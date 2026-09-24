@@ -56,14 +56,22 @@ describe('desktop Content-Security-Policy', () => {
 
   it('keeps the shell itself locked down', () => {
     expect(directive('default-src')).toEqual(["'self'"]);
-    expect(directive('script-src')).toEqual(["'self'"]);
+    // Watch together plays YouTube through its IFrame Player API: the loader
+    // script and the widget script it pulls in are both served from
+    // www.youtube.com. Nothing else may run.
+    expect(directive('script-src')).toEqual(["'self'", 'https://www.youtube.com']);
+    // …and the player frame comes from youtube-nocookie.com only.
+    expect(directive('frame-src')).toEqual(["'self'", 'https://www.youtube-nocookie.com']);
     expect(directive('object-src')).toEqual(["'none'"]);
     expect(directive('base-uri')).toEqual(["'self'"]);
     expect(directive('form-action')).toEqual(["'none'"]);
     expect(directive('frame-ancestors')).toEqual(["'none'"]);
     // Attachment media is fetched over IPC and handed to the page as a blob —
-    // `<video src>` never points at a server origin.
-    expect(directive('media-src')).toEqual(["'self'", 'data:', 'blob:']);
+    // `<video src>` never points at a server origin. `https:` is for the open
+    // web only, like `img-src`: a direct link to a video or song that Watch
+    // together plays on each device. Nothing Paracord authenticates loads so.
+    expect(directive('media-src')).toEqual(["'self'", 'data:', 'blob:', 'https:']);
+    expect(directive('media-src')).not.toContain('http:');
     // Every HTTP request the desktop makes crosses the native bridge; the
     // webview itself talks to nothing but IPC and the voice websocket.
     expect(directive('connect-src')).not.toContain('http:');

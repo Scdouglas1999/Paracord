@@ -1,5 +1,5 @@
 import { memo, type MouseEvent } from 'react';
-import { MessageSquare } from 'lucide-react';
+import { Clapperboard, MessageSquare, Music } from 'lucide-react';
 
 import { RollingNumber } from '../../../lib/motion';
 import { cn } from '../../../lib/utils';
@@ -8,6 +8,8 @@ import { LightCaption, RoomThumbnail, roomCaptionFor } from '../../light';
 import { useRoomThumbnail } from '../../../hooks/useRoomThumbnail';
 import type { RoomLight } from '../../../lib/attention/light';
 import { LIT_MARK, WINDOW_MARK, roomSharedName } from '../../../lib/motion';
+import { activityLine, type TogetherActivity } from '../../../lib/together/model';
+import { useTogetherActivity } from '../../../stores/togetherStore';
 
 /**
  * The three room rows of the Buildings column (docs/lantern-stage-spec.md §7.1).
@@ -149,6 +151,8 @@ export const QuietRoomRow = memo(function QuietRoomRow({
 export interface LiveRoomRowProps extends RoomRowProps {
   /** Injected by {@link LiveRoomRow}; kept a prop so the row stays drawable. */
   frame?: Parameters<typeof RoomThumbnail>[0]['frame'];
+  /** What the room is watching or listening to together, if anything. */
+  together?: TogetherActivity | null;
 }
 
 /**
@@ -163,6 +167,7 @@ export const LiveRoomRowView = memo(function LiveRoomRowView({
   onOpen,
   onContextMenu,
   frame = null,
+  together = null,
 }: LiveRoomRowProps) {
   return (
     <button
@@ -188,6 +193,16 @@ export const LiveRoomRowView = memo(function LiveRoomRowView({
         </span>
         <LightCaption>{roomCaptionFor(room)}</LightCaption>
       </span>
+      {together && (
+        <span className="-mt-1 flex min-w-0 items-center gap-1.5 text-meta text-text-secondary" data-together-line="">
+          {together.kind === 'watch' ? (
+            <Clapperboard size={12} aria-hidden className="shrink-0 text-text-muted" />
+          ) : (
+            <Music size={12} aria-hidden className="shrink-0 text-text-muted" />
+          )}
+          <span className="truncate">{activityLine(together.kind, together.title)}</span>
+        </span>
+      )}
     </button>
   );
 });
@@ -200,7 +215,8 @@ export const LiveRoomRowView = memo(function LiveRoomRowView({
  */
 export function LiveRoomRow(props: RoomRowProps) {
   const { frame } = useRoomThumbnail(props.room);
-  return <LiveRoomRowView {...props} frame={frame} />;
+  const together = useTogetherActivity(props.room.channelId);
+  return <LiveRoomRowView {...props} frame={frame} together={together} />;
 }
 
 /** Pick the row shape a room's light calls for. */

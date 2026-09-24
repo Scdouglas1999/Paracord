@@ -923,6 +923,30 @@ pub fn build_router(state: &AppState) -> Router<AppState> {
             get(routes::keys::get_key_count),
         )
         .route("/api/v1/users/{user_id}/keys", get(routes::keys::get_keys))
+        // Watch together / Listen together (one session per voice channel)
+        .route(
+            "/api/v1/channels/{channel_id}/together",
+            get(routes::together::get_session)
+                .post(routes::together::start_session)
+                .patch(routes::together::update_session)
+                .delete(routes::together::stop_session),
+        )
+        .route(
+            "/api/v1/channels/{channel_id}/together/playback",
+            post(routes::together::playback),
+        )
+        .route(
+            "/api/v1/channels/{channel_id}/together/items",
+            post(routes::together::add_items),
+        )
+        .route(
+            "/api/v1/channels/{channel_id}/together/items/{item_id}",
+            patch(routes::together::move_item).delete(routes::together::remove_item),
+        )
+        .route(
+            "/api/v1/guilds/{guild_id}/together",
+            get(routes::together::list_guild_activities),
+        )
         .route(
             "/api/v1/channels/{channel_id}/stage-instance",
             get(routes::stage::get_stage_instance_for_channel),
@@ -1886,11 +1910,17 @@ async fn csrf_middleware(req: Request, next: Next) -> Response {
 /// UI routes. `HeaderMap::insert` overwrites, so a double application is a
 /// no-op.
 /// Content-Security-Policy for the web UI when it is served over HTTPS.
-const CSP_APP_HTTPS: &str = "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' https: wss:; media-src 'self' data: blob: https:";
+///
+/// Watch together plays YouTube through the IFrame Player API, so the policy
+/// admits exactly its loader script (`https://www.youtube.com`, which serves
+/// `/iframe_api` and the widget script it pulls in) and frames from
+/// `https://www.youtube-nocookie.com` besides this origin. Any other frame is
+/// still refused, as it was under the `default-src 'self'` fallback.
+const CSP_APP_HTTPS: &str = "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; script-src 'self' https://www.youtube.com; frame-src 'self' https://www.youtube-nocookie.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' https: wss:; media-src 'self' data: blob: https:";
 
 /// Same policy for a document served over plain HTTP, where `http:`/`ws:` peers
 /// are the only ones reachable at all.
-const CSP_APP_PLAIN_HTTP: &str = "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: http: https:; connect-src 'self' http: https: ws: wss:; media-src 'self' data: blob: http: https:";
+const CSP_APP_PLAIN_HTTP: &str = "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; script-src 'self' https://www.youtube.com; frame-src 'self' https://www.youtube-nocookie.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: http: https:; connect-src 'self' http: https: ws: wss:; media-src 'self' data: blob: http: https:";
 
 pub async fn security_headers_middleware(req: Request, next: Next) -> Response {
     let path = req.uri().path().to_string();

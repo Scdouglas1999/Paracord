@@ -34,6 +34,9 @@ import { Modal, ModalBody, ModalHeader, ModalTitle, Plate } from '../../ui';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '../../ui/ContextMenu';
 import { LiveNow } from './LiveNow';
 import { liveNow } from './liveNowModel';
+import { useGuildTogether } from '../../../hooks/useGuildTogether';
+import { useTogetherStore } from '../../../stores/togetherStore';
+import type { TogetherActivity } from '../../../lib/together/model';
 import { ServerCover } from './ServerCover';
 import { ServerFeed } from './ServerFeed';
 import { ServerHead } from './ServerHead';
@@ -204,9 +207,18 @@ export function ServerHome({ guildId }: ServerHomeProps) {
   }, [members]);
 
   // ---- live ----------------------------------------------------------------------
+  useGuildTogether(guildId);
+  const togetherEntries = useTogetherStore((state) => state.activities);
+  const together = useMemo(() => {
+    const map: Record<string, TogetherActivity | null> = {};
+    for (const [channelId, entry] of Object.entries(togetherEntries)) {
+      if (entry.guildId === guildId) map[channelId] = entry.activity;
+    }
+    return map;
+  }, [togetherEntries, guildId]);
   const live = useMemo(
-    () => liveNow({ rooms, stageChannelIds, events, games: phone ? [] : sports.games }),
-    [rooms, stageChannelIds, events, sports.games, phone],
+    () => liveNow({ rooms, stageChannelIds, events, games: phone ? [] : sports.games, together }),
+    [rooms, stageChannelIds, events, sports.games, phone, together],
   );
   const liveGameShown = !phone && sports.games.some((game) => game.state === 'in');
 

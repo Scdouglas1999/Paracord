@@ -25,6 +25,7 @@ pub mod router_access;
 pub mod share_address;
 pub mod shutdown;
 pub mod sports;
+pub mod together;
 pub mod user;
 pub mod voice_cleanup;
 
@@ -142,6 +143,8 @@ pub struct AppState {
     pub native_media: Option<NativeMediaState>,
     /// Temporary MFA login tickets, bound to the verified credentials. 5-min TTL.
     pub mfa_tickets: moka::future::Cache<String, auth::MfaLoginTicket>,
+    /// Watch together / Listen together sessions, one per voice channel.
+    pub together: Arc<together::TogetherManager>,
 }
 
 /// State for the native QUIC-based media server.

@@ -44,6 +44,7 @@ pub mod stage;
 pub mod stickers;
 pub mod templates;
 pub mod tenor;
+pub mod together;
 pub mod users;
 pub mod voice;
 pub mod voice_diagnostics;

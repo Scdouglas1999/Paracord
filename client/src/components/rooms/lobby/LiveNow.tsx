@@ -1,6 +1,6 @@
 import { useState, type CSSProperties, type ReactNode } from 'react';
 import { Link } from 'react-router';
-import { CalendarClock, Mic, Radio } from 'lucide-react';
+import { CalendarClock, Clapperboard, Mic, Music, Radio } from 'lucide-react';
 
 import { LitAvatar } from '../../light';
 import { Button } from '../../ui';
@@ -12,6 +12,8 @@ import type { RoomLight } from '../../../lib/attention/light';
 import { wallClock } from '../../../lib/formatters';
 import { roomSharedName } from '../../../lib/motion';
 import { cn } from '../../../lib/utils';
+import { TogetherCover } from '../../voice/together/TogetherCover';
+import type { TogetherActivity } from '../../../lib/together/model';
 import { NOBODY_IN_VOICE, liveCountLine, moreLine, voiceLine } from './homeCaptions';
 import type { LiveItem, LiveNow as LiveNowModel } from './liveNowModel';
 import type { HomeEvent } from './useUpcomingEvents';
@@ -136,6 +138,8 @@ function LiveCard({
   onRsvp: (eventId: string) => void;
 }) {
   switch (item.kind) {
+    case 'together':
+      return <LiveTogetherCard room={item.room} activity={item.activity} compact={compact} onJoin={onJoinRoom} />;
     case 'voice':
     case 'stage':
       return <LiveRoomCard room={item.room} stage={item.kind === 'stage'} compact={compact} onJoin={onJoinRoom} />;
@@ -208,38 +212,10 @@ function LiveRoomCard({
   // The same flag the faces below breathe on (LitAvatar's `pc-speaking`), so
   // the card and the avatars start and stop together.
   const speaking = room.occupants.some((occupant) => occupant.person.speaking);
-  const size = compact ? 30 : 38;
-  const faces = room.occupants.slice(0, compact ? 3 : 4);
-  const extra = room.occupants.length - faces.length;
   const line = voiceLine(talking, room.occupants.length, room.durationMs);
   // Already in this call: the button takes you back to it, it does not join again.
   const action = room.youAreHere ? 'Return to' : stage ? 'Enter' : 'Join';
-  const pile = (
-    <div className="flex shrink-0 items-center" aria-hidden>
-      {faces.map((occupant, index) => (
-        <LitAvatar
-          key={occupant.person.userId}
-          person={occupant.person}
-          size={size}
-          hideLabel
-          room={room.channelId}
-          className={cn(index > 0 && (compact ? '-ml-2' : '-ml-2.5'))}
-        />
-      ))}
-      {extra > 0 && (
-        <span
-          className={cn(
-            'flex items-center justify-center rounded-full bg-bg-mod-strong px-2 text-meta text-text-secondary',
-            'shadow-[0_0_0_2px_var(--bg-raised)]',
-            compact ? '-ml-2' : '-ml-2.5',
-          )}
-          style={{ height: size, minWidth: size }}
-        >
-          +{extra}
-        </span>
-      )}
-    </div>
-  );
+  const pile = <FacePile room={room} compact={compact} />;
   return (
     <LiveShell label={`${room.name}, live`} shared={roomSharedName(room.channelId)} speaking={speaking}>
       <div className="flex items-start gap-2">
@@ -270,6 +246,91 @@ function LiveRoomCard({
           <p className="truncate text-meta text-text-secondary">{line}</p>
         </>
       )}
+    </LiveShell>
+  );
+}
+
+/** The faces in a call, overlapping, with "+N" for the rest. */
+function FacePile({ room, compact }: { room: RoomLight; compact: boolean }) {
+  const size = compact ? 30 : 38;
+  const faces = room.occupants.slice(0, compact ? 3 : 4);
+  const extra = room.occupants.length - faces.length;
+  return (
+    <div className="flex shrink-0 items-center" aria-hidden>
+      {faces.map((occupant, index) => (
+        <LitAvatar
+          key={occupant.person.userId}
+          person={occupant.person}
+          size={size}
+          hideLabel
+          room={room.channelId}
+          className={cn(index > 0 && (compact ? '-ml-2' : '-ml-2.5'))}
+        />
+      ))}
+      {extra > 0 && (
+        <span
+          className={cn(
+            'flex items-center justify-center rounded-full bg-bg-mod-strong px-2 text-meta text-text-secondary',
+            'shadow-[0_0_0_2px_var(--bg-raised)]',
+            compact ? '-ml-2' : '-ml-2.5',
+          )}
+          style={{ height: size, minWidth: size }}
+        >
+          +{extra}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/**
+ * A call that is watching or listening to something together: what is on,
+ * who is there, and the way in.
+ */
+function LiveTogetherCard({
+  room,
+  activity,
+  compact,
+  onJoin,
+}: {
+  room: RoomLight;
+  activity: TogetherActivity;
+  compact: boolean;
+  onJoin: (room: RoomLight, origin: Element | null) => void;
+}) {
+  const watching = activity.kind === 'watch';
+  const speaking = room.occupants.some((occupant) => occupant.person.speaking);
+  const count = room.occupants.length;
+  const who = `${count} ${count === 1 ? 'person' : 'people'} ${watching ? 'watching' : 'listening'}`;
+  return (
+    <LiveShell label={`${room.name}, ${watching ? 'watching' : 'listening to'} ${activity.title ?? 'something'} together`} shared={roomSharedName(room.channelId)} speaking={speaking}>
+      <div className="flex items-start gap-2">
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <Kicker icon={watching ? <Clapperboard size={12} aria-hidden /> : <Music size={12} aria-hidden />}>
+            {watching ? 'Watching together' : 'Listening together'}
+          </Kicker>
+          <h3 className="pc-display truncate text-name text-text-primary">{room.name}</h3>
+        </div>
+        <Button
+          variant="light"
+          size="sm"
+          onClick={(event) => onJoin(room, event.currentTarget.closest('[data-motion-shared]'))}
+          aria-label={`${room.youAreHere ? 'Return to' : 'Join'} ${room.name}`}
+          className="shrink-0"
+        >
+          {room.youAreHere ? 'Return' : 'Join'}
+        </Button>
+      </div>
+      <div className="flex min-w-0 items-center gap-3">
+        <span className={cn('shrink-0 overflow-hidden rounded-[var(--radius-control)] bg-bg-well', compact ? 'h-10 w-16' : 'h-12 w-20')}>
+          <TogetherCover item={{ thumbnail: activity.thumbnail, source: activity.source ?? 'url', content_type: activity.content_type ?? (activity.kind === 'listen' ? 'audio/' : null) }} />
+        </span>
+        <p className="line-clamp-2 min-w-0 text-label text-text-primary">{activity.title ?? 'Nothing queued'}</p>
+      </div>
+      <div className="flex min-w-0 items-center gap-3">
+        <FacePile room={room} compact={compact} />
+        <p className="min-w-0 truncate text-meta text-text-secondary">{who}</p>
+      </div>
     </LiveShell>
   );
 }

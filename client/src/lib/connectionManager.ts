@@ -27,6 +27,7 @@ import { acceptDatabaseHistoryEpoch, getDatabaseHistoryEpoch, registerHistoryRec
 import { toast } from '../stores/toastStore';
 import { notifyServerDisconnected } from './serverDisconnect';
 import { pauseAccountMessagingForRecovery } from './messages/accountMessagingRuntime';
+import { recordClockSample } from './together/serverClock';
 
 export { LOCAL_SERVER_ID } from './serverScope';
 
@@ -185,6 +186,8 @@ export interface ServerConnection {
   connected: boolean;
   connecting: boolean;
   lastHeartbeatSentAtMs: number;
+  /** Wall clock at that heartbeat, for the server-clock sample its ACK carries. */
+  lastHeartbeatSentWallMs?: number;
   missedAcks: number;
   connectionLatency: number;
   pendingMessages: unknown[];
@@ -1005,6 +1008,7 @@ class ConnectionManager {
       connected: false,
       connecting: false,
       lastHeartbeatSentAtMs: 0,
+      lastHeartbeatSentWallMs: 0,
       missedAcks: 0,
       connectionLatency: 0,
       pendingMessages: [],
@@ -1270,6 +1274,7 @@ class ConnectionManager {
       connected: false,
       connecting: false,
       lastHeartbeatSentAtMs: 0,
+      lastHeartbeatSentWallMs: 0,
       missedAcks: 0,
       connectionLatency: 0,
       pendingMessages: [],
@@ -1684,7 +1689,15 @@ class ConnectionManager {
         this.identify(conn);
         break;
       }
-      case 11: // HEARTBEAT_ACK
+      case 11: { // HEARTBEAT_ACK
+        // Newer servers stamp the ACK with their clock (Watch together keeps
+        // players in step with it). The SSE keepalive reuses op 11 with no
+        // stamp and no heartbeat behind it, so it is not a sample.
+        const serverTimeMs = (payload.d as { server_time_ms?: unknown } | null | undefined)?.server_time_ms;
+        if (typeof serverTimeMs === 'number' && conn.lastHeartbeatSentWallMs) {
+          recordClockSample(conn.serverId, conn.lastHeartbeatSentWallMs, Date.now(), serverTimeMs);
+          conn.lastHeartbeatSentWallMs = 0;
+        }
         if (conn.lastHeartbeatSentAtMs > 0) {
           conn.connectionLatency = Math.max(
             0,
@@ -1695,6 +1708,7 @@ class ConnectionManager {
         }
         conn.missedAcks = 0;
         break;
+      }
       case 0: // DISPATCH
         this.enqueueDispatch(conn, lane, payload);
         break;
@@ -1739,9 +1753,23 @@ class ConnectionManager {
         return;
       }
       conn.lastHeartbeatSentAtMs = monotonicNowMs();
+      conn.lastHeartbeatSentWallMs = Date.now();
       conn.missedAcks++;
       this.send(conn, { op: 1, d: conn.sequence });
     }, conn.heartbeatInterval!);
+  }
+
+  /**
+   * Send one extra heartbeat now, so its ACK refreshes this server's clock
+   * estimate (a shared player starting wants a fresh sample, not one from up
+   * to 41 s ago). A no-op on the SSE transport, which has no heartbeat.
+   */
+  sampleServerClock(serverId: string): void {
+    const conn = this.getConnection(serverId);
+    if (!conn?.ws || !conn.connected) return;
+    conn.lastHeartbeatSentAtMs = monotonicNowMs();
+    conn.lastHeartbeatSentWallMs = Date.now();
+    this.send(conn, { op: 1, d: conn.sequence });
   }
 
   /**

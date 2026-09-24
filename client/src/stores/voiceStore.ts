@@ -835,6 +835,14 @@ function getSavedOutputDeviceId(): string | undefined {
   return deviceId.length > 0 ? deviceId : undefined;
 }
 
+/**
+ * The speaker or headset the call plays through right now. Other audio that
+ * belongs to the call (Watch together's player) follows it with `setSinkId`.
+ */
+export function currentAudioOutputDeviceId(): string | undefined {
+  return selectedAudioOutputDeviceId ?? getSavedOutputDeviceId();
+}
+
 function getBooleanSetting(
   value: unknown,
   defaultValue: boolean
