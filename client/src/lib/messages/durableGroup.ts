@@ -22,7 +22,7 @@ import { bytesToHex } from '../crypto/util';
 import { enqueueMessageIntent, prepareDurableSend, type DurableIntent, type DurableSend, type StageQueuedMessage } from './durableOutbox';
 // Encrypted attachment seam: descriptors live inside the sealed group body, and
 // the staged ciphertext lives in this account's vault until the server holds it.
-import { encodeEncryptedBodyWithinBudget, type EncryptedAttachmentDescriptor } from './attachments/attachmentEnvelope';
+import { encodeMessageBody, type EncryptedAttachmentDescriptor, type SealedForward } from './attachments/attachmentEnvelope';
 import { collectUploadedDescriptors, listStagedAttachments, markStagedUploaded, nextPendingUpload, removeStagedAttachments, rekeyStagedAttachments } from './attachments/attachmentStaging';
 import type { EncryptedAttachmentUploader } from './attachments/attachmentProducer';
 
@@ -36,6 +36,7 @@ interface SendBinding {
   epoch: number;
   referencedMessageId?: string;
   forwardedFrom?: ForwardedFromRequest;
+  sealedForward?: SealedForward;
 }
 
 /** The server client this account's group key distribution speaks to. */
@@ -79,7 +80,9 @@ export function createDurableGroup(
     attachments: readonly EncryptedAttachmentDescriptor[] = [],
     membersVersion?: string,
     forwardedFrom?: ForwardedFromRequest,
+    sealedForward?: SealedForward,
   ): Promise<SendMessageRequest> {
+    if (forwardedFrom && sealedForward) throw new Error('A forward names its source either in the clear or inside the encrypted body, not both.');
     const local = await ensureLocalSenderKey(transaction, channelId, members, myUserId);
     if (pendingDistribution(local, members, myUserId).length > 0) {
       // `distribute` runs before preparation; reaching here means the roster
@@ -87,10 +90,10 @@ export function createDurableGroup(
       // member has no key for.
       throw new GroupE2eeError('This group’s membership changed while the message was being prepared. It will be sent once the new key reaches everyone.');
     }
-    const body = attachments.length ? encodeEncryptedBodyWithinBudget({ text: content, attachments }) : content;
+    const body = encodeMessageBody(content, attachments, sealedForward);
     const e2ee = await sealGroupMessage(channelId, body, myUserId, privateKey, local);
     transaction.put(SEND_BINDING_NAMESPACE, nonce, {
-      channelId, members: [...members], membersVersion, epoch: local.epoch, referencedMessageId, forwardedFrom,
+      channelId, members: [...members], membersVersion, epoch: local.epoch, referencedMessageId, forwardedFrom, sealedForward,
     } satisfies SendBinding);
     transaction.put(PLAINTEXT_NAMESPACE, await cacheId(channelId, e2ee), { content: body });
     return {
@@ -210,7 +213,7 @@ export function createDurableGroup(
       const attachments = await collectUploadedDescriptors(transaction, intent.id);
       const members = live?.members ?? intent.intent.encryption.members;
       return build(transaction, intent.nonce, intent.channelId, members, intent.draft.content,
-        intent.intent.referencedMessageId, attachments, live?.membersVersion, intent.intent.forwardedFrom);
+        intent.intent.referencedMessageId, attachments, live?.membersVersion, intent.intent.forwardedFrom, intent.intent.sealedForward);
     },
     async prepare(channelId: string, members: GroupMember[], content: string, referencedMessageId?: string, membersVersion?: string | null) {
       await distribute(channelId, members, membersVersion);
@@ -231,16 +234,18 @@ export function createDurableGroup(
       return {
         ...metadata, id: nonce, nonce, draft: { content }, revision: crypto.randomUUID(),
         status: 'pending', attempts: 0, error: null, nextAttemptAt: original.retryAfterAt ?? 0,
-        intent: { encryption: { kind: 'group', members: binding.members }, referencedMessageId: binding.referencedMessageId, forwardedFrom: binding.forwardedFrom },
+        intent: { encryption: { kind: 'group', members: binding.members }, referencedMessageId: binding.referencedMessageId, forwardedFrom: binding.forwardedFrom,
+          sealedForward: binding.sealedForward },
       };
     },
     async prepareEdit(transaction: VaultTransaction, original: DurableSend, messageId: string, editNonce: string, content: string): Promise<PreparedDeliveryEdit> {
       const binding = await transaction.get<SendBinding>(SEND_BINDING_NAMESPACE, original.nonce);
       if (!binding || binding.channelId !== original.channelId) throw new Error('The original conversation encryption metadata is missing.');
       // An edit replaces the whole encrypted body, so it must re-state the
-      // attachment descriptors or their keys would be lost with the old body.
+      // attachment descriptors (or their keys would be lost with the old body)
+      // and a sealed forward's attribution.
       const attachments = await collectUploadedDescriptors(transaction, original.id);
-      const body = attachments.length ? encodeEncryptedBodyWithinBudget({ text: content, attachments }) : content;
+      const body = encodeMessageBody(content, attachments, binding.sealedForward);
       const local = await ensureLocalSenderKey(transaction, original.channelId, binding.members, myUserId);
       const e2ee = await sealGroupMessage(original.channelId, body, myUserId, privateKey, local);
       transaction.put(PLAINTEXT_NAMESPACE, await cacheId(original.channelId, e2ee), { content: body });
@@ -250,9 +255,10 @@ export function createDurableGroup(
     async prepareDeliveredEdit(
       transaction: VaultTransaction, channelId: string, members: readonly GroupMember[], messageId: string,
       editNonce: string, content: string, attachments: readonly EncryptedAttachmentDescriptor[] = [],
+      sealedForward?: SealedForward,
     ): Promise<PreparedDeliveryEdit> {
       assertSignalMessageId(messageId);
-      const body = attachments.length ? encodeEncryptedBodyWithinBudget({ text: content, attachments }) : content;
+      const body = encodeMessageBody(content, attachments, sealedForward);
       const local = await ensureLocalSenderKey(transaction, channelId, members, myUserId);
       const e2ee = await sealGroupMessage(channelId, body, myUserId, privateKey, local);
       transaction.put(PLAINTEXT_NAMESPACE, await cacheId(channelId, e2ee), { content: body });

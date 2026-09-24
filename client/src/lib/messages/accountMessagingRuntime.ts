@@ -4,6 +4,7 @@ import { createKeysApi } from '../../api/keys';
 import { uploadOpaqueCiphertext } from '../../api/files';
 import { prepareEncryptedAttachments } from './attachments/attachmentProducer';
 import { stageAttachments } from './attachments/attachmentStaging';
+import type { SealedForward } from './attachments/attachmentEnvelope';
 import type { ForwardedFromRequest, Message, MessageE2eePayload, SendMessageRequest } from '../../types';
 import { useChannelStore } from '../../stores/channelStore';
 import { useAccountStore } from '../../stores/accountStore';
@@ -774,7 +775,7 @@ export class AccountMessagingRuntime {
    * how guild channels work, and is refused for an encrypted conversation.
    */
   async send(channelId: string, content: string, referencedMessageId?: string, attachmentIds?: string[], stickerIds?: string[], draft?: MessageDraft,
-    attachments?: EncryptedAttachmentSubmission, forwardedFrom?: ForwardedFromRequest) {
+    attachments?: EncryptedAttachmentSubmission, forwardedFrom?: ForwardedFromRequest, sealedForward?: SealedForward) {
     await this.prepareChannelHistory(channelId); this.assertDeliveryReady(channelId);
     this.assertCurrent(); const encryption = await this.receiveConversation(channelId, true);
     const lane = encryption.kind === 'plain' ? await this.requireLocal() : await this.requireIdentity();
@@ -784,6 +785,8 @@ export class AccountMessagingRuntime {
       if (encryption.kind === 'dm') await this.checkLegacySession(lane.session as IdentitySession, channelId, encryption.peer);
     } else if (attachments?.files.length) {
       throw new Error('This conversation is not encrypted; attach files through the ordinary upload path.');
+    } else if (sealedForward) {
+      throw new Error('This conversation is not encrypted, so a forward into it names its source to the instance.');
     }
     lane.session.assertCurrent();
     const prepared = attachments?.files.length
@@ -793,7 +796,7 @@ export class AccountMessagingRuntime {
     const stage = prepared.length
       ? (tx: VaultTransaction, messageId: string) => { stageAttachments(tx, messageId, channelId, prepared); }
       : undefined;
-    const intent = { encryption, referencedMessageId, attachmentIds, stickerIds, forwardedFrom };
+    const intent = { encryption, referencedMessageId, attachmentIds, stickerIds, forwardedFrom, ...(sealedForward ? { sealedForward } : {}) };
     if (draft) {
       if (draft.content.trim() !== content.trim()) throw new Error('The submitted draft no longer matches this message.');
       const local = await this.requireLocal();
@@ -1034,7 +1037,11 @@ export class AccountMessagingRuntime {
       else await lane.driver.editDraft(queued.id, queued.revision, content);
       return;
     }
-    const target: DeliveredMessageTarget = { channelId: message.channel_id, messageId: message.id, authorId: message.author.id, encryption };
+    // A forward between encrypted conversations keeps its attribution in the
+    // body, and an edit replaces the whole body, so the edit re-states it.
+    const forward = encryption.kind !== 'plain' ? message.forwarded_from?.sealed : undefined;
+    const target: DeliveredMessageTarget = { channelId: message.channel_id, messageId: message.id, authorId: message.author.id, encryption,
+      ...(forward ? { forward } : {}) };
     const existing = (await lane.mutations.snapshot()).mutations.find(row => row.target.messageId === message.id && row.target.channelId === message.channel_id);
     await lane.mutations.edit(target, content, existing?.revision ?? null);
   }

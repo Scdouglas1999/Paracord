@@ -66,9 +66,31 @@ export interface EncryptedAttachmentDescriptor extends AttachmentKeyMaterial {
   readonly thumbnail?: EncryptedAttachmentThumbnail;
 }
 
+/**
+ * Where a forwarded message came from, when it went from one encrypted
+ * conversation into another. It rides inside the encrypted body so the
+ * instance never learns which conversation or message the text was copied
+ * from. The forwarder's device writes it; nobody else vouches for it.
+ *
+ * A 3.2 client ignores this field and shows `text`, which for a forward is the
+ * note and the quote joined by an invisible separator.
+ */
+export interface SealedForward {
+  readonly channelId: string;
+  readonly messageId: string;
+  /** Set when the original was posted in a server channel. */
+  readonly guildId?: string;
+  readonly channelName?: string;
+  readonly authorId?: string;
+  readonly authorName?: string;
+  /** ISO 8601 time the original was sent. */
+  readonly sentAt?: string;
+}
+
 export interface EncryptedMessageBody {
   readonly text: string;
   readonly attachments: readonly EncryptedAttachmentDescriptor[];
+  readonly forward?: SealedForward;
 }
 
 const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
@@ -150,6 +172,44 @@ function readDescriptor(value: unknown): EncryptedAttachmentDescriptor {
   };
 }
 
+function forwardText(value: unknown, field: string, max: number): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'string' || !value || value.length > max || value.includes('\u0000')) {
+    throw new EncryptedBodyError(`This encrypted message has a malformed forward ${field}.`);
+  }
+  return value;
+}
+
+function forwardId(value: unknown, field: string): string {
+  if (typeof value !== 'string' || !SNOWFLAKE_RE.test(value)) {
+    throw new EncryptedBodyError(`This encrypted message has a malformed forward ${field}.`);
+  }
+  return value;
+}
+
+function readForward(value: unknown): SealedForward | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new EncryptedBodyError('This encrypted message has a malformed forward.');
+  }
+  const raw = value as Record<string, unknown>;
+  const guildId = raw.guildId === undefined || raw.guildId === null ? undefined : forwardId(raw.guildId, 'server');
+  const forward: SealedForward = {
+    channelId: forwardId(raw.channelId, 'channel'),
+    messageId: forwardId(raw.messageId, 'message'),
+    ...(guildId ? { guildId } : {}),
+    ...optional('channelName', forwardText(raw.channelName, 'channel name', 200)),
+    ...optional('authorId', forwardText(raw.authorId, 'author', 200)),
+    ...optional('authorName', forwardText(raw.authorName, 'author name', 200)),
+    ...optional('sentAt', forwardText(raw.sentAt, 'time', 64)),
+  };
+  return forward;
+}
+
+function optional<K extends string>(key: K, value: string | undefined): Partial<Record<K, string>> {
+  return value === undefined ? {} : { [key]: value } as Record<K, string>;
+}
+
 /** True when `plaintext` is an envelope rather than a pre-envelope text body. */
 export function isEncryptedBodyEnvelope(plaintext: string): boolean {
   return plaintext.startsWith(ENCRYPTED_BODY_PREFIX);
@@ -165,6 +225,7 @@ export function encodeEncryptedBody(body: EncryptedMessageBody): string {
     seen.add(attachment.id);
     readDescriptor(attachment);
   }
+  const forward = readForward(body.forward);
   return ENCRYPTED_BODY_PREFIX + JSON.stringify({
     v: ENCRYPTED_BODY_VERSION,
     text: body.text,
@@ -180,7 +241,21 @@ export function encodeEncryptedBody(body: EncryptedMessageBody): string {
       ...(attachment.height ? { height: attachment.height } : {}),
       ...(attachment.thumbnail ? { thumbnail: attachment.thumbnail } : {}),
     })),
+    ...(forward ? { forward } : {}),
   });
+}
+
+/**
+ * The plaintext to encrypt for one message. A message with no attachments and
+ * no forward stays the bare text every earlier message used, so it reads the
+ * same on every client; anything more becomes the versioned envelope.
+ */
+export function encodeMessageBody(
+  text: string,
+  attachments: readonly EncryptedAttachmentDescriptor[] = [],
+  forward?: SealedForward,
+): string {
+  return attachments.length || forward ? encodeEncryptedBodyWithinBudget({ text, attachments, forward }) : text;
 }
 
 /** UTF-8 length of an encoded body, which is what the server's cap measures. */
@@ -229,7 +304,8 @@ export function decodeEncryptedBody(plaintext: string): EncryptedMessageBody {
     if (seen.has(attachment.id)) throw new EncryptedBodyError('This encrypted message references one attachment twice.');
     seen.add(attachment.id);
   }
-  return { text: body.text, attachments };
+  const forward = readForward(body.forward);
+  return forward ? { text: body.text, attachments, forward } : { text: body.text, attachments };
 }
 
 /**
@@ -243,7 +319,7 @@ export function decodeEncryptedBody(plaintext: string): EncryptedMessageBody {
 export function encodeEncryptedBodyWithinBudget(body: EncryptedMessageBody): string {
   let attachments = body.attachments.map(attachment => ({ ...attachment }));
   for (;;) {
-    const encoded = encodeEncryptedBody({ text: body.text, attachments });
+    const encoded = encodeEncryptedBody({ text: body.text, attachments, forward: body.forward });
     if (encryptedBodyByteLength(encoded) <= MAX_ENCRYPTED_BODY_BYTES) return encoded;
     let largest = -1;
     let largestSize = 0;

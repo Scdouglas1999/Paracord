@@ -38,12 +38,19 @@ pub struct ResolvedForward {
 /// a direct message carries its files through the client's encrypted upload
 /// path, because the server must not put plaintext files into an encrypted
 /// conversation.
+///
+/// Returns `None` for a forward from one encrypted conversation into another.
+/// The attribution for those travels inside the encrypted body, so the
+/// instance keeps no record of which conversation or message the text came
+/// from. A client from before that change still names the source here; the
+/// message is stored without it rather than refused, so those clients can keep
+/// forwarding.
 pub async fn resolve_forward(
     state: &AppState,
     user_id: i64,
     dest_channel: &paracord_db::channels::ChannelRow,
     request: &ForwardedFromRequest,
-) -> Result<ResolvedForward, ApiError> {
+) -> Result<Option<ResolvedForward>, ApiError> {
     let channel_id = request.channel_id.parse::<i64>().map_err(|_| {
         ApiError::BadRequest("That forward does not point at a real channel.".into())
     })?;
@@ -64,6 +71,13 @@ pub async fn resolve_forward(
         &[Permissions::VIEW_CHANNEL, Permissions::READ_MESSAGE_HISTORY],
     )
     .await?;
+
+    let source_is_dm = channel.guild_id().is_none();
+    let dest_is_dm = dest_channel.guild_id().is_none();
+    if source_is_dm && dest_is_dm {
+        return Ok(None);
+    }
+
     let message = paracord_db::messages::get_message(&state.db, message_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
@@ -72,8 +86,6 @@ pub async fn resolve_forward(
         return Err(ApiError::NotFound);
     }
 
-    let source_is_dm = channel.guild_id().is_none();
-    let dest_is_dm = dest_channel.guild_id().is_none();
     let attachments = paracord_db::attachments::get_message_attachments(&state.db, message.id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
@@ -91,7 +103,7 @@ pub async fn resolve_forward(
     let json_text = match reforwarded_attribution(&message, source_is_dm) {
         Some(inner) => inner,
         None => {
-            let content = forward_content(source_is_dm, dest_is_dm, &message, request)?;
+            let content = forward_content(source_is_dm, &message, request)?;
             let (author_id, author_name) = source_author(state, &message).await?;
             let channel_name = channel_label(&channel, source_is_dm)?;
             let stored = json!({
@@ -133,10 +145,10 @@ pub async fn resolve_forward(
         }
     }
 
-    Ok(ResolvedForward {
+    Ok(Some(ResolvedForward {
         json: json_text,
         staged_attachments,
-    })
+    }))
 }
 
 /// Drop staged copies that will not be linked (a failed or repeated send).
@@ -173,15 +185,9 @@ fn reforwarded_attribution(
 
 fn forward_content(
     source_is_dm: bool,
-    dest_is_dm: bool,
     message: &paracord_db::messages::MessageRow,
     request: &ForwardedFromRequest,
 ) -> Result<Option<String>, ApiError> {
-    if source_is_dm && dest_is_dm {
-        // Both ends are encrypted. The quote rides inside the encrypted body;
-        // the server keeps no plaintext copy.
-        return Ok(None);
-    }
     if source_is_dm {
         let text = request.content.clone().unwrap_or_default();
         if text.trim().is_empty() {

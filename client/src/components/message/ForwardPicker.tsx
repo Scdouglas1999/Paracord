@@ -6,7 +6,7 @@ import { fileApi } from '../../api/files';
 import { useAvailableChannels } from '../../hooks/useChannels';
 import { useAvailableGuilds } from '../../hooks/useGuilds';
 import { MAX_FILE_SIZE } from '../../lib/constants';
-import { composeDmForwardBody } from '../../lib/forwardedMessage';
+import { composeDmForwardBody, sealedForwardFor } from '../../lib/forwardedMessage';
 import { entityScopeKey, type AccountScope } from '../../lib/serverScope';
 import { displayName } from '../../lib/displayName';
 import { useAccountStore } from '../../stores/accountStore';
@@ -51,8 +51,10 @@ function forwardableType(type: number | undefined): boolean {
 /**
  * Forward: choose up to five conversations on this instance, add an optional
  * note, and send. Each forward goes through the target's ordinary send path,
- * so a direct message is encrypted as usual; the server checks the forwarder
- * can read the original and rewrites the attribution from it.
+ * so a direct message is encrypted as usual. When either end is a server
+ * channel the server checks the forwarder can read the original and rewrites
+ * the attribution from it; between two encrypted conversations the
+ * attribution is sealed into the encrypted body instead.
  */
 export function ForwardPicker({
   message,
@@ -150,7 +152,11 @@ export function ForwardPicker({
   async function send() {
     if (selected.length === 0 || sending) return;
     const quote = (message.content ?? '').trim();
-    if (sourceEncrypted && !quote) {
+    // Between two encrypted conversations the attribution rides inside the
+    // encrypted body, so the instance never learns where the text came from.
+    const sealed = sourceEncrypted ? sealedForwardFor(message) : null;
+    const missingText = sourceEncrypted && selected.some((target) => (target.encrypted ? !sealed?.quote : !quote));
+    if (missingText) {
       setError('This message has no text to forward.');
       return;
     }
@@ -183,18 +189,30 @@ export function ForwardPicker({
       const files = needsFiles ? await filesForEncryptedTargets() : [];
       const maxCiphertextBytes = useInstanceStore.getState().getActiveMaxUploadSize() ?? MAX_FILE_SIZE;
       for (const target of selected) {
-        const forwarded: ForwardedFromRequest = { channel_id: message.channel_id, message_id: message.id };
-        let content = note.trim();
-        if (sourceEncrypted && target.encrypted) {
+        const store = getMessageStore(target.scope).getState();
+        if (sealed && target.encrypted) {
           // The server has no plaintext for either end: the quote travels
-          // inside the encrypted body, after the note.
-          content = composeDmForwardBody(note, quote);
-        } else if (sourceEncrypted) {
-          forwarded.content = quote;
+          // inside the encrypted body after the note, and the attribution
+          // with it. Nothing about the source is sent in the clear.
+          await store.sendMessage(
+            target.id,
+            composeDmForwardBody(note, sealed.quote),
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            sealed.forward,
+          );
+          sent.push(target.label);
+          continue;
         }
-        await getMessageStore(target.scope).getState().sendMessage(
+        const forwarded: ForwardedFromRequest = { channel_id: message.channel_id, message_id: message.id };
+        if (sourceEncrypted) forwarded.content = quote;
+        await store.sendMessage(
           target.id,
-          content,
+          note.trim(),
           undefined,
           undefined,
           undefined,

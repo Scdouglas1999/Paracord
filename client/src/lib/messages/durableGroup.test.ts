@@ -6,6 +6,8 @@ import { createIdentityTrustVault, installIdentityTrustVault, resetIdentityTrust
 import { bytesToHex } from '../crypto/util';
 import type { AccountVault } from '../crypto/accountVault';
 import type { Message, SendMessageRequest } from '../../types';
+import type { DurableIntent } from './durableOutbox';
+import { decodeEncryptedBody, type SealedForward } from './attachments/attachmentEnvelope';
 
 const LOCAL_SERVER_ID = '__local__';
 const channelId = '900000000000000001';
@@ -172,6 +174,52 @@ describe('durableGroup', () => {
     const nonce = request.nonce;
     expect(await alice.vault.transact(tx => alice.lane.ownsSend(tx, nonce))).toBe(true);
     expect(await alice.vault.transact(tx => alice.lane.ownsSend(tx, 'some-other-nonce'))).toBe(false);
+  });
+
+  it('seals a forward’s attribution into the body and sends none of it in the clear', async () => {
+    await aliceSends('warm up');
+    const forward: SealedForward = {
+      channelId: '900000000000000077', messageId: '900000000000000078', authorId: 'bob', authorName: 'Bob', sentAt: '2026-09-20T10:00:00Z',
+    };
+    const intent = {
+      id: 'forward-1', nonce: 'forward-1', sequence: 9, channelId, draft: { content: 'the quote' }, revision: 'r1',
+      createdAt: new Date().toISOString(), status: 'pending', attempts: 0, nextAttemptAt: 0, error: null,
+      intent: { encryption: { kind: 'group', members }, sealedForward: forward },
+    } as unknown as DurableIntent;
+    alice.activate();
+    const request = await alice.vault.transact(tx => alice.lane.prepareIntent(tx, intent, { members, membersVersion: server.version() }));
+    expect(request.forwarded_from).toBeUndefined();
+    const wire = JSON.stringify(request);
+    expect(wire).not.toContain(forward.channelId);
+    expect(wire).not.toContain(forward.messageId);
+
+    bob.activate();
+    const plaintext = await bob.lane.decrypt(channelId, members, request.e2ee!, messageId, alice.user.id, resolve);
+    expect(decodeEncryptedBody(plaintext)).toEqual({ text: 'the quote', attachments: [], forward });
+
+    // An edit replaces the whole body; it re-states the attribution.
+    alice.activate();
+    const edit = await alice.vault.transact(tx => alice.lane.prepareDeliveredEdit(tx, channelId, members, messageId, 'edit-1', 'the quote, edited', [], forward));
+    const edited = JSON.parse(edit.serializedRequest) as SendMessageRequest;
+    bob.activate();
+    const reread = await bob.lane.decrypt(channelId, members, edited.e2ee!, messageId, alice.user.id, resolve);
+    expect(decodeEncryptedBody(reread).forward).toEqual(forward);
+  });
+
+  it('refuses a forward that names its source both ways', async () => {
+    await aliceSends('warm up');
+    const intent = {
+      id: 'forward-2', nonce: 'forward-2', sequence: 10, channelId, draft: { content: 'x' }, revision: 'r2',
+      createdAt: new Date().toISOString(), status: 'pending', attempts: 0, nextAttemptAt: 0, error: null,
+      intent: {
+        encryption: { kind: 'group', members },
+        forwardedFrom: { channel_id: '1', message_id: '2' },
+        sealedForward: { channelId: '1', messageId: '2' },
+      },
+    } as unknown as DurableIntent;
+    alice.activate();
+    await expect(alice.vault.transact(tx => alice.lane.prepareIntent(tx, intent, { members, membersVersion: server.version() })))
+      .rejects.toThrow('either in the clear or inside the encrypted body');
   });
 
   it('clears staged attachment state once the server acknowledges the send', async () => {

@@ -19,10 +19,10 @@ export function createAccountDeliveredMutations(
     vault: session.vault, lifetime: session, ...events,
     async prepareEdit(tx, target, editNonce, content) {
       if (target.encryption.kind === 'dm') {
-        return dm.prepareDeliveredEdit(tx, target.channelId, target.encryption.peer, target.messageId, editNonce, content);
+        return dm.prepareDeliveredEdit(tx, target.channelId, target.encryption.peer, target.messageId, editNonce, content, [], target.forward);
       }
       if (target.encryption.kind === 'group') {
-        return group.prepareDeliveredEdit(tx, target.channelId, target.encryption.members, target.messageId, editNonce, content);
+        return group.prepareDeliveredEdit(tx, target.channelId, target.encryption.members, target.messageId, editNonce, content, [], target.forward);
       }
       return { channelId: target.channelId, messageId: target.messageId, editNonce,
         serializedRequest: JSON.stringify({ content, edit_nonce: editNonce }) };

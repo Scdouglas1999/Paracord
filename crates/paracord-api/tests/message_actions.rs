@@ -757,6 +757,131 @@ async fn dm_forwards_keep_ciphertext_off_the_server_and_refuse_files() {
     );
 }
 
+/// A forward between two encrypted conversations keeps its attribution inside
+/// the encrypted body. A client that still names the source in plaintext (3.2)
+/// gets its message delivered, and the instance stores none of the source.
+#[tokio::test]
+async fn encrypted_to_encrypted_forwards_store_no_attribution() {
+    let p = people("sealedfwd").await;
+    let source_dm = 904001_i64;
+    paracord_db::dms::create_dm_channel(&p.app.db, source_dm, p.owner_id, p.member_id)
+        .await
+        .unwrap();
+    let (status, source) = call(
+        &p.app,
+        &p.member,
+        Method::POST,
+        &format!("/api/v1/channels/{source_dm}/messages"),
+        Some(json!({"content": "", "e2ee": envelope(1)})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{source}");
+    let source_id = source["id"].as_str().unwrap().to_string();
+
+    let third = create_authenticated_user_token(
+        &p.app.db,
+        &p.app.jwt_secret,
+        "sealedfwdthird",
+        "ThirdPass123!",
+    )
+    .await
+    .unwrap();
+    let (_, third_me) = call(&p.app, &third, Method::GET, "/api/v1/users/@me", None).await;
+    let third_id: i64 = third_me["id"].as_str().unwrap().parse().unwrap();
+    let dest_dm = 904002_i64;
+    paracord_db::dms::create_dm_channel(&p.app.db, dest_dm, p.owner_id, third_id)
+        .await
+        .unwrap();
+    let dest_group = 904003_i64;
+    paracord_db::dms::create_group_dm_channel(
+        &p.app.db,
+        dest_group,
+        Some("Forward group"),
+        p.owner_id,
+        &[p.member_id, third_id],
+    )
+    .await
+    .unwrap();
+    let group_payload = json!({
+        "version": 3,
+        "nonce": "bm9uY2Uz",
+        "ciphertext": "Y2lwaGVyMw",
+        "header": json!({
+            "kind": "group_sender_key", "v": 3, "sender_id": p.owner_id.to_string(),
+            "epoch": 0, "members": "ab", "sig": "c2ln"
+        }).to_string()
+    });
+
+    for (dest, payload) in [(dest_dm, envelope(2)), (dest_group, group_payload)] {
+        let (status, forwarded) = call(
+            &p.app,
+            &p.owner,
+            Method::POST,
+            &format!("/api/v1/channels/{dest}/messages"),
+            Some(json!({
+                "content": "",
+                "e2ee": payload,
+                "forwarded_from": {
+                    "channel_id": source_dm.to_string(),
+                    "message_id": source_id,
+                    "content": "plaintext a 3.2 client never sends"
+                }
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{forwarded}");
+        assert!(forwarded["forwarded_from"].is_null(), "{forwarded}");
+        assert!(forwarded["content"].is_null(), "{forwarded}");
+        let id: i64 = forwarded["id"].as_str().unwrap().parse().unwrap();
+        let stored = paracord_db::messages::get_message(&p.app.db, id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.forwarded_from, None);
+        // The stored body is the ciphertext the client sent, nothing more.
+        let body = stored.content.as_deref().unwrap_or("");
+        assert!(!body.contains("plaintext a 3.2 client"), "{body}");
+        assert!(!body.contains(&source_id), "{body}");
+
+        // What the other side reads carries no trace of the source either.
+        let (status, page) = call(
+            &p.app,
+            &third,
+            Method::GET,
+            &format!("/api/v1/channels/{dest}/messages"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{page}");
+        let text = page.to_string();
+        assert!(!text.contains(&source_id), "{text}");
+        assert!(!text.contains(&source_dm.to_string()), "{text}");
+        assert!(!text.contains("plaintext a 3.2 client"), "{text}");
+    }
+
+    // The forwarder still has to be able to read the source channel: naming
+    // someone else's conversation is refused, not silently accepted.
+    let (status, denied) = call(
+        &p.app,
+        &third,
+        Method::POST,
+        &format!("/api/v1/channels/{dest_dm}/messages"),
+        Some(json!({
+            "content": "",
+            "e2ee": envelope(3),
+            "forwarded_from": {
+                "channel_id": source_dm.to_string(),
+                "message_id": source_id
+            }
+        })),
+    )
+    .await;
+    assert!(
+        status == StatusCode::FORBIDDEN || status == StatusCode::NOT_FOUND,
+        "{status} {denied}"
+    );
+}
+
 #[tokio::test]
 async fn role_mentions_reach_holders_only_when_the_role_can_be_mentioned() {
     let p = people("rolemention").await;

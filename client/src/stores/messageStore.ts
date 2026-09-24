@@ -25,6 +25,7 @@ import { registerAccountHistoryReset } from '../lib/databaseHistory';
 import { HistoryRequest } from '../lib/messages/historyReconciliation';
 import { getAccountMessagingRuntime, type EncryptedAttachmentSubmission, type MessageDraft } from '../lib/messages/accountMessagingRuntime';
 import { applyDecryptedBody } from '../lib/messages/attachments/messageBodyProjection';
+import type { SealedForward } from '../lib/messages/attachments/attachmentEnvelope';
 import { canProjectMutationReceipt } from '../lib/messages/receiptProjection';
 
 export const MAX_MESSAGES_PER_CHANNEL = 500;
@@ -139,6 +140,8 @@ export interface MessageState {
     // never become plaintext `attachmentIds`; they go to the encrypted producer.
     attachments?: EncryptedAttachmentSubmission,
     forwardedFrom?: ForwardedFromRequest,
+    /** A forward between encrypted conversations: its attribution, sealed into the body. */
+    sealedForward?: SealedForward,
   ) => Promise<void>;
   scheduleMessage: (
     channelId: string,
@@ -157,6 +160,13 @@ export interface MessageState {
   editMessage: (channelId: string, messageId: string, content: string) => Promise<void>;
   deleteMessage: (channelId: string, messageId: string) => Promise<void>;
   setMessages: (channelId: string, messages: Message[]) => void;
+
+  /**
+   * One page of history older than `before`, decrypted on this device the same
+   * way the conversation's own history is, for a side view such as the direct
+   * message media panel. It does not change the conversation's loaded window.
+   */
+  readHistoryPage: (channelId: string, before: string, limit?: number) => Promise<{ messages: Message[]; hasMore: boolean }>;
 
   // Pin operations
   fetchPins: (channelId: string) => Promise<void>;
@@ -448,7 +458,10 @@ function createAccountMessageStore(scope: AccountScope) {
     useMessageStore.setState((state) => {
       const hydrateRows = (rows: Message[] | undefined) => rows?.map(current => {
         if (current.id !== snapshot.id || current.e2ee !== snapshot.e2ee) return current;
-        return { ...current, content: decrypted.content, ...(described ? { attachments: described } : {}) };
+        // A forward between encrypted conversations names its source only
+        // inside the body, so its attribution arrives with the plaintext too.
+        const forward = decrypted.forwarded_from?.sealed ? { forwarded_from: decrypted.forwarded_from } : {};
+        return { ...current, content: decrypted.content, ...(described ? { attachments: described } : {}), ...forward };
       });
       const messages = hydrateRows(state.messages[channelId]);
       const pins = hydrateRows(state.pins[channelId]);
@@ -614,10 +627,12 @@ function createAccountMessageStore(scope: AccountScope) {
         } finally { context.dispose(); }
       },
 
-      sendMessage: async (channelId, content, referencedMessageId, attachmentIds, stickerIds, draft, attachments, forwardedFrom) => {
+      sendMessage: async (channelId, content, referencedMessageId, attachmentIds, stickerIds, draft, attachments, forwardedFrom, sealedForward) => {
         if (!content.trim() && !attachmentIds?.length && !stickerIds?.length && !attachments?.files.length && !forwardedFrom) return;
         if (revoked) throw new Error('This account message session has ended.');
-        if (forwardedFrom) {
+        if (sealedForward) {
+          await runtime.send(channelId, content, referencedMessageId, attachmentIds, stickerIds, draft, attachments, forwardedFrom, sealedForward);
+        } else if (forwardedFrom) {
           await runtime.send(channelId, content, referencedMessageId, attachmentIds, stickerIds, draft, attachments, forwardedFrom);
         } else {
           await runtime.send(channelId, content, referencedMessageId, attachmentIds, stickerIds, draft, attachments);
@@ -692,6 +707,20 @@ function createAccountMessageStore(scope: AccountScope) {
             messages: { ...state.messages, [channelId]: capChannelMessages(messages) },
           }),
         );
+      },
+
+      readHistoryPage: async (channelId, before, limit = 100) => {
+        const context = ownOperation();
+        const api = createChannelApi(() => context.api);
+        try {
+          await runtime.prepareChannelHistory(channelId);
+          context.assertCurrent();
+          const { data } = await api.getMessages(channelId, { before, limit }, { signal: context.signal });
+          context.assertCurrent();
+          const decrypted = await decryptMessagesForChannel(channelId, await runtime.filterDeletedMessages(data));
+          context.assertCurrent();
+          return { messages: [...decrypted].reverse(), hasMore: data.length >= limit };
+        } finally { context.dispose(); }
       },
 
       fetchPins: async (channelId) => {

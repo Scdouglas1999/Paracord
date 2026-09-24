@@ -1,6 +1,7 @@
 import type { PreparedDeliveryEdit } from './durableEdit';
 import type { ForwardedFromRequest, SendMessageRequest } from '../../types';
 import type { AccountVault, VaultTransaction } from '../crypto/accountVault';
+import type { SealedForward } from './attachments/attachmentEnvelope';
 // Encrypted attachment seam: a discarded draft must take its staged ciphertext
 // with it, so no encrypted body outlives the message that owned it.
 import { removeStagedAttachments } from './attachments/attachmentStaging';
@@ -80,6 +81,8 @@ export interface DurableIntent extends Omit<DurableSend, 'serializedRequest'> {
     attachmentIds?: string[];
     stickerIds?: string[];
     forwardedFrom?: ForwardedFromRequest;
+    /** Attribution for a forward between encrypted conversations; sealed into the body, never sent in the clear. */
+    sealedForward?: SealedForward;
   };
 }
 export type QueuedSend = DurableSend | DurableIntent;

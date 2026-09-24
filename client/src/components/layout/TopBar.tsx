@@ -515,7 +515,8 @@ function OwnedTopBar({
     // the panel still opens (§6.5, §7.6). A 1:1 DM's "list" is the one person
     // already named in the header strip.
     ...(isGroupDm ? [{ label: 'People in this message', icon: <Users size={17} />, action: panelToggle('recipients') }] : []),
-    ...(!isDM ? [{ label: 'Media', icon: <ImageIcon size={17} />, action: panelToggle('media') }] : []),
+    // In a direct message the panel shows what this device has decrypted.
+    { label: 'Media', icon: <ImageIcon size={17} />, action: panelToggle('media') },
     ...(!isDM ? [{ label: 'Server leaderboard', icon: <TrendingUp size={17} />, action: panelToggle('economy') }] : []),
     ...(canOpenSpaceSettings && resolvedGuildId ? [{ label: 'Server settings', icon: <Settings size={17} />, action: openSpaceSettings }] : []),
     { label: '', action: () => {}, divider: true },

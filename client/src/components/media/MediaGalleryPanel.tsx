@@ -2,10 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent, RefObject } from 'react';
 import {
   Download,
-  File as FileIcon,
-  FileArchive,
-  FileAudio,
-  FileText,
   Film,
   Image as ImageIcon,
   Link2,
@@ -28,6 +24,9 @@ import { toast } from '../../stores/toastStore';
 import { IconButton, Select, Tabs } from '../ui';
 import { ResourceImage } from '../ui/ResourceImage';
 import { authorLabel, groupByMonth } from './groupMedia';
+import { DeviceMediaGallery } from './DeviceMediaGallery';
+import { fileIcon, PlainLine, shortWhen, useSeen } from './mediaParts';
+import { displayName } from '../../lib/displayName';
 
 type GalleryTab = 'media' | 'files' | 'links';
 
@@ -43,8 +42,9 @@ interface MediaGalleryPanelProps {
 
 /**
  * Media, files and links posted in a channel, or across a server when opened
- * from the server home. Direct messages are end-to-end encrypted, so their
- * attachments are never listed by the server and the panel says so.
+ * from the server home. Direct messages are end-to-end encrypted, so the
+ * server cannot list their attachments; for those the panel shows what this
+ * device has decrypted (see DeviceMediaGallery).
  */
 export function MediaGalleryPanel({ guildId, channelId, onClose, panelRef, onKeyDown }: MediaGalleryPanelProps) {
   const channelsById = useCurrentChannelStore((state) => state.channelsById);
@@ -66,11 +66,13 @@ export function MediaGalleryPanel({ guildId, channelId, onClose, panelRef, onKey
       return type === ChannelType.Text || type === ChannelType.Announcement;
     });
   }, [channelsByGuild, guildId]);
-  const subtitle = scope?.kind === 'channel'
-    ? `#${channel?.name ?? 'channel'}`
-    : scope?.kind === 'guild'
-      ? 'Every channel you can read'
-      : null;
+  const subtitle = isDm
+    ? channel?.recipient ? displayName(channel.recipient) : channel?.name || 'Group conversation'
+    : scope?.kind === 'channel'
+      ? `#${channel?.name ?? 'channel'}`
+      : scope?.kind === 'guild'
+        ? 'Every channel you can read'
+        : null;
 
   return (
     <aside
@@ -92,10 +94,12 @@ export function MediaGalleryPanel({ guildId, channelId, onClose, panelRef, onKey
           <X size={16} />
         </IconButton>
       </header>
-      {!scope ? (
-        <p className="px-4 py-6 text-body text-text-secondary">
-          Direct messages are end-to-end encrypted, so their files are not listed here.
-        </p>
+      {isDm && channelId ? (
+        // End-to-end encrypted: the instance cannot list these files, so the
+        // panel is built from what this device has decrypted.
+        <DeviceMediaGallery key={channelId} channelId={channelId} />
+      ) : !scope ? (
+        <PlainLine>Choose a channel to see its media.</PlainLine>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col">
           <div className="flex shrink-0 flex-col gap-3 px-3 pt-3">
@@ -143,26 +147,6 @@ export function MediaGalleryPanel({ guildId, channelId, onClose, panelRef, onKey
       )}
     </aside>
   );
-}
-
-function PlainLine({ children, tone = 'plain' }: { children: React.ReactNode; tone?: 'plain' | 'error' }) {
-  return (
-    <p
-      role={tone === 'error' ? 'alert' : undefined}
-      className={tone === 'error'
-        ? 'px-4 py-6 text-body text-accent-danger'
-        : 'px-4 py-6 text-body text-text-secondary'}
-    >
-      {children}
-    </p>
-  );
-}
-
-/** "Sep 22": fits under a thumbnail where "less than a minute ago" does not. */
-function shortWhen(iso: string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return '';
-  return date.toLocaleString(undefined, { month: 'short', day: 'numeric' });
 }
 
 function emptyCopy(tab: GalleryTab, guild: boolean): string {
@@ -225,22 +209,6 @@ function useGalleryResource(url: string): string | null {
     const safe = safeClientResourceUrl(url);
     return safe ? safeClientResourceUrl(resolveResourceUrl(safe, ticket)) : null;
   }, [url, ticket]);
-}
-
-/** True once the element has come within a screen of the scroll viewport. */
-function useSeen<T extends Element>(): [RefObject<T | null>, boolean] {
-  const ref = useRef<T>(null);
-  const [seen, setSeen] = useState(false);
-  useEffect(() => {
-    const node = ref.current;
-    if (!node || seen) return;
-    const observer = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) setSeen(true);
-    }, { rootMargin: '300px' });
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [seen]);
-  return [ref, seen];
 }
 
 function AttachmentList({
@@ -358,15 +326,6 @@ function VideoThumb({ src }: { src: string }) {
       className="h-full w-full object-cover transition-transform duration-[var(--duration-fast)] ease-[var(--ease-out)] motion-safe:group-hover:scale-[1.02]"
     />
   );
-}
-
-function fileIcon(item: GalleryAttachment) {
-  const type = (item.content_type ?? '').toLowerCase();
-  const name = item.filename.toLowerCase();
-  if (type.startsWith('audio/')) return FileAudio;
-  if (type.includes('zip') || type.includes('compressed') || /\.(zip|tar|gz|7z|rar)$/.test(name)) return FileArchive;
-  if (type.startsWith('text/') || type === 'application/pdf' || /\.(pdf|txt|md|docx?|rtf)$/.test(name)) return FileText;
-  return FileIcon;
 }
 
 function FileRows({ items }: { items: GalleryAttachment[] }) {
