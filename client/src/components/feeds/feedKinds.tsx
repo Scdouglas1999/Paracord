@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Github, Rss, Tv, Twitch, Youtube, type LucideIcon } from 'lucide-react';
+import { Gamepad2, Github, Rss, Tv, Twitch, Youtube, type LucideIcon } from 'lucide-react';
 import type { FeedKind } from '../../api/feeds';
 import { safeExternalUrl } from '../../lib/security';
 import { cn } from '../../lib/utils';
@@ -57,7 +57,24 @@ export const FEED_KIND_META: Record<FeedKind, FeedKindMeta> = {
   },
 };
 
+/**
+ * The Game servers add-on posts "went down" / "back up" the way a feed posts,
+ * under the `game_server` kind. It is not a feed source, so it is not listed
+ * in {@link FEED_KIND_META} and never offered in "Add a feed".
+ */
+export const GAME_SERVER_POST_KIND = 'game_server';
+
+const GAME_SERVER_POST_META: FeedKindMeta = {
+  label: 'Game server',
+  Icon: Gamepad2,
+  blurb: 'Whether a game server is up.',
+  inputLabel: 'Address',
+  placeholder: '',
+  hint: '',
+};
+
 export function feedKindMeta(kind: string | null | undefined): FeedKindMeta {
+  if (kind === GAME_SERVER_POST_KIND) return GAME_SERVER_POST_META;
   return FEED_KIND_META[(kind as FeedKind) ?? 'rss'] ?? FEED_KIND_META.rss;
 }
 

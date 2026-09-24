@@ -4,6 +4,7 @@ import type { HomeEvent } from '../useUpcomingEvents';
 import { ComingUpWidget } from './ComingUpWidget';
 import { DailyWordWidget } from './DailyWordWidget';
 import { GameWidget } from './GameWidget';
+import { GameServersWidget } from './GameServersWidget';
 import { MediaWidget } from './MediaWidget';
 import { MostActiveWidget } from './MostActiveWidget';
 import { NewHereWidget } from './NewHereWidget';
@@ -72,6 +73,8 @@ export function HomeWidget({ id, context }: { id: HomeWidgetId; context: WidgetC
       );
     case 'daily_word':
       return <DailyWordWidget guildId={context.guildId} nowMs={context.nowMs} />;
+    case 'game_servers':
+      return <GameServersWidget guildId={context.guildId} />;
   }
 }
 

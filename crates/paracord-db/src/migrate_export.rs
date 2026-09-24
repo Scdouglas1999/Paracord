@@ -45,6 +45,10 @@ pub const MIGRATION_TABLE_ORDER: &[&str] = &[
     "federation_room_sync_cursors",
     "federation_server_keys",
     "federation_transport_replay_cache",
+    // Feeds add-on: one row per fetched source; no FKs.
+    "feed_sources",
+    // Game servers add-on: one row per probed address; no FKs.
+    "game_server_targets",
     "guild_templates",
     // No FK into `users`: the claimed-owner id is recorded, not enforced, so
     // deleting the owner can never reopen setup by cascading this row away.
@@ -134,7 +138,15 @@ pub const MIGRATION_TABLE_ORDER: &[&str] = &[
     "channel_overwrites",
     "event_rsvps",
     "federation_message_map",
+    // Feeds add-on: depend on spaces, channels, feed_sources and messages.
+    "feed_messages",
+    "guild_feed_settings",
+    "guild_feeds",
+    "guild_feed_items",
     "guild_daily_word_settings",
+    // Depend on spaces (and game_server_targets).
+    "guild_game_server_settings",
+    "guild_game_servers",
     "guild_level_roles",
     "guild_onboarding_role_options",
     "member_roles",

@@ -9,6 +9,7 @@ import { SectionHeader, FieldLabel, GroupLabel, ToggleRow } from './SettingsPrim
 import { HomePageSettings } from '../rooms/lobby/widgets/HomePageSettings';
 import { listedWidgets, readHomeWidgets, type HomeWidgetSetting } from '../rooms/lobby/widgets/widgetConfig';
 import { useDailyWordSettings } from '../../hooks/useDailyWord';
+import { useGameServers } from '../../hooks/useGameServers';
 
 type VisibilityMode = 'private' | 'public' | 'roles';
 
@@ -43,7 +44,11 @@ export function ServerHubSettings({ guild, channels, roles = [], onUpdate, setEr
     const [allowedRoleIds, setAllowedRoleIds] = useState<string[]>(guild.allowed_roles || []);
     const [homeWidgets, setHomeWidgets] = useState<HomeWidgetSetting[]>(() => readHomeWidgets(guild.hub_settings));
     const { enabled: dailyWordOn } = useDailyWordSettings(guild.id);
-    const shownWidgets = listedWidgets(homeWidgets, guild.hub_settings, dailyWordOn);
+    const { enabled: gameServersOn } = useGameServers(guild.id);
+    const shownWidgets = listedWidgets(homeWidgets, guild.hub_settings, {
+        daily_word: dailyWordOn,
+        game_servers: gameServersOn,
+    });
 
     const textChannels = channels.filter(c => c.type === 0 || c.channel_type === 0);
     const assignableRoles = roles.filter((role) => role.id !== guild.id);
