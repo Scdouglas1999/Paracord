@@ -2,7 +2,7 @@ import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
 import { useSelectedGuildId } from '../../hooks/useGuilds';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
-import { MessageSquare, UserPlus, Ban, Users, CalendarDays, Link2, ShieldCheck, ShieldAlert, ShieldQuestion, QrCode, Copy, Flag, Radio, BadgeCheck, StickyNote, UserCheck, UserX, UserMinus } from 'lucide-react';
+import { MessageSquare, UserPlus, Ban, Users, CalendarDays, Link2, ShieldCheck, ShieldAlert, ShieldQuestion, QrCode, Copy, Flag, BadgeCheck, StickyNote, UserCheck, UserX, UserMinus } from 'lucide-react';
 import { isAdmin, type User } from '../../types/index';
 import { extractApiError } from '../../api/client';
 import { activateChannel } from '../../lib/channelNavigation';
@@ -15,12 +15,9 @@ import { usePresenceStore } from '../../stores/presenceStore';
 import { useServerListStore } from '../../stores/serverListStore';
 import { useRelationshipStore } from '../../stores/relationshipStore';
 import { toast } from '../../stores/toastStore';
-import {
-  formatActivityElapsed,
-  formatActivityLabel,
-  getActivityType,
-  getPrimaryActivity,
-} from '../../lib/activityPresence';
+import { getActivityType, getPrimaryActivity } from '../../lib/activityPresence';
+import { displayActivity } from '../../lib/activityDisplay';
+import { ActivityCard } from './PresenceActivity';
 import { roleColorToHex } from '../../lib/colors';
 import { parseMarkdown } from '../../lib/markdown';
 import { safeExternalUrl, safeStoredImageDataUrl } from '../../lib/security';
@@ -168,7 +165,6 @@ function UserProfileCard({
   const [reportEvidence, setReportEvidence] = useState('');
   const [reportSubmitting, setReportSubmitting] = useState(false);
   const activeGuildId = useSelectedGuildId();
-  const [now, setNow] = useState(() => Date.now());
   const [profileData, setProfileData] = useState<PublicUserProfile | null>(null);
   const [identityFingerprint, setIdentityFingerprint] = useState<string | null>(null);
   // Verified / not verified / unknown. "Unknown" is what a locked account vault
@@ -197,11 +193,8 @@ function UserProfileCard({
   const relationshipType = relationship?.type ?? null;
   const status = (presence?.status as 'online' | 'idle' | 'dnd' | 'offline') || 'offline';
   const activity = useMemo(() => getPrimaryActivity(presence), [presence]);
-  const activityLabel = useMemo(() => formatActivityLabel(activity), [activity]);
-  const activityElapsed = useMemo(
-    () => formatActivityElapsed(activity?.started_at, now),
-    [activity?.started_at, now]
-  );
+  const activityView = useMemo(() => displayActivity(presence), [presence]);
+  const customStatus = status !== 'offline' ? presence?.custom_status?.trim() || null : null;
 
   useEffect(() => {
     void fetchRelationships();
@@ -360,13 +353,6 @@ function UserProfileCard({
       /* ignore */
     }
   }, [user.id, note]);
-
-  useEffect(() => {
-    if (!activity?.started_at) return;
-    setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [activity?.started_at]);
 
   const handleMessage = async () => {
     try {
@@ -589,16 +575,21 @@ function UserProfileCard({
             )}
           </div>
 
-          {activityLabel && (
-            <div
-              className="mt-2 inline-flex items-center gap-1.5 text-meta"
-              style={{ color: isStreaming ? 'var(--light-white)' : 'var(--text-secondary)' }}
-            >
-              {isStreaming && <Radio size={12} />}
-              <span>{activityElapsed ? `${activityLabel} · ${activityElapsed}` : activityLabel}</span>
+          {customStatus && (
+            <div className="mt-2 text-meta text-text-secondary" data-testid="profile-custom-status">
+              {customStatus}
             </div>
           )}
         </div>
+
+        {/* The popout has room for both: the custom status sits under the
+            name, and what they are doing gets its own section. */}
+        {activityView && (
+          <div className="px-5 pb-4" data-testid="profile-activity">
+            <SectionLabel>{activityView.verb}</SectionLabel>
+            <ActivityCard view={activityView} />
+          </div>
+        )}
 
         {bio && (
           <div className="px-5 pb-4">

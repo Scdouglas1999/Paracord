@@ -2,6 +2,7 @@ import { useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'r
 import { Bell, BellOff, CheckCheck, Image as ImageIcon, Settings, UserPlus } from 'lucide-react';
 
 import { AvatarStack, LitAvatar } from '../../light';
+import { PersonFaceTooltip, PersonStatusLine } from '../../user/PresenceActivity';
 import { Button, IconButton, Popover } from '../../ui';
 import type { ContextMenuItem } from '../../ui/ContextMenu';
 import { getIdentityColor } from '../../../lib/colors';
@@ -198,7 +199,19 @@ function MembersButton({
           'transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle',
         )}
       >
-        {onlinePeople.length > 0 && <AvatarStack people={onlinePeople} size={26} max={PILE} context="online" />}
+        {onlinePeople.length > 0 && (
+          <AvatarStack
+            people={onlinePeople}
+            size={26}
+            max={PILE}
+            context="online"
+            renderFace={(person, face) => (
+              <PersonFaceTooltip userId={person.userId} name={person.name} fallback={person.label}>
+                {face}
+              </PersonFaceTooltip>
+            )}
+          />
+        )}
         <span className="truncate text-label text-text-secondary">{line}</span>
       </button>
       <Popover anchor={anchor} open={open} onClose={() => setOpen(false)} label="Members" className="w-72 p-0">
@@ -210,13 +223,16 @@ function MembersButton({
           {people.map((person) => (
             <li key={person.userId} className="flex items-center gap-2.5 rounded-[var(--radius-chip)] px-2 py-1.5">
               <LitAvatar person={person} size={26} />
-              <span
-                className={cn(
-                  'min-w-0 flex-1 truncate text-label',
-                  person.level === 'on' ? 'text-text-primary' : 'text-text-muted',
-                )}
-              >
-                {person.name}
+              <span className="min-w-0 flex-1">
+                <span
+                  className={cn(
+                    'block truncate text-label',
+                    person.level === 'on' ? 'text-text-primary' : 'text-text-muted',
+                  )}
+                >
+                  {person.name}
+                </span>
+                <PersonStatusLine userId={person.userId} />
               </span>
               {person.roomName && (
                 <span className="max-w-[45%] shrink-0 truncate text-meta text-text-muted">{person.roomName}</span>

@@ -10,6 +10,7 @@ use futures_util::stream;
 use paracord_core::AppState;
 use paracord_models::gateway::{EVENT_CHANNEL_DELETE, EVENT_CHANNEL_UPDATE};
 use paracord_models::permissions::Permissions;
+use paracord_models::presence::{normalize_activities, MAX_ACTIVITY_TEXT_LEN};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
@@ -95,10 +96,9 @@ struct TypingStartCommandPayload {
 // caller could park a multi-megabyte blob in server memory and force it onto
 // every peer. Keep these limits in lock-step with the gateway's.
 
-/// Maximum activity entries retained from a presence update.
-const MAX_ACTIVITY_ITEMS: usize = 8;
-/// Maximum characters retained for any single presence text field.
-const MAX_ACTIVITY_TEXT_LEN: usize = 256;
+// The activity rules (count, kinds, text caps, timestamps) are shared with the
+// gateway through `paracord_models::presence::normalize_activities`.
+
 /// Hard cap on the serialized size of an inbound presence payload. Anything
 /// larger is refused outright rather than truncated, so an oversized blob is a
 /// visible client error instead of silent data loss.
@@ -119,45 +119,6 @@ fn normalize_status(raw: Option<&str>) -> &'static str {
     }
 }
 
-fn extract_activities(raw: Option<&Value>) -> Vec<Value> {
-    let mut activities = Vec::new();
-    let Some(Value::Array(list)) = raw else {
-        return activities;
-    };
-
-    for entry in list.iter().take(MAX_ACTIVITY_ITEMS) {
-        let Some(obj) = entry.as_object() else {
-            continue;
-        };
-        let name = obj
-            .get("name")
-            .and_then(|v| v.as_str())
-            .map(|s| truncate_for_presence(s, MAX_ACTIVITY_TEXT_LEN))
-            .unwrap_or_else(|| "Unknown".to_string());
-        let activity_type = obj
-            .get("type")
-            .or_else(|| obj.get("activity_type"))
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0);
-        let text_field = |key: &str| {
-            obj.get(key)
-                .and_then(|v| v.as_str())
-                .map(|s| truncate_for_presence(s, MAX_ACTIVITY_TEXT_LEN))
-        };
-
-        activities.push(json!({
-            "name": name,
-            "type": activity_type,
-            "details": text_field("details"),
-            "state": text_field("state"),
-            "started_at": text_field("started_at"),
-            "application_id": text_field("application_id"),
-        }));
-    }
-
-    activities
-}
-
 /// Build the stored/broadcast presence value from a caller-supplied payload,
 /// applying the same normalization the gateway applies.
 fn build_presence_payload(
@@ -170,7 +131,7 @@ fn build_presence_payload(
         "user_id": user_id.to_string(),
         "status": normalize_status(status),
         "custom_status": custom_status.map(|v| truncate_for_presence(v, MAX_ACTIVITY_TEXT_LEN)),
-        "activities": extract_activities(activities),
+        "activities": normalize_activities(activities),
     })
 }
 

@@ -26,6 +26,7 @@ function activitiesEqual(a: Activity[] | undefined, b: Activity[] | undefined): 
       x.details !== y.details ||
       x.state !== y.state ||
       x.started_at !== y.started_at ||
+      x.ends_at !== y.ends_at ||
       x.application_id !== y.application_id
     ) {
       return false;
@@ -148,6 +149,7 @@ export const usePresenceStore = create<PresenceState>()((set, get) => ({
         existing &&
         existing.status === next.status &&
         existing.guild_id === next.guild_id &&
+        (existing.custom_status ?? null) === (next.custom_status ?? null) &&
         activitiesEqual(existing.activities, next.activities)
       ) {
         return state;

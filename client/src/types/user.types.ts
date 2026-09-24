@@ -44,16 +44,37 @@ export interface Presence {
   guild_id?: string;
   status: 'online' | 'idle' | 'dnd' | 'offline';
   activities: Activity[];
+  /** The short line people set in the account menu. */
+  custom_status?: string | null;
 }
 
+/**
+ * Activity kinds, as sent in `Activity.type` (Discord's numbering, which the
+ * server validates against).
+ */
+export const ActivityType = {
+  PLAYING: 0,
+  STREAMING: 1,
+  LISTENING: 2,
+  WATCHING: 3,
+  CUSTOM: 4,
+  COMPETING: 5,
+} as const;
+
 export interface Activity {
+  /** The app: "Spotify", a game, or "Paracord" for a watch-together session. */
   name: string;
   type: number;
   activity_type?: number;
-  details?: string;
-  state?: string;
-  started_at?: string;
-  application_id?: string;
+  /** Listening/watching: the title. Playing: a label. */
+  details?: string | null;
+  /** Listening: the artist. Playing: the window title. */
+  state?: string | null;
+  /** RFC 3339. Listening: when the track would have started at its current position. */
+  started_at?: string | null;
+  /** RFC 3339. Listening: when the track ends, when its length is known. */
+  ends_at?: string | null;
+  application_id?: string | null;
 }
 
 export const UserFlags = {
