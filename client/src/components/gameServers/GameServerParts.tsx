@@ -33,7 +33,7 @@ export function GameKindIcon({ kind, size = 32, className }: { kind: string; siz
 }
 
 const DOT_TONE: Record<GameServerState, string> = {
-  up: 'bg-accent-success',
+  up: 'bg-status-up',
   down: 'bg-accent-danger',
   checking: 'bg-text-faint',
 };

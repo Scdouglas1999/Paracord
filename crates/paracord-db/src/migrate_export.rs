@@ -122,12 +122,6 @@ pub const MIGRATION_TABLE_ORDER: &[&str] = &[
     "voice_states",
     "webhooks",
     // Leaf/feature tables (depend on the above).
-    // Feeds: sources first, then the per-server rows that point at them.
-    "feed_sources",
-    "guild_feed_settings",
-    "guild_feeds",
-    "guild_feed_items",
-    "feed_messages",
     "anonymous_channel_aliases",
     "anonymous_messages",
     "attachments",

@@ -85,6 +85,7 @@
   --color-accent-warning: var(--accent-warning);
   --color-accent-info: var(--accent-info);
   --color-accent-success: var(--accent-success);
+  --color-status-up: var(--status-up);
   --color-danger-well: var(--danger-well);
   --color-danger-well-hover: var(--danger-well-hover);
 
@@ -681,6 +682,7 @@
   --color-accent-warning: var(--accent-warning);
   --color-accent-info: var(--accent-info);
   --color-accent-success: var(--accent-success);
+  --color-status-up: var(--status-up);
   --color-danger-well: var(--danger-well);
   --color-danger-well-hover: var(--danger-well-hover);
   --color-accent-tint: var(--accent-tint);
@@ -1412,6 +1414,20 @@
   --sports-redzone: oklch(0.46 0.12 25 / 0.38);
   --sports-logo-chip: oklch(0.97 0.008 95);
   --sports-lace: oklch(0.30 0.04 55);
+}
+
+/* =============================================================================
+   Service status. A fixed green, not the accent: "this game server is up"
+   has to read as up in every look, including Slate, where success is the
+   amber accent.
+   ============================================================================= */
+:root {
+  --status-up: oklch(0.72 0.16 150);
+}
+
+[data-theme='paper'],
+[data-theme='light'] {
+  --status-up: oklch(0.56 0.14 150);
 }
 
 /* =============================================================================

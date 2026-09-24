@@ -390,7 +390,7 @@ function PreviewLine({ preview, localProblem }: { preview: PreviewState; localPr
     .join(' · ');
   return (
     <div className="pc-feed-row pc-well flex items-center gap-3 px-3.5 py-3" aria-live="polite">
-      <span className="inline-block h-2 w-2 shrink-0 rounded-full bg-accent-success" aria-hidden />
+      <span className="inline-block h-2 w-2 shrink-0 rounded-full bg-status-up" aria-hidden />
       <div className="min-w-0 flex-1">
         <p className="truncate text-label text-text-primary">
           <span className="text-text-muted">Found: </span>
