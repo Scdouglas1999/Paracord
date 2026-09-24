@@ -238,7 +238,9 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
   }, [isMobile, mobileShowNav, onClose]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Escape') onClose();
+    // A dialog portaled out of this page (Add a feed, a confirm) still bubbles
+    // its keys here through React; only Escape pressed inside the page closes it.
+    if (e.key === 'Escape' && !e.defaultPrevented && e.currentTarget.contains(e.target as Node)) onClose();
   };
 
   const runAction = async (action: () => Promise<void>, fallback: string) => {

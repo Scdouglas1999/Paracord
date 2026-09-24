@@ -13,6 +13,12 @@ function getFocusableElements(container: HTMLElement): HTMLElement[] {
 }
 
 /**
+ * Active traps, oldest first. Only the newest one answers Escape and Tab, so a
+ * dialog opened over a panel closes alone instead of taking the panel with it.
+ */
+const trapStack: symbol[] = [];
+
+/**
  * Traps keyboard focus within an active dialog/panel and restores focus on close.
  */
 export function useFocusTrap(
@@ -25,11 +31,14 @@ export function useFocusTrap(
     const container = containerRef.current;
     if (!container) return;
 
+    const token = Symbol('focus-trap');
+    trapStack.push(token);
     const previousActive = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const focusables = getFocusableElements(container);
     (focusables[0] ?? container).focus();
 
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (trapStack[trapStack.length - 1] !== token) return;
       if (e.key === 'Escape' && onClose) {
         e.preventDefault();
         // Stop other shell Escape handlers (TopBar, keyboard nav) from also
@@ -70,6 +79,8 @@ export function useFocusTrap(
     document.addEventListener('keydown', handleKeyDown);
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
+      const at = trapStack.lastIndexOf(token);
+      if (at !== -1) trapStack.splice(at, 1);
       if (previousActive && document.contains(previousActive)) {
         previousActive.focus();
       }

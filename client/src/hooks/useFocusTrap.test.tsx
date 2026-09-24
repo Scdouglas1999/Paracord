@@ -76,4 +76,32 @@ describe('useFocusTrap', () => {
 
     expect(previous).toHaveFocus();
   });
+
+  it('lets only the newest trap answer Escape when two are open', () => {
+    const outerClose = vi.fn();
+    const innerClose = vi.fn();
+    const { rerender } = render(
+      <>
+        <FocusTrapHarness onClose={outerClose} />
+      </>,
+    );
+    rerender(
+      <>
+        <FocusTrapHarness onClose={outerClose} />
+        <FocusTrapHarness onClose={innerClose} />
+      </>,
+    );
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(innerClose).toHaveBeenCalledTimes(1);
+    expect(outerClose).not.toHaveBeenCalled();
+
+    rerender(
+      <>
+        <FocusTrapHarness onClose={outerClose} />
+      </>,
+    );
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(outerClose).toHaveBeenCalledTimes(1);
+  });
 });
