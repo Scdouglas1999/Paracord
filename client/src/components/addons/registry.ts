@@ -1,6 +1,7 @@
 import type { ComponentType, ReactNode } from 'react';
 import { dailyWordAddon } from './dailyWord';
 import { feedsAddon } from './feeds';
+import { gameServersAddon } from './gameServers';
 import { sportsAddon } from './sports';
 
 /** What an add-on's page receives. */
@@ -38,6 +39,7 @@ export const ADDONS: readonly AddonDescriptor[] = [
   sportsAddon,
   feedsAddon,
   dailyWordAddon,
+  gameServersAddon,
 ];
 
 export function findAddon(id: string | null | undefined): AddonDescriptor | undefined {

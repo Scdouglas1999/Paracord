@@ -50,7 +50,7 @@ import { mentionsEveryone } from '../../lib/mentions';
 import { MessageEmbedCard, extractUrls } from './MessageEmbed';
 import { LitAvatar } from '../light';
 import { FeedPostCard, isFeedEmbed } from '../feeds/FeedPostCard';
-import { FeedSourceIcon } from '../feeds/feedKinds';
+import { FeedSourceIcon, GAME_SERVER_POST_KIND } from '../feeds/feedKinds';
 import { Chip } from '../ui';
 import {
   AttachmentFrame,
@@ -2890,7 +2890,7 @@ function OwnedMessageList({
               )}
               {feedPost ? (
                 <Chip size="sm" className="text-accent-primary">
-                  Feed
+                  {feedPost.kind === GAME_SERVER_POST_KIND ? 'Game server' : 'Feed'}
                 </Chip>
               ) : msg.author.bot && (
                 <Chip size="sm" className="text-accent-primary">

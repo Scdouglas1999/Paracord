@@ -24,6 +24,7 @@ describe('readHomeWidgets', () => {
       'pinned',
       'new_here',
       'daily_word',
+      'game_servers',
     ]);
     expect(read[0]).toEqual({ id: 'media', enabled: false });
     expect(read.slice(2).every((widget) => widget.enabled)).toBe(true);
@@ -51,35 +52,49 @@ describe('enabledWidgets', () => {
           { id: 'pinned', enabled: true },
         ],
       }),
-      // Daily word came after this list was saved, so it is appended, switched on.
-    ).toEqual(['new_here', 'pinned', 'daily_word']);
+      // Daily word and Game servers came after this list was saved, so they
+      // are appended, switched on.
+    ).toEqual(['new_here', 'pinned', 'daily_word', 'game_servers']);
   });
 });
 
 describe('moveWidget', () => {
   it('moves one entry and leaves the rest in order', () => {
     const moved = moveWidget(DEFAULT_HOME_WIDGETS, 4, 0).map((widget) => widget.id);
-    expect(moved).toEqual(['pinned', 'coming_up', 'media', 'most_active', 'game', 'new_here', 'daily_word']);
+    expect(moved).toEqual(['pinned', 'coming_up', 'media', 'most_active', 'game', 'new_here', 'daily_word', 'game_servers']);
   });
 
   it('ignores a move off either end', () => {
     expect(moveWidget(DEFAULT_HOME_WIDGETS, 0, -1)).toEqual(DEFAULT_HOME_WIDGETS);
-    expect(moveWidget(DEFAULT_HOME_WIDGETS, 6, 7)).toEqual(DEFAULT_HOME_WIDGETS);
+    expect(moveWidget(DEFAULT_HOME_WIDGETS, 7, 8)).toEqual(DEFAULT_HOME_WIDGETS);
   });
 });
 
 describe('listedWidgets', () => {
   const all = readHomeWidgets(null);
+  const off = { daily_word: false, game_servers: false };
 
-  it('leaves Daily word out while the add-on is off and the saved list never named it', () => {
-    const saved = { widgets: HOME_WIDGET_IDS.filter((id) => id !== 'daily_word').map((id) => ({ id, enabled: true })) };
-    expect(listedWidgets(all, saved, false).map((widget) => widget.id)).not.toContain('daily_word');
-    expect(listedWidgets(all, null, false)).toHaveLength(HOME_WIDGET_IDS.length - 1);
+  it('leaves an add-on widget out while the add-on is off and the saved list never named it', () => {
+    const saved = {
+      widgets: HOME_WIDGET_IDS.filter((id) => id !== 'daily_word' && id !== 'game_servers').map((id) => ({
+        id,
+        enabled: true,
+      })),
+    };
+    const ids = listedWidgets(all, saved, off).map((widget) => widget.id);
+    expect(ids).not.toContain('daily_word');
+    expect(ids).not.toContain('game_servers');
+    expect(listedWidgets(all, null, off)).toHaveLength(HOME_WIDGET_IDS.length - 2);
   });
 
   it('lists it when the add-on is on, or when the saved list already has it', () => {
-    expect(listedWidgets(all, null, true).map((widget) => widget.id)).toContain('daily_word');
+    expect(listedWidgets(all, null, { ...off, daily_word: true }).map((widget) => widget.id)).toContain('daily_word');
+    const games = listedWidgets(all, null, { ...off, game_servers: true }).map((widget) => widget.id);
+    expect(games).toContain('game_servers');
+    expect(games).not.toContain('daily_word');
     const saved = { widgets: [{ id: 'daily_word', enabled: false }] };
-    expect(listedWidgets(readHomeWidgets(saved), saved, false)[0]).toEqual({ id: 'daily_word', enabled: false });
+    expect(listedWidgets(readHomeWidgets(saved), saved, off)[0]).toEqual({ id: 'daily_word', enabled: false });
+    const savedGames = { widgets: [{ id: 'game_servers', enabled: true }] };
+    expect(listedWidgets(readHomeWidgets(savedGames), savedGames, off)[0]).toEqual({ id: 'game_servers', enabled: true });
   });
 });

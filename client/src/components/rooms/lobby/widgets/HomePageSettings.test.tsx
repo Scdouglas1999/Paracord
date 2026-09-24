@@ -28,8 +28,9 @@ describe('Home page settings', () => {
       'game',
       'new_here',
       'daily_word',
+      'game_servers',
     ]);
-    expect(screen.getByText('Pinned moved to position 4 of 7.')).toBeInTheDocument();
+    expect(screen.getByText('Pinned moved to position 4 of 8.')).toBeInTheDocument();
   });
 
   it('previews only the widgets that are on, in order', () => {

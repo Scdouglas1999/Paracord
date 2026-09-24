@@ -11,6 +11,7 @@ pub mod daily_word;
 pub mod error;
 pub mod events;
 pub mod feeds;
+pub mod game_servers;
 pub mod guild;
 pub mod health;
 pub mod identity;

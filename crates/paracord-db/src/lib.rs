@@ -19,6 +19,7 @@ pub mod emojis;
 pub mod federation;
 pub mod federation_file_cache;
 pub mod feeds;
+pub mod game_servers;
 pub mod group_e2ee;
 pub mod guild_sports;
 pub mod guild_storage_policies;

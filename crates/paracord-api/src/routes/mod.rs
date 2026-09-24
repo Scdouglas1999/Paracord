@@ -20,6 +20,8 @@ pub mod feeds;
 pub mod feeds_poll;
 pub mod files;
 pub mod gallery;
+pub mod game_servers;
+pub mod game_servers_poll;
 pub mod guild_search;
 pub mod guilds;
 pub mod interactions;

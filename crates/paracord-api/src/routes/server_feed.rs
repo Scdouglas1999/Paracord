@@ -52,7 +52,7 @@ const SYNTHETIC_LOW_BITS: i64 = 0x3F_FFFF;
 
 /// The widgets the server home's side column knows, in their default order.
 /// `hub_settings.widgets` may name only these.
-pub const HOME_WIDGET_IDS: [&str; 7] = [
+pub const HOME_WIDGET_IDS: [&str; 8] = [
     "coming_up",
     "media",
     "most_active",
@@ -60,6 +60,7 @@ pub const HOME_WIDGET_IDS: [&str; 7] = [
     "pinned",
     "new_here",
     "daily_word",
+    "game_servers",
 ];
 
 /// Validate `hub_settings.widgets`: `[{ "id": <known id>, "enabled": <bool> }]`,

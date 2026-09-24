@@ -468,6 +468,24 @@ pub fn build_router(state: &AppState) -> Router<AppState> {
             post(routes::feeds::post_latest),
         )
         .route(
+            "/api/v1/guilds/{guild_id}/game-servers",
+            get(routes::game_servers::list_game_servers)
+                .post(routes::game_servers::create_game_server),
+        )
+        .route(
+            "/api/v1/guilds/{guild_id}/game-servers/settings",
+            put(routes::game_servers::put_settings),
+        )
+        .route(
+            "/api/v1/guilds/{guild_id}/game-servers/preview",
+            post(routes::game_servers::preview),
+        )
+        .route(
+            "/api/v1/guilds/{guild_id}/game-servers/{server_id}",
+            patch(routes::game_servers::update_game_server)
+                .delete(routes::game_servers::delete_game_server),
+        )
+        .route(
             "/api/v1/guilds/{guild_id}/members/@me",
             put(routes::members::join_public_guild).delete(routes::members::leave_guild),
         )

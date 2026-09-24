@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { dailyWordApi } from '../../api/dailyWord';
 import { feedsApi } from '../../api/feeds';
+import { gameServersApi } from '../../api/gameServers';
 import { sportsApi } from '../../api/sports';
 import { AddonsHub } from './AddonsHub';
 
@@ -29,6 +30,13 @@ vi.mock('../../api/dailyWord', async () => {
     dailyWordApi: { ...actual.dailyWordApi, getSettings: vi.fn(), updateSettings: vi.fn() },
   };
 });
+vi.mock('../../api/gameServers', async () => {
+  const actual = await vi.importActual<typeof import('../../api/gameServers')>('../../api/gameServers');
+  return {
+    ...actual,
+    gameServersApi: { list: vi.fn(), setEnabled: vi.fn(), preview: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn() },
+  };
+});
 vi.mock('../../stores/toastStore', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 const feedList = { enabled: false, feeds: [], limit: 20, twitch_available: false };
@@ -47,6 +55,9 @@ describe('AddonsHub', () => {
     vi.mocked(dailyWordApi.getSettings).mockResolvedValue({
       data: { guild_id: 'g1', enabled: false, share_channel_id: null, show_on_front_page: true, updated_at: '' },
     } as never);
+    vi.mocked(gameServersApi.list).mockResolvedValue({
+      data: { enabled: true, can_manage: true, limit: 10, servers: [] },
+    } as never);
     vi.mocked(sportsApi.listLeagues).mockResolvedValue({ data: { leagues: [] } } as never);
   });
 
@@ -59,7 +70,9 @@ describe('AddonsHub', () => {
     await waitFor(() => expect(feedsSwitch).not.toBeDisabled());
     expect(feedsSwitch).toHaveAttribute('aria-checked', 'false');
     expect(await screen.findByRole('switch', { name: 'Sports on this server' })).toHaveAttribute('aria-checked', 'true');
-    expect(screen.getAllByRole('button', { name: /Set up/ })).toHaveLength(3);
+    expect(screen.getByRole('heading', { name: 'Game servers' })).toBeInTheDocument();
+    expect(await screen.findByRole('switch', { name: 'Game servers on this server' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getAllByRole('button', { name: /Set up/ })).toHaveLength(4);
   });
 
   it('turns an add-on on from its card', async () => {

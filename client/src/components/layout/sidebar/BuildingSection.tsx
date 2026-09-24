@@ -14,6 +14,8 @@ import { SportsSidebarRow } from '../../sports/SportsSidebarRow';
 import { DailyWordSidebarRow } from '../../dailyWord/DailyWordSidebarRow';
 import { isDailyWordPath } from '../../dailyWord/model';
 import { useDailyWordSettings } from '../../../hooks/useDailyWord';
+import { useGameServers } from '../../../hooks/useGameServers';
+import { GameServersSidebarRow } from '../../gameServers/GameServersSidebarRow';
 import { RoomRow, ThreadRow, type RoomAttention } from './RoomRow';
 
 /**
@@ -107,6 +109,7 @@ export function BuildingSection({
   const sportsOpen = sportsOn && isSportsPath(building.guildId);
   const { enabled: wordOn } = useDailyWordSettings(building.guildId);
   const wordOpen = wordOn && isDailyWordPath(building.guildId);
+  const { servers: gameServers } = useGameServers(building.guildId);
   // A page of its own (Sports, Daily word) is open: the plate is not the current page.
   const pageOpen = sportsOpen || wordOpen;
   // The server's own colour — the same one its Home card and its Lobby header
@@ -193,6 +196,10 @@ export function BuildingSection({
           tabStop={wordOpen}
           onOpen={onOpenDailyWord}
         />
+      )}
+
+      {gameServers.length > 0 && (
+        <GameServersSidebarRow guildName={building.name} servers={gameServers} />
       )}
 
       {rooms.flatMap((room) => {
