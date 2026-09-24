@@ -434,7 +434,11 @@ fn mp4_boxes(data: &[u8], start: usize, end: usize) -> Vec<(u32, usize, usize)> 
         } else {
             (size32 as usize, pos + header)
         };
-        if box_size < header || pos.checked_add(box_size).is_none_or(|box_end| box_end > end) {
+        if box_size < header
+            || pos
+                .checked_add(box_size)
+                .is_none_or(|box_end| box_end > end)
+        {
             break;
         }
         out.push((kind, body_start, pos + box_size - body_start));
@@ -501,7 +505,13 @@ mod tests {
             b"\xFF\xFB\x90\x64",
             b"",
         ];
-        let kinds = ["audio/wav", "audio/ogg", "audio/mpeg", "audio/mp4", "audio/x-m4a"];
+        let kinds = [
+            "audio/wav",
+            "audio/ogg",
+            "audio/mpeg",
+            "audio/mp4",
+            "audio/x-m4a",
+        ];
         for round in 0..20_000 {
             let prefix = prefixes[round % prefixes.len()];
             let len = (next() % 512) as usize;
