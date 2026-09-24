@@ -249,7 +249,7 @@ export function ScheduledMessagesPanel({
                       )}
                     </div>
                     {isPending && !isEditing && (
-                      <div className="flex flex-shrink-0 items-center gap-1 opacity-0 transition-opacity duration-[140ms] ease-[var(--ease-out)] group-hover:opacity-100 group-focus-within:opacity-100">
+                      <div className="flex flex-shrink-0 items-center gap-1 opacity-0 transition-opacity duration-[var(--duration-fast)] ease-[var(--ease-out)] group-hover:opacity-100 group-focus-within:opacity-100">
                         <button
                           type="button"
                           onClick={() => beginEdit(item)}

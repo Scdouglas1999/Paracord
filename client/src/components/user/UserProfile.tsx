@@ -797,7 +797,7 @@ function UserProfileCard({
         {/* Actions — primary emerald message, ghost add-friend, danger block/report */}
         <div className="flex flex-col gap-2 px-5 pb-5 pt-1">
           <button
-            className={`flex h-9 w-full items-center justify-center gap-2 rounded-chip bg-accent-primary text-label font-semibold text-text-on-accent shadow-[var(--shadow-chip)] transition-[transform,background-color] duration-150 hover:bg-accent-primary-hover active:scale-[.97] active:bg-accent-primary-active ${FOCUS_RING}`}
+            className={`flex h-9 w-full items-center justify-center gap-2 rounded-chip bg-accent-primary text-label font-semibold text-text-on-accent shadow-[var(--shadow-chip)] transition-[transform,background-color] duration-[var(--duration-fast)] hover:bg-accent-primary-hover active:scale-[0.98] active:bg-accent-primary-active ${FOCUS_RING}`}
             onClick={() => void handleMessage()}
           >
             <MessageSquare size={16} />
@@ -806,7 +806,7 @@ function UserProfileCard({
           <div className="flex items-center gap-2">
             {!isBotUser && relationshipType === 1 && (
               <button
-                className={`flex h-9 flex-1 items-center justify-center gap-2 rounded-chip border border-border-subtle text-label font-medium text-text-secondary transition-colors duration-150 hover:bg-bg-mod-subtle hover:text-text-primary active:scale-[.97] ${FOCUS_RING}`}
+                className={`flex h-9 flex-1 items-center justify-center gap-2 rounded-chip border border-border-subtle text-label font-medium text-text-secondary transition-colors duration-[var(--duration-fast)] hover:bg-bg-mod-subtle hover:text-text-primary active:scale-[0.98] ${FOCUS_RING}`}
                 aria-label={`Remove ${user.username} as a friend`}
                 onClick={() => void handleRemoveRelationship(`Removed ${user.username} from friends.`)}
               >
@@ -816,7 +816,7 @@ function UserProfileCard({
             )}
             {!isBotUser && relationshipType === 2 && (
               <button
-                className={`flex h-9 flex-1 items-center justify-center gap-2 rounded-chip border border-border-subtle text-label font-medium text-text-secondary transition-colors duration-150 hover:bg-bg-mod-subtle hover:text-text-primary active:scale-[.97] ${FOCUS_RING}`}
+                className={`flex h-9 flex-1 items-center justify-center gap-2 rounded-chip border border-border-subtle text-label font-medium text-text-secondary transition-colors duration-[var(--duration-fast)] hover:bg-bg-mod-subtle hover:text-text-primary active:scale-[0.98] ${FOCUS_RING}`}
                 aria-label={`Unblock ${user.username}`}
                 onClick={() => void handleRemoveRelationship(`Unblocked ${user.username}.`)}
               >
@@ -827,7 +827,7 @@ function UserProfileCard({
             {!isBotUser && relationshipType === 3 && (
               <>
                 <button
-                  className={`flex h-9 flex-1 items-center justify-center gap-2 rounded-chip border border-border-subtle text-label font-medium text-text-secondary transition-colors duration-150 hover:bg-bg-mod-subtle hover:text-text-primary active:scale-[.97] ${FOCUS_RING}`}
+                  className={`flex h-9 flex-1 items-center justify-center gap-2 rounded-chip border border-border-subtle text-label font-medium text-text-secondary transition-colors duration-[var(--duration-fast)] hover:bg-bg-mod-subtle hover:text-text-primary active:scale-[0.98] ${FOCUS_RING}`}
                   aria-label={`Accept friend request from ${user.username}`}
                   onClick={() => void handleAcceptFriend()}
                 >
@@ -835,7 +835,7 @@ function UserProfileCard({
                   Accept
                 </button>
                 <button
-                  className={`flex h-9 items-center justify-center gap-2 rounded-chip border border-border-subtle px-3 text-label font-medium text-text-secondary transition-colors duration-150 hover:bg-bg-mod-subtle hover:text-text-primary active:scale-[.97] ${FOCUS_RING}`}
+                  className={`flex h-9 items-center justify-center gap-2 rounded-chip border border-border-subtle px-3 text-label font-medium text-text-secondary transition-colors duration-[var(--duration-fast)] hover:bg-bg-mod-subtle hover:text-text-primary active:scale-[0.98] ${FOCUS_RING}`}
                   aria-label={`Decline friend request from ${user.username}`}
                   onClick={() => void handleRemoveRelationship(`Declined friend request from ${user.username}.`)}
                 >
@@ -845,7 +845,7 @@ function UserProfileCard({
             )}
             {!isBotUser && relationshipType === 4 && (
               <button
-                className={`flex h-9 flex-1 items-center justify-center gap-2 rounded-chip border border-border-subtle text-label font-medium text-text-secondary transition-colors duration-150 hover:bg-bg-mod-subtle hover:text-text-primary active:scale-[.97] ${FOCUS_RING}`}
+                className={`flex h-9 flex-1 items-center justify-center gap-2 rounded-chip border border-border-subtle text-label font-medium text-text-secondary transition-colors duration-[var(--duration-fast)] hover:bg-bg-mod-subtle hover:text-text-primary active:scale-[0.98] ${FOCUS_RING}`}
                 aria-label={`Cancel friend request to ${user.username}`}
                 onClick={() => void handleRemoveRelationship(`Canceled friend request to ${user.username}.`)}
               >
@@ -855,7 +855,7 @@ function UserProfileCard({
             )}
             {!isBotUser && relationshipType == null && (
               <button
-                className={`flex h-9 flex-1 items-center justify-center gap-2 rounded-chip border border-border-subtle text-label font-medium text-text-secondary transition-colors duration-150 hover:bg-bg-mod-subtle hover:text-text-primary active:scale-[.97] ${FOCUS_RING}`}
+                className={`flex h-9 flex-1 items-center justify-center gap-2 rounded-chip border border-border-subtle text-label font-medium text-text-secondary transition-colors duration-[var(--duration-fast)] hover:bg-bg-mod-subtle hover:text-text-primary active:scale-[0.98] ${FOCUS_RING}`}
                 aria-label={`Add ${user.username} as a friend`}
                 onClick={() => void handleAddFriend()}
               >
@@ -865,7 +865,7 @@ function UserProfileCard({
             )}
             {relationshipType !== 2 && (
               <button
-                className={`flex h-9 items-center justify-center gap-2 rounded-chip border border-accent-danger/30 px-3 text-label font-medium text-accent-danger transition-colors duration-150 hover:bg-danger-tint active:scale-[.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-danger focus-visible:ring-offset-2 focus-visible:ring-offset-bg-floating ${isBotUser || relationshipType != null && relationshipType !== 1 ? 'flex-1' : ''}`}
+                className={`flex h-9 items-center justify-center gap-2 rounded-chip border border-accent-danger/30 px-3 text-label font-medium text-accent-danger transition-colors duration-[var(--duration-fast)] hover:bg-danger-tint active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-danger focus-visible:ring-offset-2 focus-visible:ring-offset-bg-floating ${isBotUser || relationshipType != null && relationshipType !== 1 ? 'flex-1' : ''}`}
                 aria-label={`Block ${user.username}`}
                 onClick={() => void handleBlock()}
               >
@@ -875,7 +875,7 @@ function UserProfileCard({
             )}
             {!isBotUser && activeGuildId && (
               <button
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-chip text-accent-danger transition-colors duration-150 hover:bg-danger-tint active:scale-[.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-danger focus-visible:ring-offset-2 focus-visible:ring-offset-bg-floating"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-chip text-accent-danger transition-colors duration-[var(--duration-fast)] hover:bg-danger-tint active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-danger focus-visible:ring-offset-2 focus-visible:ring-offset-bg-floating"
                 title="Report user"
                 aria-label={`Report ${user.username}`}
                 onClick={() => { setShowReportDialog(true); setActionError(null); }}

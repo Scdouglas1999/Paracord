@@ -129,7 +129,7 @@ export function DmPickerModal({ open, onClose, onCreated }: DmPickerModalProps) 
             role="tab"
             aria-selected={!groupMode}
             className={cn(
-              'pc-focusable flex h-[var(--h-control)] items-center justify-center gap-1.5 rounded-[var(--radius-chip)] text-label transition-[background-color,color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
+              'pc-focusable flex h-[var(--h-control)] items-center justify-center gap-1.5 rounded-[var(--radius-chip)] text-label transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]',
               !groupMode
                 ? 'bg-bg-raised font-semibold text-text-primary shadow-[var(--shadow-raised)]'
                 : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary',
@@ -146,7 +146,7 @@ export function DmPickerModal({ open, onClose, onCreated }: DmPickerModalProps) 
             role="tab"
             aria-selected={groupMode}
             className={cn(
-              'pc-focusable flex h-[var(--h-control)] items-center justify-center gap-1.5 rounded-[var(--radius-chip)] text-label transition-[background-color,color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
+              'pc-focusable flex h-[var(--h-control)] items-center justify-center gap-1.5 rounded-[var(--radius-chip)] text-label transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]',
               groupMode
                 ? 'bg-bg-raised font-semibold text-text-primary shadow-[var(--shadow-raised)]'
                 : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary',
@@ -178,7 +178,7 @@ export function DmPickerModal({ open, onClose, onCreated }: DmPickerModalProps) 
             type="text"
             placeholder="Group name (optional)"
             aria-label="Group name"
-            className="pc-well mt-2.5 h-[var(--h-control-phone)] w-full px-3 text-label text-text-primary outline-none transition-[box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)] placeholder:text-text-faint focus-visible:shadow-[var(--shadow-well),var(--focus-ring)]"
+            className="pc-well mt-2.5 h-[var(--h-control-phone)] w-full px-3 text-label text-text-primary outline-none placeholder:text-text-faint focus-visible:shadow-[var(--shadow-well),var(--focus-ring)]"
             value={groupName}
             onChange={(e) => setGroupName(e.target.value)}
           />
@@ -209,7 +209,7 @@ export function DmPickerModal({ open, onClose, onCreated }: DmPickerModalProps) 
                 type="button"
                 aria-pressed={groupMode ? selected : undefined}
                 className={cn(
-                  'pc-focusable group w-full rounded-[var(--radius-control)] px-3 py-2 text-left text-label font-medium transition-[background-color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle',
+                  'pc-focusable group w-full rounded-[var(--radius-control)] px-3 py-2 text-left text-label font-medium transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle',
                   groupMode && selected && 'bg-bg-raised shadow-[var(--shadow-raised)]',
                 )}
                 onClick={() => {

@@ -1,5 +1,5 @@
 import { useCurrentUser } from '../../hooks/useCurrentUser';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { Crown, Flame, Medal, TrendingUp } from 'lucide-react';
 
 import { economyApi, type EconomyLeaderboardEntry, type EconomyProgressResponse } from '../../api/economy';
@@ -118,8 +118,8 @@ export function GuildEconomyPanel({ guildId }: GuildEconomyPanelProps) {
                 aria-label="Progress through this level"
               >
                 <div
-                  className="h-full rounded-[var(--radius-full)] bg-accent-primary transition-[width] duration-[var(--duration-normal)]"
-                  style={{ width: `${progressPercent}%` }}
+                  className="pc-meter-fill bg-accent-primary"
+                  style={{ '--pc-fill': progressPercent / 100 } as CSSProperties}
                 />
               </div>
               {/* §9: the meter is never the only cue — the count reads it out. */}

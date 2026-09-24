@@ -45,7 +45,7 @@ export function ForwardedCard({
 
   const className = cn(
     'mt-1 flex w-full max-w-lg flex-col gap-1 rounded-[var(--radius-well)] border-l-2 border-border-strong bg-bg-well px-3 py-2 text-left',
-    canJump && 'pc-focusable transition-colors duration-150 ease-out hover:bg-bg-mod-subtle',
+    canJump && 'pc-focusable transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle',
   );
 
   if (!canJump) return <div className={className}>{body}</div>;

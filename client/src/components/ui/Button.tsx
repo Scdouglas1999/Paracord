@@ -27,17 +27,17 @@ import { cn } from "../../lib/utils";
  */
 const buttonVariants = cva(
     [
-        // pc-focusable: the §9 ring, faded in over --duration-fast (primitives).
+        // pc-focusable: the §9 ring (primitives).
         // Each visual variant carries pc-pressable — the §5.1 shared press:
-        // 1px lift on hover, 0.96 for the 80ms press, a spring back on release
-        // — and the accent ones layer pc-pressable-accent's one-beat flash.
+        // a faint wash on hover and a 0.98 press, 120ms each way on the one
+        // ease-out — and the accent ones layer pc-pressable-accent's flash.
         // `link` is underlined text, not a pressable surface, so it opts out.
         "pc-focusable",
         "relative inline-flex select-none items-center justify-center gap-[7px] whitespace-nowrap",
         "rounded-[var(--radius-control)] text-label font-medium outline-none",
         // No `transition-*` utility here: `.pc-pressable` already transitions
-        // background, colour, shadow AND transform (the §5.1 spring). A utility
-        // naming a shorter list would now win and drop the press.
+        // background, colour AND transform. A utility naming a shorter list
+        // would now win and drop the press.
         "disabled:pointer-events-none disabled:opacity-60",
     ].join(" "),
     {

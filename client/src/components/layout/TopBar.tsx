@@ -557,7 +557,7 @@ function OwnedTopBar({
             }
             ui.setSidebarCollapsed(true);
           }}
-          className="chat-header-navigation pc-focusable inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-text-secondary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary"
+          className="chat-header-navigation pc-focusable inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-text-secondary transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary"
           title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
         >
@@ -571,7 +571,7 @@ function OwnedTopBar({
             <button
               type="button"
               onClick={() => navigate('/app/dms')}
-              className="pc-focusable inline-flex h-8 shrink-0 items-center gap-1 rounded-[var(--radius-control)] px-1.5 text-label font-medium text-text-secondary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary sm:px-2"
+              className="pc-focusable inline-flex h-8 shrink-0 items-center gap-1 rounded-[var(--radius-control)] px-1.5 text-label font-medium text-text-secondary transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary sm:px-2"
               aria-label="Back to messages"
               title="Back to messages"
             >
@@ -653,7 +653,7 @@ function OwnedTopBar({
                       <button
                         type="button"
                         onClick={() => navigate(`/app/guilds/${resolvedGuildId}`)}
-                        className="pc-focusable rounded-[var(--radius-window)] transition-colors duration-[140ms] ease-[var(--ease-out)] hover:text-text-secondary hover:underline"
+                        className="pc-focusable rounded-[var(--radius-window)] transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:text-text-secondary hover:underline"
                         aria-label={`Go to ${guildName} home`}
                         title={`Go to ${guildName} home`}
                       >
@@ -841,7 +841,7 @@ function OwnedTopBar({
                   {existing ? (
                     <button
                       type="button"
-                      className="inline-flex h-8 shrink-0 items-center rounded-chip bg-bg-mod-subtle px-3 text-meta font-semibold text-accent-danger outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-danger-tint focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
+                      className="inline-flex h-8 shrink-0 items-center rounded-chip bg-bg-mod-subtle px-3 text-meta font-semibold text-accent-danger outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-danger-tint focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
                       onClick={() => void removeFollower(targetChannel.id)}
                       disabled={busy}
                     >
@@ -850,7 +850,7 @@ function OwnedTopBar({
                   ) : (
                     <button
                       type="button"
-                      className="inline-flex h-8 shrink-0 items-center rounded-chip bg-accent-primary px-3 text-meta font-semibold text-text-on-accent shadow-[var(--shadow-chip)] outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-primary-hover focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
+                      className="inline-flex h-8 shrink-0 items-center rounded-chip bg-accent-primary px-3 text-meta font-semibold text-text-on-accent shadow-[var(--shadow-chip)] outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-accent-primary-hover focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
                       onClick={() => void addFollower(targetChannel.id, targetChannel.guild_id || '')}
                       disabled={busy || !targetChannel.guild_id}
                     >

@@ -425,28 +425,77 @@ reviewer rejects motion that has none.
   how to recognize that it landed rather than guessing at frames; and nothing
   else may be a transition for the length of the one that matters — a theme swap
   otherwise starts several hundred color transitions underneath it.)*
-- **Controls are tactile.** Hover: 1 px lift + faint bloom (`--bg-mod-subtle`
-  wash, 120 ms). Press: 0.96 scale, 80 ms, then spring back. Toggles, tabs and
-  segmented controls slide their indicator on the spring-settle curve.
-- **Plates settle.** A plate entering the street rises 14 px on the spring-settle
-  curve; lists that change order animate layout (FLIP) on the same curve.
+- **Controls are tactile.** Hover: a faint `--bg-mod-subtle` wash, 120 ms; nothing
+  lifts. Press: 0.98 scale over 120 ms and back over 120 ms (`.pc-pressable`); a
+  row darkens a step instead of shrinking (`.pc-pressable-row`). Toggles, tabs
+  and segmented controls slide their indicator on `--ease-out`.
+  *(Motion pass 2026-09: was a 1 px hover lift and a 0.96 / 80 ms press on the
+  spring-settle curve.)*
+- **Plates settle.** A plate entering the street rises 8 px on `--ease-out`;
+  lists that change order animate layout (FLIP, transform only) over
+  `--duration-slow` on the same curve.
 - **Numbers re-roll.** Any count that changes (unread, "N reading", "24 in",
   duration ticks excepted) flips vertically, old up/out and new up/in, 180 ms.
 
-### 5.2 Curves and tokens
+### 5.2 Curves and tokens — the motion law
 
-Two curves only, both tokens: `--ease-out` `cubic-bezier(0.22, 1, 0.36, 1)` for
-light and fades; `--ease-spring-settle` `cubic-bezier(0.34, 1.2, 0.64, 1)` for
-things that move (one small overshoot, no bounce). Springs in code use
-stiffness 260 / damping 22–28 / mass 1 (`--spring-*` tokens) and must resolve
-to those curves. Durations: `--duration-fast` 120, `--duration-normal` 160,
-`--duration-slow` 220, `--duration-warm-up` 220, `--duration-dim` 400,
-`--duration-move` 380, `--duration-breathe` 1600, `--duration-roll` 180.
+*(Rewritten by the motion pass, 2026-09. It supersedes the earlier two-curve
+table: there is no spring curve any more, and nothing overshoots. Every value
+is a token in `client/src/styles/tokens.css`; a component never writes its own
+milliseconds.)*
+
+| What | Duration | Token |
+|---|---|---|
+| Hover and press feedback | 120 ms | `--duration-fast` |
+| Small surfaces: menus, popovers, tooltips, toasts, pickers | 180 ms | `--duration-normal` |
+| Panels, sheets, dialogs, page content | 240 ms | `--duration-slow` |
+| A page's first entrance stagger (and nothing else) | 420 ms, 40 ms apart | `--duration-page`, `--stagger-page` |
+| Leaving a small surface / a panel | 130 ms / 170 ms (≈70% of the entrance) | `--duration-exit`, `--duration-exit-slow` |
+| A shared element travelling to where it lands | 320 ms | `--duration-move` |
+| Light warm-up / dim / breath / count re-roll | 220 / 400 / 1600 / 180 ms | `--duration-warm-up`, `--duration-dim`, `--duration-breathe`, `--duration-roll` |
+
+- **Curves.** One ease-out for everything that arrives or moves,
+  `--ease-out: cubic-bezier(0.2, 0.8, 0.2, 1)`; a quicker ease-in for everything
+  that leaves, `--ease-in: cubic-bezier(0.4, 0, 1, 1)`; and `--ease-in-out`, which
+  only the breath uses. No bounce, no overshoot, no spring wobble. The spring in
+  `lib/motion/spring.ts` (stiffness 260 / damping 34 / mass 1, critically
+  damped) exists only to carry the velocity of an interrupted animation into the
+  one that replaces it; a fresh animation gets `--ease-out`.
+- **Movement is small.** 4–8 px of translate, scale 0.98 → 1 for surfaces, 0.96
+  → 1 for a menu or popover growing from its anchor (`.pc-pop-in`, with
+  `transform-origin` at the anchor via `--pc-origin`). Nothing slides across the
+  screen.
+- **Only `transform` and `opacity` animate.** Never `box-shadow`, `filter`
+  (blur above all), `width`, `height`, `top`/`left`, `margin`, `padding`,
+  `background-position` or anything that lays out. A glow or a lifted shadow is
+  a still layer whose opacity crossfades (`.pc-window`'s light layers,
+  `.pc-hover-lift`, `.pc-home-card`); a meter or progress bar is a transform
+  (`.pc-meter-fill`, the poll bar). Colour transitions (background-color,
+  color, border-color) on controls are allowed at `--duration-fast`.
+- **The shared recipes** (`styles/primitives.css`): `pc-pop-in`/`pc-pop-out`
+  (small surfaces), `pc-enter`/`pc-exit` (dialogs, panels), `pc-drawer-*` and
+  `pc-sheet-*` (side panels, phone sheets), `pc-fade-in`/`pc-fade-out`
+  (backdrops), `pc-content-in` (content swapped inside a surface that stays —
+  `useContentSwap` plays it on channel, settings-section and panel-mode
+  changes). A leave is always its own keyframe, never the entrance reversed:
+  swapping a class that keeps the animation-name does not restart it.
+  `usePresence` / `useLingering` keep a leaving surface mounted for
+  `--duration-exit-slow`.
+- **Exits matter as much as entrances.** Nothing a person dismissed vanishes on
+  the spot while its neighbours animate. Two named exceptions: an autocomplete
+  (slash commands, mentions) closes the instant the query stops matching,
+  because it follows keystrokes; and a surface under reduced motion.
+- **Idle is still.** No infinite animation except explicit live indicators (the
+  speaking breath, a live dot, typing dots, a loading pulse), which are
+  composited-only and pause while the window is hidden (`data-visibility`,
+  `lib/motion/visibility.ts`).
 
 ### 5.3 Budget and gates (non-negotiable)
 
-- `transform` and `opacity` only, plus `box-shadow`/`background` on the small
-  light elements (windows, rims, dots). No layout properties in keyframes.
+- `transform` and `opacity` only (§5.2). The small light elements no longer
+  get an exception: a window's light is two still layers crossfading, and the
+  engine's bloom and flicker are opacity recipes. No layout properties in
+  keyframes.
 - No motion longer than 500 ms except breathing and the lights-on stagger
   (whole sequence ≤ 1.6 s).
 - 60 fps on an integrated GPU: every signature moment is measured in a

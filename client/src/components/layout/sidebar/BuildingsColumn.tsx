@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState, type MouseEvent, type ReactNode } from 'react';
 import { Home, MessageSquare, Plus } from 'lucide-react';
 
-// §5.1: a column that changes order glides — buildings ride the spring-settle
+// §5.1: a column that changes order glides — buildings ride the ease-out
 // FLIP as the attention ranking re-sorts them, new rows fade+rise, removed
 // rows fall away as ghosts. First mount only measures; reduced motion lands.
 import { RollingNumber, useFlipList } from '../../../lib/motion';

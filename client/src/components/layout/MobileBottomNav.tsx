@@ -115,7 +115,7 @@ export function MobileBottomNav() {
           <button
             key={id}
             onClick={() => handleTabPress(id)}
-            className="flex min-h-[44px] flex-1 flex-col items-center justify-center gap-1 rounded-chip py-1.5 outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]"
+            className="flex min-h-[44px] flex-1 flex-col items-center justify-center gap-1 rounded-chip py-1.5 outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]"
             aria-label={label}
             aria-current={isActive ? 'page' : undefined}
             style={{

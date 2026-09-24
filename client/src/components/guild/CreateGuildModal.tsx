@@ -228,7 +228,7 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
                   className={cn(
                     'pc-well group flex h-24 w-24 cursor-pointer flex-col items-center justify-center gap-1',
                     'overflow-hidden rounded-[var(--radius-card)] p-2 text-center',
-                    'transition-[box-shadow,color] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
+                    'transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]',
                     'focus-within:shadow-[var(--shadow-well),var(--focus-ring)]',
                     iconDragActive && 'shadow-[var(--shadow-well),0_0_0_1px_var(--accent-primary)]',
                   )}

@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 
-import { settleIn, type SettleOptions } from './animate';
+import { contentIn, settleIn, type SettleOptions } from './animate';
 import { useReducedMotion } from './reducedMotion';
 import { ms } from './tokens';
 
@@ -8,9 +8,11 @@ import { ms } from './tokens';
  * Staying mounted for the exit (docs/lantern-stage-spec.md §5.1, §5.3).
  *
  * CSS can describe an element arriving and an element leaving, but it cannot
- * keep a React node in the tree for the 120ms a leave takes. That is the one
+ * keep a React node in the tree for the beat a leave takes. That is the one
  * job of this hook: `open` drops, the element keeps rendering with
- * `exiting = true` for `--duration-fast`, then it unmounts. Enter and exit are
+ * `exiting = true` for `--duration-exit-slow` (170ms, the longest leave in the
+ * choreography — a small surface's 130ms leave simply finishes first and holds
+ * its end state), then it unmounts. Enter and exit are
  * the shared `pc-enter` / `pc-exit` classes — this hook owns only the timing.
  *
  * It obeys the engine's three rules: the leave is interruptible (flipping back
@@ -35,7 +37,7 @@ export interface Presence {
    * A surface that has been dismissed is scenery for the beat it takes to
    * leave: out of the accessibility tree and out of the tab order. Without
    * this, a "closed" menu is still announced and still focusable for
-   * `--duration-fast` after the click that closed it — which is the price of
+   * `--duration-exit-slow` after the click that closed it — which is the price of
    * animating an exit at all, and has to be paid here rather than at each of
    * the dozen call sites. (`.pc-exit` takes the pointer out of it in CSS.)
    */
@@ -72,7 +74,7 @@ export function usePresence(open: boolean): Presence {
   }
 
   // The only thing left for an effect is the clock: the element is dropped
-  // --duration-fast after the leave began, and re-opening cancels it.
+  // --duration-exit-slow after the leave began, and re-opening cancels it.
   useEffect(() => {
     if (!state.exiting) {
       if (timer.current !== null) {
@@ -84,7 +86,7 @@ export function usePresence(open: boolean): Presence {
     timer.current = setTimeout(() => {
       timer.current = null;
       setState({ mounted: false, exiting: false });
-    }, ms('--duration-fast'));
+    }, ms('--duration-exit-slow'));
     return () => {
       if (timer.current !== null) {
         clearTimeout(timer.current);
@@ -103,7 +105,7 @@ export function usePresence(open: boolean): Presence {
 /* -------------------------------------------------------------------------- */
 
 /**
- * "A plate entering the street rises 14px" — but never on the first paint of
+ * "A plate entering the street rises 8px" — but never on the first paint of
  * the whole app (§5.1; WP9b owns the lights-on sequence). The flag flips after
  * the first painted frame: a mount before it is first paint, a mount after it
  * is into an already-rendered street.
@@ -171,7 +173,7 @@ function joiningStandingStreet(el: Element | null): boolean {
 }
 
 /**
- * A plate settling onto the street (§5.1): 14px on the spring-settle curve,
+ * A plate settling onto the street (§5.1): 8px on `--ease-out`,
  * once, on mount — and only when the street it is joining was already there.
  * Returns a ref; attach it to the plate's element.
  */
@@ -196,4 +198,86 @@ export function useSettleIn<T extends HTMLElement = HTMLElement>(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   return ref;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Small surfaces grow out of their anchor                                     */
+/* -------------------------------------------------------------------------- */
+
+export type AnchorSide = 'top' | 'right' | 'bottom' | 'left';
+export type AnchorAlign = 'start' | 'center' | 'end';
+
+/**
+ * The `transform-origin` a menu, popover or tooltip scales from (`.pc-pop-in`
+ * reads it as `--pc-origin`): the point on the surface nearest the thing that
+ * opened it. A surface below its anchor grows down from its top edge; one
+ * aligned to the anchor's start grows from that corner.
+ */
+export function anchorOrigin(side: AnchorSide, align: AnchorAlign = 'center'): string {
+  const along = align === 'start' ? '0%' : align === 'end' ? '100%' : '50%';
+  switch (side) {
+    case 'bottom':
+      return `${along} 0%`;
+    case 'top':
+      return `${along} 100%`;
+    case 'right':
+      return `0% ${along}`;
+    case 'left':
+      return `100% ${along}`;
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Content swapping inside a surface that stays                                */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The surface stays; what is in it changes — the channel you switched to, a
+ * settings section, the context panel moving from members to search. Attach the
+ * returned ref to the element that holds the content and pass the thing that
+ * identifies it: when `key` changes after the first commit, the new content
+ * crossfades in with a 4px rise (`contentIn`). The first commit never plays.
+ *
+ * It stands down in two cases, both about something else owning the frame: a
+ * shared-element journey is in flight (`data-motion-transition`), which is
+ * already the transition; and a native video underlay is live
+ * (`data-native-underlay`, Linux), where fading the content would let the
+ * video beneath the webview show through it for the length of the fade.
+ */
+export function useContentSwap<T extends HTMLElement = HTMLElement>(key: unknown): RefObject<T | null> {
+  const ref = useRef<T | null>(null);
+  const last = useRef<unknown>(key);
+  useLayoutEffect(() => {
+    if (Object.is(last.current, key)) return;
+    const previous = last.current;
+    last.current = key;
+    // Opening from nothing or closing to nothing is the surface's own enter or
+    // leave, not a swap of what is in it.
+    if (previous == null || key == null) return;
+    const el = ref.current;
+    if (!el || typeof document === 'undefined') return;
+    const root = document.documentElement;
+    if (root.hasAttribute('data-motion-transition') || root.hasAttribute('data-native-underlay')) return;
+    contentIn(el);
+  }, [key]);
+  return ref;
+}
+
+/**
+ * `usePresence` for a surface whose content is keyed on a value that is gone
+ * the moment it closes — `{picker && <Picker at={picker.position} />}`. It
+ * keeps the last value it saw for the length of the leave, so the caller can
+ * keep rendering the surface where it was while it plays its exit:
+ *
+ *   const picker = useLingering(pickerFor);
+ *   {picker.value && <EmojiPicker position={picker.value.position} leaving={picker.leaving} />}
+ */
+export function useLingering<T>(value: T | null | undefined | false): { value: T | null; leaving: boolean } {
+  const open = value !== null && value !== undefined && value !== false;
+  const { mounted, exiting } = usePresence(open);
+  const [kept, setKept] = useState<T | null>(open ? (value as T) : null);
+  // Adjusted during render, like `usePresence`: the surface must carry the new
+  // value on the very commit that opened it.
+  if (open && !Object.is(kept, value)) setKept(value as T);
+  return { value: mounted ? (open ? (value as T) : kept) : null, leaving: exiting };
 }

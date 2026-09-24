@@ -26,6 +26,12 @@ export interface RoomChatRibbonProps extends Omit<React.HTMLAttributes<HTMLEleme
   expanded?: boolean;
   /** Sheet only: the handle's action. */
   onToggle?: () => void;
+  /**
+   * The chat has been closed and is playing its leave (§5.2): the ribbon eases
+   * 6px back toward its edge, the sheet 6px down, both fading. The host keeps
+   * it mounted for the beat with `useLingering`.
+   */
+  leaving?: boolean;
 }
 
 /**
@@ -52,18 +58,20 @@ export const RoomChatRibbon = React.forwardRef<HTMLElement, RoomChatRibbonProps>
       surface = 'ribbon',
       expanded = true,
       onToggle,
+      leaving = false,
       className,
       ...props
     },
     ref,
   ) {
-    // Opening travels on the spring over --duration-move; closing is the dim
-    // curve at the fade speed, because a sheet going away is not an arrival.
+    // Opening travels on the ease-out over --duration-slow; closing is the
+    // quicker ease-in over the exit beat, because a sheet going away is not an
+    // arrival (§5.2).
     const sheetRef = useFlip<HTMLElement>(
       [expanded, surface],
       expanded
         ? { scale: false }
-        : { scale: false, duration: ms('--duration-fast'), easing: motionToken('--ease-in') },
+        : { scale: false, duration: ms('--duration-exit-slow'), easing: motionToken('--ease-in') },
     );
     const heading = (
       <div className="flex min-w-0 items-center gap-2">
@@ -87,6 +95,7 @@ export const RoomChatRibbon = React.forwardRef<HTMLElement, RoomChatRibbonProps>
           className={cn(
             'flex min-h-0 flex-col overflow-hidden rounded-b-none',
             expanded ? 'flex-1' : 'shrink-0',
+            leaving && 'pc-sheet-out',
             className,
           )}
           {...props}
@@ -125,6 +134,7 @@ export const RoomChatRibbon = React.forwardRef<HTMLElement, RoomChatRibbonProps>
         aria-label={`${roomName} — call chat`}
         className={cn(
           'flex w-[var(--w-chat-ribbon)] shrink-0 flex-col overflow-hidden',
+          leaving && 'pc-drawer-out-right',
           className,
         )}
         {...props}

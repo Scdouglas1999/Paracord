@@ -25,7 +25,7 @@ interface TopBarOverlayProps {
 
 const CLOSE_BUTTON =
   'inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-chip text-text-muted ' +
-  'outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] ' +
+  'outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] ' +
   'hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]';
 
 /**

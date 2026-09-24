@@ -136,7 +136,7 @@ export function ImageLightbox() {
   // fill plus the primary ink. That is the system's answer to "ink over a
   // photo", so nothing here has to invent a literal white.
   const controlClass =
-    'pc-tag pc-focusable flex h-9 w-9 items-center justify-center transition-[filter] duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:brightness-125';
+    'pc-tag pc-focusable flex h-9 w-9 items-center justify-center opacity-85 transition-opacity hover:opacity-100';
 
   return createPortal(
     <div

@@ -401,7 +401,7 @@ export function DeveloperPage() {
             href="/api/docs"
             target="_blank"
             rel="noreferrer"
-            className="pc-focusable flex h-[var(--h-nav-row)] w-full select-none items-center gap-2.5 rounded-[var(--radius-control)] px-2.5 text-label text-text-secondary transition-[background-color,color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary"
+            className="pc-focusable flex h-[var(--h-nav-row)] w-full select-none items-center gap-2.5 rounded-[var(--radius-control)] px-2.5 text-label text-text-secondary transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary"
           >
             <span className="flex h-4 w-4 shrink-0 items-center justify-center" aria-hidden>
               <BookOpen size={16} />

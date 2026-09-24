@@ -54,7 +54,7 @@ export const ARRIVAL_SEQUENCE_BUDGET_MS = 1_600;
 export function arrivalStep(count: number): number {
   const preferred = ms('--stagger-light');
   if (count <= 1) return preferred;
-  const tail = RIM_AFTER_ROOM_MS + ms('--duration-move');
+  const tail = RIM_AFTER_ROOM_MS + ms('--duration-slow');
   const room = Math.max(0, ARRIVAL_SEQUENCE_BUDGET_MS - tail);
   return Math.max(1, Math.min(preferred, Math.floor(room / (count - 1))));
 }

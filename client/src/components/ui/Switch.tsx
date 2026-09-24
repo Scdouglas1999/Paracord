@@ -49,7 +49,7 @@ export const Switch = React.forwardRef<HTMLButtonElement, SwitchProps>(function 
       onClick={() => onChange(!checked)}
       className={cn(
         'pc-focusable relative inline-flex shrink-0 items-center rounded-[var(--radius-full)]',
-        'transition-[background-color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
+        'transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]',
         'disabled:cursor-not-allowed disabled:opacity-60',
         track,
         checked
@@ -63,10 +63,10 @@ export const Switch = React.forwardRef<HTMLButtonElement, SwitchProps>(function 
         aria-hidden
         className={cn(
           'relative inline-block rounded-[var(--radius-full)]',
-          // §5.1: the thumb slides on the spring-settle over --duration-normal,
+          // §5.1: the thumb slides on the ease-out over --duration-normal,
           // never a jump; its light (--thumb-glow) fades in over the warm-up
           // beat and only while the switch is on.
-          'transition-transform duration-[var(--duration-normal)] ease-[var(--ease-spring-settle)]',
+          'transition-transform duration-[var(--duration-normal)] ease-[var(--ease-out)]',
           'after:absolute after:inset-0 after:rounded-[var(--radius-full)] after:content-[""]',
           'after:bg-[var(--thumb-glow)] after:transition-opacity after:duration-[var(--duration-warm-up)] after:ease-[var(--ease-out)]',
           knob,

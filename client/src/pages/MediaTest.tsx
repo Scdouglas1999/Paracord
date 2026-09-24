@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, type CSSProperties } from 'react';
 import { Mic, Video, Users, Terminal, X } from 'lucide-react';
 import { cn } from '../lib/utils';
 import type { MediaEngine } from '../lib/media/mediaEngine';
@@ -139,7 +139,7 @@ export default function MediaTest() {
   // idle is a quiet secondary. Tokens only — no ad-hoc hex.
   const ctrlBtn = (active: boolean) =>
     cn(
-      'inline-flex h-9 items-center justify-center rounded-chip px-3.5 text-label font-semibold transition-colors duration-[140ms] focus-visible:outline-none focus-visible:[box-shadow:var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50',
+      'inline-flex h-9 items-center justify-center rounded-chip px-3.5 text-label font-semibold transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:[box-shadow:var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50',
       active
         ? 'bg-danger-well text-text-on-danger hover:brightness-95'
         : 'bg-bg-mod-subtle text-text-secondary hover:bg-bg-mod-strong hover:text-text-primary',
@@ -196,7 +196,7 @@ export default function MediaTest() {
             onClick={handleConnect}
             disabled={connecting}
             className={cn(
-              'inline-flex h-10 items-center justify-center rounded-chip px-5 text-label font-semibold shadow-[var(--shadow-chip)] transition-colors duration-[140ms] focus-visible:outline-none focus-visible:[box-shadow:var(--focus-ring)] disabled:cursor-wait disabled:opacity-70',
+              'inline-flex h-10 items-center justify-center rounded-chip px-5 text-label font-semibold shadow-[var(--shadow-chip)] transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:[box-shadow:var(--focus-ring)] disabled:cursor-wait disabled:opacity-70',
               connected
                 ? 'bg-danger-well text-text-on-danger hover:brightness-95'
                 : 'bg-accent-primary text-text-on-accent hover:bg-accent-primary-hover active:bg-accent-primary-active',
@@ -297,13 +297,13 @@ export default function MediaTest() {
                     <span className="flex-1 truncate font-code text-meta text-text-secondary">
                       {p.userId}
                     </span>
-                    <div className="h-1.5 w-16 overflow-hidden rounded-full bg-bg-well">
+                    <div className="relative h-1.5 w-16 overflow-hidden rounded-full bg-bg-well">
                       <div
-                        className="h-full rounded-full transition-[width] duration-100"
+                        className="pc-meter-fill is-live"
                         style={{
-                          width: `${levelPercent(p.audioLevel)}%`,
+                          '--pc-fill': levelPercent(p.audioLevel) / 100,
                           backgroundColor: p.speaking ? 'var(--accent-primary)' : 'var(--interactive-muted)',
-                        }}
+                        } as CSSProperties}
                       />
                     </div>
                   </div>

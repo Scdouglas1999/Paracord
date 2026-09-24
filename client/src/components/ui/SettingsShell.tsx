@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { ArrowLeft, ChevronRight, X } from 'lucide-react';
+import { useContentSwap } from '../../lib/motion';
 import { cn } from '../../lib/utils';
 import { Divider } from './Divider';
 import { IconButton } from './IconButton';
@@ -75,12 +76,17 @@ export function SettingsShell({
   contentClassName,
   onKeyDown,
 }: SettingsShellProps) {
+  // A section switch crossfades the new section in (§5.2); on a phone, moving
+  // between the index and a section does the same for the whole screen.
+  const sectionRef = useContentSwap<HTMLDivElement>(active);
+  const phoneScreenRef = useContentSwap<HTMLDivElement>(showIndex ? '' : active);
   const allItems = groups.flatMap((group) => group.items);
   const activeLabel = allItems.find((item) => item.id === active)?.label ?? active;
 
   if (isMobile) {
     return (
       <div
+        ref={phoneScreenRef}
         className={cn('pc-plate flex h-full min-h-0 flex-col overflow-hidden p-0', className)}
         onKeyDown={onKeyDown}
         tabIndex={-1}
@@ -208,7 +214,9 @@ export function SettingsShell({
           <Kbd>Esc</Kbd>
         </div>
         <div className={cn('min-h-0 flex-1 overflow-y-auto px-6 py-8 lg:px-10 lg:py-9', contentClassName)}>
-          <div className="mx-auto flex h-full min-h-0 w-full max-w-[46rem] flex-col pr-14">{children}</div>
+          <div ref={sectionRef} className="mx-auto flex h-full min-h-0 w-full max-w-[46rem] flex-col pr-14">
+            {children}
+          </div>
         </div>
       </div>
     </div>

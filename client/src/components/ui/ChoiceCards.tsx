@@ -78,7 +78,7 @@ export function ChoiceCards<T extends string>({
             onKeyDown={(event) => onKeyDown(event, index)}
             className={cn(
               'pc-focusable flex flex-1 flex-col gap-1 rounded-[var(--radius-card)] px-4 py-3 text-left',
-              'transition-[background-color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
+              'transition-[color,background-color,transform] duration-[var(--duration-fast)] ease-[var(--ease-out)] active:scale-[0.98]',
               'disabled:cursor-not-allowed disabled:opacity-60',
               active
                 ? 'bg-bg-raised shadow-[var(--shadow-raised),0_0_0_1px_var(--accent-primary)]'

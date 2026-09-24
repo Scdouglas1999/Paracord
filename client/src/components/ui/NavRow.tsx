@@ -39,12 +39,11 @@ export const NavRow = React.forwardRef<HTMLElement, NavRowProps>(function NavRow
       // `aria-selected`, which the Lobby plate carries too without being a row.
       data-selected-row={active || undefined}
       className={cn(
-        'pc-focusable pc-pressable flex w-full select-none items-center gap-2.5 text-left',
+        'pc-focusable pc-pressable-row flex w-full select-none items-center gap-2.5 text-left',
         'h-[var(--h-nav-row)] rounded-[var(--radius-control)] px-2.5',
         'text-label text-text-secondary',
-        // The transition belongs to `.pc-pressable`: it covers these three plus
-        // transform, and a utility naming only three would now win and take the
-        // §5.1 press with it.
+        // The transition and the press belong to `.pc-pressable-row`: a row
+        // darkens a step under the finger rather than shrinking (§5.1).
         // The selected row is a wash in the base hue rather than a grey step,
         // and inside a server's group it is a wash in THAT server's colour —
         // `--row-selected` is written per group by BuildingSection (§7.1).

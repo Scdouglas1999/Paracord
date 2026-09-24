@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import { AlertTriangle, ChevronUp, Mic, Volume2, X } from 'lucide-react';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
@@ -276,11 +276,11 @@ export function InCallDeviceMenu(props: InCallDeviceMenuProps) {
                   aria-valuemin={0}
                   aria-valuemax={100}
                   aria-valuenow={levelPercent}
-                  className="mt-2 h-1.5 overflow-hidden rounded-full bg-bg-mod-strong"
+                  className="relative mt-2 h-1.5 overflow-hidden rounded-full bg-bg-mod-strong"
                 >
                   <div
-                    className={cn('h-full rounded-full transition-[width] duration-100', status.warning ? 'bg-accent-warning' : 'bg-accent-primary')}
-                    style={{ width: `${levelPercent}%` }}
+                    className={cn('pc-meter-fill is-live', status.warning ? 'bg-accent-warning' : 'bg-accent-primary')}
+                    style={{ '--pc-fill': levelPercent / 100 } as CSSProperties}
                   />
                 </div>
                 <p className="mt-1.5 text-meta leading-snug text-text-secondary">{status.detail}</p>

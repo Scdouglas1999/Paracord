@@ -56,7 +56,7 @@ export function PinnedMessagesOverlay({
             return (
               <li
                 key={msg.id}
-                className="group relative px-5 py-4 transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-within:bg-bg-mod-subtle"
+                className="group relative px-5 py-4 transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-within:bg-bg-mod-subtle"
               >
                 <button
                   type="button"
@@ -85,7 +85,7 @@ export function PinnedMessagesOverlay({
                     type="button"
                     aria-label="Unpin this message"
                     title="Unpin this message"
-                    className="absolute right-4 top-4 inline-flex h-8 w-8 items-center justify-center rounded-chip text-text-muted opacity-0 outline-none transition-[opacity,color,background-color] duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-strong hover:text-accent-danger focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] group-hover:opacity-100"
+                    className="absolute right-4 top-4 inline-flex h-8 w-8 items-center justify-center rounded-chip text-text-muted opacity-0 outline-none transition-[opacity,color,background-color] duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-strong hover:text-accent-danger focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] group-hover:opacity-100"
                     onClick={async (e) => {
                       e.stopPropagation();
                       onErrorChange?.(null);

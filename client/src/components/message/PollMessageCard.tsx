@@ -116,11 +116,13 @@ export function PollMessageCard({ channelId, poll, canVote }: PollMessageCardPro
               type="button"
               disabled={!canToggle || pendingOptionId === option.id}
               onClick={() => void applyVoteChange(option)}
-              className="relative overflow-hidden rounded-chip border border-border-subtle bg-bg-well px-3 py-2.5 text-left transition-colors duration-[140ms] ease-[var(--ease-out)] hover:border-border-strong focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-75"
+              className="relative overflow-hidden rounded-chip border border-border-subtle bg-bg-well px-3 py-2.5 text-left transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:border-border-strong focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-75"
             >
+              {/* The share of the vote, drawn as a scale from the left edge so a
+                  vote moving the bars is a composited change, not a relayout. */}
               <span
-                className="pointer-events-none absolute inset-y-0 left-0 bg-accent-tint"
-                style={{ width: `${votePercent}%` }}
+                className="pointer-events-none absolute inset-0 origin-left bg-accent-tint transition-transform duration-[var(--duration-slow)] ease-[var(--ease-out)]"
+                style={{ transform: `scaleX(${votePercent / 100})` }}
               />
               <span className="relative z-[1] flex items-center gap-2.5">
                 <span className="min-w-0 flex-1 break-words text-label text-text-primary">

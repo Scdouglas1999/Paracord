@@ -47,7 +47,7 @@ export const OnAirPill = React.forwardRef<HTMLButtonElement, OnAirPillProps>(fun
         'pc-focusable inline-flex h-[var(--h-control)] min-w-0 shrink-0 items-center gap-2',
         'rounded-[var(--radius-control)] bg-bg-raised px-2.5 shadow-[var(--shadow-lifted)]',
         'text-label text-text-primary',
-        'transition-[background-color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
+        'transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]',
         'hover:bg-bg-mod-strong',
         className,
       )}

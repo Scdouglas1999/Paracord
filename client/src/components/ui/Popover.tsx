@@ -1,9 +1,9 @@
 import * as React from 'react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-// §5.1/§5.3: the shared overlay recipe (pc-enter / pc-exit); the presence hook
-// keeps the surface mounted for its --duration-fast leave.
-import { usePresence } from '../../lib/motion';
+// §5.1/§5.3: the small-surface recipe (pc-pop-in / pc-pop-out) grown from the
+// anchor's side; the presence hook keeps the surface mounted for its leave.
+import { anchorOrigin, usePresence } from '../../lib/motion';
 import { cn } from '../../lib/utils';
 
 export type PopoverSide = 'top' | 'right' | 'bottom' | 'left';
@@ -140,14 +140,17 @@ export function Popover({
       data-native-overlay-occlude
       className={cn(
         'pc-floating pc-transition fixed z-[1100] min-w-[10rem] max-w-[calc(100vw-1rem)] p-1',
-        exiting ? 'pc-exit' : 'pc-enter',
+        exiting ? 'pc-pop-out' : 'pc-pop-in',
         className,
       )}
-      style={{
-        top: coords?.top ?? 0,
-        left: coords?.left ?? 0,
-        visibility: coords ? 'visible' : 'hidden',
-      }}
+      style={
+        {
+          top: coords?.top ?? 0,
+          left: coords?.left ?? 0,
+          visibility: coords ? 'visible' : 'hidden',
+          '--pc-origin': anchorOrigin(side, align),
+        } as React.CSSProperties
+      }
       {...scenery}
     >
       {children}
@@ -177,7 +180,7 @@ export const MenuItem = React.forwardRef<HTMLButtonElement, MenuItemProps>(funct
       className={cn(
         'pc-focusable flex w-full items-center gap-2.5 rounded-[var(--radius-chip)] px-2.5 text-left',
         'h-[var(--h-list-row)] text-label',
-        'transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]',
+        'pc-pressable-row',
         danger
           ? 'text-accent-danger hover:bg-danger-well'
           : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary',

@@ -635,7 +635,7 @@ test.describe('the motion gate (§5.3)', () => {
    * that first commit is the no-motion-on-first-paint rule doing its job, and
    * the pops begin with the second arrival.
    */
-  test('a reaction pops — yours bigger, theirs smaller, the leave shrinks', async ({ page }) => {
+  test('a reaction pops — yours from 0.9, theirs from 0.96, the leave shrinks', async ({ page }) => {
     test.setTimeout(120_000);
     await page.setViewportSize({ width: 1440, height: 900 });
     await openRoom(page);
@@ -654,13 +654,14 @@ test.describe('the motion gate (§5.3)', () => {
     expectRecipes('reaction pop (own)', own, ['pop']);
     expectBudget('reaction pop (own)', own);
     expect(
-      ownPop.some((frames) => /scale\(0\.6/.test(frames[0] ?? '')),
-      `your chip did not pop from 0.6 — saw ${JSON.stringify(ownPop)}`,
+      ownPop.some((frames) => /scale\(0\.9\)/.test(frames[0] ?? '')),
+      `your chip did not pop from 0.9 — saw ${JSON.stringify(ownPop)}`,
     ).toBe(true);
+    // The motion law has no over-rotation: the chip's scale is the whole move.
     expect(
-      ownPop.some((frames) => frames.some((frame) => /rotate\(-8/.test(frame))),
-      `the emoji never over-rotated — saw ${JSON.stringify(ownPop)}`,
-    ).toBe(true);
+      ownPop.some((frames) => frames.some((frame) => /rotate\(/.test(frame))),
+      `the emoji over-rotated — saw ${JSON.stringify(ownPop)}`,
+    ).toBe(false);
 
     let theirPop: string[][] = [];
     const theirs = await measureMoment(page, async () => {
@@ -671,8 +672,8 @@ test.describe('the motion gate (§5.3)', () => {
     expectRecipes('reaction pop (theirs)', theirs, ['pop']);
     expectBudget('reaction pop (theirs)', theirs);
     expect(
-      theirPop.some((frames) => /scale\(0\.8/.test(frames[0] ?? '')),
-      `an incoming chip did not pop from 0.8 — saw ${JSON.stringify(theirPop)}`,
+      theirPop.some((frames) => /scale\(0\.96\)/.test(frames[0] ?? '')),
+      `an incoming chip did not pop from 0.96 — saw ${JSON.stringify(theirPop)}`,
     ).toBe(true);
 
     const leave = await measureMoment(page, async () => {
@@ -1683,7 +1684,7 @@ test.describe('the motion gate (§5.3)', () => {
     });
 
     // 1 — a button hovered and pressed (item 1). The accent button on the Press
-    // recipe: the 1px lift and the wash, then 0.96 and the beat of light.
+    // recipe: the wash, then the 0.98 press and the beat of light.
     const pressCard = page.locator('#motion-press');
     await pressCard.scrollIntoViewIfNeeded();
     await page.waitForTimeout(400);

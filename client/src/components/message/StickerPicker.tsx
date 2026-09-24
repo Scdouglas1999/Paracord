@@ -15,6 +15,12 @@ interface StickerPickerProps {
   guildId?: string;
   onSelect: (stickerId: string) => void;
   onClose: () => void;
+  /**
+   * The picker has been dismissed and is playing its leave (§5.2): it shrinks
+   * back toward its anchor and takes no more input. The host keeps it mounted
+   * for the beat with `useLingering`.
+   */
+  leaving?: boolean;
 }
 
 function resolveStickerImageUrl(url: string): string | null {
@@ -29,7 +35,7 @@ function stickerPickerError(action: string, err: unknown): string {
   return detail ? `${action}: ${detail}` : action;
 }
 
-export function StickerPicker({ guildId, onSelect, onClose }: StickerPickerProps) {
+export function StickerPicker({ guildId, onSelect, onClose, leaving = false }: StickerPickerProps) {
   // Sticker images are authenticated by a download ticket minted after the
   // first paint; re-render once it lands so the sheet is not a grid of
   // broken images.
@@ -110,12 +116,13 @@ export function StickerPicker({ guildId, onSelect, onClose }: StickerPickerProps
   return (
     <div
       ref={pickerRef}
-      className="pc-enter flex w-[min(21.25rem,calc(100vw-1rem))] max-h-[min(26.25rem,calc(100dvh-1rem))] flex-col overflow-hidden rounded-well border border-border-subtle bg-bg-floating shadow-[var(--shadow-plate)]"
+      className={`${leaving ? 'pc-pop-out' : 'pc-pop-in'} flex w-[min(21.25rem,calc(100vw-1rem))] max-h-[min(26.25rem,calc(100dvh-1rem))] flex-col overflow-hidden rounded-well border border-border-subtle bg-bg-floating shadow-[var(--shadow-plate)]`}
+      aria-hidden={leaving || undefined}
     >
       {/* Header */}
       <div className="shrink-0 border-b border-border-subtle px-3 pb-2.5 pt-3">
         <div className="text-section mb-2 text-text-muted">Stickers</div>
-        <div className="flex items-center gap-2 rounded-chip border border-border-subtle bg-bg-well px-2.5 py-2 transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus-within:border-accent-primary focus-within:shadow-[var(--focus-ring-input)]">
+        <div className="flex items-center gap-2 rounded-chip border border-border-subtle bg-bg-well px-2.5 py-2 transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-within:border-accent-primary focus-within:shadow-[var(--focus-ring-input)]">
           <Search size={16} className="shrink-0 text-text-muted" />
           <input
             type="text"
@@ -141,7 +148,7 @@ export function StickerPicker({ guildId, onSelect, onClose }: StickerPickerProps
                 <button
                   type="button"
                   onClick={() => void fetchStickers()}
-                  className="inline-flex items-center gap-1.5 rounded-chip bg-accent-primary px-3.5 py-2 text-label font-semibold text-text-on-accent shadow-[var(--shadow-chip)] outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-primary-hover active:bg-accent-primary-active focus-visible:shadow-[var(--focus-ring)]"
+                  className="inline-flex items-center gap-1.5 rounded-chip bg-accent-primary px-3.5 py-2 text-label font-semibold text-text-on-accent shadow-[var(--shadow-chip)] outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-accent-primary-hover active:bg-accent-primary-active focus-visible:shadow-[var(--focus-ring)]"
                 >
                   <RotateCw size={15} />
                   Try again
@@ -182,7 +189,7 @@ export function StickerPicker({ guildId, onSelect, onClose }: StickerPickerProps
                   onClick={() => onSelect(sticker.id)}
                   title={sticker.name}
                   aria-label={`Select sticker ${sticker.name}`}
-                  className="flex aspect-square items-center justify-center rounded-chip p-1 outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
+                  className="flex aspect-square items-center justify-center rounded-chip p-1 outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
                 >
                   <ResourceImage
                     src={imageUrl}

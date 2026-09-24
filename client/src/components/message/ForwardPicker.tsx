@@ -298,7 +298,7 @@ export function ForwardPicker({
                 type="button"
                 aria-pressed={on}
                 className={cn(
-                  'pc-focusable flex w-full items-center gap-2.5 rounded-[var(--radius-control)] px-3 py-2 text-left transition-[background-color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle',
+                  'pc-focusable flex w-full items-center gap-2.5 rounded-[var(--radius-control)] px-3 py-2 text-left transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle',
                   on && 'bg-bg-raised shadow-[var(--shadow-raised)]',
                 )}
                 onClick={() => toggle(target)}

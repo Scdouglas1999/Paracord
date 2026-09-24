@@ -71,7 +71,7 @@ export function HomePageSettings({ widgets, onChange }: HomePageSettingsProps) {
               onDrop={(event) => onDrop(event, index)}
               className={cn(
                 'flex items-center gap-3 rounded-[var(--radius-control)] bg-bg-raised py-2.5 pl-1.5 pr-3',
-                'shadow-[var(--shadow-raised)] transition-[opacity,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
+                'shadow-[var(--shadow-raised)] transition-opacity duration-[var(--duration-fast)] ease-[var(--ease-out)]',
                 dragging === index && 'opacity-50',
                 over === index && dragging !== null && dragging !== index && 'pc-home-drag-over',
               )}

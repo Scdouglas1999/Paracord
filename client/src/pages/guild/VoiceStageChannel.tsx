@@ -44,7 +44,7 @@ import { extractApiError } from '../../api/client';
 import { VoiceLobby } from './VoiceLobby';
 import { RoomChat } from './RoomChat';
 import { displayName } from '../../lib/displayName';
-import { roomSharedName, walkOutOfRoom } from '../../lib/motion';
+import { roomSharedName, useLingering, walkOutOfRoom } from '../../lib/motion';
 import { ErrorBoundary } from '../../components/ErrorBoundary';
 import { TogetherButton, TogetherSheetFor } from '../../components/voice/together/TogetherButton';
 import {
@@ -127,6 +127,8 @@ export function VoiceStageChannel({
   const [videoLayout, setVideoLayout] = useState<VideoLayout>('top');
   const [activeStreamers, setActiveStreamers] = useState<string[]>([]);
   const [showRoomChat, setShowRoomChat] = useState(!isPhoneLayout);
+  // The call chat leaves the way it came (§5.2): kept mounted for its exit.
+  const roomChatLayer = useLingering(showRoomChat);
   const [chatSheetExpanded, setChatSheetExpanded] = useState(true);
   const [showInvite, setShowInvite] = useState(false);
   const [layoutMenuOpen, setLayoutMenuOpen] = useState(false);
@@ -817,8 +819,9 @@ export function VoiceStageChannel({
   );
 
   const ribbon =
-    showRoomChat && channelId ? (
+    roomChatLayer.value && channelId ? (
       <RoomChat
+        leaving={roomChatLayer.leaving}
         isPhone={isPhoneLayout}
         channelId={channelId}
         guildId={guildId}

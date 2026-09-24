@@ -47,7 +47,7 @@ export function captureFlip(elements: Iterable<Element | null | undefined>): Fli
 
   return {
     size: first.size,
-    play({ duration = ms('--duration-move') } = {}) {
+    play({ duration = ms('--duration-slow') } = {}) {
       if (prefersReducedMotion()) return [];
       const easing = springEasing(springTokens(), { durationMs: duration });
       const animations: Animation[] = [];

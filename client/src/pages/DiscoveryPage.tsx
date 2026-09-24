@@ -152,7 +152,7 @@ export function DiscoveryPage() {
             type="button"
             aria-label="Back to home"
             onClick={() => navigate('/app')}
-            className="flex h-9 w-9 items-center justify-center rounded-chip text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
+            className="flex h-9 w-9 items-center justify-center rounded-chip text-text-secondary outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
           >
             <ArrowLeft size={18} />
           </button>
@@ -263,7 +263,7 @@ export function DiscoveryPage() {
               return (
                 <div
                   key={guild.id}
-                  className="group flex flex-col overflow-hidden rounded-well border border-border-subtle bg-bg-raised shadow-[var(--shadow-chip)] transition-colors duration-[140ms] ease-[var(--ease-out)] hover:border-border-strong"
+                  className="group flex flex-col overflow-hidden rounded-well border border-border-subtle bg-bg-raised shadow-[var(--shadow-chip)] transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:border-border-strong"
                 >
                   {/* Framed solid banner (no gradient wash — kill-list #2) */}
                   <div
@@ -497,7 +497,7 @@ function CategoryPill({
         // coarse pointer. The identical chip on Friends already does this — this
         // one was the copy that got missed, and it is four targets deep in the
         // one surface a phone user browses with a thumb.
-        'pc-touch inline-flex h-7 items-center rounded-full px-3 text-meta font-semibold outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
+        'pc-touch inline-flex h-7 items-center rounded-full px-3 text-meta font-semibold outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
         active
           ? 'bg-accent-tint text-accent-primary'
           : 'bg-bg-mod-subtle text-text-secondary hover:bg-bg-mod-strong hover:text-text-primary',

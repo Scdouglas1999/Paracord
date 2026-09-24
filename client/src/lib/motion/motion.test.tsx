@@ -93,38 +93,26 @@ afterEach(() => {
 });
 
 /* -------------------------------------------------------------------------- */
-/* §5.2 — the spring resolves to the spring-settle curve                       */
+/* §5.2 — the spring never overshoots; a fresh animation is on --ease-out     */
 /* -------------------------------------------------------------------------- */
 
 describe('spring', () => {
-  const SPRING = { stiffness: 260, damping: 24, mass: 1 };
+  const SPRING = { stiffness: 260, damping: 34, mass: 1 };
 
   it('starts at rest and travels the whole way', () => {
     expect(springProgress(0, SPRING)).toBeCloseTo(0, 6);
     expect(springProgress(2000, SPRING)).toBeCloseTo(1, 3);
   });
 
-  it('overshoots once, by a little, and never bounces back below the target', () => {
-    let peak = 0;
-    let peakAt = 0;
-    for (let t = 0; t <= 600; t += 1) {
+  it('never overshoots at the token damping: it only ever approaches the target', () => {
+    // §5.2: "no bounce, no overshoot, no spring wobble".
+    let previous = 0;
+    for (let t = 0; t <= 1200; t += 1) {
       const p = springProgress(t, SPRING);
-      if (p > peak) {
-        peak = p;
-        peakAt = t;
-      }
+      expect(p).toBeLessThanOrEqual(1.0001);
+      expect(p).toBeGreaterThanOrEqual(previous - 1e-9);
+      previous = p;
     }
-    // §5.2: "one small overshoot, no bounce".
-    expect(peak).toBeGreaterThan(1);
-    expect(peak).toBeLessThan(1.08);
-    // The cubic-bezier token peaks around a third of the way in; so does this.
-    expect(peakAt).toBeGreaterThan(200);
-    expect(peakAt).toBeLessThan(400);
-    // After the single overshoot it settles from above — it never dips under 1
-    // again by anything a person could see.
-    let minAfterPeak = Number.POSITIVE_INFINITY;
-    for (let t = peakAt; t <= 1200; t += 1) minAfterPeak = Math.min(minAfterPeak, springProgress(t, SPRING));
-    expect(minAfterPeak).toBeGreaterThan(0.995);
   });
 
   it('is critically damped and overdamped without overshoot at higher damping', () => {
@@ -141,20 +129,33 @@ describe('spring', () => {
     expect(duration).toBeLessThanOrEqual(500);
   });
 
-  it('samples a linear() easing that starts at 0 and ends exactly at 1', () => {
-    const easing = springLinearEasing(SPRING, { durationMs: 380, samples: 24 });
+  it('samples a linear() easing that starts at 0, ends exactly at 1, and never passes it', () => {
+    const easing = springLinearEasing(SPRING, { durationMs: 240, samples: 24 });
     expect(easing.startsWith('linear(')).toBe(true);
     const points = easing.slice('linear('.length, -1).split(',').map((n) => Number(n.trim()));
     expect(points).toHaveLength(25);
     expect(points[0]).toBe(0);
     // An easing that does not end at 1 leaves the element off its mark.
     expect(points[points.length - 1]).toBe(1);
-    expect(Math.max(...points)).toBeGreaterThan(1);
+    expect(Math.max(...points)).toBeLessThanOrEqual(1);
   });
 
-  it('falls back to the --ease-spring-settle token where linear() is unsupported', () => {
+  it('hands a fresh animation the --ease-out token, and a retarget the sampled spring', () => {
+    vi.stubGlobal('CSS', { supports: () => true });
+    expect(springEasing(SPRING)).toBe(MOTION_TOKEN_FALLBACKS['--ease-out']);
+    const carried = springEasing({ ...SPRING, velocity: 4 }, { durationMs: 240 });
+    expect(carried.startsWith('linear(')).toBe(true);
+    const points = carried.slice('linear('.length, -1).split(',').map((n) => Number(n.trim()));
+    // Even a fast retarget is capped under the speed that would cross the mark.
+    expect(Math.max(...points)).toBeLessThanOrEqual(1);
+    const fast = springEasing({ ...SPRING, velocity: 400 }, { durationMs: 240 });
+    const fastPoints = fast.slice('linear('.length, -1).split(',').map((n) => Number(n.trim()));
+    expect(Math.max(...fastPoints)).toBeLessThanOrEqual(1);
+  });
+
+  it('falls back to --ease-out where linear() is unsupported', () => {
     vi.stubGlobal('CSS', { supports: () => false });
-    expect(springEasing(SPRING)).toBe(MOTION_TOKEN_FALLBACKS['--ease-spring-settle']);
+    expect(springEasing({ ...SPRING, velocity: 4 })).toBe(MOTION_TOKEN_FALLBACKS['--ease-out']);
   });
 });
 
@@ -336,7 +337,7 @@ describe('transitionWith', () => {
     const record = waapi.played.find((played) => played.target === el)!;
     expect(record.keyframes[0].transform).toBe('translate3d(-190px, -280px, 0) scale(0.5, 1)');
     expect(record.keyframes[1].transform).toBe('translate3d(0, 0, 0) scale(1, 1)');
-    expect(Number(record.options.duration)).toBe(380);
+    expect(Number(record.options.duration)).toBe(320);
   });
 
   it('does not animate an element that did not move', async () => {
@@ -498,17 +499,12 @@ describe('the token reader', () => {
     }
   });
 
-  it('names only the two curves §5.2 allows for things that move', () => {
-    // `--ease-out` is light and fades; `--ease-spring-settle` is movement.
-    // `--ease-in` is the dim and `--ease-in-out` the breath — neither moves
-    // anything. A third travelling curve would be a third physical model.
+  it('names one curve for arriving, one for leaving, and the breath', () => {
+    // `--ease-out` is everything that arrives or moves; `--ease-in` everything
+    // that leaves; `--ease-in-out` the breath, which moves nothing. There is
+    // no spring curve: nothing overshoots (§5.2).
     const curves = Object.entries(MOTION_TOKEN_FALLBACKS).filter(([name]) => name.startsWith('--ease-'));
-    expect(curves.map(([name]) => name).sort()).toEqual([
-      '--ease-in',
-      '--ease-in-out',
-      '--ease-out',
-      '--ease-spring-settle',
-    ]);
+    expect(curves.map(([name]) => name).sort()).toEqual(['--ease-in', '--ease-in-out', '--ease-out']);
   });
 });
 
@@ -657,7 +653,7 @@ describe('playArrivals / playDepartures', () => {
     expect(Number(windowBloom.options.delay)).toBe(0);
     expect(Number(rimBloom.options.delay)).toBe(120);
     expect(Number(spring.options.delay)).toBe(120);
-    expect(spring.keyframes[0].transform).toContain('scale(0.6)');
+    expect(spring.keyframes[0].transform).toContain('scale(0.9)');
   });
 
   it('fades the inline room event in last', () => {

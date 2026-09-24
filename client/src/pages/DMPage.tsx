@@ -400,7 +400,7 @@ function DmListRow({ row, onOpen }: { row: DmRow; onOpen: (row: DmRow) => void }
     <button
       type="button"
       onClick={() => onOpen(row)}
-      className="pc-focusable group grid w-full grid-cols-[36px_minmax(0,1fr)_auto] items-center gap-3 rounded-[var(--radius-control)] px-3 py-2 text-left transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle"
+      className="pc-focusable group grid w-full grid-cols-[36px_minmax(0,1fr)_auto] items-center gap-3 rounded-[var(--radius-control)] px-3 py-2 text-left transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle"
     >
       <div className="relative shrink-0">
         {/* §1.5: presence is a rim of light on the avatar, never a coloured dot. */}

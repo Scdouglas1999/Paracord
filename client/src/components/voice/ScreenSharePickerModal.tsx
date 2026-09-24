@@ -41,7 +41,7 @@ function ScreenShareSourceCard({
     <button
       type="button"
       onClick={() => onSelect(source)}
-      className="pc-focusable group rounded-[var(--radius-card)] bg-bg-raised p-2.5 text-left shadow-[var(--shadow-raised)] outline-none transition-[background-color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-strong hover:shadow-[var(--shadow-lifted)]"
+      className="pc-focusable group rounded-[var(--radius-card)] bg-bg-raised p-2.5 text-left shadow-[var(--shadow-raised)] outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-strong pc-hover-lift"
     >
       <div className="flex flex-col gap-2.5">
         <div
@@ -220,7 +220,7 @@ export function ScreenSharePickerModal({
                   onClick={() => setFilter(f.key)}
                   disabled={f.count === 0 && f.key !== 'all'}
                   className={cn(
-                    'pc-focusable h-[var(--h-control)] rounded-[var(--radius-chip)] px-3 text-label transition-[background-color,color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)] disabled:cursor-not-allowed disabled:opacity-60',
+                    'pc-focusable h-[var(--h-control)] rounded-[var(--radius-chip)] px-3 text-label transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] disabled:cursor-not-allowed disabled:opacity-60',
                     filter === f.key
                       ? 'bg-bg-raised font-semibold text-text-primary shadow-[var(--shadow-raised)]'
                       : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary',

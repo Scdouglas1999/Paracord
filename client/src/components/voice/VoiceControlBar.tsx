@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, type ReactNode } from 'react';
+import { useState, useRef, useEffect, useCallback, type CSSProperties, type ReactNode } from 'react';
 import { Mic, MicOff, Headphones, HeadphoneOff, MonitorUp, PhoneOff, ChevronUp, AlertTriangle, MonitorOff, MessageSquare, Radio, Check, Video, VideoOff, Hand, AudioLines } from 'lucide-react';
 import { useVoice } from '../../hooks/useVoice';
 import { useStream } from '../../hooks/useStream';
@@ -261,7 +261,7 @@ export function VoiceControlBar({
                         onClick={onToggleRequestToSpeak}
                         className={cn(
                             'pc-focusable inline-flex h-[var(--h-stage-control)] items-center gap-2 rounded-[var(--radius-stage-control)] px-4 text-label',
-                            'transition-[background-color,color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
+                            'transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]',
                             'disabled:pointer-events-none disabled:opacity-60',
                             requestToSpeakPending
                                 ? 'bg-light-white text-text-on-light shadow-[var(--glow-control-on)]'
@@ -308,9 +308,12 @@ export function VoiceControlBar({
                             /* Your own level, on your own control — the one place
                                the bar means something you can act on. */
                             <span className="absolute bottom-1.5 left-2.5 right-2.5 h-0.5 overflow-hidden rounded-full bg-text-on-light/25" aria-hidden>
+                                {/* A composited slide, not a width: the level
+                                    changes many times a second and a width would
+                                    re-lay-out the control bar on every one. */}
                                 <span
-                                    className="block h-full rounded-full bg-text-on-light transition-[width] duration-100"
-                                    style={{ width: `${Math.round(Math.min(1, Math.max(0, micInputLevel)) * 100)}%` }}
+                                    className="pc-meter-fill is-live bg-text-on-light"
+                                    style={{ '--pc-fill': Math.min(1, Math.max(0, micInputLevel)).toFixed(3) } as CSSProperties}
                                 />
                             </span>
                         )}

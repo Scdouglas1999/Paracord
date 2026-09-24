@@ -102,9 +102,11 @@
    -------------------------------------------------------------------------- */
 
 /* A lit avatar rim. */
+/* The rim lands with the state: a shadow never animates (§5.2). Warm-up and
+   dim are the engine's opacity recipes (`bloom`) where the moment calls for
+   one. */
 .pc-lit {
   box-shadow: var(--ring-lit);
-  transition: box-shadow var(--duration-warm-up) var(--ease-out);
 }
 
 /* Someone is talking: the ring breathes between alpha .55 and .8 at ~1.6s.
@@ -236,39 +238,69 @@
   pointer-events: none;
 }
 
-/* A light going out lingers a beat, then goes (§5). */
+/* A light going out. It used to linger by transitioning the rim's shadow and
+   the dim filter; neither may animate (§5.2 — a filter or shadow transition
+   repaints the avatar on every frame), so the class is now only a marker the
+   presence helpers still put on an avatar. */
 .pc-dimming {
-  transition: box-shadow var(--duration-dim) var(--ease-in), filter var(--duration-dim) var(--ease-in);
+  transition: none;
 }
 
 /* A window in a building's window map. Sizes come from the WindowMap component
-   (WP1); the fill and the glow are fixed here. */
+   (WP1); the fill and the glow are fixed here.
+
+   The window itself is the unlit hole — recessed, not raised: an unlit window
+   is a well, and the warm top highlight of a tile was what made a dark one
+   read as a loading chip. Its light is two still layers over it, white
+   (talking) on `::before` and amber (reading, writing) on `::after`, each
+   carrying its own fill and glow. A state change crossfades their OPACITY:
+   warm-up is 220ms `--ease-out`, the dim lingers 400ms on `--ease-in`, and
+   talking → reading is a crossfade from one light to the other. Nothing
+   animates a background or a shadow, so a room lighting up is a compositor
+   job rather than a repaint of every window around it. */
 .pc-window {
+  position: relative;
   border-radius: var(--radius-window);
   background: var(--window-dark);
-  /* Recessed, not raised: an unlit window is a hole, and the warm top
-     highlight of a tile was what made a dark one read as a loading chip. */
   box-shadow: var(--shadow-well);
-  transition: background var(--duration-warm-up) var(--ease-out), box-shadow var(--duration-warm-up) var(--ease-out);
 }
 
-.pc-window.is-talking {
+.pc-window::before,
+.pc-window::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-dim) var(--ease-in);
+}
+
+.pc-window::before {
   background: var(--light-white);
   box-shadow: var(--glow-window-white);
 }
 
-.pc-window.is-reading {
+.pc-window::after {
   background: var(--light-amber);
   box-shadow: var(--glow-window-amber);
 }
 
 /* Home draws 12×16 windows; the glow scales with them. */
-.pc-window.is-large.is-talking {
+.pc-window.is-large::before {
   box-shadow: var(--glow-window-white-lg);
 }
 
-.pc-window.is-large.is-reading {
+.pc-window.is-large::after {
   box-shadow: var(--glow-window-amber-lg);
+}
+
+.pc-window.is-talking::before,
+.pc-window.is-reading::after,
+.pc-window.is-writing::after {
+  opacity: 1;
+  transition-duration: var(--duration-warm-up);
+  transition-timing-function: var(--ease-out);
 }
 
 /* Somebody is writing in the room: the amber window breathes at half
@@ -284,10 +316,6 @@
    time, clipped out of sight while the frame breathes, so when the writing
    stops the glow it lands on is already there and its warm-up transition has
    nothing to fade in. */
-.pc-window.is-writing {
-  background: var(--light-amber);
-}
-
 :root:not([data-motion='reduced']) .pc-window.is-writing {
   clip-path: inset(0 round var(--radius-window));
 }
@@ -350,20 +378,29 @@
    -------------------------------------------------------------------------- */
 
 .pc-transition {
-  transition-property: background-color, color, box-shadow, border-color, opacity;
-  transition-duration: var(--duration-normal);
+  /* Colour and opacity only: a shadow or a glow never animates (the motion
+     law), it lands with the state that owns it. */
+  transition-property: background-color, color, border-color, opacity;
+  transition-duration: var(--duration-fast);
   transition-timing-function: var(--ease-out);
 }
 
 /* -----------------------------------------------------------------------------
    §5.1 The shared choreography — the ONLY enter/exit set in the product.
 
-   Every overlay surface (dialog, popover, menu, tooltip, toast) enters on
-   opacity + a 6px rise on the spring-settle over --duration-slow, and leaves on
-   opacity + a 4px fall on --ease-in over --duration-fast. Backdrops fade.
-   Drawers and sheets travel on --duration-move. The old ad-hoc keyframes
-   (modal-enter, overlay-enter, popup-enter, scale-in, toast-slide-in) are gone;
-   this is what replaced them.
+   Three sizes of surface, three recipes, one curve in and one curve out:
+
+     pop     menus, popovers, tooltips, pickers  opacity + scale .96 from the
+             anchor (`--pc-origin`), 180ms in / 130ms out
+     enter   dialogs, panels, cards, page content  opacity + 6px rise + scale
+             .98, 240ms in / 170ms out
+     drawer  side panels and phone sheets  opacity + 8px from their edge,
+     /sheet  240ms in / 170ms out
+
+   Backdrops fade on the same clock as the surface they hold. Everything
+   arrives on `--ease-out` and leaves on the quicker `--ease-in`; nothing
+   overshoots and nothing travels more than 8px. `usePresence` keeps a leaving
+   element mounted for `--duration-exit-slow`, the longest leave here.
 
    Each keyframe declares only its OFF state, so the same pair works forwards
    and backwards and an element that stays mounted animates exactly once.
@@ -375,75 +412,106 @@
 @keyframes pc-enter {
   from {
     opacity: 0;
-    transform: translate3d(0, 6px, 0);
+    transform: translate3d(0, 6px, 0) scale(0.98);
   }
 }
 
 @keyframes pc-exit {
   to {
     opacity: 0;
-    transform: translate3d(0, 4px, 0);
+    transform: translate3d(0, 4px, 0) scale(0.98);
   }
+}
+
+@keyframes pc-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+/* A leave is its own keyframe, never the entrance played in reverse: swapping
+   a class that keeps the same animation-name does not restart the animation,
+   it only flips the direction of one that has already finished — which lands
+   it on its start (invisible) on the spot, and the leave is never seen. */
+@keyframes pc-pop-out {
+  to {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+@keyframes pc-fade-out {
+  to { opacity: 0; }
 }
 
 @keyframes pc-drawer-in-left {
   from {
     opacity: 0;
-    transform: translate3d(-24px, 0, 0);
+    transform: translate3d(-8px, 0, 0);
   }
 }
 
 @keyframes pc-drawer-in-right {
   from {
     opacity: 0;
-    transform: translate3d(24px, 0, 0);
+    transform: translate3d(8px, 0, 0);
   }
 }
 
 @keyframes pc-drawer-out-left {
   to {
     opacity: 0;
-    transform: translate3d(-12px, 0, 0);
+    transform: translate3d(-6px, 0, 0);
   }
 }
 
 @keyframes pc-drawer-out-right {
   to {
     opacity: 0;
-    transform: translate3d(12px, 0, 0);
+    transform: translate3d(6px, 0, 0);
   }
 }
 
 @keyframes pc-sheet-in {
   from {
     opacity: 0;
-    transform: translate3d(0, 24px, 0);
+    transform: translate3d(0, 8px, 0);
   }
 }
 
 @keyframes pc-sheet-out {
   to {
     opacity: 0;
-    transform: translate3d(0, 16px, 0);
+    transform: translate3d(0, 6px, 0);
   }
 }
 
 @keyframes pc-banner-in {
   from {
     opacity: 0;
-    transform: translate3d(0, -12px, 0);
+    transform: translate3d(0, -6px, 0);
   }
 }
 
 @keyframes pc-banner-out {
   to {
     opacity: 0;
-    transform: translate3d(0, -8px, 0);
+    transform: translate3d(0, -4px, 0);
   }
 }
 
 /* A hover toolbar or a small control arriving under the pointer: 4px, fast. */
 @keyframes pc-hover-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 4px, 0);
+  }
+}
+
+/* Page content settling in: a channel you switched to, a settings section, a
+   tab's body. A crossfade with a 4px rise — never a slide. */
+@keyframes pc-content-in {
   from {
     opacity: 0;
     transform: translate3d(0, 4px, 0);
@@ -469,11 +537,30 @@
 }
 
 .pc-fade-out {
-  animation: pc-fade var(--duration-fast) var(--ease-in) reverse forwards;
+  animation: pc-fade-out var(--duration-exit-slow) var(--ease-in) forwards;
 }
 
 .pc-enter {
-  animation: pc-enter var(--duration-slow) var(--ease-spring-settle) backwards;
+  animation: pc-enter var(--duration-slow) var(--ease-out) backwards;
+}
+
+/* Small surfaces grow out of the thing that opened them. `--pc-origin` is the
+   anchor side; a surface that knows where its anchor is sets it inline. */
+.pc-pop-in,
+.pc-pop-out {
+  transform-origin: var(--pc-origin, 50% 0%);
+}
+
+.pc-pop-in {
+  animation: pc-pop var(--duration-normal) var(--ease-out) backwards;
+}
+
+.pc-pop-out {
+  animation: pc-pop-out var(--duration-exit) var(--ease-in) forwards;
+}
+
+.pc-content-in {
+  animation: pc-content-in var(--duration-slow) var(--ease-out) backwards;
 }
 
 /* Everything that is leaving is scenery for the beat it takes: the pointer
@@ -481,6 +568,7 @@
    accessibility tree and the tab order at the same moment. A dismissed
    surface must not still be clickable on its way out. */
 .pc-exit,
+.pc-pop-out,
 .pc-fade-out,
 .pc-sheet-out,
 .pc-banner-out,
@@ -490,36 +578,35 @@
 }
 
 .pc-exit {
-  animation: pc-exit var(--duration-fast) var(--ease-in) forwards;
+  animation: pc-exit var(--duration-exit-slow) var(--ease-in) forwards;
 }
 
 .pc-drawer-in-left {
-  animation: pc-drawer-in-left var(--duration-move) var(--ease-spring-settle) backwards;
+  animation: pc-drawer-in-left var(--duration-slow) var(--ease-out) backwards;
 }
 
 .pc-drawer-in-right {
-  animation: pc-drawer-in-right var(--duration-move) var(--ease-spring-settle) backwards;
+  animation: pc-drawer-in-right var(--duration-slow) var(--ease-out) backwards;
 }
 
 .pc-drawer-out-left {
-  animation: pc-drawer-out-left var(--duration-fast) var(--ease-in) forwards;
+  animation: pc-drawer-out-left var(--duration-exit-slow) var(--ease-in) forwards;
 }
 
 .pc-drawer-out-right {
-  animation: pc-drawer-out-right var(--duration-fast) var(--ease-in) forwards;
+  animation: pc-drawer-out-right var(--duration-exit-slow) var(--ease-in) forwards;
 }
 
 .pc-sheet-in {
-  animation: pc-sheet-in var(--duration-move) var(--ease-spring-settle) backwards;
+  animation: pc-sheet-in var(--duration-slow) var(--ease-out) backwards;
 }
 
 .pc-sheet-out {
-  animation: pc-sheet-out var(--duration-fast) var(--ease-in) forwards;
+  animation: pc-sheet-out var(--duration-exit-slow) var(--ease-in) forwards;
 }
 
 /* Message search: result rows fade up 4px over 180ms, the first eight
-   staggered by the light step. The phone sheet rises on the plain ease-out,
-   not the spring, so a full-screen surface does not overshoot. */
+   staggered by the light step. */
 @keyframes pc-search-row {
   from {
     opacity: 0;
@@ -528,7 +615,7 @@
 }
 
 .pc-search-row {
-  animation: pc-search-row var(--duration-roll) var(--ease-out) backwards;
+  animation: pc-search-row var(--duration-normal) var(--ease-out) backwards;
 }
 
 :root[data-motion='reduced'] .pc-search-row {
@@ -552,13 +639,13 @@
 
 
 /* A status banner pinned to the top edge drops in rather than rising — the
-   directional variant of the same recipe (spring-settle in, ease-in out). */
+   directional variant of the same recipe. */
 .pc-banner-in {
-  animation: pc-banner-in var(--duration-normal) var(--ease-spring-settle) backwards;
+  animation: pc-banner-in var(--duration-normal) var(--ease-out) backwards;
 }
 
 .pc-banner-out {
-  animation: pc-banner-out var(--duration-fast) var(--ease-in) forwards;
+  animation: pc-banner-out var(--duration-exit) var(--ease-in) forwards;
 }
 
 .pc-hover-in {
@@ -583,45 +670,97 @@
   animation: pc-sweep var(--duration-breathe) linear infinite;
 }
 
-/* -----------------------------------------------------------------------------
-   §5.1 Controls are tactile (WP9c item 1).
+/* A determinate meter or progress bar: the fill is a full-width bar slid in
+   from the left by `--pc-fill` (0–1), so a change is a composited transform
+   rather than a width that re-lays-out the row on every step. The track clips
+   it, so the fill's right end keeps the track's rounded corner. */
+.pc-meter {
+  position: relative;
+  overflow: hidden;
+}
 
-   `.pc-pressable` is the whole gesture: a 1px lift and a faint --bg-mod-subtle
-   wash on hover, 0.96 scale for the 80ms the finger is down, and a spring back
-   on release. Disabled controls get none of it. `.pc-pressable-accent` adds the
-   one-beat brighter flash primary buttons take on press — painted as an
-   opacity-only veil so the press stays inside the transform/opacity budget.
+.pc-meter-fill {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  transform: translate3d(calc((var(--pc-fill, 0) - 1) * 100%), 0, 0);
+  transition: transform var(--duration-normal) var(--ease-out);
+}
+
+/* A live level (a microphone meter) follows the signal, not a curve. */
+.pc-meter-fill.is-live {
+  transition-duration: 80ms;
+  transition-timing-function: linear;
+}
+
+/* -----------------------------------------------------------------------------
+   §5.1 Controls are tactile.
+
+   `.pc-pressable` is the whole gesture for a button, icon button or chip: a
+   faint --bg-mod-subtle wash on hover and a 0.98 press, both over 120ms on the
+   one ease-out, and back the same way on release. Nothing lifts on hover —
+   the wash is the hover. `.pc-pressable-row` is the same gesture for a row
+   (a channel, a person, a setting): a row does not shrink, it darkens a step
+   on press. `.pc-pressable-accent` adds the one-beat brighter flash primary
+   buttons take on press — an opacity-only veil. Disabled controls get none of
+   it. Only colour, transform and opacity are in the transition list: a
+   control's shadow never animates.
    -------------------------------------------------------------------------- */
 .pc-pressable {
   /* The wash is a gradient rather than a background-colour so it layers OVER
-     whatever fill the variant already carries, and so it can be interpolated:
-     `none` -> gradient is a discrete step in CSS and would snap the bloom on
-     instead of easing it over the 120ms §5.1 asks for. Transparent-to-
-     transparent is the same gradient with nothing in it, so the pair animates. */
+     whatever fill the variant already carries. */
   background-image: linear-gradient(transparent, transparent);
   transition:
-    transform var(--duration-normal) var(--ease-spring-settle),
-    background-image var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out),
     background-color var(--duration-fast) var(--ease-out),
-    color var(--duration-fast) var(--ease-out),
-    box-shadow var(--duration-fast) var(--ease-out);
+    color var(--duration-fast) var(--ease-out);
 }
 
 @media (hover: hover) {
   .pc-pressable:not(:disabled):not([aria-disabled='true']):hover {
-    transform: translateY(-1px);
     background-image: linear-gradient(var(--bg-mod-subtle), var(--bg-mod-subtle));
   }
 }
 
 .pc-pressable:not(:disabled):not([aria-disabled='true']):active {
-  transform: scale(0.96);
+  transform: scale(0.98);
+}
+
+/* A row keeps its own hover fill (every row in the app already has one); the
+   press lays one more step of wash over whatever fill it has. */
+.pc-pressable-row {
   transition:
-    transform 80ms var(--ease-out),
-    background-image var(--duration-fast) var(--ease-out),
     background-color var(--duration-fast) var(--ease-out),
-    color var(--duration-fast) var(--ease-out),
-    box-shadow var(--duration-fast) var(--ease-out);
+    color var(--duration-fast) var(--ease-out);
+}
+
+.pc-pressable-row:not(:disabled):not([aria-disabled='true']):active {
+  background-image: linear-gradient(var(--bg-mod-subtle), var(--bg-mod-subtle));
+}
+
+/* A card that deepens under the pointer. The lifted shadow is a still layer
+   that fades in over 180ms — never a box-shadow transition, which repaints the
+   card on every frame and, in a scrolling list under a resting pointer, on
+   every card the pointer crosses. */
+.pc-hover-lift {
+  position: relative;
+}
+
+.pc-hover-lift::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: var(--shadow-lifted);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-normal) var(--ease-out);
+}
+
+@media (hover: hover) {
+  .pc-hover-lift:hover::after {
+    opacity: 1;
+  }
 }
 
 .pc-pressable-accent {
@@ -640,8 +779,7 @@
 }
 
 .pc-pressable-accent:not(:disabled):not([aria-disabled='true']):active::after {
-  opacity: 0.28;
-  transition-duration: 80ms;
+  opacity: 0.2;
 }
 
 /* -----------------------------------------------------------------------------
@@ -806,9 +944,8 @@
 /* Reduced motion is the `data-motion` attribute, never a media query — see the
    header of utilities.css. Warm-up and dim become instant; breathing stops with
    the ring at its resting alpha. */
-:root[data-motion='reduced'] .pc-lit,
-:root[data-motion='reduced'] .pc-window,
-:root[data-motion='reduced'] .pc-dimming,
+:root[data-motion='reduced'] .pc-window::before,
+:root[data-motion='reduced'] .pc-window::after,
 :root[data-motion='reduced'] .pc-transition {
   transition: none;
 }
@@ -846,14 +983,14 @@
    The engine decides WHICH elements travel; these rules decide how fast and on
    what curve, so the browser-driven path and the Web Animations FLIP fallback
    are the same choreography rather than two that happen to look similar. The
-   UA default is 250ms `ease`, which is neither of §5.2's two curves.
+   UA default is 250ms `ease`, which is not §5.2's curve.
 
    Reduced motion never reaches here: `transitionWith` runs the update with no
    transition at all when the switch says so.
    -------------------------------------------------------------------------- */
 ::view-transition-group(*) {
   animation-duration: var(--duration-move);
-  animation-timing-function: var(--ease-spring-settle);
+  animation-timing-function: var(--ease-out);
 }
 
 ::view-transition-old(*),
@@ -925,7 +1062,7 @@
   }
   to {
     opacity: 0;
-    transform: scale(0.96);
+    transform: scale(0.98);
   }
 }
 
@@ -937,20 +1074,11 @@
 
 /* The `:focus-visible` recipes themselves live in focus.css, in a layer above
    Tailwind's utilities — a resting-state `shadow-*` utility must not be able to
-   delete a control's ring. The keyframe stays here with the rest of the motion.
+   delete a control's ring.
 
-   §5.3/WP9c: the ring fades in over --duration-fast rather than snapping on.
-   It is an animation, not a transition, so it never fights an element's own
-   transition list: it plays the moment :focus-visible starts matching and is
-   gone the moment it stops. 120ms still reads as instant to a keyboard user. */
-@keyframes pc-ring-in {
-  from {
-    /* Whatever shadow the element already had, and no ring. CSS pads the
-       shorter shadow list with transparent layers, so this one `from` works
-       for every rule below whatever `--focus-ring` resolves to. */
-    box-shadow: var(--pc-base-shadow, 0 0 0 0 transparent);
-  }
-}
+   The ring appears on the frame focus arrives. It used to fade in over 120ms
+   through a box-shadow keyframe; the motion law does not animate shadows, and
+   a keyboard user is better served by a ring that is simply there. */
 
 /* A well is either the control itself (Input / Select / Textarea) or the plate
    that wraps one (TextField, SearchWell, the invite readout, the CSS editor,

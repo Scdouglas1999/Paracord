@@ -53,7 +53,7 @@ function ActionButton({
       title={label}
       aria-label={label}
       className={cn(
-        'flex h-9 w-9 shrink-0 items-center justify-center rounded-chip bg-bg-mod-subtle text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-strong focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50',
+        'flex h-9 w-9 shrink-0 items-center justify-center rounded-chip bg-bg-mod-subtle text-text-secondary outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-strong focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50',
         !alwaysVisible && 'opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 sm:focus-visible:opacity-100',
         tone === 'success' && 'text-accent-success hover:text-accent-success',
         tone === 'danger' && 'hover:text-accent-danger',
@@ -85,7 +85,7 @@ function PersonRow({
   actions: ReactNode;
 }) {
   return (
-    <div className="group flex items-center gap-1.5 px-2 py-1.5 transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle">
+    <div className="group flex items-center gap-1.5 px-2 py-1.5 transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle">
       <button
         type="button"
         aria-label={`Open profile for ${name}`}
@@ -380,7 +380,7 @@ export function FriendsPage() {
                 className={cn(
                   // pc-touch (§9): the chip stays 32px so the filter row is not
                   // a row of buttons; the hit area is 44px on a coarse pointer.
-                  'pc-touch inline-flex h-8 items-center gap-2 rounded-full px-3.5 text-label font-medium outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
+                  'pc-touch inline-flex h-8 items-center gap-2 rounded-full px-3.5 text-label font-medium outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
                   active
                     ? 'bg-accent-tint text-accent-primary'
                     : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary',

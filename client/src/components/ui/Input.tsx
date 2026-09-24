@@ -14,7 +14,7 @@ import { cn } from "../../lib/utils"
  */
 const fieldBase = [
     "pc-well w-full text-label text-text-primary placeholder:text-text-faint",
-    "outline-none transition-[box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]",
+    "outline-none",
     "focus-visible:shadow-[var(--shadow-well),var(--focus-ring)]",
     "disabled:cursor-not-allowed disabled:opacity-60",
 ].join(" ")

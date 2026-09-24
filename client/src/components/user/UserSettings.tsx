@@ -2051,7 +2051,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                       <div key={kb.key} className="flex flex-col gap-2 py-4 sm:flex-row sm:items-center sm:justify-between">
                         <span className="text-label text-text-primary">{kb.action}</span>
                         <input
-                          className="h-10 w-full pc-well px-3 font-code text-body text-text-muted outline-none transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus-visible:border-accent-primary focus-visible:shadow-[var(--focus-ring-input)] sm:w-52"
+                          className="h-10 w-full pc-well px-3 font-code text-body text-text-muted outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:border-accent-primary focus-visible:shadow-[var(--focus-ring-input)] sm:w-52"
                           value={
                             capturingKeybind === kb.key
                               ? 'Press keys…'

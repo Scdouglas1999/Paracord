@@ -28,7 +28,7 @@ export function MessageEmbedCard({ embed }: MessageEmbedCardProps) {
   if (!url && (claimsDestination || !hasBody)) return null;
 
   const surface =
-    'group mt-1.5 flex max-w-[480px] overflow-hidden rounded-well border border-border-subtle bg-bg-raised shadow-[var(--shadow-chip)] transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]';
+    'group mt-1.5 flex max-w-[480px] overflow-hidden rounded-well border border-border-subtle bg-bg-raised shadow-[var(--shadow-chip)] transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]';
   const Surface = url
     ? ({ children }: { children: ReactNode }) => (
         <a

@@ -157,7 +157,7 @@ export function OnboardingWizard({ onComplete, onTryDemo }: OnboardingWizardProp
               <span
                 key={i}
                 aria-hidden
-                className={`h-1.5 rounded-[var(--radius-full)] transition-all duration-[var(--duration-normal)] ease-[var(--ease-out)] ${
+                className={`h-1.5 rounded-[var(--radius-full)] transition-colors ${
                   i <= step ? 'bg-accent-primary' : 'bg-bg-mod-strong'
                 }`}
                 style={{ width: i === step ? 26 : 8 }}

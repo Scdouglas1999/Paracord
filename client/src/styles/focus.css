@@ -39,7 +39,6 @@
   .pc-focusable:focus-visible {
     outline: none;
     box-shadow: var(--focus-ring);
-    animation: pc-ring-in var(--duration-fast) var(--ease-out);
   }
 
   /* Composed focus: a surface that already carries a shadow keeps it under the
@@ -47,47 +46,39 @@
   .pc-focusable-composed:focus-visible {
     outline: none;
     box-shadow: var(--pc-base-shadow, none), var(--focus-ring);
-    animation: pc-ring-in var(--duration-fast) var(--ease-out);
   }
 
   .pc-checkbox:focus-visible {
     outline: none;
     box-shadow: var(--focus-ring);
-    animation: pc-ring-in var(--duration-fast) var(--ease-out);
   }
 
   .btn-primary:focus-visible {
     outline: none;
     box-shadow: var(--focus-ring);
-    animation: pc-ring-in var(--duration-fast) var(--ease-out);
   }
 
   .input-field:focus-visible {
     box-shadow: var(--shadow-well), var(--focus-ring);
-    animation: pc-ring-in var(--duration-fast) var(--ease-out);
   }
 
   /* Taking focus must not erase the reason the field is red. */
   .input-field[aria-invalid='true']:focus-visible {
     box-shadow: var(--shadow-well), 0 0 0 1px var(--accent-danger), var(--focus-ring);
-    animation: pc-ring-in var(--duration-fast) var(--ease-out);
   }
 
   .icon-btn:focus-visible {
     outline: none;
     box-shadow: var(--focus-ring);
-    animation: pc-ring-in var(--duration-fast) var(--ease-out);
   }
 
   .context-menu-item:focus-visible {
     outline: none;
     box-shadow: var(--focus-ring);
-    animation: pc-ring-in var(--duration-fast) var(--ease-out);
   }
 
   .command-icon-btn:focus-visible {
     outline: none;
     box-shadow: var(--focus-ring);
-    animation: pc-ring-in var(--duration-fast) var(--ease-out);
   }
 }

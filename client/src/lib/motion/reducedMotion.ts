@@ -1,4 +1,7 @@
 import { useSyncExternalStore } from 'react';
+// Installed with the switch: every app that asks about motion also pauses its
+// loops while the window is hidden.
+import './visibility';
 
 /**
  * The one reduced-motion switch (docs/lantern-stage-spec.md §5.3:

@@ -113,8 +113,8 @@
 /* Rest state is the visible one: the keyframe only declares where a section
    comes FROM, and `backwards` holds it there for its stagger delay. */
 .pc-home-enter {
-  animation: pc-home-enter 420ms var(--ease-out) backwards;
-  animation-delay: calc(var(--enter-index, 0) * 40ms);
+  animation: pc-home-enter var(--duration-page) var(--ease-out) backwards;
+  animation-delay: calc(var(--enter-index, 0) * var(--stagger-page));
   transform-origin: 50% 0;
 }
 
@@ -134,14 +134,29 @@
   background: var(--bg-raised);
   border-radius: var(--radius-card);
   box-shadow: var(--shadow-raised), 0 0 0 1px var(--border-subtle);
-  transition:
-    transform var(--duration-slow) var(--ease-out),
-    box-shadow var(--duration-slow) var(--ease-out);
+  transition: transform var(--duration-normal) var(--ease-out);
+}
+
+/* The lifted depth is a still layer that fades in, never a shadow transition:
+   scrolling the feed under a resting pointer hovers card after card, and each
+   animated shadow would repaint its card for every frame of the lift. */
+.pc-home-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: var(--shadow-lifted), 0 0 0 1px var(--border-strong);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-normal) var(--ease-out);
 }
 
 .pc-home-card:hover {
   transform: translate3d(0, -2px, 0);
-  box-shadow: var(--shadow-lifted), 0 0 0 1px var(--border-strong);
+}
+
+.pc-home-card:hover::after {
+  opacity: 1;
 }
 
 /* A widget: quieter than a feed card, it is furniture. */
@@ -240,7 +255,7 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
-  transition: transform 360ms var(--ease-out);
+  transition: transform var(--duration-slow) var(--ease-out);
 }
 
 .pc-home-photo:hover img,
@@ -286,12 +301,13 @@
   }
 }
 
-/* The poll card is the timeline's own; on this page its bars grow in. */
+/* The poll card is the timeline's own; on this page its bars grow in. The bar
+   is a scale from the left edge (PollMessageCard), so a vote moving it is its
+   own transform transition. */
 .pc-home-poll button > span.absolute {
   transform-origin: 0 50%;
-  animation: pc-home-bar 700ms var(--ease-out) backwards;
+  animation: pc-home-bar var(--duration-page) var(--ease-out) backwards;
   animation-delay: 160ms;
-  transition: width 320ms var(--ease-out);
 }
 
 /* ---- Bars (Most active) ------------------------------------------------------ */
@@ -309,7 +325,7 @@
   border-radius: inherit;
   background: var(--accent-primary);
   transform-origin: 0 50%;
-  animation: pc-home-bar 700ms var(--ease-out) backwards;
+  animation: pc-home-bar var(--duration-page) var(--ease-out) backwards;
   animation-delay: 200ms;
 }
 

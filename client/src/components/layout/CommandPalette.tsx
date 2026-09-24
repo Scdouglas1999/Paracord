@@ -423,7 +423,7 @@ export function CommandPalette() {
                     onClick={() => handleSelect(item)}
                     onMouseEnter={() => setSelectedIndex(currentIndex)}
                     className={cn(
-                      'flex w-full items-center gap-3 rounded-chip px-3 py-2.5 text-left transition-colors duration-[140ms] ease-[var(--ease-out)]',
+                      'flex w-full items-center gap-3 rounded-chip px-3 py-2.5 text-left transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]',
                       isSelected
                         ? 'bg-accent-tint text-text-primary'
                         : 'text-text-secondary hover:bg-bg-mod-subtle'

@@ -216,7 +216,7 @@ export function ForumView({ channelId, channelName }: ForumViewProps) {
       <div className="flex flex-wrap items-center gap-2 border-b border-border-subtle px-4 py-3">
         {/* Sort */}
         <button
-          className="flex items-center gap-1.5 rounded-chip border border-border-subtle px-3 py-1.5 text-label font-medium text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
+          className="flex items-center gap-1.5 rounded-chip border border-border-subtle px-3 py-1.5 text-label font-medium text-text-secondary outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
           onClick={() => void handleSortChange(sortOrder === 0 ? 1 : 0)}
           title={sortOrder === 0 ? 'Sorted by latest activity' : 'Sorted by creation date'}
         >
@@ -228,7 +228,7 @@ export function ForumView({ channelId, channelName }: ForumViewProps) {
         <div className="flex items-center overflow-hidden rounded-chip border border-border-subtle">
           <button
             className={cn(
-              'flex items-center gap-1 px-2.5 py-1.5 text-label font-medium outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
+              'flex items-center gap-1 px-2.5 py-1.5 text-label font-medium outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
               layout === 'grid'
                 ? 'bg-bg-mod-strong text-text-primary'
                 : 'text-text-muted hover:bg-bg-mod-subtle hover:text-text-secondary',
@@ -241,7 +241,7 @@ export function ForumView({ channelId, channelName }: ForumViewProps) {
           </button>
           <button
             className={cn(
-              'flex items-center gap-1 px-2.5 py-1.5 text-label font-medium outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
+              'flex items-center gap-1 px-2.5 py-1.5 text-label font-medium outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
               layout === 'list'
                 ? 'bg-bg-mod-strong text-text-primary'
                 : 'text-text-muted hover:bg-bg-mod-subtle hover:text-text-secondary',
@@ -268,7 +268,7 @@ export function ForumView({ channelId, channelName }: ForumViewProps) {
         {/* Search. The well lights for the field it wraps, not for the Clear
             button inside it: §9 is one ring per control, and Clear draws its
             own. */}
-        <div className="relative flex items-center rounded-chip border border-border-subtle bg-bg-well transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] has-[>input:focus-visible]:border-accent-primary has-[>input:focus-visible]:shadow-[var(--focus-ring-input)]">
+        <div className="relative flex items-center rounded-chip border border-border-subtle bg-bg-well transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] has-[>input:focus-visible]:border-accent-primary has-[>input:focus-visible]:shadow-[var(--focus-ring-input)]">
           <Search size={14} className="pointer-events-none absolute left-2.5 text-text-muted" />
           <input
             type="text"
@@ -278,7 +278,7 @@ export function ForumView({ channelId, channelName }: ForumViewProps) {
               if (e.key === 'Enter') void handleSearch(searchQuery);
             }}
             placeholder="Search posts…"
-            className="w-44 bg-transparent py-1.5 pl-8 pr-7 text-meta text-text-primary placeholder:text-text-muted outline-none transition-[width] duration-[180ms] ease-[var(--ease-out)] focus:w-56"
+            className="w-52 bg-transparent py-1.5 pl-8 pr-7 text-meta text-text-primary placeholder:text-text-muted outline-none"
           />
           {searchQuery && (
             <button
@@ -295,7 +295,7 @@ export function ForumView({ channelId, channelName }: ForumViewProps) {
 
         {canManageTags && (
           <button
-            className="flex items-center gap-1.5 rounded-chip border border-border-subtle px-3 py-2 text-label font-semibold text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
+            className="flex items-center gap-1.5 rounded-chip border border-border-subtle px-3 py-2 text-label font-semibold text-text-secondary outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
             onClick={() => setShowTagManager(true)}
           >
             <Tag size={15} />
@@ -305,7 +305,7 @@ export function ForumView({ channelId, channelName }: ForumViewProps) {
 
         {/* New post button — primary emerald */}
         <button
-          className="flex items-center gap-1.5 rounded-chip bg-accent-primary px-3.5 py-2 text-label font-semibold text-text-on-accent shadow-[var(--shadow-chip)] outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-primary-hover active:bg-accent-primary-active focus-visible:shadow-[var(--focus-ring)]"
+          className="flex items-center gap-1.5 rounded-chip bg-accent-primary px-3.5 py-2 text-label font-semibold text-text-on-accent shadow-[var(--shadow-chip)] outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-accent-primary-hover active:bg-accent-primary-active focus-visible:shadow-[var(--focus-ring)]"
           onClick={() => setShowNewPost(true)}
         >
           <Plus size={16} />
@@ -328,7 +328,7 @@ export function ForumView({ channelId, channelName }: ForumViewProps) {
               onKeyDown={(event) => handleTagRovingFocus(event, 'filters')}
               data-forum-tag-scope="filters"
               className={cn(
-                'inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-meta font-medium outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
+                'inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-meta font-medium outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
                 selectedTags.has(tag.id)
                   ? 'border-transparent bg-accent-tint text-accent-primary'
                   : 'border-border-subtle text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary',
@@ -343,7 +343,7 @@ export function ForumView({ channelId, channelName }: ForumViewProps) {
           {selectedTags.size > 0 && (
             <button
               onClick={() => setSelectedTags(new Set())}
-              className="rounded-chip px-1.5 py-0.5 text-meta text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:text-text-secondary focus-visible:shadow-[var(--focus-ring)]"
+              className="rounded-chip px-1.5 py-0.5 text-meta text-text-muted outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:text-text-secondary focus-visible:shadow-[var(--focus-ring)]"
             >
               Clear
             </button>
@@ -382,7 +382,7 @@ export function ForumView({ channelId, channelName }: ForumViewProps) {
                   key={msg.id}
                   type="button"
                   onClick={() => handleSearchResultClick(msg)}
-                  className="rounded-well bg-bg-mod-subtle/50 px-4 py-3 text-left outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
+                  className="rounded-well bg-bg-mod-subtle/50 px-4 py-3 text-left outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
                 >
                   <div className="flex items-center gap-2 text-meta text-text-muted">
                     <span className="font-medium text-text-secondary">
@@ -430,7 +430,7 @@ export function ForumView({ channelId, channelName }: ForumViewProps) {
             action={
               <button
                 onClick={() => setShowNewPost(true)}
-                className="flex items-center gap-1.5 rounded-chip bg-accent-primary px-3.5 py-2 text-label font-semibold text-text-on-accent shadow-[var(--shadow-chip)] outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-primary-hover active:bg-accent-primary-active focus-visible:shadow-[var(--focus-ring)]"
+                className="flex items-center gap-1.5 rounded-chip bg-accent-primary px-3.5 py-2 text-label font-semibold text-text-on-accent shadow-[var(--shadow-chip)] outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-accent-primary-hover active:bg-accent-primary-active focus-visible:shadow-[var(--focus-ring)]"
               >
                 <Plus size={16} />
                 Start a discussion
@@ -511,10 +511,10 @@ function PostCard({
   return (
     <button
       onClick={onClick}
-      className="group flex flex-col gap-2 rounded-well border border-border-subtle bg-bg-raised p-4 text-left shadow-[var(--shadow-chip)] outline-none transition-shadow duration-[180ms] ease-[var(--ease-out)] hover:shadow-[var(--shadow-lifted)] focus-visible:shadow-[var(--focus-ring)]"
+      className="group flex flex-col gap-2 rounded-well border border-border-subtle bg-bg-raised p-4 text-left shadow-[var(--shadow-chip)] outline-none pc-hover-lift focus-visible:shadow-[var(--focus-ring)]"
     >
       <div className="flex items-start gap-2">
-        <span className="flex-1 truncate text-heading text-text-primary transition-colors duration-[140ms] group-hover:text-accent-primary">
+        <span className="flex-1 truncate text-heading text-text-primary transition-colors duration-[var(--duration-fast)] group-hover:text-accent-primary">
           {post.name || 'Untitled'}
         </span>
         {isArchived && (
@@ -572,11 +572,11 @@ function PostRow({
   return (
     <button
       onClick={onClick}
-      className="group flex w-full items-center gap-3 rounded-well border border-border-subtle bg-bg-raised px-4 py-3 text-left shadow-[var(--shadow-chip)] outline-none transition-shadow duration-[180ms] ease-[var(--ease-out)] hover:shadow-[var(--shadow-lifted)] focus-visible:shadow-[var(--focus-ring)]"
+      className="group flex w-full items-center gap-3 rounded-well border border-border-subtle bg-bg-raised px-4 py-3 text-left shadow-[var(--shadow-chip)] outline-none pc-hover-lift focus-visible:shadow-[var(--focus-ring)]"
     >
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <div className="flex items-center gap-2">
-          <span className="truncate text-label font-semibold text-text-primary transition-colors duration-[140ms] group-hover:text-accent-primary">
+          <span className="truncate text-label font-semibold text-text-primary transition-colors duration-[var(--duration-fast)] group-hover:text-accent-primary">
             {post.name || 'Untitled'}
           </span>
           {isArchived && (
@@ -686,7 +686,7 @@ function TagManagerModal({
               onChange={(e) => setName(e.target.value)}
               maxLength={30}
               placeholder="Tag name"
-              className="w-full rounded-chip border border-border-subtle bg-bg-well px-3 py-2.5 text-body text-text-primary placeholder:text-text-muted outline-none transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus:border-accent-primary focus:shadow-[var(--focus-ring-input)]"
+              className="w-full rounded-chip border border-border-subtle bg-bg-well px-3 py-2.5 text-body text-text-primary placeholder:text-text-muted outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus:border-accent-primary focus:shadow-[var(--focus-ring-input)]"
             />
             <input
               type="text"
@@ -694,12 +694,12 @@ function TagManagerModal({
               onChange={(e) => setEmoji(e.target.value)}
               maxLength={16}
               placeholder="Emoji"
-              className="w-full rounded-chip border border-border-subtle bg-bg-well px-3 py-2.5 text-body text-text-primary placeholder:text-text-muted outline-none transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus:border-accent-primary focus:shadow-[var(--focus-ring-input)]"
+              className="w-full rounded-chip border border-border-subtle bg-bg-well px-3 py-2.5 text-body text-text-primary placeholder:text-text-muted outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus:border-accent-primary focus:shadow-[var(--focus-ring-input)]"
             />
             <button
               onClick={() => void createTag()}
               disabled={creating || !name.trim()}
-              className="rounded-chip bg-accent-primary px-4 py-2 text-label font-semibold text-text-on-accent shadow-[var(--shadow-chip)] outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-primary-hover active:bg-accent-primary-active focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50"
+              className="rounded-chip bg-accent-primary px-4 py-2 text-label font-semibold text-text-on-accent shadow-[var(--shadow-chip)] outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-accent-primary-hover active:bg-accent-primary-active focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50"
             >
               {creating ? 'Creating…' : 'Create'}
             </button>
@@ -724,7 +724,7 @@ function TagManagerModal({
                     <button
                       onClick={() => void deleteTag(tag.id)}
                       disabled={deletingTagId === tag.id}
-                      className="rounded-chip px-2.5 py-1 text-meta font-semibold text-accent-danger outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-danger hover:text-text-on-danger focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50"
+                      className="rounded-chip px-2.5 py-1 text-meta font-semibold text-accent-danger outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-accent-danger hover:text-text-on-danger focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50"
                     >
                       {deletingTagId === tag.id ? 'Deleting…' : 'Delete'}
                     </button>
@@ -809,7 +809,7 @@ function NewPostModal({
               onChange={(e) => setTitle(e.target.value)}
               maxLength={100}
               placeholder="What's this discussion about?"
-              className="w-full rounded-chip border border-border-subtle bg-bg-well px-3 py-2.5 text-body text-text-primary placeholder:text-text-muted outline-none transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus:border-accent-primary focus:shadow-[var(--focus-ring-input)]"
+              className="w-full rounded-chip border border-border-subtle bg-bg-well px-3 py-2.5 text-body text-text-primary placeholder:text-text-muted outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus:border-accent-primary focus:shadow-[var(--focus-ring-input)]"
               autoFocus
             />
           </div>
@@ -862,7 +862,7 @@ function NewPostModal({
                     data-forum-tag-scope="composer"
                     aria-pressed={selectedTagIds.has(tag.id)}
                     className={cn(
-                      'rounded-full border px-2.5 py-1 text-meta font-medium outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
+                      'rounded-full border px-2.5 py-1 text-meta font-medium outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
                       selectedTagIds.has(tag.id)
                         ? 'border-transparent bg-accent-tint text-accent-primary'
                         : 'border-border-subtle text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary',
@@ -879,14 +879,14 @@ function NewPostModal({
       <ModalFooter className="mt-2 border-t border-border-subtle">
         <button
           onClick={onClose}
-          className="rounded-chip border border-border-subtle px-4 py-2 text-label font-medium text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
+          className="rounded-chip border border-border-subtle px-4 py-2 text-label font-medium text-text-secondary outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
         >
           Cancel
         </button>
         <button
           onClick={() => void handleSubmit()}
           disabled={!title.trim() || submitting}
-          className="rounded-chip bg-accent-primary px-4 py-2 text-label font-semibold text-text-on-accent shadow-[var(--shadow-chip)] outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-primary-hover active:bg-accent-primary-active focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50"
+          className="rounded-chip bg-accent-primary px-4 py-2 text-label font-semibold text-text-on-accent shadow-[var(--shadow-chip)] outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-accent-primary-hover active:bg-accent-primary-active focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50"
         >
           {submitting ? 'Creating…' : 'Create post'}
         </button>

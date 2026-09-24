@@ -295,7 +295,7 @@ function StringSelectMenu({
     <div ref={containerRef} className="relative inline-block min-w-[12rem] max-w-[25rem]">
       <button
         type="button"
-        className={`flex h-10 w-full items-center justify-between gap-2 rounded-chip border border-border-subtle bg-bg-well px-3 text-left text-body transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:border-accent-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring-input)] ${
+        className={`flex h-10 w-full items-center justify-between gap-2 rounded-chip border border-border-subtle bg-bg-well px-3 text-left text-body transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:border-accent-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring-input)] ${
           isDisabled
             ? 'cursor-not-allowed opacity-50'
             : 'cursor-pointer hover:border-border-strong'
@@ -313,7 +313,7 @@ function StringSelectMenu({
           {displayText}
         </span>
         <svg
-          className={`h-4 w-4 shrink-0 text-text-muted transition-transform duration-[140ms] ease-[var(--ease-out)] ${open ? 'rotate-180' : ''}`}
+          className={`h-4 w-4 shrink-0 text-text-muted transition-transform duration-[var(--duration-fast)] ease-[var(--ease-out)] ${open ? 'rotate-180' : ''}`}
           viewBox="0 0 20 20"
           fill="currentColor"
         >
@@ -333,7 +333,7 @@ function StringSelectMenu({
               <button
                 key={option.value}
                 type="button"
-                className={`flex w-full flex-col gap-0.5 rounded-chip px-2.5 py-1.5 text-left text-label transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
+                className={`flex w-full flex-col gap-0.5 rounded-chip px-2.5 py-1.5 text-left text-label transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
                   isSelected ? 'bg-accent-tint text-text-primary' : 'text-text-secondary hover:bg-accent-tint hover:text-text-primary'
                 }`}
                 onClick={() => handleOptionClick(option.value)}
@@ -363,7 +363,7 @@ function StringSelectMenu({
             <div className="mt-1 border-t border-border-subtle px-1 pt-2">
               <button
                 type="button"
-                className={`w-full rounded-chip px-2 py-1.5 text-meta font-semibold transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
+                className={`w-full rounded-chip px-2 py-1.5 text-meta font-semibold transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
                   selectedValues.length >= minValues
                     ? 'bg-accent-primary text-text-on-accent hover:bg-accent-primary-hover'
                     : 'cursor-not-allowed bg-bg-mod-strong text-text-muted opacity-50'
@@ -516,7 +516,7 @@ function EntitySelectMenu({
     <div ref={containerRef} className="relative inline-block min-w-[12rem] max-w-[25rem]">
       <button
         type="button"
-        className={`flex h-10 w-full items-center justify-between gap-2 rounded-chip border border-border-subtle bg-bg-well px-3 text-left text-body transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:border-accent-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring-input)] ${
+        className={`flex h-10 w-full items-center justify-between gap-2 rounded-chip border border-border-subtle bg-bg-well px-3 text-left text-body transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:border-accent-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring-input)] ${
           isDisabled
             ? 'cursor-not-allowed opacity-50'
             : 'cursor-pointer hover:border-border-strong'
@@ -528,7 +528,7 @@ function EntitySelectMenu({
           {displayText}
         </span>
         <svg
-          className={`h-4 w-4 shrink-0 text-text-muted transition-transform duration-[140ms] ease-[var(--ease-out)] ${open ? 'rotate-180' : ''}`}
+          className={`h-4 w-4 shrink-0 text-text-muted transition-transform duration-[var(--duration-fast)] ease-[var(--ease-out)] ${open ? 'rotate-180' : ''}`}
           viewBox="0 0 20 20"
           fill="currentColor"
         >
@@ -557,7 +557,7 @@ function EntitySelectMenu({
                 <button
                   key={item.id}
                   type="button"
-                  className={`flex w-full items-center gap-2 rounded-chip px-2.5 py-1.5 text-left text-label transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
+                  className={`flex w-full items-center gap-2 rounded-chip px-2.5 py-1.5 text-left text-label transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
                     isSelected ? 'bg-accent-tint text-text-primary' : 'text-text-secondary hover:bg-accent-tint hover:text-text-primary'
                   }`}
                   onClick={() => handleItemClick(item.id)}
@@ -583,7 +583,7 @@ function EntitySelectMenu({
             <div className="mt-1 border-t border-border-subtle px-1 pt-2">
               <button
                 type="button"
-                className={`w-full rounded-chip px-2 py-1.5 text-meta font-semibold transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
+                className={`w-full rounded-chip px-2 py-1.5 text-meta font-semibold transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
                   selectedIds.length >= minValues
                     ? 'bg-accent-primary text-text-on-accent hover:bg-accent-primary-hover'
                     : 'cursor-not-allowed bg-bg-mod-strong text-text-muted opacity-50'

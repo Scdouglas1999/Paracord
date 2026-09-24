@@ -1,10 +1,10 @@
 import * as React from "react";
 import { useState, useRef, useCallback, useLayoutEffect, useId } from "react";
 import { createPortal } from "react-dom";
-// §5.1/§5.3: the shared overlay recipe (pc-enter / pc-exit) and the ONE
-// reduced-motion switch — the presence hook keeps the tooltip mounted for
-// its --duration-fast leave.
-import { usePresence } from '../../lib/motion';
+// §5.1/§5.3: the small-surface recipe (pc-pop-in / pc-pop-out), grown from the
+// side that faces the trigger, and the ONE reduced-motion switch — the
+// presence hook keeps the tooltip mounted for its leave.
+import { anchorOrigin, usePresence } from '../../lib/motion';
 import { cn } from "../../lib/utils";
 
 interface TooltipProps {
@@ -142,13 +142,14 @@ export function Tooltip({
                             // translucent tooltip composites into the live stream and
                             // can stick there as a ghost label.
                             "pc-floating pointer-events-none fixed z-[9999] whitespace-nowrap px-2.5 py-1.5 text-meta font-medium text-text-primary",
-                            exiting ? "pc-exit" : "pc-enter",
+                            exiting ? "pc-pop-out" : "pc-pop-in",
                             className
                         )}
                         style={{
                             top: coords?.top ?? -9999,
                             left: coords?.left ?? -9999,
-                        }}
+                            '--pc-origin': anchorOrigin(side),
+                        } as React.CSSProperties}
                         {...scenery}
                     >
                         {content}
