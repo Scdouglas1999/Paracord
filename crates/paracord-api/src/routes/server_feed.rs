@@ -298,8 +298,11 @@ pub async fn get_server_feed(
     }
     let starter_set: HashSet<i64> = thread_starters.iter().copied().collect();
 
-    // Each source contributes its own newest `limit`; the merge below keeps
-    // the page's newest `limit` overall, so nothing between pages is skipped.
+    // Each source contributes its own newest `fetch_limit`. That is more than
+    // a page, so a run of posts from one feed can fold into one card and the
+    // page still holds `limit` cards; `assemble_cards` never reads past the
+    // point where a source that was cut short could be missing something.
+    let fetch_limit = limit + FEED_GROUP_MAX as i64;
     let messages = paracord_db::server_feed::list_notable_messages(
         &state.db,
         &NotableMessages {
@@ -308,16 +311,44 @@ pub async fn get_server_feed(
             thread_starter_ids: &thread_starters,
             min_reactions: NOTABLE_REACTIONS,
             before,
-            limit,
+            limit: fetch_limit,
         },
     )
     .await
     .map_err(internal)?;
 
     forum_posts.sort_unstable_by_key(|post| std::cmp::Reverse(post.id));
-    forum_posts.truncate(limit as usize);
+    let forum_cut = forum_posts.len() as i64 > fetch_limit;
+    forum_posts.truncate(fetch_limit as usize);
 
-    let join_groups = load_join_groups(&state, guild_id, before, limit).await?;
+    let join_groups = load_join_groups(&state, guild_id, before, fetch_limit).await?;
+
+    // The lowest key every source is complete down to.
+    let mut horizon: Option<i64> = None;
+    let mut lower = |oldest: Option<i64>| {
+        if let Some(oldest) = oldest {
+            horizon = Some(horizon.map_or(oldest, |h: i64| h.max(oldest)));
+        }
+    };
+    if messages.len() as i64 >= fetch_limit {
+        lower(messages.last().map(|row| row.id));
+    }
+    if forum_cut {
+        lower(forum_posts.last().map(|post| post.id));
+    }
+    if join_groups.len() as i64 >= fetch_limit {
+        lower(
+            join_groups
+                .iter()
+                .map(|group| synthetic_key(group.latest))
+                .min(),
+        );
+    }
+
+    let message_ids: Vec<i64> = messages.iter().map(|row| row.id).collect();
+    let feed_posts = paracord_db::feeds::front_page_feed_posts(&state.db, &message_ids)
+        .await
+        .map_err(internal)?;
 
     let mut candidates: Vec<(i64, Candidate)> = Vec::new();
     candidates.extend(
@@ -339,40 +370,49 @@ pub async fn get_server_feed(
             .map(|(i, group)| (synthetic_key(group.latest), Candidate::Joined(i))),
     );
     candidates.sort_unstable_by_key(|(key, _)| std::cmp::Reverse(*key));
-    candidates.truncate(limit as usize);
 
-    // Render only the winners, each kind in one batch.
-    let page_messages: Vec<paracord_db::messages::MessageRow> = candidates
+    let feed_of = |candidate: &Candidate| match candidate {
+        Candidate::Message(i) => feed_posts.get(&messages[*i].id).copied(),
+        _ => None,
+    };
+    let (cards, next_cursor) = assemble_cards(&candidates, &feed_of, horizon, limit as usize);
+
+    // Render only the winners, each kind in one batch. A group's other posts
+    // are listed by title, so only its newest is rendered in full.
+    let page_messages: Vec<paracord_db::messages::MessageRow> = cards
         .iter()
-        .filter_map(|(_, candidate)| match candidate {
+        .filter_map(|card| match &candidates[card.head].1 {
             Candidate::Message(i) => Some(messages[*i].clone()),
             _ => None,
         })
         .collect();
     let message_json = messages_to_json(&state, &page_messages, auth.user_id).await;
-    let page_ids: Vec<i64> = page_messages.iter().map(|row| row.id).collect();
-    let front_page_feed_posts =
-        paracord_db::feeds::front_page_feed_message_ids(&state.db, &page_ids)
-            .await
-            .map_err(internal)?;
     let mut message_json: HashMap<i64, Value> = page_messages
         .iter()
         .map(|row| row.id)
         .zip(message_json)
         .collect();
 
-    let page_posts: Vec<&ChannelRow> = candidates
+    let page_posts: Vec<&ChannelRow> = cards
         .iter()
-        .filter_map(|(_, candidate)| match candidate {
+        .filter_map(|card| match &candidates[card.head].1 {
             Candidate::ForumPost(i) => Some(forum_posts[*i]),
             _ => None,
         })
         .collect();
     let mut post_json = forum_posts_json(&state, &page_posts, &by_id).await?;
 
-    let mut items = Vec::with_capacity(candidates.len());
-    for (key, candidate) in &candidates {
-        let item = match candidate {
+    let channel_name = |channel_id: i64| {
+        by_id
+            .get(&channel_id)
+            .and_then(|c| c.name.clone())
+            .unwrap_or_else(|| "channel".to_string())
+    };
+
+    let mut items = Vec::with_capacity(cards.len());
+    for card in &cards {
+        let key = card.key;
+        let item = match &candidates[card.head].1 {
             Candidate::Message(i) => {
                 let row = &messages[*i];
                 let Some(message) = message_json.remove(&row.id) else {
@@ -382,7 +422,7 @@ pub async fn get_server_feed(
                 let channel_type = channel.map(|c| c.channel_type).unwrap_or(CHANNEL_TYPE_TEXT);
                 let reason = message_reason(
                     &message,
-                    front_page_feed_posts.contains(&row.id),
+                    feed_posts.contains_key(&row.id),
                     announcement_channels.contains(&row.channel_id),
                     starter_set.contains(&row.id),
                 );
@@ -393,9 +433,7 @@ pub async fn get_server_feed(
                     "at": row.created_at.to_rfc3339(),
                     "message": message,
                     "channel_id": row.channel_id.to_string(),
-                    "channel_name": channel
-                        .and_then(|c| c.name.clone())
-                        .unwrap_or_else(|| "channel".to_string()),
+                    "channel_name": channel_name(row.channel_id),
                     "channel_type": channel_type,
                     "reason": reason,
                 });
@@ -403,6 +441,30 @@ pub async fn get_server_feed(
                     if let Some(parent_id) = channel.and_then(|c| c.parent_id) {
                         item["thread_parent_id"] = json!(parent_id.to_string());
                     }
+                }
+                if !card.members.is_empty() {
+                    let others: Vec<Value> = card
+                        .members
+                        .iter()
+                        .filter_map(|member| match &candidates[*member].1 {
+                            Candidate::Message(m) => Some(&messages[*m]),
+                            _ => None,
+                        })
+                        .map(|other| {
+                            json!({
+                                "message_id": other.id.to_string(),
+                                "channel_id": other.channel_id.to_string(),
+                                "channel_name": channel_name(other.channel_id),
+                                "title": feed_post_title(other),
+                                "at": other.created_at.to_rfc3339(),
+                            })
+                        })
+                        .collect();
+                    item["feed_group"] = json!({
+                        "feed_id": feed_posts.get(&row.id).map(|id| id.to_string()),
+                        "name": item["message"]["feed"]["name"].clone(),
+                        "items": others,
+                    });
                 }
                 item
             }
@@ -428,10 +490,92 @@ pub async fn get_server_feed(
         items.push(item);
     }
 
-    let next_cursor = (candidates.len() as i64 == limit)
-        .then(|| candidates.last().map(|(key, _)| key.to_string()))
-        .flatten();
+    let next_cursor = next_cursor.map(|key| key.to_string());
     Ok(Json(json!({ "items": items, "next_cursor": next_cursor })))
+}
+
+/// Most posts one card folds together: the newest in full, the rest by title.
+const FEED_GROUP_MAX: usize = 25;
+const FEED_GROUP_TITLE_CHARS: usize = 200;
+
+/// One card on the page: a candidate, and for a run of posts from one feed,
+/// the older posts folded under it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Card {
+    /// Index of the card's own (newest) candidate.
+    head: usize,
+    /// Indexes of the posts folded under it, newest first.
+    members: Vec<usize>,
+    /// The card's cursor key: its oldest candidate's key.
+    key: i64,
+}
+
+/// Fold the sorted candidates into at most `limit` cards.
+///
+/// Consecutive posts from the same feed (with "Show on the front page" on)
+/// become one card. Nothing below `horizon` is read: a source cut short there
+/// may be missing items that belong between the ones it returned, and reading
+/// past it would let the cursor skip them. Every candidate read is on this
+/// page, so the returned cursor (the last card's oldest key) neither skips nor
+/// repeats anything. `None` means the feed has ended.
+fn assemble_cards<C>(
+    candidates: &[(i64, C)],
+    feed_of: &dyn Fn(&C) -> Option<i64>,
+    horizon: Option<i64>,
+    limit: usize,
+) -> (Vec<Card>, Option<i64>) {
+    let readable = |key: i64| horizon.is_none_or(|h| key >= h);
+    let mut cards = Vec::new();
+    let mut next = 0usize;
+    while next < candidates.len() && cards.len() < limit {
+        let (key, candidate) = &candidates[next];
+        if !readable(*key) {
+            break;
+        }
+        let mut card = Card {
+            head: next,
+            members: Vec::new(),
+            key: *key,
+        };
+        next += 1;
+        if let Some(feed) = feed_of(candidate) {
+            while next < candidates.len() && card.members.len() + 1 < FEED_GROUP_MAX {
+                let (other_key, other) = &candidates[next];
+                if !readable(*other_key) || feed_of(other) != Some(feed) {
+                    break;
+                }
+                card.members.push(next);
+                card.key = *other_key;
+                next += 1;
+            }
+        }
+        cards.push(card);
+    }
+    let ended = next >= candidates.len() && horizon.is_none();
+    let cursor = if ended {
+        None
+    } else {
+        cards.last().map(|card| card.key)
+    };
+    (cards, cursor)
+}
+
+/// A feed post's title for the folded list: its card's title, else its text.
+fn feed_post_title(row: &paracord_db::messages::MessageRow) -> String {
+    let from_embed = row
+        .embeds
+        .as_deref()
+        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+        .and_then(|embeds| embeds.get(0)?.get("title")?.as_str().map(str::to_string));
+    let title = from_embed
+        .or_else(|| row.content.clone())
+        .unwrap_or_default();
+    let title = title.trim();
+    if title.chars().count() <= FEED_GROUP_TITLE_CHARS {
+        return title.to_string();
+    }
+    let cut: String = title.chars().take(FEED_GROUP_TITLE_CHARS).collect();
+    format!("{}…", cut.trim_end())
 }
 
 /// Why a message is in the feed, in the order a reader would name it.
@@ -727,5 +871,90 @@ mod tests {
             validate_home_widgets(&json!([{ "id": "media", "enabled": true, "x": 1 }])).is_err()
         );
         assert!(validate_home_widgets(&json!({ "id": "media" })).is_err());
+    }
+
+    /// Candidates as (key, feed) pairs, newest first; `None` is anything that
+    /// is not a front-page feed post.
+    fn run(
+        keys: &[(i64, Option<i64>)],
+        horizon: Option<i64>,
+        limit: usize,
+    ) -> (Vec<Vec<i64>>, Option<i64>) {
+        let candidates: Vec<(i64, Option<i64>)> = keys.to_vec();
+        let (cards, cursor) =
+            assemble_cards(&candidates, &|feed: &Option<i64>| *feed, horizon, limit);
+        let shape = cards
+            .iter()
+            .map(|card| {
+                std::iter::once(card.head)
+                    .chain(card.members.iter().copied())
+                    .map(|index| candidates[index].0)
+                    .collect()
+            })
+            .collect();
+        (shape, cursor)
+    }
+
+    #[test]
+    fn consecutive_posts_from_one_feed_fold_into_one_card() {
+        let (cards, cursor) = run(
+            &[
+                (10, Some(1)),
+                (9, Some(1)),
+                (8, Some(1)),
+                (7, None),
+                (6, Some(1)),
+                (5, Some(2)),
+                (4, Some(1)),
+            ],
+            None,
+            20,
+        );
+        assert_eq!(
+            cards,
+            vec![vec![10, 9, 8], vec![7], vec![6], vec![5], vec![4]],
+            "a person's post or another feed breaks the run"
+        );
+        assert_eq!(cursor, None, "everything was read");
+    }
+
+    #[test]
+    fn a_page_holds_limit_cards_and_its_cursor_is_the_oldest_folded_key() {
+        let (cards, cursor) = run(
+            &[
+                (10, None),
+                (9, Some(1)),
+                (8, Some(1)),
+                (7, Some(1)),
+                (6, None),
+                (5, None),
+            ],
+            None,
+            2,
+        );
+        assert_eq!(cards, vec![vec![10], vec![9, 8, 7]]);
+        assert_eq!(cursor, Some(7));
+    }
+
+    #[test]
+    fn nothing_past_the_horizon_is_read() {
+        // A source was cut short at 8: something older from it could sit
+        // between 8 and 7, so the run stops at 8 and the cursor says so.
+        let (cards, cursor) = run(
+            &[(10, Some(1)), (9, Some(1)), (8, Some(1)), (7, Some(1))],
+            Some(8),
+            20,
+        );
+        assert_eq!(cards, vec![vec![10, 9, 8]]);
+        assert_eq!(cursor, Some(8));
+    }
+
+    #[test]
+    fn a_card_folds_at_most_the_group_limit() {
+        let keys: Vec<(i64, Option<i64>)> = (0..30).rev().map(|key| (key, Some(1))).collect();
+        let (cards, cursor) = run(&keys, None, 20);
+        assert_eq!(cards[0].len(), FEED_GROUP_MAX);
+        assert_eq!(cards[1].len(), 30 - FEED_GROUP_MAX);
+        assert_eq!(cursor, None);
     }
 }

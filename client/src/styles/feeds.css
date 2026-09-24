@@ -148,6 +148,60 @@ a.pc-feed-more:hover {
   justify-content: center;
 }
 
+/* A run of posts from one feed, folded under its newest card on the front page. */
+.pc-feed-run {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 6px;
+}
+
+.pc-feed-run-row {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 12px;
+  border-radius: var(--radius-chip);
+  padding: 5px 8px;
+  margin: 0 -8px;
+  width: calc(100% + 16px);
+  text-align: left;
+  font-size: var(--text-label);
+  color: var(--text-secondary);
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+
+.pc-feed-run-row time {
+  font-size: var(--text-meta);
+}
+
+.pc-feed-run-row:hover {
+  background: var(--bg-mod-subtle);
+  color: var(--text-primary);
+}
+
+.pc-feed-run-more {
+  align-self: flex-start;
+  margin-top: 2px;
+  border-radius: var(--radius-chip);
+  font-size: var(--text-meta);
+  color: var(--text-link);
+}
+
+.pc-feed-run-more:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pc-feed-run-row {
+    transition: none;
+  }
+}
+
 /* Add-ons hub */
 
 .pc-addon-mark {

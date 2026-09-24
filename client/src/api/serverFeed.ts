@@ -45,6 +45,26 @@ export interface FeedMessageItem extends FeedItemBase {
   channel_type?: number;
   thread_parent_id?: string | null;
   reason: FeedReason;
+  /**
+   * Older posts from the same feed that came right after this one, folded
+   * into this card, newest first. Absent on every other card.
+   */
+  feed_group?: FeedGroup | null;
+}
+
+/** A run of posts from one feed, shown as one card on the front page. */
+export interface FeedGroup {
+  feed_id: string | null;
+  name: string | null;
+  items: FeedGroupPost[];
+}
+
+export interface FeedGroupPost {
+  message_id: string;
+  channel_id: string;
+  channel_name: string;
+  title: string;
+  at: string;
 }
 
 export interface FeedForumPostItem extends FeedItemBase {

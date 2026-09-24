@@ -91,7 +91,12 @@ after the fourth feed item, then the feed continues.
   of `announcement | attachment | poll | reactions | pinned | thread_starter | feed`.
   `feed` is a card posted by a feed (Server settings → Add-ons → Feeds) with "Show on
   the front page" on; it wins over every other reason, and such a message carries a
-  `feed` object (`id`, `kind`, `name`, `icon_url`).
+  `feed` object (`id`, `kind`, `name`, `icon_url`). Consecutive `feed` posts from the
+  same feed are one item: the newest is the item's `message`, and the rest, newest
+  first, are in an optional `feed_group: { feed_id, name, items: [{ message_id,
+  channel_id, channel_name, title, at }] }` (at most 25 posts per card). The item's
+  `key` is its oldest post's id, so a page never splits a card into repeats; a
+  client that ignores `feed_group` shows the newest post alone.
 - `{ type: 'forum_post', channel_id, channel_name, thread_id, title, author,
   reply_count, last_reply_at, last_reply_author, participants }`.
 - `{ type: 'members_joined', users: [...], at }`: joins grouped by day.

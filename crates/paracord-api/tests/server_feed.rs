@@ -471,6 +471,137 @@ async fn feed_posts_shown_on_the_front_page_carry_the_feed_reason() -> anyhow::R
     Ok(())
 }
 
+async fn link_to_feed(
+    ctx: &TestContext,
+    guild_id: &str,
+    message_id: &str,
+    feed_id: i64,
+) -> anyhow::Result<()> {
+    paracord_db::feeds::link_feed_message(
+        &ctx.db,
+        &paracord_db::feeds::NewFeedMessage {
+            message_id: message_id.parse::<i64>()?,
+            feed_id,
+            guild_id: guild_id.parse::<i64>()?,
+            kind: "rss",
+            name: "Lantern Journal",
+            icon_url: None,
+            overflow: false,
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+/// Every message id a page shows: each card's own, and the posts folded under it.
+fn shown_message_ids(items: &[Value]) -> Vec<String> {
+    let mut ids = Vec::new();
+    for item in items {
+        if item["type"] != "message" {
+            continue;
+        }
+        ids.push(
+            item["message"]["id"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+        );
+        for other in item["feed_group"]["items"].as_array().into_iter().flatten() {
+            ids.push(other["message_id"].as_str().unwrap_or_default().to_string());
+        }
+    }
+    ids
+}
+
+#[tokio::test]
+async fn posts_in_a_row_from_one_feed_fold_into_one_card() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+    let guild_id = ctx.create_guild("Feed Runs").await?;
+    let general = ctx.create_channel(&guild_id, "general", 0).await?;
+
+    let earlier = ctx.post(&general, "a photo from before").await?;
+    attach_image(&ctx, &earlier).await?;
+    let first = ctx.post(&general, "Post 1").await?;
+    let feed_id = link_to_new_feed(&ctx, &guild_id, &general, &first, true).await?;
+    let mut run = vec![first];
+    for n in 2..=5 {
+        let id = ctx.post(&general, &format!("Post {n}")).await?;
+        link_to_feed(&ctx, &guild_id, &id, feed_id).await?;
+        run.push(id);
+    }
+    let person = ctx.post(&general, "look at this").await?;
+    attach_image(&ctx, &person).await?;
+    let later = ctx.post(&general, "Post 6").await?;
+    link_to_feed(&ctx, &guild_id, &later, feed_id).await?;
+
+    let page = ctx.feed(&guild_id, "limit=20").await?;
+    let items = items(&page);
+    let heads: Vec<&str> = items
+        .iter()
+        .filter(|item| item["type"] == "message")
+        .map(|item| item["message"]["id"].as_str().unwrap_or_default())
+        .collect();
+    assert_eq!(
+        heads,
+        vec![
+            later.as_str(),
+            person.as_str(),
+            run[4].as_str(),
+            earlier.as_str()
+        ],
+        "a person's post breaks the run into two cards: {page}"
+    );
+    let alone = message_item(&items, &later).context("newest feed post")?;
+    assert!(
+        alone.get("feed_group").is_none_or(Value::is_null),
+        "{alone}"
+    );
+    let group = message_item(&items, &run[4]).context("folded card")?;
+    assert_eq!(group["reason"], "feed");
+    assert_eq!(group["feed_group"]["name"], "Lantern Journal");
+    assert_eq!(group["feed_group"]["feed_id"], feed_id.to_string());
+    let folded: Vec<&str> = group["feed_group"]["items"]
+        .as_array()
+        .context("folded items")?
+        .iter()
+        .map(|other| other["message_id"].as_str().unwrap_or_default())
+        .collect();
+    assert_eq!(
+        folded,
+        vec![
+            run[3].as_str(),
+            run[2].as_str(),
+            run[1].as_str(),
+            run[0].as_str()
+        ]
+    );
+    let oldest = &group["feed_group"]["items"][3];
+    assert_eq!(oldest["title"], "Post 1");
+    assert_eq!(oldest["channel_id"], general);
+    assert_eq!(oldest["channel_name"], "general");
+    assert!(oldest["at"].is_string());
+    assert_eq!(
+        group["key"],
+        run[0].as_str(),
+        "a card's cursor is its oldest post"
+    );
+
+    // Paging never repeats or drops a post, whatever the page size.
+    let mut expected: Vec<String> = run.clone();
+    expected.extend([earlier.clone(), person.clone(), later.clone()]);
+    expected.sort();
+    for limit in [1, 2, 3, 20] {
+        let pages = ctx.all_pages(&ctx.token, &guild_id, limit).await?;
+        let mut shown = shown_message_ids(&pages);
+        let total = shown.len();
+        shown.sort();
+        shown.dedup();
+        assert_eq!(shown.len(), total, "limit {limit} repeated a post");
+        assert_eq!(shown, expected, "limit {limit}");
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn feed_hides_channels_the_viewer_cannot_read() -> anyhow::Result<()> {
     let ctx = TestContext::new().await?;

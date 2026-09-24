@@ -1,4 +1,5 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -100,5 +101,68 @@ describe('FeedItemMessage', () => {
     expect(screen.getByText('A short summary.')).toBeInTheDocument();
     expect(screen.getByText('Feed')).toBeInTheDocument();
     expect(screen.getByRole('article', { name: 'Lantern Journal in news' })).toBeInTheDocument();
+  });
+
+  it('folds a run from one feed under its newest card, three listed and the rest behind a count', async () => {
+    const onOpenMessage = vi.fn();
+    const others = [1, 2, 3, 4, 5].map((n) => ({
+      message_id: `m${10 - n}`,
+      channel_id: 'c1',
+      channel_name: 'news',
+      title: `Older post ${n}`,
+      at: new Date(Date.parse('2026-09-24T12:00:00Z') - n * 3600_000).toISOString(),
+    }));
+    const item = {
+      id: 'm:m10',
+      key: 'm5',
+      type: 'message',
+      at: '2026-09-24T12:00:00Z',
+      channel_id: 'c1',
+      channel_name: 'news',
+      reason: 'feed',
+      message: {
+        id: 'm10',
+        channel_id: 'c1',
+        author: { id: 'f1', username: 'Lantern Journal', discriminator: '0', bot: true },
+        content: 'Newest post',
+        tts: false,
+        mention_everyone: false,
+        pinned: false,
+        type: 0,
+        attachments: [],
+        reactions: [],
+        created_at: '2026-09-24T12:00:00Z',
+        feed: { id: 'f1', kind: 'rss', name: 'Lantern Journal', icon_url: null },
+        embeds: [{ type: 'rich', url: 'https://blog.example/new', title: 'Newest post', feed: { kind: 'rss' } }],
+      },
+      feed_group: { feed_id: 'f1', name: 'Lantern Journal', items: others },
+    } as FeedMessageItem;
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <FeedItemMessage
+          item={item}
+          guildId="g1"
+          when="now"
+          mentionNames={new Map()}
+          onOpen={vi.fn()}
+          onToggleReaction={vi.fn()}
+          nowMs={Date.parse('2026-09-24T12:00:00Z')}
+          onOpenMessage={onOpenMessage}
+        />
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole('link', { name: 'Newest post' })).toBeInTheDocument();
+    const list = screen.getByRole('list', { name: 'More from Lantern Journal' });
+    expect(within(list).getAllByRole('button').map((row) => row.textContent)).toEqual([
+      'Older post 11h',
+      'Older post 22h',
+      'Older post 33h',
+    ]);
+    await user.click(within(list).getByRole('button', { name: /Older post 2/ }));
+    expect(onOpenMessage).toHaveBeenCalledWith('c1', 'm8');
+    await user.click(screen.getByRole('button', { name: '2 more from Lantern Journal' }));
+    expect(within(list).getAllByRole('button')).toHaveLength(5);
+    expect(screen.getByRole('button', { name: 'Show fewer' })).toHaveAttribute('aria-expanded', 'true');
   });
 });

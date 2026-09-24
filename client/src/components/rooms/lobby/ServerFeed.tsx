@@ -63,6 +63,9 @@ export const ServerFeed = memo(function ServerFeed({
   const latest = useRef({ items, onOpenMessage, onOpenChannel, toggleReaction: feed.toggleReaction });
   latest.current = { items, onOpenMessage, onOpenChannel, toggleReaction: feed.toggleReaction };
   const [handlers] = useState(() => new Map<string, ItemHandlers>());
+  const [openMessage] = useState(() => (channelId: string, messageId: string) =>
+    latest.current.onOpenMessage(channelId, messageId),
+  );
   const handlersFor = (id: string): ItemHandlers => {
     let entry = handlers.get(id);
     if (!entry) {
@@ -114,6 +117,8 @@ export const ServerFeed = memo(function ServerFeed({
             onOpen={handlersFor(item.id).open}
             onToggleReaction={handlersFor(item.id).toggleReaction}
             compact={compact}
+            nowMs={item.feed_group ? nowMs : undefined}
+            onOpenMessage={openMessage}
           />
         );
       case 'forum_post':
