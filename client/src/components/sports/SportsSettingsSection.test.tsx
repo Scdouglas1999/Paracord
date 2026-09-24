@@ -144,7 +144,7 @@ describe('SportsSettingsSection', () => {
 
     await user.selectOptions(screen.getByRole('combobox', { name: 'Default view' }), 'live');
     await user.selectOptions(screen.getByRole('combobox', { name: 'Layout' }), 'list');
-    await user.click(screen.getByRole('switch', { name: "Show live games on the server's front page" }));
+    await user.click(screen.getByRole('switch', { name: 'Show games on the server home' }));
     expect(sportsApi.listTeams).not.toHaveBeenCalled();
     await user.click(screen.getByRole('button', { name: 'Pick NFL teams' }));
     expect(sportsApi.listTeams).toHaveBeenCalledWith('football/nfl');

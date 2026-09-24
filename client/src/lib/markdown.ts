@@ -644,3 +644,36 @@ export function messagePreviewText(
     .trim();
 }
 
+/**
+ * A search result's snippet: the message as plain text, markup gone.
+ *
+ * Like {@link messagePreviewText}, but a result keeps its line breaks (the
+ * panel clamps it rather than wrapping it into one line) and a spoiler is
+ * never unwrapped — the word "spoiler" stands in for its content so a query
+ * cannot leak what was hidden. Mentions resolve through the same maps the
+ * preview uses; a channel mention resolves to its name when the caller has
+ * the channel catalog, "#channel" when it does not.
+ */
+export function messageSnippetText(
+  content: string,
+  names?: ReadonlyMap<string, string>,
+  roleNames?: ReadonlyMap<string, string>,
+  channelNames?: ReadonlyMap<string, string>,
+): string {
+  return stripMarkdown(
+    content
+      // Spoilers first, before `stripMarkdown` would unwrap them to the text
+      // they exist to hide.
+      .replace(/\|\|[^|]+\|\|/g, ' spoiler ')
+      .replace(/```[^\n`]*\n?([\s\S]*?)```/g, (_match, code: string) => ` ${code} `)
+      .replace(/```[^\s`]*/g, ' '),
+  )
+    .replace(/<@!?(\d+)>/g, (_match, id: string) => `@${names?.get(id) ?? 'someone'}`)
+    .replace(/<@&(\d+)>/g, (_match, id: string) => `@${roleNames?.get(id) ?? 'role'}`)
+    .replace(/<#(\d+)>/g, (_match, id: string) => `#${channelNames?.get(id) ?? 'channel'}`)
+    .replace(/[^\S\n]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/^[ \t]+|[ \t]+$/gm, '')
+    .trim();
+}
+

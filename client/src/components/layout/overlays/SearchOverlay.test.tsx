@@ -181,11 +181,64 @@ describe('SearchOverlay', () => {
     expect(await screen.findByText('1 result')).toBeInTheDocument();
     await user.type(field, ' density{Enter}');
     expect(onClose).not.toHaveBeenCalled();
+    // Wait for the follow-up search to actually be in flight before ending it:
+    // otherwise its queued once-implementation leaks into the next test.
+    await waitFor(() => {
+      expect(guildApi.searchMessages).toHaveBeenCalledTimes(2);
+    });
     await act(async () => {
       finish({ data: { total: 0, messages: [] } });
     });
     await user.keyboard('{Enter}');
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('renders a result snippet as plain text with mentions resolved and spoilers hidden', async () => {
+    const user = userEvent.setup();
+    vi.mocked(guildApi.searchMessages).mockResolvedValue({
+      data: {
+        total: 1,
+        messages: [{
+          message: {
+            ...message,
+            id: 'm1',
+            content: 'the **postgres** plan <@777> ||secret|| `migrate`',
+          },
+          channel_id: 'channel-1',
+          channel_name: 'general',
+        }],
+      },
+    } as never);
+    renderSearchOverlay();
+
+    await user.type(screen.getByRole('combobox', { name: 'Search messages' }), 'postgres');
+
+    const mark = await screen.findByText('postgres');
+    const snippet = mark.parentElement!.textContent ?? '';
+    expect(snippet).toBe('the postgres plan @someone spoiler migrate');
+    expect(snippet).not.toContain('**');
+    expect(snippet).not.toContain('`');
+    expect(snippet).not.toContain('<@777>');
+    expect(snippet).not.toContain('secret');
+  });
+
+  it('writes a result time the way the rest of the app does: lowercase pm', async () => {
+    const user = userEvent.setup();
+    vi.mocked(guildApi.searchMessages).mockResolvedValue({
+      data: {
+        total: 1,
+        messages: [{ message, channel_id: 'channel-1', channel_name: 'general' }],
+      },
+    } as never);
+    renderSearchOverlay();
+
+    await user.type(screen.getByRole('combobox', { name: 'Search messages' }), 'postgres');
+
+    const mark = await screen.findByText('postgres');
+    const row = mark.closest('button')!;
+    const when = row.querySelector('.tabular-nums')!;
+    expect(when.textContent).toMatch(/\d{1,2}:\d{2} [ap]m/);
+    expect(when.textContent).not.toMatch(/[AP]M/);
   });
 
   it('searches a direct conversation on this device only', async () => {

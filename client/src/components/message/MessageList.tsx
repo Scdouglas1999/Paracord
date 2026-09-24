@@ -635,7 +635,6 @@ interface PopupSlice {
   profilePos: { x: number; y: number };
   emojiPickerFor: { messageId: string; position: { x: number; y: number } } | null;
   deleteConfirmId: string | null;
-  contextMenuAnchor: { x: number; y: number };
 }
 interface EditSlice {
   editingMessageId: string | null;
@@ -722,7 +721,6 @@ const initialMessageListUIState: MessageListUIState = {
     profilePos: { x: 0, y: 0 },
     emojiPickerFor: null,
     deleteConfirmId: null,
-    contextMenuAnchor: { x: 0, y: 0 },
   },
   edit: { editingMessageId: null, editContent: '' },
   report: { reportingMessage: null, reportReason: '', reportEvidence: '', reportSubmitting: false },
@@ -996,7 +994,7 @@ function OwnedMessageList({
   const [uiState, dispatchUI] = useReducer(messageListUIReducer, initialMessageListUIState);
 
   // Popup/overlay slice
-  const { hoveredMessageId, focusedMessageId, menuMessageId, profileUser, profilePos, emojiPickerFor, deleteConfirmId, contextMenuAnchor } = uiState.popup;
+  const { hoveredMessageId, focusedMessageId, menuMessageId, profileUser, profilePos, emojiPickerFor, deleteConfirmId } = uiState.popup;
   const setHoveredMessageId = (hoveredMessageId: string | null) =>
     dispatchUI({ slice: 'popup', patch: { hoveredMessageId } });
   const setFocusedMessageId = (value: string | null | ((curr: string | null) => string | null)) =>
@@ -1031,9 +1029,6 @@ function OwnedMessageList({
     deleteDialogGeneration.current++;
     const context = deleteContext.current; deleteContext.current = null; context?.dispose();
   }, []);
-  const setContextMenuAnchor = (contextMenuAnchor: { x: number; y: number }) =>
-    dispatchUI({ slice: 'popup', patch: { contextMenuAnchor } });
-
   // Inline edit slice
   const { editingMessageId, editContent } = uiState.edit;
   const setEditingMessageId = (editingMessageId: string | null) =>
@@ -2443,12 +2438,15 @@ function OwnedMessageList({
       items.push({
         label: 'React',
         icon: <Smile size={14} />,
+        // The click point itself, the way Remind me takes it: reading state
+        // here returns where the PREVIOUS menu opened — the new one is still
+        // being dispatched.
         action: () => {
           setEmojiPickerFor({
             messageId: msg.id,
             position: {
-              x: contextMenuAnchor.x + 4,
-              y: contextMenuAnchor.y + 4,
+              x: at.x + 4,
+              y: at.y + 4,
             },
           });
         },
@@ -2487,8 +2485,8 @@ function OwnedMessageList({
     items.push({
       label: 'Remind me',
       icon: <Clock size={14} />,
-      // The click point itself: `contextMenuAnchor` is still the previous one
-      // while this list is being built.
+      // The click point itself: any anchor kept in state still holds the
+      // previous menu's position while this list is being built.
       action: () => openRemind(msg, at.x, at.y),
     });
     const forwardBlocked = forwardBlockedFor(msg);
@@ -2573,7 +2571,6 @@ function OwnedMessageList({
   };
 
   const handleMessageContextMenu = (e: React.MouseEvent, msg: Message) => {
-    setContextMenuAnchor({ x: e.clientX, y: e.clientY });
     onContextMenu(e, buildMessageContextMenuItems(msg, { x: e.clientX, y: e.clientY }));
   };
 

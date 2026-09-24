@@ -76,6 +76,7 @@ pub const MIGRATION_TABLE_ORDER: &[&str] = &[
     "user_settings",
     "user_xp",
     // Depend on users/spaces (guilds).
+    "user_xp_daily",
     "application_commands",
     "audit_log_entries",
     "automod_hits",

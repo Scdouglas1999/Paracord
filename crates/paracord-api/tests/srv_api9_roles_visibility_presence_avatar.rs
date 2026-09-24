@@ -247,9 +247,11 @@ async fn avatar_upload_stores_api_path() -> anyhow::Result<()> {
         .as_str()
         .expect("avatar_hash")
         .to_string();
+    // A stored avatar carries a `?v=` version, the way banners do: replacing
+    // the picture changes the URL, so no client cache can hold the old one.
     assert!(
-        avatar_hash.starts_with("/api/v1/users/") && avatar_hash.ends_with("/avatar"),
-        "expected API path avatar_hash, got {avatar_hash}"
+        avatar_hash.starts_with("/api/v1/users/") && avatar_hash.contains("/avatar?v="),
+        "expected a versioned API path avatar_hash, got {avatar_hash}"
     );
 
     let (status, me) = dispatch_json(
@@ -259,6 +261,38 @@ async fn avatar_upload_stores_api_path() -> anyhow::Result<()> {
     .await?;
     assert_eq!(status, StatusCode::OK, "{me}");
     assert_eq!(me["avatar_hash"], avatar_hash);
+
+    // A second upload bumps the version; both old rows (bare path) and new
+    // ones (path + version) must keep serving the file.
+    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    let (status, reuploaded) = dispatch_multipart(
+        &test_app.app,
+        "/api/v1/users/@me/avatar",
+        "avatar",
+        "avatar.png",
+        "image/png",
+        TINY_PNG,
+        &token,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{reuploaded}");
+    let avatar_hash_2 = reuploaded["avatar_hash"].as_str().expect("avatar_hash");
+    assert_ne!(
+        avatar_hash, avatar_hash_2,
+        "a replaced avatar needs a new URL"
+    );
+
+    let avatar_path = avatar_hash_2.split('?').next().expect("path");
+    let (status, _) = dispatch_json(
+        &test_app.app,
+        build_json_request(Method::GET, avatar_path, None, Some(&token))?,
+    )
+    .await?;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the avatar must serve under its path"
+    );
 
     Ok(())
 }

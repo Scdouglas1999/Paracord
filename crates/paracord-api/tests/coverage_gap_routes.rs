@@ -2264,6 +2264,51 @@ async fn economy_progression_awards_xp_and_assigns_level_roles() -> anyhow::Resu
                 && entry["xp"].as_i64().unwrap_or(0) >= 15),
         "expected sender to appear in leaderboard with awarded XP: {payload}"
     );
+    assert_eq!(
+        payload["window"],
+        json!("all_time"),
+        "a leaderboard with no window param reports all_time: {payload}"
+    );
+
+    // The weekly window ranks by XP gained in the last seven days, stored in
+    // user_xp_daily as it is awarded.
+    let (status, weekly) = ctx
+        .request_json(
+            Method::GET,
+            &format!("/api/v1/guilds/{guild_id}/economy/leaderboard?window=weekly"),
+            None,
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "fetching the weekly leaderboard failed: {weekly}"
+    );
+    assert_eq!(weekly["window"], json!("weekly"));
+    let weekly_entries = weekly["entries"]
+        .as_array()
+        .context("weekly leaderboard entries should be an array")?;
+    let sender_weekly = weekly_entries
+        .iter()
+        .find(|entry| entry["user"]["id"] == json!(user_id_str))
+        .context("sender should appear on the weekly board")?;
+    assert_eq!(
+        sender_weekly["xp"], xp,
+        "weekly XP is just this week's gain, which is all of it so far: {weekly}"
+    );
+
+    let (status, _) = ctx
+        .request_json(
+            Method::GET,
+            &format!("/api/v1/guilds/{guild_id}/economy/leaderboard?window=hourly"),
+            None,
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "an unknown window must be rejected, not silently treated as all-time"
+    );
 
     let member_roles = paracord_db::roles::get_member_roles(&ctx.db, user_id, guild_id_i64).await?;
     assert!(

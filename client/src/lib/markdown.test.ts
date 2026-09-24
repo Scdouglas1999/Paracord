@@ -287,3 +287,36 @@ describe('messagePreviewText', () => {
     expect(messagePreviewText('**bold**  and\n\n`code`   and [a link](https://example.test)')).toBe('bold and code and a link');
   });
 });
+
+describe('messageSnippetText', () => {
+  it('strips markup but keeps the words', async () => {
+    const { messageSnippetText } = await import('./markdown');
+    expect(messageSnippetText('release **postgres** notes with `migrate` done')).toBe(
+      'release postgres notes with migrate done',
+    );
+  });
+
+  it('never shows what a spoiler hides', async () => {
+    const { messageSnippetText } = await import('./markdown');
+    expect(messageSnippetText('the answer is ||rosebud|| ok')).toBe('the answer is spoiler ok');
+    // Even a query term inside the spoiler must not leak.
+    const out = messageSnippetText('||rosebud||');
+    expect(out).toBe('spoiler');
+    expect(out).not.toContain('rosebud');
+  });
+
+  it('writes mentions as names like the message preview does', async () => {
+    const { messageSnippetText } = await import('./markdown');
+    const names = new Map([['360414412240064512', 'Dmitri']]);
+    const channels = new Map([['12', 'design']]);
+    expect(messageSnippetText('<@360414412240064512> filed it', names)).toBe('@Dmitri filed it');
+    expect(messageSnippetText('<@!99> see <#12>', names, undefined, channels)).toBe('@someone see #design');
+    expect(messageSnippetText('check <#88>')).toBe('check #channel');
+    expect(messageSnippetText('<@&7> review', undefined, new Map([['7', 'Design']]))).toBe('@Design review');
+  });
+
+  it('keeps line breaks a snippet can wrap on', async () => {
+    const { messageSnippetText } = await import('./markdown');
+    expect(messageSnippetText('first line\nsecond line')).toBe('first line\nsecond line');
+  });
+});

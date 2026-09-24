@@ -43,6 +43,7 @@ const mocks = vi.hoisted(() => ({
     save: vi.fn().mockResolvedValue(undefined),
     remove: vi.fn().mockResolvedValue(undefined),
   },
+  emojiPickerPositions: [] as { x: number; y: number }[],
 }));
 
 function makeMessage(over: Partial<Message> = {}): Message {
@@ -232,7 +233,10 @@ vi.mock('../user/UserProfile', () => ({
 }));
 
 vi.mock('../ui/EmojiPicker', () => ({
-  EmojiPicker: () => null,
+  EmojiPicker: (props: { position: { x: number; y: number } }) => {
+    mocks.emojiPickerPositions.push(props.position);
+    return null;
+  },
 }));
 
 vi.mock('./MessageEmbed', () => ({
@@ -441,6 +445,37 @@ describe('MessageList keyboard accessibility and error state', () => {
     const typing = await waitFor(() => screen.getByText(/is typing/));
     expect(typing.parentElement?.textContent).toContain('Alice');
     expect(typing.parentElement?.textContent).not.toContain('Someone');
+  });
+
+  // The React menu item once read a position kept in state, which is still the
+  // PREVIOUS menu's click point while the new menu's items are being built.
+  it('opens the React emoji picker beside the current menu, not the previous one', async () => {
+    mocks.permissionsState.permissions = 1n << 6n; // ADD_REACTIONS
+    mocks.useMessagesReturn.messages = [
+      makeMessage({ id: 'm-first' }),
+      makeMessage({ id: 'm-second' }),
+    ];
+    mocks.emojiPickerPositions.length = 0;
+
+    render(
+      <MemoryRouter>
+        <MessageList channelId="ch1" />
+      </MemoryRouter>,
+    );
+
+    const rows = await screen.findAllByRole('article');
+    fireEvent.contextMenu(rows[0], { clientX: 100, clientY: 200 });
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'React' }));
+    await waitFor(() => {
+      expect(mocks.emojiPickerPositions.at(-1)).toEqual({ x: 104, y: 204 });
+    });
+
+    // A second menu, far away: the picker must follow THIS click.
+    fireEvent.contextMenu(rows[1], { clientX: 600, clientY: 700 });
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'React' }));
+    await waitFor(() => {
+      expect(mocks.emojiPickerPositions.at(-1)).toEqual({ x: 604, y: 704 });
+    });
   });
 });
 
