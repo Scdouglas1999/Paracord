@@ -262,6 +262,12 @@ export function createChannelApi(getApi: () => RestClient) {
       getApi().put(`/channels/${channelId}/overwrites/${targetId}`, data),
     deleteOverwrite: async (channelId: string, targetId: string) =>
       getApi().delete(`/channels/${channelId}/overwrites/${targetId}`),
+
+    // Soundboard: play a guild sound to everyone in this voice channel.
+    // 204 on success; 403 when not connected/lacking Use Soundboard; 429 with
+    // `retry_after` seconds when over the cooldown.
+    playSoundboardSound: async (channelId: string, soundId: string) =>
+      getApi().post(`/channels/${channelId}/soundboard/play`, { sound_id: soundId }),
   };
 }
 

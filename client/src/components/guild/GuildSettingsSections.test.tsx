@@ -199,7 +199,7 @@ function renderRoles(overrides: Partial<React.ComponentProps<typeof RolesSection
       newRoleName=""
       newRoleColor="#5865f2"
       editingRoleId={null}
-      editingRolePermissions={0}
+      editingRolePermissions={0n}
       editingRoleColor="#5865f2"
       editingRoleHoist={false}
       editingRoleMentionable={false}

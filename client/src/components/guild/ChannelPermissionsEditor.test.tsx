@@ -89,7 +89,7 @@ describe('ChannelPermissionsEditor', () => {
     renderEditor();
 
     await user.click(await screen.findByRole('button', { name: '@everyone' }));
-    expect(screen.getByText('0 allowed · 15 denied')).toBeInTheDocument();
+    expect(screen.getByText('0 allowed · 16 denied')).toBeInTheDocument();
     expect(screen.getByText('Combines the @everyone base role with this channel override.')).toBeInTheDocument();
     const viewRow = screen.getByTestId('permission-row-VIEW_CHANNEL');
     expect(within(viewRow).getByText('Inherited → denied')).toBeInTheDocument();
@@ -100,7 +100,7 @@ describe('ChannelPermissionsEditor', () => {
     const viewState = within(viewRow).getByRole('tablist', { name: 'View Channel in this channel' });
     await user.click(within(viewState).getByRole('tab', { name: 'Allow' }));
     expect(within(viewRow).getByText('Effective → allowed')).toBeInTheDocument();
-    expect(screen.getByText('1 allowed · 14 denied')).toBeInTheDocument();
+    expect(screen.getByText('1 allowed · 15 denied')).toBeInTheDocument();
   });
 
   it('makes administrator bypass explicit in the preview', async () => {
@@ -114,7 +114,7 @@ describe('ChannelPermissionsEditor', () => {
 
     await user.click(await screen.findByRole('button', { name: 'Moderators' }));
     expect(screen.getByText(/Administrator access bypasses channel overrides/i)).toBeInTheDocument();
-    expect(screen.getByText('15 allowed · 0 denied')).toBeInTheDocument();
+    expect(screen.getByText('16 allowed · 0 denied')).toBeInTheDocument();
   });
 
   it('shows concrete API details when adding a role overwrite fails', async () => {

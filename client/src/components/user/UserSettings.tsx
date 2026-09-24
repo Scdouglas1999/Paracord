@@ -1739,6 +1739,51 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                   </div>
                 </section>
 
+                <section className="mt-9 border-t border-border-subtle pt-8">
+                  <h3 className="text-section text-text-muted">Soundboard</h3>
+                  <div className="mt-2 divide-y divide-border-subtle">
+                    <ToggleRow
+                      title="Play soundboard sounds"
+                      description="Hear sounds people play in voice channels. Deafen still silences everything."
+                      on={mergedNotifications['soundboardEnabled'] !== false}
+                      onToggle={() =>
+                        setNotifications((prev) => ({
+                          ...prev,
+                          soundboardEnabled: !(prev['soundboardEnabled'] !== false),
+                        }))
+                      }
+                    />
+                    <div className="py-4">
+                      <label htmlFor="soundboard-volume" className="text-label text-text-primary">
+                        Soundboard volume
+                      </label>
+                      <p className="mt-0.5 text-meta text-text-secondary">
+                        How loud soundboard plays are for you.
+                      </p>
+                      <div className="mt-2.5 flex max-w-md items-center gap-3">
+                        <input
+                          id="soundboard-volume"
+                          type="range"
+                          min={0}
+                          max={100}
+                          step={1}
+                          value={Number(mergedNotifications['soundboardVolume'] ?? 100)}
+                          onChange={(event) =>
+                            setNotifications((prev) => ({
+                              ...prev,
+                              soundboardVolume: Number(event.target.value),
+                            }))
+                          }
+                          className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-bg-mod-strong accent-accent-primary [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent-primary"
+                        />
+                        <span className="pc-mono w-10 shrink-0 text-right text-meta text-text-muted">
+                          {Math.round(Number(mergedNotifications['soundboardVolume'] ?? 100))}%
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+
                 {systemAudioGrant && (
                   <section className="mt-9 border-t border-border-subtle pt-8">
                     <h3 className="text-section text-text-muted">Desktop audio</h3>

@@ -39,6 +39,7 @@ const PERMISSION_META: Record<PermissionKey, { name: string; description: string
   DEAFEN_MEMBERS: { name: 'Deafen Members', description: 'Deafen others in voice channels' },
   MOVE_MEMBERS: { name: 'Move Members', description: 'Move members between voice channels' },
   USE_VAD: { name: 'Use VAD', description: 'Use voice activity detection' },
+  USE_SOUNDBOARD: { name: 'Use Soundboard', description: 'Play sounds in voice channels' },
   CHANGE_NICKNAME: { name: 'Change Nickname', description: 'Change own nickname' },
   MANAGE_NICKNAMES: { name: 'Manage Nicknames', description: "Change other members' nicknames" },
   MANAGE_ROLES: { name: 'Manage Roles', description: 'Create, edit, and delete roles' },

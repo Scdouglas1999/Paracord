@@ -51,6 +51,7 @@ pub mod security_events;
 pub mod server_feed;
 pub mod server_settings;
 pub mod sessions;
+pub mod soundboard;
 pub mod stage_instances;
 pub mod stickers;
 pub mod users;

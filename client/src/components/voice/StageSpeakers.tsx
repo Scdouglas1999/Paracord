@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react';
 
 import { SpeakerGrid, StageTile, type SpeakerArrangement } from './stage';
 import { CameraSurface } from './CameraSurface';
+import { SoundboardBurst } from './SoundboardBurst';
 import { Button } from '../ui';
 import { useWebcamTiles } from '../../hooks/useWebcamTiles';
 import { cn } from '../../lib/utils';
@@ -95,6 +96,7 @@ export function StageSpeakers({
             onTrackChange={(live) => markLive(userId, live)}
           />
         )}
+        <SoundboardBurst userId={userId} />
       </StageTile>
     );
   };

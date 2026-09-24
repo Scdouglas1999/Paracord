@@ -491,6 +491,18 @@ pub fn build_router(state: &AppState) -> Router<AppState> {
             get(routes::stickers::get_sticker_image),
         )
         .route(
+            "/api/v1/guilds/{guild_id}/sounds",
+            get(routes::soundboard::list_guild_sounds).post(routes::soundboard::create_sound),
+        )
+        .route(
+            "/api/v1/guilds/{guild_id}/sounds/{sound_id}",
+            patch(routes::soundboard::update_sound).delete(routes::soundboard::delete_sound),
+        )
+        .route(
+            "/api/v1/guilds/{guild_id}/sounds/{sound_id}/file",
+            get(routes::soundboard::get_sound_file),
+        )
+        .route(
             "/api/v1/guilds/{guild_id}/webhooks",
             get(routes::webhooks::list_guild_webhooks).post(routes::webhooks::create_webhook),
         )
@@ -965,6 +977,11 @@ pub fn build_router(state: &AppState) -> Router<AppState> {
         .route(
             "/api/v1/voice/{channel_id}/leave",
             post(routes::voice::leave_voice),
+        )
+        // Soundboard: play a guild sound to the voice channel's participants.
+        .route(
+            "/api/v1/channels/{channel_id}/soundboard/play",
+            post(routes::soundboard::play_sound),
         )
         .route(
             "/api/v1/voice/livekit/webhook",
