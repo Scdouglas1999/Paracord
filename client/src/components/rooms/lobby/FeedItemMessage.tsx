@@ -4,7 +4,7 @@ import { ForwardedCard } from '../../message/ForwardedCard';
 import { PollMessageCard } from '../../message/PollMessageCard';
 import { ReactionChip } from '../../message/ReactionPeople';
 import { CustomEmojiImage } from '../../ui/ResourceImage';
-import type { FeedMessageItem, FeedUser } from '../../../api/serverFeed';
+import type { FeedGroup, FeedMessageItem, FeedUser } from '../../../api/serverFeed';
 import { useCurrentAccountScope } from '../../../hooks/useCurrentUser';
 import { useDownloadTicket } from '../../../hooks/useDownloadTicket';
 import { forwardQuote } from '../../../lib/forwardedMessage';
@@ -16,6 +16,7 @@ import type { Reaction } from '../../../types';
 import { FeedAvatar, FeedCardHeader, FileChips, PhotoGrid, ReasonTag, isImageAttachment } from './feedParts';
 import { FeedPostCard, isFeedEmbed } from '../../feeds/FeedPostCard';
 import { FeedSourceIcon } from '../../feeds/feedKinds';
+import { shortAgo } from './homeCaptions';
 
 export interface FeedItemMessageProps {
   item: FeedMessageItem;
@@ -27,6 +28,10 @@ export interface FeedItemMessageProps {
   onToggleReaction: (reaction: Reaction) => void;
   /** A phone: the author sits above the text, and the text takes the full width. */
   compact?: boolean;
+  /** Now, for the times beside a folded feed run. */
+  nowMs?: number;
+  /** Open one of the posts folded under a feed card. */
+  onOpenMessage?: (channelId: string, messageId: string) => void;
 }
 
 /** Lines of text before "Show more". */
@@ -54,6 +59,8 @@ export const FeedItemMessage = memo(function FeedItemMessage({
   onOpen,
   onToggleReaction,
   compact = false,
+  nowMs,
+  onOpenMessage,
 }: FeedItemMessageProps) {
   const { message } = item;
   const scope = useCurrentAccountScope();
@@ -95,6 +102,14 @@ export const FeedItemMessage = memo(function FeedItemMessage({
             <span className="pc-display truncate pt-[7px] text-name leading-none text-text-primary">{authorName}</span>
           )}
           {feedEmbed && <FeedPostCard embed={feedEmbed} className="mt-0 w-full" />}
+          {item.feed_group && item.feed_group.items.length > 0 && (
+            <FeedRun
+              group={item.feed_group}
+              name={feed?.name ?? item.feed_group.name ?? 'this feed'}
+              nowMs={nowMs ?? Date.now()}
+              onOpenMessage={onOpenMessage}
+            />
+          )}
           {message.forwarded_from && (
             <ForwardedCard forward={message.forwarded_from} quote={forwardQuote(message)} scope={scope} />
           )}
@@ -120,6 +135,59 @@ export const FeedItemMessage = memo(function FeedItemMessage({
     </article>
   );
 });
+
+/** Posts listed before "N more from <feed>". */
+const RUN_SHOWN = 3;
+
+/**
+ * The older posts of a feed run: title and time, each opening its message.
+ * Past three, the rest wait behind "N more from <feed>".
+ */
+function FeedRun({
+  group,
+  name,
+  nowMs,
+  onOpenMessage,
+}: {
+  group: FeedGroup;
+  name: string;
+  nowMs: number;
+  onOpenMessage?: (channelId: string, messageId: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const hidden = Math.max(0, group.items.length - RUN_SHOWN);
+  const shown = open ? group.items : group.items.slice(0, RUN_SHOWN);
+  return (
+    <div className="pc-feed-run">
+      <ul aria-label={`More from ${name}`}>
+        {shown.map((post) => (
+          <li key={post.message_id}>
+            <button
+              type="button"
+              className="pc-feed-run-row pc-focusable"
+              onClick={() => onOpenMessage?.(post.channel_id, post.message_id)}
+            >
+              <span className="min-w-0 flex-1 truncate">{post.title || 'Untitled'}</span>
+              <time dateTime={post.at} className="shrink-0 tabular-nums text-text-faint">
+                {shortAgo(post.at, nowMs)}
+              </time>
+            </button>
+          </li>
+        ))}
+      </ul>
+      {hidden > 0 && (
+        <button
+          type="button"
+          className="pc-feed-run-more pc-focusable"
+          aria-expanded={open}
+          onClick={() => setOpen((value) => !value)}
+        >
+          {open ? 'Show fewer' : `${hidden} more from ${name}`}
+        </button>
+      )}
+    </div>
+  );
+}
 
 /** Six lines, then "Show more" — only when the text actually runs over. */
 function ClampedText({ children }: { children: React.ReactNode }) {

@@ -5,7 +5,7 @@
 //! INTEGER)` plus [`bool_from_any_row`]. Timestamps are TEXT on both engines,
 //! written with [`datetime_to_db_text`], which sorts in time order.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use sqlx::Row;
@@ -634,20 +634,21 @@ pub async fn get_feed_messages_for_ids(
         .map_err(DbError::from)
 }
 
-/// Of these messages, the item cards a feed posted with "Show on the front page" on.
-pub async fn front_page_feed_message_ids(
+/// Of these messages, the item cards a feed posted with "Show on the front
+/// page" on, each with the id of the feed that posted it.
+pub async fn front_page_feed_posts(
     pool: &DbPool,
     message_ids: &[i64],
-) -> Result<HashSet<i64>, DbError> {
+) -> Result<HashMap<i64, i64>, DbError> {
     if message_ids.is_empty() {
-        return Ok(HashSet::new());
+        return Ok(HashMap::new());
     }
     let placeholders = (1..=message_ids.len())
         .map(|index| format!("${index}"))
         .collect::<Vec<_>>()
         .join(", ");
     let sql = format!(
-        "SELECT fm.message_id FROM feed_messages fm
+        "SELECT fm.message_id, fm.feed_id FROM feed_messages fm
          JOIN guild_feeds f ON f.id = fm.feed_id
          WHERE fm.message_id IN ({placeholders})
            AND (CASE WHEN fm.overflow THEN 1 ELSE 0 END) = 0
@@ -659,6 +660,12 @@ pub async fn front_page_feed_message_ids(
     }
     let rows = query.fetch_all(pool).await?;
     rows.iter()
-        .map(|row| row.try_get::<i64, _>("message_id").map_err(DbError::from))
-        .collect()
+        .map(|row| {
+            Ok((
+                row.try_get::<i64, _>("message_id")?,
+                row.try_get::<i64, _>("feed_id")?,
+            ))
+        })
+        .collect::<Result<HashMap<_, _>, sqlx::Error>>()
+        .map_err(DbError::from)
 }
