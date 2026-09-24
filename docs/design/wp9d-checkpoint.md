@@ -42,9 +42,9 @@ speaks:
 |---|---|---|
 | native (Tauri) / browser QUIC engines | the RTP audio-level header, 0–127 as −dBov, so **lower is louder** | `levelFromDbov` — 45 (the noise gate's own threshold) is silence, 10 is full voice |
 | LiveKit | `Participant.audioLevel`, already 0–1 | taken as reported |
-| the local mic analyser | LiveKit's `calculateVolume` RMS, where an ordinary voice is ~0.05–0.25 | `levelFromAnalyser` — 0.25 is full |
+| the local mic analyzer | LiveKit's `calculateVolume` RMS, where an ordinary voice is ~0.05–0.25 | `levelFromAnalyzer` — 0.25 is full |
 
-The local analyser is published as its own source and merged by **loudest wins**,
+The local analyzer is published as its own source and merged by **loudest wins**,
 because it knows how loud you are about 200 ms before the server's speaker report
 does, and your own ring is the one on screen whose latency a person can feel.
 
@@ -61,7 +61,7 @@ shape is entirely about cost. Four rules, each load-bearing:
    cannot wipe it (WP9a's first lesson): it is re-applied on the next report
    regardless.
 3. **Nothing is allocated per frame.** Elements are collected when the engine
-   *reports* (a few times a second), never in the loop; the level is quantised to
+   *reports* (a few times a second), never in the loop; the level is quantized to
    1/64 and looked up in a table of strings built once, so a frame that does not
    move a ring writes nothing and a frame that does allocates nothing. The gate
    measures this (§5 below): **0.0 KiB across 300 frames**.
@@ -129,13 +129,13 @@ Two engines, one shape:
   of the old server and crosses it with the new one, at `--duration-dim` on
   `--ease-out` (`primitives.css`, under the `lights-change` stamp).
 - **The crossfade**, everywhere else: there is no snapshot to cross with, so the
-  lights go **down to the street's own colour and back up in the new one** — a
+  lights go **down to the street's own color and back up in the new one** — a
   dip, 200 ms on `--ease-in` and 200 ms on `--ease-out`, over one fixed
   rectangle, on opacity alone.
 
 **The theme is applied inside the crossfade, by `useTheme`'s own effect.** The
 store write reaches the DOM two ticks later, so `changeLights` is *told how to
-recognise that it landed* (`applied: () => html[data-theme] === next`) and polls
+recognize that it landed* (`applied: () => html[data-theme] === next`) and polls
 for it in macrotasks — never a frame, which inside a View Transition's update
 callback never comes (WP9a's hang). Bounded at 400 ms: a change that never lands
 must not hold the page's rendering open.
@@ -159,7 +159,7 @@ dims 30 % and holds there until the gateway is back.
   — and a server that dims and undims for 80 ms is precisely the flashing
   blocker WP9a spent a commit removing.
 - **The dim** is a scrim the engine owns: one fixed rectangle of the street's own
-  colour, `pointer-events: none` so you can keep typing through an outage,
+  color, `pointer-events: none` so you can keep typing through an outage,
   `contain: strict` and `will-change: opacity` so it is the compositor's bill and
   not the main thread's. **Not the shell's own opacity** — that would put an
   opacity on an ancestor of every dialog, popover and toast, and an element with
@@ -184,7 +184,7 @@ words — light is never the only cue (§9) — with a static glyph.
 One defect, and it was invisible in code review because it is not in any of this
 package's code.
 
-**A theme change fires a colour transition on every surface in the app.**
+**A theme change fires a color transition on every surface in the app.**
 `.pc-transition` alone is five properties, and nearly every plate, chip, row and
 control in the product carries one for its own hover state. Swapping the theme
 restyles all of them at once: several hundred 160 ms property transitions running
@@ -278,7 +278,7 @@ PARACORD_E2E_MOTION=1 PARACORD_E2E_MOTION_FRAMES=1 npx playwright test --grep "c
   The rim brightens monotonically (mean luminance over the ring: 26.65 → 26.94 →
   27.22).
 - `lights-change-0000ms.png` … `-0900ms.png` — Night → Daylight on the crossfade
-  path: whole at 0–120 ms, down to the street's own colour at 200–280 ms, and up
+  path: whole at 0–120 ms, down to the street's own color at 200–280 ms, and up
   in Daylight from 360 ms. Captured on the crossfade because the View Transitions
   path composites its snapshots off the main thread and a screencast of it on a
   software-rendered headless Chromium is a black rectangle (WP9a §4).
@@ -292,7 +292,7 @@ PARACORD_E2E_MOTION=1 PARACORD_E2E_MOTION_FRAMES=1 npx playwright test --grep "c
 The outage strips are zeroed on the frame the **engine** started moving, not on
 the request — WP9b's convention, and this moment needs it more than anything
 there did: the gateway has to be away for the whole 600 ms grace on top of
-however long the client takes to notice, so a strip labelled from the request
+however long the client takes to notice, so a strip labeled from the request
 would be most of a second of a server sitting still.
 
 ### 7. The gate, run
@@ -301,7 +301,7 @@ would be most of a second of a server sitting still.
 cd client
 npm run typecheck            clean
 npm run test:unit            2 354 tests, 249 files, green
-npm run test:tokens          497 files, no literal colour
+npm run test:tokens          497 files, no literal color
 npm run build                clean
 npx playwright test          84 passed (mocked smoke + encrypted storage)
 npm run test:motion          15 passed (3 frame-capture cases opt-in)
@@ -342,7 +342,7 @@ Three, all recorded here because §5 is the contract.
   it; the shape is right (dark until 300 ms, rising after) but the later labels
   are the nearest frame rather than the frame.
 - **The `--voice-level` write is a style recalculation per speaking tile per
-  frame.** It is quantised to 1/64 so a steady voice writes nothing, and the gate
+  frame.** It is quantized to 1/64 so a steady voice writes nothing, and the gate
   measures the whole thing at 16.8 ms worst with ten tiles' worth of work
   available; a fifty-person stage has not been measured.
 - **`framer-motion`** still drives `Modal`, `Tooltip`, toasts,

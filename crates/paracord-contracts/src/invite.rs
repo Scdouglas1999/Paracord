@@ -31,7 +31,7 @@ pub struct InviteGuildPreview {
 /// answers never leave the server.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct InviteJoinGate {
-    /// The newcomer must tick an acknowledgement of the server's rules.
+    /// The newcomer must tick an acknowledgment of the server's rules.
     pub require_ack: bool,
     /// Questions to answer, in order. Empty when the gate asks none.
     pub questions: Vec<String>,

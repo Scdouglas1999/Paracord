@@ -151,7 +151,7 @@ describe('keyVerification', () => {
       );
     });
 
-    it('does not let one channel pin authorise another', async () => {
+    it('does not let one channel pin authorize another', async () => {
       await assertPinnedDmPeerIdentity('chan-1', KEY_A);
       await expect(assertPinnedDmPeerIdentity('chan-2', KEY_B)).resolves.toBeUndefined();
       await expect(assertPinnedDmPeerIdentity('chan-1', KEY_B)).rejects.toBeInstanceOf(

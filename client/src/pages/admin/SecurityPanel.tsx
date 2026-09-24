@@ -31,7 +31,7 @@ export function SecurityPanel() {
   const pageLimit = 25;
 
   useEffect(() => {
-    let cancelled = false;
+    let canceled = false;
     const fetchEvents = async () => {
       setLoading(true);
       try {
@@ -40,7 +40,7 @@ export function SecurityPanel() {
           before: cursor ?? undefined,
           action: appliedAction || undefined,
         });
-        if (cancelled) return;
+        if (canceled) return;
         const pageEvents = data.slice(0, pageLimit);
         setEvents(pageEvents);
         setNextCursor(data.length > pageLimit && pageEvents.length > 0
@@ -48,18 +48,18 @@ export function SecurityPanel() {
           : null);
         setExpandedEventId(null);
       } catch (err) {
-        if (!cancelled) {
+        if (!canceled) {
           toast.error(`Failed to load security events: ${extractApiError(err)}`);
         }
       } finally {
-        if (!cancelled) {
+        if (!canceled) {
           setLoading(false);
         }
       }
     };
     void fetchEvents();
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [appliedAction, cursor, reloadKey]);
 

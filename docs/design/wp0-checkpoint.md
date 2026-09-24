@@ -14,7 +14,7 @@ four themes side by side.
 
 | File | Role |
 |---|---|
-| `client/src/styles/tokens.css` | **The single source of truth.** `@theme` maps the Tailwind colour namespace; `:root` holds the literal Night values; `[data-theme='…']` blocks remap them. |
+| `client/src/styles/tokens.css` | **The single source of truth.** `@theme` maps the Tailwind color namespace; `:root` holds the literal Night values; `[data-theme='…']` blocks remap them. |
 | `client/src/styles/primitives.css` | The `pc-*` recipe classes — plate, well, raised, floating, lit, speaking, dim, dnd, window, lamp, focus, live dot. Tokens only, no literals. |
 | `client/src/components/ui/` | The React primitives + `index.ts` barrel. |
 | `client/src/lib/presence.ts` | Presence → light (`presenceLight`). The only place that mapping is written down. |
@@ -96,7 +96,7 @@ uninstalled, every reference updated).
 `--bg-tertiary → --bg-base` · `--bg-accent → --bg-raised` ·
 `--bg-canvas/--bg-dock → --bg-base` · `--bg-panel/--bg-chat → --bg-plate` ·
 `--app-bg-base → --bg-base` · `--accent-secondary → --accent-primary` (the teal
-is gone; there is one action colour) · `--accent-danger-fill → --danger-well` ·
+is gone; there is one action color) · `--accent-danger-fill → --danger-well` ·
 `--shadow-sm → --shadow-chip` · `--shadow-md → --shadow-lifted` ·
 `--shadow-lg/xl → --shadow-plate` · `--radius-xs/sm/md/lg` onto the v2 steps ·
 `--text-subhead → --text-heading` · `--ease-spring → --ease-out` (light never
@@ -123,7 +123,7 @@ Steps (§2) generate `text-display|title|heading|name|body|ribbon|label|meta|sec
 ## 4. Primitive API
 
 All in `client/src/components/ui/`, exported from `index.ts`. No business logic,
-no product copy, no literal colour (a test asserts the last one).
+no product copy, no literal color (a test asserts the last one).
 
 | Primitive | Props |
 |---|---|
@@ -152,7 +152,7 @@ somebody is in the channel. It is never emphasis.
 ## 5. Two real bugs found and fixed on the way
 
 1. **`cn()` was silently dropping every custom type step.** tailwind-merge cannot
-   tell `text-meta` (a font-size) from `text-text-muted` (a colour), so it
+   tell `text-meta` (a font-size) from `text-text-muted` (a color), so it
    treated them as one group: `cn('text-meta text-text-muted')` returned just
    `text-text-muted`. Every composed component in the app was losing its type
    step. Fixed by declaring the step scale in `client/src/lib/utils.ts`.

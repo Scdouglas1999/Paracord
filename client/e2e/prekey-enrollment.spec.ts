@@ -138,12 +138,12 @@ test('locking during publication cancels HTTP without deleting the saved keys or
   expect(retained.pending).toHaveLength(1);
 });
 
-test('failed acknowledgement persistence retains a replayable publication after the server commits', async ({ page, context }) => {
+test('failed acknowledgment persistence retains a replayable publication after the server commits', async ({ page, context }) => {
   const server = await service(context, await setup(page));
   const result = await page.evaluate(async () => {
     const remove = IDBObjectStore.prototype.delete;
     IDBObjectStore.prototype.delete = function(key) {
-      if (Array.isArray(key) && key[2] === 'signal.publications') throw new DOMException('Acknowledgement quota exhausted', 'QuotaExceededError');
+      if (Array.isArray(key) && key[2] === 'signal.publications') throw new DOMException('Acknowledgment quota exhausted', 'QuotaExceededError');
       return remove.call(this, key);
     };
     let error = '';
@@ -151,7 +151,7 @@ test('failed acknowledgement persistence retains a replayable publication after 
     finally { IDBObjectStore.prototype.delete = remove; }
     return { error, state: await window.prekeyTest.inspect() };
   });
-  expect(result.error).toContain('Acknowledgement quota exhausted');
+  expect(result.error).toContain('Acknowledgment quota exhausted');
   expect(result.state.pending).toHaveLength(1);
   expect(result.state.keys!.oneTimePrekeys).toHaveLength(50);
   expect(server.requests).toHaveLength(1);

@@ -13,7 +13,7 @@ export interface RecordedAnimation {
   keyframes: Keyframe[];
   options: KeyframeAnimationOptions;
   animation: Animation;
-  cancelled: boolean;
+  canceled: boolean;
   finished: boolean;
 }
 
@@ -35,7 +35,7 @@ export function installWaapiStub(): WaapiStub {
       target: this,
       keyframes: keyframes ?? [],
       options: timing,
-      cancelled: false,
+      canceled: false,
       finished: false,
       animation: null as unknown as Animation,
     };
@@ -62,7 +62,7 @@ export function installWaapiStub(): WaapiStub {
         settle();
       },
       cancel() {
-        record.cancelled = true;
+        record.canceled = true;
         animation.playState = 'idle';
         for (const listener of listeners.get('cancel') ?? []) listener();
         fail(new DOMException('The user aborted a request.', 'AbortError'));
@@ -83,7 +83,7 @@ export function installWaapiStub(): WaapiStub {
 
   function getAnimations(this: Element) {
     return played
-      .filter((record) => record.target === this && !record.cancelled && !record.finished)
+      .filter((record) => record.target === this && !record.canceled && !record.finished)
       .map((record) => record.animation);
   }
 
@@ -92,7 +92,7 @@ export function installWaapiStub(): WaapiStub {
 
   return {
     played,
-    live: () => played.filter((record) => !record.cancelled && !record.finished),
+    live: () => played.filter((record) => !record.canceled && !record.finished),
     restore() {
       if (original) (Element.prototype as { animate?: unknown }).animate = original;
       else delete (Element.prototype as { animate?: unknown }).animate;

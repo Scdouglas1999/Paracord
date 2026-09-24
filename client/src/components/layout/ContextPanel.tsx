@@ -175,27 +175,27 @@ export function ContextPanel({
 
   useEffect(() => {
     if (mode !== 'pins' || controlledPins || !channelId) return;
-    let cancelled = false;
+    let canceled = false;
     setFetchedPinsError(null);
     channelApi
       .getPins(channelId)
       .then(({ data }) => {
-        if (!cancelled) setFetchedPins(data);
+        if (!canceled) setFetchedPins(data);
       })
       .catch((err) => {
-        if (!cancelled) {
+        if (!canceled) {
           setFetchedPins([]);
           setFetchedPinsError(`Failed to load pinned messages: ${extractApiError(err)}`);
         }
       });
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [mode, channelId, controlledPins]);
 
   useEffect(() => {
     if (!threadListParentId) return;
-    let cancelled = false;
+    let canceled = false;
     setThreadsLoading(true);
     setThreadsError(null);
     const upsert = channelActions;
@@ -204,23 +204,23 @@ export function ContextPanel({
       channelApi.getArchivedThreads(threadListParentId),
     ])
       .then(([activeRes, archivedRes]) => {
-        if (cancelled) return;
+        if (canceled) return;
         for (const thread of [...activeRes.data, ...archivedRes.data]) {
           upsert.addChannel(thread);
           upsert.updateChannel(thread);
         }
       })
       .catch((err) => {
-        if (!cancelled) setThreadsError(`Failed to load threads: ${extractApiError(err)}`);
+        if (!canceled) setThreadsError(`Failed to load threads: ${extractApiError(err)}`);
       })
       .finally(() => {
-        if (!cancelled) {
+        if (!canceled) {
           setFetchedThreadParentIds((prev) => new Set(prev).add(threadListParentId));
           setThreadsLoading(false);
         }
       });
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [threadListParentId, channelActions]);
 

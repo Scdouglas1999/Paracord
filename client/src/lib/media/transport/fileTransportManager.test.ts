@@ -45,7 +45,7 @@ describe('FileTransportManager authentication', () => {
 
   it.each([
     ['EOF', []],
-    ['wrong acknowledgement', [frame({ type: 'session_state' })]],
+    ['wrong acknowledgment', [frame({ type: 'session_state' })]],
     ['oversized prefix', [new Uint8Array([0xff, 0xff, 0xff, 0xff])]],
   ])('rejects %s without retaining the connection', async (_name, chunks) => {
     const server = peer(chunks as Uint8Array[]);

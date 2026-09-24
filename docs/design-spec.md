@@ -13,7 +13,7 @@ What carried over is stated in the new contract rather than here: §6.10 keeps
 the parts of the old kill-list that v2 does not supersede — buttons solid and
 tactile, empty states left-aligned with an action, density matched to the
 surface, intentional rhythm — and "consume tokens, never hard-code hex" is now
-enforced by `client/scripts/literal-colour-audit.mjs` across the whole client.
+enforced by `client/scripts/literal-color-audit.mjs` across the whole client.
 The IA contract is still [`docs/layout-spec.md`](layout-spec.md), amended by the
 new spec wherever the two disagree; its §7 names the v2 components. Token
 definitions live in `client/src/styles/tokens.css` and the primitive recipes in

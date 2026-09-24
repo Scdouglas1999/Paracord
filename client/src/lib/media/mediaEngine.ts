@@ -169,7 +169,7 @@ export interface MediaEngine {
   /** Fired when the transport is permanently lost after reconnect exhaustion. */
   onTransportLost(cb: (reason: string) => void): void;
   /**
-   * Fired when the media connection drops and is being dialled back, and again
+   * Fired when the media connection drops and is being dialed back, and again
    * when it is restored. A call whose transport is interrupted is not carrying
    * anybody's voice, and must not be presented as though it were.
    *
@@ -183,7 +183,7 @@ export interface MediaEngine {
    *
    * This is what the level bar inside the mic button and the in-call device
    * menu's mic readout are made of. On the LiveKit path the store runs its own
-   * analyser over the published track; the native engines own the capture
+   * analyzer over the published track; the native engines own the capture
    * graph, so they report it.
    */
   onLocalMicLevel?(cb: (audioLevel: number, active: boolean) => void): void;

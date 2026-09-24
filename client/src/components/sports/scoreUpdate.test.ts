@@ -40,7 +40,7 @@ describe('score update sentences', () => {
     expect(parseScoreUpdate('')).toBeNull();
   });
 
-  it('recognises the Sports author, including a taken handle', () => {
+  it('recognizes the Sports author, including a taken handle', () => {
     expect(isSportsScoreAuthor({ bot: true, username: 'Sports', display_name: 'Sports' })).toBe(true);
     expect(isSportsScoreAuthor({ bot: true, username: 'sportsbot', display_name: 'Sports' })).toBe(true);
     expect(isSportsScoreAuthor({ bot: false, username: 'Sports', display_name: 'Sports' })).toBe(false);

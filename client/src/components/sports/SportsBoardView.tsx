@@ -136,7 +136,7 @@ export function SportsBoardView({ guildId, serverName }: { guildId: string; serv
       <span id={alertsId} className="text-label text-text-secondary">Score alerts</span>
       <Switch
         checked={alertsOn}
-        labelledBy={alertsId}
+        labeledBy={alertsId}
         onChange={(next) => {
           setAlertsOn(next);
           writeScoreAlertsOn(guildId, next);
@@ -226,7 +226,7 @@ export function SportsBoardView({ guildId, serverName }: { guildId: string; serv
           <span id={hideId} className="text-label text-text-secondary">Hide scores</span>
           <Switch
             checked={hideScores}
-            labelledBy={hideId}
+            labeledBy={hideId}
             onChange={(next) => {
               setHideScores(next);
               writeHideScores(next);

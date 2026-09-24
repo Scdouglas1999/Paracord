@@ -27,7 +27,7 @@ pub enum StorageError {
 /// UNC prefix, or a backslash separator could otherwise escape the storage root.
 ///
 /// This rejects such keys outright. Post-join canonicalization in
-/// [`LocalStorage`] provides defence-in-depth for the local backend, but this
+/// [`LocalStorage`] provides defense-in-depth for the local backend, but this
 /// syntactic check keeps the contract uniform across every backend.
 fn validate_key(key: &str) -> Result<(), StorageError> {
     if key.is_empty() {
@@ -161,7 +161,7 @@ impl LocalStorage {
     ///
     /// After the syntactic [`validate_key`] check, the resolved path's parent
     /// directory is canonicalized (if it already exists) and asserted to remain
-    /// under the canonicalized `base_path`. This is defence-in-depth against
+    /// under the canonicalized `base_path`. This is defense-in-depth against
     /// symlinks or edge cases the syntactic check does not model; the join
     /// target file itself need not exist yet.
     fn resolve_path(&self, key: &str) -> Result<PathBuf, StorageError> {
@@ -250,7 +250,7 @@ impl StorageBackend for LocalStorage {
 ///   `/api/v1/federated-files/{origin_server}/{attachment_id}`
 ///
 /// Any other shape falls back to the historical `/api/v1/attachments/{stem}`
-/// behaviour so callers passing bare keys keep working.
+/// behavior so callers passing bare keys keep working.
 fn local_download_url(key: &str) -> String {
     let parts: Vec<&str> = key.split('/').collect();
     match parts.as_slice() {

@@ -31,7 +31,7 @@ describe('production send readiness', () => {
   it('answers a group’s own refusal ahead of a 1:1 encryption rung', () => {
     // The server marks a group channel `encrypted`, so the shared ladder would
     // otherwise answer "Set up encryption before sending in this conversation" —
-    // a sentence about a 1:1 that points at a page which cannot enrol somebody
+    // a sentence about a 1:1 that points at a page which cannot enroll somebody
     // else.
     const notEnrolled = { allowed: false, supported: true, reason: 'Set up encryption before sending in this conversation.' };
     const roster = [enrolled('me', 'me'), { id: 'u2', username: 'ada', public_key: null }];

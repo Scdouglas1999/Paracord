@@ -1033,7 +1033,7 @@
               "type": "array"
             },
             "require_ack": {
-              "description": "The newcomer must tick an acknowledgement of the server's rules.",
+              "description": "The newcomer must tick an acknowledgment of the server's rules.",
               "type": "boolean"
             }
           },
@@ -1619,7 +1619,7 @@
       "properties": {
         "accent_color": {
           "default": null,
-          "description": "Profile accent as `0xRRGGBB`. `null` clears it. Omit the field to leave\nthe stored colour unchanged.",
+          "description": "Profile accent as `0xRRGGBB`. `null` clears it. Omit the field to leave\nthe stored color unchanged.",
           "format": "int32",
           "type": [
             "integer",

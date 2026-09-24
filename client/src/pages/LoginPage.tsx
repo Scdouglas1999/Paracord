@@ -97,7 +97,7 @@ export function LoginPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const serverUrl = getStoredServerUrl() || getCurrentOriginServerUrl();
-  // Tracks the deferred view-switch timer so it can be cancelled on unmount,
+  // Tracks the deferred view-switch timer so it can be canceled on unmount,
   // preventing a setState on an unmounted component.
   const viewSwitchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Whether this screen is still the one on show. `completeLoginFlow` runs
@@ -145,11 +145,11 @@ export function LoginPage() {
   }, [searchParams, setSearchParams]);
 
   useEffect(() => {
-    let cancelled = false;
+    let canceled = false;
     authApi
       .options()
       .then(({ data }) => {
-        if (cancelled) return;
+        if (canceled) return;
         setAllowUsernameLogin(data.allow_username_login);
         setRequireEmail(data.require_email);
       })
@@ -157,25 +157,25 @@ export function LoginPage() {
         // Keep conservative defaults when options are unavailable.
       });
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, []);
 
   // A server nobody has claimed yet has no accounts at all, so "Welcome back"
   // is a dead end: send the operator to the claim flow instead.
   useEffect(() => {
-    let cancelled = false;
+    let canceled = false;
     instanceApi
       .getSetupStatus()
       .then(({ data }) => {
-        if (!cancelled && data.setup_required) navigate('/setup-server', { replace: true });
+        if (!canceled && data.setup_required) navigate('/setup-server', { replace: true });
       })
       .catch(() => {
         // An unreachable server is reported by the sign-in attempt itself;
         // never assume setup state from a failed request.
       });
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [navigate]);
 

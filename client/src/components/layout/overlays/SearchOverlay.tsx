@@ -359,28 +359,28 @@ export function SearchOverlay({
       setSearchError(null);
       return;
     }
-    let cancelled = false;
+    let canceled = false;
     setSearching(true);
     const timeout = setTimeout(async () => {
       try {
         const { data } = await guildApi.searchMessages(guildId, { ...params, limit: PAGE_SIZE, offset: 0 });
-        if (cancelled) return;
+        if (canceled) return;
         setSearchError(null);
         setHits(data.messages);
         setTotal(data.total);
         setResultKey((key) => key + 1);
         if (scrollRef.current) scrollRef.current.scrollTop = 0;
       } catch (err) {
-        if (cancelled) return;
+        if (canceled) return;
         setHits([]);
         setTotal(0);
         setSearchError(extractApiError(err));
       } finally {
-        if (!cancelled) setSearching(false);
+        if (!canceled) setSearching(false);
       }
     }, 250);
     return () => {
-      cancelled = true;
+      canceled = true;
       clearTimeout(timeout);
     };
   }, [open, conversation, guildId, hasQuery, params]);

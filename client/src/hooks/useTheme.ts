@@ -17,13 +17,13 @@ import {
 } from '../lib/themes';
 
 /**
- * Accent presets recolour `--accent-primary` and its derivatives ONLY
+ * Accent presets recolor `--accent-primary` and its derivatives ONLY
  * (docs/lantern-stage-spec.md §1.7). They never touch `--light-white` /
  * `--light-amber`: light is state (a person is there right now), not style, and
- * a user's colour choice must not be able to turn it into decoration.
+ * a user's color choice must not be able to turn it into decoration.
  *
  * This is the one place in `src/` outside `tokens.css` that may hold a literal
- * colour, and `scripts/literal-colour-audit.mjs` allows it by name: the hover
+ * color, and `scripts/literal-color-audit.mjs` allows it by name: the hover
  * and active steps are COMPUTED from the picked value (`shadeHex`/`scaleHex`),
  * so a CSS custom property cannot be the source — the numbers have to be here.
  */
@@ -41,10 +41,10 @@ export const ACCENT_PRESETS = {
 } as const;
 
 /**
- * The base colour of the neutral ramp, named for people rather than by degrees.
+ * The base color of the neutral ramp, named for people rather than by degrees.
  *
- * These are NOT colours — they are an oklch hue and how much of it to take, and
- * `tokens.css` §1.0 spends them on every ground, well, hairline, wash and grey
+ * These are NOT colors — they are an oklch hue and how much of it to take, and
+ * `tokens.css` §1.0 spends them on every ground, well, hairline, wash and gray
  * ink while holding each token's lightness and chroma exactly where the ramp
  * put them. That is why this is safe to hand to a user: contrast is preserved
  * by construction at every setting, and `npm run test:contrast` sweeps the
@@ -56,7 +56,7 @@ export const ACCENT_PRESETS = {
 export const BASE_HUE_PRESETS = {
   hearth: { label: 'Hearth', hint: 'Warm brown, the default', hue: 65, tint: 1 },
   ash: { label: 'Ash', hint: 'A true neutral charcoal, no tint at all', hue: 65, tint: 0 },
-  harbour: { label: 'Harbour', hint: 'Cool slate, like weather off the water', hue: 245, tint: 1 },
+  harbor: { label: 'Harbor', hint: 'Cool slate, like weather off the water', hue: 245, tint: 1 },
   moss: { label: 'Moss', hint: 'Green-leaning, quiet and outdoors', hue: 150, tint: 1 },
   dusk: { label: 'Dusk', hint: 'Violet-leaning, late in the evening', hue: 305, tint: 1 },
 } as const;
@@ -130,16 +130,16 @@ const LIGHT_ACCENT_ACTIVE_SCALE = 0.4;
  *
  * The theme itself is one attribute: `data-theme`. Every surface, shadow, glow
  * and ring for that theme is declared in `src/styles/tokens.css` under
- * `:root[data-theme=…]`, so there is exactly one place a colour is written down.
+ * `:root[data-theme=…]`, so there is exactly one place a color is written down.
  * The only values this hook writes inline are the ones that cannot be static —
- * the chosen accent preset and its derivatives, and the base colour's two
+ * the chosen accent preset and its derivatives, and the base color's two
  * numbers.
  *
  * Except under a **look** (`lib/themes.ts`), which is a complete palette: it
  * declares its own accent and its own neutral ramp, so those inline properties
  * are REMOVED for the duration rather than written. An inline property beats
  * any stylesheet, so removing them is what lets the look's own block win — and
- * writing them again is what gives the person their colours back when they
+ * writing them again is what gives the person their colors back when they
  * leave it.
  */
 export function useTheme() {
@@ -172,7 +172,7 @@ export function useTheme() {
   }, [settings, setTheme]);
 
   const requestedTheme = theme;
-  // Persisted state can outlive the build that wrote it: anything unrecognised
+  // Persisted state can outlive the build that wrote it: anything unrecognized
   // is Night rather than a document with no theme at all.
   const activeTheme: ThemeId = asThemeId(requestedTheme);
   // A look is a whole palette (lib/themes.ts): it declares its own accent and
@@ -231,13 +231,13 @@ export function useTheme() {
     }
   }, [activeTheme, accentPreset, isLook]);
 
-  // The base colour. Two numbers on <html>, and every neutral in `tokens.css`
+  // The base color. Two numbers on <html>, and every neutral in `tokens.css`
   // re-resolves against them — no relaunch, no reload, and no second place
-  // where a colour is written down.
+  // where a color is written down.
   //
   // A look declares its own pair in its own block, so for a look these are
   // removed rather than written — and written again when a non-look theme comes
-  // back, which is why the theme is a dependency of a base-colour effect.
+  // back, which is why the theme is a dependency of a base-color effect.
   useEffect(() => {
     const root = document.documentElement;
     if (isLook) {
@@ -280,7 +280,7 @@ export function useTheme() {
   }, [customCss, settings?.custom_css]);
 
   // The way back. Custom CSS runs against the whole interface, and while the
-  // sanitizer allows no layout or visibility properties, a transparent colour
+  // sanitizer allows no layout or visibility properties, a transparent color
   // or a zeroed font size is enough that somebody cannot find Settings again to
   // undo it. Ctrl+Alt+Shift+C removes it without needing to read the screen.
   // (Instance-wide CSS is an administrator's, not something a person pasted
@@ -301,7 +301,7 @@ export function useTheme() {
   // …and the desktop shell is told what all of that came out as. The GTK
   // toplevel is what shows through wherever the DOM is transparent over a
   // native video underlay, so it has to be painted the ground the person
-  // actually chose rather than a colour compiled into the shell. LAST of the
+  // actually chose rather than a color compiled into the shell. LAST of the
   // appearance effects on purpose: by the time it runs, <html> carries the new
   // theme, the new hue and tint, and the committed custom CSS — which can
   // redefine `--bg-base` itself — so what it reads is the ground as it will be

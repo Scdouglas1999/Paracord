@@ -268,7 +268,7 @@ reduced motion. There is **no motion code in any WP1 component.**
 
 | Component | Props | Notes |
 |---|---|---|
-| `LitAvatar` | `person`, `size` (px), `hideLabel` | rim / breathe / dim / dnd slash; avatar image or identity-coloured initials (`avatarInitials`). Renders `"{name} — {label}"` as `sr-only` unless `hideLabel`. |
+| `LitAvatar` | `person`, `size` (px), `hideLabel` | rim / breathe / dim / dnd slash; avatar image or identity-colored initials (`avatarInitials`). Renders `"{name} — {label}"` as `sr-only` unless `hideLabel`. |
 | `AvatarStack` | `people`, `size`, `max`, `overlap`, `context` | overlap defaults to `size / 4`; "+M" tail; names everybody **once** in one `sr-only` sentence instead of N labels. |
 | `WindowMap` | `windows`, `overflowCount`, `caption`, `scale` (`sidebar` 10×13 / `home` 12×16), `columns` (capped at 8) | cells are `pc-window` + `is-talking` / `is-reading`; one `sr-only` sentence ("2 of 13 channels lit, 4 more not shown. 2 channels lit · 2 reading"). |
 | `BuildingPlate` | `building`, `scale`, `caption`, `children` | Plate + `Lamp` + `WindowMap`. Lit ⇒ the lit ring and **exactly one** lamp; dark ⇒ neither, and it drops to the quiet tile highlight rather than a plate shadow it has not earned. |
@@ -317,7 +317,7 @@ WP1's own tests:
 - `hooks/useRoomThumbnail.test.tsx` — live only in the joined channel on a
   canvas-rendering engine; `native-surface` and `not-joined` never subscribe.
 - `components/light/light.test.tsx` — every component and state, plus the
-  no-literal-colour assertion the WP0 test established.
+  no-literal-color assertion the WP0 test established.
 
 ### Screenshots
 

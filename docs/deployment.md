@@ -171,7 +171,7 @@ its TURN relay cannot share the RTC mux's port (LiveKit refuses to bind the same
 address twice and exits at startup). With the defaults those are:
 
 - **RTC mux:** `7882/udp` when native media is also enabled, otherwise your
-  public signalling port.
+  public signaling port.
 - **TURN relay:** the port after the RTC mux (`7883/udp` by default). Override
   it with `[livekit] turn_udp_port` in `paracord.toml` if that port is taken.
 - **TURN relay range:** the ten ports after TURN (`7884-7893/udp` by default).

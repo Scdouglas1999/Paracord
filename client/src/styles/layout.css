@@ -61,7 +61,7 @@ html[data-theme='high-contrast'] #root {
 }
 
 /* `transition-colors` is not a recipe — it is a deliberate redefinition of
-   Tailwind's utility of the same name, so that the app's colour transitions
+   Tailwind's utility of the same name, so that the app's color transitions
    run on --duration-normal/--ease-out rather than Tailwind's 150ms linear.
    It belongs in `utilities` beside the one it replaces: same layer, later in
    source order, so ours wins without outranking the call site's own
@@ -77,7 +77,7 @@ html[data-theme='high-contrast'] #root {
   /* Tailwind's bare `transition` lists box-shadow, filter and backdrop-filter
      among its properties, and the motion law animates none of them: a shadow
      or a filter transition repaints its element on every frame. Same
-     redefinition, same reasoning as `transition-colors` above — colour,
+     redefinition, same reasoning as `transition-colors` above — color,
      opacity and transform only. */
   .transition {
     transition-property: color, background-color, border-color, outline-color, text-decoration-color, fill,

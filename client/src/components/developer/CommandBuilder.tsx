@@ -208,7 +208,7 @@ function OptionEditor({ option, index, depth, onChange, onRemove }: OptionEditor
                 size="sm"
                 checked={option.required ?? false}
                 onChange={(next) => updateField('required', next)}
-                labelledBy={requiredId}
+                labeledBy={requiredId}
               />
             </div>
           </div>

@@ -940,7 +940,7 @@ export class TauriMediaEngine implements MediaEngine {
    * Your own microphone level, from the process that actually owns the capture
    * graph.
    *
-   * The store's `startLocalMicAnalyser` reads LiveKit's `room.localParticipant`
+   * The store's `startLocalMicAnalyzer` reads LiveKit's `room.localParticipant`
    * — an object this engine does not have — so on the desktop build, which is
    * the only build that runs this engine, `micInputLevel` and `micInputActive`
    * had no writer at all: the bar inside the mic button stayed at `width: 0%`

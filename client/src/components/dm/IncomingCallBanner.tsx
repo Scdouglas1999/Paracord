@@ -10,7 +10,7 @@ import { cn } from '../../lib/utils';
  * Somebody is calling you in a direct message (QA D6).
  *
  * The call itself always worked; the callee's window simply said nothing — to
- * answer you had to press the same phone button the caller had, labelled "Start
+ * answer you had to press the same phone button the caller had, labeled "Start
  * direct message voice call". This is the surface that was missing: who is
  * calling, Join, and Decline.
  *

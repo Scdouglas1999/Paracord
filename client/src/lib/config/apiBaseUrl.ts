@@ -38,7 +38,7 @@ function normalizeServerBaseUrl(url: string): string {
 }
 
 /**
- * Normalise a raw connect-screen input into a canonical server base URL.
+ * Normalize a raw connect-screen input into a canonical server base URL.
  *
  * - Trims surrounding whitespace.
  * - Adds a protocol when none is present: `http://` for loopback hosts
@@ -47,7 +47,7 @@ function normalizeServerBaseUrl(url: string): string {
  *   returns that origin verbatim so a self-hosted UI connects back to itself.
  * - Strips trailing slashes.
  *
- * This is the single source of truth for connect-input normalisation; the
+ * This is the single source of truth for connect-input normalization; the
  * ServerConnectPage imports it rather than re-implementing the logic.
  */
 export function normalizeConnectInput(raw: string): string {
@@ -168,7 +168,7 @@ function getRuntimeApiBaseUrl(): string | null {
  * The stored server URL is the only input that changes while a production
  * page runs (the connect screen writes it, another tab can too), so a lookup
  * reads that one key and reuses the answer while it is unchanged — no parse,
- * no normalisation, no write. The first lookup also migrates a value still
+ * no normalization, no write. The first lookup also migrates a value still
  * under the legacy key, which nothing writes any more. The runtime override
  * is a development affordance that reads the page URL; it is not cached, so
  * `?api_base=` keeps working as it did.
@@ -302,7 +302,7 @@ function resolveActiveServerBaseUrl(): string {
     : undefined;
   if (activeUrl) {
     // Every resource URL a render builds comes through here; the URL parse in
-    // the normalisation is paid once per server switch, not once per avatar.
+    // the normalization is paid once per server switch, not once per avatar.
     if (activeUrl !== activeUrlSeen) {
       activeBaseSeen = `${normalizeServerBaseUrl(activeUrl)}/api/v1`;
       activeUrlSeen = activeUrl;

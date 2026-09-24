@@ -17,7 +17,7 @@ export interface SettingsNavItem {
 }
 
 export interface SettingsNavGroup {
-  /** Sentence case (§6.8). Omit for the first, unlabelled group. */
+  /** Sentence case (§6.8). Omit for the first, unlabeled group. */
   label?: string;
   items: SettingsNavItem[];
 }
@@ -57,7 +57,7 @@ export interface SettingsShellProps {
  *
  * Presentation only: the caller owns which section is active, what the content
  * is, and — on phones, where the index and the content are two screens — the
- * history behaviour that moves between them.
+ * history behavior that moves between them.
  */
 export function SettingsShell({
   label,

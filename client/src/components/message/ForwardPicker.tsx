@@ -238,7 +238,7 @@ export function ForwardPicker({
     <Modal
       open={open}
       onClose={onClose}
-      labelledBy="forward-title"
+      labeledBy="forward-title"
       size="sm"
       placement="center"
       panelClassName="flex max-h-[min(80dvh,40rem)] flex-col"

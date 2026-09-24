@@ -10,7 +10,7 @@ export interface PreparedDeliveryEdit {
   readonly serializedRequest: string;
 }
 
-type EditAcknowledgement = Message & { edit_nonce: string; edit_replayed: boolean };
+type EditAcknowledgment = Message & { edit_nonce: string; edit_replayed: boolean };
 
 /** Author-owned outbox edits use their original serialized request on every retry. */
 export function createDeliveryEditTransport(context: OperationContext) {
@@ -22,7 +22,7 @@ export function createDeliveryEditTransport(context: OperationContext) {
     if (!record.channelId || !record.messageId || !record.editNonce || request?.edit_nonce !== record.editNonce) {
       throw new DeliveryProtocolError('The prepared edit does not retain its original operation identity.');
     }
-    const response = await context.request<EditAcknowledgement>({
+    const response = await context.request<EditAcknowledgment>({
       method: 'PATCH', signal, timeout: 30_000,
       url: `/channels/${encodeURIComponent(record.channelId)}/messages/${encodeURIComponent(record.messageId)}`,
       data: record.serializedRequest, headers: { 'Content-Type': 'application/json' },
@@ -33,7 +33,7 @@ export function createDeliveryEditTransport(context: OperationContext) {
       || message.edit_nonce !== record.editNonce || typeof message.edit_replayed !== 'boolean') {
       throw new DeliveryProtocolError('The server did not acknowledge this account’s original message edit.');
     }
-    // A replay may return a newer edit. Its acknowledgement proves our original
+    // A replay may return a newer edit. Its acknowledgment proves our original
     // operation committed, without replacing that newer content on the server.
     return message;
   };

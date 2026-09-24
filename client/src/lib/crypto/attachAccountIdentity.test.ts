@@ -112,7 +112,7 @@ it('installs the home access token, refresh token and matching profile together'
 // are the SAME session under two names. Attaching a key revokes that session
 // and issues a new one; the copy left holding the revoked token 401'd within
 // milliseconds, refreshed with the spent credential, and its `onAuthFailed`
-// tore down the home session mid-enrolment — "Waiting for your instance
+// tore down the home session mid-enrollment — "Waiting for your instance
 // account" on a setup the server had already accepted.
 it('hands the replacement session to every entry that held the revoked one', async () => {
   tokens.access = 'home-token'; tokens.refresh = 'home-refresh';

@@ -111,13 +111,13 @@ export function useActivityPresence(options?: { idleTimeoutMs?: number }) {
   useEffect(() => {
     if (!token || !isTauri()) return;
 
-    let cancelled = false;
+    let canceled = false;
     let inFlight = false;
     let activeAppId: string | null = null;
     let startedAt: string | null = null;
 
     const tick = async () => {
-      if (cancelled || inFlight) return;
+      if (canceled || inFlight) return;
       inFlight = true;
       try {
         const { invoke } = await import('@tauri-apps/api/core');
@@ -133,7 +133,7 @@ export function useActivityPresence(options?: { idleTimeoutMs?: number }) {
         const detected = nativeCaptureAllowed
           ? await invoke<ForegroundApplication | null>('get_foreground_application')
           : null;
-        if (cancelled) return;
+        if (canceled) return;
 
         const disabledApps = new Set(
           readStringArray(notifications['activityDetectionDisabledApps']).map(normalizeDetectedAppId)
@@ -176,7 +176,7 @@ export function useActivityPresence(options?: { idleTimeoutMs?: number }) {
     void tick();
 
     return () => {
-      cancelled = true;
+      canceled = true;
       setActivitySource('playing', null);
       void import('@tauri-apps/api/core')
         .then(({ invoke }) => invoke('set_activity_sharing_enabled', { enabled: false }))

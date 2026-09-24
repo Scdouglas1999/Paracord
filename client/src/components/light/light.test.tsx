@@ -85,7 +85,7 @@ describe('LitAvatar', () => {
     expect(render(<LitAvatar person={DEVON} />).container.querySelector('.pc-dim')).not.toBeNull();
   });
 
-  it('marks do-not-disturb with the slash, not a colour dot', () => {
+  it('marks do-not-disturb with the slash, not a color dot', () => {
     const { container } = render(<LitAvatar person={DND} />);
     expect(container.querySelector('.pc-dnd')).not.toBeNull();
   });
@@ -357,7 +357,7 @@ describe('LiveDot and LightCaption', () => {
   });
 });
 
-describe('no light component hard-codes a colour', () => {
+describe('no light component hard-codes a color', () => {
   it('renders every component and every state without a literal hex or rgb value', () => {
     const rooms = [
       voice({ occupants: [{ person: MARA, speaking: true, sharingScreen: true }] }),

@@ -140,7 +140,7 @@ export class PrekeyEnrollment {
   }
 
   /**
-   * `replacePublishedBundle` is re-enrolment for a device that proved the
+   * `replacePublishedBundle` is re-enrollment for a device that proved the
    * account's identity (a recovery-phrase restore) but holds none of the
    * private halves of the bundle the account published from another device.
    *

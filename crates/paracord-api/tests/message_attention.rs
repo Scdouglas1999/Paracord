@@ -214,7 +214,7 @@ async fn replay_edit_and_delete_preserve_recipient_identity_without_duplicate_co
 }
 
 #[tokio::test]
-async fn partial_and_stale_acknowledgements_do_not_clear_newer_mentions() {
+async fn partial_and_stale_acknowledgments_do_not_clear_newer_mentions() {
     let f = setup().await;
     let first = send(&f, &f.owner, format!("<@{}> first", f.member_id), "first").await;
     let second = send(&f, &f.owner, format!("<@{}> second", f.member_id), "second").await;

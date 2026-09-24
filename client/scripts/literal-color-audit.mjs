@@ -1,19 +1,19 @@
 #!/usr/bin/env node
 /**
- * The literal-colour lint (docs/lantern-stage-spec.md §0, §1, §8).
+ * The literal-color lint (docs/lantern-stage-spec.md §0, §1, §8).
  *
  * "Consume tokens, never hard-code hex." WP0 pinned that for the `ui/`
  * primitives with a render test that walks the DOM; this is the repo-wide
  * version, so the rule cannot come back one component at a time.
  *
- * A literal colour is a hex triplet, `rgb()`/`rgba()`, `hsl()`/`hsla()`, or a
- * CSS named colour used as a value. It is allowed in exactly two places:
+ * A literal color is a hex triplet, `rgb()`/`rgba()`, `hsl()`/`hsla()`, or a
+ * CSS named color used as a value. It is allowed in exactly two places:
  *
  *   1. `src/styles/tokens.css`, which IS the palette.
  *   2. The named exceptions below, each with the reason it cannot be a token.
  *
  * Tests, fixtures and generated API types are out of scope: a test asserting
- * that sanitisation preserves `#1a1a2e` is testing a string, not painting a
+ * that sanitization preserves `#1a1a2e` is testing a string, not painting a
  * surface.
  *
  * Run: `npm run test:tokens`
@@ -25,7 +25,7 @@ import { fileURLToPath } from 'node:url';
 const HERE = fileURLToPath(new URL('.', import.meta.url));
 const SRC = join(HERE, '..', 'src');
 
-/** Files that may hold a literal colour, and why no token can replace it. */
+/** Files that may hold a literal color, and why no token can replace it. */
 const ALLOWED = new Map([
   [
     'styles/tokens.css',
@@ -38,7 +38,7 @@ const ALLOWED = new Map([
   ],
   [
     'lib/colors.ts',
-    'DEFAULT_ROLE_COLOR / UNSET_ROLE_COLOR: a role colour is data sent to the '
+    'DEFAULT_ROLE_COLOR / UNSET_ROLE_COLOR: a role color is data sent to the '
       + 'server, not a surface this app paints',
   ],
   [
@@ -53,8 +53,8 @@ const ALLOWED = new Map([
   [
     'lib/nativeGround.ts',
     'SENTINEL: a magenta painted into a 1x1 canvas and read back to prove the '
-      + 'canvas can parse a colour at all, before the real ground is offered to '
-      + 'it. Its whole job is to be a colour no theme defines, so a token is '
+      + 'canvas can parse a color at all, before the real ground is offered to '
+      + 'it. Its whole job is to be a color no theme defines, so a token is '
       + 'exactly what it must not be',
   ],
 ]);
@@ -72,9 +72,9 @@ const SKIP = [
 const EXTENSIONS = ['.ts', '.tsx', '.css'];
 
 /**
- * Colour literals. Hex needs a boundary on both sides so a snowflake, a hash
+ * Color literals. Hex needs a boundary on both sides so a snowflake, a hash
  * route or a `#{n}` template does not count; the functional notations and the
- * named colours are matched as values only (after `:` or inside a CSS function
+ * named colors are matched as values only (after `:` or inside a CSS function
  * argument list), which is why each pattern carries its own lead-in.
  */
 const PATTERNS = [
@@ -82,13 +82,13 @@ const PATTERNS = [
   { name: 'rgb()', re: /\brgba?\(\s*[\d.]+[\s,]/g },
   { name: 'hsl()', re: /\bhsla?\(\s*[\d.]+[\s,]/g },
   {
-    name: 'named colour',
-    re: /(?:^|[:\s(,])(?:white|black|red|blue|green|yellow|orange|purple|pink|gray|grey|silver|maroon|navy|teal|olive|lime|aqua|fuchsia)(?=\s*[;,)'"`]|$)/gm,
+    name: 'named color',
+    re: /(?:^|[:\s(,])(?:white|black|red|blue|green|yellow|orange|purple|pink|gray|gray|silver|maroon|navy|teal|olive|lime|aqua|fuchsia)(?=\s*[;,)'"`]|$)/gm,
   },
 ];
 
-/** A Tailwind utility naming a colour the theme defines is not a literal. */
-const TAILWIND_COLOUR_CLASS = /\b(?:bg|text|border|ring|fill|stroke|from|to|via|outline|decoration|divide|shadow|caret|accent|placeholder)-(?:white|black)\b/g;
+/** A Tailwind utility naming a color the theme defines is not a literal. */
+const TAILWIND_COLOR_CLASS = /\b(?:bg|text|border|ring|fill|stroke|from|to|via|outline|decoration|divide|shadow|caret|accent|placeholder)-(?:white|black)\b/g;
 
 /** Strip comments so a hex in prose is not a finding. */
 function stripComments(source, isCss) {
@@ -122,7 +122,7 @@ for (const file of walk(SRC)) {
   const isCss = rel.endsWith('.css');
   const cleaned = stripComments(readFileSync(file, 'utf8'), isCss)
     // `text-white` is a theme utility, not a literal; so is `bg-black`.
-    .replace(TAILWIND_COLOUR_CLASS, (m) => ' '.repeat(m.length));
+    .replace(TAILWIND_COLOR_CLASS, (m) => ' '.repeat(m.length));
 
   const lines = cleaned.split('\n');
   lines.forEach((line, index) => {
@@ -137,22 +137,22 @@ for (const file of walk(SRC)) {
 }
 
 if (findings.length > 0) {
-  console.error('Literal colours outside src/styles/tokens.css:\n');
+  console.error('Literal colors outside src/styles/tokens.css:\n');
   for (const finding of findings) {
     console.error(`  src/${finding.rel}:${finding.line}  ${finding.kind}  ${finding.text}`);
   }
   console.error(
-    `\n${findings.length} literal colour${findings.length === 1 ? '' : 's'} in ${
+    `\n${findings.length} literal color${findings.length === 1 ? '' : 's'} in ${
       new Set(findings.map((f) => f.rel)).size
     } file(s).`
     + '\nConsume a token from src/styles/tokens.css, or add the file to ALLOWED'
-    + '\nin scripts/literal-colour-audit.mjs with the reason no token can serve.',
+    + '\nin scripts/literal-color-audit.mjs with the reason no token can serve.',
   );
   process.exit(1);
 }
 
 console.log(
-  `Literal-colour audit passed: ${scanned} files hold no hex, rgb(), hsl() or named colour.`
+  `Literal-color audit passed: ${scanned} files hold no hex, rgb(), hsl() or named color.`
   + ` ${ALLOWED.size} files are allowed one, each for a stated reason`
   + ' (docs/lantern-stage-spec.md §1).',
 );

@@ -616,7 +616,7 @@ async fn forum_post_listing_is_paginated() -> anyhow::Result<()> {
     assert_eq!(
         payload["posts"].as_array().context("posts array")?.len(),
         2,
-        "forum post listing must honour the requested page size: {payload}"
+        "forum post listing must honor the requested page size: {payload}"
     );
 
     // An absurd limit clamps instead of being taken literally.
@@ -668,7 +668,7 @@ async fn ban_listing_is_paginated() -> anyhow::Result<()> {
     assert_eq!(
         payload.as_array().context("bans array")?.len(),
         2,
-        "ban listing must honour the requested page size: {payload}"
+        "ban listing must honor the requested page size: {payload}"
     );
 
     let (status, payload) = ctx
@@ -682,7 +682,7 @@ async fn ban_listing_is_paginated() -> anyhow::Result<()> {
     assert_eq!(
         payload.as_array().context("bans array")?.len(),
         1,
-        "ban listing must honour the offset: {payload}"
+        "ban listing must honor the offset: {payload}"
     );
 
     Ok(())
@@ -728,7 +728,7 @@ async fn event_listing_is_paginated() -> anyhow::Result<()> {
     assert_eq!(
         payload.as_array().context("events array")?.len(),
         2,
-        "event listing must honour the requested page size: {payload}"
+        "event listing must honor the requested page size: {payload}"
     );
 
     Ok(())

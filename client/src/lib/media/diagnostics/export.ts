@@ -3,7 +3,7 @@
 // The report is meant to be pasted into a support thread or sent to a server
 // operator, so it must never carry anything that could impersonate the user.
 // By construction the check collects no tokens, cookies or account ids; this
-// module is the second line of defence — every value also passes through the
+// module is the second line of defense — every value also passes through the
 // shared diagnostic redactor, and every URL has any embedded credentials and
 // query secrets removed before it is written out.
 

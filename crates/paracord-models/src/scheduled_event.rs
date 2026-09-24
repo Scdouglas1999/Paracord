@@ -7,7 +7,8 @@ pub enum EventStatus {
     Scheduled = 1,
     Active = 2,
     Completed = 3,
-    Cancelled = 4,
+    #[serde(rename = "Cancelled")]
+    Canceled = 4,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

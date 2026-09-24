@@ -116,7 +116,7 @@ describe('DiscoveryPage', () => {
     await screen.findByRole('heading', { name: 'Launch Guild' });
     expect(apiClient.get).toHaveBeenCalledWith(
       expect.stringContaining('include_federated=true'),
-      // Requests now carry an abort signal so a superseded search is cancelled.
+      // Requests now carry an abort signal so a superseded search is canceled.
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
   });

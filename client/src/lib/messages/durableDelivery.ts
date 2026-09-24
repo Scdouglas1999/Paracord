@@ -180,7 +180,7 @@ export function queuedMutationRevision(record: DurableSend): string {
  * One network attempt at a time per account, including across browser tabs.
  * Failed or delayed items block only later sends in their own conversation.
  * Attempts and retry times commit before HTTP; a crash never loses the body or
- * retries immediately without the recorded delay. Acknowledgement and outbox
+ * retries immediately without the recorded delay. Acknowledgment and outbox
  * removal are one encrypted transaction, with a durable receipt for UI recovery.
  */
 export class DurableDelivery {

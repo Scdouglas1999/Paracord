@@ -42,7 +42,7 @@ import {
   stagger,
   stepVoiceLevelsForTests,
   transitionWith,
-  levelFromAnalyser,
+  levelFromAnalyzer,
   levelFromDbov,
   relightBuilding,
   takeDimmedPlates,
@@ -259,7 +259,7 @@ describe('the recipes', () => {
     }
   });
 
-  it('staggers neighbours by --stagger-light', () => {
+  it('staggers neighbors by --stagger-light', () => {
     const els = [0, 1, 2].map(() => {
       const el = document.createElement('div');
       document.body.append(el);
@@ -276,7 +276,7 @@ describe('the recipes', () => {
     expect(el.getAnimations()).toHaveLength(1);
     settleIn(el);
     expect(el.getAnimations()).toHaveLength(1);
-    expect(waapi.played[0].cancelled).toBe(true);
+    expect(waapi.played[0].canceled).toBe(true);
   });
 
   it('turns a resting glow up for the bloom and off for the flicker peaks', () => {
@@ -777,7 +777,7 @@ describe('walking into a room', () => {
     expect(roomSharedName('2001')).toBe('room-2001');
   });
 
-  it('recedes a ghost of the surface, with the travelling branch hidden in it', () => {
+  it('recedes a ghost of the surface, with the traveling branch hidden in it', () => {
     document.body.innerHTML = `
       <section id="lobby" data-motion-recede="">
         <header id="header"></header>
@@ -805,16 +805,16 @@ describe('walking into a room', () => {
       expect(document.body.contains(record.target) && record.target.closest('#pc-motion-ghosts')).toBeTruthy();
     }
 
-    // The branch that is travelling is not receding: it is hidden in the copy
+    // The branch that is traveling is not receding: it is hidden in the copy
     // so the real one can fly over the top of it.
     // Queried by attribute, not by id: jsdom resolves a duplicated id through
     // the document's own map, and the ghost is a copy of something still in it.
     const ghosts = document.getElementById('pc-motion-ghosts')!;
-    const hidden = ghosts.querySelector<HTMLElement>('[data-motion-travelling]');
+    const hidden = ghosts.querySelector<HTMLElement>('[data-motion-traveling]');
     expect(hidden?.style.visibility).toBe('hidden');
     expect(ghosts.querySelectorAll('[style*="visibility: hidden"]')).toHaveLength(1);
     // And the marker it used to find that branch is not left on the real one.
-    expect(clicked.hasAttribute('data-motion-travelling')).toBe(false);
+    expect(clicked.hasAttribute('data-motion-traveling')).toBe(false);
   });
 
   it('recedes a region whole when the origin is somewhere else', () => {
@@ -825,7 +825,7 @@ describe('walking into a room', () => {
     recedeAround(null);
     const receded = waapi.played.filter((record) => record.animation.id === 'data-motion-recipe:recede');
     expect(receded).toHaveLength(1);
-    // Nothing is travelling, so nothing in the copy is hidden.
+    // Nothing is traveling, so nothing in the copy is hidden.
     expect(
       document.getElementById('pc-motion-ghosts')?.querySelectorAll('[style*="visibility"]'),
     ).toHaveLength(0);
@@ -1026,10 +1026,10 @@ describe('the speaking ring takes the voice', () => {
     expect(levelFromDbov(45)).toBe(0);
     expect(levelFromDbov(80)).toBe(0);
     expect(levelFromDbov(27.5)).toBeCloseTo(0.5, 2);
-    // The local analyser's 0..1 RMS, where an ordinary voice is a quarter.
-    expect(levelFromAnalyser(0.25)).toBe(1);
-    expect(levelFromAnalyser(0)).toBe(0);
-    expect(levelFromAnalyser(0.05)).toBeCloseTo(0.2, 2);
+    // The local analyzer's 0..1 RMS, where an ordinary voice is a quarter.
+    expect(levelFromAnalyzer(0.25)).toBe(1);
+    expect(levelFromAnalyzer(0)).toBe(0);
+    expect(levelFromAnalyzer(0.05)).toBeCloseTo(0.2, 2);
   });
 });
 
@@ -1086,7 +1086,7 @@ describe('the lights changing', () => {
     for (let round = 0; round < rounds; round += 1) {
       await new Promise((resolve) => setTimeout(resolve, 0));
       for (const record of waapi.played) {
-        if (!record.finished && !record.cancelled) record.animation.finish();
+        if (!record.finished && !record.canceled) record.animation.finish();
       }
     }
   }

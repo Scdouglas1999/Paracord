@@ -17,14 +17,14 @@ export function useNowPlayingSupport(): NowPlayingSupport | null {
 
   useEffect(() => {
     if (!tauri || support) return;
-    let cancelled = false;
+    let canceled = false;
     void import('@tauri-apps/api/core')
       .then(({ invoke }) => invoke<NowPlayingSupport>('now_playing_support'))
       .then((answer) => {
-        if (!cancelled) useNowPlayingStore.getState().setSupport(answer);
+        if (!canceled) useNowPlayingStore.getState().setSupport(answer);
       })
       .catch((err) => {
-        if (!cancelled) {
+        if (!canceled) {
           useNowPlayingStore.getState().setSupport({
             supported: false,
             reason: `The desktop app did not answer: ${err instanceof Error ? err.message : String(err)}`,
@@ -32,7 +32,7 @@ export function useNowPlayingSupport(): NowPlayingSupport | null {
         }
       });
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [tauri, support]);
 

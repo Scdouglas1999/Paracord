@@ -5,7 +5,7 @@
 //! the user count, from the presence of a config file, or from whether an admin
 //! account happens to exist right now. Deleting the owner later therefore
 //! cannot reopen the bootstrap window, which is precisely the hole the old
-//! "first registrant silently becomes admin" behaviour left open.
+//! "first registrant silently becomes admin" behavior left open.
 
 use crate::{datetime_from_db_text, datetime_to_db_text, DbError, DbPool};
 use chrono::{DateTime, Utc};

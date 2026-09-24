@@ -118,7 +118,7 @@ function Plate({ children = 'plate' }: { children?: string }) {
   return <div ref={ref}>{children}</div>;
 }
 
-/** A street: the container the plates share, so a plate has neighbours. */
+/** A street: the container the plates share, so a plate has neighbors. */
 function Street({ keys }: { keys: string[] }) {
   return (
     <div>
@@ -396,7 +396,7 @@ describe('useFlipList', () => {
 
   it('a commit landing mid-move does not read the move as a reorder', () => {
     // The bug the desktop client shipped with. A reorder starts; a burst of
-    // store updates commits again 6ms later while the row is still travelling;
+    // store updates commits again 6ms later while the row is still traveling;
     // the hook measured the row where the ANIMATION had it, kept that as its
     // resting place, and the next commit read the difference as a fresh move.
     // The error compounded — 383px, 466, 849, 1315, 2176 … 28 300 — and the

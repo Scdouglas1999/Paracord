@@ -24,12 +24,12 @@ export function OnboardingSettingsSection({ guildId, roles }: OnboardingSettings
   const [selectedRoleIds, setSelectedRoleIds] = useState<string[]>([]);
 
   useEffect(() => {
-    let cancelled = false;
+    let canceled = false;
     setLoading(true);
     guildApi
       .getOnboarding(guildId)
       .then(({ data }) => {
-        if (cancelled) return;
+        if (canceled) return;
         setWelcomeTitle(data.welcome_title || '');
         setWelcomeBody(data.welcome_body || '');
         setRulesText(data.rules_text || '');
@@ -38,14 +38,14 @@ export function OnboardingSettingsSection({ guildId, roles }: OnboardingSettings
         setSelectedRoleIds(data.role_options.map((option) => option.role_id));
       })
       .catch((err: unknown) => {
-        if (cancelled) return;
+        if (canceled) return;
         setError(extractApiError(err));
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!canceled) setLoading(false);
       });
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [guildId]);
 
@@ -54,7 +54,7 @@ export function OnboardingSettingsSection({ guildId, roles }: OnboardingSettings
     [roles, guildId],
   );
 
-  // A role's colour is the member's own choice — data, not a theme token.
+  // A role's color is the member's own choice — data, not a theme token.
   const roleColorHex = (role: Role) =>
     role.color ? `#${role.color.toString(16).padStart(6, '0')}` : 'var(--text-muted)';
 

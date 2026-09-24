@@ -284,7 +284,7 @@ export function OverviewSection({
               {ownershipCandidates.map((member) => (
                 <option key={member.user.id} value={member.user.id}>
                   {/* The disambiguator has to be something the person handing
-                      over their building can recognise. A snowflake is not: it
+                      over their building can recognize. A snowflake is not: it
                       told the owner "priya (357593456400404480)" and made them
                       guess. A username is unique on this server and is what
                       they already call each other. */}

@@ -201,7 +201,7 @@ describe('MessageInput', () => {
   it('names the member a group is waiting on, and offers no encryption route out', async () => {
     // The server marks a group channel `encrypted`, so the composer used to
     // reach the 1:1 rung and offer "Set up encryption" — an action that cannot
-    // enrol somebody else, beside a timeline saying something different.
+    // enroll somebody else, beside a timeline saying something different.
     mockEncryption.encrypted = true; mockEncryption.encryption = 'setup';
     mockActionOverrides.send = { supported: true, allowed: false, reason: 'Set up encryption before sending in this conversation.' };
     render(<MemoryRouter><MessageInput channelId="gd1" channelName="Three of us" /></MemoryRouter>);

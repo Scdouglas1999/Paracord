@@ -17,7 +17,7 @@ struct PendingOffline {
 ///
 /// When a user disconnects, instead of immediately marking them offline,
 /// the handler schedules a delayed check via this manager. If the user
-/// reconnects within the grace period, the pending offline task is cancelled.
+/// reconnects within the grace period, the pending offline task is canceled.
 pub struct PresenceManager {
     pending_offlines: Arc<DashMap<i64, PendingOffline>>,
     /// Monotonic source of per-task generation tokens. Each scheduled task gets a
@@ -38,7 +38,7 @@ impl PresenceManager {
 
     /// Schedule a deferred offline check for `user_id`.
     ///
-    /// Any previously pending offline task for the same user is cancelled first.
+    /// Any previously pending offline task for the same user is canceled first.
     /// After `grace_period` elapses, the provided future runs (which should
     /// re-check connection count and mark offline only if still 0).
     pub fn schedule_offline<F>(&self, user_id: i64, task: F)
@@ -95,7 +95,7 @@ mod tests {
 
     /// A stale task that finishes running after a newer task was scheduled must
     /// not evict the newer handle; a subsequent cancel must still be able to abort
-    /// the live task, and the newer offline future must never run once cancelled.
+    /// the live task, and the newer offline future must never run once canceled.
     #[tokio::test]
     async fn stale_task_does_not_evict_current_handle() {
         let pm = short_grace();
@@ -137,11 +137,11 @@ mod tests {
         assert!(!pm.pending_offlines.contains_key(&1));
 
         // Give the aborted second task's grace/sleep window time to pass; its
-        // offline future must never have run because it was cancelled.
+        // offline future must never have run because it was canceled.
         tokio::time::sleep(Duration::from_millis(250)).await;
         assert!(
             !second_ran.load(Ordering::SeqCst),
-            "cancelled offline task must not have flipped the user offline"
+            "canceled offline task must not have flipped the user offline"
         );
     }
 
@@ -177,7 +177,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(60)).await;
         assert!(
             !ran.load(Ordering::SeqCst),
-            "cancelled task should not run the offline future"
+            "canceled task should not run the offline future"
         );
     }
 }

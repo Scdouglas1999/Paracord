@@ -31,7 +31,7 @@ export { AppMark };
  * the heading and the action where they are.
  *
  * Below `sm` this is a browser at phone width, where a page that scrolls is
- * the normal and correct thing — that behaviour is unchanged.
+ * the normal and correct thing — that behavior is unchanged.
  */
 export function AuthCanvas({ children, className }: { children: ReactNode; className?: string }) {
   return (
@@ -200,7 +200,7 @@ export function FieldLabel({
 }
 
 /**
- * A labelled field wrapper. The `<label>` wraps its control so the accessible
+ * A labeled field wrapper. The `<label>` wraps its control so the accessible
  * name comes from the label text; hint/error render outside the label so they
  * never pollute that name.
  */
@@ -295,7 +295,7 @@ export function AuthSteps({
 }
 
 /**
- * One step of a wizard: a labelled group that announces itself when it
+ * One step of a wizard: a labeled group that announces itself when it
  * arrives, and puts the cursor in its first field so the flow is completable
  * from the keyboard alone.
  *

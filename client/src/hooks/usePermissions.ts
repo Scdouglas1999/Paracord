@@ -167,11 +167,11 @@ export function usePermissions(
       return;
     }
 
-    let cancelled = false;
+    let canceled = false;
     setIsLoading(true);
     fetchGuildRoles(guildId)
       .then((data) => {
-        if (cancelled || revision !== cacheRevision) return;
+        if (canceled || revision !== cacheRevision) return;
         const next = new Map<string, bigint>();
         for (const role of data) {
           next.set(role.id, toPermissionBits(role.permissions));
@@ -180,18 +180,18 @@ export function usePermissions(
         setRoleSnapshot({ key, roles: next });
       })
       .catch(() => {
-        if (!cancelled) {
+        if (!canceled) {
           setRoleSnapshot({ key: scopeKey, roles: new Map() });
         }
       })
       .finally(() => {
-        if (!cancelled) {
+        if (!canceled) {
           setIsLoading(false);
         }
       });
 
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [guildId, currentUserId, serverId, rolesRevision, scopeKey]);
 

@@ -55,7 +55,7 @@ describe('QUIC file upload response boundaries', () => {
     await expect(new QUICFileUploader().upload(peer.transport, token, file)).rejects.toThrow('ID mismatch');
   });
 
-  it('uploads normally with fragmented responses and progress acknowledgements', async () => {
+  it('uploads normally with fragmented responses and progress acknowledgments', async () => {
     const accept = control({ type: 'file_transfer_accept', transfer_id: token.transfer_id, chunk_size: 2, offset: 0 });
     const peer = transportWith([
       accept.slice(0, 3), accept.slice(3),

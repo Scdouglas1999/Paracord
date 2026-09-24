@@ -38,18 +38,18 @@ export async function openDeviceAccountVault(scope: AccountScope) {
           key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
           context.assertCurrent();
           const tx = db.transaction(STORE, 'readwrite', { durability: 'strict' });
-          const cancelled = () => { try { tx.abort(); } catch { /* Already committed. */ } };
-          context.signal.addEventListener('abort', cancelled, { once: true });
+          const canceled = () => { try { tx.abort(); } catch { /* Already committed. */ } };
+          context.signal.addEventListener('abort', canceled, { once: true });
           await new Promise<void>((resolve, reject) => {
-            const cleanup = () => context.signal.removeEventListener('abort', cancelled);
+            const cleanup = () => context.signal.removeEventListener('abort', canceled);
             tx.oncomplete = () => { cleanup(); resolve(); };
-            // A cancelled write reports the cancellation, not a storage fault:
+            // A canceled write reports the cancellation, not a storage fault:
             // callers tell an account's own history change from a broken device
             // apart by the error they are handed.
             tx.onabort = () => { cleanup(); reject(context.signal.aborted ? context.signal.reason : (tx.error ?? new Error('Device key storage was canceled.'))); };
             tx.onerror = () => {};
             try { tx.objectStore(STORE).put(key, accountScopeKey(scope)); }
-            catch (error) { cancelled(); cleanup(); reject(error); }
+            catch (error) { canceled(); cleanup(); reject(error); }
           });
         }
         context.assertCurrent();

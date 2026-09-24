@@ -7,7 +7,7 @@ import { isTauri } from './tauriEnv';
  * Resolve a stored avatar value (data URL or `/api/v1/users/{id}/avatar`) for <img src>.
  *
  * Absolute URLs are refused, not resolved. An avatar renders automatically for
- * every viewer of a message or member list, so honouring a remote URL another
+ * every viewer of a message or member list, so honoring a remote URL another
  * user chose would beacon each viewer's IP, user agent and viewing time to a
  * host that user controls, with no interaction. The server rejects a remote
  * `avatar_hash` on write; this is the matching client-side floor, so a value

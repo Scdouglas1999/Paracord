@@ -131,7 +131,7 @@ export function ScreenSharePickerModal({
   }, [filter, displays, windows, sources]);
 
   useEffect(() => {
-    let cancelled = false;
+    let canceled = false;
     setThumbnails({});
 
     const load = async () => {
@@ -142,19 +142,19 @@ export function ScreenSharePickerModal({
           batch.map(async (source) => {
             try {
               const thumbnail = await loadThumbnail(source.id);
-              if (cancelled) return;
+              if (canceled) return;
               setThumbnails((prev) => ({ ...prev, [source.id]: thumbnail }));
             } catch (error) {
               logVoiceDiagnostic('[picker] thumbnail load failed', {
                 sourceId: source.id,
                 error: error instanceof Error ? error.message : String(error),
               });
-              if (cancelled) return;
+              if (canceled) return;
               setThumbnails((prev) => ({ ...prev, [source.id]: null }));
             }
           })
         );
-        if (cancelled) {
+        if (canceled) {
           return;
         }
       }
@@ -162,7 +162,7 @@ export function ScreenSharePickerModal({
 
     void load();
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [sources, loadThumbnail]);
 
@@ -176,7 +176,7 @@ export function ScreenSharePickerModal({
     <Modal
       open
       onClose={onClose}
-      labelledBy="screen-share-picker-title"
+      labeledBy="screen-share-picker-title"
       describedBy="screen-share-picker-subtitle"
       panelClassName="w-[min(94vw,56rem)]"
     >

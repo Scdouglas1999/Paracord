@@ -25,20 +25,20 @@ export function MostActiveWidget({ guildId, onOpenLeaderboard }: MostActiveWidge
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
+    let canceled = false;
     setEntries(null);
     setError(null);
     economyApi
       .getLeaderboard(guildId, TOP, 'weekly')
       .then(({ data }) => {
-        if (cancelled) return;
+        if (canceled) return;
         setEntries(data.window === 'weekly' ? (data.entries ?? []) : []);
       })
       .catch((err) => {
-        if (!cancelled) setError(extractApiError(err));
+        if (!canceled) setError(extractApiError(err));
       });
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [guildId]);
 

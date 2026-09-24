@@ -8,7 +8,7 @@
 //! * **Blank names.** The guild bound is `2 <= name.len() <= 100` in *bytes*,
 //!   and the channel bound had no lower end at all. So `"      "` created a
 //!   space, `"\u{200B}\u{200B}\u{200B}"` created a space, and `""` created a
-//!   room — each of which renders in the sidebar as an unlabelled strip nobody
+//!   room — each of which renders in the sidebar as an unlabeled strip nobody
 //!   can name, search for, or tell apart from the next one. Renaming an
 //!   existing space or room to any of them worked too.
 //! * **Direction spoofing.** `"a\u{202E}gnp.exe"` was accepted and renders to

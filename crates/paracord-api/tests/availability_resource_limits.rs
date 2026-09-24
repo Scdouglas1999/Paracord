@@ -107,7 +107,7 @@ async fn streaming_and_upload_routes_are_exempt_from_the_request_timeout() -> an
 }
 
 #[tokio::test]
-async fn pool_acquire_gives_up_instead_of_queueing_for_sqlx_s_default() -> anyhow::Result<()> {
+async fn pool_acquire_gives_up_instead_of_queuing_for_sqlx_s_default() -> anyhow::Result<()> {
     // `ACTIVE_DB_ENGINE` is a process-global `OnceLock` set by the first pool
     // built in the binary. Creating a SQLite pool here while the other tests in
     // this file run against a provisioned PostgreSQL database would pin the

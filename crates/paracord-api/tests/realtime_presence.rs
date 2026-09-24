@@ -4,7 +4,7 @@
 //! That accounting used to live only in the WebSocket gateway, so every client
 //! on the SSE transport — which is what the app actually uses — stayed absent
 //! from `online_users` for its whole session and rendered as offline to
-//! everyone else. These tests pin the behaviour down at both ends: the
+//! everyone else. These tests pin the behavior down at both ends: the
 //! transition is published to the people entitled to see it, the READY snapshot
 //! carries whoever is already online, and the subject never receives its own
 //! connect event (which would eat a slot in its own resume window).

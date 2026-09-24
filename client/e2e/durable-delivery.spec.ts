@@ -96,7 +96,7 @@ test('simultaneous browser tabs serialize delivery under one account lock', asyn
   expect(new Set(nonces).size).toBe(4);
 });
 
-test('an acknowledgement storage failure retains the original request for idempotent replay', async ({ page }) => {
+test('an acknowledgment storage failure retains the original request for idempotent replay', async ({ page }) => {
   const bodies: string[] = [];
   await page.route('**/api/v1/channels/dm/messages', route => {
     const body = route.request().postData()!; bodies.push(body);
@@ -552,7 +552,7 @@ test('reload after discarding an in-flight send resumes resolution without resen
   const gate = new Promise<void>(resolve => { release = resolve; });
   await page.route('**/api/v1/channels/dm/messages', async route => {
     posts++; entered = true; await gate;
-    await route.abort('connectionreset').catch(() => {}); // Reload may already have cancelled this request.
+    await route.abort('connectionreset').catch(() => {}); // Reload may already have canceled this request.
   });
   await page.route('**/message-deliveries/*/resolve', route => {
     resolves++;
@@ -593,7 +593,7 @@ async function resolvedDelivery(page: Page, state: 'delivered' | 'cancelled' | '
   } }));
 }
 
-test('editing a delivery cancelled before creation replaces its nonce and keeps encrypted followers readable', async ({ page }) => {
+test('editing a delivery canceled before creation replaces its nonce and keeps encrypted followers readable', async ({ page }) => {
   const bodies: string[] = [];
   await resolvedDelivery(page, 'cancelled');
   await page.route('**/api/v1/channels/dm/messages', route => {
@@ -685,7 +685,7 @@ test(`a replacement edit resolves a ${outcome} PATCH before transmitting new cip
 });
 }
 
-test('editing during an in-flight POST persists immediately and wins over its acknowledgement', async ({ page }) => {
+test('editing during an in-flight POST persists immediately and wins over its acknowledgment', async ({ page }) => {
   let release!: () => void; let entered = false; let originalNonce = ''; const bodies: string[] = []; let patch = '';
   const gate = new Promise<void>(resolve => { release = resolve; });
   await page.route('**/api/v1/channels/dm/messages', async route => {

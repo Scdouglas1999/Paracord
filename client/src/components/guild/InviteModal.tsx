@@ -170,7 +170,7 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [copyError, setCopyError] = useState<string | null>(null);
   // True once the user has changed an option away from the currently-minted invite,
-  // signalling that a regenerate is needed to apply it.
+  // signaling that a regenerate is needed to apply it.
   const [optionsDirty, setOptionsDirty] = useState(false);
 
   /**
@@ -269,7 +269,7 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
     <Modal
       open
       onClose={onClose}
-      labelledBy="invite-modal-title"
+      labeledBy="invite-modal-title"
       describedBy="invite-modal-description"
       showCloseButton
       panelClassName="w-[min(92vw,32rem)]"

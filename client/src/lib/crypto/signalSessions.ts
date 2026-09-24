@@ -192,7 +192,7 @@ export function createSignalSessionCipher(
   }
 
   return {
-    /** An authoritative send acknowledgement also prevents old history selecting a former generation. */
+    /** An authoritative send acknowledgment also prevents old history selecting a former generation. */
     async acknowledgeSendingSession(privateKey: Uint8Array, peerPublicKey: string, session: SignalSessionReference, messageId: string) {
       assertSignalMessageId(messageId);
       const registry = await sessions(privateKey, peerPublicKey);

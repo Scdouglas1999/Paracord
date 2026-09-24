@@ -21,7 +21,7 @@ export function GuildEconomyPanel({ guildId }: GuildEconomyPanelProps) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
+    let canceled = false;
 
     const load = async () => {
       try {
@@ -29,15 +29,15 @@ export function GuildEconomyPanel({ guildId }: GuildEconomyPanelProps) {
           economyApi.getLeaderboard(guildId, 8),
           economyApi.getMyProgress(guildId),
         ]);
-        if (cancelled) return;
+        if (canceled) return;
         setEntries(leaderboard.data.entries || []);
         setProgress(mine.data);
         setError(null);
       } catch (err) {
-        if (cancelled) return;
+        if (canceled) return;
         setError(extractApiError(err));
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!canceled) setLoading(false);
       }
     };
 
@@ -54,7 +54,7 @@ export function GuildEconomyPanel({ guildId }: GuildEconomyPanelProps) {
     window.addEventListener('paracord:guild-member-xp-update', onXpUpdate);
 
     return () => {
-      cancelled = true;
+      canceled = true;
       window.clearInterval(interval);
       window.removeEventListener('paracord:guild-member-xp-update', onXpUpdate);
     };

@@ -35,26 +35,26 @@ export function EconomySettingsSection({ guildId, roles }: EconomySettingsSectio
   const assignableRoles = roles.filter((r) => r.id !== guildId);
 
   useEffect(() => {
-    let cancelled = false;
+    let canceled = false;
     setLoading(true);
     economyApi
       .getLevelRoles(guildId)
       .then(({ data }) => {
-        if (cancelled) return;
+        if (canceled) return;
         setMappings(data.mappings || []);
         if (assignableRoles.length > 0 && !newMappingRoleId) {
           setNewMappingRoleId(assignableRoles[0].id);
         }
       })
       .catch((err: unknown) => {
-        if (cancelled) return;
+        if (canceled) return;
         setError(extractApiError(err));
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!canceled) setLoading(false);
       });
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [guildId]);
@@ -104,7 +104,7 @@ export function EconomySettingsSection({ guildId, roles }: EconomySettingsSectio
   }
 
   const roleNameById = new Map(roles.map((r) => [r.id, r.name]));
-  // A role's colour is the member's own choice — data, not a theme token.
+  // A role's color is the member's own choice — data, not a theme token.
   const roleColorHex = (roleId: string) => {
     const role = roles.find((r) => r.id === roleId);
     if (!role?.color) return 'var(--text-muted)';

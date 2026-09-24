@@ -35,9 +35,9 @@ import { SidebarSearch } from './SidebarSearch';
  *     into an accordion: a building that is dark and not open draws its label
  *     and its window map — which still shows every room's light — and its rooms
  *     wait behind one click. Twenty dark buildings cost forty rows, not two
- *     hundred. (Virtualising was the alternative; an accordion keeps the roving
+ *     hundred. (Virtualizing was the alternative; an accordion keeps the roving
  *     tab order and the screen reader's row count honest, and a window map
- *     already summarises a folded building.)
+ *     already summarizes a folded building.)
  */
 
 /** Rows a building draws before the rest fold into the expander. */

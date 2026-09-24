@@ -47,7 +47,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
     try {
       localStorage.setItem('paracord:auth:session-seen', '1');
     } catch {
-      // A browser refusing storage keeps the old ask-and-see behaviour anyway.
+      // A browser refusing storage keeps the old ask-and-see behavior anyway.
     }
   });
 
@@ -723,7 +723,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
   // plate is its front door and opens the Lobby.
   const buildingsColumn = page.getByRole('listbox', { name: 'Servers and channels' });
   const building = buildingsColumn.getByRole('group', { name: literal(GUILD_NAME) });
-  // The lobby option is labelled "<building> lobby — <caption>", so the name to
+  // The lobby option is labeled "<building> lobby — <caption>", so the name to
   // match is the building's full name, not a prefix of it.
   await expect(
     building.getByRole('option', { name: literal(`${GUILD_NAME} lobby`) }),

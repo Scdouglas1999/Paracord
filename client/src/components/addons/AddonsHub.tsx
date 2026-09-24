@@ -42,18 +42,18 @@ function AddonCard({
 
   useEffect(() => {
     if (!loader) return;
-    let cancelled = false;
+    let canceled = false;
     setStatus({ state: 'loading' });
     loader.load(guildId).then(
       (enabled) => {
-        if (!cancelled) setStatus({ state: 'ready', enabled });
+        if (!canceled) setStatus({ state: 'ready', enabled });
       },
       (err: unknown) => {
-        if (!cancelled) setStatus({ state: 'error', message: extractApiError(err) });
+        if (!canceled) setStatus({ state: 'error', message: extractApiError(err) });
       },
     );
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [guildId, loader]);
 

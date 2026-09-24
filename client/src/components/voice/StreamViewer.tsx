@@ -63,9 +63,9 @@ function setUnderlayHole(open: boolean) {
   underlayHoleCount = Math.max(0, underlayHoleCount + (open ? 1 : -1));
   document.documentElement.toggleAttribute('data-native-underlay', underlayHoleCount > 0);
   // The moment the hole opens, the GTK toplevel under the webview becomes
-  // visible around the tile — so the shell is told the ground colour again
+  // visible around the tile — so the shell is told the ground color again
   // here as well as on every theme change, and a hole never opens onto a
-  // colour the shell was told before the last restyle.
+  // color the shell was told before the last restyle.
   if (!wasOpen && underlayHoleCount > 0) void reportGroundColor();
 }
 

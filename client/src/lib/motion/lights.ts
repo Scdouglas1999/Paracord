@@ -62,7 +62,7 @@ function scrim(): HTMLElement | null {
   return layer;
 }
 
-/** The street's own colour, right now — read, never invented (§0). */
+/** The street's own color, right now — read, never invented (§0). */
 function ground(): string {
   const value = rawToken('--bg-base');
   return value || 'transparent';
@@ -145,7 +145,7 @@ export interface LightsChangeOptions {
  *     snapshot of the old building and crosses it with the new one, so what you
  *     see is genuinely the old theme fading into the new one.
  *   - **The crossfade**, everywhere else: there is no snapshot to cross with,
- *     so the lights go down to the street's own colour and come back up in the
+ *     so the lights go down to the street's own color and come back up in the
  *     new one. A dip, over the same 400ms, on the same two curves.
  *
  * Under reduced motion the change simply happens. §5.3: "everything lands
@@ -206,7 +206,7 @@ export async function changeLights(
 
   apply();
   await waitApplied(options.applied);
-  // The ground is the new theme's now, so the dip does not end on a colour that
+  // The ground is the new theme's now, so the dip does not end on a color that
   // is no longer anywhere on screen.
   layer.style.background = ground();
 

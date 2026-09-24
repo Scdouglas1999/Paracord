@@ -18,7 +18,7 @@ import { ms } from './tokens';
  * One sequence, played over whatever is on screen when presence arrives:
  *
  *   plates settle from 8px below, 120ms apart, as the street first renders
- *   → each lit window blooms, `--stagger-light` after its neighbour
+ *   → each lit window blooms, `--stagger-light` after its neighbor
  *   → a plate's lamp fades in once its own first window is lit
  *   → a person's rim catches 120ms after the room they are in
  *
@@ -83,7 +83,7 @@ export interface LightsOnSequence {
 const NOTHING: LightsOnSequence = { animations: [], windows: 0, stepMs: 0, endsAtMs: 0 };
 
 /**
- * The gap between neighbouring lights, compressed so the WHOLE sequence still
+ * The gap between neighboring lights, compressed so the WHOLE sequence still
  * lands inside the budget on a large map.
  *
  * The last thing to move is a rim: the street's settle, then its room's window

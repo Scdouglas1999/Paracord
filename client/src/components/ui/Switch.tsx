@@ -8,7 +8,7 @@ export interface SwitchProps
   /** Accessible name. Required unless the switch is wired to a visible label. */
   label?: string;
   /** id of the element that names this switch (a ToggleRow's label). */
-  labelledBy?: string;
+  labeledBy?: string;
   size?: 'sm' | 'md';
 }
 
@@ -23,7 +23,7 @@ export interface SwitchProps
  * only the visual half of it.
  */
 export const Switch = React.forwardRef<HTMLButtonElement, SwitchProps>(function Switch(
-  { checked, onChange, label, labelledBy, size = 'md', className, disabled, ...props },
+  { checked, onChange, label, labeledBy, size = 'md', className, disabled, ...props },
   ref,
 ) {
   const track = size === 'sm' ? 'h-[22px] w-10' : 'h-6 w-11';
@@ -43,8 +43,8 @@ export const Switch = React.forwardRef<HTMLButtonElement, SwitchProps>(function 
       type="button"
       role="switch"
       aria-checked={checked}
-      aria-label={labelledBy ? undefined : label}
-      aria-labelledby={labelledBy}
+      aria-label={labeledBy ? undefined : label}
+      aria-labelledby={labeledBy}
       disabled={disabled}
       onClick={() => onChange(!checked)}
       className={cn(
@@ -92,7 +92,7 @@ export interface ToggleRowProps {
 }
 
 /**
- * ToggleRow — a labelled boolean: text on the left, {@link Switch} on the
+ * ToggleRow — a labeled boolean: text on the left, {@link Switch} on the
  * right. The whole row's text names the switch, so the name a screen reader
  * announces is the sentence a sighted reader sees.
  */
@@ -122,7 +122,7 @@ export function ToggleRow({
         checked={checked}
         onChange={onChange}
         disabled={disabled}
-        labelledBy={ariaLabel ? undefined : labelId}
+        labeledBy={ariaLabel ? undefined : labelId}
         label={ariaLabel}
       />
     </div>

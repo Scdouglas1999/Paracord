@@ -17,7 +17,7 @@
  *   - Web Animations keyframes inside `.animate(…)` calls.
  *
  * `transition: all` (and Tailwind's `transition-all`) counts, because `all`
- * includes every one of them. Colour transitions are fine.
+ * includes every one of them. Color transitions are fine.
  *
  * It also holds the one reduced-motion switch (§5.3): no `prefers-reduced-motion`
  * media query and no Tailwind `motion-safe:`/`motion-reduce:` variant anywhere —

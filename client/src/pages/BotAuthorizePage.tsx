@@ -45,11 +45,11 @@ interface ScopeDef {
 }
 
 /**
- * Human-readable scope catalogue for the OAuth consent screen. Order within a
+ * Human-readable scope catalog for the OAuth consent screen. Order within a
  * risk tier is meaningful (most consequential first); the UI groups these by
  * `risk` so a user sees dangerous grants before routine ones.
  */
-const SCOPE_CATALOGUE: ScopeDef[] = [
+const SCOPE_CATALOG: ScopeDef[] = [
   { flag: Permissions.ADMINISTRATOR, label: 'Administrator', description: 'Full, unrestricted control over this server — this grant includes every other permission.', risk: 'high', icon: ShieldAlert },
   { flag: Permissions.BAN_MEMBERS, label: 'Ban members', description: 'Permanently remove members and block them from rejoining.', risk: 'high', icon: Ban },
   { flag: Permissions.KICK_MEMBERS, label: 'Kick members', description: 'Remove members from the server.', risk: 'high', icon: UserX },
@@ -89,7 +89,7 @@ function decodeScopes(permissions: string): ScopeDef[] {
   } catch {
     bits = 0n;
   }
-  return SCOPE_CATALOGUE.filter((scope) => (bits & scope.flag) === scope.flag);
+  return SCOPE_CATALOG.filter((scope) => (bits & scope.flag) === scope.flag);
 }
 
 /**
@@ -200,7 +200,7 @@ export function BotAuthorizePage() {
       return;
     }
 
-    let cancelled = false;
+    let canceled = false;
     setLoading(true);
     setError(null);
 
@@ -210,7 +210,7 @@ export function BotAuthorizePage() {
       botStoreApi.listReviews(applicationId).catch(() => null),
     ])
       .then(([appRes, guildsRes, reviewsRes]) => {
-        if (cancelled) return;
+        if (canceled) return;
         setApplication(appRes.data);
         setGuilds(guildsRes.data);
         if (reviewsRes?.data) {
@@ -223,15 +223,15 @@ export function BotAuthorizePage() {
         }
       })
       .catch((err: unknown) => {
-        if (cancelled) return;
+        if (canceled) return;
         setError(botAuthorizeError('Failed to load authorization details', err));
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!canceled) setLoading(false);
       });
 
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [applicationId, requestedGuildId]);
 

@@ -3,7 +3,7 @@
  *
  * People who have the app open are **online**: their avatar carries a rim of
  * warm light. The light is the styling; the label says "Online", plainly. Away or offline avatars are matte. There are no
- * status-colour dots anywhere in the product — the old `--color-status-*`
+ * status-color dots anywhere in the product — the old `--color-status-*`
  * tokens are deleted.
  *
  *   online   → lit rim

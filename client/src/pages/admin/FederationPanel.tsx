@@ -142,17 +142,17 @@ export function FederationPanel() {
   };
 
   useEffect(() => {
-    let cancelled = false;
+    let canceled = false;
     // Ask the deployment whether federation is on before knocking on endpoints
     // that answer 400 when it is off. If health itself is unreachable, fall
     // through and let the calls decide, so a health outage never hides the
     // panel from a server that is genuinely federating.
     adminApi
       .getHealth()
-      .then(({ data }) => (cancelled ? null : data.network.federation_enabled))
-      .catch(() => (cancelled ? null : true))
+      .then(({ data }) => (canceled ? null : data.network.federation_enabled))
+      .catch(() => (canceled ? null : true))
       .then((enabled) => {
-        if (cancelled || enabled === null) return;
+        if (canceled || enabled === null) return;
         setFederationEnabled(enabled);
         if (!enabled) {
           setLoading(false);
@@ -163,7 +163,7 @@ export function FederationPanel() {
         fetchModeration();
       });
     return () => {
-      cancelled = true;
+      canceled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

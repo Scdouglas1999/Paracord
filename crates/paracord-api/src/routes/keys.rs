@@ -44,7 +44,7 @@ pub struct UploadKeysRequest {
     /// Legacy clients may omit both; new clients persist both before sending.
     pub request_id: Option<String>,
     pub expected_identity_key: Option<String>,
-    /// Re-enrolment by a device that holds the account's identity private key
+    /// Re-enrollment by a device that holds the account's identity private key
     /// but none of the private halves of the published bundle (a device
     /// restored from the recovery phrase). The whole published inventory is
     /// discarded and replaced by this request, so the account stops handing

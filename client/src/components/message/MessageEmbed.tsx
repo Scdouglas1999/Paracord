@@ -22,7 +22,7 @@ export function MessageEmbedCard({ embed }: MessageEmbedCardProps) {
   //
   // An embed that *claims* a destination the client refuses to open is a
   // different thing, and still renders nothing: a card whose link was quietly
-  // removed invites the click it can no longer honour.
+  // removed invites the click it can no longer honor.
   const claimsDestination = Boolean(embed.url);
   const hasBody = Boolean(embed.site_name || embed.title || embed.description || imageUrl);
   if (!url && (claimsDestination || !hasBody)) return null;

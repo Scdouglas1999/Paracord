@@ -198,9 +198,9 @@ export function LayoutTour() {
   useEffect(() => {
     if (shellDone || active) return undefined;
     let timer = 0;
-    let cancelled = false;
+    let canceled = false;
     const attempt = () => {
-      if (cancelled) return;
+      if (canceled) return;
       if (!modalIsOpen()) {
         const idx = SHELL_STEPS.findIndex((s) => findAnchor(s.selector));
         if (idx >= 0) {
@@ -214,7 +214,7 @@ export function LayoutTour() {
     };
     const raf = requestAnimationFrame(attempt);
     return () => {
-      cancelled = true;
+      canceled = true;
       cancelAnimationFrame(raf);
       window.clearTimeout(timer);
     };
@@ -230,9 +230,9 @@ export function LayoutTour() {
     if (guildDone || active || !isGuildHome) return undefined;
     let timer = 0;
     let tries = 0;
-    let cancelled = false;
+    let canceled = false;
     const attempt = () => {
-      if (cancelled) return;
+      if (canceled) return;
       // "Waits for the shell tour" means waits for it to be FINISHED — or for
       // it to be unable to run at all. On a phone the sidebar it anchors to is
       // a drawer that is not on screen, so a strict wait would hold the Lobby's
@@ -252,7 +252,7 @@ export function LayoutTour() {
     };
     const raf = requestAnimationFrame(attempt);
     return () => {
-      cancelled = true;
+      canceled = true;
       cancelAnimationFrame(raf);
       window.clearTimeout(timer);
     };

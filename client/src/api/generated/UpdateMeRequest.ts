@@ -4,7 +4,7 @@
 export interface UpdateMeRequest {
   /**
    * Profile accent as `0xRRGGBB`. `null` clears it. Omit the field to leave
-   * the stored colour unchanged.
+   * the stored color unchanged.
    */
   accent_color?: number | null;
   /**

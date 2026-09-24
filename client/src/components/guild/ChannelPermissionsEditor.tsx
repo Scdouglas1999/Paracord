@@ -389,8 +389,8 @@ export function ChannelPermissionsEditor({
     return role?.name ?? `Role ${targetId.slice(0, 6)}`;
   };
 
-  // A role's own colour is data, not design (spec §1 exception): the hex comes
-  // from the role, and a role with no colour falls back to a text token.
+  // A role's own color is data, not design (spec §1 exception): the hex comes
+  // from the role, and a role with no color falls back to a text token.
   const getRoleColor = (targetId: string) => {
     const role = roles.find((r) => r.id === targetId);
     return role?.color ? `#${role.color.toString(16).padStart(6, '0')}` : 'var(--text-faint)';
@@ -404,7 +404,7 @@ export function ChannelPermissionsEditor({
     <Modal
       open
       onClose={onClose}
-      labelledBy="channel-permissions-title"
+      labeledBy="channel-permissions-title"
       panelClassName="w-full max-w-3xl"
     >
       <div>

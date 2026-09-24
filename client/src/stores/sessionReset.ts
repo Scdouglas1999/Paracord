@@ -13,7 +13,7 @@
  *
  * Instead each store registers its own reset at module scope, and `authStore`
  * calls whatever has registered. A store that was never imported has no cached
- * state to clear, so "not registered" is exactly the right behaviour.
+ * state to clear, so "not registered" is exactly the right behavior.
  */
 
 type SessionReset = () => void | Promise<void>;

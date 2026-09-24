@@ -243,9 +243,9 @@ pub struct RosterTeam {
     pub name: String,
     pub short_name: String,
     pub logo: String,
-    /// Primary team colour as lowercase `rrggbb`, or null when the feed has none.
+    /// Primary team color as lowercase `rrggbb`, or null when the feed has none.
     pub color: Option<String>,
-    /// Secondary team colour as lowercase `rrggbb`, or null when the feed has none.
+    /// Secondary team color as lowercase `rrggbb`, or null when the feed has none.
     pub alt_color: Option<String>,
 }
 
@@ -262,9 +262,9 @@ pub struct Team {
     pub name: String,
     pub short_name: String,
     pub logo: String,
-    /// Primary team colour as lowercase `rrggbb`, or null when the feed has none.
+    /// Primary team color as lowercase `rrggbb`, or null when the feed has none.
     pub color: Option<String>,
-    /// Secondary team colour as lowercase `rrggbb`, or null when the feed has none.
+    /// Secondary team color as lowercase `rrggbb`, or null when the feed has none.
     pub alt_color: Option<String>,
     pub score: Option<i32>,
     pub record: Option<String>,

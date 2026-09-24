@@ -199,7 +199,7 @@ export function ServerHubSettings({ guild, channels, roles = [], onUpdate, setEr
                                                 className="h-3 w-3 shrink-0 rounded-[var(--radius-full)]"
                                                 aria-hidden
                                                 style={{
-                                                    // A role's colour is the member's own choice — data.
+                                                    // A role's color is the member's own choice — data.
                                                     backgroundColor: role.color
                                                         ? `#${role.color.toString(16).padStart(6, '0')}`
                                                         : 'var(--text-muted)',

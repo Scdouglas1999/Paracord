@@ -1,6 +1,6 @@
 /**
  * Pure state-transition helpers for the voice store's periodic timers
- * (local mic analyser and uplink monitor).
+ * (local mic analyzer and uplink monitor).
  *
  * Decomposed out of voiceStore.ts so the smoothing, hysteresis, and stall
  * classification can be unit tested without live LiveKit tracks or intervals.

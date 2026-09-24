@@ -255,7 +255,7 @@ def run_smoke(args: argparse.Namespace) -> None:
                 # Both of the connections a real client holds open, attached at
                 # once: this is the state in which the process used to hang.
                 stream, stream_lines = open_realtime_stream(base_url, token, args.timeout)
-                signalled_at = time.time()
+                signaled_at = time.time()
                 send_interrupt(proc)
                 # Read the notice off each live connection before the process is
                 # gone: it has to arrive ahead of the teardown, not after it.
@@ -263,7 +263,7 @@ def run_smoke(args: argparse.Namespace) -> None:
                 wait_for_stream_restart_notice(stream_lines, args.timeout)
                 try:
                     proc.wait(timeout=args.timeout)
-                    exit_seconds = time.time() - signalled_at
+                    exit_seconds = time.time() - signaled_at
                 except subprocess.TimeoutExpired:
                     forced = True
                     proc.kill()

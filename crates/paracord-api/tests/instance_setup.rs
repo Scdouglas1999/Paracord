@@ -3,7 +3,7 @@
 //! Every test here runs against SQLite by default and against a real
 //! PostgreSQL server when `PARACORD_TEST_POSTGRES_URL` is set, because the
 //! setup row, the seal migration and the claim's rollback all touch engine
-//! behaviour (`rows_affected` on a conditional UPDATE, `CASE`-typed inserts,
+//! behavior (`rows_affected` on a conditional UPDATE, `CASE`-typed inserts,
 //! cascading deletes) that in-memory SQLite cannot prove on its own.
 
 mod common;

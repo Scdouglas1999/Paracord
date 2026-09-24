@@ -22,24 +22,24 @@ function useDeferredSource(image: LightboxImage | undefined): { src: string | nu
   useEffect(() => {
     const load = image?.load;
     if (!image || !load) return;
-    let cancelled = false;
+    let canceled = false;
     let objectUrl: string | null = null;
     load().then(
       (resolved) => {
         const safe = resolved.startsWith('blob:') ? resolved : safeClientResourceUrl(resolved);
         if (resolved.startsWith('blob:')) objectUrl = resolved;
-        if (cancelled) {
+        if (canceled) {
           if (objectUrl) URL.revokeObjectURL(objectUrl);
           return;
         }
         setState({ image, src: safe, error: safe ? null : 'the file address was refused' });
       },
       (err: unknown) => {
-        if (!cancelled) setState({ image, src: null, error: extractApiError(err) });
+        if (!canceled) setState({ image, src: null, error: extractApiError(err) });
       },
     );
     return () => {
-      cancelled = true;
+      canceled = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [image]);

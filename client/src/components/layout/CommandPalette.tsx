@@ -368,7 +368,7 @@ export function CommandPalette() {
       panelRef={panelRef}
       manageFocus={false}
       onKeyDown={handleKeyDown}
-      labelledBy="command-palette-title"
+      labeledBy="command-palette-title"
       placement="top"
       size="md"
     >

@@ -7,7 +7,7 @@ export const MAX_HISTORY_MUTATIONS = 10_000;
 
 /**
  * One history request owns its journal. It lives only until the bounded HTTP
- * request completes or is cancelled; repeated edits coalesce by message ID.
+ * request completes or is canceled; repeated edits coalesce by message ID.
  * Never retain a global, unbounded list of gateway events.
  */
 export class HistoryRequest {

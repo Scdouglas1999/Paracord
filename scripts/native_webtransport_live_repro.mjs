@@ -230,9 +230,9 @@ async function main() {
           let expected;
           while (expected === undefined || buffered.length < 4 + expected) {
             const { done, value } = await beforeDeadline(reader.read());
-            if (done) throw new Error('Connection closed before authentication acknowledgement');
+            if (done) throw new Error('Connection closed before authentication acknowledgment');
             if (buffered.length + value.length > 4 + 256 * 1024) {
-              throw new Error('Authentication acknowledgement exceeds control frame limit');
+              throw new Error('Authentication acknowledgment exceeds control frame limit');
             }
             const combined = new Uint8Array(buffered.length + value.length);
             combined.set(buffered);
@@ -241,16 +241,16 @@ async function main() {
             if (expected === undefined && buffered.length >= 4) {
               expected = new DataView(buffered.buffer).getUint32(0, false);
               if (expected === 0 || expected > 256 * 1024) {
-                throw new Error('Invalid authentication acknowledgement frame size');
+                throw new Error('Invalid authentication acknowledgment frame size');
               }
             }
           }
-          const acknowledgement = JSON.parse(new TextDecoder().decode(buffered.subarray(4, 4 + expected)));
-          if (acknowledgement?.type !== 'pong') {
+          const acknowledgment = JSON.parse(new TextDecoder().decode(buffered.subarray(4, 4 + expected)));
+          if (acknowledgment?.type !== 'pong') {
             throw new Error('Server did not acknowledge authenticated transport');
           }
           result.steps.push('authenticated');
-          return { ok: true, ...result, authResponse: acknowledgement.type };
+          return { ok: true, ...result, authResponse: acknowledgment.type };
         } catch (err) {
           return {
             ok: false,

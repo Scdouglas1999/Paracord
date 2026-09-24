@@ -19,7 +19,7 @@ pub const LEGACY_DEFAULT_VOICE_CHANNEL_NAME: &str = "General";
 /// The column is `TEXT` on purpose — it legitimately holds an inline `data:`
 /// URL as well as a hash — but it was not bounded at all: whatever the caller
 /// sent was stored verbatim and then broadcast in `GUILD_UPDATE` to every
-/// session in the guild, each writer materialising its own copy. One 2 MiB
+/// session in the guild, each writer materializing its own copy. One 2 MiB
 /// PATCH therefore cost ~2 MiB of transient egress allocation *per connected
 /// session*. 256 KiB of base64 is roughly 192 KiB of image, comfortably more
 /// than any space icon needs and small enough that the fan-out copy is not a

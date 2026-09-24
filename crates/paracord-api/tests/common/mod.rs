@@ -224,7 +224,7 @@ async fn provision_postgres_database(
             // name leaked a ~13 MB template per binary per run (hundreds of
             // them filled the shared server's disk); a fixed name keyed by the
             // migration contents lets processes share it, and the advisory lock
-            // serialises the create-and-migrate step so a second process can
+            // serializes the create-and-migrate step so a second process can
             // never clone a half-migrated template.
             let key = postgres_template_key()?;
             let name = format!("pctpl_{key}");
@@ -310,7 +310,7 @@ async fn provision_postgres_database(
 pub async fn build_test_app(options: TestAppOptions) -> anyhow::Result<TestApp> {
     let database_dir = tempfile::tempdir()?;
     // An explicit url in the options always wins (the PostgreSQL-specific
-    // smokes pass one directly). Otherwise honour the suite-wide PostgreSQL
+    // smokes pass one directly). Otherwise honor the suite-wide PostgreSQL
     // override, and fall back to in-memory SQLite.
     let mut owned_postgres = None;
     let (database_url, migrated_by_template) = match options.database_url.clone() {

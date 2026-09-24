@@ -312,7 +312,7 @@ async function recipeKeyframes(page: Page, recipe: string, budgetMs = 900): Prom
  *   - `zeroOnEngine` zeroes it on the first frame the ENGINE moved on instead.
  *     WP9b's and WP9d-hard's moments begin with a round trip to the gateway (an
  *     outage has to outlast its 600ms grace on top of that), and a strip
- *     labelled from the request would be mostly a building sitting still.
+ *     labeled from the request would be mostly a building sitting still.
  */
 async function captureStrip(
   page: Page,
@@ -326,7 +326,7 @@ async function captureStrip(
     /**
      * JPEG for the short moments: PNG encoding of a 1280x900 frame costs more
      * than a frame of a 120ms exit, and the strip then has two pictures in it.
-     * The strips are for reading motion, not for colour proofing.
+     * The strips are for reading motion, not for color proofing.
      */
     format?: 'png' | 'jpeg';
     /**
@@ -1241,7 +1241,7 @@ test.describe('the motion gate (§5.3)', () => {
       // animation has finished — it changed inside the transition's update.
       await expect(page).toHaveURL(new RegExp(`/channels/${MOTION_VOICE_CHANNEL_ID}$`));
       expect(await page.evaluate(() => (window as unknown as { __vtCalls: number }).__vtCalls)).toBe(0);
-      // The card travelled, the rest of the Lobby receded, the chrome rose.
+      // The card traveled, the rest of the Lobby receded, the chrome rose.
       expectRecipes('walk-in (flip)', sample, ['shared', 'recede', 'chrome']);
 
       // The app's own cost, measured now rather than remembered, and the engine
@@ -1369,7 +1369,7 @@ test.describe('the motion gate (§5.3)', () => {
    * A CDP screencast is the only way to get real frames out of a 500ms moment.
    * Each strip's clock is zeroed on the frame the ENGINE started moving, not on
    * the action — two of these moments begin with a round trip to the gateway,
-   * and a strip labelled from the click would be mostly waiting.
+   * and a strip labeled from the click would be mostly waiting.
    *
    *   PARACORD_E2E_MOTION=1 PARACORD_E2E_MOTION_FRAMES=1 npx playwright test
    */
@@ -1529,7 +1529,7 @@ test.describe('the motion gate (§5.3)', () => {
     expect(restAlphas).toHaveLength(loudAlphas.length);
     expect(loudAlphas.length, 'the ring lost a layer').toBeGreaterThan(1);
     for (let i = 0; i < restAlphas.length; i += 1) {
-      // 2dp throughout: a shadow's alpha is quantised to 8 bits.
+      // 2dp throughout: a shadow's alpha is quantized to 8 bits.
       expect(loudAlphas[i], `ring layer ${i} did not take the voice`).toBeGreaterThanOrEqual(restAlphas[i]);
       expect(loudAlphas[i]).toBeCloseTo(Math.min(1, restAlphas[i] * 1.15), 2);
     }
@@ -1544,7 +1544,7 @@ test.describe('the motion gate (§5.3)', () => {
 
     // 3. And it must not GROW. The loop is written to allocate nothing per
     //    frame — the elements are collected when the engine reports, and the
-    //    level is quantised into a table of strings built once — so 300 frames
+    //    level is quantized into a table of strings built once — so 300 frames
     //    of somebody talking must not move the heap.
     const growth = await page.evaluate(async () => {
       const memory = (performance as Performance & { memory?: { usedJSHeapSize: number } }).memory;
@@ -1682,7 +1682,7 @@ test.describe('the motion gate (§5.3)', () => {
     expectRecipes('relight', coming, ['outage-relight', 'bloom']);
     expect(
       [...recipesIn(coming)].filter((name) => name === 'data-motion-recipe:settle'),
-      'the plates travelled for a reconnect',
+      'the plates traveled for a reconnect',
     ).toEqual([]);
     expectBudget('outage (the lights come back)', coming);
   });
@@ -1905,7 +1905,7 @@ test.describe('the motion gate (§5.3)', () => {
      * WP9b's convention — zeroed on the first frame the ENGINE moved on — and
      * the outage needs it more than anything measured there: a gateway has to
      * be away for the whole 600ms grace, on top of however long the client
-     * takes to notice, so a strip labelled from the request would be most of a
+     * takes to notice, so a strip labeled from the request would be most of a
      * second of a building sitting still.
      */
     const capture = (

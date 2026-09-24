@@ -12,7 +12,7 @@ function setup() {
 }
 
 describe('durable edit transport', () => {
-  it('retries the identical committed JSON and accepts an acknowledgement carrying a newer edit', async () => {
+  it('retries the identical committed JSON and accepts an acknowledgment carrying a newer edit', async () => {
     const f = setup();
     f.request.mockRejectedValueOnce(new Error('Lost response')).mockResolvedValueOnce({ status: 200, data: { ...f.message, edit_replayed: true, content: 'Newer version' } });
     await expect(f.send(prepared, f.signal)).rejects.toThrow('Lost response');
@@ -26,7 +26,7 @@ describe('durable edit transport', () => {
   it.each([
     { id: 'wrong' }, { channel_id: 'wrong' }, { author: { id: 'other' } },
     { edit_nonce: 'wrong' }, { edit_replayed: undefined }, { edit_replayed: 'true' },
-  ])('rejects a mismatched acknowledgement: %j', async changed => {
+  ])('rejects a mismatched acknowledgment: %j', async changed => {
     const f = setup(); f.request.mockResolvedValue({ status: 200, data: { ...f.message, ...changed } });
     await expect(f.send(prepared, f.signal)).rejects.toThrow('did not acknowledge');
   });

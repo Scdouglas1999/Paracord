@@ -48,7 +48,7 @@ function shotPath(name: string): string {
 }
 
 const MEDIA_LAUNCH_ARGS = [
-  // A deterministic 440 Hz tone and a moving colour pattern, auto-granted, so
+  // A deterministic 440 Hz tone and a moving color pattern, auto-granted, so
   // neither the microphone nor the camera step depends on the runner having
   // hardware.
   '--use-fake-device-for-media-stream',
@@ -276,10 +276,10 @@ async function waitForDecodedVideo(
 }
 
 /**
- * How much of a tile is actually lit, and how many colours are in it.
+ * How much of a tile is actually lit, and how many colors are in it.
  *
  * A tile painting somebody's camera is a picture; a tile that is not is the
- * well colour with an avatar disc on it. Screenshotting the tile and measuring
+ * well color with an avatar disc on it. Screenshotting the tile and measuring
  * what the compositor produced is the only readback that works here: the
  * renderer's WebGL context is created with `preserveDrawingBuffer: false`, so
  * reading the canvas from inside the page gives a cleared buffer.
@@ -290,7 +290,7 @@ async function waitForDecodedVideo(
 async function tileBrightness(
   page: Page,
   locator: Locator,
-): Promise<{ litFraction: number; distinctColours: number }> {
+): Promise<{ litFraction: number; distinctColors: number }> {
   const png = (await locator.screenshot()).toString('base64');
   return page.evaluate(async (base64: string) => {
     // Straight to a Blob: the app serves itself under a strict CSP, so a
@@ -307,16 +307,16 @@ async function tileBrightness(
     context.drawImage(bitmap, 0, 0);
     const { data } = context.getImageData(0, 0, canvas.width, canvas.height);
     const pixels = canvas.width * canvas.height;
-    const colours = new Set<number>();
+    const colors = new Set<number>();
     let lit = 0;
     for (let index = 0; index < pixels; index += 1) {
       const offset = index * 4;
       const [r, g, b] = [data[offset], data[offset + 1], data[offset + 2]];
       // Rec. 601 luma, near enough for "is there a picture here".
       if (0.299 * r + 0.587 * g + 0.114 * b > 24) lit += 1;
-      colours.add(((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3));
+      colors.add(((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3));
     }
-    return { litFraction: pixels === 0 ? 0 : lit / pixels, distinctColours: colours.size };
+    return { litFraction: pixels === 0 ? 0 : lit / pixels, distinctColors: colors.size };
   }, png);
 }
 
@@ -995,7 +995,7 @@ test('two browsers in one room see each other — one on camera, one sharing a s
     // 3. And it reached the screen. The guest's tile for the host stops
     //    reporting a camera that is off — that flag is set by the first frame
     //    the renderer actually paints for *that participant* — and the tile is
-    //    a picture rather than the well colour with initials on it.
+    //    a picture rather than the well color with initials on it.
     const hostTileOnGuest = guest.locator(`[data-motion-speaking="${hostAccount.userId}"]`).first();
     await expect(hostTileOnGuest).toBeVisible({ timeout: 30_000 });
     await expect(
@@ -1010,7 +1010,7 @@ test('two browsers in one room see each other — one on camera, one sharing a s
       .poll(
         async () => {
           cameraTile = await tileBrightness(guest, hostTileOnGuest);
-          return cameraTile.litFraction > 0.2 && cameraTile.distinctColours > 8;
+          return cameraTile.litFraction > 0.2 && cameraTile.distinctColors > 8;
         },
         {
           message: `the host's camera tile never showed a picture`,
@@ -1056,9 +1056,9 @@ test('two browsers in one room see each other — one on camera, one sharing a s
     const shareTile = await tileBrightness(host, shareCanvas);
     // A headless tab capture of the app's own dark UI is very nearly black, so
     // brightness proves nothing here; what proves there is a picture is that it
-    // is a *picture*. A canvas nobody painted is one colour.
+    // is a *picture*. A canvas nobody painted is one color.
     expect(
-      shareTile.distinctColours,
+      shareTile.distinctColors,
       `the guest's share canvas is blank (${JSON.stringify(shareTile)})`,
     ).toBeGreaterThan(32);
 

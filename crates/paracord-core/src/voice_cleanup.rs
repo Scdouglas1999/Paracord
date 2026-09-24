@@ -35,7 +35,7 @@ use crate::AppState;
 /// gone — power cut, cable pulled — leaves its QUIC connection to expire on the
 /// transport's ~30 s idle timeout instead, so this budget has to outlast that
 /// with room to spare. An account still publishing when it runs out is somebody
-/// genuinely on a call whose signalling connection blipped, and their claim
+/// genuinely on a call whose signaling connection blipped, and their claim
 /// stands.
 const RELAY_RETIRE_TIMEOUT: Duration = Duration::from_secs(75);
 /// How often that wait re-reads the relay. Short enough that the ordinary case
@@ -65,7 +65,7 @@ fn relay_holds_session(_state: &AppState, _user_id: i64, _session_id: &str) -> b
 /// Retire `user_id`'s voice state if the native media relay has let their
 /// call go.
 ///
-/// Call this whenever a client's signalling connection drops. It is safe to
+/// Call this whenever a client's signaling connection drops. It is safe to
 /// call for an account that is not in a call, that reconnected, or that is
 /// happily mid-call: the relay decides, and every write is fenced on the media
 /// receipt the claim was made under.
@@ -76,7 +76,7 @@ pub async fn release_orphaned_native_voice_state(state: &AppState, user_id: i64)
     if state.native_media.is_none() {
         return false;
     }
-    // A signalling connection that reconnects does so repeatedly, and each drop
+    // A signaling connection that reconnects does so repeatedly, and each drop
     // asks this question about the same account. One watcher per account is
     // enough: a second would only wait on the same relay entry.
     if !in_flight().insert(user_id) {

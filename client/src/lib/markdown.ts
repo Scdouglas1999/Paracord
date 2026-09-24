@@ -374,7 +374,7 @@ function renderInline(text: string, guildId?: string, mentionMap?: Map<string, s
           {
             key: i,
             style: {
-              // §1.2: an @mention is the action colour, not the v1 blurple.
+              // §1.2: an @mention is the action color, not the v1 blurple.
               backgroundColor: 'var(--accent-tint-strong)',
               color: 'var(--accent-primary)',
               borderRadius: 'var(--radius-window)',

@@ -5,7 +5,7 @@ export type KbdProps = React.HTMLAttributes<HTMLElement>;
 
 /**
  * Kbd — a keyboard hint ("⌘K", "Esc"). Meta face (JetBrains Mono, spec §2) on a
- * quiet plate-coloured pill so it reads as a key cap inside a well.
+ * quiet plate-colored pill so it reads as a key cap inside a well.
  */
 export const Kbd = React.forwardRef<HTMLElement, KbdProps>(function Kbd(
   { className, children, ...props },

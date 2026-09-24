@@ -122,7 +122,7 @@ export function SettingsPanel() {
               Who can create an account
             </span>
             <ChoiceCards
-              labelledBy={registrationLabelId}
+              labeledBy={registrationLabelId}
               options={REGISTRATION_CHOICES}
               value={settings.registration_mode === 'open' ? 'open' : 'invite_only'}
               onChange={(next) => update('registration_mode', next)}

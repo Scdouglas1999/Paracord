@@ -44,13 +44,13 @@ const EVENT_AFTER_MS = 260;
 export const BURST_WINDOW_MS = 300;
 /**
  * §5.3's ceiling for a staggered sequence. A burst is staggered like any other
- * run of neighbouring lights, and compressed rather than truncated when a whole
+ * run of neighboring lights, and compressed rather than truncated when a whole
  * room's worth of people land at once — an arrival that never plays is worse
  * than one that plays fast.
  */
 export const ARRIVAL_SEQUENCE_BUDGET_MS = 1_600;
 
-/** The gap between neighbours in a burst, compressed to fit the budget. */
+/** The gap between neighbors in a burst, compressed to fit the budget. */
 export function arrivalStep(count: number): number {
   const preferred = ms('--stagger-light');
   if (count <= 1) return preferred;

@@ -66,7 +66,7 @@ export function TopBarOverlay({
       onClose={onClose}
       panelRef={dialogRef}
       manageFocus={false}
-      labelledBy={titleId}
+      labeledBy={titleId}
       placement="top"
       zIndexClassName="z-50"
       backdropClassName="topbar-overlay-backdrop px-2 pb-[calc(var(--safe-bottom)+0.75rem)] pt-[calc(var(--safe-top)+3.75rem)] sm:px-4 sm:pt-20"

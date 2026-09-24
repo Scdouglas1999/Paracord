@@ -186,11 +186,11 @@ export function createDeviceAdapter(): DeviceAdapter {
       const startedAt = Date.now();
       try {
         const source = context.createMediaStreamSource(stream);
-        const analyser = context.createAnalyser();
-        analyser.fftSize = 256;
-        analyser.smoothingTimeConstant = 0.3;
-        source.connect(analyser);
-        const buffer = new Float32Array(analyser.fftSize);
+        const analyzer = context.createAnalyser();
+        analyzer.fftSize = 256;
+        analyzer.smoothingTimeConstant = 0.3;
+        source.connect(analyzer);
+        const buffer = new Float32Array(analyzer.fftSize);
         await new Promise<void>((resolve) => {
           const finish = () => {
             clearInterval(timer);
@@ -198,7 +198,7 @@ export function createDeviceAdapter(): DeviceAdapter {
             resolve();
           };
           const timer = setInterval(() => {
-            analyser.getFloatTimeDomainData(buffer);
+            analyzer.getFloatTimeDomainData(buffer);
             let framePeak = 0;
             for (const sample of buffer) {
               const magnitude = Math.abs(sample);
@@ -305,7 +305,7 @@ export function parseTransportConfig(payload: unknown): MediaTransportConfig {
   const transport = raw.transport;
   if (transport !== 'native' && transport !== 'livekit' && transport !== 'none') {
     throw new Error(
-      `The server reported an unrecognised call transport (${String(transport)}). This client cannot check it.`,
+      `The server reported an unrecognized call transport (${String(transport)}). This client cannot check it.`,
     );
   }
   const candidates = Array.isArray(raw.media_endpoint_candidates)

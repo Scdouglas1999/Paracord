@@ -50,7 +50,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /**
  * The tick box on a choice row. A checked row is a **raised** surface carrying
- * a real tick; an unchecked one is the well it sits in. Colour is never the
+ * a real tick; an unchecked one is the well it sits in. Color is never the
  * only cue (§9) — the tick is.
  */
 function TickBox({ checked }: { checked: boolean }) {
@@ -115,26 +115,26 @@ export function GuildOnboardingGate({ guildId }: GuildOnboardingGateProps) {
   const [payload, setPayload] = useState<OnboardingPayload | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
+    let canceled = false;
     setLoading(true);
     guildApi
       .getMyOnboardingState(guildId)
       .then(({ data }) => {
-        if (cancelled) return;
+        if (canceled) return;
         const normalized = normalizeOnboardingPayload(data);
         setPayload(normalized);
         setAcceptedRules(normalized.member_state.accepted_rules);
         setSelectedRoleIds(normalized.member_state.selected_role_ids);
       })
       .catch((err: unknown) => {
-        if (cancelled) return;
+        if (canceled) return;
         setError(extractApiError(err));
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!canceled) setLoading(false);
       });
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [guildId]);
 
@@ -206,7 +206,7 @@ export function GuildOnboardingGate({ guildId }: GuildOnboardingGateProps) {
       // guard the Later button uses, and the backdrop was never a close affordance.
       onClose={() => { if (canDismiss) setDismissed(true); }}
       closeOnBackdrop={false}
-      labelledBy="guild-onboarding-title"
+      labeledBy="guild-onboarding-title"
       describedBy={payload.settings.welcome_body ? 'guild-onboarding-description' : undefined}
       panelClassName="w-[min(94vw,42rem)]"
     >

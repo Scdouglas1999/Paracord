@@ -121,7 +121,7 @@ const INCLUDED_TOOLS: BuiltInBot[] = [
     name: 'Member onboarding',
     description: 'Let new members choose optional roles and acknowledge community rules.',
     icon: <Zap size={22} aria-hidden />,
-    features: ['Self-selected roles', 'Rules acknowledgement', 'Welcome prompts'],
+    features: ['Self-selected roles', 'Rules acknowledgment', 'Welcome prompts'],
   },
   {
     id: 'system-economy',
@@ -604,7 +604,7 @@ export function BotStoreSection({
                       onChange={(next) => setAutoModConfig({ ...autoModConfig, verification_gate: { ...(autoModConfig.verification_gate || DEFAULT_VERIFICATION_GATE), enabled: next } })}
                     />
                     <ToggleRow
-                      label="Require acknowledgement"
+                      label="Require acknowledgment"
                       description="They have to tick the rules before they can post."
                       checked={autoModConfig.verification_gate?.require_ack !== false}
                       onChange={(next) => setAutoModConfig({ ...autoModConfig, verification_gate: { ...(autoModConfig.verification_gate || DEFAULT_VERIFICATION_GATE), require_ack: next } })}

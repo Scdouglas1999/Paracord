@@ -163,12 +163,12 @@ export function settleIn(el: Element | null | undefined, options: SettleOptions 
 }
 
 export interface StaggerOptions extends SettleOptions {
-  /** Gap between neighbours. Defaults to `--stagger-light` (30ms). */
+  /** Gap between neighbors. Defaults to `--stagger-light` (30ms). */
   step?: number;
 }
 
 /**
- * Neighbouring things arrive 30ms apart (§5.1). Returns one animation per
+ * Neighboring things arrive 30ms apart (§5.1). Returns one animation per
  * element, in order, so the caller can cancel the whole run.
  */
 export function stagger(
@@ -204,13 +204,13 @@ export function press(el: Element | null | undefined): Animation | null {
  * element whose `className` is recomputed on the very next render (the send
  * makes it busy), which would wipe a class the engine added microseconds
  * earlier. React does not own this element's `style`, so the beat survives. It
- * is removed after 80ms, or if the animation is cancelled.
+ * is removed after 80ms, or if the animation is canceled.
  *
  * The light is a state, not an animation: it is on for the beat and off
  * after it. Only the press is animated, and only in transform.
  */
 const FLASH_LIGHT: ReadonlyArray<readonly [string, string]> = [
-  // A beat, not a fade: the control almost always carries a colour transition
+  // A beat, not a fade: the control almost always carries a color transition
   // for its hover state, and leaving it on turns the flash into a 140ms ramp
   // that never reaches the light. Removing the properties restores the
   // transition, so it comes ON like a light and goes off like one.
@@ -469,7 +469,7 @@ export function ghost(el: Element | null | undefined): HTMLElement | null {
 
 /**
  * Clone `el` where it stands and hand the copy to `play`. The ghost is removed
- * when the animation finishes or is cancelled — and immediately if nothing
+ * when the animation finishes or is canceled — and immediately if nothing
  * played, so a reduced-motion run leaves nothing behind.
  */
 export function ghostOut(

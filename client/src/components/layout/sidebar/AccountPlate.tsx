@@ -30,7 +30,7 @@ export type PresenceStatus = UserSettings['status'];
 
 /**
  * §1.5: a picker is the one place that legitimately needs a per-option visual,
- * so each option carries a swatch in the light vocabulary, not a colour.
+ * so each option carries a swatch in the light vocabulary, not a color.
  */
 const STATUS_OPTIONS: Array<{ id: PresenceStatus; label: string; swatch: string }> = [
   { id: 'online', label: 'Online', swatch: 'pc-lit' },

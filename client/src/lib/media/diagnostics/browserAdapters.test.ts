@@ -72,7 +72,7 @@ describe('parseTransportConfig', () => {
   });
 
   it('refuses a payload it does not understand rather than guessing', () => {
-    expect(() => parseTransportConfig({ transport: 'magic' })).toThrow(/unrecognised call transport/i);
+    expect(() => parseTransportConfig({ transport: 'magic' })).toThrow(/unrecognized call transport/i);
     expect(() => parseTransportConfig(null)).toThrow(/no voice transport information/i);
   });
 });
@@ -97,23 +97,23 @@ describe('classifyTransportError', () => {
     expect(classifyTransportError(new Error('no reply'), 8000, 8000).failure).toBe('timeout');
   });
 
-  it('recognises its own deadline even when the clock rounds a millisecond short', () => {
+  it('recognizes its own deadline even when the clock rounds a millisecond short', () => {
     expect(
       classifyTransportError(new Error(`${PROBE_TIMEOUT_MESSAGE} 8000 ms.`), 7999, 8000).failure,
     ).toBe('timeout');
   });
 
-  it('recognises a refused certificate', () => {
+  it('recognizes a refused certificate', () => {
     expect(classifyTransportError(new Error('CERT_AUTHORITY_INVALID'), 10, 8000).failure).toBe(
       'certificate-refused',
     );
   });
 
-  it('recognises an address that never resolved', () => {
+  it('recognizes an address that never resolved', () => {
     expect(classifyTransportError(new Error('ERR_NAME_NOT_RESOLVED'), 10, 8000).failure).toBe('unreachable');
   });
 
-  it('recognises a QUIC handshake that started and stopped', () => {
+  it('recognizes a QUIC handshake that started and stopped', () => {
     expect(classifyTransportError(new Error('Opening handshake failed.'), 10, 8000).failure).toBe(
       'handshake-failed',
     );

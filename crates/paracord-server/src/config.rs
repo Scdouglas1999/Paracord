@@ -298,7 +298,7 @@ pub struct LiveKitConfig {
     /// startup ("could not listen on TURN UDP port … address already in use"),
     /// so LiveKit mode could not start at all. Left unset it takes the port
     /// after LiveKit's RTC mux, and the relay range moves up to make room.
-    /// Set it when that neighbour is already spoken for; it is a port an
+    /// Set it when that neighbor is already spoken for; it is a port an
     /// operator must forward alongside the media port.
     pub turn_udp_port: Option<u16>,
 }
@@ -582,7 +582,7 @@ pub struct SetupConfig {
     /// Whether an unclaimed instance must be claimed with a bootstrap token
     /// before any account can exist.
     ///
-    /// `true` (the default) is the safe behaviour: a freshly exposed server
+    /// `true` (the default) is the safe behavior: a freshly exposed server
     /// cannot be taken over by whoever finds the URL first. Setting it to
     /// `false` restores the legacy bootstrap in which the first registered
     /// account becomes the owner — deterministic, which is why automated

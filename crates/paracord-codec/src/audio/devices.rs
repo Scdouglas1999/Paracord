@@ -37,7 +37,7 @@
 //! # Fallback
 //!
 //! With no sound server reachable (`pactl` missing or refusing), enumeration
-//! falls back to raw cpal, collapsed to one entry per card and clearly labelled
+//! falls back to raw cpal, collapsed to one entry per card and clearly labeled
 //! so the caller can say which layer answered. That is a fallback in *naming*
 //! only — the stream path is unchanged — and it is reported, never silent.
 
@@ -110,7 +110,7 @@ pub enum DeviceGroup {
     Device,
     /// A loopback of something that is playing (`…​.monitor`). Never a
     /// microphone; belongs to the share-system-audio feature, which has its own
-    /// control. Surfaced only in its own labelled group.
+    /// control. Surfaced only in its own labeled group.
     Monitor,
 }
 
@@ -150,7 +150,7 @@ pub struct DeviceTarget {
     /// Name to log / show for the device actually opened.
     pub display_name: String,
     /// True when the requested id was gone and the default was used instead.
-    /// The caller must say so rather than pretending the request was honoured.
+    /// The caller must say so rather than pretending the request was honored.
     pub fell_back_to_default: bool,
 }
 
@@ -747,7 +747,7 @@ pub fn resolve_target(direction: Direction, id: &str) -> Result<DeviceTarget, De
 /// Index of the PCM that routes through the sound server.
 ///
 /// The order depends on whether this open is aimed at a particular node,
-/// because the two server PCMs do not both honour a target.
+/// because the two server PCMs do not both honor a target.
 ///
 /// Measured on PipeWire 1.6.8 (`arecord -D <pcm>` + `pactl list source-outputs`):
 ///
@@ -763,7 +763,7 @@ pub fn resolve_target(direction: Direction, id: &str) -> Result<DeviceTarget, De
 /// was resolved correctly, reported correctly, and then opened on whatever the
 /// system default happened to be — silently right whenever the two agreed.
 ///
-/// When a node is being targeted, prefer `pulse`, which does honour it. With no
+/// When a node is being targeted, prefer `pulse`, which does honor it. With no
 /// target, keep `pipewire`: it is the shorter path to the same graph.
 fn server_pcm_index(raw: &[(usize, String, bool)], targeted: bool) -> Option<(usize, String)> {
     let order: [&str; 3] = if targeted {
@@ -828,7 +828,7 @@ pub fn silence_alsa_probe_errors() {}
 
 // ── Pinning a stream to a node for the duration of the open ─────────────────
 
-/// Serialises the `PIPEWIRE_NODE` / `PULSE_*` window so two concurrent opens
+/// Serializes the `PIPEWIRE_NODE` / `PULSE_*` window so two concurrent opens
 /// cannot read each other's target.
 static TARGET_ENV_LOCK: Mutex<()> = Mutex::new(());
 

@@ -166,7 +166,7 @@ pub fn create_decoder(
 /// that can only present GPU-resident handles (macOS `AVSampleBufferDisplayLayer`
 /// consumes `CVPixelBuffer`; Linux CUDA/VAAPI interop consumes device memory /
 /// dma-bufs) must be fed a [`DecodeOutput::Gpu`] decoder. [`DecodeOutput::Cpu`]
-/// keeps the existing behaviour (software floor / tier-2), so it delegates to
+/// keeps the existing behavior (software floor / tier-2), so it delegates to
 /// [`create_decoder`] unchanged.
 ///
 /// A [`DecodeOutput::Gpu`] request on a platform/codec with no GPU decode backend

@@ -61,7 +61,7 @@ moment the face of somebody leaving still exists to be copied.
 `MotionLightsOn.html`, implemented against the real presence edge.
 
 Plates settle from 14px below, 120ms apart, as the street renders → each lit
-window blooms `--stagger-light` after its neighbour, behind its own plate → a
+window blooms `--stagger-light` after its neighbor, behind its own plate → a
 lamp fades in once the first window in its plate is lit → a person's rim
 catches 120ms after the channel they are in.
 
@@ -107,7 +107,7 @@ single-channel lobby's Join. A channel travels under one name on every surface t
 draws it, `room-<channelId>`, so every door in and every door out is the same
 move played in a different direction.
 
-**One behaviour change, and it is the point of the package: Join in the Lobby
+**One behavior change, and it is the point of the package: Join in the Lobby
 now takes you into the channel.** It used to join the call and leave you standing
 in the street, which is the one thing "walk into a channel" cannot mean.
 
@@ -165,7 +165,7 @@ something moving.
 **A leaving face is a ghost.** The store update that tells us somebody left has
 already taken their face out of the tree by the time React has rendered, and an
 animation on a disconnected element is not played at all. `ghostOut` is WP9a's
-"the words are a ghost, not the textarea" generalised: a copy the engine owns
+"the words are a ghost, not the textarea" generalized: a copy the engine owns
 outright, cut from the live element while it is still there, parked in a
 `pointer-events: none` layer and removed when its animation ends.
 
@@ -222,15 +222,15 @@ budget — dropping an element is free.
 1. **The card flew into the sidebar.** The "after" pass took the first element
    in the document carrying the channel's name, and the sidebar comes first. →
    `destinationRoot`.
-2. **And then it travelled nowhere.** The surface you leave is still in the
+2. **And then it traveled nowhere.** The surface you leave is still in the
    document for a tick after the route changes, so the destination pass found
    the card sitting where it was and measured a delta of zero. A journey's
    destination is never its origin. → `collect(..., exclude)`.
 3. **The Lobby never receded.** The route change unmounts it on the same tick,
    so §5.1's "the rest of the Lobby recedes" was an animation on elements that
    were already gone; the screen simply went empty for a beat. It recedes as a
-   ghost now, with the branch that is travelling hidden inside the copy.
-4. **The travelling tile was missing for ~200ms.** Same cause, other half. →
+   ghost now, with the branch that is traveling hidden inside the copy.
+4. **The traveling tile was missing for ~200ms.** Same cause, other half. →
    `holdOrigin`.
 
 Two more came out of measuring rather than watching: `springEasing` samples the
@@ -260,7 +260,7 @@ is the compositor's bill rather than the main thread's.
 
 Each strip's clock is zeroed on the frame the **engine** started moving, not on
 the action: two of these moments begin with a round trip to the gateway, and a
-strip labelled from the click would be mostly waiting.
+strip labeled from the click would be mostly waiting.
 
 The walk-in strip is captured on the Web Animations path. The View Transitions
 path composites its snapshots off the main thread, and this harness is a
@@ -331,7 +331,7 @@ Building the gate found four real bugs, all fixed in `8470b13`:
 cd client
 npm run typecheck            clean
 npm run test:unit            2 336 tests, 249 files, green
-npm run test:tokens          494 files, no literal colour
+npm run test:tokens          494 files, no literal color
 npm run build                clean
 npx playwright test          84 passed (mocked smoke + encrypted storage)
 npm run test:motion          11 passed

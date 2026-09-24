@@ -201,7 +201,7 @@ export function ContextMenu({ items, position, open = true, onClose, label = 'Co
     >
       {/*
         One menu, one label column. A row without an icon used to close the gap
-        its neighbours reserve, so "Follow the building" — the fourth choice of
+        its neighbors reserve, so "Follow the building" — the fourth choice of
         a four-way radio group — started 26px left of the three above it. When
         any row in a menu carries an icon, every row reserves the column; a
         menu with no icons at all still sits flush.

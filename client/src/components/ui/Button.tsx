@@ -36,7 +36,7 @@ const buttonVariants = cva(
         "relative inline-flex select-none items-center justify-center gap-[7px] whitespace-nowrap",
         "rounded-[var(--radius-control)] text-label font-medium outline-none",
         // No `transition-*` utility here: `.pc-pressable` already transitions
-        // background, colour AND transform. A utility naming a shorter list
+        // background, color AND transform. A utility naming a shorter list
         // would now win and drop the press.
         "disabled:pointer-events-none disabled:opacity-60",
     ].join(" "),

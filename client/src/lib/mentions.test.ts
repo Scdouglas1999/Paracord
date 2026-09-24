@@ -36,7 +36,7 @@ describe('mentionsEveryone', () => {
     expect(mentionsEveryone({ content: 'ship it' })).toBe(false);
   });
 
-  it('honours an explicit boolean from a server that does compute it', () => {
+  it('honors an explicit boolean from a server that does compute it', () => {
     // A server may deliberately strip the ping when the author lacks
     // MENTION_EVERYONE; the client must not override that decision.
     expect(mentionsEveryone({ mention_everyone: false, content: '@everyone' })).toBe(false);

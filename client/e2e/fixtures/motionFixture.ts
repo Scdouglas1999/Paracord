@@ -12,7 +12,7 @@ import { guildDetailFixture, guildSummaryFixture } from '../../src/test/guildCon
  * two routes that make that possible are exactly the smoke's:
  *
  *   · `POST /channels/:id/messages` echoes the request `nonce` back, which is
- *     how the durable-delivery transport recognises its own send;
+ *     how the durable-delivery transport recognizes its own send;
  *   · `GET  /channels/:id/messages/recovery` can vouch for every message the
  *     fixture has ever served, including the one just posted — the runtime will
  *     not publish a row the authoritative feed has not confirmed.

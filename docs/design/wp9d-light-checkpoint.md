@@ -33,7 +33,7 @@ departing ghost, `flipBetween`, the indicator — now sets
 `animation.id = 'data-motion-recipe:<name>'`, the convention `flip.ts` and
 `animate.ts#run()` already used. Before this the gate logged WP9c's own
 reorders and arrivals as `anonymous`, which made the new moments
-indistinguishable from noise. No behaviour changed; only the names did.
+indistinguishable from noise. No behavior changed; only the names did.
 
 ## 3. A reaction pops — `MessageList.tsx`, `flipList.ts`
 
@@ -102,7 +102,7 @@ distance. 8px of dead zone absorbs jitter; 72px of pull fires
 `fetchMessages(channelId)`, the lamp `flicker()`s once (the engine's own
 recipe, so the gate can name it), then dims back out on a Web Animations exit.
 Letting go early just dims it; nothing refetches. Passive listeners, no
-preventDefault, no spinner — the scroller's native behaviour is untouched and
+preventDefault, no spinner — the scroller's native behavior is untouched and
 the gesture is abandoned the moment the scroller starts moving on its own.
 Reduced motion skips the animated dim and resets immediately.
 
@@ -180,7 +180,7 @@ phone timeline.
 cd client
 npm run typecheck            clean
 npm run test:unit            2 356 tests, 250 files, green
-npm run test:tokens          496 files, no literal colour (5 allowed exceptions)
+npm run test:tokens          496 files, no literal color (5 allowed exceptions)
 npm run build                clean (existing chunk-size + circular warnings)
 npx playwright test          84 passed (mocked)
 npm run test:motion          18 passed, 5 skipped (opt-in captures)

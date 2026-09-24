@@ -132,7 +132,7 @@ test('logout cancels a staged device write and clears runtime projections', asyn
     let release!: () => void; let enter!: () => void;
     const entered = new Promise<void>(resolve => { enter = resolve; });
     const gate = new Promise<void>(resolve => { release = resolve; });
-    const saved = session.vault.transact(async tx => { tx.put('messages.drafts', '2001', { content: 'Cancelled secret' }); enter(); await gate; });
+    const saved = session.vault.transact(async tx => { tx.put('messages.drafts', '2001', { content: 'Canceled secret' }); enter(); await gate; });
     const status = saved.then(() => 'saved', () => 'cancelled');
     await entered; window.messaging.logout(); release();
     return { status: await status, state: window.messaging.runtime.store.getState() };

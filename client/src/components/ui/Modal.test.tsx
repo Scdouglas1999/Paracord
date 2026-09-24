@@ -5,7 +5,7 @@ import { Modal, ModalTitle } from './Modal';
 
 function Harness({ onClose = vi.fn() }: { onClose?: () => void }) {
   return (
-    <Modal open onClose={onClose} labelledBy="t" showCloseButton>
+    <Modal open onClose={onClose} labeledBy="t" showCloseButton>
       <ModalTitle id="t">Test dialog</ModalTitle>
       <button type="button">first</button>
       <button type="button">second</button>
@@ -14,7 +14,7 @@ function Harness({ onClose = vi.fn() }: { onClose?: () => void }) {
 }
 
 describe('Modal', () => {
-  it('renders a labelled modal dialog into a portal', () => {
+  it('renders a labeled modal dialog into a portal', () => {
     render(<Harness />);
     const dialog = screen.getByRole('dialog', { name: 'Test dialog' });
     expect(dialog).toHaveAttribute('aria-modal', 'true');

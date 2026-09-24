@@ -198,7 +198,7 @@ export function GuildsPanel() {
         open={Boolean(editingGuild)}
         onClose={closeEdit}
         size="sm"
-        labelledBy="admin-edit-guild-title"
+        labeledBy="admin-edit-guild-title"
         showCloseButton
       >
         <ModalHeader>

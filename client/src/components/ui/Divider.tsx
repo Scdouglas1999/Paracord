@@ -5,7 +5,7 @@ export interface DividerProps extends React.HTMLAttributes<HTMLElement> {
   orientation?: 'horizontal' | 'vertical';
   /** Use the stronger hairline where a plate genuinely needs a harder break. */
   strong?: boolean;
-  /** A labelled rule ("Today", "New messages"). Horizontal only. */
+  /** A labeled rule ("Today", "New messages"). Horizontal only. */
   label?: React.ReactNode;
 }
 

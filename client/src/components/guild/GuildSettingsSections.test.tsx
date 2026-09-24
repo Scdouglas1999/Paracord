@@ -330,8 +330,8 @@ describe('audit log action labels', () => {
       1, 10, 11, 12, 20, 21, 22, 23, 30, 31, 32, 40, 41, 50, 51, 52, 60, 61, 62, 71, 72, 73, 80,
       81, 90, 91, 100, 101, 102, 103,
     ];
-    const unlabelled = serverActions.filter((code) => !ACTION_LABELS[code]);
-    expect(unlabelled).toEqual([]);
+    const unlabeled = serverActions.filter((code) => !ACTION_LABELS[code]);
+    expect(unlabeled).toEqual([]);
     // And nothing here that the server never emits.
     expect(Object.keys(ACTION_LABELS).map(Number).sort((a, b) => a - b)).toEqual(serverActions);
   });

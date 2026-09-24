@@ -61,7 +61,7 @@ const BLOCKED_VALUE_PATTERNS = [
  * and is injected as one global <style>, a hostile server could read the UI of
  * every other server this client is connected to.
  *
- * Everything here is a computation over colours/numbers. No CSS `<image>`
+ * Everything here is a computation over colors/numbers. No CSS `<image>`
  * function is included (not even gradients, which are safe today but sit in the
  * grammar slot where the fetching ones live).
  */
@@ -95,7 +95,7 @@ const IMPORTANT_RE = /^!\s*important\s*$/i;
 /**
  * Allowlist validation of a declaration value.
  *
- * A value may only be built from: whitespace and separators, hex colours,
+ * A value may only be built from: whitespace and separators, hex colors,
  * numbers with a unit, quoted strings, bare keywords, and calls to the
  * functions in {@link ALLOWED_CSS_FUNCTIONS}. Anything else — a colon (which is
  * what `javascript:` needs), an at-sign, a brace, an unknown function name — is

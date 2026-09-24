@@ -10,7 +10,7 @@ const BG = P.get('bg') !== '0';
 const SHOW_L = P.get('lantern') !== '0', SHOW_C = P.get('cord') !== '0';
 // small=1: the favicon / tray / tiny-avatar variant. The same silhouette, drawn
 // larger in the tile, with a bolder cord and thicker guard wires, and none of the
-// detail that turns to noise below ~48 px: engraving, rivets, vent slots, fibre
+// detail that turns to noise below ~48 px: engraving, rivets, vent slots, fiber
 // lines, the wall rings and the grain.
 const SMALL = P.get('small') === '1';
 // lit=0: the lantern before it is lit, for the first beat of the loading screen.
@@ -203,7 +203,7 @@ function braid(pts, w, { phase = 0, shadow = true } = {}) {
       g.fillStyle = lin(0, -th / 2, 0, th / 2, [[0, rgb(tracer ? [255, 232, 180] : CORD.light, lift)], [0.42, rgb(col, lift)], [0.9, rgb(tracer ? [150, 90, 30] : CORD.dark, lift)], [1, CORD.edge]]);
       g.beginPath(); g.ellipse(0, 0, len / 2, th / 2, 0, 0, Math.PI * 2); g.fill();
       g.strokeStyle = 'rgba(4,34,28,.55)'; g.lineWidth = 0.8; g.stroke();
-      // fibre lines on each pick
+      // fiber lines on each pick
       g.strokeStyle = 'rgba(255,255,255,.10)'; g.lineWidth = 0.6;
       if (!SMALL) for (const f of [-0.22, 0.02, 0.24]) { g.beginPath(); g.moveTo(-len * 0.34, th * f); g.lineTo(len * 0.34, th * f); g.stroke(); }
       g.restore();

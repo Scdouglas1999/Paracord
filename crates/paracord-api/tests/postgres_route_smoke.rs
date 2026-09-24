@@ -259,7 +259,7 @@ async fn basic_route_flow_uses_postgres_when_configured() -> anyhow::Result<()> 
         "created scheduled message should be listed"
     );
 
-    let (status, cancelled_scheduled) = request_json(
+    let (status, canceled_scheduled) = request_json(
         &test_app.app,
         &token,
         Method::DELETE,
@@ -270,7 +270,7 @@ async fn basic_route_flow_uses_postgres_when_configured() -> anyhow::Result<()> 
     assert_eq!(
         status,
         StatusCode::NO_CONTENT,
-        "unexpected scheduled message cancel response: {cancelled_scheduled}"
+        "unexpected scheduled message cancel response: {canceled_scheduled}"
     );
 
     let (status, messages) = request_json(
@@ -883,7 +883,7 @@ async fn scheduled_message_paths_work_on_postgres() -> anyhow::Result<()> {
     );
 
     // cancel → the remaining UPDATE ... RETURNING select list
-    let (status, cancelled) = request_json(
+    let (status, canceled) = request_json(
         &test_app.app,
         &token,
         Method::DELETE,
@@ -893,7 +893,7 @@ async fn scheduled_message_paths_work_on_postgres() -> anyhow::Result<()> {
     .await?;
     assert!(
         status == StatusCode::OK || status == StatusCode::NO_CONTENT,
-        "cancel scheduled: {status} {cancelled}"
+        "cancel scheduled: {status} {canceled}"
     );
 
     Ok(())

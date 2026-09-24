@@ -136,7 +136,7 @@ async fn an_attached_stream_is_told_the_server_is_restarting_and_then_ends() {
     );
     assert!(
         ended,
-        "an attached stream must end itself once shutdown is signalled — nothing \
+        "an attached stream must end itself once shutdown is signaled — nothing \
          else closes it, and the drain waits for every open connection"
     );
 }

@@ -14,7 +14,7 @@ import { cn } from '../../lib/utils';
  * room's plate** — near the composer because that is where you decide what to
  * do about them, and raised because they are waiting on you.
  *
- * The behaviour is untouched: retry, copy, edit, discard and restore all go
+ * The behavior is untouched: retry, copy, edit, discard and restore all go
  * through the messaging runtime exactly as before.
  *
  * One thing IS held back: a send that is merely in flight. Every send spends a

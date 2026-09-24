@@ -22,8 +22,8 @@ interface FeatureRow {
 
 /**
  * A divided list of value props inside one well — not a stack of identical
- * bordered cards (spec §6.8), and not three icons in three different colours:
- * colour here would be decoration, and the only colours this app spends are
+ * bordered cards (spec §6.8), and not three icons in three different colors:
+ * color here would be decoration, and the only colors this app spends are
  * light (a person is there) and the emerald (an action you can take).
  */
 function FeatureList({ rows }: { rows: FeatureRow[] }) {

@@ -22,7 +22,7 @@ fn parse_datetime(value: &str) -> Result<DateTime<Utc>, ApiError> {
 /// The furthest ahead a message may be scheduled.
 ///
 /// There was a floor and no ceiling, so a message scheduled for the year 9999
-/// was accepted and sat in the queue forever — while a poll, the neighbouring
+/// was accepted and sat in the queue forever — while a poll, the neighboring
 /// timed feature, is capped at 14 days. A year is generous for "send this on
 /// their birthday" and still a bound.
 const MAX_SCHEDULE_AHEAD_DAYS: i64 = 365;
@@ -385,11 +385,11 @@ pub async fn delete_scheduled_message(
         return Err(ApiError::Forbidden);
     }
 
-    let cancelled =
+    let canceled =
         paracord_db::scheduled_messages::cancel_scheduled_message(&state.db, scheduled_message_id)
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-    if cancelled.is_none() {
+    if canceled.is_none() {
         return Err(ApiError::Conflict(
             "Scheduled message can no longer be canceled".into(),
         ));
@@ -544,7 +544,7 @@ pub struct GroupSenderKeysPostRequest {
     /// somebody who has left. The client cannot settle that on its own — its
     /// roster is whatever it was last told — so the server, which owns
     /// `dm_recipients`, refuses the publish outright. Optional only so an older
-    /// client fails on its own terms rather than on a deserialisation error;
+    /// client fails on its own terms rather than on a deserialization error;
     /// see `require_current_membership`.
     pub members_version: Option<String>,
 }
@@ -573,7 +573,7 @@ pub struct GroupSenderKeyAckRequest {
 /// fold in identity keys, which are the client's to pin and rotate — coupling
 /// the two would make a key rotation look like a membership change to a layer
 /// that cannot tell the difference, and would tie this digest to the client's
-/// own fingerprint serialisation.
+/// own fingerprint serialization.
 pub fn membership_version(recipient_ids: &[i64]) -> String {
     let mut sorted = recipient_ids.to_vec();
     sorted.sort_unstable();

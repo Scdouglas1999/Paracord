@@ -531,7 +531,7 @@ describe('connectionManager stale duplicate entries', () => {
     useAuthStore.setState({ token: 'home-token' });
   });
 
-  it('recognises the entry carrying the live home credential', () => {
+  it('recognizes the entry carrying the live home credential', () => {
     expect(internals.entryCarriesHomeCredential('live')).toBe(true);
   });
 

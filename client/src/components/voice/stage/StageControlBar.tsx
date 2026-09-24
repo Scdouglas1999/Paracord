@@ -12,7 +12,7 @@ export interface StageControlBarProps extends React.HTMLAttributes<HTMLDivElemen
  * (docs/lantern-stage-spec.md §7.2, §8).
  *
  * Mic on is white light, leave is danger; the controls themselves are
- * `IconButton size="stage"`. This is only the row: it centres its children and
+ * `IconButton size="stage"`. This is only the row: it centers its children and
  * spaces them, and knows nothing about microphones.
  */
 export const StageControlBar = React.forwardRef<HTMLDivElement, StageControlBarProps>(

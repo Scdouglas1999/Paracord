@@ -67,7 +67,7 @@ across all four themes, plus an sRGB gamut check on every token.
 What does **not** follow the hue, and why:
 
 - the two lights (§1.2) and every glow, ring and lamp recipe made from them.
-  Light is state; §6.3 will not let a preference recolour it.
+  Light is state; §6.3 will not let a preference recolor it.
 - the semantic accents (§1.3) and the identity palette. They carry meaning, and
   a meaning that drifts is not one.
 - a plate's warm 1px top highlight — it is the lamp above the plate, so it stays
@@ -210,10 +210,10 @@ Themes remap the *tokens*, never the recipes:
   choice is still visible and the chrome is still of one piece.
 
 Every theme's ramp is expressed the same way (§1.0), so a theme and a base
-color compose rather than fight: picking Daylight and picking Harbour are two
+color compose rather than fight: picking Daylight and picking Harbor are two
 independent choices and every pair of them passes §9.
 
-Accent presets (existing `ACCENT_PRESETS`) recolour `--accent-primary` only.
+Accent presets (existing `ACCENT_PRESETS`) recolor `--accent-primary` only.
 Base-color presets (`BASE_HUE_PRESETS`) move `--ui-hue` / `--ui-chroma` only.
 Neither ever touches the light tokens.
 
@@ -252,7 +252,7 @@ Rules a look lives by:
   color they can sit over, so a plate is only as transparent as the worst of
   the sky allows; the spine's ink set and all eight bubbles (both mixes) are
   measured too.
-- **Light still means people.** A look may recolour the two lights for its
+- **Light still means people.** A look may recolor the two lights for its
   ground (as Daylight does); it never spends them on anything else.
 - **A live native video underlay wins.** On the Linux desktop, while a stream
   is up, Dusk sky's sky is cleared with the rest of the shell's grounds and its
@@ -347,7 +347,7 @@ reviewer rejects motion that has none.
 
 - **Light has a source and a speed.** A window, rim or tile that lights up
   *blooms* 20% past its resting glow and settles — 220 ms, `--ease-out`. It
-  dims over 400 ms, `--ease-in` (light lingers a beat, then goes). Neighbouring
+  dims over 400 ms, `--ease-in` (light lingers a beat, then goes). Neighboring
   lights stagger 30 ms. A lamp fades in once the first window in its plate is
   lit. Reading light *flickers* once (two 40 ms pulses) when a message lands.
   *(WP9b: "lights on" is one sequence with one clock, played by
@@ -401,7 +401,7 @@ reviewer rejects motion that has none.
   resting ring.
   *(WP9d: the level comes from the media engine that is actually running — the
   native engines' RTP audio-level header, LiveKit's own 0–1, and the local mic
-  analyser for your own ring, which knows before the server does. ONE
+  analyzer for your own ring, which knows before the server does. ONE
   `requestAnimationFrame` loop writes `--voice-level` for every tile on screen
   and exits when the last voice releases; never a loop per tile and never React
   state, because a level is fifty updates a second. The ring is multiplied, not
@@ -451,7 +451,7 @@ milliseconds.)*
 | Panels, sheets, dialogs, page content | 240 ms | `--duration-slow` |
 | A page's first entrance stagger (and nothing else) | 420 ms, 40 ms apart | `--duration-page`, `--stagger-page` |
 | Leaving a small surface / a panel | 130 ms / 170 ms (≈70% of the entrance) | `--duration-exit`, `--duration-exit-slow` |
-| A shared element travelling to where it lands | 320 ms | `--duration-move` |
+| A shared element traveling to where it lands | 320 ms | `--duration-move` |
 | Light warm-up / dim / breath / count re-roll | 220 / 400 / 1600 / 180 ms | `--duration-warm-up`, `--duration-dim`, `--duration-breathe`, `--duration-roll` |
 
 - **Curves.** One ease-out for everything that arrives or moves,
@@ -470,7 +470,7 @@ milliseconds.)*
   `background-position` or anything that lays out. A glow or a lifted shadow is
   a still layer whose opacity crossfades (`.pc-window`'s light layers,
   `.pc-hover-lift`, `.pc-home-card`); a meter or progress bar is a transform
-  (`.pc-meter-fill`, the poll bar). Colour transitions (background-color,
+  (`.pc-meter-fill`, the poll bar). Color transitions (background-color,
   color, border-color) on controls are allowed at `--duration-fast`.
 - **The shared recipes** (`styles/primitives.css`): `pc-pop-in`/`pc-pop-out`
   (small surfaces), `pc-enter`/`pc-exit` (dialogs, panels), `pc-drawer-*` and
@@ -482,7 +482,7 @@ milliseconds.)*
   `usePresence` / `useLingering` keep a leaving surface mounted for
   `--duration-exit-slow`.
 - **Exits matter as much as entrances.** Nothing a person dismissed vanishes on
-  the spot while its neighbours animate. Two named exceptions: an autocomplete
+  the spot while its neighbors animate. Two named exceptions: an autocomplete
   (slash commands, mentions) closes the instant the query stops matching,
   because it follows keystrokes; and a surface under reduced motion.
 - **Enforced.** `npm run test:motion-lint` (`client/scripts/motion-lint.mjs`,

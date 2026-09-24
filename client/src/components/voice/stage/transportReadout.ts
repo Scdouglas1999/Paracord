@@ -15,7 +15,7 @@
  * where it lands and every Stage improves at once.
  */
 
-/** How the call's media is actually travelling. */
+/** How the call's media is actually traveling. */
 export type CallTransport = 'quic' | 'webrtc';
 
 /** The coarse link health LiveKit reports. The native path reports none. */

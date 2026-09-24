@@ -3,10 +3,10 @@ import { useEffect, useState } from 'react';
 import { useAuthenticatedImage } from '../../../lib/authenticatedImage';
 import { identityTone, toneFromPixels, type CoverTone } from './serverCoverModel';
 
-/** Pixels sampled per side; the colour of a logo survives being this small. */
+/** Pixels sampled per side; the color of a logo survives being this small. */
 const SAMPLE = 24;
 
-/** One read per icon per session: the same icon is the same colour. */
+/** One read per icon per session: the same icon is the same color. */
 const toneCache = new Map<string, CoverTone | null>();
 
 function readTone(src: string): Promise<CoverTone | null> {
@@ -36,13 +36,13 @@ function readTone(src: string): Promise<CoverTone | null> {
 }
 
 /**
- * The colour a server's cover is made of.
+ * The color a server's cover is made of.
  *
- * With an icon: the icon's own colour, read from its pixels. With no icon, or
- * an icon that is grey all the way through: the server's identity colour —
+ * With an icon: the icon's own color, read from its pixels. With no icon, or
+ * an icon that is gray all the way through: the server's identity color —
  * which is exactly what its mark shows in that case, so the cover and the mark
  * always agree. `null` only while an icon is still being read, so the cover
- * never paints one colour and then changes to another.
+ * never paints one color and then changes to another.
  */
 export function useIconTone(guildId: string, iconSrc: string | null): CoverTone | null {
   const resolved = useAuthenticatedImage(iconSrc);
@@ -51,13 +51,13 @@ export function useIconTone(guildId: string, iconSrc: string | null): CoverTone 
 
   useEffect(() => {
     if (!resolved || toneCache.has(resolved)) return;
-    let cancelled = false;
+    let canceled = false;
     void readTone(resolved).then((read) => {
       toneCache.set(resolved, read);
-      if (!cancelled) setTone({ src: resolved, tone: read });
+      if (!canceled) setTone({ src: resolved, tone: read });
     });
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [resolved]);
 

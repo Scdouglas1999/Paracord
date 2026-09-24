@@ -4,13 +4,13 @@ import type { Role } from '../types';
 
 /**
  * The identity palette (docs/lantern-stage-spec.md §1.2, and the reference
- * renders' avatar hues). Eight soft colours that sit quietly on the dark
- * ground — a person's or a server's colour is *who they are*, so it is fixed
+ * renders' avatar hues). Eight soft colors that sit quietly on the dark
+ * ground — a person's or a server's color is *who they are*, so it is fixed
  * across themes, fixed across the user's base-hue choice, and never carries
  * state. Light is the only thing that carries state.
  *
  * Eight rather than five: a channel with a dozen people in it repeated a hue
- * every other row at five, which is exactly when a colour stops saying who
+ * every other row at five, which is exactly when a color stops saying who
  * somebody is.
  *
  * Returned as token references so there is still exactly one place the values
@@ -61,7 +61,7 @@ export function getIdentityColor(id: string): string {
 
 /**
  * The same identity, as text. Use this wherever a name is *written* in somebody's
- * colour; {@link getIdentityColor} everywhere it is a fill.
+ * color; {@link getIdentityColor} everywhere it is a fill.
  */
 export function getIdentityInk(id: string): string {
   return IDENTITY_INKS[identityIndex(id)];
@@ -98,13 +98,13 @@ export function getHighestRoleColor(
 }
 
 /**
- * The colour a role starts life with in the colour picker — a role's colour is
+ * The color a role starts life with in the color picker — a role's color is
  * DATA the operator sends to the server, not a surface this app paints, so it
  * is a literal number and belongs here rather than in `tokens.css`. A role with
- * this value reads as "no colour chosen"; `roleColorToHex(0)` is the token that
+ * this value reads as "no color chosen"; `roleColorToHex(0)` is the token that
  * actually paints an uncoloured role's name.
  */
 export const DEFAULT_ROLE_COLOR = '#99aab5';
 
-/** A role colour the server has never been given; render it with the ramp. */
+/** A role color the server has never been given; render it with the ramp. */
 export const UNSET_ROLE_COLOR = '#000000';

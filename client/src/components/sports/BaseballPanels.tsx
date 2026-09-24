@@ -814,7 +814,7 @@ function ParkBug({
   );
 }
 
-/** Team colour on the dark plate. A dark fill is mixed toward chalk so the letters still read. */
+/** Team color on the dark plate. A dark fill is mixed toward chalk so the letters still read. */
 function plateColor(paint: { fill: string; ink: string }): string {
   if (paint.ink !== 'var(--sports-chalk)') return paint.fill;
   return `color-mix(in srgb, ${paint.fill} 42%, var(--sports-chalk))`;

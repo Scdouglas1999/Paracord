@@ -93,7 +93,7 @@ param(
 )
 
 # Deliberately not a #Requires statement: this script is meant to be piped into
-# `iex`, and #Requires is only honoured for real script files. A plain check
+# `iex`, and #Requires is only honored for real script files. A plain check
 # works in both shapes.
 if ($PSVersionTable.PSVersion.Major -lt 5) {
     throw "paracord-install: error: this needs Windows PowerShell 5.1 or newer (found $($PSVersionTable.PSVersion))."

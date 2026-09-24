@@ -7,7 +7,7 @@ import { isTauri } from './tauriEnv';
  */
 export async function syncTrustedHosts(serverUrls: string[]): Promise<void> {
   if (!isTauri()) return;
-  // Sanitise the caller-supplied list (trim, drop empties, dedupe) so the
+  // Sanitize the caller-supplied list (trim, drop empties, dedupe) so the
   // freshly-resolved host is always included exactly once. Host allow/deny and
   // SSRF validation remain the Rust side's responsibility — we only forward a
   // clean list and must not filter hosts here, or first-connect to a

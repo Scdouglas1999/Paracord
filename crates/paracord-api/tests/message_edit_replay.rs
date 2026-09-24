@@ -567,7 +567,7 @@ async fn broken_moderation_also_blocks_webhook_execution() {
 }
 
 #[tokio::test]
-async fn a_timeout_does_not_prevent_acknowledgement_of_an_already_committed_edit() {
+async fn a_timeout_does_not_prevent_acknowledgment_of_an_already_committed_edit() {
     let (app, _, bob, guild, channel, id) = moderated().await;
     let path = format!("/api/v1/channels/{channel}/messages/{id}");
     let body = json!({"content":"A committed edit", "edit_nonce":"before-timeout"});
@@ -659,13 +659,13 @@ async fn failed_receipt_rolls_back_moderation_hits_before_any_alert_is_dispatche
 async fn resolving_an_absent_edit_seals_it_without_changing_content_or_history() {
     let (app, alice, _, channel) = setup().await;
     let (path, id) = create(&app, &alice, channel).await;
-    let resolution = format!("{path}/edits/cancelled-edit/resolve");
+    let resolution = format!("{path}/edits/canceled-edit/resolve");
     let (status, result) = call(&app, &alice, Method::POST, &resolution, None).await;
     assert_eq!(status, StatusCode::OK, "{result}");
     assert_eq!(result["state"], "cancelled");
     assert_eq!(result["message_id"], id.to_string());
     assert_eq!(result["channel_id"], channel.to_string());
-    assert_eq!(result["edit_nonce"], "cancelled-edit");
+    assert_eq!(result["edit_nonce"], "canceled-edit");
     assert!(paracord_db::messages::get_edit_history(&app.db, id)
         .await
         .unwrap()
@@ -693,7 +693,7 @@ async fn resolving_an_absent_edit_seals_it_without_changing_content_or_history()
         &alice,
         Method::PATCH,
         &path,
-        Some(mutation("cancelled-edit", 1)),
+        Some(mutation("canceled-edit", 1)),
     )
     .await;
     assert_eq!(delayed.0, StatusCode::GONE, "{delayed:?}");
@@ -813,8 +813,8 @@ async fn edit_cancellation_is_actor_owned_and_cannot_cancel_another_authors_nonc
     let (app, alice, bob, channel) = setup().await;
     let (path, _) = create(&app, &alice, channel).await;
     let resolve = format!("{path}/edits/shared-edit/resolve");
-    let cancelled = call(&app, &bob, Method::POST, &resolve, None).await;
-    assert_eq!(cancelled.0, StatusCode::OK, "{cancelled:?}");
+    let canceled = call(&app, &bob, Method::POST, &resolve, None).await;
+    assert_eq!(canceled.0, StatusCode::OK, "{canceled:?}");
     let applied = call(
         &app,
         &alice,
@@ -826,7 +826,7 @@ async fn edit_cancellation_is_actor_owned_and_cannot_cancel_another_authors_nonc
     assert_eq!(applied.0, StatusCode::OK, "{applied:?}");
     let resolved = call(&app, &alice, Method::POST, &resolve, None).await;
     assert_eq!(resolved.1["state"], "applied");
-    assert_ne!(resolved.1["actor_id"], cancelled.1["actor_id"]);
+    assert_ne!(resolved.1["actor_id"], canceled.1["actor_id"]);
 }
 
 #[tokio::test]

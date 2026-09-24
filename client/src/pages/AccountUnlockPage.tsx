@@ -84,7 +84,7 @@ export function AccountUnlockPage() {
         // test therefore skipped the connect on exactly the load that created
         // the entry and made it active. `getApi()` then resolved the active
         // server to a connection that was never opened and threw "This server is
-        // not connected", so the first unlock after enrolment left the composer
+        // not connected", so the first unlock after enrollment left the composer
         // unable to send or save a draft until the page was loaded again.
         if (!gateway.getApiClient(serverId)) {
           try {

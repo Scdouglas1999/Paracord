@@ -116,7 +116,7 @@ describe('GuildSettings destructive flows', () => {
     vi.mocked(guildApi.transferOwnership).mockResolvedValue({ data: {} } as never);
   });
 
-  it('does not transfer ownership when the confirm dialog is cancelled', async () => {
+  it('does not transfer ownership when the confirm dialog is canceled', async () => {
     const user = userEvent.setup();
     vi.mocked(confirm).mockResolvedValue(false);
     renderSettings();
@@ -164,7 +164,7 @@ describe('GuildSettings destructive flows', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('cancelling the delete dialog issues no delete request', async () => {
+  it('canceling the delete dialog issues no delete request', async () => {
     const user = userEvent.setup();
     renderSettings();
 

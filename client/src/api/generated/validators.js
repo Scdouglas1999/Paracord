@@ -9,9 +9,9 @@ var __commonJS = (cb, mod) => function __require() {
   }
 };
 
-// node_modules/ajv/dist/runtime/ucs2length.js
+// ../../../Paracord/client/node_modules/ajv/dist/runtime/ucs2length.js
 var require_ucs2length = __commonJS({
-  "node_modules/ajv/dist/runtime/ucs2length.js"(exports) {
+  "../../../Paracord/client/node_modules/ajv/dist/runtime/ucs2length.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     function ucs2length(str) {
@@ -4540,7 +4540,7 @@ function validate49(data, { instancePath = "", parentData, parentDataProperty, r
 }
 validate49.evaluated = { "props": { "allowed_roles": true, "bot_settings": true, "description": true, "discovery_tags": true, "hub_settings": true, "icon": true, "name": true, "visibility": true }, "dynamicProps": false, "dynamicItems": false };
 var isUpdateMeRequest = validate50;
-var schema80 = { "$id": "urn:paracord:contract:UpdateMeRequest", "$schema": "https://json-schema.org/draft/2020-12/schema", "properties": { "accent_color": { "default": null, "description": "Profile accent as `0xRRGGBB`. `null` clears it. Omit the field to leave\nthe stored colour unchanged.", "format": "int32", "type": ["integer", "null"] }, "avatar_hash": { "description": "Legacy data-URL avatars are still accepted for backward compatibility,\nbut clients should prefer `POST /users/@me/avatar`.", "type": ["string", "null"] }, "bio": { "type": ["string", "null"] }, "display_name": { "type": ["string", "null"] } }, "title": "UpdateMeRequest", "type": "object" };
+var schema80 = { "$id": "urn:paracord:contract:UpdateMeRequest", "$schema": "https://json-schema.org/draft/2020-12/schema", "properties": { "accent_color": { "default": null, "description": "Profile accent as `0xRRGGBB`. `null` clears it. Omit the field to leave\nthe stored color unchanged.", "format": "int32", "type": ["integer", "null"] }, "avatar_hash": { "description": "Legacy data-URL avatars are still accepted for backward compatibility,\nbut clients should prefer `POST /users/@me/avatar`.", "type": ["string", "null"] }, "bio": { "type": ["string", "null"] }, "display_name": { "type": ["string", "null"] } }, "title": "UpdateMeRequest", "type": "object" };
 function validate50(data, { instancePath = "", parentData, parentDataProperty, rootData = data, dynamicAnchors = {} } = {}) {
   ;
   let vErrors = null;

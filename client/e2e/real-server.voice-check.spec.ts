@@ -94,7 +94,7 @@ function registerSharedAccount(page: Page): Promise<{ email: string; password: s
   const username = `vc${unique}`.slice(0, 32);
   const password = 'Voice-Check-Password-123!';
   // Registration goes through the loopback address: Playwright's Node-side
-  // request context does not honour Chromium's host-resolver rules, so the
+  // request context does not honor Chromium's host-resolver rules, so the
   // blocked-media hostname exists only inside the browser.
   return page.request
     .post(`${BASE}/api/v1/auth/register`, { data: { email, username, password } })

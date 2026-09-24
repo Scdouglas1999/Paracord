@@ -13,7 +13,7 @@ import type { BuildingLight, PersonLight } from '../../../lib/attention/light';
  * Navigation has to survive the collapse, so the buildings stay — as their
  * marks, each carrying the brightest window it has lit. The window dot is the
  * same light the expanded column draws, and it keeps its words in the button's
- * accessible name, so a collapsed rail is still readable without colour (§9).
+ * accessible name, so a collapsed rail is still readable without color (§9).
  *
  * Desktop only: on a phone the column is a full overlay or nothing (§6).
  */

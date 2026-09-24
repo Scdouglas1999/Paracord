@@ -139,7 +139,7 @@ describe('readSessionParticipantWire (media control plane)', () => {
     expect(participant?.videoCapabilities).toEqual([]);
   });
 
-  it('ignores a participant with no id rather than materialising an empty one', () => {
+  it('ignores a participant with no id rather than materializing an empty one', () => {
     expect(readSessionParticipantWire({ sessionId: 'r' })).toBeNull();
     expect(readSessionParticipantWire(undefined)).toBeNull();
     expect(readSessionParticipantWire({ user_id: '1' })).toBeNull();

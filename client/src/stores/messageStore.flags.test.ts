@@ -109,7 +109,7 @@ describe('flags survive a refetch that omits them', () => {
   it('lets the server override flags when it actually sends them', async () => {
     useMessageStore.getState().addMessage('ch1', makeMessage({ flags: EPHEMERAL }) as never);
 
-    // An explicit 0 is a real value, not an omission — honour it.
+    // An explicit 0 is a real value, not an omission — honor it.
     mockChannelApi.getMessages.mockResolvedValue({ data: [makeMessage({ flags: 0 })] });
     await useMessageStore.getState().fetchMessages('ch1');
 

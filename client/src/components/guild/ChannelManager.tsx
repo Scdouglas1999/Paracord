@@ -73,8 +73,8 @@ function channelTypeBadge(type: number) {
   return 'Text';
 }
 
-// A role's own colour is data, not design (spec §1 exception): the hex comes
-// from the role, and a role with no colour falls back to a text token rather
+// A role's own color is data, not design (spec §1 exception): the hex comes
+// from the role, and a role with no color falls back to a text token rather
 // than a literal.
 function roleSwatch(role: Role): string {
   return role.color ? `#${role.color.toString(16).padStart(6, '0')}` : 'var(--text-faint)';
@@ -83,7 +83,7 @@ function roleSwatch(role: Role): string {
 /**
  * A role you can switch on or off — the chip recipe (spec §3 radius 7) on the
  * well → raised step: unselected is recessed, selected is raised and carries a
- * check, so selection is never colour alone (§9).
+ * check, so selection is never color alone (§9).
  */
 function RoleToggle({
   role,

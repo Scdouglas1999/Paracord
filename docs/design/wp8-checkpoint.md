@@ -34,12 +34,12 @@ out of the orchestrator's review of the landed frames. §2 onwards is the detail
 | A12 | WP3 §6 | the two static-a11y findings (`HomeAddBuilding`, `TimelineParts`) | **Not present** — `npm run test:a11y:static` passes on the whole tree; WP5/WP6 fixed them in flight |
 | A13 | WP7 §8 | dead `panelClassName` overrides from `CommandPalette` / `DiscoveryPage` | **Done** (`e7564d0`) |
 | A14 | WP2 §8 | stale prose naming deleted components | **Done** — `PinnedRail`, `SpacesList`, `GuildHomeHeader`, `LiveRoomsGrid`, `serverResolve`, `ConversationRow`, `MiniVoiceBar` (`74775f2`) |
-| A15 | WP2 §8 | `CallDock`'s collapsed variant paints `bg-accent-tint` + `ring-bg-secondary` | **Done** — being in a channel is white light, not the action colour: a raised pill with a lit dot (`3a982f5`) |
+| A15 | WP2 §8 | `CallDock`'s collapsed variant paints `bg-accent-tint` + `ring-bg-secondary` | **Done** — being in a channel is white light, not the action color: a raised pill with a lit dot (`3a982f5`) |
 | A16 | WP0 §8 | `data-testid="presence-dot"` in `ConversationRow` | **Moot** — `ConversationRow` is deleted (`e7564d0`); no `presence-dot` remains anywhere |
-| A17 | WP0 §8 | ~40 avatar fallbacks painting `bg-accent-primary` | **Already done** by WP2–WP7 — every avatar fallback now takes `getIdentityColor`; the remaining `bg-accent-primary` fills are buttons, progress bars and toggles, which is what the action colour is for |
+| A17 | WP0 §8 | ~40 avatar fallbacks painting `bg-accent-primary` | **Already done** by WP2–WP7 — every avatar fallback now takes `getIdentityColor`; the remaining `bg-accent-primary` fills are buttons, progress bars and toggles, which is what the action color is for |
 | A18 | WP0 §8, WP7 §8 | badge-sized `uppercase` labels | **Done** — the last two were the event card's weekday and the code block's language tag (`74775f2`). No `uppercase` class or `text-transform` survives in the product |
 | A19 | WP7 §8 | generic empty states in `FriendsPage` / `DiscoveryPage` | **Done for Friends** — the fallback state named its real tab (Requests) and gained its action (`74775f2`). `DiscoveryPage`'s was already specific and already carried a Clear-filters action |
-| A20 | WP7 §8 | `CreateBotForm`'s `sr-only`-labelled `Input`s | **Done** — two `TextField`s with visible labels (`74775f2`) |
+| A20 | WP7 §8 | `CreateBotForm`'s `sr-only`-labeled `Input`s | **Done** — two `TextField`s with visible labels (`74775f2`) |
 | A21 | WP0 §8 | point `docs/design-spec.md` at the Lantern Stage spec | **Done** — two paragraphs, file kept because other docs link to it (`00105cd`) |
 | A22 | WP8 brief | `docs/layout-spec.md` §7 "Channels recipes" names the replaced components | **Done** — rewritten as the IA-level map (`00105cd`) |
 
@@ -50,7 +50,7 @@ out of the orchestrator's review of the landed frames. §2 onwards is the detail
 | B1 | Hub welcome copy / banner / featured channels, with tests | **Done** — each fact goes where it is already true of the Lobby (`64581ef`); §3 |
 | B2 | Migrate every deprecated token alias, then delete it | **Done** — §4 carries the table (`3a982f5`) |
 | B3 | `--color-status-*`, glass/noise/ambient, Fraunces/Inter | **Confirmed gone** — one prose mention of `--color-status-*` survives, in `lib/presence.ts`, explaining what replaced it |
-| B4 | Hard-coded hex outside `tokens.css`, and a lint so it cannot regress | **Done** — `scripts/literal-colour-audit.mjs`, `npm run test:tokens`, wired into `npm test` (`3a982f5`); §5 |
+| B4 | Hard-coded hex outside `tokens.css`, and a lint so it cannot regress | **Done** — `scripts/literal-color-audit.mjs`, `npm run test:tokens`, wired into `npm test` (`3a982f5`); §5 |
 | B5 | Uppercase section labels, emoji chrome | **Done** for uppercase (A18). **Nothing to do** for emoji: a scan of every emoji block in `client/src` finds no emoji used as chrome — only the emoji picker, reactions and custom-emoji parsing, which are product features |
 | B6 | Delete unused components / hooks / CSS | **Done** — 15 modules and 85 CSS rules (`e7564d0`); §6 |
 | B7 | README screenshots + copy in the new vocabulary | **Done** (`40800d4`); §7 |
@@ -61,7 +61,7 @@ out of the orchestrator's review of the landed frames. §2 onwards is the detail
 
 | # | Item | Disposition |
 |---|---|---|
-| C1 | `RoomThumbnail`'s lamp is a grey haze over the top-left third of every live thumbnail | **Done** — the thumbnail has its own recipe now, `--thumb-glow` over `--thumb-frame-lit`, matching the reference exactly (`1536f3a`); §2 |
+| C1 | `RoomThumbnail`'s lamp is a gray haze over the top-left third of every live thumbnail | **Done** — the thumbnail has its own recipe now, `--thumb-glow` over `--thumb-frame-lit`, matching the reference exactly (`1536f3a`); §2 |
 | C2 | The Stage frame has no Servers column | **Harness, not product** — `VoiceStageChannel` has always rendered inside the AppShell; the frames came from `/design-stage`, a bare preview page. It now also mounts at `/app/design-stage` and the desktop frames use it (`1536f3a`, `0cbc578`) |
 | C3 | The text-channel header shows only the channel name | **Fixture, not product** — `TopBar` renders "\<server\> · \<topic\>" and `TextRoom.test.tsx` pins it; the WP5 fixture had neither a guild in the store nor a topic on the channel. Both are staged now (`22359ad`) |
 | C4 | The WP5 fixture was empty and dark | **Done** — a server of 24 with three people in the channel next door, three typing, and a timeline written by people who are in it (`22359ad`) |
@@ -72,7 +72,7 @@ out of the orchestrator's review of the landed frames. §2 onwards is the detail
 
 `RoomThumbnail` borrowed the card lamp — `radial-gradient(closest-side)` on a
 fully-rounded ellipse — and stretched it to 140% × 240% to cover the frame. At
-that size it reads as grey fog over the top-left third of every live thumbnail:
+that size it reads as gray fog over the top-left third of every live thumbnail:
 the sidebar row, the Lobby card and the Home card.
 
 That is not what the reference renders draw. `Home.html`, `Main.html` and
@@ -146,7 +146,7 @@ been wrong on half the ~90 call sites. Each one was mapped to what it is:
 | `--bg-tertiary` | `--bg-base` | the shell root, `App`'s splash |
 | `--bg-tertiary` | `--bg-well` | inputs, textareas, selects, poster placeholders, quoted readouts, the letterbox behind a live surface |
 | `--bg-accent` | `--bg-raised` | the update toast |
-| `--accent-secondary` | `--accent-primary` | the teal is gone; there is one action colour |
+| `--accent-secondary` | `--accent-primary` | the teal is gone; there is one action color |
 | `--accent-danger-fill` | `--danger-well` | the v2 recipe was already the well |
 | `--text-subhead` | `--text-heading` | 16 call sites |
 | `--member-list-width` | `--w-context-panel` | the panel has not been a member list for two packages |
@@ -181,9 +181,9 @@ painting a v1 shadow with hard-coded rgba in it:
 ### 4.3 What the migration surfaced
 
 - `useTheme` wrote `--accent-secondary` on every theme change, and exported a
-  `THEME_SURFACES` table of 16 literal colours that nothing read.
+  `THEME_SURFACES` table of 16 literal colors that nothing read.
 - the sidebar `CallDock`'s collapsed variant painted `bg-accent-tint` — the
-  action colour — for a channel you are **in**. Being in a channel is white light.
+  action color — for a channel you are **in**. Being in a channel is white light.
 - markdown's `@mention` was still the v1 Discord blurple, its spoiler and link
   rules carried literal fallbacks, and `==highlight==` was a raw rgba.
 - the contrast audit's last two checks were on `--bg-primary` / `--bg-secondary`;
@@ -191,12 +191,12 @@ painting a v1 shadow with hard-coded rgba in it:
 
 ---
 
-## 5. The literal-colour lint (B4)
+## 5. The literal-color lint (B4)
 
-`client/scripts/literal-colour-audit.mjs` — `npm run test:tokens`, and part of
+`client/scripts/literal-color-audit.mjs` — `npm run test:tokens`, and part of
 `npm test`. It walks all 477 source files under `client/src` and fails on any
-hex, `rgb()`, `hsl()` or CSS named colour used as a value. Comments are stripped
-first, `text-white` / `bg-black` are recognised as theme utilities, and tests,
+hex, `rgb()`, `hsl()` or CSS named color used as a value. Comments are stripped
+first, `text-white` / `bg-black` are recognized as theme utilities, and tests,
 fixtures and generated contract types are out of scope.
 
 Five files are allowed one each, **by name, with the reason no token can serve**:
@@ -205,11 +205,11 @@ Five files are allowed one each, **by name, with the reason no token can serve**
 |---|---|
 | `styles/tokens.css` | the palette itself |
 | `hooks/useTheme.ts` | `ACCENT_PRESETS` — the hover and active steps are computed from the picked value (`shadeHex`/`scaleHex`), so the numbers cannot be custom properties |
-| `lib/colors.ts` | `DEFAULT_ROLE_COLOR` / `UNSET_ROLE_COLOR` — a role colour is data sent to the server, not a surface this app paints |
+| `lib/colors.ts` | `DEFAULT_ROLE_COLOR` / `UNSET_ROLE_COLOR` — a role color is data sent to the server, not a surface this app paints |
 | `lib/media/video/canvasRenderer.ts` | canvas 2D `fillStyle` for the letterbox behind a video frame; a canvas cannot read a custom property |
 | `components/customization/CustomCSS.tsx` | the example CSS in the editor's placeholder, which has to look like CSS |
 
-Everything else was tokenised: the theme preview and accent-chip swatch classes
+Everything else was tokenized: the theme preview and accent-chip swatch classes
 (dead — `ThemeSelector` renders token-based previews now), the two
 `color-mix(…, #000)` hover fills, the markdown mention/spoiler/link/highlight
 rules, and the 16-row `THEME_SURFACES` table.
@@ -326,7 +326,7 @@ what the product now says (`6b8c205`), and none was weakened without saying why:
 - a Needs-you row names **who** mentioned you rather than how many times
   (`needsYouReason`), so the two count assertions became row-shape assertions and
   the preview assertions carry the content check they always did
-- a row's single action is labelled for the channel it opens ("Open decisions")
+- a row's single action is labeled for the channel it opens ("Open decisions")
 - the edit-history dialog lists "Version N · \<time\>" after WP7's restyle
 
 **`playwright.dm-attachments.config.ts` could not run at all.** It set its ports
@@ -428,7 +428,7 @@ lying.
   says "\<author\> mentioned you", so two mentions from the same person in the
   same channel read the same as one. WP6's choice, surfaced by the real-server
   suite; worth revisiting with the row's design rather than patched here.
-- **`--thumb-frame-lit` for Daylight is a judgement call.** The Night value comes
+- **`--thumb-frame-lit` for Daylight is a judgment call.** The Night value comes
   straight from the reference renders; the other three themes are derived, and
   only the Night one has been compared against an artboard.
 - **The here-now strip is hidden below the `md` breakpoint.** On a phone the

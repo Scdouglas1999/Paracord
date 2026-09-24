@@ -97,8 +97,8 @@ async function register(name) {
  *
  * It borrows the browser context's cookies rather than holding a token of its
  * own. Two reasons, both learned the hard way: attaching an encryption identity
- * revokes the session it was authorised with, so a captured token starts 401ing
- * the moment an account enrols; and logging in again out of band opens a second
+ * revokes the session it was authorized with, so a captured token starts 401ing
+ * the moment an account enrolls; and logging in again out of band opens a second
  * session that costs the browser its first — which showed up as every account
  * losing its realtime stream (`POST /stream/ticket` 401) partway through a run,
  * and looked exactly like a product bug. One session per person, and it is the
@@ -149,7 +149,7 @@ async function waitUntilSendable(person, timeoutMs = 120000) {
   await composer(page).waitFor({ state: 'visible', timeout: 30000 });
   let lastRefusal = '(none seen)';
   // A page load re-locks the identity and re-opens the realtime stream, and the
-  // post-enrolment credential rotation can 401 either. Ready means the composer
+  // post-enrollment credential rotation can 401 either. Ready means the composer
   // is willing *and* the session has stopped failing — asserting on live
   // delivery before that measures the reconnect, not the product.
   let failures = person.logs.filter(line => line.startsWith('HTTP 4')).length;
@@ -314,9 +314,9 @@ async function publishPrekeys(person) {
 }
 
 /**
- * Wait for this session to stop 401ing after an enrolment.
+ * Wait for this session to stop 401ing after an enrollment.
  *
- * Attaching an encryption identity revokes the session it was authorised with
+ * Attaching an encryption identity revokes the session it was authorized with
  * and the instance issues a replacement. For a moment either side of that the
  * app is still presenting the dead credential: `/users/@me/relationships` and
  * `POST /stream/ticket` answer 401, the realtime stream drops, and the gateway
@@ -436,9 +436,9 @@ async function scenarios(people) {
   const state = {};
 
   log('\nEncryption identities');
-  await step('ada enrols an encryption identity', async () => `key ${await enrollEncryption(ada)}…`);
-  await step('grace enrols an encryption identity', async () => `key ${await enrollEncryption(grace)}…`);
-  await step('linus enrols an encryption identity', async () => `key ${await enrollEncryption(linus)}…`);
+  await step('ada enrolls an encryption identity', async () => `key ${await enrollEncryption(ada)}…`);
+  await step('grace enrolls an encryption identity', async () => `key ${await enrollEncryption(grace)}…`);
+  await step('linus enrolls an encryption identity', async () => `key ${await enrollEncryption(linus)}…`);
   await step('unlocking publishes each account’s prekeys', async () => {
     const counts = [];
     for (const person of [ada, grace, linus]) {
@@ -447,7 +447,7 @@ async function scenarios(people) {
     }
     return counts.join(' ');
   });
-  await step('every session settles on its post-enrolment credential', async () => {
+  await step('every session settles on its post-enrollment credential', async () => {
     for (const person of [ada, grace, linus]) await settle(person);
     return 'no stale-credential failures left in flight';
   });
@@ -706,7 +706,7 @@ async function scenarios(people) {
 
   log('\nPage health');
   await step('no unexpected errors in any session', async () => {
-    // Enrolling an encryption identity revokes the session it was authorised
+    // Enrolling an encryption identity revokes the session it was authorized
     // with and the instance issues a replacement. Requests already on the wire
     // carry the dead credential, so a 401 and one gateway reconnect either side
     // of that are the rotation working, not a defect — the client installs the
@@ -735,7 +735,7 @@ async function scenarios(people) {
       }
     }
     assert(unexpected.length === 0, unexpected.slice(0, 5).join('\n'));
-    return `none (${transient} post-enrolment rotation notices, ${removedMember} expected 403s for the removed member)`;
+    return `none (${transient} post-enrollment rotation notices, ${removedMember} expected 403s for the removed member)`;
   });
 }
 

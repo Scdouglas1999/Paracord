@@ -137,7 +137,7 @@ pub struct UpdateMeRequest {
     /// but clients should prefer `POST /users/@me/avatar`.
     pub avatar_hash: Option<String>,
     /// Profile accent as `0xRRGGBB`. `null` clears it. Omit the field to leave
-    /// the stored colour unchanged.
+    /// the stored color unchanged.
     #[serde(default, deserialize_with = "deserialize_clearable_i32")]
     pub accent_color: Option<Option<i32>>,
 }

@@ -940,7 +940,7 @@ impl RelayForwarder {
     /// fail, so they wind down and the effective per-user cap is one.
     /// Per-account connection gate.
     ///
-    /// Serialises replacement (`add_connection`) against every lease-checked
+    /// Serializes replacement (`add_connection`) against every lease-checked
     /// mutation, so a superseded connection's cleanup can never interleave
     /// between its replacement's ownership check and that replacement's writes.
     ///
@@ -1785,7 +1785,7 @@ impl RelayForwarder {
     /// Compute the set of recipients a packet from `sender_id` in `room_id`
     /// would be forwarded to, applying the same decision as the fan-out hot path
     /// without touching any connection. Used by routing tests to assert
-    /// subscription, self-echo, deafen, and cross-room-isolation behaviour.
+    /// subscription, self-echo, deafen, and cross-room-isolation behavior.
     #[cfg(test)]
     fn compute_forward_recipients(
         &self,
@@ -2359,7 +2359,7 @@ impl RelayForwarder {
                     return;
                 }
                 for (recipient_user_id, ciphertext) in encrypted_keys {
-                    // Authorisation is membership, not reachability: a peer that
+                    // Authorization is membership, not reachability: a peer that
                     // has joined the call but whose media connection has not
                     // come up yet must still have its key stored, so
                     // `send_initial_track_state` can hand it over on connect.
@@ -2664,9 +2664,9 @@ impl RelayForwarder {
     ///
     /// A recipient id a client put in a message (`StreamKeyAnnounce` and
     /// `KeyAnnounce` both carry a caller-supplied `recipient_user_id`) is only
-    /// ever authorised against the announcing participant's own room; without
+    /// ever authorized against the announcing participant's own room; without
     /// that scoping a participant in any room could target users in every other
-    /// call on the server. This is the *authorisation* question, kept separate
+    /// call on the server. This is the *authorization* question, kept separate
     /// from whether the recipient currently has a live media connection.
     fn is_room_member(&self, room_id: &str, user_id: i64) -> bool {
         self.room_manager

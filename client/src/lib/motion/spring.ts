@@ -65,7 +65,7 @@ export function springDisplacement(tMs: number, config: SpringConfig): number {
   return a * Math.exp(r1 * t) + b * Math.exp(r2 * t);
 }
 
-/** Normalised progress 0 → 1 at `tMs`. At the token damping it never passes 1. */
+/** Normalized progress 0 → 1 at `tMs`. At the token damping it never passes 1. */
 export function springProgress(tMs: number, config: SpringConfig): number {
   return 1 - springDisplacement(tMs, config);
 }
@@ -117,7 +117,7 @@ export function springLinearEasing(config: SpringConfig, options: SpringEasingOp
   const raw: number[] = [];
   for (let i = 0; i <= samples; i += 1) raw.push(springProgress((i / samples) * duration, config));
   // The window is usually shorter than the spring's own settling time, so the
-  // last sample sits a whisker short of 1. Normalise on it: an easing MUST end
+  // last sample sits a whisker short of 1. Normalize on it: an easing MUST end
   // at exactly 1 or the element is left off its mark.
   const last = raw[raw.length - 1] || 1;
   const points = raw.map((value, i) =>
@@ -134,7 +134,7 @@ export function springLinearEasing(config: SpringConfig, options: SpringEasingOp
 /**
  * Sampling the spring into a `linear()` string is real main-thread arithmetic,
  * and a moment can ask for the same curve a dozen times on one frame — a burst
- * of arrivals, or the travelling tile and the chrome behind it starting
+ * of arrivals, or the traveling tile and the chrome behind it starting
  * together. The answer only depends on the four numbers below, all of them
  * tokens, so it is worth remembering. Small and bounded: the cache can only
  * ever hold one entry per (spring, duration, velocity) the product uses.

@@ -163,7 +163,7 @@ req("PATCH", f"/guilds/{GID}", token=OT, json={
 }, expect=(200, 204))
 
 # A new space ships with a default text and voice channel; this fixture builds
-# its own categorised set, so the defaults are removed to avoid duplicates.
+# its own categorized set, so the defaults are removed to avoid duplicates.
 default_channels = [str(c["id"]) for c in req("GET", f"/guilds/{GID}/channels", token=OT)]
 
 ROLES = {}

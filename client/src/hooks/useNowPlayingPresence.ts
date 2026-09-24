@@ -60,16 +60,16 @@ export function useNowPlayingPresence(): void {
       return;
     }
 
-    let cancelled = false;
+    let canceled = false;
     const unlisten: Array<() => void> = [];
     // A listener that finished registering after cleanup ran is dropped at once.
     const keep = (stop: () => void) => {
-      if (cancelled) stop();
+      if (canceled) stop();
       else unlisten.push(stop);
     };
     const store = useNowPlayingStore.getState();
     const publisher = new NowPlayingPublisher((activity) => {
-      if (!cancelled) setActivitySource('listening', activity);
+      if (!canceled) setActivitySource('listening', activity);
     });
 
     const fail = (message: string) => {
@@ -83,36 +83,36 @@ export function useNowPlayingPresence(): void {
     void (async () => {
       const { listen } = await import('@tauri-apps/api/event');
       const support = await invokeNative<NowPlayingSupport>('now_playing_support');
-      if (cancelled) return;
+      if (canceled) return;
       store.setSupport(support);
       if (!support.supported) return;
 
       // Listen before starting: the reader sends what is playing right away.
       keep(
         await listen<NowPlayingSnapshot | null>(NOW_PLAYING_CHANGED_EVENT, (event) => {
-          if (cancelled) return;
+          if (canceled) return;
           store.setCurrent(event.payload);
           publisher.update(event.payload);
         }),
       );
       keep(
         await listen<string>(NOW_PLAYING_FAILED_EVENT, (event) => {
-          if (!cancelled) fail(event.payload);
+          if (!canceled) fail(event.payload);
         }),
       );
-      if (cancelled) return;
+      if (canceled) return;
       try {
         await queueNative(() => invokeNative('now_playing_start'));
-        if (!cancelled) store.setError(null);
+        if (!canceled) store.setError(null);
       } catch (err) {
-        if (!cancelled) fail(errorText(err));
+        if (!canceled) fail(errorText(err));
       }
     })().catch((err) => {
-      if (!cancelled) fail(errorText(err));
+      if (!canceled) fail(errorText(err));
     });
 
     return () => {
-      cancelled = true;
+      canceled = true;
       publisher.dispose();
       for (const stop of unlisten) stop();
       // Queued behind this round's start, so it always lands after it.

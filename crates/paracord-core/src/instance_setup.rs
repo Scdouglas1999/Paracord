@@ -2,7 +2,7 @@
 //!
 //! A fresh instance starts `pending`. While pending nothing can create an
 //! account except [`claim_instance`], which requires the one-time bootstrap
-//! claim token the server printed on startup. That replaces the old behaviour
+//! claim token the server printed on startup. That replaces the old behavior
 //! where whoever registered first on a freshly exposed server silently became
 //! its owner.
 

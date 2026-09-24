@@ -244,7 +244,7 @@ export function VoiceControlBar({
 
     return (
         <>
-        {/* The Stage lays the bar out in flow and centres it (§7.2); the
+        {/* The Stage lays the bar out in flow and centers it (§7.2); the
             controls are 46px (50 on a phone) on the 13px stage radius, mic-on
             is white light and leave is danger. */}
         {/* §5.1: the control bar is chrome — it rises 80ms behind the tile
@@ -513,7 +513,7 @@ export function VoiceControlBar({
                     // §5.1: leaving reverses the journey. There is no on-air
                     // pill to fold into when you are leaving the room
                     // altogether, so the tile dims out with the page rather
-                    // than travelling to a destination that is not there.
+                    // than traveling to a destination that is not there.
                     onClick={() => {
                         if (!channelId) {
                             void leaveChannel();

@@ -138,7 +138,7 @@ export function BackupsPanel() {
         <Switch
           checked={includeMedia}
           onChange={setIncludeMedia}
-          labelledBy="backup-include-media"
+          labeledBy="backup-include-media"
         />
       </div>
 

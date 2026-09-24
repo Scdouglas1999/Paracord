@@ -62,7 +62,7 @@ export function sourceRect(
   return { sx: cx - sw / 2, sy: cy - sh / 2, sw, sh };
 }
 
-/** CSS `#rrggbb` for a stored `0xRRGGBB` accent, or null when it is not a colour. */
+/** CSS `#rrggbb` for a stored `0xRRGGBB` accent, or null when it is not a color. */
 export function accentCssColor(color: number | null | undefined): string | null {
   if (color == null || !Number.isInteger(color) || color < 0 || color > 0xffffff) return null;
   return `#${color.toString(16).padStart(6, '0')}`;

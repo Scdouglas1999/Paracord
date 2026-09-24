@@ -114,7 +114,7 @@ describe('native media certificate pin', () => {
     );
   });
 
-  it('refuses to start a session with no pin at all rather than dialling unpinned', async () => {
+  it('refuses to start a session with no pin at all rather than dialing unpinned', async () => {
     const media = engine();
     await expect(media.connect('https://media.example/media', 'token', undefined)).rejects.toThrow(
       /certificate pin/i,

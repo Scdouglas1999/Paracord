@@ -44,8 +44,8 @@ export const NavRow = React.forwardRef<HTMLElement, NavRowProps>(function NavRow
         'text-label text-text-secondary',
         // The transition and the press belong to `.pc-pressable-row`: a row
         // darkens a step under the finger rather than shrinking (§5.1).
-        // The selected row is a wash in the base hue rather than a grey step,
-        // and inside a server's group it is a wash in THAT server's colour —
+        // The selected row is a wash in the base hue rather than a gray step,
+        // and inside a server's group it is a wash in THAT server's color —
         // `--row-selected` is written per group by BuildingSection (§7.1).
         active
           ? 'bg-[var(--row-selected)] text-text-primary shadow-[var(--shadow-raised)]'

@@ -288,10 +288,10 @@ async fn failed_reservation_does_not_prevent_a_later_create() {
     let (app, alice, _, channel) = setup().await;
     match paracord_db::active_database_engine() {
         paracord_db::DatabaseEngine::Sqlite => {
-            sqlx::query("CREATE TRIGGER reject_delivery_resolution AFTER INSERT ON message_delivery_receipts WHEN NEW.cancelled BEGIN SELECT RAISE(ABORT, 'injected resolution failure'); END").execute(&app.db).await.unwrap();
+            sqlx::query("CREATE TRIGGER reject_delivery_resolution AFTER INSERT ON message_delivery_receipts WHEN NEW.canceled BEGIN SELECT RAISE(ABORT, 'injected resolution failure'); END").execute(&app.db).await.unwrap();
         }
         paracord_db::DatabaseEngine::Postgres => {
-            sqlx::query("CREATE FUNCTION reject_delivery_resolution() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.cancelled THEN RAISE EXCEPTION 'injected resolution failure'; END IF; RETURN NEW; END; $$").execute(&app.db).await.unwrap();
+            sqlx::query("CREATE FUNCTION reject_delivery_resolution() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.canceled THEN RAISE EXCEPTION 'injected resolution failure'; END IF; RETURN NEW; END; $$").execute(&app.db).await.unwrap();
             sqlx::query("CREATE TRIGGER reject_delivery_resolution AFTER INSERT ON message_delivery_receipts FOR EACH ROW EXECUTE FUNCTION reject_delivery_resolution()").execute(&app.db).await.unwrap();
         }
     }

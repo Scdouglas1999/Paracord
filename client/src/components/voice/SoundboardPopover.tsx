@@ -47,16 +47,16 @@ export function SoundboardPopover({
   const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    let cancelled = false;
+    let canceled = false;
     loadSounds(guildId)
       .then(() => {
-        if (!cancelled) setFailed(false);
+        if (!canceled) setFailed(false);
       })
       .catch(() => {
-        if (!cancelled) setFailed(true);
+        if (!canceled) setFailed(true);
       });
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [guildId, loadSounds]);
 

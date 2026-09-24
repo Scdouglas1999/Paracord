@@ -39,7 +39,7 @@ function formatAge(hours: number | null): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
-// §9: colour is never the only cue — every severity carries its own word.
+// §9: color is never the only cue — every severity carries its own word.
 const SEVERITY: Record<
   HealthCheck['severity'],
   { icon: typeof AlertTriangle; tone: string; label: string }

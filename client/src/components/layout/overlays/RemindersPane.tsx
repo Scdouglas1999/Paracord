@@ -40,17 +40,17 @@ function ReminderRow({
   const author = reminderAuthor(item);
 
   useEffect(() => {
-    let cancelled = false;
+    let canceled = false;
     setPreviewError(null);
     reminderPreviewLine(scope, item)
       .then((line) => {
-        if (!cancelled) setPreview(line);
+        if (!canceled) setPreview(line);
       })
       .catch((err) => {
-        if (!cancelled) setPreviewError(`This message could not be read here: ${extractApiError(err)}`);
+        if (!canceled) setPreviewError(`This message could not be read here: ${extractApiError(err)}`);
       });
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [item, scope]);
 

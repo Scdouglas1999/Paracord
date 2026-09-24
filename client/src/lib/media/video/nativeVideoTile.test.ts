@@ -13,7 +13,7 @@ describe('sampleTileVisibility', () => {
     const tile = document.createElement('div');
     const fromPoint = vi.fn(() => tile);
     expect(sampleTileVisibility(tile, RECT, fromPoint)).toBe(true);
-    // centre + 4 inset corners = 5 samples.
+    // center + 4 inset corners = 5 samples.
     expect(fromPoint).toHaveBeenCalledTimes(5);
   });
 
@@ -64,12 +64,12 @@ describe('sampleTileVisibility', () => {
     const tile = document.createElement('div');
     const overlay = document.createElement('div');
     let call = 0;
-    // Centre is covered by an unrelated overlay (e.g. a modal); corners are clear.
+    // Center is covered by an unrelated overlay (e.g. a modal); corners are clear.
     const fromPoint = () => (call++ === 0 ? overlay : tile);
     expect(sampleTileVisibility(tile, RECT, fromPoint)).toBe(false);
   });
 
-  it('is occluded when a corner is covered even if the centre is clear', () => {
+  it('is occluded when a corner is covered even if the center is clear', () => {
     const tile = document.createElement('div');
     const overlay = document.createElement('div');
     const fromPoint = (x: number, y: number) =>
@@ -151,7 +151,7 @@ describe('sampleTileVisibility', () => {
       ),
     ).toBe(true);
 
-    // Same menu covering the centre: hide the surface (fullscreen-style occluder).
+    // Same menu covering the center: hide the surface (fullscreen-style occluder).
     const fromCenterMenu = (x: number, y: number) => {
       const centerX = (RECT.left + RECT.right) / 2;
       const centerY = (RECT.top + RECT.bottom) / 2;
@@ -334,7 +334,7 @@ describe('NativeVideoTile', () => {
     document.body.removeChild(stage);
   });
 
-  it('reports hidden when a body-portaled menu covers the tile centre in underlay mode', async () => {
+  it('reports hidden when a body-portaled menu covers the tile center in underlay mode', async () => {
     const onVisibilityChange = vi.fn();
     const { tile, element, invoke } = makeTile({
       occlusion: 'underlay',
@@ -348,7 +348,7 @@ describe('NativeVideoTile', () => {
     menu.setAttribute('data-native-overlay-occlude', '');
     menu.style.position = 'fixed';
     document.body.appendChild(menu);
-    // Cover every sample including centre — fullscreen-style occluder.
+    // Cover every sample including center — fullscreen-style occluder.
     document.elementFromPoint = vi.fn(() => menu) as typeof document.elementFromPoint;
     (tile as unknown as { report: () => void }).report();
 

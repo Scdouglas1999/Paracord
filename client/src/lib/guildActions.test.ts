@@ -31,7 +31,7 @@ describe('background guild read actions', () => {
     expect(useReadStateStore.getState().byAccount[JSON.stringify(['b', '42'])]).toBeUndefined();
     expect(useServerListStore.getState().activeServerId).toBe('b');
   });
-  it('leaves failed acknowledgements unread and reports the failure', async () => {
+  it('leaves failed acknowledgments unread and reports the failure', async () => {
     clients.get('a')!.defaults.adapter = async config => {
       if (config.method !== 'get') throw new Error('Permission revoked');
       return reply(config, config.url?.endsWith('/visible') ? { channel_ids: ['7'] } : [{ id: '7', type: 0, position: 0, last_message_id: '99' }]);
@@ -39,7 +39,7 @@ describe('background guild read actions', () => {
     await expect(markGuildRead({ id: '1', scope })).rejects.toThrow('1 of 1 channels could not be marked read: Permission revoked');
     expect(useReadStateStore.getState().byAccount[JSON.stringify(['a', '42'])]).toBeUndefined();
   });
-  it('bounds concurrent acknowledgements for large servers', async () => {
+  it('bounds concurrent acknowledgments for large servers', async () => {
     let concurrent = 0; let maximum = 0; let acknowledged = 0;
     const channels = Array.from({ length: 19 }, (_, id) => ({ id: String(id), type: 0, position: id, last_message_id: '99' }));
     clients.get('a')!.defaults.adapter = async config => {

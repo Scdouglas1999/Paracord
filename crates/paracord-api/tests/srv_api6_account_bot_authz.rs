@@ -269,7 +269,7 @@ async fn existing_members_cannot_trigger_raid_lockdown_by_replaying_an_invite() 
             .await?;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
         assert!(
-            body.to_string().contains("Verification acknowledgement"),
+            body.to_string().contains("Verification acknowledgment"),
             "{body}"
         );
     }

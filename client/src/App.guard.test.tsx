@@ -194,7 +194,7 @@ describe('destinationAfterLogin', () => {
     expect(destinationAfterLogin(null, false)).toBeNull();
   });
 
-  it('still honours an invite the person asked for', () => {
+  it('still honors an invite the person asked for', () => {
     expect(destinationAfterLogin('aBcDeF', false)).toBe('/invite/aBcDeF?joining=1');
   });
 });

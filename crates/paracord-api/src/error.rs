@@ -23,9 +23,9 @@ pub enum ApiError {
     #[error("This message was already delivered and has since been deleted.")]
     DeliveryAlreadyDeleted,
     #[error("This message delivery was canceled before it was created.")]
-    DeliveryCancelled,
+    DeliveryCanceled,
     #[error("This message edit was canceled before it committed.")]
-    EditCancelled,
+    EditCanceled,
     /// An AutoMod rule rejected the content. The message is operator-authored
     /// and shown verbatim to the author.
     #[error("{0}")]
@@ -69,8 +69,8 @@ impl ApiError {
             ApiError::Conflict(_) => "CONFLICT",
             ApiError::HistoryChanged => "HISTORY_CHANGED",
             ApiError::DeliveryAlreadyDeleted => "DELIVERY_ALREADY_DELETED",
-            ApiError::DeliveryCancelled => "DELIVERY_CANCELLED",
-            ApiError::EditCancelled => "EDIT_CANCELLED",
+            ApiError::DeliveryCanceled => "DELIVERY_CANCELLED",
+            ApiError::EditCanceled => "EDIT_CANCELLED",
             ApiError::AutomodBlocked(_) => "AUTOMOD_BLOCKED",
             ApiError::UpgradeRequired(_) => "UPGRADE_REQUIRED",
             ApiError::InviteRequired(_) => "INVITE_REQUIRED",
@@ -91,8 +91,8 @@ impl ApiError {
             ApiError::Conflict(_) => StatusCode::CONFLICT,
             ApiError::HistoryChanged => StatusCode::CONFLICT,
             ApiError::DeliveryAlreadyDeleted => StatusCode::GONE,
-            ApiError::DeliveryCancelled => StatusCode::GONE,
-            ApiError::EditCancelled => StatusCode::GONE,
+            ApiError::DeliveryCanceled => StatusCode::GONE,
+            ApiError::EditCanceled => StatusCode::GONE,
             ApiError::AutomodBlocked(_) => StatusCode::FORBIDDEN,
             ApiError::UpgradeRequired(_) => StatusCode::UPGRADE_REQUIRED,
             ApiError::InviteRequired(_) => StatusCode::FORBIDDEN,
@@ -176,8 +176,8 @@ impl From<paracord_db::DbError> for ApiError {
             paracord_db::DbError::NotFound => ApiError::NotFound,
             paracord_db::DbError::Conflict(message) => ApiError::Conflict(message),
             paracord_db::DbError::DeliveryAlreadyDeleted => ApiError::DeliveryAlreadyDeleted,
-            paracord_db::DbError::DeliveryCancelled => ApiError::DeliveryCancelled,
-            paracord_db::DbError::EditCancelled => ApiError::EditCancelled,
+            paracord_db::DbError::DeliveryCanceled => ApiError::DeliveryCanceled,
+            paracord_db::DbError::EditCanceled => ApiError::EditCanceled,
             paracord_db::DbError::LimitReached(msg) => ApiError::Conflict(msg),
             paracord_db::DbError::Sqlx(_) => ApiError::Internal(anyhow::anyhow!("database error")),
         }

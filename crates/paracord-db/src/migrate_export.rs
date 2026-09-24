@@ -253,7 +253,7 @@ fn quote_ident(ident: &str) -> String {
 }
 
 /// Build the parameterised `INSERT` used to copy a single row. Temporal columns
-/// get an explicit cast so PostgreSQL accepts the normalised text value.
+/// get an explicit cast so PostgreSQL accepts the normalized text value.
 ///
 /// The statement upserts on the source primary key rather than plainly
 /// inserting. `migrate_sqlite_to_postgres` runs the PostgreSQL migrations
@@ -352,9 +352,9 @@ enum BoundValue {
 }
 
 fn normalize_temporal_text(raw: &str) -> String {
-    // Canonicalise to UTC, retaining fractional seconds, so the `::timestamp*` cast is
+    // Canonicalize to UTC, retaining fractional seconds, so the `::timestamp*` cast is
     // unambiguous; PostgreSQL connections are pinned to UTC. If the value isn't
-    // a recognised datetime, pass it through untouched and let PostgreSQL judge.
+    // a recognized datetime, pass it through untouched and let PostgreSQL judge.
     match crate::datetime_from_db_text(raw) {
         Ok(dt) => dt.format("%Y-%m-%d %H:%M:%S%.f").to_string(),
         Err(_) => raw.to_string(),

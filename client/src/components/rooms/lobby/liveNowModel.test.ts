@@ -76,7 +76,7 @@ describe('the calendar', () => {
     expect(event('c', '2026-09-22T10:00:00Z', 2).happeningNow).toBe(true);
   });
 
-  it('drops what is over, cancelled or unreadable', () => {
+  it('drops what is over, canceled or unreadable', () => {
     expect(toHomeEvent({ id: 'a', name: 'a', scheduled_start: '2026-09-22T10:00:00Z', status: 1 }, NOW)).toBeNull();
     expect(toHomeEvent({ id: 'a', name: 'a', scheduled_start: '2026-09-23T10:00:00Z', status: 4 }, NOW)).toBeNull();
     expect(toHomeEvent({ id: 'a', name: 'a', scheduled_start: 'soon' }, NOW)).toBeNull();

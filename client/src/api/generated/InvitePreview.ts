@@ -40,7 +40,7 @@ export interface InviteJoinGate {
    */
   questions: string[];
   /**
-   * The newcomer must tick an acknowledgement of the server's rules.
+   * The newcomer must tick an acknowledgment of the server's rules.
    */
   require_ack: boolean;
   [k: string]: unknown | undefined;

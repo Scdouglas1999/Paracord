@@ -15,14 +15,14 @@ import { bytesToHex } from './util';
 /**
  * Hand the replacement credential to every scope that was holding the dead one.
  *
- * Attaching a key revokes the login session it was authorised with, and the
+ * Attaching a key revokes the login session it was authorized with, and the
  * server answers with a brand-new one. Installing that reply in a single scope
  * is not enough: on the desktop the *same* session is also held by the
  * server-list entry for this instance (the shell has no origin server, so it
  * always adds its own instance by address). That copy was left holding the
  * token the attach had just revoked, and within milliseconds its own requests
  * 401'd, its refresh presented the spent token, and `onAuthFailed` tore down
- * the home session the copy was made from — mid-enrolment. The visible result
+ * the home session the copy was made from — mid-enrollment. The visible result
  * was "Waiting for your instance account" on a setup that had in fact
  * succeeded, a settings toggle that silently 401'd forever after, and
  * "your session ended on the instance" over a live, healthy connection.

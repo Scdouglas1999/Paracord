@@ -52,7 +52,7 @@ export function GateNotice({ children }: { children: ReactNode }) {
   );
 }
 
-// The boolean control and the labelled boolean row are the app-wide primitives
+// The boolean control and the labeled boolean row are the app-wide primitives
 // (ui/Switch.tsx). They used to be duplicated here with a literal `bg-white`
 // knob; re-exported so every settings call site paints the one recipe.
 export { Switch, ToggleRow } from '../ui';

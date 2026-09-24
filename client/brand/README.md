@@ -42,7 +42,7 @@ What it writes:
 | `lantern=0` | The cord only (the loading screen's cord layer) |
 | `cord=0` | The lantern only |
 | `lit=0` | The unlit lantern, dimmed and desaturated (the loading screen's first beat) |
-| `small=1` | The small-size variant for 16-48 px: the same silhouette drawn larger in the tile, a bolder cord and thicker guard wires, and no engraving, rivets, vent slots, fibre lines, wall rings or grain |
+| `small=1` | The small-size variant for 16-48 px: the same silhouette drawn larger in the tile, a bolder cord and thicker guard wires, and no engraving, rivets, vent slots, fiber lines, wall rings or grain |
 | `ground=0` | No floor shadow, floor light or lamp wash: only the lantern and cord, for the in-app mark, which is trimmed to the drawing |
 
 `banner.html` composes the README banner and the bare wordmark (Gabarito 800)

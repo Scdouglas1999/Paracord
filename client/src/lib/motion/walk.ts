@@ -34,8 +34,8 @@ export interface WalkOptions {
   go: () => void;
 }
 
-/** Marks the branch that is travelling, so a clone can find it again. */
-const TRAVELLING = 'data-motion-travelling';
+/** Marks the branch that is traveling, so a clone can find it again. */
+const TRAVELING = 'data-motion-traveling';
 
 /**
  * The surface you are walking out of steps back 4% and fades (§5.1 "the rest
@@ -50,19 +50,19 @@ const TRAVELLING = 'data-motion-travelling';
  * while the room you are entering arrives underneath it.
  *
  * The branch the origin is on is hidden IN THE CLONE, because that branch is
- * not receding: it is travelling.
+ * not receding: it is traveling.
  */
 export function recedeAround(origin: Element | null | undefined, root: ParentNode = document): Animation[] {
   const animations: Animation[] = [];
   for (const region of root.querySelectorAll<HTMLElement>(`[${RECEDE_MARK}]`)) {
     const inside = origin ? region.contains(origin) || region === origin : false;
-    if (inside && origin) origin.setAttribute(TRAVELLING, '');
+    if (inside && origin) origin.setAttribute(TRAVELING, '');
     const animation = ghostOut(region, (copy) => {
-      const travelling = copy.querySelector<HTMLElement>(`[${TRAVELLING}]`);
-      if (travelling) travelling.style.visibility = 'hidden';
+      const traveling = copy.querySelector<HTMLElement>(`[${TRAVELING}]`);
+      if (traveling) traveling.style.visibility = 'hidden';
       return recede(copy);
     });
-    if (inside && origin) origin.removeAttribute(TRAVELLING);
+    if (inside && origin) origin.removeAttribute(TRAVELING);
     if (animation) animations.push(animation);
   }
   return animations;
@@ -77,7 +77,7 @@ const HOLD_MS = 900;
  *
  * The route change unmounts the card on the same tick, and the room behind it
  * is a lazy chunk and a React render away — so on the Web Animations path the
- * travelling element simply vanished for ~200ms and reappeared at its
+ * traveling element simply vanished for ~200ms and reappeared at its
  * destination. The frame strip showed it; the budget did not, because dropping
  * an element is free.
  *

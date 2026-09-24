@@ -200,7 +200,7 @@ export function AddFeedSheet({ guildId, open, onClose, twitchAvailable, channels
     <Modal
       open={open}
       onClose={onClose}
-      labelledBy={titleId}
+      labeledBy={titleId}
       describedBy={descriptionId}
       size="md"
       showCloseButton
@@ -277,7 +277,7 @@ export function AddFeedSheet({ guildId, open, onClose, twitchAvailable, channels
                   <span id={modeLabelId}>Post</span>
                 </FieldLabel>
                 <ChoiceCards
-                  labelledBy={modeLabelId}
+                  labeledBy={modeLabelId}
                   options={GITHUB_MODES}
                   value={githubMode}
                   onChange={setGithubMode}

@@ -23,7 +23,7 @@ import { useTogetherActivity } from '../../../stores/togetherStore';
  *
  * Presentational: the light is decided by `lib/attention` and handed in as a
  * {@link RoomLight}; these components never derive one. Every light carries its
- * words (§9) — a row is readable with the colours switched off.
+ * words (§9) — a row is readable with the colors switched off.
  */
 
 /** Unread / mention state for one room, from the unified conversation merge. */

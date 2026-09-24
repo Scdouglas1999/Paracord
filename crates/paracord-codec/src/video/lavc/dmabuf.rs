@@ -202,7 +202,7 @@ impl DmaBufDescriptor {
 /// it — the minimum needed to `hwmap` a dma-buf into VAAPI. Called once at
 /// stream start by the route selector (D3); the decision is then fixed.
 ///
-/// Honours `PARACORD_VAAPI_DEVICE` (a DRM render node like `/dev/dri/renderD128`)
+/// Honors `PARACORD_VAAPI_DEVICE` (a DRM render node like `/dev/dri/renderD128`)
 /// exactly as the SHM VAAPI path does, so probe and real construction target the
 /// same device.
 pub fn probe_dmabuf_vaapi_import() -> bool {

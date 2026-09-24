@@ -1,6 +1,6 @@
 services:
   paracord:
-    # Default behaviour in a source checkout is unchanged: `build` policy +
+    # Default behavior in a source checkout is unchanged: `build` policy +
     # local context means `docker compose up -d` builds from this tree.
     #
     # Two env overrides make the same file work with NO checkout:

@@ -59,7 +59,7 @@ export function needsYouReason(entry: ConversationEntry, authorName: string | nu
   return `Activity in ${entry.title}`;
 }
 
-/** §1.5: presence is a rim of light, never a coloured dot. */
+/** §1.5: presence is a rim of light, never a colored dot. */
 function usePersonLight(
   userId: string | null | undefined,
   name: string,

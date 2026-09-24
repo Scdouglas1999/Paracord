@@ -179,7 +179,7 @@ impl MediaConnection {
             let encoded = auth_msg.encode()?;
             send.write_all(&encoded).await?;
 
-            // Wait for Pong acknowledgement. Bound the frame before allocating
+            // Wait for Pong acknowledgment. Bound the frame before allocating
             // attacker-controlled memory — exactly as the server side does at
             // `accept_and_auth`. This is a *client* reading a length prefix from
             // a server it dialed, and in this product that server is an
@@ -223,7 +223,7 @@ impl MediaConnection {
         .await
         .map_err(|_| {
             ConnectionError::AuthFailed(format!(
-                "auth acknowledgement timeout after {}s",
+                "auth acknowledgment timeout after {}s",
                 CLIENT_AUTH_TIMEOUT.as_secs()
             ))
         })?

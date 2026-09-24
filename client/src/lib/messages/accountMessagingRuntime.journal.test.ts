@@ -436,7 +436,7 @@ describe('production authoritative recovery gate', () => {
   // before the session exists — so before `invalidateLocal` can move the
   // generation — and the coalesced handshake used to inherit the rejection,
   // rejecting READY and forcing a full gateway reconnect on every first login.
-  it('retries an open cancelled by the account\'s own first authenticated history instead of failing the handshake', async () => {
+  it('retries an open canceled by the account\'s own first authenticated history instead of failing the handshake', async () => {
     runtime.dispose();
     let attempts = 0;
     fixture.openLocal.mockReset().mockImplementation(async () => {
@@ -445,19 +445,19 @@ describe('production authoritative recovery gate', () => {
       return session(local.vault);
     });
     runtime = new AccountMessagingRuntime(scope);
-    const cancelled = runtime.startLocal();
+    const canceled = runtime.startLocal();
     await expect(runtime.acceptHandshake()).resolves.toBeUndefined();
-    await expect(cancelled).rejects.toBeInstanceOf(DatabaseHistoryExpiredError);
+    await expect(canceled).rejects.toBeInstanceOf(DatabaseHistoryExpiredError);
     expect(attempts).toBe(2);
     expect(runtime.store.getState().storage).toBe('ready');
     expect(runtime.store.getState().synchronization).toBe('ready');
   });
   // The abort that acceptance raises lands wherever the open happens to be, and
-  // every step reports it in its own words — a cancelled IndexedDB key write, a
-  // vault closed under a transaction. Recognising the cancellation only by its
+  // every step reports it in its own words — a canceled IndexedDB key write, a
+  // vault closed under a transaction. Recognizing the cancellation only by its
   // error class therefore left most of the open reporting a storage failure,
   // and READY still reconnected the gateway, intermittently, on a fresh login.
-  it('retries an open cancelled by its own history even when the cancellation is not reported as one', async () => {
+  it('retries an open canceled by its own history even when the cancellation is not reported as one', async () => {
     runtime.dispose();
     let attempts = 0;
     fixture.openLocal.mockReset().mockImplementation(async () => {
@@ -469,9 +469,9 @@ describe('production authoritative recovery gate', () => {
       return session(local.vault);
     });
     runtime = new AccountMessagingRuntime(scope);
-    const cancelled = runtime.startLocal();
+    const canceled = runtime.startLocal();
     await expect(runtime.acceptHandshake()).resolves.toBeUndefined();
-    await expect(cancelled).rejects.toThrow('Encrypted account storage is closed');
+    await expect(canceled).rejects.toThrow('Encrypted account storage is closed');
     expect(attempts).toBe(2);
     expect(runtime.store.getState().storage).toBe('ready');
     expect(runtime.store.getState().synchronization).toBe('ready');

@@ -169,7 +169,7 @@ export function orderBuildingsByBrightness(buildings: readonly BuildingLight[]):
 const LIT_ONLY_NAMES = 3;
 
 export interface AroundNowInput {
-  /** Rooms to summarise, across one building or every building. */
+  /** Rooms to summarize, across one building or every building. */
   rooms: readonly RoomLight[];
   /** People whose lights are on or dim, for the "… is away" tail. */
   people?: readonly PersonLight[];

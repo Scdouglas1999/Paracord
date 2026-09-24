@@ -16,7 +16,7 @@ use crate::routes::mod_log;
 /// clean insert on SQLite and a 500 on PostgreSQL.
 const MAX_ROLE_NAME_LEN: usize = 100;
 
-/// The highest 24-bit RGB value a role colour can carry.
+/// The highest 24-bit RGB value a role color can carry.
 ///
 /// Every consumer — the client's swatch, the member list, the role editor —
 /// reads this as `#RRGGBB`. `999999999` and `-1` stored and echoed back fine

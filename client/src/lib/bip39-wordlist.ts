@@ -104,7 +104,7 @@ export const wordlist: string[] = [
   'arrive',
   'arrow',
   'art',
-  'artefact',
+  'artifact',
   'artist',
   'artwork',
   'ask',

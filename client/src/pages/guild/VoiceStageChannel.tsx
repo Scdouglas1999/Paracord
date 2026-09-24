@@ -211,19 +211,19 @@ export function VoiceStageChannel({
       return;
     }
 
-    let cancelled = false;
+    let canceled = false;
     setStageLoading(true);
     setStageError(null);
 
     stageApi
       .getForChannel(channelId)
       .then(({ data }) => {
-        if (cancelled) return;
+        if (canceled) return;
         setStageInstance(data);
         setStageTopicDraft(data.topic || '');
       })
       .catch((err) => {
-        if (cancelled) return;
+        if (canceled) return;
         const status = (err as { response?: { status?: number } }).response?.status;
         if (status === 404) {
           setStageInstance(null);
@@ -233,11 +233,11 @@ export function VoiceStageChannel({
         setStageError(extractApiError(err));
       })
       .finally(() => {
-        if (!cancelled) setStageLoading(false);
+        if (!canceled) setStageLoading(false);
       });
 
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [channelId, isStage]);
 

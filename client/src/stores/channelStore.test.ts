@@ -100,7 +100,7 @@ describe('channel account ownership and snapshot reconciliation', () => {
     pending.finish(request.url!, channel('Created', '1', action === 'createChannel' ? 'g' : null));
     expect(await promise).toMatchObject({ scope: a }); expect(cached(b)).toBeUndefined();
   });
-  it('reorders only after acknowledgement without rolling back concurrent edits on failure', async () => {
+  it('reorders only after acknowledgment without rolling back concurrent edits on failure', async () => {
     state().addChannel(channel(), a); const pending = delay(); const reorder = state().reorderChannels('g', [{ id: '1', position: 5 }], a);
     await vi.waitFor(() => expect(pending.adapter).toHaveBeenCalledTimes(1));
     state().updateChannel({ id: '1', name: 'New name' }, a); expect(cached()?.position).toBe(0);

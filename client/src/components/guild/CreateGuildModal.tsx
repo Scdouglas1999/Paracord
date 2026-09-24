@@ -188,7 +188,7 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
     <Modal
       open
       onClose={onClose}
-      labelledBy="create-guild-modal-title"
+      labeledBy="create-guild-modal-title"
       describedBy="create-guild-modal-description"
       showCloseButton
       panelClassName="w-[min(92vw,32rem)]"

@@ -10,7 +10,7 @@ export interface ChoiceOption<T extends string> {
 
 export interface ChoiceCardsProps<T extends string> {
   /** Id of the visible element that names the question. */
-  labelledBy: string;
+  labeledBy: string;
   options: ReadonlyArray<ChoiceOption<T>>;
   value: T;
   onChange: (next: T) => void;
@@ -27,7 +27,7 @@ export interface ChoiceCardsProps<T extends string> {
  * arrows to move and choose.
  */
 export function ChoiceCards<T extends string>({
-  labelledBy,
+  labeledBy,
   options,
   value,
   onChange,
@@ -54,7 +54,7 @@ export function ChoiceCards<T extends string>({
   return (
     <div
       role="radiogroup"
-      aria-labelledby={labelledBy}
+      aria-labelledby={labeledBy}
       className={cn(
         'flex flex-col gap-2',
         layout === 'row' && 'sm:flex-row',

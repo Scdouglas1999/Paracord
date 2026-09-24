@@ -89,7 +89,7 @@ export function PinGameButton({
         <ul className="pc-sports-pin-picker" aria-label="Text channels">
           <li className="pc-sports-pin-until">
             <span id={untilFinalId} className="text-meta text-text-secondary">Unpin at the final</span>
-            <Switch size="sm" checked={untilFinal} labelledBy={untilFinalId} onChange={setUntilFinal} />
+            <Switch size="sm" checked={untilFinal} labeledBy={untilFinalId} onChange={setUntilFinal} />
           </li>
           {text.length === 0 && <li className="text-meta text-text-muted">No text channels</li>}
           {text.map((channel) => (
@@ -155,19 +155,19 @@ function useBoardPlay(guildId: string, game: SportsGame): string | null {
     if (boardPlay) return;
     const parts = game.league_path.split('/');
     if (parts.length !== 2) return;
-    let cancelled = false;
+    let canceled = false;
     const load = () => {
       void sportsApi.getGame(guildId, parts[0], parts[1], game.id).then((res) => {
-        if (cancelled) return;
+        if (canceled) return;
         const text = latestPlayText(res.data);
         if (text) setExtra(text);
       }).catch(() => {});
     };
     load();
-    if (game.state !== 'in') return () => { cancelled = true; };
+    if (game.state !== 'in') return () => { canceled = true; };
     const timer = window.setInterval(load, LIVE_POLL_MS);
     return () => {
-      cancelled = true;
+      canceled = true;
       window.clearInterval(timer);
     };
   }, [boardPlay, guildId, game.league_path, game.id, game.state]);

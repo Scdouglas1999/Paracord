@@ -48,17 +48,17 @@ export function useRoomThumbnail(room: RoomLight | null): RoomThumbnailFeed {
       setCapabilities(null);
       return;
     }
-    let cancelled = false;
+    let canceled = false;
     void engine
       .getStreamCapabilities()
       .then((caps) => {
-        if (!cancelled) setCapabilities(caps);
+        if (!canceled) setCapabilities(caps);
       })
       .catch(() => {
-        if (!cancelled) setCapabilities(null);
+        if (!canceled) setCapabilities(null);
       });
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [engine]);
 

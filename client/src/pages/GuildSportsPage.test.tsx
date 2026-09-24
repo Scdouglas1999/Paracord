@@ -210,7 +210,7 @@ describe('GuildSportsPage', () => {
     expect(chiefs).toHaveClass('pc-sports-card');
     expect(within(chiefs).getByText('Chiefs 21, Bills 17, 4th quarter 7:58, red zone')).toBeInTheDocument();
     expect(within(yours).getByRole('img', { name: 'Favorite team' })).toBeInTheDocument();
-    expect(screen.queryByText('Favourite')).not.toBeInTheDocument();
+    expect(screen.queryByText('Favorite')).not.toBeInTheDocument();
 
     const live = screen.getByRole('region', { name: 'Live' });
     expect(within(live).queryByRole('link', { name: /Chiefs/ })).not.toBeInTheDocument();

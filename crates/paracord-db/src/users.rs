@@ -54,7 +54,7 @@ async fn claim_first_admin_slot(executor: &mut sqlx::AnyConnection) -> Result<bo
 /// Remove an account that was created moments ago and never used, as part of
 /// rolling back a failed first-owner claim.
 ///
-/// [`delete_user_typed`] is the right tool for a real account: it anonymises
+/// [`delete_user_typed`] is the right tool for a real account: it anonymizes
 /// authored content behind a "Deleted User" tombstone so conversations stay
 /// coherent. A rolled-back bootstrap owner has authored nothing, so minting
 /// that tombstone would leave a permanent phantom member on a server that has
@@ -704,7 +704,7 @@ async fn ensure_deleted_user_tombstone(
 /// and `spaces.owner_id` -- so the delete aborted with a foreign-key violation
 /// and GDPR self-delete, admin delete and bot deletion were all broken.
 ///
-/// The account is therefore anonymised rather than cascaded away:
+/// The account is therefore anonymized rather than cascaded away:
 /// * rows that are personal data and carry no shared meaning (poll votes, event
 ///   RSVPs) are deleted outright;
 /// * authored content is reassigned to the [`DELETED_USER_ID`] tombstone so

@@ -119,10 +119,10 @@ row; the requests themselves are on Home, where the list is.
   its channels wait behind one click. Twenty dark servers cost forty rows instead
   of two hundred.
 
-Virtualising was the alternative and was rejected: the column is one roving
-listbox with a flat `data-nav-index` order (layout-spec §5), and a virtualised
+Virtualizing was the alternative and was rejected: the column is one roving
+listbox with a flat `data-nav-index` order (layout-spec §5), and a virtualized
 list makes both the arrow-key order and the screen reader's row count lie about
-what exists. A window map already summarises a folded server, which a
+what exists. A window map already summarizes a folded server, which a
 scrolled-past row does not.
 
 Both bounds are one piece of state (`openBuildings`), and both expanders are
@@ -150,7 +150,7 @@ returns it on close, which reopens the palette). The column's search wears the
 
 ---
 
-## 4. Keyboard and narrow behaviour (layout-spec §5, §6)
+## 4. Keyboard and narrow behavior (layout-spec §5, §6)
 
 - One `[data-roving-container]`, one Tab stop. Every row carries
   `data-nav-index` in DOM order — Home, Messages, then per server the plate,
@@ -229,7 +229,7 @@ PARACORD_E2E_DESIGN=1 PARACORD_E2E_DESIGN_WP=wp2 npx playwright test e2e/design-
 Twelve frames at **1440×900 and 390×844**: `column-{lobby,room,call,empty}` from
 the tokens page, and `app-{lobby,room}` with the column in situ beside a real
 main pane (on a phone the column is opened through the header control where the
-route offers one, which is the honest §6 behaviour). The desktop in-situ pass
+route offers one, which is the honest §6 behavior). The desktop in-situ pass
 also **asserts the exact selectors the mocked smoke uses** for the column
 (`listbox "Buildings and rooms"` → `group "<building>"` →
 `option "<building> lobby"`), so a rename cannot slip through while the smoke is

@@ -171,7 +171,7 @@ export class WebTransportManager {
         const { value } = await reader.read();
         assertCurrent();
         if (!value || value.byteLength < 4) {
-          throw new Error('Missing auth acknowledgement');
+          throw new Error('Missing auth acknowledgment');
         }
       } finally {
         writer.releaseLock();

@@ -1,6 +1,6 @@
 //! Availability regression tests for the relay's resource bounds.
 //!
-//! Every case here is a *bound*, not a behaviour: one media peer — authenticated
+//! Every case here is a *bound*, not a behavior: one media peer — authenticated
 //! but hostile — must not be able to convert a trickle of ingress into unbounded
 //! server memory or allocation. Each test drives the same primitive an attacker
 //! would (a wire field the peer chooses freely) and asserts the ceiling holds,

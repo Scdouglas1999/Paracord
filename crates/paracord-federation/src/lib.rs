@@ -33,7 +33,7 @@ pub const MAX_INBOUND_EVENT_FUTURE_SKEW_MS: i64 = transport::DEFAULT_MAX_SKEW_MS
 /// How far into the past an inbound envelope's `origin_ts` may sit before it is
 /// rejected as stale.
 ///
-/// This is the *freshness* half of the replay defence. Envelope replay
+/// This is the *freshness* half of the replay defense. Envelope replay
 /// protection is the `(event_id, origin_server)` dedup row in
 /// `federation_events`; without a freshness bound that table can never be
 /// pruned, because dropping a dedup row would re-open the replay window for the
@@ -97,7 +97,7 @@ fn relay_fanout_slots() -> &'static std::sync::Arc<tokio::sync::Semaphore> {
 /// when they are all taken.
 ///
 /// Deliberately non-blocking: an inbound event whose relay cannot be admitted is
-/// SHED, not queued, because queueing would simply move the unbounded growth
+/// SHED, not queued, because queuing would simply move the unbounded growth
 /// from tasks into a backlog of retained envelopes. Shedding is recoverable —
 /// the event is still persisted, dispatched to local clients, and re-pulled by
 /// peers through `run_federation_catchup_once`, which exists precisely to

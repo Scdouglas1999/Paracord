@@ -1314,7 +1314,7 @@ mod target_tests {
     use super::FederationTarget;
 
     /// The regression this type exists for: the destination a request presents
-    /// is the peer's identity, not the host of the URL it is dialled on. Those
+    /// is the peer's identity, not the host of the URL it is dialed on. Those
     /// two differ on every deployment reached through a proxy, an IP literal,
     /// or a non-standard port — and on the shipped default, where
     /// `server_name = "localhost"` sits behind a real endpoint.

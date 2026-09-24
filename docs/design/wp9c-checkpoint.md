@@ -15,7 +15,7 @@ Twenty commits, `b1f0343..HEAD`, the last two of them this file. 58 files,
 | `ec52987` | **12** the focus ring arrives rather than appearing |
 | `9b43833` | **2** the thumb and the tab indicator slide, never jump |
 | `bdf10f8` | **4** a plate settles onto a street that is already there |
-| `99a092e` | **5** the sidebar re-sorts by travelling, not by redrawing |
+| `99a092e` | **5** the sidebar re-sorts by traveling, not by redrawing |
 | `99c07a2` | **6** every count that changes now re-rolls |
 | `7821b5f` | **7** the phone chat sheet travels instead of resizing |
 | `752706b` | **8** the on-air dot breathes only while somebody is talking |
@@ -53,7 +53,7 @@ an element leaving, and a list changing shape.
 | `presence.ts` · `useSettleIn()` | §5.1's "a plate entering the street rises 14px", with the exception §5.3 needs: the module flips a flag two rAFs into the app's life, so a plate present at first paint does not settle and one mounting into a lit street does. |
 | `flipList.ts` · `useFlipList()` | A container whose marked rows reorder. Moved rows travel on the spring over `--duration-move`; arrived rows `rise` (6px) or `pop` (0.6→1); removed rows leave a falling ghost. Nothing on a first commit. |
 | `flipList.ts` · `useFlip` / `flipBetween` | One element that re-lays itself out — the phone chat sheet's height. |
-| `flipList.ts` · `useIndicator()` | A tab thumb: the mark and the travelling element are measured in one effect rather than racing, with velocity carried when the mark moves mid-travel. |
+| `flipList.ts` · `useIndicator()` | A tab thumb: the mark and the traveling element are measured in one effect rather than racing, with velocity carried when the mark moves mid-travel. |
 
 Three details in there are the difference between working and looking like it
 works, and all three are the sort of thing only a measurement or a recording
@@ -96,7 +96,7 @@ is 0.96 for 80ms on `--ease-out` and a spring back on `--duration-normal`
 one-beat `--light-white` flash as an opacity-only veil. Disabled gets none of
 it, and the hover half is behind `(hover: hover)`.
 
-**The wash is a gradient, not a background colour.** `none` → gradient is a
+**The wash is a gradient, not a background color.** `none` → gradient is a
 *discrete* step in CSS: a `background-image` transition from nothing snaps
 instead of easing, so the bloom §5.1 asks for over 120ms simply appeared. It is
 transparent-to-transparent at rest, which interpolates, and it layers over
@@ -108,7 +108,7 @@ that is in neither of §5.2's two, on the most-rendered component in the product
 ### 2 · Switch, tabs, segmented controls
 `Switch.tsx`, `Tabs.tsx`, `flipList.ts#useIndicator`.
 
-The Switch thumb was travelling on `--ease-out` over `--duration-fast` — the
+The Switch thumb was traveling on `--ease-out` over `--duration-fast` — the
 fade curve at the fade speed. It is `--duration-normal` on the spring now, and
 its `--thumb-glow` is a real light that fades in over `--duration-warm-up` when
 the switch goes on rather than being painted into the thumb's fill.
@@ -298,7 +298,7 @@ PARACORD_E2E_MOTION=1 PARACORD_E2E_MOTION_FRAMES=1 npx playwright test --grep "W
 ```
 
 `button-hover`, `button-press`, `dialog-open`, `dialog-close`, `toast`,
-`reorder`, `roll`, `tabs` — each a strip of screencast frames labelled in ms
+`reorder`, `roll`, `tabs` — each a strip of screencast frames labeled in ms
 after the gesture — plus `_still-emoji-picker.png` and
 `_still-hover-actions.png` for the two surfaces that were restructured without
 being animated, where the risk is layout rather than timing.
@@ -327,7 +327,7 @@ the whole point of FLIP'ing it. Both fixed on `/design-tokens` (`adb00db`).
 cd client
 npm run typecheck            clean
 npm run test:unit            2 313 tests, 248 files, green
-npm run test:tokens          488 files, no literal colour
+npm run test:tokens          488 files, no literal color
 npm run build                clean
 npx playwright test          84 passed (mocked smoke + encrypted storage)
 npm run test:motion          6 passed (1 skipped: the opt-in frame capture)
@@ -345,7 +345,7 @@ excludes them.
    micro-motion, and it would need its own decisions about thresholds, velocity
    hand-off and what a half-open sheet means.
 2. **The timeline's skeleton is not wrapped in `SkeletonSwap` (item 9).** Its
-   branches size themselves against the scroll container the virtualiser
+   branches size themselves against the scroll container the virtualizer
    measures; a wrapper between them changes the scroll geometry, which is a
    bigger change than a crossfade is worth. Its placeholders still take the
    `.pc-skeleton` pulse and its reduced-motion stop.

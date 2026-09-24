@@ -385,16 +385,16 @@ export function UserSettings({ onClose }: UserSettingsProps) {
   const [systemAudioGrant, setSystemAudioGrant] = useState<SystemAudioGrant | null>(null);
   useEffect(() => {
     if (activeSection !== 'voice') return;
-    let cancelled = false;
+    let canceled = false;
     void getSystemAudioGrant()
       .then((grant) => {
-        if (!cancelled) setSystemAudioGrant(grant);
+        if (!canceled) setSystemAudioGrant(grant);
       })
       .catch(() => {
         /* a browser build has no desktop audio to manage */
       });
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [activeSection]);
 

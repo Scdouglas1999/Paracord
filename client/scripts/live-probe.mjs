@@ -73,7 +73,7 @@ const main = async () => {
   await page.waitForURL(/\/app(\/|$)/, { timeout: 45000 });
   await dismiss(page);
 
-  // Enrol
+  // Enroll
   await page.goto(`/setup?migrate=1&server=__local__&user=${ada.id}&returnTo=${encodeURIComponent('/app/friends')}`);
   const pw = page.locator('input[type="password"]');
   await pw.first().waitFor({ timeout: 30000 });
@@ -92,7 +92,7 @@ const main = async () => {
 
   console.log('ada  public_key:', (await call(ada)('GET', '/users/@me')).body?.public_key?.slice(0, 20));
 
-  // Bob gets a real browser and a real enrolment too: `peers_ready` is about
+  // Bob gets a real browser and a real enrollment too: `peers_ready` is about
   // him, so a probe where he never enrolled only ever proves that.
   const bobContext = await browser.newContext({ baseURL: BASE, viewport: { width: 1280, height: 800 } });
   const bobPage = await bobContext.newPage();

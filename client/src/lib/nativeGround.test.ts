@@ -14,10 +14,10 @@ vi.mock('./desktopDiagnostics', () => ({ logVoiceDiagnostic: vi.fn() }));
 type Pixel = [number, number, number, number];
 
 /**
- * jsdom has no 2D canvas, and the ground colour is resolved through one on
+ * jsdom has no 2D canvas, and the ground color is resolved through one on
  * purpose (`getComputedStyle` hands back `oklch(...)`, the shell needs sRGB
  * bytes). So the engine is stood in for: a canvas that starts BLACK like a real
- * one, parses the colours a real one parses, and refuses the ones a real one
+ * one, parses the colors a real one parses, and refuses the ones a real one
  * refuses by leaving `fillStyle` where it was.
  *
  * `setterWorks: false` is the engine that produced the bug this module was
@@ -58,7 +58,7 @@ function installCanvas(
  * jsdom does not substitute `var()` either, so the probe reads back empty.
  * Stand in for that too: the probe asks for `var(--bg-base)`, so hand it back
  * whatever `--bg-base` is set to on `<html>` — which is what an engine does,
- * and is the behaviour this module is written against.
+ * and is the behavior this module is written against.
  */
 function installVarSubstitution() {
   const real = window.getComputedStyle.bind(window);
@@ -87,7 +87,7 @@ function ground(value: string, theme = 'dark') {
   document.documentElement.style.setProperty('--bg-base', value);
 }
 
-describe('the ground colour the shell is told', () => {
+describe('the ground color the shell is told', () => {
   beforeEach(() => {
     resetGroundColorReport();
     installVarSubstitution();
@@ -100,19 +100,19 @@ describe('the ground colour the shell is told', () => {
     document.documentElement.removeAttribute('data-theme');
   });
 
-  it('turns a colour written in any space into the sRGB bytes the shell can paint', () => {
+  it('turns a color written in any space into the sRGB bytes the shell can paint', () => {
     expect(cssColorToHex('oklch(0.165 0.007 65)')).toBe('#110e0b');
     expect(cssColorToHex('rgb(10, 12, 16)')).toBe('#0a0c10');
   });
 
-  it('says it could not read a colour rather than reporting black', () => {
+  it('says it could not read a color rather than reporting black', () => {
     // An engine with no `oklch()` in canvas leaves the sentinel standing.
     expect(readCssColor('oklch(0.42 0.1 250)')).toMatchObject({
       hex: null,
       why: expect.stringContaining('refused'),
     });
     expect(cssColorToHex('')).toBeNull();
-    // Nothing painted at all is not a ground colour either.
+    // Nothing painted at all is not a ground color either.
     expect(readCssColor('rgba(0, 0, 0, 0)')).toMatchObject({
       hex: null,
       why: expect.stringContaining('transparent'),
@@ -122,7 +122,7 @@ describe('the ground colour the shell is told', () => {
   /**
    * The regression. A `fillStyle` setter that silently does nothing leaves a
    * fresh canvas at its own opaque black; the first version of this module read
-   * that back and reported `#000000` — a colour no theme defines — and the
+   * that back and reported `#000000` — a color no theme defines — and the
    * shell painted the window with it.
    */
   it('refuses a canvas that cannot paint, instead of reading back its black', () => {
@@ -156,7 +156,7 @@ describe('the ground colour the shell is told', () => {
     expect(resolveGroundColor()).toMatchObject({ hex: null, why: expect.stringContaining('--bg-base') });
   });
 
-  it('tells the shell once per colour, and again when the colour changes', async () => {
+  it('tells the shell once per color, and again when the color changes', async () => {
     const invoke = vi.fn().mockResolvedValue(undefined);
     ground('rgb(10, 12, 16)');
     await reportGroundColor(invoke);

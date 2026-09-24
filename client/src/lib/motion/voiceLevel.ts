@@ -28,7 +28,7 @@ import { prefersReducedMotion } from './reducedMotion';
  *      next frame regardless.
  *   3. **Nothing is allocated per frame.** The elements are collected when the
  *      engine publishes (a few times a second), never in the loop; the level is
- *      quantised to 1/64 and looked up in a table of strings built once, so a
+ *      quantized to 1/64 and looked up in a table of strings built once, so a
  *      frame that does not change a ring writes nothing at all and a frame that
  *      does allocates nothing.
  *   4. **A level is never invented.** `publish` takes what the media engine
@@ -57,7 +57,7 @@ const LEVEL_STRINGS: string[] = Array.from({ length: STEPS + 1 }, (_, index) =>
 
 /**
  * Where a level comes from. Two engines can be talking at once — the room's own
- * speaker report and the local microphone's analyser, which is faster and knows
+ * speaker report and the local microphone's analyzer, which is faster and knows
  * about you before the server does — and each replaces only its own picture.
  * The loudest observation of a person wins, because a person who is audible on
  * either path is audible.
@@ -243,15 +243,15 @@ export function levelFromDbov(raw: number): number {
 }
 
 /**
- * The local analyser's own reading (LiveKit's `calculateVolume`, 0-1 RMS).
+ * The local analyzer's own reading (LiveKit's `calculateVolume`, 0-1 RMS).
  *
- * An ordinary speaking voice through a normalised mic sits around 0.05-0.25 of
+ * An ordinary speaking voice through a normalized mic sits around 0.05-0.25 of
  * full scale — the store's own speaking threshold is 0.055 — so the raw number
  * would leave the ring in the bottom quarter of its travel for every real
  * voice. 0.25 is taken as full, which is where the store's hysteresis says a
  * voice clearly is.
  */
-export function levelFromAnalyser(volume: number): number {
+export function levelFromAnalyzer(volume: number): number {
   if (!Number.isFinite(volume)) return 0;
   return clamp01(volume / 0.25);
 }

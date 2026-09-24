@@ -143,7 +143,7 @@ function DetailBody({
           <span className="flex shrink-0 flex-wrap items-start justify-end gap-3">
             <PinGameButton guildId={guildId} game={game} />
             <span id={hideId} className="text-label text-text-secondary">Hide scores</span>
-            <Switch checked={hideScores} labelledBy={hideId} onChange={onHide} />
+            <Switch checked={hideScores} labeledBy={hideId} onChange={onHide} />
           </span>
         </div>
         <Scoreboard game={game} hideScores={hideScores} />

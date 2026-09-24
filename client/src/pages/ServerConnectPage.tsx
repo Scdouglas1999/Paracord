@@ -25,7 +25,7 @@ function canonicalServerBaseFromResolvedUrl(value: string): string {
     return `${parsed.protocol}//${parsed.host}`;
   } catch {
     // normalizeConnectInput is the single source of truth for connect-input
-    // normalisation (shared with the data layer), used only as a fallback here.
+    // normalization (shared with the data layer), used only as a fallback here.
     return normalizeConnectInput(value);
   }
 }
@@ -536,7 +536,7 @@ export function ServerConnectPage() {
               </div>
               <ul className="mt-1 flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain">
                 {servers.map((server, index) => {
-                  // Presence here is a word, never a coloured dot (spec §1.5, §6.6).
+                  // Presence here is a word, never a colored dot (spec §1.5, §6.6).
                   const stateLabel = server.connected
                     ? 'Connected'
                     : server.token

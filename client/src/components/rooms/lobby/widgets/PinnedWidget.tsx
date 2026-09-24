@@ -36,14 +36,14 @@ export function PinnedWidget({ guildId, announcementChannels, mentionNames, onOp
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
+    let canceled = false;
     setPin(null);
     setError(null);
     if (!key) return;
     const wanted = key.split(',');
     Promise.all(wanted.map((id) => channelApi.getPins(id).then(({ data }) => ({ id, pins: data }))))
       .then((results) => {
-        if (cancelled) return;
+        if (canceled) return;
         const all = results.flatMap((result) =>
           result.pins.filter((message) => !message.e2ee).map((message) => ({ message, channelId: result.id })),
         );
@@ -53,10 +53,10 @@ export function PinnedWidget({ guildId, announcementChannels, mentionNames, onOp
         setPin(top ? { message: top.message, channelName: name } : null);
       })
       .catch((err) => {
-        if (!cancelled) setError(extractApiError(err));
+        if (!canceled) setError(extractApiError(err));
       });
     return () => {
-      cancelled = true;
+      canceled = true;
     };
     // `key` is the identity of the channel list.
     // eslint-disable-next-line react-hooks/exhaustive-deps

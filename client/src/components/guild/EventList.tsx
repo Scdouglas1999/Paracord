@@ -40,7 +40,7 @@ interface ScheduledEvent {
   reminder_minutes?: number | null;
   event_channel_created?: boolean;
   reminder_sent_at?: string | null;
-  status: number; // 1=scheduled, 2=active, 3=completed, 4=cancelled
+  status: number; // 1=scheduled, 2=active, 3=completed, 4=canceled
   entity_type: number; // 1=voice, 2=external
   location: string | null;
   image_url: string | null;
@@ -57,7 +57,7 @@ const STATUS_LABELS: Record<number, string> = {
 };
 
 // Status is carried by the word first; the chip's ink only seconds it (§9 —
-// colour is never the only cue).
+// color is never the only cue).
 const STATUS_TONES: Record<number, ChipTone> = {
   1: 'neutral',
   2: 'accent',
@@ -224,7 +224,7 @@ function EventFormModal({ guildId, event, onClose, onSaved }: EventFormModalProp
     <Modal
       open
       onClose={onClose}
-      labelledBy="event-form-title"
+      labeledBy="event-form-title"
       showCloseButton
       // The events list lives inside Building settings, a windowed overlay at
       // z-[150]. At the Modal default (z-[60]) this form opened *behind* that

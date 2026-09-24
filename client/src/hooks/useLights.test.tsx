@@ -323,22 +323,22 @@ describe('useServerLights across servers', () => {
   });
 
   it('says it has not looked rather than claiming a server is empty', () => {
-    // Harbour Lights is a building you are not standing in: nobody has fetched
+    // Harbor Lights is a building you are not standing in: nobody has fetched
     // its rooms or its members. "0 online · Nobody in voice" would be two claims
     // and both would be false.
     act(() => {
       useGuildStore.getState().setGuilds(
         [
           { id: GUILD, name: 'Kestrel Robotics', owner_id: 'viewer', member_count: 61, created_at: '' },
-          { id: 'g2', name: 'Harbour Lights', owner_id: 'viewer', member_count: 12, created_at: '' },
+          { id: 'g2', name: 'Harbor Lights', owner_id: 'viewer', member_count: 12, created_at: '' },
         ],
         SCOPE,
       );
     });
     const { result } = renderHook(() => useBuildingLights());
-    const harbour = result.current.find((building) => building.name === 'Harbour Lights');
-    expect(harbour?.rosterKnown).toBe(false);
-    expect(harbour?.caption).toBe('Open to see channels');
+    const harbor = result.current.find((building) => building.name === 'Harbor Lights');
+    expect(harbor?.rosterKnown).toBe(false);
+    expect(harbor?.caption).toBe('Open to see channels');
     const kestrel = result.current.find((building) => building.name === 'Kestrel Robotics');
     expect(kestrel?.rosterKnown).toBe(true);
   });

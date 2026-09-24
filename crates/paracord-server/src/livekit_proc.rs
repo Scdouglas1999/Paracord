@@ -200,7 +200,7 @@ fn build_livekit_config(
         // same address twice and exited with "could not listen on TURN UDP port
         // … address already in use", which took LiveKit mode down entirely.
         // The default is the port after the RTC mux, and the relay range moves
-        // up to leave it room; an operator whose neighbouring port is already
+        // up to leave it room; an operator whose neighboring port is already
         // spoken for sets `[livekit] turn_udp_port`.
         let turn_port = turn_udp_port.unwrap_or(lk_udp_port + 1);
         lines.push("turn:".to_string());

@@ -387,7 +387,7 @@ describe('runVoiceConnectionCheck', () => {
     expect(speaker.code).toBe('SPEAKER_NOT_HEARD');
   });
 
-  it('warns when output routing could not honour the selected device', async () => {
+  it('warns when output routing could not honor the selected device', async () => {
     const report = await runVoiceConnectionCheck({
       adapters: fakeAdapters({ tone: { routedToSelectedDevice: false } }),
       selection: { outputDeviceId: 'out-1' },
@@ -512,7 +512,7 @@ describe('runVoiceConnectionCheck', () => {
     expect(JSON.stringify(report)).not.toContain('user_id');
   });
 
-  it('marks remaining steps as cancelled once the run is aborted', async () => {
+  it('marks remaining steps as canceled once the run is aborted', async () => {
     const controller = new AbortController();
     controller.abort();
     const report = await runVoiceConnectionCheck({ adapters: fakeAdapters(), signal: controller.signal });

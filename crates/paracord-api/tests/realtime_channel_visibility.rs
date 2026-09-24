@@ -235,7 +235,7 @@ async fn a_room_you_never_saw_is_still_none_of_your_business() {
             .expect("member token");
 
     let guild_id = paracord_util::snowflake::generate(1);
-    paracord_db::guilds::create_guild(&ctx.db, guild_id, "Harbour Lights", owner_id, None)
+    paracord_db::guilds::create_guild(&ctx.db, guild_id, "Harbor Lights", owner_id, None)
         .await
         .expect("create guild");
     paracord_db::members::add_member(&ctx.db, owner_id, guild_id)
@@ -287,7 +287,7 @@ async fn a_room_you_never_saw_is_still_none_of_your_business() {
     // The stream itself is alive.
     ctx.state.event_bus.dispatch(
         "GUILD_UPDATE",
-        json!({ "id": guild_id.to_string(), "name": "Harbour Lights" }),
+        json!({ "id": guild_id.to_string(), "name": "Harbor Lights" }),
         Some(guild_id),
     );
 

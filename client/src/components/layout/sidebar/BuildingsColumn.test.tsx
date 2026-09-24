@@ -362,7 +362,7 @@ describe('BuildingsColumn', () => {
     ).toHaveClass('truncate');
   });
 
-  it('spends no literal colour — tokens only', () => {
+  it('spends no literal color — tokens only', () => {
     const { container } = renderColumn({
       attention: new Map([[QUIET_TEXT.key, { unread: true, mentionCount: 2 }]]),
     });

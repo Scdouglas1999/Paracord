@@ -204,7 +204,7 @@ export function GameServerSheet({ guildId, open, editing = null, onClose, channe
     <Modal
       open={open}
       onClose={onClose}
-      labelledBy={titleId}
+      labeledBy={titleId}
       describedBy={descriptionId}
       size="md"
       showCloseButton

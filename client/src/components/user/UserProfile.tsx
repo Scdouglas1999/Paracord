@@ -202,22 +202,22 @@ function UserProfileCard({
 
   // Fetch profile data from API
   useEffect(() => {
-    let cancelled = false;
+    let canceled = false;
     userApi
       .getProfile(user.id)
       .then(({ data }) => {
-        if (!cancelled) setProfileData(data);
+        if (!canceled) setProfileData(data);
       })
       .catch(() => {
         // Profile fetch is optional; popup still works without it
       });
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [user.id]);
 
   useEffect(() => {
-    let cancelled = false;
+    let canceled = false;
     const loadIdentityFingerprint = async () => {
       let identityKeyHex: string | null = null;
       try {
@@ -233,12 +233,12 @@ function UserProfileCard({
         identityKeyHex = user.public_key;
       }
 
-      if (!identityKeyHex || cancelled) {
+      if (!identityKeyHex || canceled) {
         return;
       }
 
       const fingerprint = formatIdentityFingerprint(identityKeyHex);
-      if (cancelled) return;
+      if (canceled) return;
       setIdentityFingerprint(fingerprint);
 
       let observed: Awaited<ReturnType<typeof observeIdentityFingerprint>> | null = null;
@@ -247,7 +247,7 @@ function UserProfileCard({
       } catch (error) {
         if (!(error instanceof IdentityTrustLockedError)) throw error;
       }
-      if (cancelled) return;
+      if (canceled) return;
 
       setIdentityTrust(await getIdentityTrustState(user.id, fingerprint));
       if (observed?.rotated && observed.previousFingerprint) {
@@ -261,7 +261,7 @@ function UserProfileCard({
 
     void loadIdentityFingerprint();
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [user.id, user.public_key, user.username]);
 
@@ -270,24 +270,24 @@ function UserProfileCard({
       setIdentityQrDataUrl(null);
       return;
     }
-    let cancelled = false;
+    let canceled = false;
     QRCode.toDataURL(verificationPayload, {
       errorCorrectionLevel: 'M',
       margin: 1,
       width: 240,
     })
       .then((url: string) => {
-        if (!cancelled) {
+        if (!canceled) {
           setIdentityQrDataUrl(url);
         }
       })
       .catch(() => {
-        if (!cancelled) {
+        if (!canceled) {
           setIdentityQrDataUrl(null);
         }
       });
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [showIdentityVerifyModal, verificationPayload]);
 
@@ -520,7 +520,7 @@ function UserProfileCard({
         {...scenery}
       >
         {/* The banner at the 3:1 its owner cropped it to, fading into the card;
-            without one, a shorter strip of their accent colour. */}
+            without one, a shorter strip of their accent color. */}
         <div
           className={cn('relative shrink-0', bannerSrc ? 'aspect-[3/1]' : 'h-20')}
           style={{ background: accent ?? 'var(--accent-tint-strong)' }}
@@ -899,7 +899,7 @@ function UserProfileCard({
         <Modal
           open
           onClose={() => { setShowReportDialog(false); setActionError(null); }}
-          labelledBy="report-user-title"
+          labeledBy="report-user-title"
           panelClassName="w-full max-w-md p-5"
         >
           <div>
@@ -963,7 +963,7 @@ function UserProfileCard({
         <Modal
           open
           onClose={() => setShowIdentityVerifyModal(false)}
-          labelledBy="identity-verification-title"
+          labeledBy="identity-verification-title"
           panelClassName="w-full max-w-md p-5"
         >
           <div>

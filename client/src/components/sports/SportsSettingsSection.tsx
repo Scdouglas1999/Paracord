@@ -106,7 +106,7 @@ export function SportsSettingsSection({ guildId }: { guildId: string }) {
   }, []);
 
   useEffect(() => {
-    const gate = { cancelled: false };
+    const gate = { canceled: false };
     setLoading(true);
     setError(null);
     void (async () => {
@@ -114,11 +114,11 @@ export function SportsSettingsSection({ guildId }: { guildId: string }) {
         const [, leaguesRes] = await Promise.all([
           useSportsStore.getState().ensureSettings(guildId),
           sportsApi.listLeagues().catch((err: unknown) => {
-            if (!gate.cancelled) setCatalogError(extractApiError(err));
+            if (!gate.canceled) setCatalogError(extractApiError(err));
             return null;
           }),
         ]);
-        if (gate.cancelled) return;
+        if (gate.canceled) return;
         if (leaguesRes) setCatalog(leaguesRes.data.leagues ?? []);
         const current = useSportsStore.getState().byGuild[guildId];
         if (!current?.settings || current.settingsStatus !== 'ready') {
@@ -127,13 +127,13 @@ export function SportsSettingsSection({ guildId }: { guildId: string }) {
         }
         applySettings(current.settings);
       } catch (err) {
-        if (!gate.cancelled) setError(extractApiError(err));
+        if (!gate.canceled) setError(extractApiError(err));
       } finally {
-        if (!gate.cancelled) setLoading(false);
+        if (!gate.canceled) setLoading(false);
       }
     })();
     return () => {
-      gate.cancelled = true;
+      gate.canceled = true;
     };
   }, [guildId, applySettings]);
 

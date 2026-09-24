@@ -139,7 +139,7 @@ The router is only the first door. Your computer has one too.
   put one of them in "bridge mode"). Two signs of this: the address on your
   router's WAN/Internet page starts with `192.168.`, `10.` or `172.`, or it does
   not match what <https://ifconfig.me> reports.
-- **Your provider does not give you a public address.** Some mobile and fibre
+- **Your provider does not give you a public address.** Some mobile and fiber
   providers put every customer behind a shared address (called CGNAT). No amount
   of port forwarding helps, because the address is not yours. Tell-tale sign: the
   WAN address on your router starts with `100.64.`–`100.127.`, or simply does not

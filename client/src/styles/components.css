@@ -21,7 +21,7 @@
   white-space: nowrap;
   cursor: pointer;
   /* The §5.1 pressable recipe (see .pc-pressable in primitives.css): the
-     hover colour and a 0.98 press, both 120ms on the one ease-out, and the
+     hover color and a 0.98 press, both 120ms on the one ease-out, and the
      one-beat brighter flash an accent button takes. */
   transition:
     transform var(--duration-fast) var(--ease-out),

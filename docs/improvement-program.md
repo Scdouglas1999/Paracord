@@ -152,8 +152,8 @@ Evidence is saved in `output/improvement-program/guild-isolation/`.
   channels. They no longer prefill an unscoped channel cache from the result.
 - Leaving a background space does not switch servers to issue the request or
   navigate away from a different server's same-ID space. Marking a whole space
-  read fetches visible channels from its own server, bounds acknowledgements to
-  eight in flight, and updates read state only after successful acknowledgement.
+  read fetches visible channels from its own server, bounds acknowledgments to
+  eight in flight, and updates read state only after successful acknowledgment.
 - Verification: 1,276 client tests in 182 files pass. New coverage uses actual
   domain clients with controlled Axios responses for colliding IDs, delayed
   snapshots and mutations, account revocation, navigation and read actions.
@@ -194,7 +194,7 @@ Evidence is saved in `output/improvement-program/channel-isolation/`.
 - Gateway channel/DM/thread mutations and last-message changes use the event's
   account. Background DM metadata changes refetch only their owning account.
   DM creation, group creation and recipient management retain their account
-  across asynchronous responses. Reorders commit after acknowledgement and do
+  across asynchronous responses. Reorders commit after acknowledgment and do
   not restore stale snapshots over concurrent edits when a request fails.
 - DM index rows and command-palette results retain colliding IDs from multiple
   servers and open the account represented by the row. A DM deep link no longer
@@ -247,7 +247,7 @@ Evidence is saved in `output/improvement-program/read-notification-isolation/`.
 
 Item 2 remains in progress. Conversation/pin keys, message/outbox/crypto state,
 relationships, presence/typing, call state and remaining direct HTTP workflows
-still require complete account and operation ownership. Read acknowledgements
+still require complete account and operation ownership. Read acknowledgments
 also need backend correctness work: a stale cursor currently clears all mentions,
 without validating that its message belongs to the channel. The optimistic UI
 and server counter semantics need reconciliation with concurrent new messages.
@@ -286,7 +286,7 @@ Item 2 remains in progress. Message/outbox/encryption ownership, relationships,
 presence/typing and call state remain outstanding, as do remaining direct HTTP
 workflows, connection lifetime and canonical home-server identity. The voice
 occupancy and friend-request inputs to attention still need account scoping.
-Backend read acknowledgement/counter correctness remains required. This
+Backend read acknowledgment/counter correctness remains required. This
 checkpoint does not complete durable delivery, encrypted attachments or the real
 server UI scenarios from item 15.
 
@@ -484,7 +484,7 @@ Evidence is saved in `output/improvement-program/delivery-identity/`.
 - Verification: all 1,347 client tests in 191 files pass, plus build, final
   typecheck and lint (zero errors; 118 warnings). All 18 Chromium tests pass.
   New delivery cases cover lost-response replay after reload, exact request
-  bytes, cross-tab serialization, failed acknowledgement persistence, permanent
+  bytes, cross-tab serialization, failed acknowledgment persistence, permanent
   rejection, rate-limit deadlines, in-flight logout and enqueue during delivery.
   All 182 database tests and 74 API tests pass on SQLite; the same 74 API tests
   pass on actual PostgreSQL 18.6. The API suites cover message/channel behavior,
@@ -521,11 +521,11 @@ Evidence is saved in `output/improvement-program/prekey-enrollment/`.
   back the keys too. Database migration/export includes the receipt table.
 - The new client enrollment service uses a captured account operation context
   and encrypted vault. Private keys and the exact pending request commit before
-  upload; acknowledgement removes only the matching pending request. Reload,
-  network loss and failed local acknowledgement persistence retain the same
+  upload; acknowledgment removes only the matching pending request. Reload,
+  network loss and failed local acknowledgment persistence retain the same
   publication identity and bytes. It requires a committed response that echoes
   the expected request and key IDs; it does not accept an older server's missing
-  acknowledgement as success. An enrollment Web Lock serializes browser tabs.
+  acknowledgment as success. An enrollment Web Lock serializes browser tabs.
 - Legacy prekeys can enter the owned vault only after verifying the enrolled
   identity, the server's signed-prekey signature, matching private/public key
   pairs, key IDs, and every still-published one-time and last-resort key. Missing
@@ -1038,7 +1038,7 @@ browser storage/locks/crypto with controlled HTTP responses. Five additional uni
 cases verify resolution/delete response handling. The CRLF-aware diff check passes.
 
 This checkpoint does not complete a review item. Prepared editing, discard during
-an in-flight send and after acknowledgement, legacy migrations, production
+an in-flight send and after acknowledgment, legacy migrations, production
 composer/timeline and prekey/session cutover, encrypted attachments, complete
 recovery and full two-user/two-server UI scenarios remain unfinished, along with
 the other open review requirements.
@@ -1066,7 +1066,7 @@ persistence, resolution before followers, fresh-session follower decryption and
 no duplicate original POST. The CRLF-aware diff check passes.
 
 The race while an item remains queued is addressed. A discard requested after
-acknowledgement has already removed it still needs a timeline handoff to ordinary
+acknowledgment has already removed it still needs a timeline handoff to ordinary
 message deletion. Prepared editing, legacy sending-session metadata and attempted
 follower recovery also remain open. These modules are not yet the production
 composer/timeline or prekey writer; all previously listed integration, encrypted
@@ -1194,14 +1194,14 @@ mutation. Moderation evaluation is read-only until the write is authorized;
 invalid stored rules and moderation storage failures now propagate through
 message sends, edits and webhooks. They can no longer silently bypass filtering.
 A committed replay requires current visibility, while fresh changes additionally
-require edit authority and pass timeout checks. This permits acknowledgement
+require edit authority and pass timeout checks. This permits acknowledgment
 after a timeout without granting another write. Blocked operations record their
 moderation verdict but do not receive successful-edit receipts. Existing
 post-commit gateway, audit, alert and federation delivery is still not a durable
 event dispatcher.
 
 The client has an immutable edit transport that reuses committed JSON bytes,
-captures account/request lifetime and validates the operation acknowledgement.
+captures account/request lifetime and validates the operation acknowledgment.
 It accepts a replay response containing a newer message version. This transport
 is not yet integrated with durable edit intent, encryption preparation, the
 delivery driver or production UI.
@@ -1364,7 +1364,7 @@ Verification:
 
 No additional full review item is complete. The durable driver's prepared-edit
 workflow is now present, but the shipped messageStore/composer/timeline still
-need to adopt it. Post-acknowledgement edit/delete handoff, encrypted draft and
+need to adopt it. Post-acknowledgment edit/delete handoff, encrypted draft and
 legacy queue migration, account-owned prekey startup, matching receive-session
 migration and the group/attachment producers must accompany that production
 cutover. The existing production writer still uses the legacy queue and crypto

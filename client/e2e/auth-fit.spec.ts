@@ -21,7 +21,7 @@ import { expect, test, type Page } from '@playwright/test';
 const NATIVE_DEFAULT = { width: 1280, height: 740 } as const;
 /** The smallest window the client will let you make, minus the same chrome. */
 const NATIVE_MIN = { width: 940, height: 500 } as const;
-/** A browser at phone width, where page scrolling is the normal behaviour. */
+/** A browser at phone width, where page scrolling is the normal behavior. */
 const PHONE = { width: 400, height: 844 } as const;
 
 const NATIVE_VIEWPORTS = [

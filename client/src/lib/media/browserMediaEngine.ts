@@ -1784,7 +1784,7 @@ export class BrowserMediaEngine implements MediaEngine {
           }
         }
       } catch {
-        // Track ended or reader cancelled.
+        // Track ended or reader canceled.
       } finally {
         try {
           reader.releaseLock();
@@ -1812,7 +1812,7 @@ export class BrowserMediaEngine implements MediaEngine {
         try {
           reader.cancel();
         } catch {
-          // Already cancelled.
+          // Already canceled.
         }
       };
 
@@ -3338,7 +3338,7 @@ export class BrowserMediaEngine implements MediaEngine {
     );
     this.assertOpen();
     // The recipient is a snowflake, so it stays a string all the way to the
-    // wire. `Number(...)` here rounded every id past 2^53 to a neighbouring
+    // wire. `Number(...)` here rounded every id past 2^53 to a neighboring
     // value, and the server then delivered each wrapped key to an account that
     // does not exist — nobody could decrypt anybody.
     return wrapped.map(

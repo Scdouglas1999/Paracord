@@ -2084,7 +2084,7 @@ pub async fn register(
 
     // An unclaimed instance has no members yet, only an owner waiting to be
     // established. Letting an ordinary registration through here is exactly the
-    // behaviour this gate exists to remove: on a freshly exposed server the
+    // behavior this gate exists to remove: on a freshly exposed server the
     // first stranger to find the URL became its administrator. The claim flow
     // (`POST /api/v1/setup/claim`) is the only way to create that first
     // account, and it needs the bootstrap token the operator's terminal printed.

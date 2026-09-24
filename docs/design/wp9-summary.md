@@ -41,10 +41,10 @@ are what most of them ride on. **`framer-motion` left production code here.**
 | Moment | Where it lives | Gate case |
 |---|---|---|
 | **Controls are tactile** — 1px hover lift + wash, 0.96 press, spring back | `.pc-pressable` / `.pc-pressable-accent` in `styles/primitives.css`; `Button`, `IconButton`, `NavRow`, `Chip`; `.btn-primary`, `.icon-btn`, `.context-menu-item`, `.hover-action-btn`, `.command-icon-btn` | `every engine recipe…` (`#motion-press`) |
-| **Switch, tabs, segmented controls** — one travelling indicator | `ui/Switch.tsx`, `ui/Tabs.tsx`, `lib/motion/flipList.ts#useIndicator` | `every engine recipe…` (tabs strip) |
+| **Switch, tabs, segmented controls** — one traveling indicator | `ui/Switch.tsx`, `ui/Tabs.tsx`, `lib/motion/flipList.ts#useIndicator` | `every engine recipe…` (tabs strip) |
 | **One enter, one exit for every overlay** — `pc-enter` / `pc-exit` / `pc-fade` / `pc-drawer-*` / `pc-sheet-*` / `pc-banner-*` | `styles/primitives.css`; `Modal`, `Popover`, `ContextMenu`, `Tooltip`, `Toast`, `ImageLightbox`, `AppShell`, `ConnectionStatusBar`, `RestartBanner`, `UpdateNotification`, `LayoutTour`, `SlashCommandPopup`, `MessageInput`, `EmojiPicker`, `GifPicker`, `StickerPicker`, `UserProfile` — all via `lib/motion/presence.ts#usePresence` | `a dialog opening and closing holds the budget` (enter, exit, and the exit's own opacity samples) |
 | **Plates settle** onto a street that is already there | `ui/Plate.tsx`, `light/RoomThumbnail.tsx`, `lib/motion/presence.ts#useSettleIn` | `every engine recipe…` (`#motion-settle`) |
-| **Lists re-sort by travelling** | `layout/sidebar/BuildingsColumn.tsx`, `BuildingSection.tsx`, `RoomRow.tsx`, `ui/Toast.tsx`, `lib/motion/flipList.ts` | `a list reordering holds the budget` |
+| **Lists re-sort by traveling** | `layout/sidebar/BuildingsColumn.tsx`, `BuildingSection.tsx`, `RoomRow.tsx`, `ui/Toast.tsx`, `lib/motion/flipList.ts` | `a list reordering holds the budget` |
 | **Every count re-rolls** | `RoomRow`, `BuildingsColumn`, `BuildingSection`, `AvatarStack`, `InboxOverlay`, `MessageList` | `every engine recipe…` (`#motion-roll`) |
 | **The phone chat sheet travels** instead of resizing | `voice/stage/RoomChatRibbon.tsx`, `flipList.ts#flipBetween` | (covered by the reduced-motion case and the WP9c strips) |
 | **The on-air dot breathes only while somebody talks** | `hooks/useLights.ts`, `light/OnAirPill.tsx`, `layout/sidebar/CallDock.tsx`, `.pc-live-dot.is-speaking` | infinite breathe — asserted present, exempt from the duration budget |

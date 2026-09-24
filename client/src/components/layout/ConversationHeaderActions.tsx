@@ -13,7 +13,7 @@ import { cn } from '../../lib/utils';
  * Two rules this file keeps:
  *   - Nothing here spends a light token. A count of pinned messages is not
  *     somebody being present (§0, §6.3), so these are quiet ghost controls and
- *     the action colour marks only what is currently open.
+ *     the action color marks only what is currently open.
  *   - The narrow layout is `docs/layout-spec.md` §7.8: below the small
  *     breakpoint only the high-frequency controls stay visible and the rest
  *     move into the overflow menu, which lists them at every width.

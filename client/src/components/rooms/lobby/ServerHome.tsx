@@ -438,7 +438,7 @@ export function ServerHome({ guildId }: ServerHomeProps) {
 
       <Modal open={showCalendar} onClose={() => setShowCalendar(false)} size="auto"
         panelClassName="w-full max-w-[min(960px,calc(100vw-2rem))]"
-        labelledBy="server-calendar-title"
+        labeledBy="server-calendar-title"
         showCloseButton
       >
         <ModalHeader>

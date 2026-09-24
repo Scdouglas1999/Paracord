@@ -227,7 +227,7 @@ test('the release API seals uncertain deliveries and protects edit replays', asy
     const resolved = await client.post(`${path}/message-deliveries/${nonce}/resolve`);
     expect(resolved.status()).toBe(200);
     expect(await resolved.json()).toEqual({ state: 'cancelled', channel_id: channel.id, author_id: account.user.id, nonce });
-    const delayed = await client.post(`${path}/messages`, { data: { content: 'This cancelled message must not appear', nonce } });
+    const delayed = await client.post(`${path}/messages`, { data: { content: 'This canceled message must not appear', nonce } });
     expect(delayed.status()).toBe(410);
     expect((await delayed.json()).code).toBe('DELIVERY_CANCELLED');
     const repeated = await client.post(`${path}/message-deliveries/${nonce}/resolve`);
@@ -247,14 +247,14 @@ test('the release API seals uncertain deliveries and protects edit replays', asy
     expect(await replay.json()).toMatchObject({ id: original.id, content: 'Newer durable edit', edit_nonce: firstEdit.edit_nonce, edit_replayed: true, edited_at: latest.edited_at });
     const history = await client.get(`${editPath}/edits`); expect(history.status()).toBe(200);
     expect((await history.json()).map((entry: { content: string }) => entry.content)).toEqual(['Original before durable edits', 'First durable edit']);
-    const cancelledNonce = `cancelled-edit-${unique}`;
-    const resolutionPath = `${editPath}/edits/${cancelledNonce}/resolve`;
+    const canceledNonce = `canceled-edit-${unique}`;
+    const resolutionPath = `${editPath}/edits/${canceledNonce}/resolve`;
     const editResolution = await client.post(resolutionPath);
     expect(editResolution.status()).toBe(200);
-    expect(await editResolution.json()).toMatchObject({ state: 'cancelled', actor_id: account.user.id, message_id: original.id, edit_nonce: cancelledNonce });
+    expect(await editResolution.json()).toMatchObject({ state: 'cancelled', actor_id: account.user.id, message_id: original.id, edit_nonce: canceledNonce });
     const replacement = await client.patch(editPath, { data: { content: 'Replacement after edit cancellation', edit_nonce: `replacement-${unique}` } });
     expect(replacement.status()).toBe(200);
-    const delayedEdit = await client.patch(editPath, { data: { content: 'This delayed edit must not overwrite its replacement', edit_nonce: cancelledNonce } });
+    const delayedEdit = await client.patch(editPath, { data: { content: 'This delayed edit must not overwrite its replacement', edit_nonce: canceledNonce } });
     expect(delayedEdit.status()).toBe(410); expect((await delayedEdit.json()).code).toBe('EDIT_CANCELLED');
     const current = await client.get(`${path}/messages`); expect(current.status()).toBe(200);
     expect((await current.json()).find((entry: { id: string }) => entry.id === original.id)?.content).toBe('Replacement after edit cancellation');
@@ -489,7 +489,7 @@ test('Home follows live mention creation, edits and deletion and opens the survi
     if (await homeTour.isVisible()) await homeTour.click();
     await page.screenshot({ path: testInfo.outputPath('home-surviving-mention.png'), fullPage: true });
     const jump = page.waitForURL(new RegExp(`/channels/${channel.id}\\?message=${survivor.id}`));
-    // §7.5: a Needs-you row carries one action, labelled for the room it opens.
+    // §7.5: a Needs-you row carries one action, labeled for the room it opens.
     await attention.getByRole('button', { name: 'Open decisions', exact: true }).click();
     await jump;
     const skip = page.getByRole('button', { name: 'Skip tour', exact: true });

@@ -417,7 +417,7 @@ pub async fn accept_invite(
                 let require_ack = parse_bool(config.get("require_ack"), true);
                 if require_ack && accept_body.verification_ack != Some(true) {
                     return Err(ApiError::BadRequest(
-                        "Verification acknowledgement is required before joining".into(),
+                        "Verification acknowledgment is required before joining".into(),
                     ));
                 }
 

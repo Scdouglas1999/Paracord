@@ -34,20 +34,20 @@ export function RoleMentionChip({ guildId, roleId }: { guildId?: string; roleId:
       setError('This role is not in this conversation.');
       return;
     }
-    let cancelled = false;
+    let canceled = false;
     setError(null);
     fetchGuildRoles(guildId)
       .then((roles) => {
-        if (cancelled) return;
+        if (canceled) return;
         const found = roles.find((item) => item.id === roleId) ?? null;
         setRole(found);
         if (!found) setError('This role is no longer available.');
       })
       .catch((err) => {
-        if (!cancelled) setError(extractApiError(err));
+        if (!canceled) setError(extractApiError(err));
       });
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [guildId, roleId]);
 
@@ -79,8 +79,8 @@ export function RoleMentionChip({ guildId, roleId }: { guildId?: string; roleId:
         ref={anchorRef}
         type="button"
         className="pc-focusable inline rounded-[var(--radius-window)] px-0.5 font-medium transition-[background-color] duration-[var(--duration-fast)] ease-[var(--ease-out)]"
-        // A role's own colour can be anything, so the ink is the colour mixed
-        // into the theme's text colour: dark roles lighten on a dark theme and
+        // A role's own color can be anything, so the ink is the color mixed
+        // into the theme's text color: dark roles lighten on a dark theme and
         // light roles darken on a light one, and the text always reads.
         style={
           tint

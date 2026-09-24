@@ -2,7 +2,7 @@
    The server home page (docs/server-home-spec.md).
 
    The recipes the page's components share: the cover, the live glow, the card
-   lift, the photo hover and the section entrance. Colours are tokens (the
+   lift, the photo hover and the section entrance. Colors are tokens (the
    cover's lightness steps are `--cover-*` in tokens.css; its hue arrives as a
    number from `serverCover.ts`). Imported into `@layer components`, so a
    utility at the call site still wins.
@@ -48,7 +48,7 @@
 
 /* A server with no banner: three soft lights over a ground, all made of the
    server's own hue. Positions, sizes and the lights' hue shifts are set inline
-   by `coverStyle()`; everything that is a colour is assembled here. */
+   by `coverStyle()`; everything that is a color is assembled here. */
 .pc-home-cover-made {
   position: absolute;
   inset: 0;

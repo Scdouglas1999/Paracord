@@ -26,7 +26,7 @@ const PUBLIC_IP_DETECTION_TIMEOUT: std::time::Duration = std::time::Duration::fr
 const PUBLIC_IP_DETECTION_BODY_LIMIT: usize = 128;
 
 /// Bounded grace period granted to background workers to drain their current
-/// batch after shutdown is signalled, before the process tears down.
+/// batch after shutdown is signaled, before the process tears down.
 const WORKER_SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// How long the restart notice gets to reach connected clients before the
@@ -53,7 +53,7 @@ const CONNECTION_DRAIN_DEADLINE: std::time::Duration = std::time::Duration::from
 /// worker grace period that precedes it.
 async fn connection_drain_deadline(started: tokio::sync::oneshot::Receiver<()>) {
     if started.await.is_err() {
-        // The shutdown future was dropped without signalling; nothing to bound.
+        // The shutdown future was dropped without signaling; nothing to bound.
         std::future::pending::<()>().await;
     }
     tokio::time::sleep(CONNECTION_DRAIN_DEADLINE).await;
@@ -585,7 +585,7 @@ async fn main() -> Result<()> {
 
     // Create LiveKit config for the media layer
     // On Windows, "localhost" can resolve to IPv6 [::1] which may hang if
-    // LiveKit only listens on IPv4.  Normalise to 127.0.0.1 for reliability.
+    // LiveKit only listens on IPv4.  Normalize to 127.0.0.1 for reliability.
     let livekit_config = Arc::new(paracord_media::LiveKitConfig {
         api_key: config.livekit.api_key.clone(),
         api_secret: config.livekit.api_secret.clone(),
@@ -3210,7 +3210,7 @@ async fn provision_instance_setup(
     // Otherwise reuse the token this server minted on an earlier run, as long
     // as the file it was written to still holds the matching secret. A missing
     // or edited file means the operator no longer has the token, so churning it
-    // is the useful behaviour — and it is announced rather than silent.
+    // is the useful behavior — and it is announced rather than silent.
     let token_path = claim_token_file_path(config_path);
     let token_path_display = token_path.display().to_string();
     if row.claim_token_source.as_deref()
@@ -4749,7 +4749,7 @@ async fn handle_webtransport_connection(
                             return;
                         }
 
-                        // Send length-prefixed Pong acknowledgement.
+                        // Send length-prefixed Pong acknowledgment.
                         if let Ok(ack) = paracord_transport::control::ControlMessage::Pong.encode()
                         {
                             let _ = send.write_all(&ack).await;

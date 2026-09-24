@@ -44,10 +44,10 @@ Nothing in `components/voice/stage/` reads a store. The containers
 | `components/voice/VideoGrid.tsx` (+ test) — one tile per **camera**, four ad-hoc layouts, its own attach logic and its own chrome | **Deleted.** Split into `CameraSurface` (the attach logic), `StageTile` (the chrome), `SpeakerGrid` (the layout rules) and `StageSpeakers` (the container). The strip now shows one tile per **person in the channel**, because a channel with four people and one camera is four tiles, not one. |
 | `components/voice/MiniVoiceBar.tsx` (+ test) — a second control bar in the app chrome | **Deleted.** `components/voice/OnAirDock.tsx` renders WP1's `OnAirPill`: white dot, channel name, mono duration, mic state, one action (§7.7). Call sites updated: `components/layout/sidebar/CallDock.tsx`, `pages/AppShell.tsx` (and the two tests that stubbed it). |
 | `pages/guild/VoiceChatSidebar.tsx` — a 460px slide-over with its own header | **Deleted.** `pages/guild/RoomChat.tsx` + `RoomChatRibbon`: the 336px plate beside the Stage, or the phone sheet. |
-| `components/voice/FocusedWebcamView.tsx` — duplicated VideoGrid's attach logic | Rewritten as `StageTile` + `CameraSurface`. Same props, same behaviour. |
+| `components/voice/FocusedWebcamView.tsx` — duplicated VideoGrid's attach logic | Rewritten as `StageTile` + `CameraSurface`. Same props, same behavior. |
 | `components/voice/VoiceControlBar.tsx` — an absolutely-positioned floating bar of 44px controls | Laid out in flow by the Stage, on `StageControlBar` + `IconButton size="stage"`: mic-on is **white light**, leave is danger. Every aria-label, tooltip, menu and the whole screen-share flow are unchanged. |
 | `components/voice/StreamViewer.tsx` — a red "LIVE" badge and a black gradient wash across the top of the frame | Chrome restyled onto the tile recipe: `LiveDot` + name tag bottom-left, transport readout top-right, hover controls on the tag fill in the same corner (so nothing shifts), poster states left-aligned in the metaphor. **The media path is untouched** — the underlay hole-punch, the WebGL canvas, the subscription bookkeeping and the native-surface boundary are all byte-identical. |
-| `components/voice/SplitPane.tsx`, `SplitPaneSourcePicker.tsx`, `InCallDeviceMenu.tsx` | Restyled to tokens (floating recipe, tag fill, stage control height). Behaviour untouched. |
+| `components/voice/SplitPane.tsx`, `SplitPaneSourcePicker.tsx`, `InCallDeviceMenu.tsx` | Restyled to tokens (floating recipe, tag fill, stage control height). Behavior untouched. |
 | `pages/guild/VoiceLobby.tsx` | Restyled to a plate; the Join button is **white light when somebody is in there** and emerald when the channel is dark; the gradient avatar ring is gone (§6.2). |
 | `pages/GuildPage.tsx` | The app's `TopBar` is suppressed for voice/stage channels — the Stage plate carries its own header (§7.2), and two titles for one channel is a defect. Every other channel type keeps it. |
 
@@ -162,7 +162,7 @@ WP3's own tests:
   initials fallback, speaking, muted, readout, badge), the column rules, the
   header, the ribbon in both surfaces, the layout's rows, the status copy
   (including the banned-filler assertion), the transport readout, and the
-  no-literal-colour assertion WP0 established.
+  no-literal-color assertion WP0 established.
 - `components/voice/StageSpeakers.test.tsx` — the camera derivation the deleted
   `VideoGrid.test.tsx` used to cover, moved and kept whole: a screenshare-only
   publisher gets no video surface, muted and ended camera tracks are excluded, an

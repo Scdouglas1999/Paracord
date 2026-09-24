@@ -126,10 +126,10 @@ pub async fn can_receive_replayed_event(
 /// buffer at the gateway's 2000-connection cap, on a server that is meant to run
 /// on modest hardware.
 ///
-/// 1024 keeps ~104 KiB per socket (~208 MB at the cap) while still queueing ten
+/// 1024 keeps ~104 KiB per socket (~208 MB at the cap) while still queuing ten
 /// times the gateway's `MAX_REPLAY_EVENTS` (100) — a client that falls further
 /// behind than that has to re-IDENTIFY on its next RESUME regardless, so the
-/// extra depth bought nothing but memory. Overflow behaviour is unchanged: the
+/// extra depth bought nothing but memory. Overflow behavior is unchanged: the
 /// receiver sees `RecvError::Lagged` and the gateway closes with 1013 so the
 /// client reconnects and re-fetches. Raise with `PARACORD_EVENT_BUS_CAPACITY`
 /// for deployments with unusually bursty guilds.

@@ -277,7 +277,7 @@ describe('group sender keys', () => {
     // The pin assertions inside verification open the identity-trust vault,
     // which for a signed-in account is this same vault behind the same
     // exclusive lock. Doing that from inside a transaction deadlocks: the
-    // conversation sticks on a spinner and the account's enrolment never
+    // conversation sticks on a spinner and the account's enrollment never
     // finishes. It cost a live run to find, so it is pinned here.
     await distribute(alice, server, channelId, members);
     bob.activate();

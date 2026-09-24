@@ -1,7 +1,7 @@
 //! Values the API stored because nothing looked at them.
 //!
 //! Each case here was accepted by a release candidate and persisted: a reaction
-//! that is not an emoji, a room of a type no client can render, a role colour
+//! that is not an emoji, a room of a type no client can render, a role color
 //! outside the 24 bits every consumer reads, a message scheduled for the year
 //! 9999, a permission overwrite whose bits this server does not define, and one
 //! naming a role that no longer exists.
@@ -201,7 +201,7 @@ async fn a_room_has_to_be_a_kind_this_server_serves() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn a_role_colour_stays_inside_twenty_four_bits() -> anyhow::Result<()> {
+async fn a_role_color_stays_inside_twenty_four_bits() -> anyhow::Result<()> {
     let app = build_test_app(TestAppOptions::default()).await?;
     let space = owned_space(&app).await?;
     let path = format!("/api/v1/guilds/{}/roles", space.guild_id);
@@ -230,7 +230,7 @@ async fn a_role_colour_stays_inside_twenty_four_bits() -> anyhow::Result<()> {
         )?,
     )
     .await?;
-    assert_eq!(status, StatusCode::CREATED, "a real colour: {role}");
+    assert_eq!(status, StatusCode::CREATED, "a real color: {role}");
     let role_id = role["id"].as_str().unwrap().to_string();
 
     // The edit route was unguarded for the same reason the create route was.

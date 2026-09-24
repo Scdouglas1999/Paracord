@@ -147,11 +147,11 @@ export function RegisterPage() {
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
+    let canceled = false;
     authApi
       .options()
       .then(({ data }) => {
-        if (cancelled) return;
+        if (canceled) return;
         setRequireEmail(data.require_email);
         setRegistrationEnabled(data.registration_enabled ?? true);
         setRegistrationMode(data.registration_mode ?? 'open');
@@ -160,7 +160,7 @@ export function RegisterPage() {
         // Keep conservative defaults when options are unavailable.
       });
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, []);
 
@@ -168,18 +168,18 @@ export function RegisterPage() {
   // reject this form anyway. Send the operator to the claim flow rather than
   // letting them fill in a page that cannot succeed.
   useEffect(() => {
-    let cancelled = false;
+    let canceled = false;
     instanceApi
       .getSetupStatus()
       .then(({ data }) => {
-        if (!cancelled && data.setup_required) navigate('/setup-server', { replace: true });
+        if (!canceled && data.setup_required) navigate('/setup-server', { replace: true });
       })
       .catch(() => {
         // Never infer setup state from a failed request; submitting reports the
         // real error.
       });
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [navigate]);
 

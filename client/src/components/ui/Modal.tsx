@@ -48,7 +48,7 @@ export interface ModalProps {
   /** Dialog semantics. Use `alertdialog` for confirm/destructive prompts. */
   role?: 'dialog' | 'alertdialog';
   /** id of the title element for aria-labelledby. */
-  labelledBy?: string;
+  labeledBy?: string;
   /** id of the description element for aria-describedby. */
   describedBy?: string;
   /** Fallback accessible name when there is no visible title element. */
@@ -89,7 +89,7 @@ export function Modal({
   onClose,
   children,
   role = 'dialog',
-  labelledBy,
+  labeledBy,
   describedBy,
   ariaLabel,
   placement = 'center',
@@ -143,9 +143,9 @@ export function Modal({
         ref={ref}
         role={role}
         aria-modal="true"
-        aria-labelledby={labelledBy}
+        aria-labelledby={labeledBy}
         aria-describedby={describedBy}
-        aria-label={labelledBy ? undefined : ariaLabel}
+        aria-label={labeledBy ? undefined : ariaLabel}
         tabIndex={-1}
         className={cn(
           // A dialog is a plate that floats over the street (spec §4):

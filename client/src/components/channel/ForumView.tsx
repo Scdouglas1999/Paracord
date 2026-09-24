@@ -671,7 +671,7 @@ function TagManagerModal({
       onClose={onClose}
       size="auto"
       panelClassName="w-full max-w-lg"
-      labelledBy="forum-tag-manager-title"
+      labeledBy="forum-tag-manager-title"
       showCloseButton
       closeLabel="Close tag manager"
     >
@@ -790,7 +790,7 @@ function NewPostModal({
       onClose={onClose}
       size="auto"
       panelClassName="w-full max-w-lg"
-      labelledBy="forum-new-post-title"
+      labeledBy="forum-new-post-title"
       showCloseButton
       closeLabel="Close new post dialog"
     >

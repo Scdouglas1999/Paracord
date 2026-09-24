@@ -49,19 +49,19 @@ export function MediaWidget({ guildId, onOpenMedia }: MediaWidgetProps) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
+    let canceled = false;
     setItems(null);
     setError(null);
     galleryApi
       .guildAttachments(guildId, { kind: 'image', limit: COUNT })
       .then(({ data }) => {
-        if (!cancelled) setItems(data.items);
+        if (!canceled) setItems(data.items);
       })
       .catch((err) => {
-        if (!cancelled) setError(extractApiError(err));
+        if (!canceled) setError(extractApiError(err));
       });
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [guildId]);
 

@@ -32,7 +32,7 @@ pub enum PlaybackError {
     Resampler(String),
 }
 
-/// Enumerate speakers/headphones the way a person recognises them.
+/// Enumerate speakers/headphones the way a person recognizes them.
 ///
 /// Delegates to [`devices::list_devices`], which asks the sound server for real
 /// device names and stable node ids and only falls back to raw cpal PCM names

@@ -143,7 +143,7 @@ describe('VoiceConnectionCheck', () => {
     expect(screen.getByText(/Chat is unaffected/i)).toBeInTheDocument();
   });
 
-  it('asks whether the test tone was heard and honours the answer', async () => {
+  it('asks whether the test tone was heard and honors the answer', async () => {
     render(<VoiceConnectionCheck open onClose={() => {}} adapters={fakeAdapters({ useOwnAsk: true })} />);
     fireEvent.click(screen.getByRole('button', { name: /run check/i }));
     const no = await screen.findByRole('button', { name: /No, nothing played/i });

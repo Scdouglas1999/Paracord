@@ -42,7 +42,7 @@ export class NoiseGateProcessor {
 
   private ctx: AudioContext | null = null;
   private source: MediaStreamAudioSourceNode | null = null;
-  private analyser: AnalyserNode | null = null;
+  private analyzer: AnalyserNode | null = null;
   private gain: GainNode | null = null;
   private destination: MediaStreamAudioDestinationNode | null = null;
   private animFrame: number | null = null;
@@ -79,13 +79,13 @@ export class NoiseGateProcessor {
     const inputStream = new MediaStream([inputTrack]);
     this.source = this.ctx.createMediaStreamSource(inputStream);
 
-    // Analyser for level detection — small FFT for fast response
-    this.analyser = this.ctx.createAnalyser();
-    this.analyser.fftSize = 256;
-    this.analyser.smoothingTimeConstant = 0.3;
-    this.analyser.channelCount = 1;
-    this.analyser.channelCountMode = 'explicit';
-    this.fftBuf = new Float32Array(this.analyser.fftSize);
+    // Analyzer for level detection — small FFT for fast response
+    this.analyzer = this.ctx.createAnalyser();
+    this.analyzer.fftSize = 256;
+    this.analyzer.smoothingTimeConstant = 0.3;
+    this.analyzer.channelCount = 1;
+    this.analyzer.channelCountMode = 'explicit';
+    this.fftBuf = new Float32Array(this.analyzer.fftSize);
 
     // Gain node — this is the actual "gate". Force mono to prevent the
     // default stereo upmix (channelCount=2, channelCountMode='max') which
@@ -100,9 +100,9 @@ export class NoiseGateProcessor {
     this.destination = this.ctx.createMediaStreamDestination();
     this.destination.channelCount = 1;
 
-    // Wire: source → analyser (for monitoring)
+    // Wire: source → analyzer (for monitoring)
     //        source → gain → destination (for output)
-    this.source.connect(this.analyser);
+    this.source.connect(this.analyzer);
     this.source.connect(this.gain);
     this.gain.connect(this.destination);
 
@@ -115,14 +115,14 @@ export class NoiseGateProcessor {
   }
 
   private tick = (): void => {
-    if (!this.analyser || !this.gain || !this.ctx || !this.fftBuf) return;
+    if (!this.analyzer || !this.gain || !this.ctx || !this.fftBuf) return;
 
     const now = performance.now();
     const dt = now - this.lastTime;
     this.lastTime = now;
 
     // Measure current audio level in dBFS
-    this.analyser.getFloatTimeDomainData(this.fftBuf);
+    this.analyzer.getFloatTimeDomainData(this.fftBuf);
     let peak = 0;
     for (let i = 0; i < this.fftBuf.length; i++) {
       const abs = Math.abs(this.fftBuf[i]);
@@ -192,10 +192,10 @@ export class NoiseGateProcessor {
     }
     this.source?.disconnect();
     this.gain?.disconnect();
-    this.analyser?.disconnect();
+    this.analyzer?.disconnect();
     this.source = null;
     this.gain = null;
-    this.analyser = null;
+    this.analyzer = null;
     this.destination = null;
     this.fftBuf = null;
     this.processedTrack = undefined;

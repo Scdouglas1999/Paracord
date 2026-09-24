@@ -30,12 +30,12 @@ durations that were already there:
 --ease-spring-settle: cubic-bezier(0.34, 1.2, 0.64, 1)   the ONE curve for movement
 --duration-move: 380ms       shared elements, settling plates, sliding indicators
 --duration-roll: 180ms       a count flipping over
---stagger-light: 30ms        neighbouring lights
+--stagger-light: 30ms        neighboring lights
 --stagger-chrome: 80ms       chrome rising behind the thing it supports
 --spring-stiffness: 260 · --spring-damping: 24 · --spring-mass: 1
 ```
 
-No third travelling curve: `--ease-in` is the dim, `--ease-in-out` the breath,
+No third traveling curve: `--ease-in` is the dim, `--ease-in-out` the breath,
 and neither moves anything. `motion.test.tsx` asserts exactly four `--ease-*`
 names exist, so a fifth cannot arrive quietly.
 
@@ -51,7 +51,7 @@ left it and nothing new is built on it.
 |---|---|
 | `tokens.ts` | reads the §5 custom properties off the document. `MOTION_TOKEN_FALLBACKS` holds the stylesheet's values for a renderer with no stylesheet (jsdom), and a test reads `tokens.css` and fails if the two ever disagree. `rawToken()` resolves any custom property for the two places WAAPI needs a value rather than a `var()`. |
 | `reducedMotion.ts` | **the** switch. OS media query + `uiStore.motion` (`system` / `full` / `reduced`), folded into one answer and published as `data-motion` on `<html>`. `prefersReducedMotion()` for modules, `useReducedMotion()` for components, `:root[data-motion='reduced']` for CSS. |
-| `spring.ts` | the damped spring behind `--ease-spring-settle`, solved analytically (under-, critically and over-damped). `springLinearEasing()` samples it into a WAAPI `linear()` string, normalised so it ends at exactly 1; `springEasing()` falls back to the cubic-bezier token where `linear()` is unsupported. `sampleRunning()` reads a running animation's position and velocity so a replacement can retarget from it. |
+| `spring.ts` | the damped spring behind `--ease-spring-settle`, solved analytically (under-, critically and over-damped). `springLinearEasing()` samples it into a WAAPI `linear()` string, normalized so it ends at exactly 1; `springEasing()` falls back to the cubic-bezier token where `linear()` is unsupported. `sampleRunning()` reads a running animation's position and velocity so a replacement can retarget from it. |
 | `animate.ts` | `bloom` · `dim` · `flicker` · `settleIn` · `stagger` · `press` · `flash` · `liftOut` · `relax` · `fadeIn`. Each cancels the recipe it replaces on that element, returns the `Animation`, and lands its end state instantly under reduced motion. |
 | `sharedElement.ts` | `transitionWith(update, { names })` — View Transitions where the webview has them, a Web Animations FLIP everywhere else, the same choreography on both: 380ms spring-settle, `[data-motion-chrome]` rising 80ms later 30ms apart. |
 | `flipCounter.tsx` | `<RollingNumber value={n} />` — old up and out, new up and in, 180ms, on a change only. |
@@ -115,8 +115,8 @@ Three things make it honest:
   one frame that must not be spent re-rendering a 1,600-line composer.
 - **Only a row the person caused lands.** Without a gesture on the bus nothing
   animates, which keeps history, channel switches and other people's messages
-  still. The transform is on the row itself, under the virtualiser's own
-  positioning, so no neighbour moves and the list never reflow-animates.
+  still. The transform is on the row itself, under the virtualizer's own
+  positioning, so no neighbor moves and the list never reflow-animates.
 - **Nothing at all happens for a send that will not go.** A poll, a schedule, an
   attachment, a slash command, an empty or over-long draft, or a conversation
   that will refuse it, all take the ordinary path.
@@ -151,7 +151,7 @@ review:
 1. **The send control never caught the light.** `flash` added a class and the
    send's own re-render rewrote `className` microseconds later. Inline style
    now, which React does not own — plus `transition: none` for the beat, because
-   the control's colour transition had been turning the flash into a 140ms ramp
+   the control's color transition had been turning the flash into a 140ms ramp
    that peaked at 93%.
 2. **A 180px card appeared and vanished under the composer.** Every send passes
    through the durable outbox, and `MessagingQueuePanel` drew a "Queued message"
@@ -212,7 +212,7 @@ threshold.
 **The send moment drops exactly one frame**, at the moment the row arrives. It
 is `MessageList`'s own render of the new row — it is there, to the frame, with
 motion switched off entirely (the reduced-motion case plays nothing and drops
-the same frame), and it survived every optimisation this package could make
+the same frame), and it survived every optimization this package could make
 without restructuring the timeline. The gate allows it *by name*, at one: a
 second dropped frame fails.
 
@@ -239,7 +239,7 @@ Building the gate found three real bugs, all fixed in `45c7a6a`:
 - the View Transitions path ran on the UA's 250ms `ease`, which is neither of
   §5.2's two curves. `::view-transition-*` now takes `--duration-move` and
   `--ease-spring-settle`, and the root snapshot crosses at the plain fade speed
-  so nothing but the element that travelled draws the eye.
+  so nothing but the element that traveled draws the eye.
 
 ## 5. `/design-tokens` › Motion
 
@@ -283,7 +283,7 @@ PARACORD_E2E_MOTION=1 PARACORD_E2E_MOTION_FRAMES=1 npx playwright test --grep "f
 cd client
 npm run typecheck            247/247 files, clean
 npm run test:unit            2 298 tests, 247 files, green
-npm run test:tokens          486 files, no literal colour
+npm run test:tokens          486 files, no literal color
 npm run build                clean
 npx playwright test          84 passed (mocked smoke + encrypted storage)
 npm run test:motion          4 passed
@@ -339,7 +339,7 @@ the phone pull-to-refresh lamp.
 
 **Known, not fixed here.**
 - The timeline drops one frame when a message arrives (§4). It is `MessageList`
-  render cost, not motion, and shrinking it means changing how the virtualiser
+  render cost, not motion, and shrinking it means changing how the virtualizer
   measures — a package of its own.
 - `framer-motion` still drives `Modal`, `Tooltip`, toasts, `SlashCommandPopup`
   and the composer's upload sweep. WP9c should retire it; nothing new uses it.

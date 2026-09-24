@@ -6,13 +6,13 @@ import type React from "react";
  * The design system's type steps (`--text-display` … `--text-section` in
  * src/styles/tokens.css) generate `text-*` utilities whose names are words, not
  * t-shirt sizes. tailwind-merge cannot tell `text-meta` (a font-size) from
- * `text-text-muted` (a colour) on its own, so out of the box it treats them as
+ * `text-text-muted` (a color) on its own, so out of the box it treats them as
  * the same class group and silently drops the first — `cn('text-meta
  * text-text-muted')` returned just `text-text-muted`, and every composed
  * component in the app lost its type step.
  *
  * Declaring the scale here is the fix: a `text-*` utility named below is a
- * font-size, and everything else `text-*` stays a colour.
+ * font-size, and everything else `text-*` stays a color.
  */
 const TYPE_STEPS = [
   // Lantern Stage steps (docs/lantern-stage-spec.md §2).

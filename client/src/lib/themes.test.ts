@@ -81,7 +81,7 @@ describe('LOOK_THEMES', () => {
     expect([...LOOK_THEMES].sort()).toEqual(['dusk', 'paper', 'slate', 'voices']);
   });
 
-  it('leaves the four themes out — they keep the accent and base-colour controls', () => {
+  it('leaves the four themes out — they keep the accent and base-color controls', () => {
     for (const id of ['dark', 'light', 'amoled', 'high-contrast'] as ThemeId[]) {
       expect(LOOK_THEMES.has(id)).toBe(false);
     }

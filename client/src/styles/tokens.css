@@ -45,7 +45,7 @@
    a subtree can be painted in another theme — that is how `/design-tokens`
    shows all four side by side, and how a preview renders a theme you are not in. The light tokens
    are REMAPPED in every theme, never removed — "lit" must still read as
-   presence on a light ground. Accent presets (useTheme.ts) recolour
+   presence on a light ground. Accent presets (useTheme.ts) recolor
    --accent-primary and its derivatives ONLY; they never touch the light tokens.
 
    There are no deprecated aliases left. WP8 migrated every consumer of the v1
@@ -55,7 +55,7 @@
    deleted them. The alias→name table is in docs/design/wp8-checkpoint.md.
    ============================================================================= */
 @theme {
-  /* ---- Colour: the Tailwind namespace ------------------------------------
+  /* ---- Color: the Tailwind namespace ------------------------------------
      Every `--color-*` here POINTS AT a plain token declared in `:root` below
      (and re-declared by each `[data-theme]` block). That indirection is what
      makes the generated utilities — `bg-bg-plate`, `text-text-primary`,
@@ -89,7 +89,7 @@
   --color-danger-well: var(--danger-well);
   --color-danger-well-hover: var(--danger-well-hover);
 
-  /* Tints: meaning-coloured washes (mention rows, badges). */
+  /* Tints: meaning-colored washes (mention rows, badges). */
   --color-accent-tint: var(--accent-tint);
   --color-accent-tint-strong: var(--accent-tint-strong);
   --color-teal-tint: var(--teal-tint);
@@ -124,7 +124,7 @@
 
   /* Identity hues — the fill a person or a server wears (a 28px circle, a
      server's mark). Identity, never state. Fixed across themes AND across the
-     base hue below: a person's colour is who they are, not where the app is and
+     base hue below: a person's color is who they are, not where the app is and
      not what ground the reader picked. Eight of them, so a channel with a dozen
      people in it rarely repeats one.
      Written as TEXT, an identity needs its own ink on paper — the timeline
@@ -307,13 +307,13 @@
   /* A soundboard play's mark on the tile: the emoji pops in, holds long enough
      to be read, and lifts away — one beat somebody caused. */
   --duration-burst: 1400ms;
-  /* A shared element travelling from where you clicked to where it lands
+  /* A shared element traveling from where you clicked to where it lands
      (§5.1 "the thing you click becomes the thing you look at"). The one
      movement longer than a panel, and still inside the page-entrance range. */
   --duration-move: 320ms;
   /* A count re-rolling: old up/out, new up/in (§5.1 "numbers re-roll"). */
   --duration-roll: 180ms;
-  /* A page's first entrance: neighbours start 40ms apart. */
+  /* A page's first entrance: neighbors start 40ms apart. */
   --stagger-page: 40ms;
   /* Curves. ONE ease-out for everything that arrives or moves, a quicker
      ease-in for everything that leaves, and the in-out that only the breath
@@ -321,7 +321,7 @@
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
   --ease-in: cubic-bezier(0.4, 0, 1, 1);
   --ease-in-out: cubic-bezier(0.45, 0, 0.55, 1);
-  /* Neighbouring lights stagger 30ms; supporting chrome rises 80ms after the
+  /* Neighboring lights stagger 30ms; supporting chrome rises 80ms after the
      shared element it belongs to (§5.1). */
   --stagger-light: 30ms;
   --stagger-chrome: 80ms;
@@ -343,11 +343,11 @@
 /* =============================================================================
    §1.0 The base hue — the one number the whole neutral ramp turns on.
 
-   Every ground, well, hairline, wash, scrim and grey ink below is written
+   Every ground, well, hairline, wash, scrim and gray ink below is written
    `oklch(L C var(--ui-hue))`. L and C are the ramp — fixed, per token, per
    theme — and only H moves. Because relative luminance is carried almost
    entirely by L at these chromas, holding L and C and varying H keeps every
-   contrast pair where it was: the ramp cannot be made illegible by a colour
+   contrast pair where it was: the ramp cannot be made illegible by a color
    choice, at any hue. `npm run test:contrast` proves it, sweeping the whole
    circle every 30 degrees against all four themes.
 
@@ -358,11 +358,11 @@
    What does NOT turn on the hue, and why:
      - the two lights (`--light-white`, `--light-amber`) and every glow, ring
        and lamp recipe made from them. Light is state — a person is there right
-       now — and §6.3 will not let a preference recolour it.
+       now — and §6.3 will not let a preference recolor it.
      - the semantic accents (action green, warning gold, danger, info) and the
        identity palette. They carry meaning; a meaning that drifts is not one.
      - a plate's warm 1px top highlight. It is the lamp above the plate, so it
-       stays the colour of the light rather than the colour of the wall.
+       stays the color of the light rather than the color of the wall.
    Where an accent sits ON the ground — a selection wash, a hover wash — it is
    written in the base hue, which is what keeps the chrome of one piece.
    ============================================================================= */
@@ -372,8 +372,8 @@
   --ui-hue: 65;
   --ui-chroma: 1;
   /* The street is not the room. Outside is the night sky — dusk blue — and the
-     rooms are lamp-warm; the colour of the app is the difference between the
-     two. One hue at near-zero chroma read as grey on every monitor it was
+     rooms are lamp-warm; the color of the app is the difference between the
+     two. One hue at near-zero chroma read as gray on every monitor it was
      tried on, whatever the hue was. The reader paints the walls (`--ui-hue`);
      the sky stays the sky. It takes `--ui-chroma` like everything else, so Ash
      is still a true neutral end to end. */
@@ -406,11 +406,11 @@
      names: a look turns them on, the four themes leave them off.
        --sky            a painted backdrop behind the whole shell (Dusk sky)
        --street-scrim   the smoke between street-level ink and that backdrop
-       --plate-fill     what a plate is filled with, when it is not one colour
+       --plate-fill     what a plate is filled with, when it is not one color
        --grain          a paper texture over everything (Paper & ink)
-       --bubble-mix     how much of its author's colour a bubble takes (Voices);
+       --bubble-mix     how much of its author's color a bubble takes (Voices);
                         --bubble-own-mix is the same for your own
-     `--audit-backdrop` is never painted: it is the brightest colour a
+     `--audit-backdrop` is never painted: it is the brightest color a
      translucent ground can find itself over, written down so
      `scripts/contrast-audit.mjs` can composite against the worst case. */
   --sky: none;
@@ -428,7 +428,7 @@
   --cover-l-light: 74%;
   --cover-a-light: 0.58;
   --cover-c-scale: 1;
-  /* A fine, colourless tooth over the made cover, so its gradients never band. */
+  /* A fine, colorless tooth over the made cover, so its gradients never band. */
   --cover-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .55 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E");
   --cover-grain-opacity: 0.09;
 
@@ -443,20 +443,20 @@
   --bg-well: oklch(16.5% calc(0.016 * var(--ui-chroma)) var(--ui-hue));
   /* Menus and tooltips over content. */
   --bg-floating: oklch(22% calc(0.022 * var(--ui-chroma)) var(--ui-hue) / 0.97);
-  /* Hover and press washes. Warm rather than grey: the same hue as the ground,
-     carried at a light L so it lifts the surface instead of greying it. */
+  /* Hover and press washes. Warm rather than gray: the same hue as the ground,
+     carried at a light L so it lifts the surface instead of graying it. */
   --bg-mod-subtle: oklch(76% calc(0.11 * var(--ui-chroma)) var(--ui-hue) / 0.07);
   --bg-mod-strong: oklch(76% calc(0.11 * var(--ui-chroma)) var(--ui-hue) / 0.15);
-  /* The row you are on. A wash in the base hue, not a grey step — and a row
-     inside a server's group takes that server's colour instead, which is what
+  /* The row you are on. A wash in the base hue, not a gray step — and a row
+     inside a server's group takes that server's color instead, which is what
      `--row-selected` is for (BuildingSection writes it per group). */
   --bg-selected: oklch(76% calc(0.115 * var(--ui-chroma)) var(--ui-hue) / 0.17);
   --row-selected: var(--bg-selected);
-  /* An unlit window. As a grey step lighter than the plate it read as two
+  /* An unlit window. As a gray step lighter than the plate it read as two
      avatar skeletons that never resolved; as a step darker it read as a black
      hole, and a quiet server as a dead one.
      It is glass, so it reflects what is outside: the dusk of the street, not a
-     black hole. A dark server is still a building under a sky — the colour of
+     black hole. A dark server is still a building under a sky — the color of
      an unlit pane is what keeps "nobody in" from reading as "nothing here".
      The hue is what separates it from a skeleton now, not the lightness. */
   --window-dark: oklch(27% calc(0.05 * var(--ui-chroma)) var(--ui-hue-street));
@@ -510,7 +510,7 @@
   --danger-well-hover: #3a1d20;
   --accent-primary-rgb: 43, 211, 154;
 
-  /* ---- Tints: meaning-coloured washes (badges, mention rows) --------------- */
+  /* ---- Tints: meaning-colored washes (badges, mention rows) --------------- */
   --accent-tint: rgba(43, 211, 154, 0.12);
   --accent-tint-strong: rgba(43, 211, 154, 0.18);
   --teal-tint: rgba(143, 169, 217, 0.12);
@@ -568,7 +568,7 @@
      person's. The parts are the one source of these numbers — the three whole
      recipes underneath are composed from them, so `.pc-lit` and the glow table
      on /design-tokens are unchanged and there is still exactly one place a
-     colour is written down (§1). */
+     color is written down (§1). */
   --voice-level: 0;
   --light-ring-rgb: 243, 234, 216;
   --ring-edge: 1.5px;
@@ -602,7 +602,7 @@
   --tag-fill: oklch(16.5% calc(0.007 * var(--ui-chroma)) var(--ui-hue) / 0.78);
 
   /* ---- Identity as INK ----------------------------------------------------
-     An author's name in the timeline is written in their own colour. On a dark
+     An author's name in the timeline is written in their own color. On a dark
      ground the fill IS the ink — every one of the eight clears 7:1 on all four
      Night grounds at every base hue. Daylight needs its own, deeper set. */
   --identity-ink-1: var(--color-avatar-1);
@@ -614,7 +614,7 @@
   --identity-ink-7: var(--color-avatar-7);
   --identity-ink-8: var(--color-avatar-8);
 
-  /* A native <select>'s own arrow is never used; this is the tokenised one
+  /* A native <select>'s own arrow is never used; this is the tokenized one
      (`.pc-select`). The literal lives here, with every other literal, because a
      data URI cannot read a custom property — it is --text-muted, encoded. */
   --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238B8D8E' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
@@ -654,7 +654,7 @@
 }
 
 /* =============================================================================
-   Re-substitute the Tailwind colour namespace on any themed subtree.
+   Re-substitute the Tailwind color namespace on any themed subtree.
 
    A custom property is substituted where it is DECLARED, and descendants
    inherit the already-resolved value. `--color-bg-plate: var(--bg-plate)` is
@@ -756,7 +756,7 @@
      the lightest paper ground, and amber is a *label* as well as a fill
      ("5 reading"), so it is deepened to the minimum that clears §9's 4.5:1 on
      every Daylight surface. The window fills below carry the same value, so a
-     lit window and its caption stay the same colour. */
+     lit window and its caption stay the same color. */
   --light-white: #17170f;
   /* Deepened once more when the grounds became hue-configurable: the old value
      cleared 4.5:1 against a single fixed paper, and the sweep found it at 4.61
@@ -907,7 +907,7 @@
 [data-theme='high-contrast'] {
   /* HIGH CONTRAST TAKES THE HUE ONLY IN THE CHROME (§1.0). The two extremes
      that do the legibility work — the black street and the white ink — are
-     literal black and white and carry no hue at all, so no colour choice can
+     literal black and white and carry no hue at all, so no color choice can
      soften them. The surfaces BETWEEN them (plate, raised, the unlit window)
      and the hairlines follow `--ui-hue`, so the user's choice is still visible
      and the chrome is still of one piece. */
@@ -1011,9 +1011,9 @@
 
    A theme remaps the ramp; a look is a whole palette with a point of view, and
    it is allowed the things §6 forbids everywhere else (a painted backdrop,
-   translucent plates, a texture, colour taken from an author) because it is
+   translucent plates, a texture, color taken from an author) because it is
    one deliberate, named choice in Settings rather than decoration creeping in.
-   A look brings its own accent and its own grounds: the base-colour and accent
+   A look brings its own accent and its own grounds: the base-color and accent
    controls are inert while one is on (`lib/themes.ts` `LOOK_THEMES`).
 
    Every look still answers to §9. `npm run test:contrast` audits each one,
@@ -1113,9 +1113,9 @@
 }
 
 /* ---- Slate: the default ---------------------------------------------------
-   Voices' look (author-coloured bubbles, amber) on a cool, nearly neutral
+   Voices' look (author-colored bubbles, amber) on a cool, nearly neutral
    charcoal. Chosen 2026-09-22 as what a fresh install looks like: the purple
-   ground read as AI-generated. The ground carries little colour of its own on
+   ground read as AI-generated. The ground carries little color of its own on
    purpose - the people, the banners and anything live bring it. */
 [data-theme='slate'] {
   --bg-base: oklch(15% 0.013 240);
@@ -1167,9 +1167,9 @@
   --bubble-own-mix: 0.3;
 }
 
-/* ---- Aubergine (id 'voices'): the colour comes from the people ---------------
-   A deep aubergine ground, chosen because all eight identity colours read
-   against it, and a timeline of bubbles that each take their author's colour
+/* ---- Aubergine (id 'voices'): the color comes from the people ---------------
+   A deep aubergine ground, chosen because all eight identity colors read
+   against it, and a timeline of bubbles that each take their author's color
    (`looks.css`, keyed off `data-message-style='bubbles'`). */
 [data-theme='voices'] {
   --bg-base: oklch(15% 0.035 320);
@@ -1222,7 +1222,7 @@
 }
 
 /* ---- Paper & ink: a printed object -------------------------------------------
-   Cream stock with a grain, near-black ink, three spot colours used flat and at
+   Cream stock with a grain, near-black ink, three spot colors used flat and at
    full strength, and hard offset shadows where the other themes have soft ones.
    The sidebar is the spine: one solid block of cobalt carrying cream type, with
    a complete ink set of its own (`--spine-*`), remapped onto the ordinary token
@@ -1371,7 +1371,7 @@
 }
 
 /* =============================================================================
-   Sports field. Real colours, not a mix of the accent: a field has to read as
+   Sports field. Real colors, not a mix of the accent: a field has to read as
    grass in every look, including when the accent is not green. Night, AMOLED,
    high contrast, Dusk and Voices use the dark set. Daylight and Paper use the
    light set below. Chalk stays light so yard numbers and end-zone letters
@@ -1513,7 +1513,7 @@
     --h-control: var(--h-control-phone);
     /* §9: a nav row is a target a thumb has to hit, and a *stacked* one cannot
        borrow the space around it the way a lone control can (`pc-touch`) — its
-       neighbours are there. On a phone the row itself grows to 44px. */
+       neighbors are there. On a phone the row itself grows to 44px. */
     --h-nav-row: var(--h-control-phone);
     --h-composer: var(--h-composer-phone);
     --h-stage-control: var(--h-stage-control-phone);

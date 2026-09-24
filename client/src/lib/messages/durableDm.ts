@@ -94,7 +94,7 @@ export function createDurableDm(vault: AccountVault, privateKey: Uint8Array, key
     async acknowledgeSend(transaction: VaultTransaction, nonce: string, message: Message) {
       const binding = await transaction.get<SendSession>(SEND_SESSION_NAMESPACE, nonce);
       if (!binding) return;
-      if (binding.channelId !== message.channel_id || message.nonce !== nonce || message.author.id !== vault.scope.userId) throw new Error('The send acknowledgement belongs to another message.');
+      if (binding.channelId !== message.channel_id || message.nonce !== nonce || message.author.id !== vault.scope.userId) throw new Error('The send acknowledgment belongs to another message.');
       const cipher = createSignalSessionCipher(transaction, binding.channelId, keysApi);
       await cipher.acknowledgeSendingSession(privateKey, binding.peer.publicKey, binding.session, message.id);
       // The server now holds the ciphertext and the recipient holds the keys.

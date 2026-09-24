@@ -372,22 +372,22 @@ function ResolvedAttachmentImage({
   useEffect(() => {
     if (!safeRawUrl) return;
 
-    let cancelled = false;
+    let canceled = false;
     let blobUrl: string | null = null;
 
     void fileApi.resolveAttachmentObjectUrl(safeRawUrl).then((src) => {
-      if (cancelled) {
+      if (canceled) {
         if (src.startsWith('blob:')) URL.revokeObjectURL(src);
         return;
       }
       if (src.startsWith('blob:')) blobUrl = src;
       setResolvedSrc(src);
     }).catch(() => {
-      if (!cancelled) setResolvedSrc(null);
+      if (!canceled) setResolvedSrc(null);
     });
 
     return () => {
-      cancelled = true;
+      canceled = true;
       if (blobUrl) URL.revokeObjectURL(blobUrl);
     };
   }, [safeRawUrl]);
@@ -824,7 +824,7 @@ function OwnedMessageList({
   /*     arrives on the motion bus, and without one nothing animates (§5.3:  */
   /*     never animate what the user did not cause);                        */
   /*   · only the new row animates: it is a transform on the row itself, so  */
-  /*     no neighbour moves and the list never reflow-animates;             */
+  /*     no neighbor moves and the list never reflow-animates;             */
   /*   · the row cannot exist before the server has answered for it (the     */
   /*     runtime only publishes a message the recovery feed has vouched      */
   /*     for), so the receipt below is structurally "after the ack".         */
@@ -897,18 +897,18 @@ function OwnedMessageList({
       setChannelOverwrites([]);
       return;
     }
-    let cancelled = false;
+    let canceled = false;
     // Shared, deduped fetch: MessageList, MessageInput and MemberList all need
     // this for the same channel and used to request it independently.
     fetchChannelOverwrites(channelId)
       .then((data) => {
-        if (!cancelled) setChannelOverwrites(data);
+        if (!canceled) setChannelOverwrites(data);
       })
       .catch(() => {
-        if (!cancelled) setChannelOverwrites([]);
+        if (!canceled) setChannelOverwrites([]);
       });
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [activeGuildId, canReadOverwrites, channelId]);
   const { permissions, isAdmin } = usePermissions(activeGuildId, {
@@ -1213,15 +1213,15 @@ function OwnedMessageList({
     }
     // Guild switches are fast and this response is not. Without the guard, the
     // previous guild's roles landed after the switch and painted every author
-    // name with a colour from a guild the user is no longer looking at.
-    let cancelled = false;
+    // name with a color from a guild the user is no longer looking at.
+    let canceled = false;
     fetchGuildRoles(activeGuildId).then((data) => {
-      if (!cancelled) setGuildRoles(data);
+      if (!canceled) setGuildRoles(data);
     }).catch(() => {
       // non-fatal, role colors will simply not show
     });
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [activeGuildId]);
 
@@ -1646,14 +1646,14 @@ function OwnedMessageList({
     if (!shouldHydrateThreads) return;
     const lastHydrated = _threadHydratedAt.get(channelId) ?? 0;
     if (Date.now() - lastHydrated < THREAD_CACHE_TTL_MS) return;
-    let cancelled = false;
+    let canceled = false;
     const hydrateThreads = async () => {
       try {
         const [activeRes, archivedRes] = await Promise.all([
           channelApi.getThreads(channelId),
           channelApi.getArchivedThreads(channelId),
         ]);
-        if (cancelled) return;
+        if (canceled) return;
         _threadHydratedAt.set(channelId, Date.now());
         const upsertChannel = channelActions;
         for (const thread of [...activeRes.data, ...archivedRes.data]) {
@@ -1666,7 +1666,7 @@ function OwnedMessageList({
     };
     void hydrateThreads();
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [channelId, activeGuildId, activeChannelType, channelActions]);
 
@@ -1848,13 +1848,13 @@ function OwnedMessageList({
     // Message not in the loaded window — fetch around the anchor once, then scroll.
     if (jumpFetchAttemptedRef.current === msgId) return;
     jumpFetchAttemptedRef.current = msgId;
-    let cancelled = false;
+    let canceled = false;
     void (async () => {
       try {
         await fetchMessages(channelId, { around: msgId, limit: 50 });
-        if (cancelled) return;
+        if (canceled) return;
         requestAnimationFrame(() => {
-          if (cancelled) return;
+          if (canceled) return;
           const el = document.getElementById(`msg-${msgId}`);
           if (el) {
             el.scrollIntoView({ block: 'center', behavior: 'smooth' });
@@ -1866,7 +1866,7 @@ function OwnedMessageList({
       }
     })();
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [messages.length, channelId, fetchMessages, highlightJumpTarget, hashJumpTick, rows, scrollMessageIntoView]);
 
@@ -2087,7 +2087,7 @@ function OwnedMessageList({
     // channel's actual last message. Measured on a 600-message channel after a
     // full scrollback: one press landed on message 500 and presented it as the
     // newest, with the composer sitting under it and no sign that a hundred
-    // messages were missing. Fetch the newest page back before travelling to
+    // messages were missing. Fetch the newest page back before traveling to
     // it — the plain fetch caps from the other end and keeps the newest.
     const newestLoaded = messages[messages.length - 1]?.id;
     const newestKnown = activeChannel?.last_message_id ?? null;
@@ -2730,7 +2730,7 @@ function OwnedMessageList({
     const feedEmbed = feedPost ? (msg.embeds ?? []).find(isFeedEmbed) ?? null : null;
     const scoreSides = scoreUpdate ? resolveScoreSides(pinnedSportsGame, scoreUpdate) : null;
     const authorRoleColor = authorGuildMember ? getHighestRoleColor(authorGuildMember.roles ?? [], guildRoles) : undefined;
-    // §1.5: a person is a rim of light, not a coloured dot. The author's light
+    // §1.5: a person is a rim of light, not a colored dot. The author's light
     // also carries "in Shop floor" when they are in a room right now (§7.4).
     const author = {
       id: msg.author.id,
@@ -2796,7 +2796,7 @@ function OwnedMessageList({
         )}
         // What a look needs to restyle a row without a second render path
         // (`styles/looks.css`): whose it is, whether it continues the one
-        // above, and the author's colour. The row's own fill travels as a
+        // above, and the author's color. The row's own fill travels as a
         // custom property for the same reason — an inline `background-color`
         // could only be beaten with `!important`.
         data-own={isOwnMessage || undefined}
@@ -2917,8 +2917,8 @@ function OwnedMessageList({
               <button
                 type="button"
                 className="pc-display rounded-[var(--radius-window)] text-left text-name leading-tight hover:underline focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-                /* A name is written in the person's own colour, unless a role
-                   has coloured it — a role outranks identity because a role is
+                /* A name is written in the person's own color, unless a role
+                   has colored it — a role outranks identity because a role is
                    something the server said about them. The ink set is per
                    theme, so this clears AA on paper as well as on the dark. */
                 style={{ color: authorRoleColor ?? getIdentityInk(msg.author.id) }}
@@ -3209,7 +3209,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                 // conversation the server's row is an opaque blob. Its real
                 // name, type and bytes come from the encrypted message body and
                 // are decrypted on this device; an attachment the body never
-                // described is labelled as not encrypted rather than shown as
+                // described is labeled as not encrypted rather than shown as
                 // if it were.
                 if (msg.e2ee) {
                   return <EncryptedAttachment key={att.id} attachment={att} />;
@@ -3979,7 +3979,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
         onClose={() => setDeleteConfirmId(null)}
         role="alertdialog"
         size="sm"
-        labelledBy="delete-message-dialog-title"
+        labeledBy="delete-message-dialog-title"
         describedBy="delete-message-dialog-desc"
       >
         <ModalHeader

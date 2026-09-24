@@ -487,7 +487,7 @@ impl EncodePipeline {
         }
 
         // Parse the middle of the chain (upload + optional scale) between the
-        // labelled endpoints, following the canonical filtering_video.c wiring
+        // labeled endpoints, following the canonical filtering_video.c wiring
         // where the source is named "in" and the sink "out".
         let outputs = ff::avfilter_inout_alloc();
         let inputs = ff::avfilter_inout_alloc();
@@ -884,7 +884,7 @@ fn filter_chain_candidates(
 /// `bufsize=2×bitrate`, no B-frames, no lookahead/delay.
 ///
 /// Shared with the dma-buf import pipeline ([`super::dmabuf`]) so the imported
-/// VAAPI path gets byte-identical rate control and BT.709 signalling (C1) as
+/// VAAPI path gets byte-identical rate control and BT.709 signaling (C1) as
 /// the SHM VAAPI path — the two differ only in how frames reach the encoder.
 pub(super) unsafe fn configure_encoder_context(
     ctx: *mut ff::AVCodecContext,

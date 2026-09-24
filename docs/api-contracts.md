@@ -198,12 +198,12 @@ cannot resolve a cryptographic ownership conflict.
   - Resolves the authenticated actor's edit nonce under current channel visibility. The response identifies `channel_id`, `actor_id`, `message_id`, `edit_nonce`, and `state` (`cancelled`, `applied`, or `deleted`).
   - An absent operation is atomically sealed as canceled. A delayed PATCH using that nonce cannot change the target; a live target returns `410 EDIT_CANCELLED`. A successful receipt stays applied, even if newer edits exist. If its target was deleted, resolution returns deleted. No content, history, or moderation verdict is changed by resolution.
   - Nonces are scoped to actor and channel, have the same 1-64-byte bounds as PATCH, and bind one target. A different target conflicts. Resolution remains available during a timeout, but loss of channel visibility denies access. Its actor-owned cancellation does not authorize a future edit.
-  - Before replacing an uncertain PATCH, clients must persist the replacement intent and resolve the preceding edit. This seals a missing operation so that its delayed first attempt cannot overwrite the replacement. A storage or HTTP failure is not a cancellation acknowledgement.
+  - Before replacing an uncertain PATCH, clients must persist the replacement intent and resolve the preceding edit. This seals a missing operation so that its delayed first attempt cannot overwrite the replacement. A storage or HTTP failure is not a cancellation acknowledgment.
 - `PATCH /api/v1/channels/{channel_id}/messages/{message_id}`
   - Accepts `content`, optional `e2ee`, and optional `edit_nonce`. A replayable edit must provide a nonempty nonce of at most 64 bytes without surrounding whitespace, and retain its original request on retry.
   - Successful nonce-bearing responses include `edit_nonce` and boolean `edit_replayed`. Receipts are scoped to channel, authenticated actor and nonce, and bind the target message plus the complete content/encryption payload. Reusing one for a different mutation returns `409 CONFLICT`.
   - Matching retries return `200` with the current message and `edit_replayed: true`. That message may contain a subsequent edit; the earlier request is acknowledged without overwriting it, changing its edit timestamp, adding history, or repeating successful moderation effects/events.
-  - New mutations require current edit authority. Replays require channel visibility or DM membership and the same actor's matching receipt, so a timeout does not prevent acknowledgement of an already committed edit. A deleted target returns `404`; receipts survive deletion and do not recreate the message.
+  - New mutations require current edit authority. Replays require channel visibility or DM membership and the same actor's matching receipt, so a timeout does not prevent acknowledgment of an already committed edit. A deleted target returns `404`; receipts survive deletion and do not recreate the message.
   - Accepted edits commit the body/encryption metadata, preceding-content snapshot, moderation hits and receipt atomically. A persistence failure rolls them all back. Rejected operations are not recorded as successful edits.
   - AutoMod evaluation and hit-persistence failures now reject edits, sends and webhook execution instead of silently allowing unfiltered content. Moderator alerts, timeouts and gateway/federation fan-out retain their existing post-commit delivery behavior; this protocol does not add a durable event dispatcher.
 - `DELETE /api/v1/channels/{channel_id}/messages/{message_id}`
@@ -474,7 +474,7 @@ permitted mentionable roles, and authorized mass mentions are deduplicated; the
 author and people unable to view the channel are excluded. Editing the text or
 changing a role later does not rewrite the original notification audience.
 Deleting the message cascades its mention records. New unread counts derive from
-records above the read cursor, so replay and stale/partial acknowledgements do not
+records above the read cursor, so replay and stale/partial acknowledgments do not
 inflate counts or clear newer mentions.
 
 After a new message commits, `MESSAGE_MENTION` is dispatched only to its recorded

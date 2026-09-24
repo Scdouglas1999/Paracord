@@ -69,7 +69,7 @@ export function EditFeedSheet({ guildId, feed, onClose, channels, onSaved }: Edi
   };
 
   return (
-    <Modal open={Boolean(feed)} onClose={onClose} labelledBy={titleId} size="md" showCloseButton>
+    <Modal open={Boolean(feed)} onClose={onClose} labeledBy={titleId} size="md" showCloseButton>
       {feed && (
         <>
           <ModalHeader icon={<FeedSourceIcon kind={feed.kind} iconUrl={feed.icon_url} size={36} />}>

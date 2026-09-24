@@ -258,7 +258,7 @@ export const useChannelStore = create<ChannelState>()((set, get) => ({
   reorderChannels: async (guildId, positions, scope) => {
     const context = own(scope);
     try {
-      // Commit after acknowledgement; a failed reorder must never restore a stale snapshot.
+      // Commit after acknowledgment; a failed reorder must never restore a stale snapshot.
       await createChannelApi(() => context.api).updatePositions(guildId, positions);
       context.assertCurrent();
       for (const position of positions) get().updateChannel(position, scope);

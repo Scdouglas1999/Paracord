@@ -84,7 +84,7 @@ describe('Account recovery setup flows', () => {
     mockAccountState.getRecoveryPhrase.mockReturnValue(recoveryPhrase);
   });
 
-  it('creates a local identity, displays the recovery phrase, and requires acknowledgement before continuing', async () => {
+  it('creates a local identity, displays the recovery phrase, and requires acknowledgment before continuing', async () => {
     const user = userEvent.setup();
 
     renderSetupPage();

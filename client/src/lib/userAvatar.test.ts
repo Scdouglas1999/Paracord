@@ -12,7 +12,7 @@ import { resolveUserAvatarUrl } from './userAvatar';
 
 /**
  * An avatar renders automatically for every viewer of a message or member list.
- * Honouring a remote URL another user chose would beacon each viewer's IP, user
+ * Honoring a remote URL another user chose would beacon each viewer's IP, user
  * agent and viewing time to a host that user controls, with no interaction and
  * no way for the viewer to notice.
  */

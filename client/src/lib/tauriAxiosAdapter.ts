@@ -8,7 +8,7 @@
  * place this adapter runs, headless-Chromium E2E never touches it, and every
  * gap between what axios promises a caller and what this hands back has shipped
  * as a release blocker: response headers dropped (errors on every screen),
- * `config.params` dropped (no room could load), `FormData` serialised to `{}`
+ * `config.params` dropped (no room could load), `FormData` serialized to `{}`
  * (no upload worked). The rule here is: whatever the browser adapter does with
  * a given `config`, this must do. `tauriAxiosAdapter.test.ts` holds that line.
  */
@@ -80,7 +80,7 @@ async function binaryBodyToBase64(data: Blob | ArrayBuffer | ArrayBufferView): P
  * Flatten a `FormData` into parts the Rust side can rebuild.
  *
  * This is the whole of bug #5: a `FormData` has no enumerable own properties,
- * so handing one to `invoke()` serialises it as `{}` — the server saw an empty
+ * so handing one to `invoke()` serializes it as `{}` — the server saw an empty
  * JSON object and answered 400 "Missing …". Encrypted DM attachments, custom
  * emoji, stickers and avatars were all dead on the desktop for that reason,
  * and all of them pass in a browser, where axios hands the FormData to XHR and
@@ -138,7 +138,7 @@ function decodeBody(resp: NativeFetchResponse, config: InternalAxiosRequestConfi
     return new Blob([bytes], { type: contentType });
   }
   if (responseType === 'text') {
-    // Rust already parsed a JSON body; re-serialise so a text caller sees text.
+    // Rust already parsed a JSON body; re-serialize so a text caller sees text.
     return typeof resp.body === 'string' ? resp.body : JSON.stringify(resp.body ?? '');
   }
   return resp.body;
@@ -182,7 +182,7 @@ export async function tauriAdapter(config: InternalAxiosRequestConfig): Promise<
   // `limit`/`before`, and `GET /channels/{id}/messages/recovery` arrived with
   // no `after` at all — a 400 that left the account stuck at "wait for this
   // account's authenticated message recovery" and made the channel unusable.
-  // Serialise through axios itself so arrays, a custom `paramsSerializer` and
+  // Serialize through axios itself so arrays, a custom `paramsSerializer` and
   // an existing query string in `url` behave exactly as they do in the browser.
   const url = axios.getUri({ ...config, url: path, baseURL: undefined });
 
@@ -218,7 +218,7 @@ export async function tauriAdapter(config: InternalAxiosRequestConfig): Promise<
         const declared = headers['Content-Type'] ?? headers['content-type'] ?? '';
         if (/json/i.test(declared)) {
           // axios has already stringified a JSON body; hand Rust the value so
-          // it is re-serialised once, not double-encoded.
+          // it is re-serialized once, not double-encoded.
           try {
             body = JSON.parse(data);
           } catch {
@@ -226,7 +226,7 @@ export async function tauriAdapter(config: InternalAxiosRequestConfig): Promise<
           }
         } else {
           // A form-encoded or plain-text body must go on the wire verbatim.
-          // Wrapping it in a JSON string put quotes around it and relabelled it
+          // Wrapping it in a JSON string put quotes around it and relabeled it
           // `application/json`.
           bodyBase64 = bytesToBase64(new TextEncoder().encode(data));
         }
@@ -249,7 +249,7 @@ export async function tauriAdapter(config: InternalAxiosRequestConfig): Promise<
   try {
     // `invoke` has no cancellation, so an abort cannot stop the request in
     // flight — but it must still reject the caller's promise the moment the
-    // signal fires, which is the contract the browser adapter honours and
+    // signal fires, which is the contract the browser adapter honors and
     // every `assertCurrent()`/lease teardown in this app depends on.
     resp = (await raceAbort(
       invoke(command, { req }) as Promise<NativeFetchResponse>,

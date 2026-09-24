@@ -263,7 +263,7 @@ async fn a_nonce_cannot_retarget_even_when_two_deletions_race() {
 }
 
 #[tokio::test]
-async fn resolve_and_delete_serialize_without_cancelling_the_operation() {
+async fn resolve_and_delete_serialize_without_canceling_the_operation() {
     let f = setup().await;
     let id = send(&f, "resolve-race").await;
     let (resolution, deletion) = tokio::join!(

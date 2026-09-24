@@ -16,7 +16,7 @@
 > wrong. Visual law is `docs/lantern-stage-spec.md` ("Lantern Stage"), which supersedes
 > the Emerald Commons system this document was written against and amends §7 below:
 > **consume tokens from `client/src/styles/tokens.css`, never hard-code hex** (enforced
-> by `client/scripts/literal-colour-audit.mjs`). The anti-slop kill-list stays
+> by `client/scripts/literal-color-audit.mjs`). The anti-slop kill-list stays
 > enforceable.
 >
 > **Scope guard:** CLIENT-ONLY. No server changes. Every datum the new IA needs (unreads,

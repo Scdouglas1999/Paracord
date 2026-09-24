@@ -61,7 +61,7 @@ pub struct DmE2eePayloadRequest {
 /// validation loops below spend one `SELECT` per element on a pooled
 /// connection. At the 2 MiB body ceiling that is roughly 95k ids — about 1.8s
 /// of connection-hold per request, from anyone with SEND_MESSAGES. These are
-/// the per-message limits the composer is modelled on, and they leave the
+/// the per-message limits the composer is modeled on, and they leave the
 /// loops at ten queries and three queries respectively.
 const MAX_MESSAGE_ATTACHMENTS: usize = 10;
 const MAX_MESSAGE_STICKERS: usize = 3;
@@ -298,7 +298,7 @@ pub enum AttentionKind {
 #[derive(Deserialize)]
 pub struct AttentionQuery {
     pub kind: AttentionKind,
-    /// A device may have a newer local read cursor while its acknowledgement is
+    /// A device may have a newer local read cursor while its acknowledgment is
     /// in flight. It can move this read-only search forward, never backwards.
     pub after: Option<i64>,
 }
@@ -1198,7 +1198,7 @@ pub async fn edit_message(
     // rules and must never overwrite a subsequent edit.
     if let Some(nonce) = body.edit_nonce.as_deref() {
         if let Some(current) = prepared.replayed_message(&state.db, nonce).await? {
-            return Ok(Json(edit_acknowledgement(
+            return Ok(Json(edit_acknowledgment(
                 message_to_json(&state, &current, auth.user_id).await,
                 Some(nonce),
                 true,
@@ -1227,7 +1227,7 @@ pub async fn edit_message(
         .await?;
     let updated = applied.message;
     if applied.replayed {
-        return Ok(Json(edit_acknowledgement(
+        return Ok(Json(edit_acknowledgment(
             message_to_json(&state, &updated, auth.user_id).await,
             body.edit_nonce.as_deref(),
             true,
@@ -1310,14 +1310,14 @@ pub async fn edit_message(
         }
     }
 
-    Ok(Json(edit_acknowledgement(
+    Ok(Json(edit_acknowledgment(
         msg_json,
         body.edit_nonce.as_deref(),
         false,
     )))
 }
 
-fn edit_acknowledgement(mut message: Value, nonce: Option<&str>, replayed: bool) -> Value {
+fn edit_acknowledgment(mut message: Value, nonce: Option<&str>, replayed: bool) -> Value {
     if let Some(nonce) = nonce {
         message["edit_nonce"] = json!(nonce);
         message["edit_replayed"] = json!(replayed);
@@ -1372,9 +1372,15 @@ pub async fn get_edit_history(
 #[derive(serde::Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum DeliveryResolutionOutcome {
-    Cancelled,
-    Delivered { message_id: String },
-    Deleted { message_id: String },
+    // Wire value predates the American spelling; clients match on it.
+    #[serde(rename = "cancelled")]
+    Canceled,
+    Delivered {
+        message_id: String,
+    },
+    Deleted {
+        message_id: String,
+    },
 }
 
 #[derive(serde::Serialize)]
@@ -1411,7 +1417,7 @@ pub async fn resolve_message_delivery(
     .await?;
     use paracord_db::messages::DeliveryResolution;
     let outcome = match result {
-        DeliveryResolution::Cancelled => DeliveryResolutionOutcome::Cancelled,
+        DeliveryResolution::Canceled => DeliveryResolutionOutcome::Canceled,
         DeliveryResolution::Delivered(id) => DeliveryResolutionOutcome::Delivered {
             message_id: id.to_string(),
         },
@@ -1430,7 +1436,9 @@ pub async fn resolve_message_delivery(
 #[derive(serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EditResolutionState {
-    Cancelled,
+    // Wire value predates the American spelling; clients match on it.
+    #[serde(rename = "cancelled")]
+    Canceled,
     Applied,
     Deleted,
 }
@@ -1473,7 +1481,7 @@ pub async fn resolve_message_edit(
     .await?;
     use paracord_db::messages::MessageEditResolution;
     let resolved = match result {
-        MessageEditResolution::Cancelled => EditResolutionState::Cancelled,
+        MessageEditResolution::Canceled => EditResolutionState::Canceled,
         MessageEditResolution::Applied => EditResolutionState::Applied,
         MessageEditResolution::Deleted => EditResolutionState::Deleted,
     };

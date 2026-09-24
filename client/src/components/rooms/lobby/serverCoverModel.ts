@@ -4,11 +4,11 @@
  *
  * This is the designed look for "no banner", not an error state. It is layered
  * soft light over a ground, and every part of it is fixed by two facts about
- * the server: the colour of its icon, and its id. Open the page a hundred times
+ * the server: the color of its icon, and its id. Open the page a hundred times
  * and it is the same picture; open a different server and it is a different
  * one. No randomness, no clock.
  *
- * The colour is a hue and a chroma, never a literal: the lightness of each
+ * The color is a hue and a chroma, never a literal: the lightness of each
  * layer comes from the theme (`--cover-*` in `tokens.css`), so the same server
  * reads as a dusk sky on Slate and a watercolour wash on Daylight.
  *
@@ -17,7 +17,7 @@
 
 import { identityIndex } from '../../../lib/colors';
 
-/** Hue (OKLCH degrees) and chroma of a server's colour. */
+/** Hue (OKLCH degrees) and chroma of a server's color. */
 export interface CoverTone {
   hue: number;
   chroma: number;
@@ -42,9 +42,9 @@ export interface CoverRecipe {
 }
 
 /**
- * The OKLCH hues of the eight identity colours (`--color-avatar-1…8`), in
- * palette order. A server with no icon wears its identity colour as its mark,
- * so that is the colour its cover is made of.
+ * The OKLCH hues of the eight identity colors (`--color-avatar-1…8`), in
+ * palette order. A server with no icon wears its identity color as its mark,
+ * so that is the color its cover is made of.
  */
 const IDENTITY_HUES = [66, 258, 168, 32, 309, 97, 212, 349] as const;
 const IDENTITY_CHROMA = 0.09;
@@ -78,13 +78,13 @@ function toOklab(r: number, g: number, b: number): [number, number, number] {
 }
 
 /**
- * The colour of an icon, from its pixels (RGBA, row-major, as a canvas hands
+ * The color of an icon, from its pixels (RGBA, row-major, as a canvas hands
  * them back).
  *
  * Averaged in OKLab and weighted by each pixel's own chroma and opacity, so a
- * logo's colour wins over the white or black it sits on, and transparent
- * corners count for nothing. Returns null when the icon has no colour to give:
- * fully transparent, or grey all the way through.
+ * logo's color wins over the white or black it sits on, and transparent
+ * corners count for nothing. Returns null when the icon has no color to give:
+ * fully transparent, or gray all the way through.
  */
 export function toneFromPixels(data: ArrayLike<number>): CoverTone | null {
   let sumA = 0;
@@ -159,7 +159,7 @@ export function coverRecipe(guildId: string, tone: CoverTone): CoverRecipe {
 
 /**
  * The recipe as custom properties for the `.pc-home-cover-made` recipe in
- * `styles/server-home.css`. Numbers and percentages only; the colours are
+ * `styles/server-home.css`. Numbers and percentages only; the colors are
  * assembled there, out of theme tokens.
  */
 export function coverStyle(recipe: CoverRecipe): Record<string, string> {

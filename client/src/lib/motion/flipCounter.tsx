@@ -78,9 +78,9 @@ export function RollingNumber({ value, format, className, announce = true }: Rol
         ),
       );
     }
-    let cancelled = false;
+    let canceled = false;
     const done = () => {
-      if (!cancelled) setOutgoing(null);
+      if (!canceled) setOutgoing(null);
     };
     if (animations.length === 0) {
       done();
@@ -88,7 +88,7 @@ export function RollingNumber({ value, format, className, announce = true }: Rol
     }
     Promise.all(animations.map((animation) => animation.finished.catch(() => {}))).then(done);
     return () => {
-      cancelled = true;
+      canceled = true;
       for (const animation of animations) animation.cancel();
     };
   }, [outgoing]);

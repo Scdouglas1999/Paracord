@@ -25,7 +25,7 @@ import { motionToken, ms } from './tokens';
  *     recipe: 4px, `--ease-in`, `--duration-exit`) — a real removed node cannot
  *     play its own exit, so the engine paints the same leave as scenery;
  *   - a row inside a moved PARENT does not animate twice: when an ancestor
- *     marked with the same attribute travelled the same delta, the ancestor
+ *     marked with the same attribute traveled the same delta, the ancestor
  *     carries the row.
  *
  * The first commit only measures — nothing animates on initial mount
@@ -75,7 +75,7 @@ const LAYOUT_EPSILON_PX = 1.5;
  * each can be a pixel out and the difference two; anything smaller than a
  * character is not a row moving independently of the plate it sits on. Getting
  * this wrong animates the row AND the section it is in, and the two transforms
- * compose into a row travelling twice as far as the list did.
+ * compose into a row traveling twice as far as the list did.
  */
 const CARRIED_EPSILON_PX = 2.5;
 
@@ -444,7 +444,7 @@ export function useFlipList<T extends HTMLElement = HTMLElement>(
         // Only drift this engine put there: a press is `scale(.96)` and a hover
         // a 1px lift, and neither is a journey half-finished. And only the row's
         // OWN share of it — a rect is drawn through every transform above it, so
-        // a row inside a section that is itself travelling reads its ancestor's
+        // a row inside a section that is itself traveling reads its ancestor's
         // journey as well, and adding that here would compose the ancestor's
         // move into the row a second time.
         const drift = inFlight(prior) ? drifts.get(el) : undefined;

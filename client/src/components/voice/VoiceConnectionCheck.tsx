@@ -110,7 +110,7 @@ export function VoiceConnectionCheck({
       open={open}
       onClose={onClose}
       size="lg"
-      labelledBy="voice-connection-check-title"
+      labeledBy="voice-connection-check-title"
       describedBy="voice-connection-check-intro"
       showCloseButton
       // Settings is a windowed overlay at z-[150]; the check is opened from

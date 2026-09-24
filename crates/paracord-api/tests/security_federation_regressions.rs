@@ -714,14 +714,14 @@ async fn federation_transport_binds_destination_server() -> anyhow::Result<()> {
 ///   * the canonical identity is accepted (that is the whole protocol), and
 ///   * the host of our own `public_url` is accepted as an alias, because every
 ///     sender built before this change derived the destination from the host of
-///     the endpoint URL it dialled. Without that alias a rolling upgrade would
+///     the endpoint URL it dialed. Without that alias a rolling upgrade would
 ///     break in the old-sender/new-receiver direction for exactly the
 ///     deployments the fix is meant to rescue.
 ///
 /// The alias widens the accepted set only by names this operator configured for
 /// this server, never by anything the peer asserts — a destination nobody
 /// declared is still refused, which is what keeps the binding a misdirection
-/// defence.
+/// defense.
 #[tokio::test]
 async fn federation_transport_accepts_own_public_url_host_as_destination() -> anyhow::Result<()> {
     let _guard = env_lock().lock().await;

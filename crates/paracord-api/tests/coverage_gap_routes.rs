@@ -947,7 +947,7 @@ async fn scheduled_messages_edit_and_reschedule() -> anyhow::Result<()> {
     assert_eq!(
         status,
         StatusCode::CONFLICT,
-        "editing a cancelled scheduled message should be 409"
+        "editing a canceled scheduled message should be 409"
     );
 
     Ok(())

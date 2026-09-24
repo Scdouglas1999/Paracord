@@ -224,7 +224,7 @@ async fn require_manage_webhooks(
 /// Channel-scoped MANAGE_WEBHOOKS gate.
 ///
 /// Every webhook belongs to exactly one channel, and a webhook token is a
-/// standing licence to post into that channel under an arbitrary name and
+/// standing license to post into that channel under an arbitrary name and
 /// avatar. Gating those operations on *guild* permissions made a channel
 /// overwrite denying MANAGE_WEBHOOKS a no-op: a role granted the bit
 /// space-wide but denied it on `#general` could still mint a webhook there,

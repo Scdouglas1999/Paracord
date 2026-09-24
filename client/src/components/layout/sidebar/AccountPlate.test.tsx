@@ -83,7 +83,7 @@ describe('AccountPlate', () => {
     );
   });
 
-  it('spends no literal colour', () => {
+  it('spends no literal color', () => {
     const { container } = render(<AccountPlate {...props} muted />);
     expect(container.innerHTML).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
     expect(container.innerHTML).not.toMatch(/\brgba?\(\s*\d/);

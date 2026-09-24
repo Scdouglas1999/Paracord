@@ -41,7 +41,7 @@ describe('typingStore', () => {
     useTypingStore.getState().clearChannel('chan-1');
     expect(useTypingStore.getState().typingByChannel['chan-1']).toEqual([]);
 
-    // If the timers were not cancelled, they would fire here and could resurrect
+    // If the timers were not canceled, they would fire here and could resurrect
     // stale state or run set() on a cleared channel. Nothing should change.
     vi.advanceTimersByTime(8000);
     expect(useTypingStore.getState().typingByChannel['chan-1']).toEqual([]);

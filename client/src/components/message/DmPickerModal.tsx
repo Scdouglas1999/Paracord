@@ -113,7 +113,7 @@ export function DmPickerModal({ open, onClose, onCreated }: DmPickerModalProps) 
     <Modal
       open={open}
       onClose={onClose}
-      labelledBy="dm-picker-title"
+      labeledBy="dm-picker-title"
       size="sm"
       placement="center"
       panelClassName="flex max-h-[70vh] flex-col"

@@ -94,7 +94,7 @@ function PersonRow({
         className="flex min-w-0 flex-1 items-center gap-3 rounded-chip px-2 py-1 text-left outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-default"
       >
         <div className="relative shrink-0">
-          {/* §1.5: presence is a rim of light on the avatar, never a coloured
+          {/* §1.5: presence is a rim of light on the avatar, never a colored
               dot. The status word itself is already in the row subtitle. */}
           <div
             className={cn(
@@ -102,7 +102,7 @@ function PersonRow({
               showPresence && presenceLight(status).avatarClass,
               showPresence && presenceLight(status).dnd && 'pc-dnd',
             )}
-            // A person wears their own colour, the same one the timeline and
+            // A person wears their own color, the same one the timeline and
             // the header strip give them. The emerald is an action, not a person.
             style={{ background: getIdentityColor(userId) }}
           >

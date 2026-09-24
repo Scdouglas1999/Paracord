@@ -113,13 +113,13 @@ production account runtime calls this service; it does not own UI state.
   a durable tombstone. The service never performs a create-message POST.
 - Send `observeDeleted({channelId, messageId})` only an authenticated deletion
   event captured for this account. It persists a tombstone, completes a pending
-  deletion, or retains a failed edit draft. Late PATCH acknowledgements re-read
+  deletion, or retains a failed edit draft. Late PATCH acknowledgments re-read
   it before committing a receipt. Broader gateway integration must also resolve
   affected outbound crypto dependencies before allowing dependent sends; a UI
   tombstone alone does not perform that cross-domain reconciliation.
 - A message still in the creation outbox belongs to `DurableDelivery`'s prepared
   edit/discard protocol, even if a gateway echo already supplied a server ID.
-  Hand it to this service once creation acknowledgement has removed that record.
+  Hand it to this service once creation acknowledgment has removed that record.
   Older delivered server messages need no creation nonce or local send receipt.
 
 ## Crypto and delivery invariants
@@ -129,7 +129,7 @@ The mutation driver shares the account's `paracord:delivery:` Web Lock with
 browser tabs. New user intent uses only the vault lock and can commit during HTTP.
 Attempts/backoff commit before network work. Newer intent defeats a late success
 or failure. A superseded immutable PATCH stays saved until its edit-resolution
-endpoint confirms it applied, cancelled or its target was deleted; only then can
+endpoint confirms it applied, canceled or its target was deleted; only then can
 replacement ciphertext be prepared. A deletion similarly resolves any preceding
 uncertain edit first.
 
@@ -220,7 +220,7 @@ Production handshake, sender, receipt and ratchet-only inbox integration is
 still required before this module provides authoritative recovery guarantees.
 
 On runtime open, already-existing creation receipts are marked observed rather
-than inserted into the current history window. Fresh delivery acknowledgements
+than inserted into the current history window. Fresh delivery acknowledgments
 still project. This prevents a saved creation receipt from surviving a latest
 HTTP page omission as a fabricated new message; authoritative recovery remains
 necessary for ratchet gaps and missed mutations.

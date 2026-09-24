@@ -451,7 +451,7 @@ async fn publication_receipt_storage_failure_rolls_back_all_keys_before_retry() 
     assert_eq!(receipt["request_id"], body["request_id"]);
 }
 
-/// Re-enrolment for a device that proved the account's enrolled identity but
+/// Re-enrollment for a device that proved the account's enrolled identity but
 /// holds none of the private halves of the published bundle (a recovery-phrase
 /// restore). The published inventory is replaced wholesale, because prekeys
 /// nobody can open would otherwise keep being handed to peers ahead of the new

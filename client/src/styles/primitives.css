@@ -59,7 +59,7 @@
    introducing, so unlike a menu it cannot be translucent — the display-size
    heading beneath it ghosted straight through 97% alpha. Opaque plate fill,
    the floating depth, and a hairline so it separates from a plate of the same
-   colour underneath. */
+   color underneath. */
 .pc-coach {
   background: var(--bg-plate);
   border: 1px solid var(--border-strong);
@@ -68,7 +68,7 @@
 }
 
 /* A card that floats over the page without a scrim (a profile card) carries
-   text of its own, so the page must not read through it. The floating colour
+   text of its own, so the page must not read through it. The floating color
    laid over the opaque plate: the same shade, with nothing ghosting behind. */
 .pc-dialog-opaque {
   background: linear-gradient(var(--bg-floating), var(--bg-floating)), var(--bg-plate);
@@ -378,7 +378,7 @@
    -------------------------------------------------------------------------- */
 
 .pc-transition {
-  /* Colour and opacity only: a shadow or a glow never animates (the motion
+  /* Color and opacity only: a shadow or a glow never animates (the motion
      law), it lands with the state that owns it. */
   transition-property: background-color, color, border-color, opacity;
   transition-duration: var(--duration-fast);
@@ -703,11 +703,11 @@
    (a channel, a person, a setting): a row does not shrink, it darkens a step
    on press. `.pc-pressable-accent` adds the one-beat brighter flash primary
    buttons take on press — an opacity-only veil. Disabled controls get none of
-   it. Only colour, transform and opacity are in the transition list: a
+   it. Only color, transform and opacity are in the transition list: a
    control's shadow never animates.
    -------------------------------------------------------------------------- */
 .pc-pressable {
-  /* The wash is a gradient rather than a background-colour so it layers OVER
+  /* The wash is a gradient rather than a background-color so it layers OVER
      whatever fill the variant already carries. */
   background-image: linear-gradient(transparent, transparent);
   transition:
@@ -786,8 +786,8 @@
    §5 Loading and presence indicators.
    -------------------------------------------------------------------------- */
 
-/* The 10px mark that carries a server's identity colour, in front of its
-   section label in the sidebar — the same colour as that server's Home card and
+/* The 10px mark that carries a server's identity color, in front of its
+   section label in the sidebar — the same color as that server's Home card and
    its Lobby header, so the eye learns it. Identity, never state (§6.3): it is
    not a light, it never glows, and it says nothing about who is in there.
    `--identity` is written on the group by `BuildingSection`. */
@@ -1001,7 +1001,7 @@
 
 /* The page itself is not a thing that moves (§5.1: "nothing else on screen
    moves"). The root snapshot crosses over at the plain fade speed and no more,
-   so the only thing the eye follows is the element that travelled. */
+   so the only thing the eye follows is the element that traveled. */
 ::view-transition-group(root),
 ::view-transition-old(root),
 ::view-transition-new(root) {
@@ -1011,13 +1011,13 @@
 
 /* Walking into a room is the one journey where the page you left IS a thing
    that moves: §5.1 has the rest of the Lobby receding 4% behind the card that
-   travelled. `transitionWith({ kind })` stamps the journey on <html>, so the
+   traveled. `transitionWith({ kind })` stamps the journey on <html>, so the
    browser-driven path dresses its root snapshot exactly as the Web Animations
    path dresses the live DOM (`walk.ts` → `recedeAround`) — one choreography,
    two engines. */
 /* While the lights are changing, the shell crosses over as ONE thing.
 
-   Nearly every surface in the app carries a colour transition for its own hover
+   Nearly every surface in the app carries a color transition for its own hover
    state (`.pc-transition` alone is background-color, color, box-shadow,
    border-color and opacity), and swapping the theme restyles all of them at
    once — several hundred 160ms property transitions running underneath a 400ms
@@ -1097,7 +1097,7 @@
    around it with a pseudo-element, which is where the finger actually lands.
 
    Coarse pointers only. A mouse does not need it, and an invisible box larger
-   than its own control would otherwise reach across the gap into a neighbour on
+   than its own control would otherwise reach across the gap into a neighbor on
    a dense desktop row. */
 @media (pointer: coarse) {
   .pc-touch {
@@ -1116,8 +1116,8 @@
 }
 
 /* A checkbox. The native control carries the platform's own semantics (and its
-   high-contrast and forced-colors behaviour), so it is kept and tinted through
-   `accent-color` rather than redrawn — one size, the action colour, the §9 ring. */
+   high-contrast and forced-colors behavior), so it is kept and tinted through
+   `accent-color` rather than redrawn — one size, the action color, the §9 ring. */
 .pc-checkbox {
   width: 1rem;
   height: 1rem;

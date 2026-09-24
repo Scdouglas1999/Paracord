@@ -208,7 +208,7 @@ describe('UserSettings session management', () => {
     });
   });
 
-  it('does not revoke a session when the confirm dialog is cancelled', async () => {
+  it('does not revoke a session when the confirm dialog is canceled', async () => {
     const user = userEvent.setup();
     vi.mocked(confirm).mockResolvedValue(false);
     renderSettings();

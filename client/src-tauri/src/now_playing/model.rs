@@ -259,7 +259,7 @@ mod tests {
     }
 
     #[test]
-    fn paracord_media_is_recognised_by_name_and_by_page_title() {
+    fn paracord_media_is_recognized_by_name_and_by_page_title() {
         assert!(is_paracord_media("Paracord", None, Some("anything")));
         assert!(is_paracord_media("", Some("paracord-desktop"), None));
         assert!(is_paracord_media(

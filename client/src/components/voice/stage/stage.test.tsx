@@ -95,7 +95,7 @@ describe('SpeakerGrid', () => {
 });
 
 describe('StageControlBar', () => {
-  it('is a labelled group of centred controls', () => {
+  it('is a labeled group of centred controls', () => {
     render(<StageControlBar><button type="button">Mute</button></StageControlBar>);
     const group = screen.getByRole('group', { name: 'Call controls' });
     expect(group).toBeInTheDocument();
@@ -269,7 +269,7 @@ describe('StageLayout', () => {
   });
 });
 
-describe('no Stage component hard-codes a colour', () => {
+describe('no Stage component hard-codes a color', () => {
   it('renders every piece without a literal hex or rgb value', () => {
     const { container } = render(
       <StageLayout

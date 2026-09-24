@@ -6,14 +6,14 @@
 //! Audio Processing Module. Its bundled build needs meson + ninja + abseil and
 //! a C++17 toolchain — meson is not even present on this build host, and
 //! requiring it on Linux/macOS/Windows is not a sane cross-platform story. The
-//! SpeexDSP MDF echo canceller + preprocessor, on the other hand, is vendored
+//! SpeexDSP MDF echo canceler + preprocessor, on the other hand, is vendored
 //! and statically linked by `aec-rs-sys` via CMake (no system libspeexdsp), so
 //! it builds everywhere a C toolchain + CMake exists. It ships the same class of
 //! adaptive-filter AEC plus an AGC in one library, which is exactly what this
 //! path needs. That is the deterministic choice made here.
 //!
 //! # Pipeline position (contract AEC4)
-//! `capture -> AEC -> AGC -> RNNoise (if enabled) -> Opus`. The echo canceller
+//! `capture -> AEC -> AGC -> RNNoise (if enabled) -> Opus`. The echo canceler
 //! runs first (it needs the raw mic, not a denoised one — RNNoise would distort
 //! the echo path and break filter convergence), then the SpeexDSP preprocessor
 //! applies residual-echo suppression, then a conservative feed-forward AGC, then
@@ -33,7 +33,7 @@
 //! speakers actually emit). It is tapped in the audio output callback and handed
 //! across a lock-free SPSC ring ([`ReferenceRing`]) so the real-time render
 //! thread never blocks. The mic send task drains it, resamples the device-rate
-//! reference to 48 kHz, and feeds it to the canceller alongside each mic frame.
+//! reference to 48 kHz, and feeds it to the canceler alongside each mic frame.
 //! The MDF adaptive filter absorbs the (positive) output-buffer + acoustic delay
 //! within its tail; no manual sample-accurate alignment is required.
 
@@ -83,15 +83,15 @@ pub const REFERENCE_RING_CAPACITY: usize = 96_000;
 const MAX_REFERENCE_BACKLOG_FRAMES: usize = 8;
 
 // ---------------------------------------------------------------------------
-// Echo canceller + AGC
+// Echo canceler + AGC
 // ---------------------------------------------------------------------------
 
-/// SpeexDSP echo canceller + preprocessor bound to one mic stream.
+/// SpeexDSP echo canceler + preprocessor bound to one mic stream.
 ///
 /// Owns two Speex heap handles. Both toggles default ON (contract AEC3). The
-/// canceller processes one 20 ms mono frame (`FRAME_SIZE` samples at 48 kHz) at
+/// canceler processes one 20 ms mono frame (`FRAME_SIZE` samples at 48 kHz) at
 /// a time, matching the Opus frame the send task encodes.
-pub struct EchoCanceller {
+pub struct EchoCanceler {
     echo: *mut sys::SpeexEchoState,
     preprocess: *mut sys::SpeexPreprocessState,
     frame_size: usize,
@@ -105,20 +105,20 @@ pub struct EchoCanceller {
 }
 
 // SAFETY: the Speex states are heap handles reached only through this struct.
-// An `EchoCanceller` is created inside, and never leaves, the single mic send
+// An `EchoCanceler` is created inside, and never leaves, the single mic send
 // task; it is `Send` so that task's future is `Send`, but it is never shared
 // between threads, so no interior state is touched concurrently. (Mirrors the
 // treatment of the audiopus `OpusEncoder` held in the same task.)
-unsafe impl Send for EchoCanceller {}
+unsafe impl Send for EchoCanceler {}
 
-impl EchoCanceller {
-    /// Create a canceller for the standard 20 ms / 48 kHz voice frame.
+impl EchoCanceler {
+    /// Create a canceler for the standard 20 ms / 48 kHz voice frame.
     pub fn new() -> Self {
         Self::with_frame_size(FRAME_SIZE)
     }
 
-    /// Create a canceller for a custom frame size (samples at 48 kHz). Used by
-    /// tests; the send task always uses [`EchoCanceller::new`].
+    /// Create a canceler for a custom frame size (samples at 48 kHz). Used by
+    /// tests; the send task always uses [`EchoCanceler::new`].
     pub fn with_frame_size(frame_size: usize) -> Self {
         // SAFETY: FFI init calls; the returned handles are non-null on success
         // and are only ever passed back to the matching Speex functions.
@@ -168,7 +168,7 @@ impl EchoCanceller {
         // the two do not fight (contract AEC4).
         self.ctl_i32(sys::SPEEX_PREPROCESS_SET_DENOISE, 0);
 
-        // Residual-echo suppression only makes sense while the canceller is
+        // Residual-echo suppression only makes sense while the canceler is
         // engaged. Speex reads this ctl's pointer *as* the echo state, so pass
         // the handle directly (null unlinks it).
         let echo_ptr: *mut c_void = if self.aec_enabled {
@@ -296,13 +296,13 @@ impl EchoCanceller {
     }
 }
 
-impl Default for EchoCanceller {
+impl Default for EchoCanceler {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Drop for EchoCanceller {
+impl Drop for EchoCanceler {
     fn drop(&mut self) {
         // SAFETY: handles were created by the matching init calls and are only
         // destroyed once (this struct owns them uniquely).
@@ -579,7 +579,7 @@ impl ReferenceConsumer {
 
     /// Yield exactly `frame_size` samples of 48 kHz mono reference aligned to
     /// live playback. Returns silence on underrun (no far-end playing yet), which
-    /// the canceller treats as "no echo to subtract".
+    /// the canceler treats as "no echo to subtract".
     pub fn next_frame(&mut self, frame_size: usize) -> Vec<f32> {
         self.refill();
         if self.acc48.len() >= frame_size {
@@ -596,7 +596,7 @@ mod tests {
 
     #[test]
     fn passthrough_when_both_disabled() {
-        let mut aec = EchoCanceller::new();
+        let mut aec = EchoCanceler::new();
         aec.set_echo_cancellation(false);
         aec.set_agc(false);
         let mic: Vec<f32> = (0..FRAME_SIZE)
@@ -608,7 +608,7 @@ mod tests {
 
     #[test]
     fn process_returns_full_frame() {
-        let mut aec = EchoCanceller::new();
+        let mut aec = EchoCanceler::new();
         let mic = vec![0.2f32; FRAME_SIZE];
         let reference = vec![0.2f32; FRAME_SIZE];
         let out = aec.process(&mic, &reference);
@@ -617,7 +617,7 @@ mod tests {
 
     #[test]
     fn short_reference_is_zero_filled() {
-        let mut aec = EchoCanceller::new();
+        let mut aec = EchoCanceler::new();
         let mic = vec![0.1f32; FRAME_SIZE];
         // Reference shorter than a frame (startup underrun) must not panic.
         let out = aec.process(&mic, &[0.1, 0.1, 0.1]);
@@ -626,10 +626,10 @@ mod tests {
 
     #[test]
     fn cancels_a_pure_echo() {
-        // Feed the canceller a near-end that is exactly the far-end reference
+        // Feed the canceler a near-end that is exactly the far-end reference
         // (a perfect, delay-free echo). After the MDF filter converges the
         // output energy must drop well below the input energy.
-        let mut aec = EchoCanceller::new();
+        let mut aec = EchoCanceler::new();
         aec.set_agc(false); // isolate the AEC stage from AGC gain changes
         let far: Vec<f32> = (0..FRAME_SIZE)
             .map(|i| {
@@ -652,7 +652,7 @@ mod tests {
 
     #[test]
     fn agc_amplifies_a_quiet_signal_toward_target() {
-        let mut aec = EchoCanceller::new();
+        let mut aec = EchoCanceler::new();
         aec.set_echo_cancellation(false); // isolate the AGC stage
                                           // A quiet tone well below the -18 dBFS target but above the noise gate.
         let make = || -> Vec<f32> {
@@ -683,7 +683,7 @@ mod tests {
 
     #[test]
     fn agc_holds_gain_on_silence() {
-        let mut aec = EchoCanceller::new();
+        let mut aec = EchoCanceler::new();
         aec.set_echo_cancellation(false);
         // Silence is below the gate: gain must stay at unity and output stay ~0.
         for _ in 0..50 {
@@ -694,7 +694,7 @@ mod tests {
 
     #[test]
     fn toggle_state_reports_correctly() {
-        let mut aec = EchoCanceller::new();
+        let mut aec = EchoCanceler::new();
         assert!(aec.is_echo_cancellation_enabled());
         assert!(aec.is_agc_enabled());
         aec.set_echo_cancellation(false);

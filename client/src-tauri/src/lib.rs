@@ -29,7 +29,7 @@ static TRUSTED_SERVER_ORIGINS: LazyLock<RwLock<HashSet<String>>> =
 
 /// Exact origins previously approved through the native trust prompt. This is
 /// persisted separately from certificate pins: a pin proves continuity for a
-/// host, but it must never itself authorise a new scheme/port/origin supplied by
+/// host, but it must never itself authorize a new scheme/port/origin supplied by
 /// the renderer.
 static USER_APPROVED_SERVER_ORIGINS: LazyLock<RwLock<HashSet<String>>> =
     LazyLock::new(|| RwLock::new(HashSet::new()));
@@ -114,7 +114,7 @@ pub(crate) fn ensure_native_fetch_target_is_trusted(uri: &str) -> Result<(), Str
 }
 
 /// Hosts of every currently-trusted server origin, lowercased and without IPv6
-/// brackets (the same normalisation [`pin_host_from_url`] applies).
+/// brackets (the same normalization [`pin_host_from_url`] applies).
 fn trusted_server_hosts() -> HashSet<String> {
     TRUSTED_SERVER_ORIGINS
         .read()
@@ -127,7 +127,7 @@ fn trusted_server_hosts() -> HashSet<String> {
         .unwrap_or_default()
 }
 
-/// Normalise a native media endpoint into a bare host.
+/// Normalize a native media endpoint into a bare host.
 ///
 /// Unlike the HTTP commands, media endpoints reach Rust as `host:port` (see
 /// `normalizeNativeRelayEndpoint` in the renderer), so `Url::parse` alone is not
@@ -189,7 +189,7 @@ fn native_endpoint_host(endpoint: &str) -> Option<String> {
 /// renderer-supplied `endpoint` calls this first — `start_voice_session`,
 /// `quic_upload_file` and `quic_download_file` — exactly as the HTTP/SSE
 /// commands in this file call `ensure_native_fetch_target_is_trusted`. Removing
-/// any of those call sites reopens renderer-chosen dialling; they are load
+/// any of those call sites reopens renderer-chosen dialing; they are load
 /// bearing, not defensive decoration.
 pub(crate) fn ensure_native_media_endpoint_is_trusted(endpoint: &str) -> Result<(), String> {
     let Some(host) = native_endpoint_host(endpoint) else {
@@ -384,7 +384,7 @@ fn is_loopback_host(host: &str) -> bool {
             .unwrap_or(false)
 }
 
-/// Normalise the host of a URL into the key used for certificate pinning. IPv6
+/// Normalize the host of a URL into the key used for certificate pinning. IPv6
 /// literals are stored without their surrounding brackets so they match the
 /// form produced from a rustls [`ServerName`](rustls::pki_types::ServerName).
 fn pin_host_from_url(raw_url: &str) -> Option<String> {
@@ -616,7 +616,7 @@ fn remove_user_approved_server_origin(origin: &str) {
 
 /// Ask through an OS-native dialog before trusting an origin for privileged
 /// native networking. The renderer cannot approve this dialog, and a global
-/// guard prevents it from queueing prompt spam after a renderer compromise.
+/// guard prevents it from queuing prompt spam after a renderer compromise.
 async fn request_native_server_trust_confirmation(app: &tauri::AppHandle, origin: &str) -> bool {
     if NATIVE_PRIVILEGE_PROMPT_ACTIVE
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -1153,7 +1153,7 @@ struct NativeMultipartPart {
 /// A multipart/form-data request with arbitrary fields and files.
 ///
 /// The bridge had no such route. A `FormData` handed to `invoke('native_fetch')`
-/// is serialised by `structuredClone`/JSON as `{}` — it has no enumerable own
+/// is serialized by `structuredClone`/JSON as `{}` — it has no enumerable own
 /// properties — so on the desktop every multipart call arrived with the body
 /// `{}` and `content-type: application/json`, and the server answered 400
 /// "Missing …". That killed encrypted DM attachments, custom emoji, stickers
@@ -1586,7 +1586,7 @@ fn linux_native_render_enabled() -> bool {
 /// Whether this machine's active EGL vendor is NVIDIA's proprietary driver.
 ///
 /// libglvnd picks an EGL implementation from the JSON manifests in
-/// `/usr/share/glvnd/egl_vendor.d`, honouring `__EGL_VENDOR_LIBRARY_FILENAMES`
+/// `/usr/share/glvnd/egl_vendor.d`, honoring `__EGL_VENDOR_LIBRARY_FILENAMES`
 /// when it is set. NVIDIA's entry sorts first by convention (`10_nvidia.json`),
 /// so on a machine with both it is the one WebKit ends up on.
 #[cfg(target_os = "linux")]
@@ -1644,8 +1644,8 @@ fn configure_linux_webkit_buffer_transport() {}
 /// Give the window back to the compositor's own titlebar.
 ///
 /// On Wayland tao installs a GTK header bar of its own, wrapped in an event box
-/// that sits above its child — so the minimise/maximise/close buttons never see
-/// a click, and the bar is GTK's tall grey one rather than the desktop's. With
+/// that sits above its child — so the minimize/maximize/close buttons never see
+/// a click, and the bar is GTK's tall gray one rather than the desktop's. With
 /// no custom titlebar GTK negotiates server-side decorations where the
 /// compositor offers them (KWin does) and draws its own stock, working header
 /// where it does not (GNOME).
@@ -1935,7 +1935,7 @@ mod tests {
     /// which EGL is in play, so detection reads it before anything else.
     #[cfg(target_os = "linux")]
     #[test]
-    fn nvidia_detection_honours_an_explicit_vendor_library() {
+    fn nvidia_detection_honors_an_explicit_vendor_library() {
         std::env::set_var(
             "__EGL_VENDOR_LIBRARY_FILENAMES",
             "/usr/share/glvnd/egl_vendor.d/50_mesa.json",
@@ -2161,7 +2161,7 @@ mod tests {
     }
 
     #[test]
-    fn loopback_hosts_are_recognised() {
+    fn loopback_hosts_are_recognized() {
         assert!(is_loopback_host("localhost"));
         assert!(is_loopback_host("127.0.0.1"));
         assert!(is_loopback_host("127.5.6.7"));
@@ -2378,7 +2378,7 @@ mod bridge_contract_tests {
     }
 
     #[test]
-    fn the_callers_deadline_is_honoured_within_the_bound() {
+    fn the_callers_deadline_is_honored_within_the_bound() {
         // Every native request used to share one hard 15 s client timeout, so
         // an upload the browser allows 120 s died mid-body.
         let upload: NativeMultipartRequest =

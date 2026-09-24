@@ -93,7 +93,7 @@ export function InteractionModal() {
     <Modal
       open
       onClose={clearModal}
-      labelledBy="interaction-modal-title"
+      labeledBy="interaction-modal-title"
       size="md"
       showCloseButton
     >

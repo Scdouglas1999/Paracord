@@ -215,7 +215,7 @@ WP6's own tests:
   ordering and de-duplication; **the lit card vs the quiet row**, Join in white
   light, the text-channel lines and their mentions, one window per channel; the
   Coming-up card's one action and its absence when empty; Pick-up's context,
-  its window light, and its absence when empty; and the no-literal-colour
+  its window light, and its absence when empty; and the no-literal-color
   assertion WP0 established.
 - `components/home/useComingUp.test.tsx` — the merge and its ordering, the
   status/past filters, the channel name, one unreachable server, the cap, that a
@@ -251,7 +251,7 @@ relaxed locally, **the whole smoke passes, including WP6's Home block**, and the
 file was restored untouched afterwards. WP2 owns the fix.
 
 WP6's own changes to the smoke keep its intent and update it to this surface:
-`/app` is now recognised by "Your servers"; the Needs-you region still proves
+`/app` is now recognized by "Your servers"; the Needs-you region still proves
 that unread work outranks quiet copy (`3 mentions for you`, the preview, both
 servers by name, no "is quiet" / "No data" / "Nothing is waiting on you"), no
 horizontal overflow at 320/390/768/1280, and the row's one action still

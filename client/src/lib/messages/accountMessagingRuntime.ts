@@ -525,7 +525,7 @@ export class AccountMessagingRuntime {
     this.assertCurrent();
     if (this.local && !this.local.session.signal.aborted) return;
     if (this.localOpening) {
-      // An open cancelled by this account's own first authenticated history is
+      // An open canceled by this account's own first authenticated history is
       // not a storage failure: the replacement history owns a fresh open.
       // The cancellation usually arrives through `invalidateLocal`, which moves
       // the generation — but that listener is only wired once a session exists,
@@ -533,10 +533,10 @@ export class AccountMessagingRuntime {
       // login, where READY carries the account's first epoch) cancels the open
       // with the generation untouched.
       //
-      // Recognise the cancellation by the authoritative fact — the history the
+      // Recognize the cancellation by the authoritative fact — the history the
       // open was started against is no longer the account's — and not only by
       // the error that surfaced. An abort lands wherever the open happens to be
-      // and is reported by whatever that step throws: a cancelled IndexedDB key
+      // and is reported by whatever that step throws: a canceled IndexedDB key
       // write, a vault closed under a transaction, a rejected request. Judging
       // it by the error class alone left every step but one reporting a storage
       // failure, which rejected READY and reconnected the gateway over a history

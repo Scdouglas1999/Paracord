@@ -76,7 +76,7 @@ const BANNER_REQUEST_BODY_LIMIT_BYTES: usize = 9 * 1024 * 1024;
 /// listed in [`request_timeout_exempt`].
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Resolve the request timeout, honouring `PARACORD_HTTP_REQUEST_TIMEOUT_SECS`.
+/// Resolve the request timeout, honoring `PARACORD_HTTP_REQUEST_TIMEOUT_SECS`.
 ///
 /// Read once per [`build_router`] call and captured by the layer rather than
 /// memoised in a `OnceLock` like the other env knobs in this crate: routers are

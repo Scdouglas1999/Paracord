@@ -94,8 +94,8 @@ impl DecodedFrameHandle {
     }
 
     /// The matrix the frame's luma/chroma are expressed in. The surface uses
-    /// this to pick the YUV→RGB coefficients so colours match the bitstream's
-    /// signalled colorspace (contract C1).
+    /// this to pick the YUV→RGB coefficients so colors match the bitstream's
+    /// signaled colorspace (contract C1).
     pub fn colorspace(&self) -> ColorSpace {
         match self {
             #[cfg(feature = "lavc")]
@@ -236,7 +236,7 @@ impl CudaFrame {
         self.height
     }
 
-    /// Signalled colorspace (selects the YUV→RGB matrix).
+    /// Signaled colorspace (selects the YUV→RGB matrix).
     pub fn colorspace(&self) -> ColorSpace {
         self.colorspace
     }
@@ -463,7 +463,7 @@ impl DmaBufFrame {
         self.height
     }
 
-    /// Signalled colorspace (selects the YUV→RGB matrix).
+    /// Signaled colorspace (selects the YUV→RGB matrix).
     pub fn colorspace(&self) -> ColorSpace {
         self.colorspace
     }
@@ -671,7 +671,7 @@ impl CvPixelBufferFrame {
         self.height
     }
 
-    /// Signalled colorspace (selects the YUV→RGB matrix).
+    /// Signaled colorspace (selects the YUV→RGB matrix).
     pub fn colorspace(&self) -> ColorSpace {
         self.colorspace
     }

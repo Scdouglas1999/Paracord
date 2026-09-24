@@ -508,7 +508,7 @@ function PrimitivesSection() {
         open={dialogOpen}
         onClose={() => setDialogOpen(false)}
         size="sm"
-        labelledBy="tokens-dialog-title"
+        labeledBy="tokens-dialog-title"
         describedBy="tokens-dialog-desc"
         showCloseButton
       >
@@ -1365,7 +1365,7 @@ function MotionSection() {
           id="motion-stagger"
           name="Stagger"
           tokens="--stagger-light 30ms"
-          model="Neighbouring lights are 30ms apart, so a server comes on as a sequence rather than a switch."
+          model="Neighboring lights are 30ms apart, so a server comes on as a sequence rather than a switch."
           onPlay={() => stagger(staggerRef.current?.querySelectorAll('span') ?? [])}
         >
           <div ref={staggerRef} className="flex gap-1.5" aria-hidden>

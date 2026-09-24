@@ -156,7 +156,7 @@ export { motionToken, ms, num, parseDuration, rawToken, MOTION_TOKEN_FALLBACKS }
 export { installVisibilityPause, resetVisibilityPauseForTests } from './visibility';
 export {
   clearVoiceLevels,
-  levelFromAnalyser,
+  levelFromAnalyzer,
   levelFromDbov,
   publishVoiceLevels,
   stepVoiceLevelsForTests,

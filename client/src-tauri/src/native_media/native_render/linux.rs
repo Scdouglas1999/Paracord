@@ -28,7 +28,7 @@
 //! This pass lands the **tier-2 floor as the working path**: decoded frames
 //! arrive as [`DecodedFrameHandle::CpuI420`] (the decoder runs in CPU-output
 //! mode) and are uploaded with `glTexSubImage2D`, then drawn NV-free through an
-//! I420→RGB shader with the frame's signalled colorspace matrix and a
+//! I420→RGB shader with the frame's signaled colorspace matrix and a
 //! rounded-rect premultiplied-alpha mask. **Still zero IPC, zero WebKit.** The
 //! tier-1 GPU-interop paths (CUDA-GL / EGL-dmabuf) are **not engaged**: they
 //! cannot be made sound without a live GL/CUDA session (spec §8), so per the
@@ -318,7 +318,7 @@ void main() {
 }
 "#;
 
-// I420 → RGB with the frame's signalled matrix (contract C1), plus a rounded-rect
+// I420 → RGB with the frame's signaled matrix (contract C1), plus a rounded-rect
 // SDF mask and premultiplied-alpha output so the corners composite cleanly over
 // the webview (spec §3.3).
 const FRAGMENT_SHADER: &str = r#"#version 150 core
@@ -367,7 +367,7 @@ void main() {
 /// Column-major 3×3 YUV(limited-range)→RGB matrix operating on
 /// `(Y-16, U-128, V-128)` and producing [0,1] RGB. The BT.709 coefficients match
 /// the CPU `i420_to_rgba` converter byte-for-byte (contract C1); BT.601 uses the
-/// SDTV set for frames that signalled it.
+/// SDTV set for frames that signaled it.
 fn yuv_to_rgb_matrix(colorspace: ColorSpace) -> [f32; 9] {
     let scale = 1.0f32 / (256.0 * 255.0);
     // Rows are (R, G, B); stored column-major as m[col*3 + row].
@@ -720,18 +720,18 @@ struct RenderHost {
     overlay: gtk::Overlay,
     webview: gtk::Widget,
     last_configure_pulse: RefCell<Option<Instant>>,
-    /// The provider that paints the toplevel the app's ground colour. Held so
+    /// The provider that paints the toplevel the app's ground color. Held so
     /// a later `--bg-base` change can reload it in place (see [`GROUND_COLOR`]).
     ground: gtk::CssProvider,
 }
 
-/// The app's ground colour — `--bg-base` — exactly as the renderer resolved it,
+/// The app's ground color — `--bg-base` — exactly as the renderer resolved it,
 /// as `#rrggbb`.
 ///
 /// Pixels the DOM leaves transparent with no GLArea beneath them (the shell
 /// gutters while a stream is live, a hidden surface's backdrop) fall through to
 /// the GTK toplevel, and they have to read as the app's own background rather
-/// than as GTK theme grey. That colour used to be the literal `#0a0c10`, which
+/// than as GTK theme gray. That color used to be the literal `#0a0c10`, which
 /// was `--bg-base` when the ground was fixed. It is not fixed any more: the
 /// base is `oklch(16.5% calc(0.007 * var(--ui-chroma)) var(--ui-hue))` and the
 /// person picks the hue and the tint, so a literal reads cold against every
@@ -742,14 +742,14 @@ struct RenderHost {
 /// `None` until the renderer has spoken. The toplevel is only ever visible once
 /// the webview's own background has been cleared, which happens at host install
 /// — and the renderer reports on mount, long before any video — so in practice
-/// the colour is in hand before a hole can open. If it is not, the shell paints
-/// nothing rather than inventing a colour.
+/// the color is in hand before a hole can open. If it is not, the shell paints
+/// nothing rather than inventing a color.
 static GROUND_COLOR: Mutex<Option<String>> = Mutex::new(None);
 
 /// `#rrggbb`, and nothing else.
 ///
 /// The string crosses the IPC boundary and is pasted into a GTK stylesheet, so
-/// it is validated as a colour and not merely trusted to be one; anything else
+/// it is validated as a color and not merely trusted to be one; anything else
 /// is a loud error (spec §3.7), never a quietly ignored one.
 fn validated_ground_color(color: &str) -> Result<String, String> {
     let trimmed = color.trim();
@@ -758,7 +758,7 @@ fn validated_ground_color(color: &str) -> Result<String, String> {
         return Ok(format!("#{}", hex.to_ascii_lowercase()));
     }
     Err(format!(
-        "ground colour {trimmed:?} is not #rrggbb; the shell will not paint a colour it cannot read"
+        "ground color {trimmed:?} is not #rrggbb; the shell will not paint a color it cannot read"
     ))
 }
 
@@ -769,10 +769,10 @@ fn paint_ground_on_main(app: &tauri::AppHandle, color: &str) {
             let css = format!("window {{ background-color: {color}; }}");
             let outcome = match host.ground.load_from_data(css.as_bytes()) {
                 Ok(()) => {
-                    format!("[native-render] underlay ground colour is now {color} (--bg-base)")
+                    format!("[native-render] underlay ground color is now {color} (--bg-base)")
                 }
                 Err(err) => {
-                    format!("[native-render] underlay ground colour {color} refused by GTK: {err}")
+                    format!("[native-render] underlay ground color {color} refused by GTK: {err}")
                 }
             };
             let _ = crate::commands::append_client_log(app.clone(), outcome);
@@ -781,7 +781,7 @@ fn paint_ground_on_main(app: &tauri::AppHandle, color: &str) {
 }
 
 /// The renderer's answer for `--bg-base`. Remembered even when no host is
-/// installed yet, so the colour is already in hand when one is.
+/// installed yet, so the color is already in hand when one is.
 pub fn set_ground_color(app: &tauri::AppHandle, color: &str) -> Result<(), String> {
     let color = validated_ground_color(color)?;
     {
@@ -793,7 +793,7 @@ pub fn set_ground_color(app: &tauri::AppHandle, color: &str) -> Result<(), Strin
     }
     let handle = app.clone();
     app.run_on_main_thread(move || paint_ground_on_main(&handle, &color))
-        .map_err(|e| format!("run_on_main_thread (ground colour) failed: {e}"))
+        .map_err(|e| format!("run_on_main_thread (ground color) failed: {e}"))
 }
 
 thread_local! {
@@ -810,7 +810,7 @@ thread_local! {
 /// DOM's transparent stream tiles become real holes down to a `gtk::GLArea`.
 /// That is a hole punched in the *entire* page: if the GLArea behind it cannot
 /// allocate, there is nothing to see through it and the window renders as the
-/// toplevel's bare background — a grey pane where the app should be, with the
+/// toplevel's bare background — a gray pane where the app should be, with the
 /// UI still running underneath it and clicks landing on nothing visible.
 ///
 /// On the NVIDIA proprietary driver GBM allocation fails outright
@@ -905,11 +905,11 @@ pub fn install_render_host(app: &tauri::AppHandle) -> Result<(), String> {
     };
     webkit2gtk::WebViewExt::set_background_color(wk_view, &gtk::gdk::RGBA::new(0.0, 0.0, 0.0, 0.0));
 
-    // Paint the toplevel window the app's own ground colour — see
+    // Paint the toplevel window the app's own ground color — see
     // [`GROUND_COLOR`]. The provider is attached empty and filled in when the
     // renderer reports `--bg-base`, which it does on mount and on every change
     // to the base hue or tint, so the gutters follow the ground the person
-    // actually chose instead of a colour compiled in here.
+    // actually chose instead of a color compiled in here.
     let ground = gtk::CssProvider::new();
     if let Some(toplevel) = vbox.toplevel() {
         toplevel
@@ -926,7 +926,7 @@ pub fn install_render_host(app: &tauri::AppHandle) -> Result<(), String> {
             ground,
         })
     });
-    // A colour reported before the host existed (a host installed late, a
+    // A color reported before the host existed (a host installed late, a
     // renderer that was already running) is not lost.
     let known = GROUND_COLOR
         .lock()
@@ -1330,10 +1330,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_ground_colour_is_read_as_a_colour_not_trusted_as_one() {
+    fn the_ground_color_is_read_as_a_color_not_trusted_as_one() {
         // The renderer's answer is pasted into a GTK stylesheet, so it is read
-        // before it is repeated, and normalised so a re-report of the same
-        // colour in different case is the same colour.
+        // before it is repeated, and normalized so a re-report of the same
+        // color in different case is the same color.
         assert_eq!(validated_ground_color("#0A0C10").unwrap(), "#0a0c10");
         assert_eq!(validated_ground_color("  #100f0c  ").unwrap(), "#100f0c");
         for refused in [
@@ -1354,7 +1354,7 @@ mod tests {
 
     #[test]
     fn bt709_matrix_matches_cpu_converter_reference() {
-        // The BT.709 matrix must reproduce the CPU converter's grey mapping:
+        // The BT.709 matrix must reproduce the CPU converter's gray mapping:
         // Y=126 (mid), U=V=128 → R=G=B=(298*110)/(256*255) ≈ 0.502.
         let m = yuv_to_rgb_matrix(ColorSpace::Bt709);
         let (c, d, e) = (126.0f32 - 16.0, 0.0f32, 0.0f32);
@@ -1363,7 +1363,7 @@ mod tests {
         let b = m[2] * c + m[5] * d + m[8] * e;
         let expected = (298.0 * 110.0) / (256.0 * 255.0);
         for channel in [r, g, b] {
-            assert!((channel - expected).abs() < 1e-4, "grey maps equally");
+            assert!((channel - expected).abs() < 1e-4, "gray maps equally");
         }
     }
 

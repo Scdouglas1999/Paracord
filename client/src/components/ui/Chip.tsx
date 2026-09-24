@@ -45,7 +45,7 @@ export const Chip = React.forwardRef<HTMLSpanElement, ChipProps>(function Chip(
         TONES[tone],
         as === 'button' &&
           // No `transition-colors` beside `pc-pressable`: the recipe's list
-          // already covers colour and carries the §5.1 press with it.
+          // already covers color and carries the §5.1 press with it.
           'pc-focusable pc-pressable hover:bg-bg-mod-strong hover:text-text-primary',
         className,
       )}

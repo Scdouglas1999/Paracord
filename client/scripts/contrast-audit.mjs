@@ -1,10 +1,10 @@
 /**
  * The contrast audit (docs/lantern-stage-spec.md §9).
  *
- * Every ground, well, hairline, wash and grey ink in `tokens.css` is written
+ * Every ground, well, hairline, wash and gray ink in `tokens.css` is written
  * `oklch(L C var(--ui-hue))`: the ramp is L and C, and the user picks H in
  * Settings › Appearance. That is the whole safety argument for a configurable
- * base colour — relative luminance is carried almost entirely by L at these
+ * base color — relative luminance is carried almost entirely by L at these
  * chromas, so holding L and C and moving only H leaves every pair where it was.
  *
  * "Almost entirely" is not "entirely", so this script does not take the
@@ -12,7 +12,7 @@
  * the whole circle every 30 degrees, at full tint and at none, against all four
  * themes, and fails if any pair drops below its floor at any setting. It also
  * fails on a token that lands outside sRGB, because a browser would gamut-map
- * it and the measured colour would no longer be the one written down.
+ * it and the measured color would no longer be the one written down.
  *
  * Run: `npm run test:contrast`
  */
@@ -141,7 +141,7 @@ function evalExpr(expr) {
   return value;
 }
 
-/* ---- Colour ---------------------------------------------------------------- */
+/* ---- Color ---------------------------------------------------------------- */
 
 const linearFromSrgb = (c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
 const srgbFromLinear = (c) => (c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(c, 1 / 2.4) - 0.055);
@@ -351,7 +351,7 @@ function bubbleChecks(vars, setting) {
 /**
  * A ground, as it will actually be seen.
  *
- * Most grounds are opaque and this is just the colour. A look may make them
+ * Most grounds are opaque and this is just the color. A look may make them
  * translucent over a painted backdrop (Dusk sky): the plate and the street
  * scrim then sit over `--audit-backdrop` — the BRIGHTEST point of that
  * backdrop, the worst case for light ink — and everything inside a plate sits

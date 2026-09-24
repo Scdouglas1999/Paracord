@@ -32,7 +32,7 @@ export type RoomKind = 'voice' | 'text';
 /** A person's lights: on (app open), dim (away / dnd), off (signed out). */
 export type PersonLightLevel = 'on' | 'dim' | 'off';
 
-/** One person, as light (§1.5). Presence is a rim, never a coloured dot. */
+/** One person, as light (§1.5). Presence is a rim, never a colored dot. */
 export interface PersonLight {
   userId: string;
   /** Visible identity — already resolved through `displayName`. */

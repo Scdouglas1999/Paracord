@@ -411,7 +411,7 @@ function OwnedTopBar({
   const roomIsVoice = Boolean(isVoice);
   /* Somebody writing in this text room is the amber window breathing at half
      amplitude — the same breath the speaking ring takes, softened. A voice
-     room's window is white because people are in it; writing does not recolour
+     room's window is white because people are in it; writing does not recolor
      it. Refreshed TYPING_STARTs change nothing the selector returns, so the
      pulse runs uninterrupted until typing actually stops. */
   const meId = useCurrentUser()?.id;
@@ -466,20 +466,20 @@ function OwnedTopBar({
       setPinCount(cached.count);
       return;
     }
-    let cancelled = false;
+    let canceled = false;
     channelApi
       .getPins(conversationId)
       .then(({ data }) => {
-        if (cancelled) return;
+        if (canceled) return;
         pinCountCache.set(pinScopeKey, { count: data.length, atMs: Date.now() });
         setPinCount(data.length);
       })
       .catch(() => {
         // A count is decoration; the pins panel reports its own failure.
-        if (!cancelled) setPinCount(null);
+        if (!canceled) setPinCount(null);
       });
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [conversationId, pinScopeKey]);
 

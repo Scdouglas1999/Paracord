@@ -1332,7 +1332,7 @@ impl VideoDecoder for VideoToolboxH264Decoder {
     ) -> Result<Vec<DecodedFrameHandle>, VideoError> {
         match self.mode {
             // CPU mode: decode to I420 and wrap as the software-floor handle,
-            // exactly like the default trait behaviour and the lavc CPU path.
+            // exactly like the default trait behavior and the lavc CPU path.
             DecodeOutput::Cpu => Ok(self
                 .decode(frame)?
                 .into_iter()

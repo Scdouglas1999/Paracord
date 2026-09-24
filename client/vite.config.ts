@@ -30,7 +30,7 @@ export default defineConfig(({ mode }) => {
           description: "A decentralized, self-hostable chat platform",
           // The Slate ground: the default theme's --bg-base, which is also the
           // loading screen's ground (index.html), so the OS launch splash, the
-          // loading screen and the app are one colour.
+          // loading screen and the app are one color.
           theme_color: "#070c10",
           background_color: "#070c10",
           icons: [

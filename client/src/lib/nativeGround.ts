@@ -9,17 +9,17 @@ import { isTauri } from './tauriEnv';
  * it (see `layout.css`, "Native video underlay hole"). Everything the DOM then
  * leaves transparent with no video beneath it — the shell gutters around a
  * tile, a hidden surface's backdrop — falls through to the GTK toplevel, and
- * that has to read as the app's own background rather than as GTK theme grey.
+ * that has to read as the app's own background rather than as GTK theme gray.
  *
  * The shell used to paint it `#0a0c10`, which was `--bg-base` back when the
- * ground was one fixed colour. It is not one colour any more: the base is
+ * ground was one fixed color. It is not one color any more: the base is
  * `oklch(16.5% calc(0.007 * var(--ui-chroma)) var(--ui-hue))` and the person
  * picks the hue and the tint, so a literal in the shell reads cold against
  * every setting except the one it was copied from. Only the renderer knows what
  * the ground resolved to, so the renderer says so.
  *
  * Nothing here runs in the browser build, and — the hard rule, learned the
- * expensive way — **nothing here reports a colour it did not actually read**.
+ * expensive way — **nothing here reports a color it did not actually read**.
  * A ground that cannot be read yet is waited for and then declined out loud,
  * never rounded to a plausible dark.
  */
@@ -28,7 +28,7 @@ import { isTauri } from './tauriEnv';
 const GROUND_PROPERTY = '--bg-base';
 
 /**
- * A colour no theme in this app uses, painted and READ BACK before the real one
+ * A color no theme in this app uses, painted and READ BACK before the real one
  * is offered to the same canvas.
  *
  * A 2D canvas starts out black and `fillStyle` silently keeps its previous
@@ -37,7 +37,7 @@ const GROUND_PROPERTY = '--bg-base';
  * the case where the *setter itself* never takes: the fill is then still the
  * canvas's own opaque black, the comparison against the sentinel says "not the
  * sentinel, so it parsed", and the module hands the shell `#000000` with
- * complete confidence. That is a colour no theme defines, and it is what the
+ * complete confidence. That is a color no theme defines, and it is what the
  * user's window was painted. So the sentinel is now proved by the pixel:
  * unless the canvas can demonstrably paint magenta and read magenta back,
  * nothing it says afterwards is believed.
@@ -77,11 +77,11 @@ function paintAndRead(ctx: CanvasRenderingContext2D, color: string): Pixel | nul
 const isSentinel = (pixel: Pixel) => SENTINEL_PIXEL.every((channel, i) => pixel[i] === channel);
 
 /**
- * Any CSS colour the renderer can compute → `#rrggbb`, or a reason it could
+ * Any CSS color the renderer can compute → `#rrggbb`, or a reason it could
  * not be read.
  *
  * Through a 1×1 canvas rather than by parsing, because `getComputedStyle`
- * returns a colour in the space it was written in — `oklch(0.165 0.007 65)` —
+ * returns a color in the space it was written in — `oklch(0.165 0.007 65)` —
  * and the shell needs sRGB bytes. Every failure is a refusal, never a value:
  * the pipeline proves itself on the sentinel first, so black can only ever come
  * back when black is what the engine actually painted.
@@ -114,7 +114,7 @@ export function readCssColor(color: string, doc: Document = document): GroundRea
   return { hex: `#${hex2(painted[0])}${hex2(painted[1])}${hex2(painted[2])}`, computed, why: '' };
 }
 
-/** Back-compat shape for callers that only want the colour. */
+/** Back-compat shape for callers that only want the color. */
 export function cssColorToHex(color: string, doc: Document = document): string | null {
   return readCssColor(color, doc).hex;
 }
@@ -125,7 +125,7 @@ export function cssColorToHex(color: string, doc: Document = document): string |
  * Read off a probe rather than off the custom property, because the computed
  * value of `--bg-base` is still `oklch(16.5% calc(0.007 * 1) 65)` — `var()` is
  * substituted, `calc()` is not evaluated, and nothing has been converted to a
- * colour. Painting it on an element is what makes the engine resolve it.
+ * color. Painting it on an element is what makes the engine resolve it.
  *
  * Two things have to be true before the probe is even worth painting, and both
  * are false for a moment at boot: the app's stylesheet has to be in effect, so
@@ -208,11 +208,11 @@ async function readGroundWhenReadable(doc: Document = document): Promise<GroundR
 }
 
 /**
- * Tell the shell the ground colour, if it changed.
+ * Tell the shell the ground color, if it changed.
  *
  * Called on every change to the theme, the accent, the base hue and tint and
  * the committed custom CSS, and again whenever an underlay hole opens — every
- * moment the colour behind the hole can be wrong. A no-op in the browser build;
+ * moment the color behind the hole can be wrong. A no-op in the browser build;
  * loud, in the client log, when the ground cannot be read or the shell refuses
  * what it is told. Nothing is cached unless it was actually read, so a boot
  * that could not see the ground does not poison every later report.

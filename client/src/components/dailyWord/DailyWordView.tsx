@@ -243,7 +243,7 @@ export function DailyWordView({ guildId, serverName }: { guildId: string; server
       aside={
         <span className="flex items-center gap-2">
           <span id="pc-word-contrast-label" className="text-meta text-text-secondary">High contrast colors</span>
-          <Switch checked={palette === 'contrast'} labelledBy="pc-word-contrast-label" onChange={pickPalette} />
+          <Switch checked={palette === 'contrast'} labeledBy="pc-word-contrast-label" onChange={pickPalette} />
         </span>
       }
     >

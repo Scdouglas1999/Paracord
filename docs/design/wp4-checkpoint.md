@@ -4,7 +4,7 @@ Contract: [`docs/lantern-stage-spec.md`](../lantern-stage-spec.md) §7.3 (the
 surface), §8 (RoomCard, RoomThumbnail, EventCard, TextRoomRow, HereNowStrip), §6
 (the kill-list), §9 (accessibility). Builds on [WP0](./wp0-checkpoint.md) and
 [WP1](./wp1-checkpoint.md). IA carried over from `docs/layout-spec.md` §7
-("Channels recipes") — the behaviour is kept, the presentation is replaced.
+("Channels recipes") — the behavior is kept, the presentation is replaced.
 Branch: `design/lantern-stage`.
 
 Reference render: `output/design-reference/Lobby.html` / `.png`.
@@ -33,7 +33,7 @@ light: every count, caption, occupant and reader comes from WP1's selectors
 (`useBuildingLight`, `useBuildingPeople`, `useAroundNow`, `useRoomThumbnail`) and
 WP1's components (`RoomThumbnail`, `AvatarStack`, `LitAvatar`, `LiveDot`,
 `RoomDuration`). Styling is tokens + `ui/` + `light/` only; the standing
-"no literal colour" assertion covers every part in every state.
+"no literal color" assertion covers every part in every state.
 
 ### Deleted (presentation replaced)
 
@@ -155,7 +155,7 @@ there is nothing a reader can do about it from the street. A failed RSVP does
 toast, because that one was their action.
 
 `toLobbyEvent` / `nextEventOf` are pure and exported so "what counts as coming
-up" is pinned in a test: a cancelled, completed, past or unparseable event is not
+up" is pinned in a test: a canceled, completed, past or unparseable event is not
 put in front of a human; an event that is already running still is.
 
 ---
@@ -216,7 +216,7 @@ design-review captures, which boot the same mocked shell.
   permission-gated add tile, the text row in all four of its states, the event
   card with and without its optional clauses, the media strip, the Around-now
   well, the header's gated actions, the selection rules behind both optional
-  sections, and the no-literal-colour assertion.
+  sections, and the no-literal-color assertion.
 - `pages/GuildHomePage.test.tsx` — the Lobby end to end against the **real**
   stores, seeded the way WP1's `useLights.test.tsx` seeds them, so the light is
   derived by the same code the app runs. Covers the header line, the settings

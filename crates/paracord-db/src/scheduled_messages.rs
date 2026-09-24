@@ -12,7 +12,7 @@ use sqlx::Row;
 
 pub const STATUS_SCHEDULED: i16 = 0;
 pub const STATUS_SENT: i16 = 1;
-pub const STATUS_CANCELLED: i16 = 2;
+pub const STATUS_CANCELED: i16 = 2;
 pub const STATUS_FAILED: i16 = 3;
 
 #[derive(Debug, Clone)]
@@ -157,7 +157,7 @@ pub async fn cancel_scheduled_message(
         select_cols
     ))
     .bind(id)
-    .bind(STATUS_CANCELLED)
+    .bind(STATUS_CANCELED)
     .bind(STATUS_SCHEDULED)
     .fetch_optional(pool)
     .await?;
@@ -281,7 +281,7 @@ pub async fn reconcile_committed_delivery(
 ) -> Result<bool, DbError> {
     let mut tx = pool.begin().await?;
     let receipt: Option<(i64, Option<i64>)> = sqlx::query_as(
-        "SELECT CASE WHEN r.cancelled THEN 1 ELSE 0 END, m.id
+        "SELECT CASE WHEN r.canceled THEN 1 ELSE 0 END, m.id
          FROM message_delivery_receipts r LEFT JOIN messages m ON m.id = r.message_id
          WHERE r.channel_id = $1 AND r.author_id = $2 AND r.nonce = $3",
     )
@@ -290,7 +290,7 @@ pub async fn reconcile_committed_delivery(
     .bind(scheduled.delivery_nonce())
     .fetch_optional(&mut *tx)
     .await?;
-    let Some((cancelled, message_id)) = receipt else {
+    let Some((canceled, message_id)) = receipt else {
         tx.commit().await?;
         return Ok(false);
     };
@@ -299,13 +299,13 @@ pub async fn reconcile_committed_delivery(
          error = $4, updated_at = datetime('now') WHERE id = $1 AND status = $5",
     )
     .bind(scheduled.id)
-    .bind(if cancelled != 0 {
+    .bind(if canceled != 0 {
         STATUS_FAILED
     } else {
         STATUS_SENT
     })
     .bind(message_id)
-    .bind(if cancelled != 0 {
+    .bind(if canceled != 0 {
         Some("Message delivery was canceled")
     } else {
         None

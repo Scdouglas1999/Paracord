@@ -172,7 +172,7 @@ export function createDurableGroup(
       const binding = await transaction.get<SendBinding>(SEND_BINDING_NAMESPACE, nonce);
       if (!binding) return;
       if (binding.channelId !== message.channel_id || message.nonce !== nonce || message.author.id !== myUserId) {
-        throw new Error('The send acknowledgement belongs to another message.');
+        throw new Error('The send acknowledgment belongs to another message.');
       }
       // The server holds the ciphertext and every member holds the epoch.
       await removeStagedAttachments(transaction, nonce);

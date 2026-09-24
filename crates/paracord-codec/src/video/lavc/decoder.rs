@@ -86,7 +86,7 @@ pub struct LavcDecoder {
     backend: DecodeBackend,
     /// Where decoded frames are placed, fixed at construction (spec §3.2). In
     /// [`DecodeOutput::Gpu`] mode the decode keeps the frame GPU-resident; in
-    /// [`DecodeOutput::Cpu`] mode it downloads to I420 (unchanged behaviour).
+    /// [`DecodeOutput::Cpu`] mode it downloads to I420 (unchanged behavior).
     output: DecodeOutput,
     backend_name: &'static str,
     dec_ctx: *mut ff::AVCodecContext,
@@ -656,7 +656,7 @@ impl VideoDecoder for LavcDecoder {
         frame: &EncodedFrame,
     ) -> Result<Vec<DecodedFrameHandle>, VideoError> {
         match self.output {
-            // CPU mode is the default trait behaviour and also the §3.4 tier-2
+            // CPU mode is the default trait behavior and also the §3.4 tier-2
             // floor (hardware decode → download → I420).
             DecodeOutput::Cpu => Ok(self
                 .decode(frame)?

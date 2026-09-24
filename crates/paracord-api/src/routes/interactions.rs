@@ -657,7 +657,7 @@ async fn ensure_command_invocable(
 /// `create_followup_message`, `edit_original_response` and
 /// `delete_original_response` take no `AuthUser` — the path token *is* the sole
 /// credential, and it authorizes acting **as the bot**. Handing it back to the
-/// invoker gave any member who could run a slash command a 15-minute licence to
+/// invoker gave any member who could run a slash command a 15-minute license to
 /// post, edit and delete messages under the bot's identity, bypassing their own
 /// SEND_MESSAGES. The bot still receives the complete payload (token included)
 /// over the gateway via the INTERACTION_CREATE dispatch inside

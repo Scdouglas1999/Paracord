@@ -134,7 +134,7 @@ async function waitForHealth(handle: ServerHandle, base: string, timeoutMs = 60_
 
 async function stopServer(handle: ServerHandle) {
   if (handle.hasExited) return;
-  // Only the child this spec spawned is ever signalled.
+  // Only the child this spec spawned is ever signaled.
   handle.child.kill('SIGTERM');
   let timer: ReturnType<typeof setTimeout> | undefined;
   await Promise.race([

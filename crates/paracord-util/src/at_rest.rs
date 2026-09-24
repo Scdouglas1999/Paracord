@@ -325,7 +325,7 @@ mod tests {
     use aes_gcm::Aes256Gcm;
     use std::sync::{Mutex, OnceLock};
 
-    /// Serializes every test whose behaviour depends on
+    /// Serializes every test whose behavior depends on
     /// `PARACORD_AT_REST_REFUSE_LEGACY_V1`.
     ///
     /// The flag is read from the process environment inside `decrypt_with_aad`,

@@ -8,7 +8,7 @@
  * anyone. Derive the value from the content whenever the field is absent.
  *
  * An explicit `false` from a server that *does* compute the flag is still
- * honoured: that server may have deliberately stripped the ping because the
+ * honored: that server may have deliberately stripped the ping because the
  * author lacked MENTION_EVERYONE, and the client must not override it.
  */
 

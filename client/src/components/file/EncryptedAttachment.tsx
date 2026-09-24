@@ -15,7 +15,7 @@ import { Button, Chip } from '../ui';
  *
  * The server holds an opaque blob under a random name. Everything shown here —
  * the name, the type, the size, the preview — comes from the descriptor that
- * travelled inside the encrypted message, and the bytes are decrypted on this
+ * traveled inside the encrypted message, and the bytes are decrypted on this
  * device when they are actually needed. Object URLs are revoked when the view
  * goes away, so a decrypted copy never outlives the thing showing it.
  *
@@ -140,17 +140,17 @@ function EncryptedThumbnail({ attachment }: { attachment: EncryptedAttachmentMod
   const thumbnail = attachment.encryption.thumbnail;
 
   useEffect(() => {
-    let cancelled = false;
+    let canceled = false;
     if (!thumbnail) return;
     void decryptAttachmentThumbnail(attachment).then(blob => {
       if (!blob) return;
       const objectUrl = URL.createObjectURL(blob);
-      if (cancelled) { URL.revokeObjectURL(objectUrl); return; }
+      if (canceled) { URL.revokeObjectURL(objectUrl); return; }
       url.current = objectUrl;
       setSource(objectUrl);
     }).catch(() => { /* The full attachment remains available on demand. */ });
     return () => {
-      cancelled = true;
+      canceled = true;
       if (url.current) { URL.revokeObjectURL(url.current); url.current = null; }
     };
   }, [attachment, thumbnail]);

@@ -20,7 +20,7 @@ interface ThemeOption {
 
 /**
  * The four themes (docs/lantern-stage-spec.md §1.7). Each is a ground plus an
- * ink: the accent and the base colour below are still the person's own.
+ * ink: the accent and the base color below are still the person's own.
  * `lib/themes.ts` is the list of ids; this is what they are called.
  */
 const THEME_OPTIONS: ThemeOption[] = [
@@ -118,9 +118,9 @@ function ThemePreview({ id }: { id: ThemeId }) {
 }
 
 /**
- * A base-colour preset, painted in the theme you are actually in.
+ * A base-color preset, painted in the theme you are actually in.
  *
- * Not a swatch: the base colour is not one colour, it is a whole ramp, and the
+ * Not a swatch: the base color is not one color, it is a whole ramp, and the
  * only honest preview of it is the ramp. `data-theme` plus the two custom
  * properties is the real mechanism — `tokens.css` re-resolves every surface on
  * a `[data-theme]` subtree, and each one reads the `--ui-hue` / `--ui-chroma`
@@ -165,7 +165,7 @@ function ThemeCard({
         // §5.1, WP9d: changing the theme is the lights changing. The whole
         // shell crosses over `--duration-dim` and the light elements re-bloom
         // behind it — and the theme itself is applied INSIDE the crossfade, by
-        // `useTheme`'s effect, which is why the engine is told how to recognise
+        // `useTheme`'s effect, which is why the engine is told how to recognize
         // that it landed rather than guessing at a number of frames. Under
         // reduced motion `changeLights` simply calls this and returns.
         void changeLights(
@@ -183,7 +183,7 @@ function ThemeCard({
         active
           ? // The chosen palette is raised, with the warm top highlight and an
             // accent edge — plus the word "Selected" below, so the state is never
-            // carried by colour alone (spec §9).
+            // carried by color alone (spec §9).
             'bg-bg-raised shadow-[var(--shadow-raised),0_0_0_1px_var(--accent-primary)]'
           : 'bg-bg-mod-subtle hover:bg-bg-mod-strong',
       )}
@@ -361,7 +361,7 @@ export function ThemeSelector({ currentTheme, onThemeChange }: ThemeSelectorProp
                 setBaseHue(Number(event.target.value));
                 // Moving the hue while the tint is off would do nothing at all
                 // and look broken. Reaching for this control means you want a
-                // colour, so it turns the tint back on.
+                // color, so it turns the tint back on.
                 if (baseTint === 0) setBaseTint(1);
               }}
               className={cn(
@@ -413,7 +413,7 @@ export function ThemeSelector({ currentTheme, onThemeChange }: ThemeSelectorProp
                 onClick={() => setAccentPreset(preset)}
                 className={cn(
                   // A swatch is one of the three shapes allowed to be round, and
-                  // the one place a literal colour is legitimate: it has to paint
+                  // the one place a literal color is legitimate: it has to paint
                   // the preset's own value to be a swatch at all (spec §1.7).
                   'pc-focusable h-11 w-11 shrink-0 rounded-[var(--radius-full)] sm:h-8 sm:w-8',
                   'transition-transform duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:scale-[1.06]',

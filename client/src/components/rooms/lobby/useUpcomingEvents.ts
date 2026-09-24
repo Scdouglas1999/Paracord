@@ -26,7 +26,7 @@ interface ScheduledEventPayload {
   user_rsvp?: unknown;
 }
 
-/** One event, normalised: every field checked, nothing left to parse. */
+/** One event, normalized: every field checked, nothing left to parse. */
 export interface HomeEvent {
   id: string;
   name: string;
@@ -41,7 +41,7 @@ export interface HomeEvent {
   happeningNow: boolean;
 }
 
-/** 1 = scheduled, 2 = active. 3 (done) and 4 (cancelled) are never shown. */
+/** 1 = scheduled, 2 = active. 3 (done) and 4 (canceled) are never shown. */
 const SCHEDULED = 1;
 const ACTIVE = 2;
 

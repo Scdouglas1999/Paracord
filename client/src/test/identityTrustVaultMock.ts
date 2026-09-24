@@ -14,7 +14,7 @@ import { useServerListStore } from '../stores/serverListStore';
  *
  * It keeps the two properties the real vault gives the trust store and that the
  * tests depend on: records survive as long as the vault is open (so a "reload"
- * is modelled by re-opening the same backing map), and an atomic transaction
+ * is modeled by re-opening the same backing map), and an atomic transaction
  * commits nothing when its body throws.
  */
 export function createIdentityTrustVault(records = new Map<string, unknown>()) {

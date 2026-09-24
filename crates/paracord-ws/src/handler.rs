@@ -553,7 +553,7 @@ async fn send_ws_text_logged(
             Err(e) => {
                 // Do NOT fall back to an uncompressed text frame. In
                 // `Mode::Streaming` the deflate window persists across frames, so
-                // skipping one desynchronises the client's single long-lived
+                // skipping one desynchronizes the client's single long-lived
                 // inflate context and every subsequent binary frame decodes to
                 // garbage — a silent, unrecoverable corruption. Close the socket
                 // and make the client reconnect (which resets both contexts).
@@ -1002,7 +1002,7 @@ fn build_presence_payload(
 /// The entry is *removed* from `user_presences` rather than overwritten with an
 /// offline payload. Nothing ever evicted from that map, so it retained one JSON
 /// value per user that had ever connected and grew without bound for the life of
-/// the process. Removing is also behaviourally identical to what was stored:
+/// the process. Removing is also behaviorally identical to what was stored:
 /// READY only reads presences for users listed in `online_users`, and the
 /// reconnect merge in `handle_connection` reconstructs exactly
 /// `default_presence_payload(user, "online")` when the entry is absent — the
@@ -3975,7 +3975,7 @@ pub fn test_push_buffered_event(session_id: &str, sequence: u64, event_type: &st
 }
 
 /// Mark a session's buffer as disconnected exactly as the real disconnect path
-/// does, so tests can assert the release/eviction behaviour.
+/// does, so tests can assert the release/eviction behavior.
 #[doc(hidden)]
 pub fn test_release_event_buffer(session_id: &str) {
     release_event_buffer(session_id);

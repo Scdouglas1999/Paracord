@@ -232,7 +232,7 @@ describe('VoiceControlBar', () => {
     expect(screen.getByRole('button', { name: 'Disconnect from voice' })).toBeInTheDocument();
   });
 
-  it('shows a cancellable pending state after raising a hand', () => {
+  it('shows a cancelable pending state after raising a hand', () => {
     const onToggleRequestToSpeak = vi.fn();
     render(
       <VoiceControlBar

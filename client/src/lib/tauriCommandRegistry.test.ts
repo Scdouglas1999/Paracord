@@ -97,7 +97,7 @@ describe('desktop command registry', () => {
     ).toEqual([]);
   });
 
-  it('recognises an unregistered command as a failure', () => {
+  it('recognizes an unregistered command as a failure', () => {
     // Guards the guard: if the handler list ever stopped parsing, the test above
     // would pass vacuously against an empty set.
     const registered = registeredCommands();

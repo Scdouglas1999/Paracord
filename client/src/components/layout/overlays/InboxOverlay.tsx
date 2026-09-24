@@ -83,17 +83,17 @@ export function InboxOverlay({ open, onClose, unreadItems, allChannels, error }:
   }, [allChannels]);
   useEffect(() => {
     if (!open || !previewGuildIds) return;
-    let cancelled = false;
+    let canceled = false;
     void Promise.all(previewGuildIds.split(',').map((guildId) => fetchGuildRoles(guildId)))
       .then((lists) => {
-        if (cancelled) return;
+        if (canceled) return;
         setRoleNames(new Map(lists.flat().map((role) => [role.id, role.name])));
       })
       .catch((err) => {
-        if (!cancelled) toast.error(`Role names in these previews could not load: ${extractApiError(err)}`);
+        if (!canceled) toast.error(`Role names in these previews could not load: ${extractApiError(err)}`);
       });
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [open, previewGuildIds]);
 
@@ -113,22 +113,22 @@ export function InboxOverlay({ open, onClose, unreadItems, allChannels, error }:
 
   useEffect(() => {
     if (!open || unreadItems.length === 0) return;
-    let cancelled = false;
+    let canceled = false;
     const channelIds = unreadItems.slice(0, 20).map(({ state }) => state.channel_id);
     void Promise.all(channelIds.map(async (channelId) => {
       try {
         const { data } = await channelApi.getMessages(channelId, { limit: 1 });
-        if (!cancelled) {
+        if (!canceled) {
           setPreviews((current) => ({ ...current, [channelId]: data[0] ?? null }));
         }
       } catch {
-        if (!cancelled) {
+        if (!canceled) {
           setPreviews((current) => ({ ...current, [channelId]: null }));
         }
       }
     }));
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [open, unreadItems]);
 

@@ -6,7 +6,7 @@
      1. Every selector here is scoped to a look (`[data-theme='…']`, or
         `[data-message-style='bubbles']`, which only a look turns on). With no
         look active this sheet matches nothing.
-     2. No colour is written here. A look's colours are tokens like any other,
+     2. No color is written here. A look's colors are tokens like any other,
         and `npm run test:contrast` audits them.
    Unlayered on purpose: a look has to clear `bg-bg-base`, and only an unlayered
    rule outranks the utility layer (see `globals.css`).
@@ -97,7 +97,7 @@ html[data-theme='paper'][data-native-underlay] body::after {
 }
 
 /* ---- Bubbles (Voices) --------------------------------------------------------
-   Every message sits in a bubble that takes its author's colour; yours sit on
+   Every message sits in a bubble that takes its author's color; yours sit on
    the right at a stronger mix. `MessageList` supplies `--who`, `data-own` and
    `data-grouped`; this is the whole of the difference, so flipping the look
    never re-renders the timeline. The mix is `in srgb` because that is exactly

@@ -28,7 +28,7 @@ describe('durable delivery HTTP contract', () => {
     { nonce: 'different', channel_id: 'channel', author: { id: 'owner' } },
     { nonce: 'original', channel_id: 'wrong', author: { id: 'owner' } },
     { nonce: 'original', channel_id: 'channel', author: { id: 'other' } },
-  ])('rejects an acknowledgement for another request, channel or sender', async fields => {
+  ])('rejects an acknowledgment for another request, channel or sender', async fields => {
     await expect(setup({ id: 'm', ...fields }).transport(record)).rejects.toBeInstanceOf(DeliveryProtocolError);
   });
   it('does not interpret asynchronous server acceptance as a committed message', async () => {
@@ -39,8 +39,8 @@ describe('durable delivery HTTP contract', () => {
     const deleted = failure(410); deleted.response!.data = Object.assign(deleted.response!.data, { code: 'DELIVERY_ALREADY_DELETED' });
     request.mockRejectedValueOnce(deleted);
     await expect(transport(record)).resolves.toEqual({ kind: 'deleted' });
-    const cancelled = failure(410); cancelled.response!.data = Object.assign(cancelled.response!.data, { code: 'DELIVERY_CANCELLED' });
-    request.mockRejectedValueOnce(cancelled);
+    const canceled = failure(410); canceled.response!.data = Object.assign(canceled.response!.data, { code: 'DELIVERY_CANCELLED' });
+    request.mockRejectedValueOnce(canceled);
     await expect(transport(record)).resolves.toEqual({ kind: 'cancelled' });
     request.mockRejectedValueOnce(failure(410));
     await expect(transport(record)).rejects.toBeInstanceOf(AxiosError);
@@ -144,7 +144,7 @@ describe('prepared message discard transport', () => {
     const context = { request, scope: { userId: 'author' }, assertCurrent: vi.fn() } as unknown as OperationContext;
     return { request, discard: createDeliveryDiscardTransport(context), signal: new AbortController().signal };
   }
-  it('never issues a delete for a delivery cancelled before creation', async () => {
+  it('never issues a delete for a delivery canceled before creation', async () => {
     const { request, discard, signal } = setup(); request.mockResolvedValueOnce(response('cancelled'));
     await expect(discard(record, signal)).resolves.toEqual({ kind: 'cancelled' });
     expect(request).toHaveBeenCalledTimes(1);

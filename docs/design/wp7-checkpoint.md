@@ -6,7 +6,7 @@ and the §10 work-package table. Depends on
 
 This package restyles every surface a person reaches *around* the channels —
 settings, dialogs, the first screens of the app — onto the plate/well/raised
-system. **No behaviour, route, store, API call or test intent changed.**
+system. **No behavior, route, store, API call or test intent changed.**
 
 ---
 
@@ -34,15 +34,15 @@ Three rules carry almost all of the work:
 
 | Primitive | Why it exists | Props |
 |---|---|---|
-| `Switch` | Two hand-rolled switches existed (`guild/SettingsPrimitives`, inside `UserSettings`), both painting `bg-white` — a literal colour in a system that forbids them. | `checked`, `onChange`, `label` \| `labelledBy`, `size` (`sm`\|`md`), `disabled` |
-| `ToggleRow` | The labelled-boolean row that both of those switches sat in. Names its switch from the row's own text, so the name a screen reader hears is the sentence a sighted reader reads. | `label`, `description`, `checked`, `onChange`, `disabled`, `ariaLabel`, `children` |
+| `Switch` | Two hand-rolled switches existed (`guild/SettingsPrimitives`, inside `UserSettings`), both painting `bg-white` — a literal color in a system that forbids them. | `checked`, `onChange`, `label` \| `labeledBy`, `size` (`sm`\|`md`), `disabled` |
+| `ToggleRow` | The labeled-boolean row that both of those switches sat in. Names its switch from the row's own text, so the name a screen reader hears is the sentence a sighted reader reads. | `label`, `description`, `checked`, `onChange`, `disabled`, `ariaLabel`, `children` |
 | `Tabs` | Five hand-rolled tab strips / segmented controls, each with its own selected-state recipe. | `items`, `value`, `onChange`, `label`, `variant` (`segmented`\|`underline`), `size`, `fill` |
-| `SettingsShell` | The settings frame itself: index + content + close + Esc hint + the phone index/detail split. Presentation only and fully controlled, so each caller keeps its own section state, permission gates, Escape handling and history behaviour. | `label`, `title`, `groups`, `active`, `onSelect`, `onClose`, `closeLabel`, `indexFooter`, `isMobile`, `showIndex`, `onShowIndex`, `onKeyDown`, `contentClassName` |
+| `SettingsShell` | The settings frame itself: index + content + close + Esc hint + the phone index/detail split. Presentation only and fully controlled, so each caller keeps its own section state, permission gates, Escape handling and history behavior. | `label`, `title`, `groups`, `active`, `onSelect`, `onClose`, `closeLabel`, `indexFooter`, `isMobile`, `showIndex`, `onShowIndex`, `onKeyDown`, `contentClassName` |
 | `SettingsSectionHeader` | The head of a section: Gabarito heading, one specific line, at most one primary action. | `title`, `description`, `action` |
 
 **Design decisions worth recording**
 
-- `Switch`'s off state is a **well**, not a grey pill: recessed like every other
+- `Switch`'s off state is a **well**, not a gray pill: recessed like every other
   input. On is the **emerald**, never a light token — a light would assert that
   somebody is in a channel (§0, §6.3). A test asserts exactly this.
 - `Tabs` selects with a **raised** surface inside a well, the same way a
@@ -58,7 +58,7 @@ All five are exported from the `ui` barrel, which now also re-exports the
 already-existing `Modal` family, `Input`/`Textarea`/`Select` and
 `ErrorBanner`/`EmptyState`/`LoadingSpinner` so a consumer has one import site.
 Every one of them is rendered on `/design-tokens` (§4 below), and the WP0
-"no primitive hard-codes a colour" test now sweeps `Switch`, `ToggleRow` and
+"no primitive hard-codes a color" test now sweeps `Switch`, `ToggleRow` and
 both `Tabs` variants too.
 
 ### Three new recipes and one new token
@@ -73,9 +73,9 @@ All three recipes live in `client/src/styles/primitives.css`.
   their own muted ink) rather than in a component. This removed the last literal
   hex from `components/ui/`.
 - `.pc-checkbox` — eleven checkboxes across the scope were each doing their own
-  thing (one had no styling at all and rendered as the raw grey platform box).
+  thing (one had no styling at all and rendered as the raw gray platform box).
   The native control is kept, so it keeps the platform's semantics and its
-  forced-colors behaviour, and is tinted through `accent-color` with the §9 ring.
+  forced-colors behavior, and is tinted through `accent-color` with the §9 ring.
 
 ### One token change with a consequence worth naming
 
@@ -96,7 +96,7 @@ the contrast audit's block parser still finds it.
 - **User settings** (`components/user/UserSettings.tsx`) — the hand-rolled
   shell, mobile nav, close affordance and breadcrumb are gone, replaced by
   `SettingsShell`; the nav groups, every section id, the admin gate, the
-  Escape/keybind-capture handling and the phone history behaviour are unchanged.
+  Escape/keybind-capture handling and the phone history behavior are unchanged.
   The file's private `ToggleSwitch`, `ToggleRow` and `Segmented` now delegate to
   the shared `Switch`, `ToggleRow` and `Tabs`. Sections swept for raw type
   steps, border-as-depth (every `rounded-md border … bg-bg-tertiary` readout is
@@ -112,7 +112,7 @@ the contrast audit's block parser still finds it.
   index; every tab id, the `isAdmin` gate and the route are unchanged, and
   Escape now does what the shell's Esc hint promises. Six identical stat cards
   became one hairline-parted spec sheet (§6.8 forbids identical-card tiling);
-  each security finding carries its severity as a **word** beside the colour.
+  each security finding carries its severity as a **word** beside the color.
   Wide tables keep their own `overflow-x-auto` so the page never scrolls
   sideways on a phone.
 - **Developer** (`pages/DeveloperPage` + `pages/developer/**` +
@@ -137,7 +137,7 @@ the contrast audit's block parser still finds it.
 - `ImageLightbox` — its controls and filename chip painted `text-white/85` on
   `rgba(0,0,0,.45)`, which is what "ink over a photo" looked like before there
   was an answer. There is one: `pc-tag` (spec §8), the name tag a live tile
-  already uses. The lightbox is on it now, and the last literal colour in
+  already uses. The lightbox is on it now, and the last literal color in
   `components/ui/` went with it.
 - `DmPickerModal` — the Direct/Group tabs and the selected-recipient row now use
   the well/raised recipe instead of an accent tint.
@@ -185,7 +185,7 @@ the contrast audit's block parser still finds it.
   an accent recolours actions only and never the light.
 - **Onboarding** — the wizard moved onto `AuthCanvas`/`AuthCard`, its progress
   bars gained a mono "1 of 2" so the bar is not the only cue, and its three
-  feature icons stopped being three different semantic colours (§6.3: a
+  feature icons stopped being three different semantic colors (§6.3: a
   semantic hue is not decoration). The layout tour's coach-mark is now
   `pc-floating` with 32px controls.
 
@@ -206,7 +206,7 @@ without touching their JSX:
 
 | Class | Before | After |
 |---|---|---|
-| `.input-field`, `.select-field` | colour-mixed fill + 1px border + a 3px accent halo on focus | the well recipe + the §9 focus ring; `--select-chevron` |
+| `.input-field`, `.select-field` | color-mixed fill + 1px border + a 3px accent halo on focus | the well recipe + the §9 focus ring; `--select-chevron` |
 | `.settings-nav-item` | 44px row, accent-tinted fill + accent border when active | the `NavRow` recipe: 34px, raised when active, no border |
 | `.tab-btn` | `--bg-mod-subtle` for both hover and active — the selected tab was invisible | raised + the warm highlight when active |
 | `.settings-section-title` | 1.45rem, tracked | the Gabarito Title step |
@@ -246,7 +246,7 @@ The visual pass is not decoration — six things only showed up in a frame:
 3. **The developer page had no gutter** — it was the one settings route
    `AppShell` did not give the 12px plate inset to.
 4. **"Theme" was printed twice** in Appearance: the section wrapper and
-   `ThemeSelector`'s own labelled section. The wrapper is gone.
+   `ThemeSelector`'s own labeled section. The wrapper is gone.
 5. **The account avatar was emerald** — the accent means "an action you can
    take", and a person is not an action. It takes an identity hue now, and the
    "Change avatar" control became a raised chip instead of a bordered box.
@@ -294,7 +294,7 @@ Found and removed inside WP7's scope:
   follow-on line telling you how to make something appear.
 - **Status dots** — server connect drew three presence dots (`accent-success` /
   `accent-warning` / `text-faint`) beside each saved server. §1.5 and §6.6 say
-  presence is light, never a coloured dot; the words "Connected",
+  presence is light, never a colored dot; the words "Connected",
   "Saved — not connected" and "Sign-in required" carry it alone now.
 - **Identical-card tiling** — six identical stat cards in the admin overview,
   nineteen intent tiles and thirty permission tiles in the developer pages, and
@@ -302,7 +302,7 @@ Found and removed inside WP7's scope:
   hairline-parted rows.
 - **Decorative semantics** — the onboarding wizard gave its three feature icons
   three different semantic hues, and the admin panels filled cards with
-  `accent-tint`/`warning-tint`/`success-tint`. A semantic colour means
+  `accent-tint`/`warning-tint`/`success-tint`. A semantic color means
   something; it is not decoration (§6.3).
 - **Emerald as emphasis** — eyebrow labels ("You're invited", "Step 1 of 2",
   "Authorize application"), the context menu's hover fill (every item, not just
@@ -409,7 +409,7 @@ Each name below exists at both `-1440x900` and `-390x844`:
   shells use the `NavRow` primitive. It was restyled rather than deleted here
   because deleting a global class belongs to the sweep.
 - `pages/developer/CreateBotForm.tsx`'s two fields are still `Input`s laid out
-  in a grid rather than `TextField`s; they are labelled `sr-only`, which works
+  in a grid rather than `TextField`s; they are labeled `sr-only`, which works
   but hides the labels a settings form would normally show.
 - Title case survives in *product* strings ("Save Keybinds", "Export Identity",
   "Space Hub" as a feature name). The kill-list bans uppercase, not title case,

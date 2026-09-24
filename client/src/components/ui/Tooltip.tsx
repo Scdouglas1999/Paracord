@@ -98,7 +98,7 @@ export function Tooltip({
         try {
             if (target && !target.matches(":focus-visible")) return;
         } catch {
-            // An engine without :focus-visible keeps the old behaviour.
+            // An engine without :focus-visible keeps the old behavior.
         }
         showTooltip();
     };

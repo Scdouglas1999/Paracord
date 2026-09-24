@@ -73,7 +73,7 @@ describe('compound account and entity keys', () => {
  *
  * The user types an address; nothing guarantees they type it the way it is
  * stored. `127.0.0.1:18600` with no scheme, `localhost`, a trailing slash and a
- * capitalised host all name the same server, and a spelling difference must
+ * capitalized host all name the same server, and a spelling difference must
  * never split one account into two.
  */
 describe('the home server among the servers in the list', () => {
@@ -93,7 +93,7 @@ describe('the home server among the servers in the list', () => {
     ['localhost against the loopback address', 'http://localhost:18600', 'http://127.0.0.1:18600'],
     ['the loopback address against localhost', 'http://127.0.0.1:18600', 'http://localhost:18600'],
     ['a trailing slash', 'http://127.0.0.1:18600/', 'http://127.0.0.1:18600'],
-    ['a capitalised host', 'http://LOCALHOST:18600', 'http://127.0.0.1:18600'],
+    ['a capitalized host', 'http://LOCALHOST:18600', 'http://127.0.0.1:18600'],
     ['an /api/v1 suffix on the stored URL', 'http://127.0.0.1:18600/api/v1', 'http://127.0.0.1:18600'],
   ])('finds it through %s', (_why, storedUrl, entryUrl) => {
     setStoredServerUrl(storedUrl);

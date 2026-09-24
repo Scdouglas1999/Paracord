@@ -96,7 +96,7 @@ export function DiscoveryPage() {
     [],
   );
 
-  // Search fired a request on every keystroke with nothing cancelling the
+  // Search fired a request on every keystroke with nothing canceling the
   // previous one, so typing "gaming" issued six overlapping searches whose
   // responses could land out of order and leave the wrong results on screen.
   // Debounce keystrokes and abort the in-flight request when the query moves
@@ -388,7 +388,7 @@ function DiscoveryPreview({
       open
       onClose={onClose}
       size="md"
-      labelledBy={titleId}
+      labeledBy={titleId}
       describedBy={descriptionId}
       showCloseButton
       closeOnBackdrop={!joining}

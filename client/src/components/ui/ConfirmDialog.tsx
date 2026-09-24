@@ -29,7 +29,7 @@ export function ConfirmDialog() {
       // a channel, transfer ownership) could not be confirmed or dismissed
       // without closing settings first. Toasts stay above at z-[9999].
       zIndexClassName="z-[160]"
-      labelledBy="confirm-dialog-title"
+      labeledBy="confirm-dialog-title"
       describedBy={options?.description ? 'confirm-dialog-desc' : undefined}
     >
       {options && (

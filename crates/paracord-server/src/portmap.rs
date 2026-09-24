@@ -975,7 +975,7 @@ mod tests {
     }
 
     /// The renewal loop refreshes on its interval and stops the moment shutdown
-    /// is signalled — a task that outlives the process it maps for would keep a
+    /// is signaled — a task that outlives the process it maps for would keep a
     /// door open with nothing behind it.
     #[tokio::test]
     async fn renewal_refreshes_on_its_interval_and_stops_at_shutdown() {
@@ -1034,7 +1034,7 @@ mod tests {
     }
 
     #[test]
-    fn a_configured_lease_is_clamped_to_something_a_router_will_honour() {
+    fn a_configured_lease_is_clamped_to_something_a_router_will_honor() {
         assert_eq!(lease_from_seconds(3600), Duration::from_secs(3600));
         assert_eq!(lease_from_seconds(0), MIN_LEASE);
         assert_eq!(lease_from_seconds(5), MIN_LEASE);

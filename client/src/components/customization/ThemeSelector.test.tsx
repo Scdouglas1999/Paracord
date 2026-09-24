@@ -27,7 +27,7 @@ afterEach(() => {
   resetMotionSwitchForTests();
 });
 
-/** The base-colour presets, found by their hints so "Dusk" cannot collide with
+/** The base-color presets, found by their hints so "Dusk" cannot collide with
  *  the "Dusk sky" look. */
 const hearth = () => screen.getByRole('button', { name: /Warm brown, the default/ });
 const swatch = () => screen.getByRole('button', { name: 'Set accent Emerald' });
@@ -80,7 +80,7 @@ describe('ThemeSelector', () => {
     expect(screen.getByRole('button', { name: /Night/ })).toHaveAttribute('aria-pressed', 'false');
   });
 
-  it('leaves the base colour and the accent usable for a theme that is not a look', () => {
+  it('leaves the base color and the accent usable for a theme that is not a look', () => {
     render(<ThemeSelector currentTheme="dark" />);
 
     expect(hearth()).toBeEnabled();
@@ -89,7 +89,7 @@ describe('ThemeSelector', () => {
     expect(screen.queryByText(/brings its own colors/)).toBeNull();
   });
 
-  it('disables the base colour and the accent for a look, and says which look', () => {
+  it('disables the base color and the accent for a look, and says which look', () => {
     render(<ThemeSelector currentTheme="dusk" />);
 
     expect(hearth()).toBeDisabled();
@@ -114,7 +114,7 @@ describe('ThemeSelector', () => {
     expect(screen.getAllByText(/^Paper & ink brings its own colors\./)).toHaveLength(2);
   });
 
-  it('does not change the base colour while a look is active', () => {
+  it('does not change the base color while a look is active', () => {
     render(<ThemeSelector currentTheme="voices" />);
 
     // A disabled control cannot be clicked; the store is the proof.

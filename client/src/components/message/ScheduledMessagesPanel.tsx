@@ -14,7 +14,7 @@ import { Button } from '../ui/Button';
 
 const STATUS_SCHEDULED = 0;
 const STATUS_SENT = 1;
-const STATUS_CANCELLED = 2;
+const STATUS_CANCELED = 2;
 const STATUS_FAILED = 3;
 
 interface ScheduledMessagesPanelProps {
@@ -31,7 +31,7 @@ function statusLabel(status: number): string {
       return 'Scheduled';
     case STATUS_SENT:
       return 'Sent';
-    case STATUS_CANCELLED:
+    case STATUS_CANCELED:
       return 'Canceled';
     case STATUS_FAILED:
       return 'Failed';
@@ -59,25 +59,25 @@ export function ScheduledMessagesPanel({
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
+    let canceled = false;
     setLoading(true);
     setLoadError(null);
     channelApi
       .listScheduledMessages(channelId)
       .then(({ data }) => {
-        if (cancelled) return;
+        if (canceled) return;
         setItems(data);
         onCountChange?.(data.filter((m) => m.status === STATUS_SCHEDULED).length);
       })
       .catch((err) => {
-        if (cancelled) return;
+        if (canceled) return;
         setLoadError(extractApiError(err));
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!canceled) setLoading(false);
       });
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [channelId, onCountChange]);
 
@@ -178,7 +178,7 @@ export function ScheduledMessagesPanel({
     <Modal
       open
       onClose={onClose}
-      labelledBy="scheduled-messages-title"
+      labeledBy="scheduled-messages-title"
       size="auto"
       panelClassName="max-h-[min(86dvh,44rem)] w-[min(92vw,34rem)] overflow-auto"
     >

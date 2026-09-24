@@ -251,7 +251,7 @@ function OwnedAccountSetupPage() {
             </div>
 
             {/* A caution is a well carrying warning ink, never a tinted box
-                with a coloured border (spec §1.1, §1.6). */}
+                with a colored border (spec §1.1, §1.6). */}
             <div className="pc-well flex items-start gap-2.5 px-4 py-3 text-label text-accent-warning">
               <ShieldAlert size={16} className="mt-px shrink-0" />
               <span className="leading-relaxed">

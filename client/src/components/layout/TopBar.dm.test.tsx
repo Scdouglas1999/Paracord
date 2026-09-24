@@ -155,7 +155,7 @@ describe('TopBar DM voice calls', () => {
   });
 
   // The one list that survives §6.5: who a group message is addressed to, which
-  // is editable. It lives in the labelled overflow, never docked, and a
+  // is editable. It lives in the labeled overflow, never docked, and a
   // one-to-one has no such list — there is one other person and the header
   // strip already names them.
   it('offers the group message its people, from the overflow, and only there', async () => {

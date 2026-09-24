@@ -106,7 +106,7 @@ export function HomePageSettings({ widgets, onChange }: HomePageSettingsProps) {
               <Switch
                 checked={widget.enabled}
                 onChange={(next) => toggle(widget.id, next)}
-                labelledBy={`home-widget-${widget.id}`}
+                labeledBy={`home-widget-${widget.id}`}
               />
             </li>
           );

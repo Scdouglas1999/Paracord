@@ -27,9 +27,9 @@ export type AccentPreset =
 type ConnectionStatus = 'connected' | 'connecting' | 'reconnecting' | 'disconnected';
 
 /**
- * The base colour of the whole neutral ramp, as an oklch hue in degrees plus
+ * The base color of the whole neutral ramp, as an oklch hue in degrees plus
  * how much of it to take (tokens.css §1.0). Every ground, well, hairline, wash
- * and grey ink is written `oklch(L C var(--ui-hue))`, so this one number turns
+ * and gray ink is written `oklch(L C var(--ui-hue))`, so this one number turns
  * the interface from warm brown to slate to green without moving a single
  * lightness — which is why `npm run test:contrast` can prove it safe at every
  * setting rather than at the five we happened to name.

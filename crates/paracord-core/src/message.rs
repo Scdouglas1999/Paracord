@@ -570,8 +570,8 @@ impl PreparedMessageEdit {
             self.header.as_deref(),
             self.flags,
         );
-        if receipt.message_id == self.message_id && receipt.cancelled != 0 {
-            return Err(paracord_db::DbError::EditCancelled.into());
+        if receipt.message_id == self.message_id && receipt.canceled != 0 {
+            return Err(paracord_db::DbError::EditCanceled.into());
         }
         if receipt.message_id != self.message_id || receipt.request_hash != expected {
             return Err(CoreError::Conflict(

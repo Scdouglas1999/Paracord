@@ -21,7 +21,7 @@ describe('banner crop', () => {
     expect(rect.sy).toBeCloseTo(1000 / 3);
   });
 
-  it('builds a colour from the integer accent and rejects anything else', () => {
+  it('builds a color from the integer accent and rejects anything else', () => {
     expect(accentCssColor(0x336699)).toBe('#336699');
     expect(accentCssColor(0)).toBe('#000000');
     expect(accentCssColor(null)).toBeNull();

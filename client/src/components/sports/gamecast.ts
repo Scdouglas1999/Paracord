@@ -737,8 +737,8 @@ function cssHex(hex: string): string {
 /**
  * Paint for a team color that arrived as data. Ink is chalk on a dark fill
  * and the dark on-light ink on a light fill. When the other team's primary
- * is nearly the same, the alternate colour is used if it separates them.
- * A missing colour falls back to the neutral end-zone token.
+ * is nearly the same, the alternate color is used if it separates them.
+ * A missing color falls back to the neutral end-zone token.
  */
 export function teamPaint(
   team: { color?: string | null; alt_color?: string | null } | null | undefined,
@@ -758,7 +758,7 @@ export function teamPaint(
 
 export type PitchShapeName = 'circle' | 'square' | 'diamond' | 'triangle' | 'star' | 'ring';
 
-/** Result colour plus a shape, so the mark still reads without the colour. */
+/** Result color plus a shape, so the mark still reads without the color. */
 export function pitchMark(result: string | null | undefined): { fill: string; shape: PitchShapeName } {
   switch (result) {
     case 'ball': return { fill: 'var(--sports-pitch-ball)', shape: 'circle' };

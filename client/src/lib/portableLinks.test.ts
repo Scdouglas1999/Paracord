@@ -22,7 +22,7 @@ describe('portableLinks', () => {
     expect(decodePortableLink(uri)).toEqual({ serverUrl, inviteCode });
   });
 
-  it('recognises valid portable links', () => {
+  it('recognizes valid portable links', () => {
     expect(isPortableLink(encodePortableLink(serverUrl, inviteCode))).toBe(true);
     expect(isPortableLink(toPortableUri(serverUrl, inviteCode))).toBe(true);
   });

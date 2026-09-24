@@ -47,7 +47,7 @@ const MAX_SEQ_GAP: u16 = 3000;
 /// The bound mirrors the relay's own per-sender fan-out cache: a publisher's
 /// live SSRC set is one per (track, simulcast layer), well under ten in
 /// practice. Eviction is FIFO; an evicted SSRC that reappears is simply treated
-/// as a first arrival (no loss attributed), which is the same behaviour as the
+/// as a first arrival (no loss attributed), which is the same behavior as the
 /// stream genuinely restarting.
 pub(crate) const MAX_TRACKED_SSRCS_PER_PUBLISHER: usize = 32;
 
@@ -258,7 +258,7 @@ impl PublisherIngress {
         }
     }
 
-    /// Summarise the current window: `(goodput_kbps, loss_ratio, has_data)`.
+    /// Summarize the current window: `(goodput_kbps, loss_ratio, has_data)`.
     fn window_stats(&mut self, current_epoch: u64) -> (u32, f64, bool) {
         self.prune(current_epoch);
         let Some(front) = self.buckets.front() else {

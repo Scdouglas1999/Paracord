@@ -90,7 +90,7 @@ function hasFocusableDialogContainer(openingTag) {
     isForwardedAttr(openingTag, "tabIndex");
 }
 
-function literalAriaLabelledBy(openingTag) {
+function literalAriaLabeledBy(openingTag) {
   return openingTag.match(/\saria-labelledby\s*=\s*["']([^"']+)["']/)?.[1] ?? null;
 }
 
@@ -268,12 +268,12 @@ async function auditFile(filePath) {
         message: "aria-modal dialog is missing tabIndex={-1} for focus trapping",
       });
     }
-    const labelledBy = literalAriaLabelledBy(openingTag);
-    if (labelledBy && !hasElementId(source, labelledBy)) {
+    const labeledBy = literalAriaLabeledBy(openingTag);
+    if (labeledBy && !hasElementId(source, labeledBy)) {
       failures.push({
         filePath,
         line: lineNumberFor(source, match.index ?? 0),
-        message: `aria-labelledby references missing id "${labelledBy}"`,
+        message: `aria-labelledby references missing id "${labeledBy}"`,
       });
     }
   }

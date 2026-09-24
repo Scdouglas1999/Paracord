@@ -153,7 +153,7 @@ export function FileStorageSection({ guildId, canManage }: FileStorageSectionPro
   const quota = storageInfo?.quota;
   const usagePercent = quota && quota > 0 ? Math.min(100, (usage / quota) * 100) : 0;
   const overQuota = usagePercent >= 90;
-  // §9: colour is never the only cue — the numbers and the sentence below carry
+  // §9: color is never the only cue — the numbers and the sentence below carry
   // the same reading the meter does.
   const meterTone = overQuota
     ? 'bg-accent-danger'

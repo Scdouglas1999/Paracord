@@ -17,7 +17,7 @@ export function fromBase64(b64: string): Uint8Array {
 
 export function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   // Only hand back the underlying buffer when the view spans it exactly;
-  // otherwise a subarray/DataView would leak (or truncate) neighbouring bytes,
+  // otherwise a subarray/DataView would leak (or truncate) neighboring bytes,
   // so copy just the view's region.
   return bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength
     ? (bytes.buffer as ArrayBuffer)

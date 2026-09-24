@@ -134,12 +134,12 @@ function isClassList(value: string): boolean {
 }
 
 /**
- * One banned noun, in the only shape a reader would recognise as that word.
+ * One banned noun, in the only shape a reader would recognize as that word.
  *
  * An identifier wears the word too — `building.name`, `useRoomMenu`,
  * `./BuildingPlate`, `group/room`, `data-motion-shared="tokens-room"` — and
  * renaming identifiers was explicitly out of scope, so the match refuses any
- * neighbour that makes the word part of a longer name or a path: a letter, a
+ * neighbor that makes the word part of a longer name or a path: a letter, a
  * digit, `_`, `$`, `/`, `-`, or a `.` that is followed by more identifier. A
  * full stop that ends a sentence still counts, because "manage this building."
  * is the product saying it.
@@ -177,7 +177,7 @@ const PLACE_ALLOWED = [
   /or space\./i,
   /spacebar/i,
   /no spaces\)/i, // "Name (lowercase, no spaces)" — the character, not the place
-  /^space$/, // the key name, normalised for keybinds — lowercase, exactly
+  /^space$/, // the key name, normalized for keybinds — lowercase, exactly
 ];
 
 const GUILD_ALLOWED = [
@@ -224,7 +224,7 @@ const LIT = /(^|[^A-Za-z])(never lit|last lit|lit up|lights up|(channels?|rooms?
 /** "Dark · nobody in", "general is dark" — an empty channel is empty. */
 const DARK = /(^|[^A-Za-z])(Dark ·|is dark(?![A-Za-z]))/;
 
-/** The design-token page describing the styling itself, where dark is a colour. */
+/** The design-token page describing the styling itself, where dark is a color. */
 const DARK_ALLOWED = [/not light is dark, matte/];
 
 /**

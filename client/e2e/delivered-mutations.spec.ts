@@ -28,7 +28,7 @@ test('delivered DM edit without a send receipt survives reload with exactly one 
   const result = await page.evaluate(async () => {
     const f = window.mutationTest; f.setMutationNow(11_001); await f.service.drain();
     const receipt = (await f.service.snapshot()).receipts[0];
-    if (receipt.result.kind !== 'message') throw new Error('Missing edit acknowledgement');
+    if (receipt.result.kind !== 'message') throw new Error('Missing edit acknowledgment');
     return { plaintext: await f.bobDm.decrypt('dm', f.alicePeer, receipt.result.message.e2ee!, '100'), bundles: f.bundleCalls(),
       ownPlaintext: await f.aliceDm.decrypt('dm', f.bobPeer, receipt.result.message.e2ee!, '100') };
   });

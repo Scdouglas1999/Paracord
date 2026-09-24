@@ -1848,7 +1848,7 @@ class ConnectionManager {
           conn.pendingMessages = [];
           conn.sessionId = null; conn.sequence = null; conn.realtimeCursor = null;
           // RESUMED has no authoritative guild/channel projection. Re-identify
-          // after cancelling the old history before allowing replayed events.
+          // after canceling the old history before allowing replayed events.
           if (event === GatewayEvents.RESUMED) { this.reconcileHistory(conn); return false; }
         }
       } else {

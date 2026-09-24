@@ -34,7 +34,7 @@ describe('effectiveNotificationLevel', () => {
 });
 
 describe('messageAddressesReader', () => {
-  it('recognises a direct mention in either wire form', () => {
+  it('recognizes a direct mention in either wire form', () => {
     expect(messageAddressesReader({ content: 'hello <@42> there' }, '42')).toBe(true);
     expect(messageAddressesReader({ content: 'hello <@!42>' }, '42')).toBe(true);
   });

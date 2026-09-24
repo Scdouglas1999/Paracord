@@ -137,7 +137,7 @@ export async function collectUploadedDescriptors(
 /**
  * Move staged attachments onto a replacement queue entry.
  *
- * A cancelled delivery is replaced by a fresh draft with a new delivery nonce.
+ * A canceled delivery is replaced by a fresh draft with a new delivery nonce.
  * Its attachments are already accepted by the server, so only the records move;
  * losing them here would silently send the replacement without its files.
  */

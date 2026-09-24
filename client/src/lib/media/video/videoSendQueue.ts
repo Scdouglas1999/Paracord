@@ -1,5 +1,5 @@
 /**
- * One simulcast layer's outbound video, serialised and bounded.
+ * One simulcast layer's outbound video, serialized and bounded.
  *
  * A `VideoEncoder`'s output callback is synchronous and publishing a frame is
  * not: a keyframe is encrypted and then written to a **fresh WebTransport

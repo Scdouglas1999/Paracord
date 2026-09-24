@@ -80,11 +80,11 @@ function useServerStatus() {
     }
     const healthUrl = resolveServerRootUrl('/health');
 
-    let cancelled = false;
+    let canceled = false;
     fetch(healthUrl, { signal: AbortSignal.timeout(5_000) })
       .then((r) => r.json())
       .then((data) => {
-        if (cancelled) return;
+        if (canceled) return;
         if (data?.service === 'paracord' || data?.status === 'ok') {
           setStatus('ready');
         } else {
@@ -92,11 +92,11 @@ function useServerStatus() {
         }
       })
       .catch(() => {
-        if (!cancelled) setStatus('needed');
+        if (!canceled) setStatus('needed');
       });
 
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [status]);
 
@@ -348,7 +348,7 @@ function DeviceKeySignIn() {
 
 /**
  * Guard redirects that bounce between two screens would spin forever. Count
- * them across mounts so a ping-pong is recognised and stopped rather than run
+ * them across mounts so a ping-pong is recognized and stopped rather than run
  * silently at full speed.
  */
 let recentGuardRedirects: number[] = [];

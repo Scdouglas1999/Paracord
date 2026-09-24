@@ -7,7 +7,7 @@ function pixels(rgba: [number, number, number, number], count = 16): number[] {
 }
 
 describe('toneFromPixels', () => {
-  it('reads the hue of a coloured icon', () => {
+  it('reads the hue of a colored icon', () => {
     const red = toneFromPixels(pixels([220, 40, 40, 255]));
     expect(red).not.toBeNull();
     // OKLCH red sits near 25–30°.
@@ -25,7 +25,7 @@ describe('toneFromPixels', () => {
     expect(tone!.hue).toBeLessThan(280);
   });
 
-  it('has nothing to say about a grey or empty icon', () => {
+  it('has nothing to say about a gray or empty icon', () => {
     expect(toneFromPixels(pixels([128, 128, 128, 255]))).toBeNull();
     expect(toneFromPixels(pixels([220, 40, 40, 0]))).toBeNull();
     expect(toneFromPixels([])).toBeNull();
@@ -59,7 +59,7 @@ describe('coverRecipe', () => {
 });
 
 describe('coverStyle', () => {
-  it('hands the stylesheet numbers, never a colour', () => {
+  it('hands the stylesheet numbers, never a color', () => {
     const style = coverStyle(coverRecipe('7', { hue: 350, chroma: 0.1 }));
     for (const value of Object.values(style)) {
       expect(value).not.toMatch(/#|rgb|hsl|oklch/);

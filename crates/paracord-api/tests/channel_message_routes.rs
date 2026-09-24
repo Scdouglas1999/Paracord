@@ -1023,7 +1023,7 @@ async fn cross_channel_reaction_write_is_rejected() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn moderator_edit_emits_edited_mod_log_entry() -> anyhow::Result<()> {
-    // A moderator edit must produce a mod-log entry labelled as an edit, not a
+    // A moderator edit must produce a mod-log entry labeled as an edit, not a
     // (copy-pasted) deletion.
     let ctx = TestContext::new().await?;
     let guild_id = create_guild(&ctx, "Mod Log Edit Guild").await?;

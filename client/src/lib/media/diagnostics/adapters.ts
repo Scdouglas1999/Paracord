@@ -44,7 +44,7 @@ export interface TestToneOutcome {
   /**
    * Whether the tone was actually routed to the selected output device. False
    * when the platform cannot steer audio output, which is reported rather than
-   * silently pretending the selection was honoured.
+   * silently pretending the selection was honored.
    */
   routedToSelectedDevice: boolean;
 }
@@ -71,7 +71,7 @@ export type TransportFailure =
 export interface TransportProbeOutcome {
   /** A QUIC/WebTransport session reached the media endpoint and became ready. */
   ok: boolean;
-  /** Milliseconds from dialling to session ready. */
+  /** Milliseconds from dialing to session ready. */
   rttMs: number | null;
   /** The peer accepted a stream on the established session. */
   streamOpened: boolean;

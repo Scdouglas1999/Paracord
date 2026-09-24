@@ -174,7 +174,7 @@ does not exist, so failures rendered in inherited ink. They are
 ### Pins, threads, search, members
 
 They are contextual plates on the gutter beside the channel, mounted only when
-open. Nothing about their behaviour changed.
+open. Nothing about their behavior changed.
 
 ---
 

@@ -4,7 +4,7 @@
 //! refuses every request (see [`super::auth::SETUP_REQUIRED_MESSAGE`]) and the
 //! single account-creating path is [`claim_instance`], which requires the
 //! one-time bootstrap token the server printed on startup. That replaces the
-//! old behaviour in which whoever reached a freshly exposed server first became
+//! old behavior in which whoever reached a freshly exposed server first became
 //! its administrator without being told so.
 //!
 //! Nothing here derives setup state from the user count or from a config file:

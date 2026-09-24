@@ -35,7 +35,7 @@ pub enum CaptureError {
     Resampler(String),
 }
 
-/// Enumerate microphones the way a person recognises them.
+/// Enumerate microphones the way a person recognizes them.
 ///
 /// Delegates to [`devices::list_devices`], which asks the sound server for real
 /// device names and stable node ids and only falls back to raw cpal PCM names

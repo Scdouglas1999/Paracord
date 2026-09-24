@@ -78,7 +78,7 @@ describe('Coming up, across the servers', () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
-  it('drops cancelled, completed and finished events', async () => {
+  it('drops canceled, completed and finished events', async () => {
     request.mockResolvedValue({
       data: [
         event({ id: 'cancelled', status: 4 }),

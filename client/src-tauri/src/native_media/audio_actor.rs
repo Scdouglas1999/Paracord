@@ -2,7 +2,7 @@
 //!
 //! `cpal::Stream` is `!Send`/`!Sync` as a cross-platform precaution, and on
 //! macOS CoreAudio a stream must be created, used, *and dropped* on the same
-//! thread — dropping it on another thread is undefined behaviour. The rest of
+//! thread — dropping it on another thread is undefined behavior. The rest of
 //! the native media session is driven from tokio worker threads and is moved
 //! between them freely, so the cpal-backed [`AudioCapture`]/[`AudioPlayback`]
 //! must not live directly inside `NativeMediaSession`.

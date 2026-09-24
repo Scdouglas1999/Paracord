@@ -69,7 +69,7 @@ pub struct TransferState {
     pub total_size: u64,
     pub bytes_received: u64,
     pub temp_path: PathBuf,
-    pub cancelled: bool,
+    pub canceled: bool,
 }
 
 /// Manages in-progress transfers for progress tracking, cancellation, and resume.
@@ -116,17 +116,17 @@ impl TransferTracker {
 
     pub fn cancel(&self, transfer_id: &str) -> bool {
         if let Some(mut state) = self.transfers.get_mut(transfer_id) {
-            state.cancelled = true;
+            state.canceled = true;
             true
         } else {
             false
         }
     }
 
-    pub fn is_cancelled(&self, transfer_id: &str) -> bool {
+    pub fn is_canceled(&self, transfer_id: &str) -> bool {
         self.transfers
             .get(transfer_id)
-            .map(|s| s.cancelled)
+            .map(|s| s.canceled)
             .unwrap_or(false)
     }
 
@@ -301,7 +301,7 @@ pub enum FileTransferError {
     #[error("transfer rejected: {0}")]
     Rejected(String),
     #[error("transfer canceled")]
-    Cancelled,
+    Canceled,
     #[error("file too large: {size} bytes (max {MAX_FILE_SIZE})")]
     FileTooLarge { size: u64 },
     #[error("protocol error: {0}")]
@@ -403,7 +403,7 @@ async fn handle_upload_stream_inner(
         total_size: claims.fsize,
         bytes_received: 0,
         temp_path,
-        cancelled: false,
+        canceled: false,
     })?;
 
     // 3. Handle resume
@@ -448,14 +448,14 @@ async fn handle_upload_stream_inner(
 
     // 7. Read data chunks until EndOfData
     loop {
-        if tracker.is_cancelled(&transfer_id) {
+        if tracker.is_canceled(&transfer_id) {
             let cancel = StreamFrame::Control(ControlMessage::FileTransferCancel {
                 transfer_id: transfer_id.clone(),
             });
             let _ = send.write_all(&cancel.encode()?).await;
             drop(file);
             let _ = partial_mgr.remove(&transfer_id).await;
-            return Err(FileTransferError::Cancelled);
+            return Err(FileTransferError::Canceled);
         }
 
         // Init, data and EndOfData may arrive in one QUIC read. Drain complete
@@ -529,7 +529,7 @@ async fn handle_upload_stream_inner(
                 StreamFrame::Control(ControlMessage::FileTransferCancel { .. }) => {
                     drop(file);
                     let _ = partial_mgr.remove(&transfer_id).await;
-                    return Err(FileTransferError::Cancelled);
+                    return Err(FileTransferError::Canceled);
                 }
                 _ => {
                     // Ignore unexpected control messages
@@ -719,7 +719,7 @@ mod tests {
             total_size: 1000,
             bytes_received: 0,
             temp_path: PathBuf::from("/tmp/t1.part"),
-            cancelled: false,
+            canceled: false,
         };
         tracker.insert(state);
         assert_eq!(tracker.get_bytes_received("t1"), Some(0));
@@ -727,9 +727,9 @@ mod tests {
         tracker.update_bytes_received("t1", 500);
         assert_eq!(tracker.get_bytes_received("t1"), Some(500));
 
-        assert!(!tracker.is_cancelled("t1"));
+        assert!(!tracker.is_canceled("t1"));
         assert!(tracker.cancel("t1"));
-        assert!(tracker.is_cancelled("t1"));
+        assert!(tracker.is_canceled("t1"));
 
         let removed = tracker.remove("t1");
         assert!(removed.is_some());
@@ -1011,7 +1011,7 @@ mod tests {
                 total_size: 6,
                 bytes_received: 3,
                 temp_path: mgr.temp_path("busy").unwrap(),
-                cancelled: false,
+                canceled: false,
             })
             .unwrap();
         let (result, frames) =

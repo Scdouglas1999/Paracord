@@ -726,7 +726,7 @@ async fn verify_transport_request(
     //     safe because `public_url` is *our own* configuration, not peer input:
     //     the set of accepted destinations stays a fixed, operator-declared set
     //     of names for this server, which is exactly what makes the binding a
-    //     misdirection defence. See docs/known-limitations.md ("Federation").
+    //     misdirection defense. See docs/known-limitations.md ("Federation").
     let endpoint_host = state
         .config
         .public_url
@@ -1198,7 +1198,7 @@ async fn ingest_verified_payload(
             }
             other => {
                 // Unknown/unhandled federated event types have no defined client
-                // handling. Do NOT globally fan them out: the previous behaviour
+                // handling. Do NOT globally fan them out: the previous behavior
                 // dispatched `FEDERATION_<TYPE>` with peer-controlled `content` and
                 // a `None` guild target, which is a global broadcast to every
                 // connected session and lets a trusted peer push arbitrary JSON to
@@ -2230,7 +2230,7 @@ async fn ensure_federated_space_exists(
 ///   guild in (`PARACORD_FEDERATION_ALLOWED_GUILD_IDS=*`), because a freshly
 ///   generated snowflake can never appear on an explicit allowlist.
 ///
-/// That is the documented default-deny behaviour.
+/// That is the documented default-deny behavior.
 async fn ensure_federated_space_allowed(
     state: &AppState,
     payload: &FederationEventEnvelope,

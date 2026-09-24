@@ -506,10 +506,10 @@ fn base_occupied(situation: &Value, name: &str) -> bool {
     }
 }
 
-/// A team colour as lowercase `rrggbb`. ESPN sends bare hex strings; a leading
-/// '#' is tolerated and stripped. Anything else — a colour name, the wrong
+/// A team color as lowercase `rrggbb`. ESPN sends bare hex strings; a leading
+/// '#' is tolerated and stripped. Anything else — a color name, the wrong
 /// number of digits, a non-hex digit, a number instead of a string — is no
-/// colour at all, so the field reads null rather than something unusable.
+/// color at all, so the field reads null rather than something unusable.
 /// An id stored as a string, a number, or an object with `id` / `playerId`.
 pub(crate) fn loose_id(value: &Value) -> Option<String> {
     match value {
@@ -598,7 +598,7 @@ mod tests {
         assert_eq!(game.broadcasts, ["FOX", "NFL+"]);
         assert_eq!(game.home.color.as_deref(), Some("a71930"));
         assert_eq!(game.home.alt_color.as_deref(), Some("000000"));
-        assert!(game.away.color.is_none(), "the feed sent CAR no colour");
+        assert!(game.away.color.is_none(), "the feed sent CAR no color");
         assert!(game.away.alt_color.is_none());
         assert_eq!(game.home.logo, "");
         assert_eq!(format_rfc3339(game.start), "2026-09-20T17:00:00Z");
@@ -720,7 +720,7 @@ mod tests {
         );
         assert_eq!(teams[1].color.as_deref(), Some("e31837"));
         assert_eq!(teams[1].alt_color.as_deref(), Some("ffb612"));
-        assert!(teams[0].color.is_none(), "the feed sent BUF no colour");
+        assert!(teams[0].color.is_none(), "the feed sent BUF no color");
         assert!(teams[0].alt_color.is_none());
         let wire = serde_json::to_value(&teams[1]).unwrap();
         assert_eq!(wire["color"], "e31837");
@@ -750,7 +750,7 @@ mod tests {
     }
 
     #[test]
-    fn pregame_scores_are_serialised_as_the_feed_sent_them() {
+    fn pregame_scores_are_serialized_as_the_feed_sent_them() {
         let raw = r#"{
           "events": [{
             "id": "200",
@@ -773,7 +773,7 @@ mod tests {
         assert_eq!(value["away"]["score"], 7);
     }
 
-    /// One board game whose home team carries the two raw colour values
+    /// One board game whose home team carries the two raw color values
     /// verbatim; `color` and `alt` are JSON literals, not strings.
     fn game_with_colors(color: &str, alt: &str) -> Game {
         let raw = format!(
@@ -786,7 +786,7 @@ mod tests {
     }
 
     #[test]
-    fn a_colour_that_is_not_six_hex_digits_is_null() {
+    fn a_color_that_is_not_six_hex_digits_is_null() {
         for raw in [
             r#""red""#,
             r#""12345""#,
@@ -817,7 +817,7 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_colour_field_is_null() {
+    fn a_missing_color_field_is_null() {
         let game = parse(
             r#"{ "events": [{ "id": "1", "competitions": [{ "competitors": [
               { "homeAway": "home", "team": { "id": "12", "abbreviation": "KC" } }
@@ -840,7 +840,7 @@ mod tests {
         assert!(value["away"]["color"].is_null());
         assert!(value["away"]["alt_color"].is_null());
         // serde_json keeps an object's keys sorted, so this is the set of
-        // colour keys a team carries, not their order.
+        // color keys a team carries, not their order.
         let keys: Vec<&str> = value["home"]
             .as_object()
             .unwrap()

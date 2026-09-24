@@ -143,7 +143,7 @@ export function setStreetPaintedForTests(painted: boolean): void {
  * twice. What WP9c owns is the other half of that sentence: a plate joining a
  * street that is ALREADY THERE.
  *
- * So the question a mounting plate asks is about its neighbours, not the
+ * So the question a mounting plate asks is about its neighbors, not the
  * clock: does anything beside me in this container predate this commit? The
  * mark lands two frames after mount, so plates that arrive together never see
  * each other and none of them settles; one that arrives later sees them all

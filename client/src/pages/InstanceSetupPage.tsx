@@ -328,11 +328,11 @@ export function InstanceSetupPage() {
   // An already-claimed server must not keep showing a claim form: it would
   // invite someone to type a token that can never work again.
   useEffect(() => {
-    let cancelled = false;
+    let canceled = false;
     instanceApi
       .getSetupStatus()
       .then(({ data }) => {
-        if (cancelled) return;
+        if (canceled) return;
         if (!data.setup_required) {
           navigate('/login', { replace: true });
           return;
@@ -341,7 +341,7 @@ export function InstanceSetupPage() {
         setChecking(false);
       })
       .catch((err: unknown) => {
-        if (cancelled) return;
+        if (canceled) return;
         setStatusError(
           extractApiError(err) ||
             'Could not reach this instance to check whether it has been set up. Check that it is running and reload.',
@@ -349,17 +349,17 @@ export function InstanceSetupPage() {
         setChecking(false);
       });
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [navigate]);
 
   // The password rules come from the same server that enforces them.
   useEffect(() => {
-    let cancelled = false;
+    let canceled = false;
     instanceApi
       .getPasswordRequirements()
       .then(({ data }) => {
-        if (!cancelled) setRequirements(data);
+        if (!canceled) setRequirements(data);
       })
       .catch(() => {
         // The hint below still describes the rules this build ships with; a
@@ -368,14 +368,14 @@ export function InstanceSetupPage() {
     authApi
       .options()
       .then(({ data }) => {
-        if (!cancelled) setRequireEmail(data.require_email);
+        if (!canceled) setRequireEmail(data.require_email);
       })
       .catch(() => {
         // Conservative default: email stays optional in the UI and the server
         // decides on submit.
       });
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, []);
 
@@ -741,7 +741,7 @@ export function InstanceSetupPage() {
                     Who can create an account
                   </span>
                   <ChoiceCards
-                    labelledBy={accessLabelId}
+                    labeledBy={accessLabelId}
                     options={REGISTRATION_CHOICES}
                     value={draft.registrationMode}
                     onChange={(next) => edit('registrationMode', next)}

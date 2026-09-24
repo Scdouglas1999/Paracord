@@ -45,7 +45,7 @@ import { registerSessionReset } from './sessionReset';
 // brightens with the voice. The level is deliberately not store state — it
 // changes fifty times a second, and a store write would re-render the room to
 // move a glow. It goes straight to the engine's own rAF loop instead.
-import { clearVoiceLevels, levelFromAnalyser, levelFromDbov, publishVoiceLevels } from '../lib/motion/voiceLevel';
+import { clearVoiceLevels, levelFromAnalyzer, levelFromDbov, publishVoiceLevels } from '../lib/motion/voiceLevel';
 const SYSTEM_AUDIO_PRIVACY_ACK_KEY = 'paracord:system-audio-privacy-ack';
 
 function hasAcknowledgedSystemAudioPrivacyWarning(): boolean {
@@ -53,15 +53,15 @@ function hasAcknowledgedSystemAudioPrivacyWarning(): boolean {
   return localStorage.getItem(SYSTEM_AUDIO_PRIVACY_ACK_KEY) === '1';
 }
 
-function persistSystemAudioPrivacyWarningAcknowledgement(): void {
+function persistSystemAudioPrivacyWarningAcknowledgment(): void {
   if (typeof window === 'undefined') return;
   localStorage.setItem(SYSTEM_AUDIO_PRIVACY_ACK_KEY, '1');
 }
 
 const attachedRemoteAudioElements = new Map<string, HTMLAudioElement>();
-let localMicAnalyserInterval: ReturnType<typeof setInterval> | null = null;
-let localMicAnalyserCleanup: (() => Promise<void>) | null = null;
-let localMicAnalyserRoom: Room | null = null;
+let localMicAnalyzerInterval: ReturnType<typeof setInterval> | null = null;
+let localMicAnalyzerCleanup: (() => Promise<void>) | null = null;
+let localMicAnalyzerRoom: Room | null = null;
 let localMicSpeakingFallback = false;
 let localMicSmoothedVolume = 0;
 let localMicUiLastUpdateAt = 0;
@@ -349,18 +349,18 @@ function detachAllAttachedRemoteAudio(): void {
   attachedRemoteAudioElements.clear();
 }
 
-function stopLocalMicAnalyser(resetSpeaking = true): void {
-  if (localMicAnalyserInterval) {
-    clearInterval(localMicAnalyserInterval);
-    localMicAnalyserInterval = null;
+function stopLocalMicAnalyzer(resetSpeaking = true): void {
+  if (localMicAnalyzerInterval) {
+    clearInterval(localMicAnalyzerInterval);
+    localMicAnalyzerInterval = null;
   }
-  if (localMicAnalyserCleanup) {
-    void localMicAnalyserCleanup().catch(() => {
-      // ignore analyser cleanup errors
+  if (localMicAnalyzerCleanup) {
+    void localMicAnalyzerCleanup().catch(() => {
+      // ignore analyzer cleanup errors
     });
-    localMicAnalyserCleanup = null;
+    localMicAnalyzerCleanup = null;
   }
-  localMicAnalyserRoom = null;
+  localMicAnalyzerRoom = null;
   localMicSpeakingFallback = false;
   localMicSmoothedVolume = 0;
   localMicUiLastUpdateAt = 0;
@@ -587,9 +587,9 @@ function refreshAudioCodecCompatibility(room: Room, reason = 'refresh'): void {
   });
 }
 
-function startLocalMicAnalyser(room: Room): void {
+function startLocalMicAnalyzer(room: Room): void {
   if (!isCurrentRoom(room)) return;
-  stopLocalMicAnalyser(false);
+  stopLocalMicAnalyzer(false);
   const localUserId = currentCallUser()?.id;
   if (!localUserId) return;
 
@@ -608,10 +608,10 @@ function startLocalMicAnalyser(room: Room): void {
       cloneTrack: true,
       smoothingTimeConstant: 0.45,
     });
-    localMicAnalyserRoom = room;
-    localMicAnalyserCleanup = cleanup;
-    localMicAnalyserInterval = setInterval(() => {
-      if (localMicAnalyserRoom !== room) return;
+    localMicAnalyzerRoom = room;
+    localMicAnalyzerCleanup = cleanup;
+    localMicAnalyzerInterval = setInterval(() => {
+      if (localMicAnalyzerRoom !== room) return;
       const state = useVoiceStore.getState();
       const micPublication = room.localParticipant.getTrackPublication(livekit().Track.Source.Microphone);
       const locallyMuted =
@@ -631,12 +631,12 @@ function startLocalMicAnalyser(room: Room): void {
       });
       localMicSpeakingFallback = speaking;
       setSpeakingForIdentity(localUserId, speaking);
-      // Your own ring answers your own microphone: the analyser knows how loud
+      // Your own ring answers your own microphone: the analyzer knows how loud
       // you are ~200ms before the server's speaker report does, and this is the
       // one ring on screen whose latency a person can feel.
       publishVoiceLevels(
         'self',
-        new Map(speaking ? [[localUserId, levelFromAnalyser(localMicSmoothedVolume)]] : []),
+        new Map(speaking ? [[localUserId, levelFromAnalyzer(localMicSmoothedVolume)]] : []),
       );
       const now = Date.now();
       if (now - localMicUiLastUpdateAt >= 200) {
@@ -649,7 +649,7 @@ function startLocalMicAnalyser(room: Room): void {
       }
     }, 100);
   } catch (err) {
-    console.warn('[voice] Local mic analyser unavailable:', err);
+    console.warn('[voice] Local mic analyzer unavailable:', err);
     useVoiceStore.setState({
       micInputActive: false,
       micInputLevel: 0,
@@ -1272,7 +1272,7 @@ function detachRemoteAudioTrack(
 function setSpeakingForIdentity(identity: string, speaking: boolean): void {
   if (!identity) return;
   useVoiceStore.setState((state) => {
-    // This runs on a 100ms analyser tick; bail without publishing a new Set
+    // This runs on a 100ms analyzer tick; bail without publishing a new Set
     // when membership is unchanged so subscribers don't re-render 10x/sec.
     if (state.speakingUsers.has(identity) === speaking) return state;
     const next = new Set(state.speakingUsers);
@@ -1534,7 +1534,7 @@ function registerRoomListeners(
       if (speaker.identity) levels.set(speaker.identity, speaker.audioLevel ?? 0);
     }
     publishVoiceLevels('room', levels);
-    // Fallback to local analyser for self speaking so the local ring still
+    // Fallback to local analyzer for self speaking so the local ring still
     // reflects microphone activity even when server speaker updates lag.
     if (localUserId && localMicSpeakingFallback) {
       speakingIds.add(localUserId);
@@ -1566,7 +1566,7 @@ function registerRoomListeners(
   };
 
   const onLocalTrackPublished = () => {
-    startLocalMicAnalyser(room);
+    startLocalMicAnalyzer(room);
     startLocalAudioUplinkMonitor(room);
   };
 
@@ -1575,7 +1575,7 @@ function registerRoomListeners(
     _participant: LocalParticipant
   ) => {
     if (publication.source === livekit().Track.Source.Microphone) {
-      stopLocalMicAnalyser();
+      stopLocalMicAnalyzer();
       stopLocalAudioUplinkMonitor();
     }
     // When the local camera track is unpublished, clear selfVideo.
@@ -1835,7 +1835,7 @@ function registerRoomListeners(
   const onDisconnectedEvent = (reason?: DisconnectReason) => {
     logVoiceDiagnostic('[voice] LiveKit disconnected', { reason: reason ?? 'unknown' });
     stopRemoteAudioReconcile();
-    stopLocalMicAnalyser();
+    stopLocalMicAnalyzer();
     stopLocalAudioUplinkMonitor();
     unbindParticipantSpeaking(room.localParticipant);
     for (const participant of room.remoteParticipants.values()) {
@@ -2806,7 +2806,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
     if (owner) await closeCall(owner, reason || 'Voice connection lost');
   },
   acknowledgeSystemAudioPrivacyWarning: () => {
-    persistSystemAudioPrivacyWarningAcknowledgement();
+    persistSystemAudioPrivacyWarningAcknowledgment();
     set({ showSystemAudioPrivacyWarning: false });
   },
 
@@ -3082,7 +3082,7 @@ function closeCall(owner: CallSession, error?: string): Promise<void> {
     // anybody is. Straight back to resting, not a release (§0: a glow asserts
     // something is true right now).
     clearVoiceLevels();
-    stopLocalMicAnalyser();
+    stopLocalMicAnalyzer();
     stopLocalAudioUplinkMonitor();
     stopRemoteAudioReconcile();
     detachAllAttachedRemoteAudio();
@@ -3151,7 +3151,7 @@ function ownLivekitRoom(owner: CallSession, room: Room): () => Promise<void> {
   return owner.own(async () => {
     lease.active = false;
     removeListeners();
-    if (localMicAnalyserRoom === room) stopLocalMicAnalyser();
+    if (localMicAnalyzerRoom === room) stopLocalMicAnalyzer();
     if (localAudioUplinkMonitorRoom === room) stopLocalAudioUplinkMonitor();
     if (remoteAudioReconcileRoom === room) stopRemoteAudioReconcile();
     for (const publication of room.localParticipant.trackPublications.values()) publication.track?.stop();
@@ -3185,7 +3185,7 @@ function bindEngine(owner: CallSession, engine: MediaEngine): void {
     publishVoiceLevels('room', levels);
   }));
   // The mic meter and the "is my microphone working" readout, on the native
-  // path. They used to be written only by `startLocalMicAnalyser`, which reads
+  // path. They used to be written only by `startLocalMicAnalyzer`, which reads
   // LiveKit's `room.localParticipant` — an object the native engines do not
   // have — so on the shipping transport the bar sat at zero for the whole call
   // and the readout had nothing behind it.
@@ -3199,7 +3199,7 @@ function bindEngine(owner: CallSession, engine: MediaEngine): void {
     });
   }));
   engine.onTransportLost(owner.guard(reason => { void closeCall(owner, reason); }));
-  // A media connection that has dropped is being dialled back, and until it is
+  // A media connection that has dropped is being dialed back, and until it is
   // back nobody in the room can hear this client and this client can hear
   // nobody. The Stage already has words and a dim for that state (§5.1) — it
   // was simply never told. Without this the call went on presenting itself as

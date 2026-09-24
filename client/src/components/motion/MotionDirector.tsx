@@ -151,11 +151,11 @@ function useConnection() {
   const status = useUIStore((state) => state.connectionStatus);
 
   useEffect(() => {
-    let cancelled = false;
+    let canceled = false;
     let timer: number | null = null;
 
     const look = () => {
-      if (cancelled) return;
+      if (canceled) return;
       const edge = outageTracker.observe({ connected: status === 'connected', nowMs: Date.now() });
       if (edge === 'dim') dimBuilding();
       else if (edge === 'relight') void relightBuilding();
@@ -167,7 +167,7 @@ function useConnection() {
     if (status !== 'connected') timer = window.setTimeout(look, OUTAGE_GRACE_MS + 20);
 
     return () => {
-      cancelled = true;
+      canceled = true;
       if (timer != null) clearTimeout(timer);
     };
   }, [status]);

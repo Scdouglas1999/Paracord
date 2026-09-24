@@ -76,7 +76,7 @@ const OCCLUSION_INSET = 4;
 
 /**
  * True when `el` is a floating overlay that may hide a Linux underlay surface
- * (only when it also covers the tile centre — see {@link sampleTileVisibility}).
+ * (only when it also covers the tile center — see {@link sampleTileVisibility}).
  *
  * Stage chrome (voice control bar, side panels) is excluded — underlay
  * composites that ABOVE the video. Ephemeral hover chrome (`role="tooltip"`)
@@ -111,7 +111,7 @@ export function isUnderlayOccluder(el: Element, boundary: Element): boolean {
 }
 
 /**
- * Occlusion test (spec §3.6): sample `elementFromPoint` at the tile centre and
+ * Occlusion test (spec §3.6): sample `elementFromPoint` at the tile center and
  * four inset corners. If a FOREIGN element is topmost at any sample, the tile is
  * occluded — return `false` (not visible). This deterministically hides the
  * native surface behind any modal, popover, or context menu drawn over the video
@@ -140,7 +140,7 @@ export function isUnderlayOccluder(el: Element, boundary: Element): boolean {
  * does not blank the stream.
  *
  * `centerOnlyOcclusion` (underlay): a foreign occluder only hides the surface
- * when it covers the tile *centre*. Corner-only hits from a device picker /
+ * when it covers the tile *center*. Corner-only hits from a device picker /
  * quality menu / tooltip must keep the GL surface live — blanking the whole
  * tile for a small bottom menu was the 2026-07-12 black-stream regression.
  *

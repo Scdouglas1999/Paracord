@@ -110,9 +110,9 @@ pub enum DbError {
     #[error("This message was already delivered and has since been deleted.")]
     DeliveryAlreadyDeleted,
     #[error("This message delivery was canceled before it was created.")]
-    DeliveryCancelled,
+    DeliveryCanceled,
     #[error("This message edit was canceled before it committed.")]
-    EditCancelled,
+    EditCanceled,
     /// A per-resource limit was reached (e.g. the maximum number of pinned
     /// messages in a channel). The API layer maps this to HTTP 409 Conflict.
     #[error("limit reached: {0}")]
@@ -428,7 +428,7 @@ pub async fn run_migrations_for_engine(
 
 /// Take a self-consistent snapshot of a SQLite database into `dest_path`.
 ///
-/// Goes through the normal pool builder, so the snapshot honours `PRAGMA key`
+/// Goes through the normal pool builder, so the snapshot honors `PRAGMA key`
 /// and therefore works for SQLCipher-encrypted databases -- opening the file
 /// with a plain unkeyed SQLite handle just reports "file is not a database".
 /// `VACUUM INTO` also produces a coherent file while the database is being
@@ -703,7 +703,7 @@ mod tests {
             assert_eq!(parsed, expected, "{text:?} decoded to the wrong instant");
         }
 
-        // A non-UTC offset must be honoured, not dropped — dropping it would
+        // A non-UTC offset must be honored, not dropped — dropping it would
         // silently shift the instant by the offset instead of failing.
         assert_eq!(
             datetime_from_db_text("2026-07-25 15:26:54-05").unwrap(),

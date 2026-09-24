@@ -34,8 +34,8 @@ export function InvitePage() {
   // Most servers ask a newcomer for nothing, and then this page asks for
   // nothing: no box to tick, no answers to give. When the owner HAS turned the
   // gate on, the preview says so (`join_gate`) and carries the questions, so
-  // they can be shown rather than guessed at. An acknowledgement that arrives
-  // already ticked is not an acknowledgement, so it starts empty.
+  // they can be shown rather than guessed at. An acknowledgment that arrives
+  // already ticked is not an acknowledgment, so it starts empty.
   const [verificationAck, setVerificationAck] = useState(false);
   const [verificationAnswers, setVerificationAnswers] = useState<string[]>([]);
   const [searchParams] = useSearchParams();
@@ -97,7 +97,7 @@ export function InvitePage() {
   //
   // It waits for the realtime connection. A brand-new session learns which
   // database history it is talking to when that connection comes up, and any
-  // action begun before then is cancelled on purpose ("Database history
+  // action begun before then is canceled on purpose ("Database history
   // changed…") — which is what a join fired the instant sign-up finished got.
   const cameBackToJoin = searchParams.get('joining') === '1';
   const connected = useUIStore((state) => state.connectionStatus) === 'connected';

@@ -101,7 +101,7 @@ export function scoreUpdateHref(guildId: string, game: SportsGame | null): strin
   return `/app/guilds/${guildId}/sports/${game.league_path}/${game.id}`;
 }
 
-/** Lead is the team named first. Real teams supply the logo and the colour. */
+/** Lead is the team named first. Real teams supply the logo and the color. */
 export function resolveScoreSides(game: SportsGame | null, update: ScoreUpdate): { lead: SportsTeam; other: SportsTeam } {
   if (game && sameTeam(game.home, update.leadName)) return { lead: game.home, other: game.away };
   if (game && sameTeam(game.away, update.leadName)) return { lead: game.away, other: game.home };

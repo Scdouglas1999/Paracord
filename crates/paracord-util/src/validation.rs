@@ -515,7 +515,7 @@ mod tests {
 /// `<details ontoggle=`, `<body onpageshow=` all sail straight through — and
 /// eight copies of exactly that denylist had been pasted across the route
 /// modules under this same function name, so callers could not tell which
-/// behaviour they were getting. `<` and `>` cannot open a tag, which closes the
+/// behavior they were getting. `<` and `>` cannot open a tag, which closes the
 /// entire tag-injection class for these fields. `javascript:` stays rejected for
 /// consumers that place a value directly into an `href`/`src`.
 ///

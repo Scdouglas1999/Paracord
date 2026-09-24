@@ -359,7 +359,7 @@ export interface SenderKeyAdoption {
  * `AccountVault.transact` takes an exclusive `navigator.locks` lease. Verifying
  * from inside a transaction therefore waits on a lock the caller is already
  * holding, and deadlocks — silently, with the conversation stuck on a spinner
- * and the account's enrolment never completing. Splitting verification from the
+ * and the account's enrollment never completing. Splitting verification from the
  * write is what keeps that impossible rather than merely avoided.
  *
  * `currentMembers` is the roster this account can see. A key minted for a
@@ -506,8 +506,8 @@ export async function openGroupMessage(
     || typeof parsed.members !== 'string' || typeof parsed.sig !== 'string') {
     throw new GroupE2eeError('A group message header is malformed.');
   }
-  // Only the five fields below are canonicalised into the signature and the
-  // AAD, so an unrecognised sixth would ride along unauthenticated — invisible
+  // Only the five fields below are canonicalized into the signature and the
+  // AAD, so an unrecognized sixth would ride along unauthenticated — invisible
   // to this verifier and available to anything downstream that reads the raw
   // header. The header is exactly these keys or it is not a header.
   const keys = Object.keys(parsed).sort();

@@ -276,12 +276,12 @@ async fn create_message_with_delivery_typed(
         .fetch_optional(&mut *tx)
         .await?;
         if claimed.is_none() {
-            let (previous_id, cancelled): (i64, i64) = sqlx::query_as(
-                "SELECT message_id, CASE WHEN cancelled THEN 1 ELSE 0 END FROM message_delivery_receipts WHERE channel_id = $1 AND author_id = $2 AND nonce = $3",
+            let (previous_id, canceled): (i64, i64) = sqlx::query_as(
+                "SELECT message_id, CASE WHEN canceled THEN 1 ELSE 0 END FROM message_delivery_receipts WHERE channel_id = $1 AND author_id = $2 AND nonce = $3",
             ).bind(channel_id).bind(author_id).bind(key).fetch_one(&mut *tx).await?;
-            if cancelled != 0 {
+            if canceled != 0 {
                 tx.commit().await?;
-                return Err(DbError::DeliveryCancelled);
+                return Err(DbError::DeliveryCanceled);
             }
             let existing = sqlx::query_as::<_, MessageRow>(
                 "SELECT id, channel_id, author_id, content, nonce, delivery_nonce, message_type, flags,
@@ -345,7 +345,7 @@ async fn create_message_with_delivery_typed(
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum DeliveryResolution {
-    Cancelled,
+    Canceled,
     Delivered(i64),
     Deleted(i64),
 }
@@ -362,16 +362,21 @@ pub async fn resolve_message_delivery(
 ) -> Result<DeliveryResolution, DbError> {
     let mut tx = pool.begin().await?;
     let claimed: Option<(i64,)> = sqlx::query_as(
-        "INSERT INTO message_delivery_receipts (channel_id, author_id, nonce, message_id, cancelled)
+        "INSERT INTO message_delivery_receipts (channel_id, author_id, nonce, message_id, canceled)
          VALUES ($1, $2, $3, $4, TRUE)
          ON CONFLICT (channel_id, author_id, nonce) DO NOTHING RETURNING message_id",
-    ).bind(channel_id).bind(author_id).bind(nonce).bind(reservation_id)
-        .fetch_optional(&mut *tx).await?;
+    )
+    .bind(channel_id)
+    .bind(author_id)
+    .bind(nonce)
+    .bind(reservation_id)
+    .fetch_optional(&mut *tx)
+    .await?;
     let result = if claimed.is_some() {
-        DeliveryResolution::Cancelled
+        DeliveryResolution::Canceled
     } else {
-        let (id, cancelled, exists): (i64, i64, i64) = sqlx::query_as(
-            "SELECT r.message_id, CASE WHEN r.cancelled THEN 1 ELSE 0 END,
+        let (id, canceled, exists): (i64, i64, i64) = sqlx::query_as(
+            "SELECT r.message_id, CASE WHEN r.canceled THEN 1 ELSE 0 END,
                 CASE WHEN m.id IS NOT NULL THEN 1 ELSE 0 END
              FROM message_delivery_receipts r LEFT JOIN messages m
                 ON m.id = r.message_id AND m.channel_id = r.channel_id AND m.author_id = r.author_id
@@ -382,8 +387,8 @@ pub async fn resolve_message_delivery(
         .bind(nonce)
         .fetch_one(&mut *tx)
         .await?;
-        if cancelled != 0 {
-            DeliveryResolution::Cancelled
+        if canceled != 0 {
+            DeliveryResolution::Canceled
         } else if exists != 0 {
             DeliveryResolution::Delivered(id)
         } else {
@@ -759,7 +764,7 @@ pub fn message_edit_request_hash(
 pub struct MessageEditReceipt {
     pub message_id: i64,
     pub request_hash: String,
-    pub cancelled: i64,
+    pub canceled: i64,
 }
 
 pub async fn find_message_edit_receipt(
@@ -768,13 +773,13 @@ pub async fn find_message_edit_receipt(
     actor_id: i64,
     edit_nonce: &str,
 ) -> Result<Option<MessageEditReceipt>, DbError> {
-    Ok(sqlx::query_as("SELECT message_id, request_hash, CASE WHEN cancelled THEN 1 ELSE 0 END AS cancelled FROM message_edit_receipts WHERE channel_id = $1 AND actor_id = $2 AND edit_nonce = $3")
+    Ok(sqlx::query_as("SELECT message_id, request_hash, CASE WHEN canceled THEN 1 ELSE 0 END AS canceled FROM message_edit_receipts WHERE channel_id = $1 AND actor_id = $2 AND edit_nonce = $3")
         .bind(channel_id).bind(actor_id).bind(edit_nonce).fetch_optional(pool).await?)
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum MessageEditResolution {
-    Cancelled,
+    Canceled,
     Applied,
     Deleted,
 }
@@ -796,11 +801,11 @@ pub async fn resolve_message_edit(
     .bind(channel_id)
     .fetch_optional(&mut *tx)
     .await?;
-    sqlx::query("INSERT INTO message_edit_receipts (channel_id, actor_id, edit_nonce, message_id, request_hash, cancelled)
+    sqlx::query("INSERT INTO message_edit_receipts (channel_id, actor_id, edit_nonce, message_id, request_hash, canceled)
         VALUES ($1, $2, $3, $4, '', TRUE) ON CONFLICT (channel_id, actor_id, edit_nonce) DO NOTHING")
         .bind(channel_id).bind(actor_id).bind(edit_nonce).bind(message_id).execute(&mut *tx).await?;
     let receipt: MessageEditReceipt = sqlx::query_as(
-        "SELECT message_id, request_hash, CASE WHEN cancelled THEN 1 ELSE 0 END AS cancelled
+        "SELECT message_id, request_hash, CASE WHEN canceled THEN 1 ELSE 0 END AS canceled
          FROM message_edit_receipts WHERE channel_id = $1 AND actor_id = $2 AND edit_nonce = $3",
     )
     .bind(channel_id)
@@ -813,8 +818,8 @@ pub async fn resolve_message_edit(
             "This edit nonce belongs to another target message.".into(),
         ));
     }
-    let result = if receipt.cancelled != 0 {
-        MessageEditResolution::Cancelled
+    let result = if receipt.canceled != 0 {
+        MessageEditResolution::Canceled
     } else if target.is_some() {
         MessageEditResolution::Applied
     } else {
@@ -860,11 +865,11 @@ pub async fn update_message_authorized_with_receipt(
     let request_hash = message_edit_request_hash(id.get(), content, nonce, e2ee_header, flags);
     if let Some(edit_nonce) = edit_nonce {
         let receipt: Option<MessageEditReceipt> = sqlx::query_as(
-            "SELECT message_id, request_hash, CASE WHEN cancelled THEN 1 ELSE 0 END AS cancelled FROM message_edit_receipts WHERE channel_id = $1 AND actor_id = $2 AND edit_nonce = $3")
+            "SELECT message_id, request_hash, CASE WHEN canceled THEN 1 ELSE 0 END AS canceled FROM message_edit_receipts WHERE channel_id = $1 AND actor_id = $2 AND edit_nonce = $3")
             .bind(channel_id).bind(actor_id).bind(edit_nonce).fetch_optional(&mut *transaction).await?;
         if let Some(receipt) = receipt {
-            if receipt.message_id == id.get() && receipt.cancelled != 0 {
-                return Err(DbError::EditCancelled);
+            if receipt.message_id == id.get() && receipt.canceled != 0 {
+                return Err(DbError::EditCanceled);
             }
             if receipt.message_id != id.get() || receipt.request_hash != request_hash {
                 return Err(DbError::Conflict(
@@ -3103,10 +3108,10 @@ mod tests {
         assert!(replay.replayed);
         assert_eq!(replay.message.content.as_deref(), Some("Newer content"));
         assert_eq!(
-            resolve_message_edit(&pool, channel, 15590, actor, "new-cancelled-edit")
+            resolve_message_edit(&pool, channel, 15590, actor, "new-canceled-edit")
                 .await
                 .unwrap(),
-            MessageEditResolution::Cancelled
+            MessageEditResolution::Canceled
         );
         let rejected = update_message_authorized_with_receipt(
             &pool,
@@ -3118,12 +3123,12 @@ mod tests {
             None,
             None,
             false,
-            Some("new-cancelled-edit"),
+            Some("new-canceled-edit"),
             &[],
         )
         .await
         .unwrap_err();
-        assert!(matches!(rejected, DbError::EditCancelled));
+        assert!(matches!(rejected, DbError::EditCanceled));
         assert!(get_edit_history(&pool, 15590).await.unwrap().is_empty());
     }
 

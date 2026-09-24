@@ -73,7 +73,7 @@ interface MessageInputProps {
   /**
    * What `channelName` names: a server channel ("Message #general"), a group
    * DM or a person ("Message Mara"). It only changes the words, never the
-   * behaviour.
+   * behavior.
    */
   conversationKind?: 'channel' | 'group' | 'person';
   /**
@@ -116,7 +116,7 @@ const ICON_BTN_BASE =
   '[@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:w-11';
 const ICON_BTN = `inline-flex ${ICON_BTN_BASE}`;
 
-// A composer mode that is switched on — the action colour, never a light token.
+// A composer mode that is switched on — the action color, never a light token.
 const ICON_BTN_ACTIVE =
   'bg-accent-tint text-accent-primary hover:bg-accent-tint-strong hover:text-accent-primary';
 
@@ -457,13 +457,13 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
   // Anonymous posting detection
   const [channelFeatures, setChannelFeatures] = useState<ChannelFeatureSettings | null>(null);
   useEffect(() => {
-    let cancelled = false;
+    let canceled = false;
     channelApi.getFeatureSettings(channelId).then(({ data }) => {
-      if (!cancelled) setChannelFeatures(data);
+      if (!canceled) setChannelFeatures(data);
     }).catch(() => {
       // Feature settings are optional
     });
-    return () => { cancelled = true; };
+    return () => { canceled = true; };
   }, [channelId]);
   const isAnonymousChannel = channelFeatures?.anonymous_posting_enabled === true;
 
@@ -502,19 +502,19 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
       setComposerRolesError(null);
       return;
     }
-    let cancelled = false;
+    let canceled = false;
     fetchGuildRoles(guildId)
       .then((roles) => {
-        if (!cancelled) {
+        if (!canceled) {
           setComposerRoles(roles);
           setComposerRolesError(null);
         }
       })
       .catch((err) => {
-        if (!cancelled) setComposerRolesError(extractApiError(err));
+        if (!canceled) setComposerRolesError(extractApiError(err));
       });
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [guildId]);
 
@@ -715,7 +715,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
     catch (error) { endSay(); setSubmitError(messageInputError(error, 'Save this draft before sending.')); return; }
     finally { sendingRef.current = false; }
     // The blocker banner above the composer is already saying this, word for
-    // word, and stacking a red copy of a grey sentence tells the reader nothing
+    // word, and stacking a red copy of a gray sentence tells the reader nothing
     // they cannot see. The banner carries the way out ("Check again", "Set up
     // encryption"), so it stays and the echo does not.
     if (!composerAction.allowed) { setSubmitError(blockerSettled ? null : composerAction.reason); return; }
@@ -1272,7 +1272,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
           {/* A blocker can be resolved by someone else (a recipient finishing
               encryption setup, a restored permission), so the check is always
               repeatable from here instead of only after a request failure. */}
-          {/* A group waiting on somebody's enrolment is not a server answer to
+          {/* A group waiting on somebody's enrollment is not a server answer to
               re-ask: the capability call already said the group is encrypted,
               and the missing key is the other person's to publish. */}
           {!groupDmRefusal && <button type="button" className="ml-2 underline" onClick={refreshActions}>{capabilityError ? 'Retry' : 'Check again'}</button>}

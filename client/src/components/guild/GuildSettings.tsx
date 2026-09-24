@@ -76,7 +76,7 @@ export function getGuildSettingsErrorMessage(err: unknown, fallback: string): st
 }
 
 // The index of the settings plate. `group` is the sentence-case heading the row
-// sits under (spec §6.8 — never uppercase); the first group is unlabelled.
+// sits under (spec §6.8 — never uppercase); the first group is unlabeled.
 // Section ids are load-bearing (deep links, `?section=`, the Bot Store's
 // "Open …" jumps) and never change.
 type NavGroupKey = '' | 'The server' | 'People' | 'Automation' | 'Moderation';

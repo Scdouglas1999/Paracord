@@ -121,7 +121,7 @@ function resolveResource(url: string): Promise<string> {
  * sticker. `data:` and `blob:` values are already loadable and come straight
  * back; anything else is resolved through {@link fileApi.resolveResourceObjectUrl},
  * which on the desktop shell fetches it over the native bridge (the only path
- * that can carry the credential and honour the server's pinned certificate).
+ * that can carry the credential and honor the server's pinned certificate).
  *
  * Returns null while a desktop resolution is in flight, or if it failed — the
  * caller should draw whatever it draws for "no image", not a broken glyph.
@@ -140,18 +140,18 @@ export function useAuthenticatedImage(src: string | null | undefined): string | 
       setResolved(src ?? null);
       return;
     }
-    let cancelled = false;
+    let canceled = false;
     setResolved(null);
     void resolveResource(src as string).then(
       (objectUrl) => {
-        if (!cancelled) setResolved(objectUrl);
+        if (!canceled) setResolved(objectUrl);
       },
       () => {
-        if (!cancelled) setResolved(null);
+        if (!canceled) setResolved(null);
       },
     );
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [src, immediate, cacheGeneration]);
 

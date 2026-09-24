@@ -7,7 +7,7 @@ import { isTauri } from '../../lib/tauriEnv';
  * The desktop backend enumerates through the sound server (PipeWire/PulseAudio
  * on Linux, WASAPI/CoreAudio elsewhere) and returns a **stable id** per device
  * — a sound-server node name, not an enumeration index — plus the name a person
- * would recognise. The WebView cannot drive those devices via `setSinkId` (that
+ * would recognize. The WebView cannot drive those devices via `setSinkId` (that
  * only reaches the WebView's own audio graph), so when a native voice session is
  * active we must additionally route the OS device through the native commands.
  *
@@ -144,7 +144,7 @@ export async function listNativeInputDevices(): Promise<AudioDeviceInfo[]> {
  * index string, or a device label) to the stable id the switch commands take.
  *
  * Matching order: exact id, then exact name, then case-insensitive name. An
- * unrecognised selection resolves to `@default`, which the backend re-resolves
+ * unrecognized selection resolves to `@default`, which the backend re-resolves
  * to the live system default at open time and logs as a fallback — a device
  * that has gone away never silently becomes some other device.
  */

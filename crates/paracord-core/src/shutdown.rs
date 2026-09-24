@@ -63,12 +63,12 @@ impl ShutdownSignal {
         self.notify.notify_waiters();
     }
 
-    /// Whether shutdown has been signalled. Never returns to `false`.
+    /// Whether shutdown has been signaled. Never returns to `false`.
     pub fn is_shutting_down(&self) -> bool {
         self.latched.load(Ordering::SeqCst)
     }
 
-    /// Resolve when shutdown is signalled — immediately if it already was.
+    /// Resolve when shutdown is signaled — immediately if it already was.
     ///
     /// Cancel-safe: dropping the future (a losing `select!` arm) neither
     /// consumes nor loses the signal, because the latch, not the wakeup, is
@@ -129,7 +129,7 @@ mod tests {
         // Loop the way a stream's tail does: a fresh `notified()` each pass.
         for _ in 0..3 {
             tokio::select! {
-                _ = signal.notified() => panic!("not signalled yet"),
+                _ = signal.notified() => panic!("not signaled yet"),
                 _ = tokio::time::sleep(std::time::Duration::from_millis(1)) => {}
             }
         }

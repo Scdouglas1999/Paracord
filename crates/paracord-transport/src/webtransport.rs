@@ -396,7 +396,7 @@ fn describe_stream_type(stream_type: u64) -> String {
 /// Consume a stream that is not this session's, without disturbing the HTTP/3
 /// connection underneath it.
 ///
-/// RFC 9114 §6.2.3 says a recipient that does not recognise a unidirectional
+/// RFC 9114 §6.2.3 says a recipient that does not recognize a unidirectional
 /// stream's type ignores it; §6.2.1 says closing a *critical* stream — the
 /// control stream or either QPACK stream — is `H3_CLOSED_CRITICAL_STREAM`, a
 /// connection error. Together those rule out the obvious implementation,
@@ -1268,10 +1268,10 @@ mod tests {
         assert_eq!(recv.read_to_end(4096).await.unwrap(), b"\x00\x00\x00\x02hi");
     }
 
-    /// GREASE stream types (RFC 9114 §6.2.3) are recognised as something to
+    /// GREASE stream types (RFC 9114 §6.2.3) are recognized as something to
     /// ignore rather than mistaken for a WebTransport stream.
     #[test]
-    fn grease_stream_types_are_recognised() {
+    fn grease_stream_types_are_recognized() {
         for reserved in [0x21u64, 0x21 + 0x1f, 0x21 + 0x1f * 2, 0x21 + 0x1f * 1000] {
             assert!(is_grease_stream_type(reserved), "{reserved:#x}");
             assert!(describe_stream_type(reserved).contains("GREASE"));

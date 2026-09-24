@@ -274,7 +274,7 @@ pub enum ControlMessage {
         offset: u64,
     },
 
-    /// Progress acknowledgement from server (sent every ~1MB).
+    /// Progress acknowledgment from server (sent every ~1MB).
     FileTransferProgress {
         transfer_id: String,
         bytes_received: u64,

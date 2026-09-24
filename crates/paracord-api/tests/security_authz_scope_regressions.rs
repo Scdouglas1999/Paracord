@@ -614,7 +614,7 @@ async fn admin_only_command_is_not_invocable_by_a_plain_member() -> anyhow::Resu
     assert_eq!(
         status,
         StatusCode::FORBIDDEN,
-        "autocomplete must honour the same gate: {payload}"
+        "autocomplete must honor the same gate: {payload}"
     );
 
     // The command is hidden from the member's picker, but still listed for a

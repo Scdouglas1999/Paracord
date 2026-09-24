@@ -32,7 +32,7 @@ audiopus = "0.3.0-rc.0"
 nnnoiseless = { version = "0.5", default-features = false }
 cpal = "0.15"
 rubato = "0.15"
-# Acoustic echo cancellation + AGC (SpeexDSP MDF echo canceller + preprocessor).
+# Acoustic echo cancellation + AGC (SpeexDSP MDF echo canceler + preprocessor).
 # `aec-rs-sys` vendors the full libspeexdsp source and builds it statically via
 # CMake, so there is NO system libspeexdsp requirement — but the host DOES need
 # `cmake` + a C toolchain on the build path (Linux/macOS/Windows). This is a

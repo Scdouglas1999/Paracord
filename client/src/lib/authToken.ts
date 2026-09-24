@@ -135,7 +135,7 @@ export function noteSessionEstablished(): void {
   try {
     localStorage.setItem(SESSION_HINT_KEY, '1');
   } catch {
-    // A browser refusing storage simply keeps the old ask-and-see behaviour.
+    // A browser refusing storage simply keeps the old ask-and-see behavior.
   }
 }
 

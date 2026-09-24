@@ -112,7 +112,7 @@ export function BuildingSection({
   const { servers: gameServers } = useGameServers(building.guildId);
   // A page of its own (Sports, Daily word) is open: the plate is not the current page.
   const pageOpen = sportsOpen || wordOpen;
-  // The server's own colour — the same one its Home card and its Lobby header
+  // The server's own color — the same one its Home card and its Lobby header
   // wear, so the eye learns it. Identity, never state (§6.3): it says WHICH
   // server this is, and it says nothing at all about who is in it.
   const identity = getIdentityColor(building.guildId);
@@ -129,7 +129,7 @@ export function BuildingSection({
       className="flex flex-col gap-0.5"
       style={{
         '--identity': identity,
-        // Inside this group the row you are on wears the server's colour
+        // Inside this group the row you are on wears the server's color
         // instead of the neutral wash. 16% is the measured step: enough to
         // name the server, quiet enough that the row's ink is untouched.
         '--row-selected': 'color-mix(in srgb, var(--identity) 16%, transparent)',

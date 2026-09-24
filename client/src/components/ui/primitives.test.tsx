@@ -25,7 +25,7 @@ import { presenceLight } from '../../lib/presence';
  * accessibility guarantees from spec §9 (a name on every control, a text
  * equivalent for every light state).
  *
- * There is one rule no primitive may break: **no literal colour**. The final
+ * There is one rule no primitive may break: **no literal color**. The final
  * test walks every rendered element and fails on a raw hex or rgb() value.
  */
 
@@ -182,8 +182,8 @@ describe('NavRow', () => {
     render(<NavRow active>Shop floor</NavRow>);
     const row = screen.getByRole('button', { name: 'Shop floor' });
     expect(row).toHaveAttribute('aria-current', 'page');
-    // The row you are on is the selection wash, which a server's own colour can
-    // take over (`--row-selected`), not a fixed grey step.
+    // The row you are on is the selection wash, which a server's own color can
+    // take over (`--row-selected`), not a fixed gray step.
     expect(row).toHaveClass('bg-[var(--row-selected)]');
   });
 
@@ -256,7 +256,7 @@ describe('Divider', () => {
     expect(container.querySelector('hr')).toHaveClass('bg-border-subtle');
   });
 
-  it('renders a labelled separator', () => {
+  it('renders a labeled separator', () => {
     render(<Divider label="Today" />);
     expect(screen.getByRole('separator')).toHaveTextContent('Today');
   });
@@ -333,7 +333,7 @@ describe('Popover', () => {
   });
 });
 
-describe('presence is light, never a coloured dot (§1.5)', () => {
+describe('presence is light, never a colored dot (§1.5)', () => {
   it('maps every status onto a rim, a matte, and a text equivalent', () => {
     expect(presenceLight('online')).toMatchObject({ lit: true, avatarClass: 'pc-lit', label: 'Online' });
     expect(presenceLight('streaming')).toMatchObject({ lit: true, live: true });
@@ -537,7 +537,7 @@ describe('SettingsShell', () => {
   });
 });
 
-describe('no primitive hard-codes a colour', () => {
+describe('no primitive hard-codes a color', () => {
   it('renders every primitive without a literal hex or rgb value', () => {
     const ref = createRef<HTMLButtonElement>();
     const { container } = render(
@@ -574,7 +574,7 @@ describe('no primitive hard-codes a colour', () => {
       </Plate>,
     );
     const markup = container.innerHTML;
-    // Arbitrary Tailwind values reference tokens (var(--…)); a raw colour never appears.
+    // Arbitrary Tailwind values reference tokens (var(--…)); a raw color never appears.
     expect(markup).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
     expect(markup).not.toMatch(/\brgba?\(\s*\d/);
   });

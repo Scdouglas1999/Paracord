@@ -37,12 +37,12 @@ export function FilePreview({ url, filename, mimeType, size, resolveObjectUrl }:
   useEffect(() => {
     if (!safeRawUrl) return;
 
-    let cancelled = false;
+    let canceled = false;
     let blobUrl: string | null = null;
 
     const resolve = resolveObjectUrl ?? fileApi.resolveAttachmentObjectUrl;
     void resolve(safeRawUrl).then((src) => {
-      if (cancelled) {
+      if (canceled) {
         if (src.startsWith('blob:')) URL.revokeObjectURL(src);
         return;
       }
@@ -50,13 +50,13 @@ export function FilePreview({ url, filename, mimeType, size, resolveObjectUrl }:
       setResolvedSrc(src);
       setError(null);
     }).catch((failure: unknown) => {
-      if (cancelled) return;
+      if (canceled) return;
       setResolvedSrc(null);
       setError(failure instanceof Error ? failure.message : 'This attachment could not be opened.');
     });
 
     return () => {
-      cancelled = true;
+      canceled = true;
       if (blobUrl) URL.revokeObjectURL(blobUrl);
     };
   }, [safeRawUrl, resolveObjectUrl]);

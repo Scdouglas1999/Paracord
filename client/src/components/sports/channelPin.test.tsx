@@ -240,7 +240,7 @@ describe('ambient strip', () => {
     mockPerms.isAdmin = true;
   });
 
-  it('summarises the score and unpins', async () => {
+  it('summarizes the score and unpins', async () => {
     const user = userEvent.setup();
     const onUnpin = vi.fn();
     render(
@@ -362,7 +362,7 @@ describe('ambient strip', () => {
     expect(screen.getByRole('region', { name: /Pinned game/ })).toHaveClass('is-score');
   });
 
-  it('keeps the chip and skips the colour flash when motion is reduced', async () => {
+  it('keeps the chip and skips the color flash when motion is reduced', async () => {
     configureMotion('reduced');
     useSportsStore.getState().adoptSettings(settings([]));
     const quiet = game({ away: { ...game().away, score: 0 }, home: { ...game().home, score: 0 } });

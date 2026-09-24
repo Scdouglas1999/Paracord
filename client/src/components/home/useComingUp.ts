@@ -25,7 +25,7 @@ const ACTIVE_GRACE_MS = 3 * 60 * 60 * 1000;
 /** Home shows the next few; the building's own event list is the full one. */
 export const COMING_UP_CAP = 3;
 
-/** `status`: 1 = scheduled, 2 = active, 3 = completed, 4 = cancelled. */
+/** `status`: 1 = scheduled, 2 = active, 3 = completed, 4 = canceled. */
 const SCHEDULED = 1;
 const ACTIVE = 2;
 

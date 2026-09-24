@@ -49,11 +49,11 @@ export function PollMessageCard({ channelId, poll, canVote }: PollMessageCardPro
   }, [livePoll.expires_at, isExpired]);
 
   useEffect(() => {
-    let cancelled = false;
+    let canceled = false;
     const refreshPoll = async () => {
       try {
         const { data } = await channelApi.getPoll(channelId, livePoll.id);
-        if (!cancelled) {
+        if (!canceled) {
           usePollStore.getState().upsertPoll(data);
         }
       } catch {
@@ -64,7 +64,7 @@ export function PollMessageCard({ channelId, poll, canVote }: PollMessageCardPro
     void refreshPoll();
     if (isExpired) {
       return () => {
-        cancelled = true;
+        canceled = true;
       };
     }
 
@@ -73,7 +73,7 @@ export function PollMessageCard({ channelId, poll, canVote }: PollMessageCardPro
     }, 15_000);
 
     return () => {
-      cancelled = true;
+      canceled = true;
       window.clearInterval(interval);
     };
   }, [channelId, livePoll.id, isExpired]);

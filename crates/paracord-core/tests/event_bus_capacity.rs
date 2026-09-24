@@ -87,7 +87,7 @@ fn a_session_receives_a_full_queue_without_lagging() {
 }
 
 /// Past the bound the receiver lags, which the gateway turns into a 1013 close
-/// so the client reconnects and re-fetches. That behaviour is unchanged by the
+/// so the client reconnects and re-fetches. That behavior is unchanged by the
 /// depth reduction — only how much memory is reserved to reach it.
 #[test]
 fn a_session_lags_once_it_overruns_its_queue() {

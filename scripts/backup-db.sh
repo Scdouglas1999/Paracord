@@ -67,7 +67,7 @@ case "$DB_URL" in
     pg_dump --format=custom --no-owner --no-privileges --dbname="$DB_URL" --file="$OUT_FILE"
     ;;
   *)
-    echo "Unrecognised database url scheme in $(redact_db_url "$DB_URL")." >&2
+    echo "Unrecognized database url scheme in $(redact_db_url "$DB_URL")." >&2
     echo "Paracord supports sqlite:// and postgres:// urls." >&2
     exit 5
     ;;

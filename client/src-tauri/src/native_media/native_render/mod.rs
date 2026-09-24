@@ -326,7 +326,7 @@ pub async fn native_render_update_geometry(
     guard.update_geometry(geometry)
 }
 
-/// Tell the shell what the app's ground colour is — `--bg-base`, as the
+/// Tell the shell what the app's ground color is — `--bg-base`, as the
 /// renderer resolved it, `#rrggbb`.
 ///
 /// Only the Linux underlay has anywhere to put it: there the webview's own

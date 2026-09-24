@@ -80,7 +80,7 @@ export function GuildWelcomeScreen({ guild, channels, onDismiss }: GuildWelcomeS
     <Modal
       open
       onClose={onDismiss}
-      labelledBy="guild-welcome-title"
+      labeledBy="guild-welcome-title"
       describedBy="guild-welcome-description"
       showCloseButton
       closeLabel="Close welcome screen"

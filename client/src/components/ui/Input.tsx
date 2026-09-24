@@ -10,7 +10,7 @@ import { cn } from "../../lib/utils"
  * that shadow; an invalid field carries a 1px danger edge in the same slot.
  *
  * {@link TextField} composes an Input with its label, hint and error wiring —
- * prefer it. These are for the cases that already own their labelling.
+ * prefer it. These are for the cases that already own their labeling.
  */
 const fieldBase = [
     "pc-well w-full text-label text-text-primary placeholder:text-text-faint",

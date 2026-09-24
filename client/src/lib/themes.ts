@@ -3,7 +3,7 @@
  *
  * `data-theme` on <html> is the whole mechanism (docs/lantern-stage-spec.md
  * §1.7): every surface, ink, shadow, glow and ring for a theme is declared in
- * `src/styles/tokens.css` under `:root[data-theme=…]`, so a colour is written
+ * `src/styles/tokens.css` under `:root[data-theme=…]`, so a color is written
  * down exactly once. What this module owns is the *list* — which ids exist,
  * which of them are light, which are looks, and how a message row is shaped —
  * because that list used to be a hand-written union repeated in the store, the
@@ -12,7 +12,7 @@
  *
  * A **look** is a complete palette rather than a theme plus the user's choices:
  * it brings its own accent and its own ground, so the accent presets and the
- * base-colour control do not apply while one is active. `useTheme` removes the
+ * base-color control do not apply while one is active. `useTheme` removes the
  * inline properties for those two controls instead of writing them, which is
  * what lets the look's own `tokens.css` block win.
  */
@@ -32,7 +32,7 @@ export const THEME_IDS = [
 export type ThemeId = (typeof THEME_IDS)[number];
 
 /**
- * What a fresh install looks like, and what anything unrecognised collapses to.
+ * What a fresh install looks like, and what anything unrecognized collapses to.
  * The server's `DEFAULT_THEME` (crates/paracord-api/src/routes/users.rs) must
  * agree: the client adopts the server's value on first sign-in.
  */
@@ -62,7 +62,7 @@ export const LIGHT_THEMES: ReadonlySet<ThemeId> = new Set<ThemeId>(['light', 'pa
 
 /**
  * The looks. A look is a whole palette: it declares its own accent and its own
- * neutral ramp, so while one is active the accent presets and the base-colour
+ * neutral ramp, so while one is active the accent presets and the base-color
  * hue/tint are not applied — `useTheme` removes those inline properties rather
  * than writing them, and Settings shows both controls disabled with the reason.
  */
@@ -74,7 +74,7 @@ export type MessageStyle = 'rows' | 'bubbles';
  * How a message is shaped, published as `data-message-style` on <html>.
  *
  * Rows everywhere but Slate and Aubergine (id 'voices'), which give every
- * message its author's colour and need a bubble to carry it. This is a *shape*, not a density: the compact
+ * message its author's color and need a bubble to carry it. This is a *shape*, not a density: the compact
  * setting is separate and stays server-synced (`data-density`).
  */
 export function messageStyleFor(theme: ThemeId): MessageStyle {

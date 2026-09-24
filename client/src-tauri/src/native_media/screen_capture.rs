@@ -44,10 +44,10 @@ const SCREEN_CAPTURE_CONSENT_TTL: Duration = Duration::from_secs(120);
 /// Backstop for a capture backend that neither starts nor errors. A refused or
 /// unavailable display answers immediately and never reaches this.
 ///
-/// It is a backstop, so it is generous. Startup is only signalled once the
-/// first frame has been ENCODED, which puts encoder initialisation inside this
+/// It is a backstop, so it is generous. Startup is only signaled once the
+/// first frame has been ENCODED, which puts encoder initialization inside this
 /// window: three NVENC AV1 simulcast layers took 3.4 s to come up on a machine
-/// where everything else was healthy, and at 3 s this cancelled a share that
+/// where everything else was healthy, and at 3 s this canceled a share that
 /// was 400 ms from working — and told the user to close a picker they had
 /// already closed.
 const SCREEN_START_TIMEOUT: Duration = Duration::from_secs(20);
@@ -344,7 +344,7 @@ pub async fn start_capture(
         // Linux's portal-backed PipeWire capturer may not know the selected
         // stream dimensions until the first frame arrives. Do not initialize or
         // publish a 0x0 encoder configuration; the capture worker will seed the
-        // encoder from the first real frame before signalling startup success.
+        // encoder from the first real frame before signaling startup success.
         if capture_width > 0 && capture_height > 0 {
             video_pipeline::start_screen_share(
                 session,
@@ -1294,7 +1294,7 @@ fn convert_video_frame(video: scap::frame::VideoFrame) -> Option<(u32, u32, Vec<
 ///
 /// The `bgra` buffer stays empty — on the texture route the encode loop hands
 /// the `ID3D11Texture2D` straight to the MFT via `encode_texture` and never
-/// materialises system-memory pixels for this frame. This is the texture-route
+/// materializes system-memory pixels for this frame. This is the texture-route
 /// counterpart to the CPU `PendingVideoFrame` built from `convert_video_frame`.
 #[cfg(target_os = "windows")]
 pub(crate) fn pending_frame_from_texture(

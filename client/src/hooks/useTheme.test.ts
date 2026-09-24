@@ -70,7 +70,7 @@ afterEach(() => {
 });
 
 describe('useTheme', () => {
-  it('publishes the theme, the colour scheme and the message shape', () => {
+  it('publishes the theme, the color scheme and the message shape', () => {
     const { result } = renderHook(() => useTheme());
 
     expect(result.current.theme).toBe('dark');
@@ -79,7 +79,7 @@ describe('useTheme', () => {
     expect(root().getAttribute('data-message-style')).toBe('rows');
   });
 
-  it('narrows a stored theme it does not recognise to the default', () => {
+  it('narrows a stored theme it does not recognize to the default', () => {
     // Persisted state outlives the build that wrote it.
     useUIStore.setState({ theme: 'sepia' as ThemeId });
     const { result } = renderHook(() => useTheme());
@@ -96,7 +96,7 @@ describe('useTheme', () => {
     expect(root().getAttribute('data-theme')).toBe('light');
   });
 
-  it('writes the accent preset and the base colour for a theme that is not a look', () => {
+  it('writes the accent preset and the base color for a theme that is not a look', () => {
     renderHook(() => useTheme());
 
     for (const name of ACCENT_PROPERTIES) expect(inline(name)).not.toBe('');
@@ -105,7 +105,7 @@ describe('useTheme', () => {
   });
 
   it.each(['dusk', 'paper', 'slate', 'voices'] as ThemeId[])(
-    'removes the accent and base-colour properties for the %s look',
+    'removes the accent and base-color properties for the %s look',
     (look) => {
       renderHook(() => useTheme());
       // Written first, so the assertion proves a removal rather than an absence.
@@ -121,7 +121,7 @@ describe('useTheme', () => {
     },
   );
 
-  it('keeps a look out of the base-colour control even when the hue is moved', () => {
+  it('keeps a look out of the base-color control even when the hue is moved', () => {
     renderHook(() => useTheme());
     setTheme('dusk');
 
@@ -146,7 +146,7 @@ describe('useTheme', () => {
     expect(root().style.colorScheme).toBe('light');
   });
 
-  it('writes the accent and base colour again when a look is left', () => {
+  it('writes the accent and base color again when a look is left', () => {
     renderHook(() => useTheme());
     setTheme('voices');
     for (const name of ACCENT_PROPERTIES) expect(inline(name)).toBe('');

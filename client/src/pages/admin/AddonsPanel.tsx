@@ -24,19 +24,19 @@ export function AddonsPanel() {
   const [savingTwitch, setSavingTwitch] = useState(false);
 
   useEffect(() => {
-    let cancelled = false;
+    let canceled = false;
     feedsApi.adminSettings().then(
       (res) => {
-        if (cancelled) return;
+        if (canceled) return;
         setSettings(res.data);
         setClientId(res.data.twitch_client_id ?? '');
       },
       (err: unknown) => {
-        if (!cancelled) setError(feedErrorMessage(err));
+        if (!canceled) setError(feedErrorMessage(err));
       },
     );
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, []);
 

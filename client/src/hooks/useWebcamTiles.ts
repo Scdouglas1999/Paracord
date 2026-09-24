@@ -140,7 +140,7 @@ export function useWebcamTiles(): WebcamTile[] {
       return;
     }
 
-    let cancelled = false;
+    let canceled = false;
 
     const recompute = async () => {
       const next: WebcamTile[] = [];
@@ -170,7 +170,7 @@ export function useWebcamTiles(): WebcamTile[] {
       // self_video flag is briefly stale after a track_publish).
       try {
         const tracks = await mediaEngine.listPublishedTracks();
-        if (cancelled) return;
+        if (canceled) return;
         for (const track of tracks) {
           if (track.kind !== 'video' || track.trackId !== 'camera') continue;
           const userId = String(track.publisherUserId);
@@ -188,7 +188,7 @@ export function useWebcamTiles(): WebcamTile[] {
         // listPublishedTracks can fail during reconnect; voice-state tiles still work.
       }
 
-      if (!cancelled) {
+      if (!canceled) {
         commitTiles(setTiles, next);
       }
     };
@@ -199,7 +199,7 @@ export function useWebcamTiles(): WebcamTile[] {
     }, 1000);
 
     return () => {
-      cancelled = true;
+      canceled = true;
       clearInterval(interval);
     };
   }, [room, mediaEngine, connected, selfVideo, participants, currentUserId]);

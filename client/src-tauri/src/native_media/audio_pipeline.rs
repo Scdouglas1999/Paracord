@@ -105,7 +105,7 @@ pub fn spawn_audio_send_task(session: &mut NativeMediaSession) {
         if let Err(e) = opus_encoder.set_bitrate(VOICE_BITRATE_BPS) {
             tracing::warn!("opus bitrate init failed: {e}");
         }
-        let mut echo_canceller = paracord_codec::audio::aec::EchoCanceller::new();
+        let mut echo_canceler = paracord_codec::audio::aec::EchoCanceler::new();
         let mut noise_suppressor = paracord_codec::audio::noise::NoiseSuppressor::new();
         let mut seq: u16 = 0;
         let mut timestamp: u32 = 0;
@@ -155,13 +155,13 @@ pub fn spawn_audio_send_task(session: &mut NativeMediaSession) {
                     }
 
                     // Pipeline (contract AEC4): capture -> AEC -> AGC -> RNNoise
-                    // -> Opus. The echo canceller runs on the raw mic (before
+                    // -> Opus. The echo canceler runs on the raw mic (before
                     // RNNoise, which would distort the echo path); AGC is applied
                     // inside `process`, then RNNoise, then Opus.
-                    echo_canceller
+                    echo_canceler
                         .set_echo_cancellation(echo_cancellation_enabled.load(Ordering::SeqCst));
-                    echo_canceller.set_agc(agc_enabled.load(Ordering::SeqCst));
-                    let cleaned = echo_canceller.process(&pcm, &reference);
+                    echo_canceler.set_agc(agc_enabled.load(Ordering::SeqCst));
+                    let cleaned = echo_canceler.process(&pcm, &reference);
 
                     // Runtime noise-suppression toggle (AU13).
                     noise_suppressor

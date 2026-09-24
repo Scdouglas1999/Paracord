@@ -20,7 +20,7 @@
 #      writes beside the config, preferring the link file when one exists,
 #      always against the loopback address and the configured port. Checks the
 #      closing block for jargon and length, and that PARACORD_NO_BROWSER=1 is
-#      honoured (nothing here may open a browser).
+#      honored (nothing here may open a browser).
 #   7. HTTP download path: serves the tarball + a SHA256SUMS file from a local
 #      web server, asserting checksum verification runs and succeeds.
 #   8. Negative test: a wrong checksum aborts before touching the install dir.
@@ -333,7 +333,7 @@ assert_contains "$WORK/install_link2.log" "Finish setting up" "ending leads with
 if grep -q "Finish setting up (opens in your browser)" "$WORK/install_link2.log"; then
     fail "PARACORD_NO_BROWSER=1 still claimed to open a browser"
 else
-    pass "PARACORD_NO_BROWSER=1 honoured (link printed, nothing opened)"
+    pass "PARACORD_NO_BROWSER=1 honored (link printed, nothing opened)"
 fi
 
 # A link file published by the server wins over the raw token, and the address
