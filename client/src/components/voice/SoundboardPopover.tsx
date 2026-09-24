@@ -25,11 +25,17 @@ export function SoundboardPopover({
   channelId,
   coords,
   panelRef,
+  leaving = false,
 }: {
   guildId: string;
   channelId: string;
   coords: AnchoredOverlayCoords | null;
   panelRef: React.RefObject<HTMLDivElement | null>;
+  /**
+   * Closed, and playing its leave (§5.2): it shrinks back toward the control
+   * bar. The host keeps it mounted for the beat with `useLingering`.
+   */
+  leaving?: boolean;
 }) {
   const sounds = useSoundboardStore((s) => s.soundsByGuild.get(guildId));
   const loadSounds = useSoundboardStore((s) => s.loadSounds);
@@ -135,11 +141,19 @@ export function SoundboardPopover({
       panelRef={panelRef}
       role="dialog"
       aria-label="Soundboard"
-      className="pc-floating w-[min(18.75rem,calc(100vw-1rem))] p-2"
-      style={{
-        bottom: coords?.bottom ?? 72,
-        left: coords?.left ?? 8,
-      }}
+      className={cn(
+        'pc-floating w-[min(18.75rem,calc(100vw-1rem))] p-2',
+        // A small surface opened from the control bar below it: it grows up
+        // out of its bottom edge (§5.2).
+        leaving ? 'pc-pop-out' : 'pc-pop-in',
+      )}
+      style={
+        {
+          bottom: coords?.bottom ?? 72,
+          left: coords?.left ?? 8,
+          '--pc-origin': '50% 100%',
+        } as React.CSSProperties
+      }
     >
       <div className="flex items-center gap-2 px-1.5 pb-2 pt-0.5">
         <AudioLines size={14} className="shrink-0 text-text-faint" aria-hidden />

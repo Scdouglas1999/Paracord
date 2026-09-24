@@ -226,7 +226,7 @@ const HEIGHTS = ['--h-nav-row', '--h-list-row', '--h-control-sm', '--h-control',
 const MOTION = [
   '--duration-fast', '--duration-normal', '--duration-slow', '--duration-page',
   '--duration-exit', '--duration-exit-slow', '--duration-warm-up', '--duration-dim',
-  '--duration-move', '--duration-roll', '--duration-breathe',
+  '--duration-move', '--duration-roll', '--duration-breathe', '--duration-glow', '--duration-burst',
   '--ease-out', '--ease-in', '--ease-in-out',
   '--stagger-page', '--stagger-light', '--stagger-chrome',
   '--spring-stiffness', '--spring-damping', '--spring-mass',

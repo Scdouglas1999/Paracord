@@ -28,6 +28,8 @@ function animatable(el: Element | null | undefined): el is HTMLElement {
 function landed(el: Element): Animation | null {
   if (!animatable(el)) return null;
   const animation = el.animate([], { duration: 0 });
+  // Named, so the frame gate never reports a landed recipe as "anonymous".
+  animation.id = 'data-motion-recipe:landed';
   animation.finish();
   return animation;
 }

@@ -804,7 +804,7 @@
 
 /* A matte placeholder pulse — the breath timing, like every other slow pulse
    in the product, and it stops dead under reduced motion rather than freezing
-   wherever the global 0.01ms override happens to land. */
+   on its end frame through the global 0s override. */
 .pc-skeleton {
   animation: skeleton-pulse var(--duration-breathe) var(--ease-in-out) infinite;
 }
@@ -870,14 +870,14 @@
   }
   to {
     opacity: 0;
-    transform: scale(1.18);
+    transform: scale(1.12);
   }
 }
 
 @keyframes pc-soundboard-emoji {
   0% {
     opacity: 0;
-    transform: translate3d(0, 6px, 0) scale(0.8);
+    transform: translate3d(0, 6px, 0) scale(0.9);
   }
   18% {
     opacity: 1;
@@ -913,11 +913,11 @@
   box-shadow:
     inset 0 0 0 2px rgba(var(--light-ring-rgb), 0.7),
     0 0 14px rgba(var(--light-ring-rgb), 0.35);
-  animation: pc-soundboard-ring 550ms var(--ease-out) forwards;
+  animation: pc-soundboard-ring var(--duration-page) var(--ease-out) forwards;
 }
 
 .pc-soundboard-burst .pc-soundboard-burst-emoji {
-  animation: pc-soundboard-emoji 1400ms var(--ease-out) forwards;
+  animation: pc-soundboard-emoji var(--duration-burst) var(--ease-out) forwards;
 }
 
 :root[data-motion='reduced'] .pc-soundboard-burst::before {
@@ -926,7 +926,7 @@
 }
 
 :root[data-motion='reduced'] .pc-soundboard-burst .pc-soundboard-burst-emoji {
-  animation: pc-fade 1200ms var(--ease-out) reverse forwards;
+  animation: pc-fade-out var(--duration-burst) var(--ease-in) forwards;
 }
 
 /* The on-air pill's live dot breathes only while somebody is actually

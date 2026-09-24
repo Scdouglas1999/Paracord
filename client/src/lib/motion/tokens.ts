@@ -20,6 +20,8 @@ export const MOTION_TOKEN_FALLBACKS = {
   '--duration-warm-up': '220ms',
   '--duration-dim': '400ms',
   '--duration-breathe': '1600ms',
+  '--duration-glow': '2000ms',
+  '--duration-burst': '1400ms',
   '--duration-move': '320ms',
   '--duration-roll': '180ms',
   '--ease-out': 'cubic-bezier(0.2, 0.8, 0.2, 1)',

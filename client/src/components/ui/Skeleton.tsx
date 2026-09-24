@@ -14,7 +14,7 @@ interface SkeletonProps {
 // A placeholder is a matte wash, gently pulsed — never a sweeping sheen
 // (§6.2: no gradient wash across a surface). The pulse is opacity-only, and it
 // lives in `.pc-skeleton` so the one reduced-motion switch can stop it dead
-// rather than freezing it wherever the 0.01ms override happens to land (§5.3:
+// rather than landing it on its end frame through the global 0s override (§5.3:
 // "loading skeletons crossfade to content, they do not pulse forever").
 export function Skeleton({ width, height, borderRadius = 'var(--radius-chip)', className = '' }: SkeletonProps) {
   return (

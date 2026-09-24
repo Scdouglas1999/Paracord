@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 
 import { useTogetherStore, type TogetherNotice } from '../../../stores/togetherStore';
+import { useLingering } from '../../../lib/motion';
 import { cn } from '../../../lib/utils';
 
 /** How long "Priya paused" stays up. */
@@ -34,14 +35,21 @@ export function TogetherNoticePill({
   nameOf: (userId: string | null) => string;
   className?: string;
 }) {
+  // The pill pops in over the video and, when its few seconds are up, pops
+  // back out rather than vanishing (§5.2): the last notice is kept for the
+  // leave. A newer notice replacing it is a new pill (keyed), so it pops in.
+  const shown = useLingering(notice);
   return (
     <div aria-live="polite" className={cn('pointer-events-none flex justify-center', className)}>
-      {notice && (
+      {shown.value && (
         <span
-          key={notice.id}
-          className="pc-tag pc-enter inline-flex h-7 max-w-full items-center truncate px-3 text-meta font-medium"
+          key={shown.value.id}
+          className={cn(
+            'pc-tag inline-flex h-7 max-w-full items-center truncate px-3 text-meta font-medium',
+            shown.leaving ? 'pc-pop-out' : 'pc-pop-in',
+          )}
         >
-          {noticeSentence(notice, nameOf)}
+          {noticeSentence(shown.value, nameOf)}
         </span>
       )}
     </div>

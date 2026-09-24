@@ -297,7 +297,7 @@ function MediaTile({ item, onOpen }: { item: GalleryAttachment; onOpen: () => vo
           src={src}
           alt=""
           draggable={false}
-          className="h-full w-full object-cover transition-transform duration-[var(--duration-fast)] ease-[var(--ease-out)] motion-safe:group-hover:scale-[1.02]"
+          className="h-full w-full object-cover transition-transform duration-[var(--duration-fast)] ease-[var(--ease-out)] group-hover:scale-[1.02]"
         />
       ))}
       {item.kind === 'video' && (
@@ -323,7 +323,7 @@ function VideoThumb({ src }: { src: string }) {
       muted
       playsInline
       preload="metadata"
-      className="h-full w-full object-cover transition-transform duration-[var(--duration-fast)] ease-[var(--ease-out)] motion-safe:group-hover:scale-[1.02]"
+      className="h-full w-full object-cover transition-transform duration-[var(--duration-fast)] ease-[var(--ease-out)] group-hover:scale-[1.02]"
     />
   );
 }

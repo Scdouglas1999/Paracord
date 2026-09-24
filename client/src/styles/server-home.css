@@ -224,7 +224,7 @@
     0 0 34px color-mix(in oklch, var(--light-amber) 12%, transparent);
   opacity: 0;
   filter: opacity(0);
-  animation: pc-home-glow-peak 2s var(--ease-in-out) infinite paused;
+  animation: pc-home-glow-peak var(--duration-glow) var(--ease-in-out) infinite paused;
   transition: filter var(--duration-dim) var(--ease-out);
 }
 

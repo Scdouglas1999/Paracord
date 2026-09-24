@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { Lock } from 'lucide-react';
 
 import { canControl, currentItem, formatPlaybackTime, playsFromLine } from '../../../lib/together/model';
+import { useLingering } from '../../../lib/motion';
 import { cn } from '../../../lib/utils';
 import { useTogetherStore } from '../../../stores/togetherStore';
 import { Modal, ModalBody, ModalHeader, ModalTitle, Raised } from '../../ui';
@@ -79,6 +80,7 @@ function useFittedMedia(
 export function TogetherWatchStage({ together, phone }: { together: TogetherContext; phone: boolean }) {
   const session = together.session;
   const [queueOpen, setQueueOpen] = useState(false);
+  const queuePanel = useLingering(queueOpen);
   const [adding, setAdding] = useState(false);
   const addAnchor = useRef<HTMLDivElement>(null);
   const columnRef = useRef<HTMLDivElement>(null);
@@ -116,7 +118,7 @@ export function TogetherWatchStage({ together, phone }: { together: TogetherCont
             <div className={cn('flex min-w-0 gap-x-2 gap-y-0.5', phone ? 'flex-col' : 'items-baseline')}>
               <h2 className="min-w-0 shrink truncate text-label font-semibold text-text-primary">{item?.title ?? 'The queue is empty'}</h2>
               {notice ? (
-                <span key={notice.id} aria-live="polite" className="pc-enter min-w-0 truncate text-meta text-text-secondary">
+                <span key={notice.id} aria-live="polite" className="pc-content-in min-w-0 truncate text-meta text-text-secondary">
                   {noticeSentence(notice, together.nameOf)}
                 </span>
               ) : (
@@ -137,8 +139,17 @@ export function TogetherWatchStage({ together, phone }: { together: TogetherCont
           />
         </div>
       </div>
-      {queueOpen && !phone && (
-        <Raised bare className="flex w-72 shrink-0 flex-col p-2.5 pc-enter">
+      {queuePanel.value && !phone && (
+        // The queue is a side panel: it eases in from its edge and back out
+        // the same way (§5.2), kept mounted for the leave.
+        <Raised
+          bare
+          aria-hidden={queuePanel.leaving || undefined}
+          className={cn(
+            'flex w-72 shrink-0 flex-col p-2.5',
+            queuePanel.leaving ? 'pc-drawer-out-right' : 'pc-drawer-in-right',
+          )}
+        >
           {queue}
         </Raised>
       )}
@@ -171,6 +182,7 @@ export function TogetherWatchStage({ together, phone }: { together: TogetherCont
 export function TogetherNowPlaying({ together, phone }: { together: TogetherContext; phone: boolean }) {
   const session = together.session;
   const [queueOpen, setQueueOpen] = useState(false);
+  const queueSection = useLingering(queueOpen);
   const [adding, setAdding] = useState(false);
   const anchor = useRef<HTMLDivElement>(null);
   const notice = useLatestNotice(together.channelId);
@@ -227,8 +239,11 @@ export function TogetherNowPlaying({ together, phone }: { together: TogetherCont
           compact
         />
       )}
-      {queueOpen && (
-        <div className="max-h-64 border-t border-border-subtle pt-2 pc-enter">
+      {queueSection.value && (
+        <div
+          aria-hidden={queueSection.leaving || undefined}
+          className={cn('max-h-64 border-t border-border-subtle pt-2', queueSection.leaving ? 'pc-exit' : 'pc-enter')}
+        >
           <TogetherQueue
             session={session}
             api={together.api}

@@ -8,6 +8,7 @@ import {
   installMotionMocks,
   litBuilding,
   MOTION_CHANNEL_NAME,
+  MOTION_GUILD_NAME,
   MOTION_GUILD_ID,
   MOTION_TEXT_CHANNEL_ID,
   MOTION_VOICE_CHANNEL_ID,
@@ -716,20 +717,34 @@ test.describe('the motion gate (§5.3)', () => {
     await expect(roomWindow).toHaveClass(/is-writing/);
     // The feed says it in words at the same time — light always has words.
     await expect(page.getByLabel('Message history').getByText(/typing/)).toBeVisible();
+    // The breath is two still glows crossfading on the window's FRAME
+    // (`.pc-window-breath`, its ::before and ::after), never an animated shadow
+    // on the window itself — so that is where the loops are, and the window
+    // carries none.
     const breathing = await page.evaluate(() => {
-      const el = document.querySelector('.chat-header .pc-window');
-      return document
-        .getAnimations()
-        .filter((a) => (a.effect as KeyframeEffect | null)?.target === el)
-        .map((a) => ({
-          name: (a as CSSAnimation).animationName ?? '',
-          iterations: a.effect?.getComputedTiming?.().iterations ?? 0,
-        }));
+      const frame = document.querySelector('.chat-header .pc-window-breath');
+      const window_ = document.querySelector('.chat-header .pc-window');
+      const all = document.getAnimations();
+      const on = (target: Element | null) =>
+        all
+          .filter((a) => (a.effect as KeyframeEffect | null)?.target === target)
+          .map((a) => ({
+            name: (a as CSSAnimation).animationName ?? '',
+            pseudo: (a.effect as KeyframeEffect | null)?.pseudoElement ?? '',
+            iterations: a.effect?.getComputedTiming?.().iterations ?? 0,
+          }));
+      return { frame: on(frame), window: on(window_).filter((a) => a.iterations === Infinity) };
     });
     expect(
-      breathing,
-      'no breathing animation on the room window while is-writing',
-    ).toContainEqual({ name: 'pc-window-breathe', iterations: Infinity });
+      breathing.frame,
+      'no breathing layers on the room window\'s frame while is-writing',
+    ).toEqual(
+      expect.arrayContaining([
+        { name: 'pc-breathe-rest', pseudo: '::before', iterations: Infinity },
+        { name: 'pc-breathe-peak', pseudo: '::after', iterations: Infinity },
+      ]),
+    );
+    expect(breathing.window, 'the window itself loops — the breath belongs on its frame').toEqual([]);
     expect(
       measured.worstOverall.delta,
       `typing pulse: ${describeFrame(measured.worstOverall)} — over ${MOMENT_FRAME_CEILING_MS}ms in the moment`,
@@ -756,12 +771,16 @@ test.describe('the motion gate (§5.3)', () => {
     await expect(textWindow).not.toHaveClass(/is-writing/);
     expect(
       await page.evaluate(() => {
-        const el = document.querySelector('.chat-header .pc-window');
+        const frame = document.querySelector('.chat-header .pc-window-breath');
+        const window_ = document.querySelector('.chat-header .pc-window');
         return document
           .getAnimations()
-          .filter((a) => (a.effect as KeyframeEffect | null)?.target === el).length;
+          .filter((a) => {
+            const target = (a.effect as KeyframeEffect | null)?.target;
+            return (target === frame || target === window_) && a.effect?.getComputedTiming?.().iterations === Infinity;
+          }).length;
       }),
-      'the window is still animating after typing stopped',
+      'the window is still breathing after typing stopped',
     ).toBe(0);
   });
 
@@ -975,14 +994,19 @@ test.describe('the motion gate (§5.3)', () => {
   /* Moment 1 — lights on                                                 */
   /* ------------------------------------------------------------------ */
 
+  /** The server home — the page a server opens to (it replaced the Lobby). */
+  function serverHome(page: Page) {
+    return page.getByRole('region', { name: `${MOTION_GUILD_NAME} home` });
+  }
+
   /**
-   * Open the Lobby into a building that is already awake: five people with
-   * their lights on and three of them in Shop floor.
+   * Open the server home into a building that is already awake: five people
+   * with their lights on and three of them in Shop floor.
    */
-  async function openLitLobby(page: Page) {
+  async function openLitHome(page: Page) {
     await setStandingWorld({ world: litBuilding() });
     await page.goto(`/app/guilds/${MOTION_GUILD_ID}`);
-    await expect(page.getByRole('region', { name: 'Lobby' })).toBeVisible();
+    await expect(serverHome(page)).toBeVisible();
     // The building really is lit before anything is measured: the room card
     // carries the occupants, which is what a window map and a rim are drawn
     // from. Without this the gate would measure an empty street.
@@ -995,7 +1019,7 @@ test.describe('the motion gate (§5.3)', () => {
   test('lights on: the building wakes, and the whole sequence lands inside 1.6s', async ({ page }) => {
     test.setTimeout(120_000);
     await page.setViewportSize({ width: 1440, height: 900 });
-    await openLitLobby(page);
+    await openLitHome(page);
 
     // §5.1's second trigger: the gateway comes back. It is the one the gate can
     // drive deterministically — the app is already on screen and already lit,
@@ -1013,14 +1037,14 @@ test.describe('the motion gate (§5.3)', () => {
   test('lights on does not fire again for a route change or a re-render', async ({ page }) => {
     test.setTimeout(120_000);
     await page.setViewportSize({ width: 1440, height: 900 });
-    await openLitLobby(page);
+    await openLitHome(page);
     // It already fired once, on load. §5.3: "never animate on first paint what
     // the user did not cause or presence did not cause" — and a route change is
     // not presence.
     await page.goto(`/app/guilds/${MOTION_GUILD_ID}/channels/${MOTION_TEXT_CHANNEL_ID}`);
     await expect(page.getByLabel('Message history')).toBeVisible();
     await page.goto(`/app/guilds/${MOTION_GUILD_ID}`);
-    await expect(page.getByRole('region', { name: 'Lobby' })).toBeVisible();
+    await expect(serverHome(page)).toBeVisible();
 
     // Watch across the whole window the lights-on gather could fire in.
     const woke: string[] = [];
@@ -1070,17 +1094,17 @@ test.describe('the motion gate (§5.3)', () => {
     // would — through the sidebar, not a reload, which would throw the module
     // away again. A cold chunk happens once per session and is the loader's
     // latency, not the engine's; measuring it would be measuring Vite.
-    await openLitLobby(page);
+    await openLitHome(page);
     await page.goto(`/app/guilds/${MOTION_GUILD_ID}/channels/${MOTION_VOICE_CHANNEL_ID}`);
     await expect(page.getByRole('button', { name: 'Join voice' })).toBeVisible();
     await page.getByRole('option', { name: /lobby/ }).click();
-    await expect(page.getByRole('region', { name: 'Lobby' })).toBeVisible();
+    await expect(serverHome(page)).toBeVisible();
     await page.waitForTimeout(1200);
     // The room's name is on its sidebar row AND on its Lobby card — which is
     // exactly why `transitionWith` needs an origin. The gate has to be as
     // specific as the click is.
     const card = page
-      .getByRole('region', { name: 'Lobby' })
+      .getByRole('region', { name: `${MOTION_GUILD_NAME} home` })
       .locator(`[data-motion-shared="room-${MOTION_VOICE_CHANNEL_ID}"]`)
       .first();
     await expect(card).toBeVisible();
@@ -1267,7 +1291,7 @@ test.describe('the motion gate (§5.3)', () => {
   test('someone arrives: window, rim, the strip, and the counts', async ({ page }) => {
     test.setTimeout(120_000);
     await page.setViewportSize({ width: 1440, height: 900 });
-    await openLitLobby(page);
+    await openLitHome(page);
 
     // Tomas walks into Shop floor while you are standing in the Lobby.
     const sample = await measureMoment(page, async () => {
@@ -1289,7 +1313,7 @@ test.describe('the motion gate (§5.3)', () => {
     // Start with only Priya in the room, so the other four have somewhere to go.
     await setStandingWorld({ world: litBuilding(['43']) });
     await page.goto(`/app/guilds/${MOTION_GUILD_ID}`);
-    await expect(page.getByRole('region', { name: 'Lobby' })).toBeVisible();
+    await expect(serverHome(page)).toBeVisible();
     await expect(page.locator('[data-motion-window][data-motion-lit]').first()).toBeVisible();
     await page.waitForTimeout(1400);
 
@@ -1317,7 +1341,7 @@ test.describe('the motion gate (§5.3)', () => {
   test('leaving is the mirror', async ({ page }) => {
     test.setTimeout(120_000);
     await page.setViewportSize({ width: 1440, height: 900 });
-    await openLitLobby(page);
+    await openLitHome(page);
 
     const sample = await measureMoment(page, async () => {
       await emitGateway(voiceFrame('43', null));
@@ -1329,11 +1353,13 @@ test.describe('the motion gate (§5.3)', () => {
     // room, so a building where somebody was signed in but in no room drew an
     // empty strip beside a "+1 lights on" count of that same person.
     await expect(
-      page.locator(`section[aria-label="Rooms"] [data-motion-person="43"]`),
+      page.locator(`article[aria-label="${MOTION_VOICE_CHANNEL_NAME}, live"] [data-motion-person="43"]`),
     ).toHaveCount(0);
-    // The rim dims and the face slides out — as a ghost, because the store
-    // update that told us has already taken the real face out of the tree.
-    expectRecipes('departure', sample, ['dim', 'leave']);
+    // The face slides out — as a ghost, because the store update that told us
+    // has already taken the real face out of the tree. The rim's dim is not a
+    // script animation any more: a rim is a shadow, and the motion law does
+    // not animate shadows (§5.2), so the light simply goes with the face.
+    expectRecipes('departure', sample, ['leave']);
     expectBudget('departure', sample);
   });
 
@@ -1359,7 +1385,7 @@ test.describe('the motion gate (§5.3)', () => {
       });
 
     // 1. Lights on — the building wakes after a gateway reconnect.
-    await openLitLobby(page);
+    await openLitHome(page);
     await capture(
       'lights-on',
       async () => { await dropStreams(); },
@@ -1386,7 +1412,7 @@ test.describe('the motion gate (§5.3)', () => {
     );
 
     // 3. Someone arrives — Tomas walks into Shop floor while you watch.
-    await openLitLobby(page);
+    await openLitHome(page);
     await capture(
       'arrives',
       async () => { await emitGateway(voiceFrame('44', MOTION_VOICE_CHANNEL_ID)); },
@@ -1472,9 +1498,16 @@ test.describe('the motion gate (§5.3)', () => {
       // The computed BOX-SHADOW, not the custom property: an unregistered
       // custom property reports the token stream it was written with (`calc(…)`
       // and all), and it is the shadow that says what is actually painted.
+      //
+      // The ring is painted by two still layers — the resting ring on ::before
+      // and the peak on ::after, whose OPACITY is what breathes — so both are
+      // read, in order. Their shadows never animate; only the voice moves them.
       const shadowAt = (level: string) => {
         el.style.setProperty('--voice-level', level);
-        const value = getComputedStyle(el).boxShadow;
+        const value = ['::before', '::after']
+          .map((pseudo) => getComputedStyle(el, pseudo).boxShadow)
+          .filter((shadow) => shadow && shadow !== 'none')
+          .join(', ');
         el.style.removeProperty('--voice-level');
         return value;
       };
@@ -1619,7 +1652,7 @@ test.describe('the motion gate (§5.3)', () => {
   test('the gateway goes away: the building dims, and relights when it is back', async ({ page }) => {
     test.setTimeout(180_000);
     await page.setViewportSize({ width: 1440, height: 900 });
-    await openLitLobby(page);
+    await openLitHome(page);
 
     const scrim = page.locator('#pc-motion-lights');
     await expect(scrim, 'the building was already dark').toHaveCount(0);
@@ -1938,7 +1971,7 @@ test.describe('the motion gate (§5.3)', () => {
 
     // 3. The power goes, over a real building.
     await page.goto('/app');
-    await openLitLobby(page);
+    await openLitHome(page);
     await capture(
       'outage',
       async () => {
@@ -2016,8 +2049,8 @@ test.describe('the motion gate (§5.3)', () => {
     await composer.press('Enter');
     await expect(page.getByLabel('Message history').getByText('No lift, no flash, no flicker.')).toBeVisible();
 
-    // A 0.01ms transition from the reduced-motion rules can still be in flight
-    // for a frame; after one settle nothing may be running.
+    // The reduced-motion rules zero every duration, so nothing is created; the
+    // settle is only for the commit that follows the send.
     await page.waitForTimeout(120);
     const running = await page.evaluate(() =>
       document.getAnimations().map((animation) => {
@@ -2031,7 +2064,7 @@ test.describe('the motion gate (§5.3)', () => {
     // room is walked into and somebody arrives, all with the engine silent.
     await setStandingWorld({ world: litBuilding() });
     await page.goto(`/app/guilds/${MOTION_GUILD_ID}`);
-    await expect(page.getByRole('region', { name: 'Lobby' })).toBeVisible();
+    await expect(serverHome(page)).toBeVisible();
     await expect(page.locator('[data-motion-window][data-motion-lit]').first()).toBeVisible();
     await page.waitForTimeout(900);
     await emitGateway(voiceFrame('44', MOTION_VOICE_CHANNEL_ID));
@@ -2059,7 +2092,7 @@ test.describe('the motion gate (§5.3)', () => {
     ).toBe(0);
 
     const join = page
-      .getByRole('region', { name: 'Lobby' })
+      .getByRole('region', { name: `${MOTION_GUILD_NAME} home` })
       .locator(`[data-motion-shared="room-${MOTION_VOICE_CHANNEL_ID}"]`)
       .first()
       .getByRole('button', { name: `Join ${MOTION_VOICE_CHANNEL_NAME}` });
@@ -2125,13 +2158,11 @@ test.describe('the motion gate (§5.3)', () => {
     report('lights-change (reduced motion — the app alone)', silentTheme);
     await expect(page.locator('html')).not.toHaveAttribute('data-theme', beforeTheme ?? 'dark');
     await expect(lights.getByText('Last run: none.')).toBeVisible();
-    // A longer settle than the other cases, and for a reason worth writing
-    // down: restyling this particular page is enormous — it is nine hundred
-    // table rows of live token values — and Chromium creates a 0.01ms
-    // `scrollbar-color` transition per row as it works through them. They are
-    // reduced-motion transitions doing exactly what the switch asks (0.01ms, no
-    // travel), but they trickle in for over a second, so a snapshot taken too
-    // early catches the tail of a repaint rather than motion.
+    // A longer settle than the other cases: restyling this page is enormous
+    // (nine hundred rows of live token values). The reduced-motion rules zero
+    // every duration, so no transition is created for any of it — they used to
+    // be 0.01ms, which made Chromium mint a `scrollbar-color` transition per
+    // row — but the restyle itself still takes its time.
     await page.waitForTimeout(1_800);
     const afterTheme = await page.evaluate(() =>
       document.getAnimations().map((animation) => {
@@ -2159,11 +2190,10 @@ test.describe('the motion gate (§5.3)', () => {
     // it just does not move to say it.
     await openRoom(page);
 
-    // The WP9d checks below count animations with a real duration. The global
-    // reduced-motion blanket turns every transition into a 0.01ms one-shot,
-    // and in this headless harness a 0.01ms transition can sit at
-    // `state: 'running'` forever — no frame is produced to retire it. The rule
+    // The WP9d checks below count animations with a real duration: the rule
     // being gated is "nothing moves", so the filter is "nothing that could".
+    // (The reduced-motion rules zero every duration now, so this filter should
+    // see nothing to filter; it stays as the statement of the rule.)
     const realAnimations = () =>
       page.evaluate(() =>
         document

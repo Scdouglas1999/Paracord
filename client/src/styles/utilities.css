@@ -106,9 +106,16 @@
 :root[data-motion='reduced'] *,
 :root[data-motion='reduced'] *::before,
 :root[data-motion='reduced'] *::after {
-  animation-duration: 0.01ms !important;
+  /* Zero, not "almost zero". Every element's transition-property is `all`
+     until something narrows it, so a 0.01ms duration on `*` turned EVERY
+     property change on the page into a transition object — a reorder on
+     /design-tokens started over a thousand of them (scrollbar-color, on every
+     element). A 0s transition is never created at all, and a 0s animation
+     lands its end state on the spot (fill modes still hold it). Nothing in
+     the app waits on transitionend/animationend. */
+  animation-duration: 0s !important;
   animation-iteration-count: 1 !important;
-  transition-duration: 0.01ms !important;
+  transition-duration: 0s !important;
   scroll-behavior: auto !important;
 }
 
