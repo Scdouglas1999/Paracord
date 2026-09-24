@@ -30,29 +30,48 @@ pub struct UpdateTargetInfo {
     installer_preference: String,
 }
 
+/// What the updater plugin knows this build as: the OS and architecture names
+/// it uses in latest.json and the bundle the binary was packaged in. The plugin
+/// picks the download from the same facts (`{os}-{arch}-{installer}`, then
+/// `{os}-{arch}`); the webview only uses this to name the file.
+///
+/// The bundle comes from the marker the bundler writes into each packaged
+/// binary. It used to be guessed from the executable's path, which inside an
+/// AppImage is the mounted binary rather than the `.AppImage`, so an AppImage
+/// was taken for a .deb install.
 #[tauri::command]
 pub fn get_update_target() -> UpdateTargetInfo {
-    let installer_preference = if cfg!(target_os = "windows") {
-        "msi".to_string()
-    } else if cfg!(target_os = "linux") {
-        let prefers_appimage = std::env::current_exe()
-            .ok()
-            .and_then(|p| p.to_str().map(|s| s.ends_with(".AppImage")))
-            .unwrap_or(false);
-        if prefers_appimage {
-            "appimage".to_string()
-        } else {
-            "deb".to_string()
-        }
-    } else {
-        "asset".to_string()
+    use tauri::utils::{config::BundleType, platform::bundle_type};
+
+    let installer_preference = match bundle_type() {
+        Some(BundleType::Msi) => "msi",
+        Some(BundleType::Nsis) => "nsis",
+        Some(BundleType::Deb) => "deb",
+        Some(BundleType::Rpm) => "rpm",
+        Some(BundleType::AppImage) => "appimage",
+        Some(BundleType::App) | Some(BundleType::Dmg) => "app",
+        _ => "",
+    };
+    let os = match std::env::consts::OS {
+        "macos" => "darwin",
+        other => other,
     };
 
     UpdateTargetInfo {
-        os: std::env::consts::OS.to_string(),
+        os: os.to_string(),
         arch: std::env::consts::ARCH.to_string(),
-        installer_preference,
+        installer_preference: installer_preference.to_string(),
     }
+}
+
+/// Start the app again once an update is installed. On Windows the updater's
+/// `install()` hands over to the installer and exits by itself; everywhere else
+/// it replaces the AppImage, the `.app` bundle or the package and returns with
+/// the old version still running, so "Restart to install" would otherwise
+/// install and then do nothing a person could see.
+#[tauri::command]
+pub fn restart_after_update(app: tauri::AppHandle) {
+    app.restart();
 }
 
 #[derive(Clone, Serialize)]

@@ -14,8 +14,10 @@ const DISMISSED_RELEASE_STORAGE_KEY = 'paracord.update.dismissed.release';
 type UpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded';
 
 interface UpdateTargetInfo {
+  /** The updater's name for this OS: windows, linux, darwin. */
   os: string;
   arch: string;
+  /** The bundle this build was packaged as (msi, nsis, deb, rpm, appimage, app), or '' when unknown. */
   installer_preference: string;
 }
 
@@ -25,7 +27,6 @@ interface AvailableUpdate {
   htmlUrl: string;
   publishedAt: string | null;
   assetName: string;
-  target: string | null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -42,21 +43,22 @@ function normalizeArch(arch: string): string {
   return arch;
 }
 
-function buildUpdaterTarget(targetInfo: UpdateTargetInfo): string | null {
-  const arch = normalizeArch(targetInfo.arch);
-
-  if (targetInfo.os === 'windows') {
-    return `windows-${arch}`;
-  }
-
-  if (targetInfo.os === 'linux') {
-    if (targetInfo.installer_preference === 'appimage') {
-      return `linux-${arch}-appimage`;
-    }
-    return `linux-${arch}-deb`;
-  }
-
-  return null;
+/**
+ * The latest.json keys the updater plugin tries for this build, in its order:
+ * `{os}-{arch}-{installer}`, then `{os}-{arch}`.
+ *
+ * Only used to name the file the toast is about. The plugin chooses the
+ * download itself from the bundle the app was packaged as; this used to pass it
+ * a key instead, guessed from the executable's path — which inside an AppImage
+ * is the mounted binary, never `*.AppImage`, so an AppImage asked for the .deb
+ * and would have written the package over itself — and an RPM install asked
+ * for the .deb too.
+ */
+function updaterKeys(targetInfo: UpdateTargetInfo): string[] {
+  const base = `${targetInfo.os}-${normalizeArch(targetInfo.arch)}`;
+  return targetInfo.installer_preference
+    ? [`${base}-${targetInfo.installer_preference}`, base]
+    : [base];
 }
 
 function fileNameFromUrl(url: string): string {
@@ -73,11 +75,11 @@ function releaseUrl(tag: string): string {
   return `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/tag/${tag}`;
 }
 
-function readAssetUrl(rawJson: Record<string, unknown>, target: string | null): string | null {
-  if (target) {
-    const platforms = rawJson.platforms;
-    if (isRecord(platforms)) {
-      const platformEntry = platforms[target];
+function readAssetUrl(rawJson: Record<string, unknown>, keys: string[]): string | null {
+  const platforms = rawJson.platforms;
+  if (isRecord(platforms)) {
+    for (const key of keys) {
+      const platformEntry = platforms[key];
       if (isRecord(platformEntry) && typeof platformEntry.url === 'string') {
         return platformEntry.url;
       }
@@ -91,7 +93,7 @@ function readAssetUrl(rawJson: Record<string, unknown>, target: string | null): 
   return null;
 }
 
-function extractUpdateInfo(update: Update, target: string | null): AvailableUpdate {
+function extractUpdateInfo(update: Update, keys: string[]): AvailableUpdate {
   const rawJson = isRecord(update.rawJson) ? update.rawJson : {};
   const version = normalizeVersion(update.version);
   const releaseTag =
@@ -109,7 +111,7 @@ function extractUpdateInfo(update: Update, target: string | null): AvailableUpda
       : typeof rawJson.published_at === 'string'
         ? rawJson.published_at
         : update.date ?? null;
-  const assetUrl = readAssetUrl(rawJson, target);
+  const assetUrl = readAssetUrl(rawJson, keys);
   const assetName = assetUrl ? fileNameFromUrl(assetUrl) : `Paracord ${version} update`;
 
   return {
@@ -118,7 +120,6 @@ function extractUpdateInfo(update: Update, target: string | null): AvailableUpda
     htmlUrl,
     publishedAt,
     assetName,
-    target,
   };
 }
 
@@ -186,8 +187,7 @@ export function UpdateNotification() {
 
     try {
       const targetInfo = await invoke<UpdateTargetInfo>('get_update_target');
-      const target = buildUpdaterTarget(targetInfo);
-      const update = await check(target ? { target, timeout: 15_000 } : { timeout: 15_000 });
+      const update = await check({ timeout: 15_000 });
 
       if (!update) {
         await closeActiveUpdate();
@@ -197,7 +197,7 @@ export function UpdateNotification() {
         return;
       }
 
-      const info = extractUpdateInfo(update, target);
+      const info = extractUpdateInfo(update, updaterKeys(targetInfo));
       const dismissedRelease = window.localStorage.getItem(DISMISSED_RELEASE_STORAGE_KEY);
       if (dismissedRelease === info.releaseTag) {
         await closeActiveUpdate();
@@ -284,6 +284,10 @@ export function UpdateNotification() {
     setErrorText(null);
     try {
       await update.install();
+      // Windows never gets here: its installer takes over and closes the app.
+      // On Linux and macOS the new version is in place and this one is still
+      // running, so start it.
+      await invoke('restart_after_update');
     } catch (error) {
       setErrorText(getErrorMessage(error));
     }

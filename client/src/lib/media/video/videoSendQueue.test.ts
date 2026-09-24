@@ -47,8 +47,8 @@ describe('VideoSendQueue', () => {
 
     expect(onError).toHaveBeenCalledTimes(1);
     expect(queue.stats.failed).toBe(1);
-    // A later frame still goes out — one refusal does not stop publishing.
-    queue.enqueue(2, false);
+    // A later keyframe still goes out — one refusal does not stop publishing.
+    queue.enqueue(2, true);
     await queue.idle();
     expect(queue.stats.failed).toBe(2);
     // …and it is not reported again inside the same run of failures.
@@ -102,6 +102,66 @@ describe('VideoSendQueue', () => {
     gate.resolve();
     await queue.idle();
     expect(sent).toEqual([1, 4]);
+  });
+
+  it('withholds every delta after a dropped one until a keyframe, and asks for it once', async () => {
+    const gate = deferred();
+    const sent: number[] = [];
+    const onChainBroken = vi.fn();
+    const queue = new VideoSendQueue<number>(
+      async (frame) => {
+        sent.push(frame);
+        await gate.promise;
+      },
+      { depth: 2, onChainBroken },
+    );
+
+    queue.enqueue(1, true); // in flight
+    queue.enqueue(2, false);
+    queue.enqueue(3, false); // depth reached
+    queue.enqueue(4, false); // dropped: the chain breaks here
+    gate.resolve();
+    await queue.idle();
+    // 5 and 6 predict from 4, which never left: sending them would hand the
+    // viewer deltas that do not follow from anything it has.
+    queue.enqueue(5, false);
+    queue.enqueue(6, false);
+    await queue.idle();
+    expect(sent).toEqual([1, 2, 3]);
+    expect(onChainBroken).toHaveBeenCalledTimes(1);
+
+    queue.enqueue(7, true);
+    queue.enqueue(8, false);
+    await queue.idle();
+    expect(sent).toEqual([1, 2, 3, 7, 8]);
+    expect(queue.stats).toMatchObject({ dropped: 3, chainBreaks: 1 });
+  });
+
+  it('drops the deltas queued behind a refused send, but not a keyframe waiting there', async () => {
+    const gate = deferred();
+    const sent: number[] = [];
+    const onChainBroken = vi.fn();
+    const queue = new VideoSendQueue<number>(
+      async (frame) => {
+        if (frame === 2) {
+          await gate.promise;
+          throw new Error('Failed to create send stream.');
+        }
+        sent.push(frame);
+      },
+      { depth: 3, onChainBroken },
+    );
+
+    queue.enqueue(2, true); // in flight, will be refused
+    queue.enqueue(3, false); // orphaned by the refusal
+    queue.enqueue(4, true); // restarts the chain
+    queue.enqueue(5, false);
+    gate.resolve();
+    await queue.idle();
+
+    expect(sent).toEqual([4, 5]);
+    // The keyframe was already waiting, so there was nothing to ask for.
+    expect(onChainBroken).not.toHaveBeenCalled();
   });
 
   it('goes quiet when the session ends rather than reporting every frame', async () => {

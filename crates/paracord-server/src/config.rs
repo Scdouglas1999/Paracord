@@ -960,6 +960,9 @@ auto_generate = {tls_auto}
 # Optional ACME automation (certbot HTTP-01 webroot flow).
 enabled = {acme_enabled}
 client_path = "{acme_client_path}"
+# The ACME server to ask. Let's Encrypt production by default; point it at
+# https://acme-staging-v02.api.letsencrypt.org/directory while testing, or at any
+# other RFC 8555 CA. Env override: PARACORD_TLS_ACME_DIRECTORY_URL
 directory_url = "{acme_directory_url}"
 # email = "ops@example.com"
 # domains = ["chat.example.com"]

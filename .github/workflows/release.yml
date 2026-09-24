@@ -414,6 +414,31 @@ jobs:
           done
           npx tauri build --target ${{ matrix.target }} --bundles app,dmg
 
+      # The bundler names the updater archive after the product alone
+      # (Paracord.app.tar.gz), so the Apple Silicon and Intel archives arrive
+      # with one name: the release step refuses two assets with the same name,
+      # and the manifest could only have pointed both architectures at one of
+      # them. Give each its version and architecture; the signature covers the
+      # contents, not the name.
+      - name: Name the updater archive after its architecture
+        if: ${{ env.HAS_SIGNING_KEY == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          dir="target/${{ matrix.target }}/release/bundle/macos"
+          shopt -s nullglob
+          archives=("$dir"/*.app.tar.gz)
+          if [ "${#archives[@]}" -ne 1 ]; then
+            echo "expected exactly one updater archive in $dir, found ${#archives[@]}" >&2
+            exit 1
+          fi
+          archive="${archives[0]}"
+          named="$dir/$(basename "$archive" .app.tar.gz)_${version}_${{ matrix.arch }}.app.tar.gz"
+          mv "$archive" "$named"
+          mv "$archive.sig" "$named.sig"
+          ls -l "$dir"
+
       - name: Upload client macOS bundles
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -657,101 +682,27 @@ jobs:
       - name: List artifacts
         run: find artifacts -type f | sort
 
-      - name: Generate updater manifest (latest.json)
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          version="${GITHUB_REF_NAME#v}"
-          tag="${GITHUB_REF_NAME}"
-          repo="${GITHUB_REPOSITORY}"
-          pub_date="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-
-          msi_sig_path="$(find artifacts/client-windows-msi -maxdepth 1 -type f -name '*.msi.sig' 2>/dev/null | head -n1)"
-          appimage_sig_path="$(find artifacts/client-linux-appimage -maxdepth 1 -type f -name '*.AppImage.sig' 2>/dev/null | head -n1)"
-          deb_sig_path="$(find artifacts/client-linux-deb -maxdepth 1 -type f -name '*.deb.sig' 2>/dev/null | head -n1)"
-          mac_arm_sig_path="$(find artifacts/client-macos-aarch64 -maxdepth 2 -type f -name '*.app.tar.gz.sig' 2>/dev/null | head -n1)"
-          mac_x64_sig_path="$(find artifacts/client-macos-x86_64 -maxdepth 2 -type f -name '*.app.tar.gz.sig' 2>/dev/null | head -n1)"
-
-          # Only generate latest.json if all signature files exist (signing key was configured)
-          if [ -z "$msi_sig_path" ] || [ -z "$appimage_sig_path" ] || [ -z "$deb_sig_path" ]; then
-            echo "Signing artifacts not found - skipping latest.json generation"
-            exit 0
-          fi
-
-          # A macOS entry is only written when that architecture actually built.
-          # Publishing a platform key with no artifact behind it is worse than
-          # omitting it: the updater would offer an update it cannot fetch.
-          if [ -z "$mac_arm_sig_path" ] || [ -z "$mac_x64_sig_path" ]; then
-            echo "::warning::macOS updater artifacts missing - latest.json will not offer macOS updates"
-          fi
-
-          msi_path="${msi_sig_path%.sig}"
-          appimage_path="${appimage_sig_path%.sig}"
-          deb_path="${deb_sig_path%.sig}"
-
-          msi_name="$(basename "$msi_path")"
-          appimage_name="$(basename "$appimage_path")"
-          deb_name="$(basename "$deb_path")"
-
-          msi_sig="$(tr -d '\r\n' < "$msi_sig_path")"
-          appimage_sig="$(tr -d '\r\n' < "$appimage_sig_path")"
-          deb_sig="$(tr -d '\r\n' < "$deb_sig_path")"
-
-          mac_arm_url=""; mac_arm_sig=""
-          if [ -n "$mac_arm_sig_path" ]; then
-            mac_arm_sig="$(tr -d '\r\n' < "$mac_arm_sig_path")"
-            mac_arm_url="https://github.com/${repo}/releases/download/${tag}/$(basename "${mac_arm_sig_path%.sig}")"
-          fi
-          mac_x64_url=""; mac_x64_sig=""
-          if [ -n "$mac_x64_sig_path" ]; then
-            mac_x64_sig="$(tr -d '\r\n' < "$mac_x64_sig_path")"
-            mac_x64_url="https://github.com/${repo}/releases/download/${tag}/$(basename "${mac_x64_sig_path%.sig}")"
-          fi
-
-          msi_url="https://github.com/${repo}/releases/download/${tag}/${msi_name}"
-          appimage_url="https://github.com/${repo}/releases/download/${tag}/${appimage_name}"
-          deb_url="https://github.com/${repo}/releases/download/${tag}/${deb_name}"
-
-          jq -n \
-            --arg version "$version" \
-            --arg notes "Signed desktop update ${version}" \
-            --arg pub_date "$pub_date" \
-            --arg msi_url "$msi_url" \
-            --arg msi_sig "$msi_sig" \
-            --arg appimage_url "$appimage_url" \
-            --arg appimage_sig "$appimage_sig" \
-            --arg deb_url "$deb_url" \
-            --arg deb_sig "$deb_sig" \
-            --arg mac_arm_url "$mac_arm_url" \
-            --arg mac_arm_sig "$mac_arm_sig" \
-            --arg mac_x64_url "$mac_x64_url" \
-            --arg mac_x64_sig "$mac_x64_sig" \
-            '{
-              version: $version,
-              notes: $notes,
-              pub_date: $pub_date,
-              platforms: ({
-                "windows-x86_64": { url: $msi_url, signature: $msi_sig },
-                "linux-x86_64": { url: $deb_url, signature: $deb_sig },
-                "linux-x86_64-deb": { url: $deb_url, signature: $deb_sig },
-                "linux-x86_64-appimage": { url: $appimage_url, signature: $appimage_sig }
-              }
-              + (if $mac_arm_url == "" then {} else
-                  { "darwin-aarch64": { url: $mac_arm_url, signature: $mac_arm_sig } } end)
-              + (if $mac_x64_url == "" then {} else
-                  { "darwin-x86_64": { url: $mac_x64_url, signature: $mac_x64_sig } } end))
-            }' > artifacts/latest.json
-
-          cat artifacts/latest.json
-
       - uses: actions/checkout@v4
         with:
-          sparse-checkout: RELEASE_NOTES.md
+          sparse-checkout: |
+            RELEASE_NOTES.md
+            scripts/generate_updater_manifest.py
           sparse-checkout-cone-mode: false
           # Check out into a subdirectory so this checkout cannot wipe the
           # already-downloaded `artifacts/` directory in the workspace root.
           path: _release_src
+
+      # The manifest logic lives in a script so the exact file a release
+      # publishes can be produced and checked locally from signed test files.
+      - name: Generate updater manifest (latest.json)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 _release_src/scripts/generate_updater_manifest.py \
+            --artifacts artifacts \
+            --tag "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --out artifacts/latest.json
 
       - name: Build release body from RELEASE_NOTES.md
         shell: bash
@@ -775,9 +726,9 @@ jobs:
           | Server (Linux x64) | `paracord-server-linux-x64-*.tar.gz` |
           | Client Installer (Windows) | `Paracord-Setup-*.exe` |
           | Client MSI (Windows) | `Paracord_*_x64_en-US.msi` |
-          | Client AppImage (Linux) | `Paracord_*.AppImage` |
-          | Client deb (Linux) | `paracord_*_amd64.deb` |
-          | Client rpm (Fedora/RHEL) | `paracord-*.x86_64.rpm` |
+          | Client AppImage (Linux) | `Paracord_*_amd64.AppImage` |
+          | Client deb (Linux) | `Paracord_*_amd64.deb` |
+          | Client rpm (Fedora/RHEL) | `Paracord-*-1.x86_64.rpm` |
           | Client (macOS, Apple Silicon) | `Paracord_*_aarch64.dmg` |
           | Client (macOS, Intel) | `Paracord_*_x64.dmg` |
           | Server (macOS) | `paracord-server-macos-*.tar.gz` |

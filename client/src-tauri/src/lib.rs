@@ -1815,6 +1815,7 @@ pub fn run() {
         commands::greet,
         commands::get_app_version,
         commands::get_update_target,
+        commands::restart_after_update,
         commands::append_client_log,
         commands::get_client_log_path,
         commands::secure_store_set,

@@ -11,6 +11,8 @@ import type { MediaKeyring } from './mediaKeyring';
 export interface VideoReassemblyState {
   streamId: string;
   trackId: string;
+  layerId: number;
+  timestampUs: bigint;
   codec: number;
   fragmentCount: number;
   isKeyframe: boolean;
@@ -25,6 +27,10 @@ export interface ReassembledVideoFrame {
   isKeyframe: boolean;
   streamId: string;
   trackId: string;
+  /** The simulcast layer this frame was encoded for. */
+  layerId: number;
+  /** The publisher's capture timestamp, shared by every layer of the track. */
+  timestampUs: bigint;
   codec: string;
 }
 
@@ -77,6 +83,8 @@ export function reassembleVideoPayload(
       isKeyframe: metadata.isKeyframe,
       streamId: metadata.streamId,
       trackId: metadata.trackId,
+      layerId: metadata.layerId,
+      timestampUs: metadata.timestampUs,
       codec: codecLabelFromHeader(metadata.codec),
     };
   }
@@ -98,6 +106,8 @@ export function reassembleVideoPayload(
     entry = {
       streamId: metadata.streamId,
       trackId: metadata.trackId,
+      layerId: metadata.layerId,
+      timestampUs: metadata.timestampUs,
       codec: metadata.codec,
       fragmentCount: metadata.fragmentCount,
       isKeyframe: metadata.isKeyframe,
@@ -136,8 +146,95 @@ export function reassembleVideoPayload(
     isKeyframe: entry.isKeyframe,
     streamId: entry.streamId,
     trackId: entry.trackId,
+    layerId: entry.layerId,
+    timestampUs: entry.timestampUs,
     codec: codecLabelFromHeader(entry.codec),
   };
+}
+
+/** What {@link VideoDecodeGate.admit} decided for one arriving frame. */
+export interface VideoDecodeGateResult<F> {
+  /** Frames to hand to the decoder now, in this order. */
+  decode: F[];
+  /** The chain cannot continue until a keyframe arrives; ask the publisher for one. */
+  needKeyframe: boolean;
+}
+
+/** How many deltas of a layer whose keyframe is still in flight are held. */
+const VIDEO_GATE_MAX_HELD = 60;
+
+/**
+ * Puts one subscription's frames into a single chain a decoder can follow.
+ *
+ * A decoder is only ever fed a keyframe and then deltas of the SAME simulcast
+ * layer that come after it. Two things break that on the wire, and each one
+ * throws a WebCodecs decoder into its terminal `closed` state with "Decoding
+ * error":
+ *
+ * - **A layer switch.** The relay flips a viewer to another layer at that
+ *   layer's keyframe, but the keyframe rides a reliable unidirectional stream
+ *   while the deltas behind it ride datagrams, so the new layer's first deltas
+ *   routinely arrive before its keyframe. Fed straight in, a 704x360 delta lands
+ *   on a 384x180 picture.
+ * - **Late frames.** A delta from before the latest keyframe (a datagram that
+ *   lost the race with the stream) references a picture the decoder no longer
+ *   holds.
+ *
+ * So: a keyframe always starts a new chain (it decodes on its own, and a
+ * publisher that restarts its clock starts over from one); a delta of the
+ * chain's layer is decoded unless it is older than what was already decoded; a
+ * newer delta of another layer is held until that layer's keyframe arrives and
+ * is then replayed behind it in capture order; everything else is dropped.
+ *
+ * Every layer of a track is stamped from the same capture clock, which is what
+ * makes `timestampUs` comparable across a switch.
+ */
+export class VideoDecodeGate<
+  F extends { isKeyframe: boolean; layerId: number; timestampUs: bigint },
+> {
+  private layerId: number | null = null;
+  private lastTimestampUs = 0n;
+  private held: F[] = [];
+
+  /** Forget the chain, e.g. when the decoder behind it was rebuilt. */
+  reset(): void {
+    this.layerId = null;
+    this.lastTimestampUs = 0n;
+    this.held = [];
+  }
+
+  admit(frame: F): VideoDecodeGateResult<F> {
+    if (frame.isKeyframe) {
+      const behind = this.held
+        .filter(
+          (held) =>
+            held.layerId === frame.layerId && held.timestampUs > frame.timestampUs,
+        )
+        .sort((a, b) => (a.timestampUs < b.timestampUs ? -1 : a.timestampUs > b.timestampUs ? 1 : 0));
+      this.held = [];
+      this.layerId = frame.layerId;
+      this.lastTimestampUs =
+        behind.length > 0 ? behind[behind.length - 1].timestampUs : frame.timestampUs;
+      return { decode: [frame, ...behind], needKeyframe: false };
+    }
+
+    if (this.layerId !== null && frame.timestampUs < this.lastTimestampUs) {
+      // Older than the picture already decoded: whichever layer it is from,
+      // nothing after it in the chain can use it.
+      return { decode: [], needKeyframe: false };
+    }
+
+    if (this.layerId === frame.layerId) {
+      this.lastTimestampUs = frame.timestampUs;
+      return { decode: [frame], needKeyframe: false };
+    }
+
+    this.held.push(frame);
+    if (this.held.length > VIDEO_GATE_MAX_HELD) {
+      this.held.shift();
+    }
+    return { decode: [], needKeyframe: true };
+  }
 }
 
 /**

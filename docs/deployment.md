@@ -105,6 +105,12 @@ and invite links carry a name instead of an address.
    went wrong each time. After that it renews on its own schedule
    (`renew_interval_seconds`, every 12 hours by default).
 
+   To try this out without spending Let's Encrypt's rate limits, point
+   `directory_url` under `[tls.acme]` at its staging server,
+   `https://acme-staging-v02.api.letsencrypt.org/directory`, then remove the
+   line (the default is Let's Encrypt's production server) once it works. Any
+   other ACME certificate authority works the same way.
+
 If you would rather run a reverse proxy such as Caddy or nginx on the standard
 ports, the next section covers that instead. Either way, the self-made
 certificate and its browser warning are only for trying Paracord out.

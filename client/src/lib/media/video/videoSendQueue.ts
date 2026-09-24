@@ -1,5 +1,5 @@
 /**
- * One publisher's outbound video, serialised and bounded.
+ * One simulcast layer's outbound video, serialised and bounded.
  *
  * A `VideoEncoder`'s output callback is synchronous and publishing a frame is
  * not: a keyframe is encrypted and then written to a **fresh WebTransport
@@ -19,11 +19,20 @@
  * - a keyframe clears the delta frames waiting behind it — none of them can be
  *   decoded without a keyframe that is now newer than they are — and takes
  *   their place;
- * - a delta frame arriving into a full queue is dropped where it stands, which
- *   keeps the frames already queued contiguous.
+ * - a delta frame arriving into a full queue is dropped, and so is every delta
+ *   after it until the next keyframe: each one predicts from the frame before
+ *   it, so once one is missing the rest decode to garbage or, in a WebCodecs
+ *   decoder, to "Decoding error" and a decoder that is closed for good. The
+ *   queue reports the break once (`onChainBroken`) so the publisher can encode
+ *   a keyframe now instead of at its next scheduled one.
  *
- * Either way the next keyframe restores the picture, which is the same contract
- * the datagram path has always had.
+ * A send that fails breaks the chain the same way.
+ *
+ * **One queue per layer.** Every simulcast layer is its own chain. A shared
+ * queue let one layer's keyframe clear another layer's deltas (and another
+ * layer's keyframe), and let a slow keyframe stream on one layer starve the
+ * rest — which is how a viewer came to be sent a keyframe and then a delta that
+ * did not follow from it.
  */
 
 /** One queued frame, with the one fact back-pressure needs to know about it. */
@@ -44,6 +53,12 @@ export interface VideoSendQueueOptions {
    * so once rather than thousands of times.
    */
   onError?: (error: unknown, stats: VideoSendQueueStats) => void;
+  /**
+   * Told when a frame of this layer's chain is lost (dropped for back-pressure
+   * or refused by the transport). Deltas are withheld from then until the next
+   * keyframe; the listener should ask the encoder for one.
+   */
+  onChainBroken?: (stats: VideoSendQueueStats) => void;
 }
 
 export interface VideoSendQueueStats {
@@ -53,6 +68,8 @@ export interface VideoSendQueueStats {
   failed: number;
   /** Sends that have rejected in an unbroken run up to now. */
   consecutiveFailures: number;
+  /** Times the chain broke and the queue began waiting for a keyframe. */
+  chainBreaks: number;
 }
 
 /** How many failures apart the repeat reports are. */
@@ -62,11 +79,14 @@ export class VideoSendQueue<T> {
   private readonly queue: Array<QueuedFrame<T>> = [];
   private readonly depth: number;
   private readonly onError?: VideoSendQueueOptions['onError'];
+  private readonly onChainBroken?: VideoSendQueueOptions['onChainBroken'];
   private pump: Promise<void> | null = null;
   private stopped = false;
+  private awaitingKeyframe = false;
   private dropped = 0;
   private failed = 0;
   private consecutiveFailures = 0;
+  private chainBreaks = 0;
 
   constructor(
     private readonly send: (frame: T) => Promise<void>,
@@ -74,6 +94,7 @@ export class VideoSendQueue<T> {
   ) {
     this.depth = Math.max(1, options.depth ?? 2);
     this.onError = options.onError;
+    this.onChainBroken = options.onChainBroken;
   }
 
   get stats(): VideoSendQueueStats {
@@ -81,6 +102,7 @@ export class VideoSendQueue<T> {
       dropped: this.dropped,
       failed: this.failed,
       consecutiveFailures: this.consecutiveFailures,
+      chainBreaks: this.chainBreaks,
     };
   }
 
@@ -98,9 +120,16 @@ export class VideoSendQueue<T> {
   enqueue(frame: T, isKeyframe: boolean): void {
     if (this.stopped) return;
 
+    if (!isKeyframe && this.awaitingKeyframe) {
+      // The chain this delta belongs to is already broken.
+      this.dropped += 1;
+      return;
+    }
+
     if (this.queue.length >= this.depth) {
       if (!isKeyframe) {
         this.dropped += 1;
+        this.breakChain('tail');
         return;
       }
       // A keyframe supersedes everything waiting: the deltas behind it are
@@ -109,6 +138,7 @@ export class VideoSendQueue<T> {
       this.queue.length = 0;
     }
 
+    if (isKeyframe) this.awaitingKeyframe = false;
     this.queue.push({ frame, isKeyframe });
     if (!this.pump) this.pump = this.drain();
   }
@@ -148,6 +178,28 @@ export class VideoSendQueue<T> {
     }
   }
 
+  /**
+   * A frame of the chain is gone. `lostAt` says where: `'tail'` for a frame
+   * that never joined the queue (everything queued came before it and is still
+   * good), `'head'` for the frame just taken off the front (everything queued
+   * came after it, so the deltas up to the next queued keyframe are not).
+   * Deltas are then withheld until a keyframe starts a new chain.
+   */
+  private breakChain(lostAt: 'head' | 'tail'): void {
+    if (lostAt === 'head') {
+      const restart = this.queue.findIndex((queued) => queued.isKeyframe);
+      const orphaned = restart === -1 ? this.queue.length : restart;
+      this.dropped += orphaned;
+      this.queue.splice(0, orphaned);
+      // The keyframe that restarts the chain is already waiting.
+      if (restart !== -1) return;
+    }
+    if (this.awaitingKeyframe) return;
+    this.awaitingKeyframe = true;
+    this.chainBreaks += 1;
+    this.onChainBroken?.(this.stats);
+  }
+
   private recordFailure(error: unknown): void {
     this.failed += 1;
     this.consecutiveFailures += 1;
@@ -158,6 +210,8 @@ export class VideoSendQueue<T> {
       this.stop();
       return;
     }
+
+    this.breakChain('head');
 
     if (
       this.consecutiveFailures === 1 ||

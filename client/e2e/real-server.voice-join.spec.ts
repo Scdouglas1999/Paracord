@@ -1002,12 +1002,22 @@ test('two browsers in one room see each other — one on camera, one sharing a s
       hostTileOnGuest.getByText(/camera is off/),
       'the tile must stop reporting a camera that is off once frames arrive',
     ).toHaveCount(0, { timeout: 60_000 });
-    const cameraTile = await tileBrightness(guest, hostTileOnGuest);
-    expect(
-      cameraTile.litFraction,
-      `the host's camera tile is still dark (${JSON.stringify(cameraTile)})`,
-    ).toBeGreaterThan(0.2);
-    expect(cameraTile.distinctColours).toBeGreaterThan(8);
+    // The flag flips on the first *decoded* frame; the renderer paints it on the
+    // next animation frame. Measuring once, straight after the flag, raced that
+    // paint and read the empty well — so wait for the picture itself.
+    let cameraTile = await tileBrightness(guest, hostTileOnGuest);
+    await expect
+      .poll(
+        async () => {
+          cameraTile = await tileBrightness(guest, hostTileOnGuest);
+          return cameraTile.litFraction > 0.2 && cameraTile.distinctColours > 8;
+        },
+        {
+          message: `the host's camera tile never showed a picture`,
+          timeout: 15_000,
+        },
+      )
+      .toBe(true);
     await guest.screenshot({ path: shotPath('browser-video-camera-seen.png') });
 
     // 4. The other direction: the host opens the guest's share and decodes it.
@@ -1062,6 +1072,13 @@ test('two browsers in one room see each other — one on camera, one sharing a s
     //    subscription about nine times a second — 812 `VideoDecoder`s and 812
     //    WebGL contexts per browser in ninety seconds, measured, while the tile
     //    and the share viewer it collided with lost their picture each time.
+    //
+    //    The one exception is exact: a WebCodecs decoder that reports an error
+    //    (a datagram lost on a starved runner breaks the VP9 chain) is closed for
+    //    good, and the engine replaces it and asks for a keyframe — one new
+    //    decoder per error, both of which the probe counts. Before that
+    //    replacement existed, one lost frame ended the picture for the rest of
+    //    the call, which is what "X is not sharing" and "stopped decoding" were.
     const settled = await Promise.all(
       [
         { label: 'host', page: host },
@@ -1073,8 +1090,9 @@ test('two browsers in one room see each other — one on camera, one sharing a s
       const now = await readVideoProbe(page);
       expect(
         now.decoders - probe.decoders,
-        `${label} built ${now.decoders - probe.decoders} more decoders in fifteen settled seconds`,
-      ).toBe(0);
+        `${label} built ${now.decoders - probe.decoders} more decoders in fifteen settled seconds ` +
+          `(${now.errors - probe.errors} of them replacing a decoder that failed)`,
+      ).toBe(now.errors - probe.errors);
       expect(
         now.decodedFrames,
         `${label} stopped decoding while the call was still running`,
