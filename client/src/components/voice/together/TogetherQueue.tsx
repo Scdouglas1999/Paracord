@@ -41,13 +41,15 @@ export function TogetherQueue({ session, api, selfUserId, nameOf, onAdd, classNa
           Add
         </Button>
       </div>
-      <ol className="flex min-h-0 flex-col gap-1 overflow-y-auto pr-0.5" onDragLeave={() => setOver(null)}>
+      <ol role="listbox" aria-label="Queue" className="flex min-h-0 flex-col gap-1 overflow-y-auto pr-0.5" onDragLeave={() => setOver(null)}>
         {session.items.map((item, index) => {
           const current = index === session.current_index;
           return (
             <li
               key={item.id}
               draggable={allowed}
+              role="option"
+              aria-selected={current}
               tabIndex={0}
               aria-current={current ? 'true' : undefined}
               aria-label={`${item.title}${current ? ', playing now' : ''}`}

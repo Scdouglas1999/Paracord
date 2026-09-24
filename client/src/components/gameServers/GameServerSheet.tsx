@@ -98,6 +98,7 @@ export function GameServerSheet({ guildId, open, editing = null, onClose, channe
       setChannelId(defaultChannel(channels));
     }
     // Only on open: the channel list changing must not wipe what was typed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, editing]);
 
   // The live check: "Checking…", then what answered.

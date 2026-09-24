@@ -1023,7 +1023,7 @@ function OwnedMessageList({
     }
     if (hoveredRef.current !== id) setHoveredMessageId(id);
   };
-  const holdHoverForScroll = () => {
+  const holdHoverForScroll = useCallback(() => {
     const hold = hoverHold.current;
     hold.until = performance.now() + 140;
     if (hoveredRef.current !== null) {
@@ -1038,7 +1038,7 @@ function OwnedMessageList({
       hold.dirty = false;
       if (hoveredRef.current !== hold.pending) setHoveredMessageId(hold.pending);
     }, 150);
-  };
+  }, []);
   const setFocusedMessageId = (value: string | null | ((curr: string | null) => string | null)) =>
     dispatchUI({ slice: 'popup', patch: (s) => ({ focusedMessageId: typeof value === 'function' ? value(s.focusedMessageId) : value }) });
   const setMenuMessageId = (value: string | null | ((curr: string | null) => string | null)) =>
@@ -2077,7 +2077,7 @@ function OwnedMessageList({
       };
       loadMore();
     }
-  }, [hasMore, isLoading, loadMore, markLatestRead, messages]);
+  }, [hasMore, holdHoverForScroll, isLoading, loadMore, markLatestRead, messages]);
 
   const scrollToBottom = useCallback(() => {
     // "Jump to present" has to mean the present. A reader who scrolled a long

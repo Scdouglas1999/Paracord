@@ -285,6 +285,7 @@ function ItemPlayer({ item, session, serverId, api, variant, volume, muted, onSt
       {!status.error && status.needsGesture && (
         <button
           type="button"
+          aria-label="Tap to start"
           onClick={onTapToStart}
           className={cn(
             'pc-focusable absolute inset-0 flex flex-col items-center justify-center gap-2 bg-bg-well',
@@ -386,6 +387,8 @@ function ElementMedia({
 
   if (!src) return null;
   return (
+    // Shared videos are pasted links and posted files; they come without caption tracks.
+    // eslint-disable-next-line jsx-a11y/media-has-caption
     <video
       ref={videoRef}
       src={src}

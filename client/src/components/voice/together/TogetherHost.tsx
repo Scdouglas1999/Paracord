@@ -117,6 +117,7 @@ export function TogetherHost() {
   }, [activityKey]);
   useEffect(() => () => setActivitySource('together', null), []);
 
+  const hasSession = session != null;
   // Lay the player over the slot, following it through layout changes and the
   // Stage's own entrance motion.
   //
@@ -180,7 +181,7 @@ export function TogetherHost() {
       document.removeEventListener('animationstart', follow, true);
       document.removeEventListener('transitionrun', follow, true);
     };
-  }, [slot, session != null]);
+  }, [slot, hasSession]);
 
   const onStatus = useCallback(
     (status: PlayerStatus) => {

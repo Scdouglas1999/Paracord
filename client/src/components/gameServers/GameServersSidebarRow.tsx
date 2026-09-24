@@ -27,8 +27,6 @@ export function GameServersSidebarRow({ guildName, servers }: { guildName: strin
         ref={anchor}
         role="option"
         aria-selected={false}
-        aria-haspopup="dialog"
-        aria-expanded={open}
         tabIndex={-1}
         icon={<Gamepad2 size={16} />}
         onClick={() => setOpen((current) => !current)}

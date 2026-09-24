@@ -342,7 +342,7 @@ export function TogetherSheet({
         )}
 
         {(!session || isStarter) && (
-          <label className="flex items-center justify-between gap-3">
+          <div className="flex items-center justify-between gap-3">
             <span className="flex min-w-0 flex-col">
               <span className="text-label text-text-primary">Only I can control it</span>
               <span className="text-meta text-text-muted">Others can still watch and listen</span>
@@ -353,7 +353,7 @@ export function TogetherSheet({
               checked={session ? session.controller_policy === 'starter' : onlyMe}
               onChange={(next) => void setPolicy(next)}
             />
-          </label>
+          </div>
         )}
 
         {error && (
