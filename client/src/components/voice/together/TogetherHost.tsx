@@ -5,6 +5,7 @@ import { create } from 'zustand';
 import { createTogetherApi } from '../../../api/together';
 import { gateway } from '../../../gateway/manager';
 import { currentItem } from '../../../lib/together/model';
+import { setActivitySource } from '../../../lib/presenceActivities';
 import { togetherActivity } from '../../../lib/together/presence';
 import { useTogetherStore } from '../../../stores/togetherStore';
 import { useVoiceStore } from '../../../stores/voiceStore';
@@ -109,10 +110,12 @@ export function TogetherHost() {
   // lasts. The shared activity composer sends it (Now playing workstream).
   const activity = togetherActivity(inServerCall ? session : null);
   const activityKey = activity ? `${activity.type}|${activity.details}` : '';
+  const activityRef = useRef(activity);
+  activityRef.current = activity;
   useEffect(() => {
-    // presence: setActivitySource('together', activity)
-    void activityKey;
+    setActivitySource('together', activityRef.current);
   }, [activityKey]);
+  useEffect(() => () => setActivitySource('together', null), []);
 
   // Lay the player over the slot, following it through layout changes and the
   // Stage's own entrance motion.
