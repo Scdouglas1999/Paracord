@@ -23,7 +23,7 @@
 </p>
 
 <p align="center">
-  Current release: <strong>v3.2.0</strong> — <a href="RELEASE_NOTES.md">what changed</a>
+  Current release: <strong>v3.3.0</strong> — <a href="RELEASE_NOTES.md">what changed</a>
 </p>
 
 ---
@@ -186,7 +186,7 @@ shasum -a 256 --ignore-missing -c SHA256SUMS.txt
 Each file you have should say `OK`. On Windows, in PowerShell:
 
 ```powershell
-(Get-FileHash .\paracord-server-windows-x64-3.2.0.zip).Hash
+(Get-FileHash .\paracord-server-windows-x64-3.3.0.zip).Hash
 ```
 
 and compare the result with that file's line in `SHA256SUMS.txt` (the case of the letters
@@ -262,6 +262,12 @@ controls, over Paracord's own QUIC transport: raw QUIC in the desktop app, WebTr
 the browser. Opus audio with RNNoise noise suppression, VP9 video, speaker detection, and
 media frames the relay cannot read.
 
+**Together in a call.** Watch or listen together: paste a YouTube link or a direct video or
+audio link, or pick a file posted in the server, and everyone in the call plays it in step,
+with a shared queue. A soundboard of the server's own short sounds. Share what you're listening
+to from your system's media controls (desktop app, off by default), and see who's talking in a
+voice channel without joining it.
+
 **Direct messages.** One-to-one and group conversations, encrypted end to end
 ([how it works](docs/encryption.md)). Text and
 attachments are both encrypted on your device, so the server stores files it cannot read and
@@ -282,6 +288,17 @@ economy if you want one. Automatic moderation covers keywords, patterns, links, 
 mention floods and spam, with block, timeout and moderator-alert actions
 ([AutoMod](docs/automod.md) has the details). There's also a health page that reports
 backups, database size, transport security and capacity, and says what to fix.
+
+**Add-ons.** Server settings → Add-ons turns on extras for a server:
+
+- **Feeds** bring new posts from blogs and news sites (RSS/Atom), YouTube channels, GitHub
+  releases, Twitch streams going live, and a Jellyfin library into a channel as cards. The
+  server does the fetching and refuses addresses on its own network unless the admin allows it.
+- **Game servers** show whether the group's Minecraft or Steam game servers are up and who's
+  playing, with an optional post when one goes down or comes back.
+- **Daily word** is a five-letter puzzle, the same word for everyone each day, with streaks and
+  a spoiler-free way to share your result.
+- **Sports**, below.
 
 **Sports.** A server can follow leagues and teams: live scores, standings, a game page with
 the field or the diamond, and games pinned above a channel that post each score as it

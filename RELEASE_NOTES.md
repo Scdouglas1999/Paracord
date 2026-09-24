@@ -1,3 +1,96 @@
+# Paracord 3.3.0
+
+More to do together, and more that arrives on its own. You can watch or listen to something together in a voice channel, play sounds for the room, and share what you're listening to. A server can pull in posts from blogs, YouTube, GitHub, Twitch and Jellyfin, show whether its game servers are up, and run a daily word puzzle. The desktop app can now update itself.
+
+Compare: [v3.2.0...v3.3.0](https://github.com/Scdouglas1999/Paracord/compare/v3.2.0...v3.3.0)
+
+## Watch and listen together
+
+In a voice channel, the new Together button starts something everyone in the call plays in step.
+
+- Paste a YouTube video or playlist, or a direct link to a video or audio file (https), or pick a file already posted in the server, or upload one.
+- Everyone can pause, seek and skip, or the person who started it can keep the controls to themselves. Your volume is your own.
+- There's a queue you can add to, reorder and clear. Someone who joins the call later jumps straight to where everyone is.
+- The sidebar shows "Watching …" or "Listening to …" under the voice channel, and the server's front page shows it under Live now with a Join button.
+- YouTube videos play from YouTube on each person's device, and links play from the site they point to. Uploaded videos show a preview frame.
+
+For now this works in server voice channels, not in direct-message calls.
+
+## Soundboard
+
+Short sounds anyone in a voice channel can play for everyone in it.
+
+- Upload sounds under Server settings → Soundboard: mp3, ogg, wav or m4a, up to 5 seconds and 1 MB, with a name, an emoji and a volume. A server can have 48.
+- Open the soundboard from the call controls and click a sound. The other people in the call hear it, and see its emoji ripple on your tile.
+- Settings → Voice has a soundboard volume and a switch to turn sounds off for yourself. Deafened people don't hear them.
+- A new permission, Use soundboard, is on for everyone by default. There's a short cooldown so a call can't be flooded.
+
+## Share what you're listening to
+
+Turn on Settings → Activity privacy → "Share what I'm listening to" in the desktop app on Windows or Linux. Paracord reads your system's media controls and shows the title, artist and player to people you share a server with, only while the setting is on. It's off by default, and it isn't available on macOS or in the browser.
+
+Profiles show what someone is listening to (with progress), watching or playing, and member lists, the DM list and the front page show it in one line. Your custom status now actually reaches other people; before, it was never sent.
+
+## See who's talking without joining
+
+The front page's Live now card and the sidebar now show who is talking in a voice channel even when you're not in it, the same way they do when you are. Only people who can already see the channel see this, and nothing is stored.
+
+## Add-ons
+
+Server settings → Add-ons is now one page listing everything you can add to a server: Sports, Feeds, Game servers and Daily word.
+
+### Feeds
+
+New posts from outside Paracord land in a channel as tidy cards, and can show in Latest on the front page.
+
+- **RSS or Atom**: any blog, news site or podcast. Paste the site's address and Paracord finds its feed.
+- **YouTube**: new videos from a channel.
+- **GitHub**: releases, commits on a branch, or tags from a public repository.
+- **Twitch**: a post when a channel goes live. The instance admin adds Twitch app credentials first, under Admin → Add-ons.
+- **Jellyfin**: new movies, episodes and albums from your library, with posters.
+
+Adding a feed never floods the channel with old posts: it shows the newest item and lets you post it if you want. Several posts in a row from one feed show on the front page as one card. Your server fetches everything; members' devices never talk to these sites. It won't fetch addresses on its own network unless the instance admin allows it (Admin → Add-ons → Network), which a Jellyfin server at home needs.
+
+### Game servers
+
+List up to 10 Minecraft (Java or Bedrock), Steam (CS2, TF2, Garry's Mod, Rust, Valheim, ARK and more) or any-port game servers. Everyone in the server sees which are up and who's playing, in the sidebar and in a front-page panel, with Copy address and, for Steam games, Connect. A channel can get a post when a server goes down and when it comes back.
+
+### Daily word
+
+A five-letter word to guess in six tries, the same word for everyone on the instance, new every day at midnight UTC. Keep a streak, see how the rest of the server did once you've finished, and share your result as colored squares without giving the word away. The front page shows who has solved today's word.
+
+## Direct messages
+
+- Forwarding between direct messages and group DMs is now end to end: the "Forwarded from" line travels inside the encrypted message, and the instance no longer records where a forwarded message came from.
+- Direct messages have a Media panel (Media, Files, Links), built on your device from the messages you have. Load older reaches further back.
+
+## Smoother
+
+Menus, popovers, dialogs, panels and phone sheets open and close with one quiet, quick motion, and they now leave as smoothly as they arrive: closing a dialog no longer makes its backdrop vanish. Switching channels or settings sections fades the new content in. Scrolling a busy channel or the front page does less work, microphone meters no longer shift the call controls, and nothing animates while the window is hidden. With reduced motion turned on in your system, nothing animates at all.
+
+## Updates
+
+- The desktop app can update itself again, with a new signing key. Because the key changed, 3.2.0 and older can't update to 3.3.0 on their own: install 3.3.0 once from the downloads below, and later versions will arrive in the app.
+- On Linux, "Restart to install" now actually restarts into the new version, and AppImage and rpm installs download the right file.
+
+## Fixes
+
+- A camera or screen share no longer freezes for the rest of a call after one lost video frame. The picture comes back at the next keyframe, which is requested straight away.
+- The Linux AppImage starts on computers with AMD or Intel graphics. It shipped an older copy of a system graphics library that stopped current drivers from loading.
+- The Windows installer no longer fails to download on machines where Internet Explorer was never set up.
+- Search results show readable snippets (no stray markdown, mentions named, spoilers hidden), and their times match the rest of the app.
+- The React emoji picker opens next to the message you clicked.
+- A new profile picture shows up everywhere straight away.
+- "Most active" on the front page counts XP earned this week. It starts filling from this update.
+- Sports' "show on the server page" setting decides whether live games appear on the front page.
+- Pressing Escape in a dialog over Server settings (like Add a feed) closes only the dialog.
+
+## Upgrading
+
+Run the install command again, or install the new downloads below. Your data and settings carry over. The desktop app needs this one manual install (see Updates above).
+
+If you run Paracord behind Let's Encrypt, nothing changes. If you want to test certificates against a different ACME server, `tls.acme.directory_url` now appears in the example config.
+
 # Paracord 3.2.0
 
 The biggest release since 3.0. A server's front page is no longer a list of empty channels, there's a lot more you can do with a message, search covers a whole server, and there's a new Sports add-on. Paracord also has a proper logo now, and it's noticeably lighter on your computer.
