@@ -52,7 +52,8 @@ function input(over: Partial<GuildLightInput> = {}): GuildLightInput {
     ],
     members: [member('1', 'mara'), member('2', 'priya'), member('3', 'ren')],
     channelParticipants: new Map(),
-    speakingUsers: new Set(),
+    localCall: null,
+    remoteSpeaking: new Map(),
     typingByChannel: {},
     messages: {},
     getStatus: () => 'online',
@@ -101,7 +102,7 @@ describe('guildLight — the store seam', () => {
         channelParticipants: new Map([
           ['v1', [voiceState({ user_id: '1' }), voiceState({ user_id: '2', self_stream: true })]],
         ]),
-        speakingUsers: new Set(['1']),
+        remoteSpeaking: new Map([['g1:v1', new Set(['1'])]]),
       }),
     );
     const room = building.rooms.find((entry) => entry.channelId === 'v1')!;
@@ -110,6 +111,40 @@ describe('guildLight — the store seam', () => {
     expect(room.screenSharer?.person.name).toBe('priya');
     expect(building.roomsLit).toBe(1);
     expect(building.caption).toBe('2 in voice');
+  });
+
+  it('reads your own call from the engine and every other channel from the relayed signal', () => {
+    const channelParticipants = new Map([
+      ['v1', [voiceState({ user_id: '1' }), voiceState({ user_id: '3' })]],
+      ['v2', [voiceState({ user_id: '2' })]],
+    ]);
+    // The relay is a beat behind in your own call (it still says mara), and
+    // the engine already hears you instead.
+    const remoteSpeaking = new Map([
+      ['g1:v1', new Set(['1'])],
+      ['g1:v2', new Set(['2'])],
+    ]);
+    const inCall = guildLight(
+      input({
+        channelParticipants,
+        remoteSpeaking,
+        localCall: { serverId: 'a', guildId: 'g1', channelId: 'v1', speakingUsers: new Set(['3']) },
+      }),
+    );
+    const own = inCall.rooms.find((entry) => entry.channelId === 'v1')!;
+    const other = inCall.rooms.find((entry) => entry.channelId === 'v2')!;
+    expect(own.occupants.filter((o) => o.speaking).map((o) => o.person.userId)).toEqual(['3']);
+    expect(other.occupants.map((o) => [o.person.userId, o.speaking, o.person.speaking])).toEqual([
+      ['2', true, true],
+    ]);
+
+    // Not in any call (or in a call on another server): the relay for both.
+    for (const localCall of [null, { serverId: 'b', guildId: 'g1', channelId: 'v1', speakingUsers: new Set(['3']) }]) {
+      const outside = guildLight(input({ channelParticipants, remoteSpeaking, localCall }));
+      const room = outside.rooms.find((entry) => entry.channelId === 'v1')!;
+      expect(room.occupants.filter((o) => o.speaking).map((o) => o.person.userId)).toEqual(['1']);
+      expect(room.occupants.find((o) => o.person.userId === '1')!.person.speaking).toBe(true);
+    }
   });
 
   it('refuses a voice state belonging to another server', () => {

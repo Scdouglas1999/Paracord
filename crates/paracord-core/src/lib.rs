@@ -30,6 +30,7 @@ pub mod sports;
 pub mod together;
 pub mod user;
 pub mod voice_cleanup;
+pub mod voice_speaking;
 
 use dashmap::{DashMap, DashSet};
 use paracord_db::DbPool;
@@ -147,6 +148,9 @@ pub struct AppState {
     pub mfa_tickets: moka::future::Cache<String, auth::MfaLoginTicket>,
     /// Watch together / Listen together sessions, one per voice channel.
     pub together: Arc<together::TogetherManager>,
+    /// Who is talking in each voice channel right now, relayed to people
+    /// outside the call.
+    pub speaking: Arc<voice_speaking::SpeakingTracker>,
 }
 
 /// State for the native QUIC-based media server.

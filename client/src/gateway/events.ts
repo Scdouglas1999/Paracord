@@ -56,6 +56,8 @@ export const GatewayEvents = {
 
   // Voice events
   VOICE_STATE_UPDATE: 'VOICE_STATE_UPDATE',
+  // Somebody started or stopped talking in a voice channel you can see.
+  VOICE_SPEAKING: 'VOICE_SPEAKING',
   VOICE_SERVER_UPDATE: 'VOICE_SERVER_UPDATE',
 
   // Invite events

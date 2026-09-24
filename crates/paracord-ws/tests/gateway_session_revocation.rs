@@ -255,6 +255,7 @@ async fn build_env() -> TestEnv {
             .time_to_live(std::time::Duration::from_secs(300))
             .build(),
         together: Arc::new(paracord_core::together::TogetherManager::new()),
+        speaking: Arc::new(paracord_core::voice_speaking::SpeakingTracker::new()),
     };
 
     TestEnv {

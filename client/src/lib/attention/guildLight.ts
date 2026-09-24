@@ -19,6 +19,7 @@ import { ChannelType, type Member, type VoiceState } from '../../types';
 import { buildingLight } from './buildingLight';
 import { roomLitHistory, type LitHistory } from './litHistory';
 import { personLight } from './personLight';
+import { channelSpeakers, type LocalCall } from '../voice/speakingSource';
 import {
   RECENT_AUTHOR_LIMIT,
   textRoomLight,
@@ -80,7 +81,10 @@ export interface GuildLightInput {
   members: readonly Member[];
   /** Voice states, keyed by the BARE channel id exactly as `voiceStore` holds them. */
   channelParticipants: ReadonlyMap<string, VoiceState[]>;
-  speakingUsers: ReadonlySet<string>;
+  /** The call this client is in; its engine's speaking flags win there. */
+  localCall: LocalCall | null;
+  /** Server-relayed speakers of every other channel (`remoteSpeakingStore`). */
+  remoteSpeaking: ReadonlyMap<string, ReadonlySet<string>>;
   typingByChannel: Readonly<Record<string, readonly string[]>>;
   messages: Readonly<Record<string, readonly LightMessage[]>>;
 
@@ -101,6 +105,14 @@ export interface GuildLightInput {
    * nobody has fetched it yet.
    */
   rosterKnown?: boolean;
+}
+
+/**
+ * Who is talking in one of this building's voice channels: your own call's
+ * engine flags, or the server-relayed signal for every other channel.
+ */
+function speakersOf(input: GuildLightInput, channelId: string): ReadonlySet<string> {
+  return channelSpeakers(input.scope.serverId, input.guildId, channelId, input.localCall, input.remoteSpeaking);
 }
 
 function isVoice(type: ChannelType): boolean {
@@ -157,7 +169,7 @@ export function guildPeople(input: GuildLightInput): PersonLight[] {
       name: displayName(member.user, member.nick),
       status: input.getStatus(userId) ?? 'offline',
       avatar: member.user.avatar_hash ?? null,
-      speaking: input.speakingUsers.has(userId),
+      speaking: voice ? speakersOf(input, voice.channelId).has(userId) : false,
       inRoom: Boolean(voice),
       roomName: voice?.roomName ?? null,
     });
@@ -200,6 +212,7 @@ export function guildRooms(input: GuildLightInput, people: readonly PersonLight[
         (state) => state.guild_id === input.guildId,
       );
       const times = history.observe(key, states.length > 0, input.nowMs);
+      const speakers = speakersOf(input, channel.id);
       rooms.push(
         voiceRoomLight({
           scope: input.scope,
@@ -217,11 +230,11 @@ export function guildRooms(input: GuildLightInput, people: readonly PersonLight[
                 name: displayName({ username: state.username, display_name: state.display_name }),
                 status: 'online',
                 avatar: state.avatar_hash ?? null,
-                speaking: input.speakingUsers.has(state.user_id),
+                speaking: speakers.has(state.user_id),
                 inRoom: true,
                 roomName: name,
               }),
-            speaking: input.speakingUsers.has(state.user_id),
+            speaking: speakers.has(state.user_id),
             muted: state.self_mute || state.mute,
             sharingScreen: state.self_stream,
             sharingCamera: state.self_video,

@@ -31,9 +31,11 @@ import { usePresenceStore } from '../stores/presenceStore';
 import { registerSessionReset } from '../stores/sessionReset';
 import { useTypingStore } from '../stores/typingStore';
 import { useVoiceStore } from '../stores/voiceStore';
+import { useRemoteSpeakingStore } from '../stores/remoteSpeakingStore';
 
 import { getAccountChannelView } from '../lib/channelView';
 import { displayName } from '../lib/displayName';
+import type { LocalCall } from '../lib/voice/speakingSource';
 import { accountScopeKey, entityScopeKey, type AccountScope } from '../lib/serverScope';
 import {
   aroundNowSentence,
@@ -200,6 +202,20 @@ function useLightSources(messageChannels: readonly string[]) {
   const presences = usePresenceStore((state) => state.presences);
   const channelParticipants = useVoiceStore((state) => state.channelParticipants);
   const speakingUsers = useVoiceStore((state) => state.speakingUsers);
+  const remoteSpeaking = useRemoteSpeakingStore((state) => state.byChannel);
+  const callConnected = useVoiceStore((state) => state.connected);
+  const callScope = useVoiceStore((state) => state.callScope);
+  const callGuildId = useVoiceStore((state) => state.guildId);
+  const callChannelId = useVoiceStore((state) => state.channelId);
+  // The call you are in reads its own engine's speaking flags; every other
+  // voice channel reads the server-relayed signal (lib/voice/speakingSource).
+  const localCall = useMemo<LocalCall | null>(
+    () =>
+      callConnected && callScope && callGuildId && callChannelId
+        ? { serverId: callScope.serverId, guildId: callGuildId, channelId: callChannelId, speakingUsers }
+        : null,
+    [callConnected, callScope, callGuildId, callChannelId, speakingUsers],
+  );
   const typingByChannel = useTypingStore((state) => state.typingByChannel);
   // Message stores are per account (`getMessageStore`), and hooks cannot be
   // looped over scopes — so the "authored" reading term reads the CURRENT
@@ -230,7 +246,8 @@ function useLightSources(messageChannels: readonly string[]) {
     () => ({
       presences,
       channelParticipants,
-      speakingUsers,
+      localCall,
+      remoteSpeaking,
       typingByChannel,
       messages,
       messagesScopeKey,
@@ -242,7 +259,8 @@ function useLightSources(messageChannels: readonly string[]) {
     [
       presences,
       channelParticipants,
-      speakingUsers,
+      localCall,
+      remoteSpeaking,
       typingByChannel,
       messages,
       messagesScopeKey,
@@ -311,7 +329,8 @@ export function useBuildingLight(guildId: string | null | undefined): BuildingLi
       channels: channels ?? NO_CHANNELS,
       members: members ?? NO_MEMBERS,
       channelParticipants: sources.channelParticipants,
-      speakingUsers: sources.speakingUsers,
+      localCall: sources.localCall,
+      remoteSpeaking: sources.remoteSpeaking,
       typingByChannel: sources.typingByChannel,
       messages:
         sources.messagesScopeKey === accountScopeKey(scope) ? sources.messages : NO_MESSAGES,
@@ -393,7 +412,8 @@ export function useBuildingLights(): BuildingLight[] {
         channels: channelsByGuild[key] ?? NO_CHANNELS,
         members: members.get(key) ?? NO_MEMBERS,
         channelParticipants: sources.channelParticipants,
-        speakingUsers: sources.speakingUsers,
+        localCall: sources.localCall,
+        remoteSpeaking: sources.remoteSpeaking,
         typingByChannel: sources.typingByChannel,
         messages:
           sources.messagesScopeKey === accountScopeKey(guild.scope)

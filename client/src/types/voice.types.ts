@@ -14,4 +14,9 @@ export interface VoiceState {
   username?: string;
   display_name?: string | null;
   avatar_hash?: string | null;
+  /**
+   * Talking right now, as the server last heard. Only on READY's snapshot;
+   * live changes arrive as `VOICE_SPEAKING` (see `remoteSpeakingStore`).
+   */
+  speaking?: boolean;
 }
