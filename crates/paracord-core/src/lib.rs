@@ -7,6 +7,7 @@ pub mod automod_enforce;
 #[cfg(feature = "backup")]
 pub mod backup;
 pub mod channel;
+pub mod daily_word;
 pub mod error;
 pub mod events;
 pub mod guild;

@@ -402,6 +402,26 @@ pub fn build_router(state: &AppState) -> Router<AppState> {
             "/api/v1/guilds/{guild_id}/economy/level-roles",
             get(routes::economy::list_level_roles).put(routes::economy::update_level_roles),
         )
+        .route(
+            "/api/v1/daily-word/today",
+            get(routes::daily_word::get_today),
+        )
+        .route(
+            "/api/v1/daily-word/today/guess",
+            post(routes::daily_word::post_guess),
+        )
+        .route(
+            "/api/v1/daily-word/stats",
+            get(routes::daily_word::get_stats),
+        )
+        .route(
+            "/api/v1/guilds/{guild_id}/daily-word",
+            get(routes::daily_word::get_settings).put(routes::daily_word::put_settings),
+        )
+        .route(
+            "/api/v1/guilds/{guild_id}/daily-word/board",
+            get(routes::daily_word::get_board),
+        )
         .route("/api/v1/sports/leagues", get(routes::sports::list_leagues))
         .route(
             "/api/v1/sports/leagues/{sport}/{league}/teams",

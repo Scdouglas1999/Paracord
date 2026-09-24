@@ -8,6 +8,7 @@ pub mod bans;
 pub mod bots;
 pub mod channels;
 pub mod commands;
+pub mod daily_word;
 pub mod discovery;
 pub mod dms;
 pub mod docs;

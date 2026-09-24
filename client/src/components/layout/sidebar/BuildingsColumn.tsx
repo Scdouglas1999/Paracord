@@ -110,6 +110,8 @@ export interface BuildingsColumnProps {
   onOpenThread?: (thread: OpenThread) => void;
   /** Opens a server's sports board. */
   onOpenSports?: (guildId: string) => void;
+  /** Opens a server's daily word. */
+  onOpenDailyWord?: (guildId: string) => void;
   /** The account plate, and the call dock while you are in a room. */
   footer?: ReactNode;
 }
@@ -145,6 +147,7 @@ export function BuildingsColumn({
   openThread = null,
   onOpenThread,
   onOpenSports,
+  onOpenDailyWord,
   footer,
 }: BuildingsColumnProps) {
   const [openBuildings, setOpenBuildings] = useState<ReadonlySet<string>>(() => new Set<string>());
@@ -305,6 +308,7 @@ export function BuildingsColumn({
             navIndexStart={section.navIndexStart}
             activeNavIndex={activeNavIndex}
             onOpenSports={onOpenSports}
+            onOpenDailyWord={onOpenDailyWord}
           />
         ))}
 

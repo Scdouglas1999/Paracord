@@ -30,6 +30,7 @@ import { BotStoreSection } from './BotStoreSection';
 import { OnboardingSettingsSection } from './OnboardingSettingsSection';
 import { EconomySettingsSection } from './EconomySettingsSection';
 import { SportsSettingsSection } from '../sports/SportsSettingsSection';
+import { DailyWordSection } from '../addons/DailyWordSection';
 import {
   AuditLogSection,
   BansSection,
@@ -1432,7 +1433,9 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
 
         {activeSection === 'economy' && <EconomySettingsSection guildId={guildId} roles={roles} />}
 
-        {activeSection === 'sports' && <SportsSettingsSection guildId={guildId} />}
+        {activeSection === 'sports' && (
+          <SportsSettingsSection guildId={guildId} extra={<DailyWordSection guildId={guildId} />} />
+        )}
 
         {activeSection === 'audit-log' && (
           <AuditLogSection

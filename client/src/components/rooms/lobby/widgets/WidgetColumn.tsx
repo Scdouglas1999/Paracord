@@ -2,6 +2,7 @@ import type { FeedUser } from '../../../../api/serverFeed';
 import type { Member } from '../../../../types';
 import type { HomeEvent } from '../useUpcomingEvents';
 import { ComingUpWidget } from './ComingUpWidget';
+import { DailyWordWidget } from './DailyWordWidget';
 import { GameWidget } from './GameWidget';
 import { MediaWidget } from './MediaWidget';
 import { MostActiveWidget } from './MostActiveWidget';
@@ -69,6 +70,8 @@ export function HomeWidget({ id, context }: { id: HomeWidgetId; context: WidgetC
           onSayHi={context.onSayHi}
         />
       );
+    case 'daily_word':
+      return <DailyWordWidget guildId={context.guildId} nowMs={context.nowMs} />;
   }
 }
 

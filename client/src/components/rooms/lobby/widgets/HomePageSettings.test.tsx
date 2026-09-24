@@ -27,8 +27,9 @@ describe('Home page settings', () => {
       'pinned',
       'game',
       'new_here',
+      'daily_word',
     ]);
-    expect(screen.getByText('Pinned moved to position 4 of 6.')).toBeInTheDocument();
+    expect(screen.getByText('Pinned moved to position 4 of 7.')).toBeInTheDocument();
   });
 
   it('previews only the widgets that are on, in order', () => {

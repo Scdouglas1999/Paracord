@@ -7,7 +7,8 @@ import { extractApiError } from '../../api/client';
 import { Button, Divider, Input, Textarea } from '../ui';
 import { SectionHeader, FieldLabel, GroupLabel, ToggleRow } from './SettingsPrimitives';
 import { HomePageSettings } from '../rooms/lobby/widgets/HomePageSettings';
-import { readHomeWidgets, type HomeWidgetSetting } from '../rooms/lobby/widgets/widgetConfig';
+import { listedWidgets, readHomeWidgets, type HomeWidgetSetting } from '../rooms/lobby/widgets/widgetConfig';
+import { useDailyWordSettings } from '../../hooks/useDailyWord';
 
 type VisibilityMode = 'private' | 'public' | 'roles';
 
@@ -41,6 +42,8 @@ export function ServerHubSettings({ guild, channels, roles = [], onUpdate, setEr
     const [discoveryTags, setDiscoveryTags] = useState((guild.discovery_tags || []).join(', '));
     const [allowedRoleIds, setAllowedRoleIds] = useState<string[]>(guild.allowed_roles || []);
     const [homeWidgets, setHomeWidgets] = useState<HomeWidgetSetting[]>(() => readHomeWidgets(guild.hub_settings));
+    const { enabled: dailyWordOn } = useDailyWordSettings(guild.id);
+    const shownWidgets = listedWidgets(homeWidgets, guild.hub_settings, dailyWordOn);
 
     const textChannels = channels.filter(c => c.type === 0 || c.channel_type === 0);
     const assignableRoles = roles.filter((role) => role.id !== guild.id);
@@ -74,7 +77,7 @@ export function ServerHubSettings({ guild, channels, roles = [], onUpdate, setEr
         setError(null);
         try {
             await guildApi.update(guild.id, {
-                hub_settings: { ...hubSettings, widgets: homeWidgets },
+                hub_settings: { ...hubSettings, widgets: shownWidgets },
                 visibility,
                 discovery_tags: discoveryTags
                     .split(',')
@@ -139,7 +142,7 @@ export function ServerHubSettings({ guild, channels, roles = [], onUpdate, setEr
                     The widgets beside the feed on this server&apos;s home page, top to bottom. One with nothing to show stays hidden.
                 </p>
                 <div className="mt-4">
-                    <HomePageSettings widgets={homeWidgets} onChange={setHomeWidgets} />
+                    <HomePageSettings widgets={shownWidgets} onChange={setHomeWidgets} />
                 </div>
             </section>
 
