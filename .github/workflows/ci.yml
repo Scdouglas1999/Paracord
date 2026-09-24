@@ -18,7 +18,7 @@ jobs:
     name: Rust Dependency Audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: Install cargo-audit
         run: cargo install cargo-audit --version 0.22.2 --locked
@@ -31,7 +31,7 @@ jobs:
     name: Client Dependency Audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -46,7 +46,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [rust-dependency-audit, npm-dependency-audit]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Enforce P0 release gate
         run: python3 scripts/security_gate_check.py
 
@@ -55,7 +55,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: security-gate
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Install Linux native dependencies
@@ -129,7 +129,7 @@ jobs:
     name: Installer Smoke
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       # End-to-end: lint both installers, package a fake release archive,
@@ -144,7 +144,7 @@ jobs:
     name: Installer Smoke (Windows)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.91"
@@ -173,7 +173,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: migration-feature-sanity
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Linux native dependencies
         run: |
           sudo apt-get update
@@ -265,7 +265,7 @@ jobs:
     env:
       PARACORD_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/paracord_test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # The upgrade gate reads migrations from the v0.9.0 tag.
           fetch-depth: 0
@@ -343,7 +343,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: migration-feature-sanity
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -383,7 +383,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.91"
@@ -469,7 +469,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
       - name: Set up Docker Buildx
@@ -508,7 +508,7 @@ jobs:
       - rust
       - client
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.91"
@@ -580,7 +580,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: client
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -611,7 +611,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: client
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Linux native dependencies
         run: |
           sudo apt-get update
