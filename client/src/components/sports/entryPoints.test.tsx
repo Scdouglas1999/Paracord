@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router';
@@ -6,7 +6,6 @@ import { buildingLight } from '../../lib/attention/light';
 import { sportsApi, type SportsBoard, type SportsGame, type SportsSettings, type SportsTeam } from '../../api/sports';
 import { BuildingSection } from '../layout/sidebar/BuildingSection';
 import { useSportsStore } from '../../stores/sportsStore';
-import { LiveNowStrip } from './LiveNowStrip';
 
 vi.mock('../../api/sports', async () => {
   const actual = await vi.importActual<typeof import('../../api/sports')>('../../api/sports');
@@ -77,17 +76,6 @@ function liveGame(id: string, heat: number): SportsGame {
     heat,
     tags: [],
     favorite: false,
-  };
-}
-
-function upcomingGame(id: string, start: string): SportsGame {
-  return {
-    ...liveGame(id, 0),
-    state: 'pre',
-    detail: '',
-    start,
-    home: team(`${id}-home`, null),
-    away: team(id, null),
   };
 }
 
@@ -176,7 +164,7 @@ describe('sports entry points', () => {
     expect(lobby).toHaveAttribute('tabindex', '-1');
   });
 
-  it('shows a live count from a board another surface already loaded', async () => {
+  it('shows a live count on the sidebar row once a board lands', async () => {
     vi.mocked(sportsApi.getSettings).mockResolvedValue({
       data: settings({ enabled: true, show_on_server_page: true }),
     } as never);
@@ -204,72 +192,11 @@ describe('sports entry points', () => {
           navIndexStart={2}
           activeNavIndex={2}
         />
-        <LiveNowStrip guildId="g1" />
       </MemoryRouter>,
     );
-    expect(await screen.findByRole('heading', { name: 'Live now' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'All games' })).toHaveAttribute('href', '/app/guilds/g1/sports');
-    const liveChip = screen.getByText('2 live');
+    const liveChip = await screen.findByText('2 live');
     expect(liveChip.querySelector('.pc-sports-live')).not.toBeNull();
     expect(sportsApi.getSettings).toHaveBeenCalledTimes(1);
     expect(sportsApi.getBoard).toHaveBeenCalledTimes(1);
-  });
-
-  it('renders nothing and does not poll when the front-page strip is off', async () => {
-    vi.mocked(sportsApi.getSettings).mockResolvedValue({
-      data: settings({ enabled: true, show_on_server_page: false }),
-    } as never);
-    render(
-      <MemoryRouter>
-        <LiveNowStrip guildId="g1" />
-      </MemoryRouter>,
-    );
-    await waitFor(() => expect(useSportsStore.getState().byGuild.g1?.settingsStatus).toBe('ready'));
-    expect(screen.queryByRole('region', { name: 'Sports' })).not.toBeInTheDocument();
-    expect(sportsApi.getBoard).not.toHaveBeenCalled();
-  });
-
-  it('shows the four hottest live games, or the next ones when none are live', async () => {
-    vi.mocked(sportsApi.getSettings).mockResolvedValue({
-      data: settings({ enabled: true, show_on_server_page: true }),
-    } as never);
-    vi.mocked(sportsApi.getBoard).mockResolvedValue({
-      data: board([10, 50, 20, 40, 30].map((heat) => liveGame(`Heat${heat}`, heat))),
-    } as never);
-    const { unmount } = render(
-      <MemoryRouter>
-        <LiveNowStrip guildId="g1" />
-      </MemoryRouter>,
-    );
-    expect(await screen.findByRole('heading', { name: 'Live now' })).toBeInTheDocument();
-    const lead = screen.getByRole('link', { name: 'Heat50 at Heat50-home, 1st quarter' });
-    expect(within(lead).getByText('Heat50 at Heat50-home')).toBeInTheDocument();
-    expect(lead.querySelector('.pc-sports-live')).not.toBeNull();
-    expect(lead.querySelector('.pc-sports-strip-line')).not.toBeNull();
-    expect(screen.getByRole('link', { name: /Heat40/ })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Heat30/ })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Heat20/ })).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: /Heat10/ })).not.toBeInTheDocument();
-
-    unmount();
-    useSportsStore.getState().reset();
-    vi.mocked(sportsApi.getBoard).mockResolvedValue({
-      data: board([
-        upcomingGame('Later', '2026-09-21T23:00:00.000Z'),
-        upcomingGame('Soon', '2026-09-21T21:00:00.000Z'),
-      ]),
-    } as never);
-    render(
-      <MemoryRouter>
-        <LiveNowStrip guildId="g1" />
-      </MemoryRouter>,
-    );
-    expect(await screen.findByRole('heading', { name: 'Up next' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Soon at Soon-home/ })).toBeInTheDocument();
-    const links = screen.getAllByRole('link').map((link) => link.getAttribute('aria-label') ?? '');
-    const soon = links.findIndex((label) => label.includes('Soon'));
-    const later = links.findIndex((label) => label.includes('Later'));
-    expect(soon).toBeGreaterThanOrEqual(0);
-    expect(soon).toBeLessThan(later);
   });
 });

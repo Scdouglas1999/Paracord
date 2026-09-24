@@ -553,9 +553,9 @@ export function UserSettings({ onClose }: UserSettingsProps) {
     try {
       if (avatarFile) {
         const { data } = await authApi.uploadAvatar(avatarFile);
-        // The avatar's URL does not change when the picture does
-        // (`/users/{id}/avatar`), so every viewer of this device's resolved
-        // copy would keep the old face until it expired.
+        // The new avatar_hash carries a `?v=` version, so every surface gets
+        // a fresh URL through USER_UPDATE. Drop this device's resolved copies
+        // too so nothing keeps the old picture for the TTL's duration.
         clearAuthenticatedImageCache();
         useAuthStore.setState({ user: data });
       }

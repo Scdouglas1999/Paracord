@@ -47,7 +47,7 @@ export function HomeWidget({ id, context }: { id: HomeWidgetId; context: WidgetC
       return <MediaWidget guildId={context.guildId} onOpenMedia={context.onOpenMedia} />;
     case 'most_active':
       return (
-        <MostActiveWidget guildId={context.guildId} nowMs={context.nowMs} onOpenLeaderboard={context.onOpenLeaderboard} />
+        <MostActiveWidget guildId={context.guildId} onOpenLeaderboard={context.onOpenLeaderboard} />
       );
     case 'game':
       return <GameWidget guildId={context.guildId} liveShownElsewhere={context.liveGameShown} />;

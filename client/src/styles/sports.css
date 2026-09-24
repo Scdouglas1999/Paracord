@@ -236,27 +236,6 @@
   animation: pc-sports-pulse 1.5s ease-in-out infinite;
 }
 
-.pc-sports-strip-link {
-  position: relative;
-  display: flex;
-  min-height: 2.75rem;
-  min-width: 0;
-  align-items: center;
-  gap: var(--space-2);
-  padding: 0.35rem 0.25rem 0.55rem;
-  border-radius: var(--radius-control);
-}
-
-.pc-sports-strip-line {
-  position: absolute;
-  right: 4px;
-  bottom: 4px;
-  left: 4px;
-  height: 2px;
-  border-radius: var(--radius-full);
-  background: linear-gradient(90deg, var(--pc-away, var(--sports-endzone)), var(--pc-home, var(--sports-endzone)));
-}
-
 .pc-sports-hero-band {
   position: relative;
   overflow: hidden;

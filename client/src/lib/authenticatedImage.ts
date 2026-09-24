@@ -20,11 +20,10 @@ interface CacheEntry {
 /**
  * How long a resolved resource is reused.
  *
- * An avatar's URL is stable across a change of picture (`/users/{id}/avatar`),
- * so something has to expire or a new avatar would never appear. The browser
- * path has the same ceiling by accident — the download ticket in the query
- * string rotates every three minutes — so this is not a new staleness, it is
- * the same one made explicit.
+ * A replaced avatar or banner arrives under a new `?v=` URL, which is a cache
+ * miss on its own; this bound is for everything still served at a stable path
+ * (an older server's avatar, an attachment) so a changed body eventually
+ * reaches the screen.
  */
 const RESOURCE_TTL_MS = 5 * 60_000;
 const MAX_CACHED_RESOURCES = 400;
@@ -32,11 +31,10 @@ const MAX_CACHED_RESOURCES = 400;
 const cache = new Map<string, CacheEntry>();
 
 /**
- * Bumped whenever the cache is emptied, so mounted images re-resolve.
- *
- * The URL of an avatar does not change when the picture does, so dropping the
- * cached copy is not enough on its own: every `<img>` already on screen holds
- * the same `src` it held a moment ago and React has no reason to ask again.
+ * Bumped whenever the cache is emptied, so mounted images re-resolve:
+ * dropping the cached copy is not enough on its own — every `<img>` already
+ * on screen holds the same `src` it held a moment ago and React has no reason
+ * to ask again.
  */
 let generation = 0;
 const generationListeners = new Set<() => void>();

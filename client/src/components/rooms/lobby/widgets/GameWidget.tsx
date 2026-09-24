@@ -25,23 +25,25 @@ export interface GameWidgetProps {
 
 /**
  * The Sports add-on's live data, for pages that are not the widget itself:
- * the page puts a live game into "Live now" from this.
+ * the page puts a live game into "Live now" from this. `show_on_server_page`
+ * is the server saying games belong on its home page — off keeps them on the
+ * Sports page only, and nothing here polls for data nobody will see.
  */
-export function useSportsGames(guildId: string): { enabled: boolean; games: SportsGame[] } {
+export function useSportsGames(guildId: string): { shown: boolean; games: SportsGame[] } {
   const { settings, status, board } = useSportsSettings(guildId);
-  const enabled = settings?.enabled === true && status === 'ready';
-  useSportsPolling(guildId, enabled);
-  return { enabled, games: enabled ? board?.games ?? [] : [] };
+  const shown = settings?.enabled === true && settings.show_on_server_page === true && status === 'ready';
+  useSportsPolling(guildId, shown);
+  return { shown, games: shown ? board?.games ?? [] : [] };
 }
 
 
 /**
  * "Game": a game live now for the teams the server follows, or else the next
- * one. Only when Sports is on.
+ * one. Only when Sports is on and the server shows games on its home page.
  */
 export function GameWidget({ guildId, liveShownElsewhere }: GameWidgetProps) {
   const { settings, status, board, boardError } = useSportsSettings(guildId);
-  const enabled = settings?.enabled === true && status === 'ready';
+  const enabled = settings?.enabled === true && settings.show_on_server_page === true && status === 'ready';
   const hideScores = useHideScores();
   if (!enabled) return null;
   if (boardError && !board) {

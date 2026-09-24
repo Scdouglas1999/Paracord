@@ -15,10 +15,14 @@ export interface EconomyLeaderboardEntry {
   last_xp_at: string;
 }
 
+export type EconomyLeaderboardWindow = 'all_time' | 'weekly';
+
 export interface EconomyLeaderboardResponse {
   guild_id: string;
   entries: EconomyLeaderboardEntry[];
   limit: number;
+  /** Which window `entries` was ranked on; absent on servers older than 3.2. */
+  window?: EconomyLeaderboardWindow;
 }
 
 export interface EconomyAchievement {
@@ -62,9 +66,9 @@ export const economyApi = {
   getMyProgress: async (guildId: string) =>
     getApi().get<EconomyProgressResponse>(`/guilds/${guildId}/economy/me`),
 
-  getLeaderboard: async (guildId: string, limit = 20) =>
+  getLeaderboard: async (guildId: string, limit = 20, window?: EconomyLeaderboardWindow) =>
     getApi().get<EconomyLeaderboardResponse>(`/guilds/${guildId}/economy/leaderboard`, {
-      params: { limit },
+      params: { limit, window },
     }),
 
   getLevelRoles: async (guildId: string) =>

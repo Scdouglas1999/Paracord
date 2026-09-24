@@ -366,6 +366,26 @@ fn avatar_api_path(user_id: i64) -> String {
     format!("/api/v1/users/{user_id}/avatar")
 }
 
+/// The value stored in `avatar_hash` after an upload. Banners taught the
+/// lesson first: the serve path is stable, so a bare path keeps every client's
+/// image caches keyed on a URL whose bytes just changed. The `?v=` version
+/// makes a replacement a new URL while the path it serves stays the same.
+fn avatar_hash_with_version(user_id: i64) -> String {
+    format!(
+        "{}?v={}",
+        avatar_api_path(user_id),
+        chrono::Utc::now().timestamp_millis()
+    )
+}
+
+/// `avatar_hash` is an API path plus an optional `?v=` version (older rows
+/// carry the bare path). Compare the path part only.
+fn avatar_hash_path(avatar_hash: &str) -> &str {
+    avatar_hash
+        .split_once('?')
+        .map_or(avatar_hash, |(path, _)| path)
+}
+
 fn avatar_storage_dir(storage_path: &str) -> PathBuf {
     FsPath::new(storage_path).join("avatars")
 }
@@ -457,7 +477,7 @@ pub async fn upload_avatar(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
-    let avatar_hash = avatar_api_path(auth.user_id);
+    let avatar_hash = avatar_hash_with_version(auth.user_id);
     let updated = paracord_core::user::update_profile(
         &state.db,
         auth.user_id,
@@ -486,7 +506,7 @@ pub async fn get_user_avatar(
         .ok_or(ApiError::NotFound)?;
 
     let expected = avatar_api_path(user_id);
-    if user.avatar_hash.as_deref() != Some(expected.as_str()) {
+    if user.avatar_hash.as_deref().map(avatar_hash_path) != Some(expected.as_str()) {
         return Err(ApiError::NotFound);
     }
 

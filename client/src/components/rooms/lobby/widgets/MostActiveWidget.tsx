@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { extractApiError } from '../../../../api/client';
 import { economyApi, type EconomyLeaderboardEntry } from '../../../../api/economy';
@@ -8,29 +8,19 @@ import { WidgetCard, WidgetError, WidgetLink } from './WidgetCard';
 
 export interface MostActiveWidgetProps {
   guildId: string;
-  nowMs: number;
   onOpenLeaderboard: () => void;
 }
 
-const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 const TOP = 4;
 
 /**
- * The top four by XP among people who earned some this week. The leaderboard
- * endpoint ranks all-time XP, so "this week" is the filter: somebody whose
- * last XP is older than seven days is not shown, however high they rank.
+ * "Most active": the top four by XP earned in the last seven days, with bars.
+ * The window is computed server-side from per-day gains, so a member's number
+ * is what they earned this week — not an all-time total under a "This week"
+ * label. An older server has no weekly window; the widget hides rather than
+ * label all-time XP as weekly.
  */
-export function topThisWeek(entries: readonly EconomyLeaderboardEntry[], nowMs: number): EconomyLeaderboardEntry[] {
-  return entries
-    .filter((entry) => {
-      const at = Date.parse(entry.last_xp_at);
-      return Number.isFinite(at) && nowMs - at <= WEEK_MS && entry.xp > 0;
-    })
-    .slice(0, TOP);
-}
-
-/** "Most active": the XP leaderboard, top four, with bars. */
-export function MostActiveWidget({ guildId, nowMs, onOpenLeaderboard }: MostActiveWidgetProps) {
+export function MostActiveWidget({ guildId, onOpenLeaderboard }: MostActiveWidgetProps) {
   const [entries, setEntries] = useState<EconomyLeaderboardEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -39,9 +29,10 @@ export function MostActiveWidget({ guildId, nowMs, onOpenLeaderboard }: MostActi
     setEntries(null);
     setError(null);
     economyApi
-      .getLeaderboard(guildId, 25)
+      .getLeaderboard(guildId, TOP, 'weekly')
       .then(({ data }) => {
-        if (!cancelled) setEntries(data.entries ?? []);
+        if (cancelled) return;
+        setEntries(data.window === 'weekly' ? (data.entries ?? []) : []);
       })
       .catch((err) => {
         if (!cancelled) setError(extractApiError(err));
@@ -51,7 +42,7 @@ export function MostActiveWidget({ guildId, nowMs, onOpenLeaderboard }: MostActi
     };
   }, [guildId]);
 
-  const top = useMemo(() => topThisWeek(entries ?? [], nowMs), [entries, nowMs]);
+  const top = entries ?? [];
 
   if (error) {
     return (

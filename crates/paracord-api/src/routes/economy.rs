@@ -155,6 +155,10 @@ pub(crate) async fn award_message_xp(
 #[derive(Deserialize)]
 pub struct LeaderboardQuery {
     pub limit: Option<i64>,
+    /// `all_time` (default) or `weekly`: XP gained in the last seven UTC days,
+    /// today included. Unknown values are rejected rather than silently
+    /// treated as all-time.
+    pub window: Option<String>,
 }
 
 pub async fn get_leaderboard(
@@ -170,9 +174,25 @@ pub async fn get_leaderboard(
         .unwrap_or(DEFAULT_LEADERBOARD_LIMIT)
         .clamp(1, MAX_LEADERBOARD_LIMIT);
 
-    let rows = paracord_db::economy::get_leaderboard(&state.db, guild_id, limit)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    let window = query.window.as_deref().unwrap_or("all_time");
+    let rows = match window {
+        "all_time" => paracord_db::economy::get_leaderboard(&state.db, guild_id, limit).await,
+        "weekly" => {
+            // Seven UTC calendar days, today included, keyed on the 'YYYY-MM-DD'
+            // day strings user_xp_daily stores.
+            let since_day = (Utc::now() - chrono::Duration::days(6))
+                .date_naive()
+                .to_string();
+            paracord_db::economy::get_windowed_leaderboard(&state.db, guild_id, &since_day, limit)
+                .await
+        }
+        _ => {
+            return Err(ApiError::BadRequest(
+                "window must be 'all_time' or 'weekly'".into(),
+            ))
+        }
+    }
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
     let mut entries = Vec::with_capacity(rows.len());
     for (index, row) in rows.iter().enumerate() {
@@ -211,6 +231,7 @@ pub async fn get_leaderboard(
         "guild_id": guild_id.to_string(),
         "entries": entries,
         "limit": limit,
+        "window": window,
     })))
 }
 

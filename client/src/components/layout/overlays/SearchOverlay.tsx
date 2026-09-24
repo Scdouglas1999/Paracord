@@ -28,6 +28,8 @@ import { useMobile } from '../../../hooks/useMobile';
 import { useCurrentMessageStore } from '../../../hooks/useMessageStore';
 import { personLight } from '../../../lib/attention/personLight';
 import { displayName } from '../../../lib/displayName';
+import { wallClock } from '../../../lib/formatters';
+import { messageSnippetText } from '../../../lib/markdown';
 import {
   applyChip,
   chipLabel,
@@ -98,24 +100,6 @@ function isSearchableType(type: number | undefined): boolean {
   return type === 0 || type === 5 || type === 6 || type === 7;
 }
 
-const MENTION_TOKEN = /<(@!?|#)(\d+)>/g;
-
-/** Mention tokens read as names in a result, the way the message list shows them. */
-function readableContent(
-  content: string,
-  memberById: ReadonlyMap<string, CatalogMember>,
-  channelById: ReadonlyMap<string, CatalogChannel>,
-): string {
-  return content.replace(MENTION_TOKEN, (token, kind: string, id: string) => {
-    if (kind === '#') {
-      const channel = channelById.get(id);
-      return channel ? `#${channel.name}` : token;
-    }
-    const member = memberById.get(id);
-    return member ? `@${member.label}` : token;
-  });
-}
-
 function highlightTerms(text: string, query: string): ReactNode {
   const terms = [...new Set(query.toLowerCase().split(/\s+/).filter(Boolean))]
     .sort((a, b) => b.length - a.length);
@@ -152,13 +136,13 @@ function formatWhen(raw: string | undefined): string {
   const date = new Date(raw);
   if (Number.isNaN(date.getTime())) return '';
   const sameYear = date.getFullYear() === new Date().getFullYear();
-  return date.toLocaleString(undefined, {
+  const day = date.toLocaleDateString(undefined, {
     month: 'short',
     day: 'numeric',
     ...(sameYear ? {} : { year: 'numeric' }),
-    hour: 'numeric',
-    minute: '2-digit',
   });
+  // The app's one wall clock ("3:04 pm"), not the locale's "3:04 PM".
+  return `${day}, ${wallClock(date)}`;
 }
 
 interface HitGroup {
@@ -309,7 +293,16 @@ export function SearchOverlay({
   }, [conversation, guildChannels]);
 
   const memberById = useMemo(() => new Map(catalogMembers.map((member) => [member.id, member])), [catalogMembers]);
-  const channelById = useMemo(() => new Map(catalogChannels.map((channel) => [channel.id, channel])), [catalogChannels]);
+  // The maps a snippet resolves mentions through — the same people and
+  // channels the `from:`/`in:` filters complete against.
+  const mentionNames = useMemo(
+    () => new Map(catalogMembers.map((member) => [member.id, member.label])),
+    [catalogMembers],
+  );
+  const channelMentionNames = useMemo(
+    () => new Map(catalogChannels.map((channel) => [channel.id, channel.name])),
+    [catalogChannels],
+  );
 
   const interpreted = useMemo(
     () => interpretSearchDraft(draft, catalogMembers, catalogChannels, new Date()),
@@ -833,7 +826,7 @@ export function SearchOverlay({
                   && (attachment.content_type ?? '').toLowerCase().startsWith('image/'));
                 const otherFiles = (hit.message.attachments ?? []).length - images.length;
                 const text = hit.message.content
-                  ? readableContent(hit.message.content, memberById, channelById)
+                  ? messageSnippetText(hit.message.content, mentionNames, undefined, channelMentionNames)
                   : '';
                 return (
                   <li key={hit.message.id}>

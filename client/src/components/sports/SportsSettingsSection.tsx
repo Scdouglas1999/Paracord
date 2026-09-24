@@ -652,8 +652,8 @@ function SportsConfig(props: {
       </section>
 
       <ToggleRow
-        label="Show live games on the server's front page"
-        description="A short list on the front page. When nothing is live, it shows the next games to start."
+        label="Show games on the server home"
+        description="Live games join 'Live now', and the next game gets a card. Off keeps games on the Sports page only."
         checked={showOnPage}
         onChange={setShowOnPage}
       />

@@ -168,6 +168,22 @@ pub async fn add_xp(
         .fetch_one(&mut *tx)
         .await?;
 
+    // The running total above cannot answer "earned this week", so the award
+    // also lands on the member's UTC-day row in the same transaction — a gain
+    // can never exist in the total without a matching day entry.
+    sqlx::query(
+        "INSERT INTO user_xp_daily (user_id, guild_id, day, xp)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (user_id, guild_id, day)
+         DO UPDATE SET xp = user_xp_daily.xp + $4",
+    )
+    .bind(user_id)
+    .bind(guild_id)
+    .bind(Utc::now().date_naive().to_string())
+    .bind(amount)
+    .execute(&mut *tx)
+    .await?;
+
     let new_level = level_for_xp(row.xp);
     let leveled_up = new_level > row.level;
 
@@ -208,6 +224,42 @@ pub async fn get_leaderboard(
         .bind(limit)
         .fetch_all(pool)
         .await?;
+    Ok(rows)
+}
+
+/// Get the leaderboard for a guild across the UTC days since `since_day`
+/// (inclusive), ordered by XP gained inside that window. `xp` in each row is
+/// the windowed sum; `level` and `last_xp_at` still describe the member's
+/// all-time record. Days before `user_xp_daily` existed have no rows, so an
+/// empty result means "nothing recorded in the window", not "nobody plays".
+pub async fn get_windowed_leaderboard(
+    pool: &DbPool,
+    guild_id: i64,
+    since_day: &str,
+    limit: i64,
+) -> Result<Vec<UserXpRow>, DbError> {
+    // SUM(bigint) is NUMERIC on PostgreSQL, which the Any driver cannot hand
+    // back as i64, so the windowed total is cast inside the query.
+    let rows = sqlx::query_as::<_, UserXpRow>(
+        "SELECT d.user_id AS user_id, d.guild_id AS guild_id,
+                CAST(d.window_xp AS BIGINT) AS xp,
+                COALESCE(u.level, 0) AS level,
+                COALESCE(u.last_xp_at, 0) AS last_xp_at
+         FROM (
+             SELECT user_id, guild_id, SUM(xp) AS window_xp
+             FROM user_xp_daily
+             WHERE guild_id = $1 AND day >= $2
+             GROUP BY user_id, guild_id
+         ) d
+         LEFT JOIN user_xp u ON u.user_id = d.user_id AND u.guild_id = d.guild_id
+         ORDER BY d.window_xp DESC, d.user_id ASC
+         LIMIT $3",
+    )
+    .bind(guild_id)
+    .bind(since_day)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
     Ok(rows)
 }
 
@@ -436,7 +488,7 @@ pub async fn grant_achievement_if_missing(
 
 #[cfg(test)]
 mod tests {
-    use super::{add_xp, get_user_xp, level_for_xp};
+    use super::{add_xp, get_leaderboard, get_user_xp, get_windowed_leaderboard, level_for_xp};
     use crate::{create_pool, run_migrations, DbPool};
 
     async fn setup() -> DbPool {
@@ -498,5 +550,55 @@ mod tests {
         let pool = setup().await;
         let err = add_xp(&pool, 1, 2, -1).await.expect_err("must reject");
         assert!(matches!(err, crate::DbError::Sqlx(_)));
+    }
+
+    #[tokio::test]
+    async fn windowed_leaderboard_sums_only_days_in_the_window() {
+        let pool = setup().await;
+        crate::users::create_user(&pool, 3, "v", 1, "v@example.com", "hash")
+            .await
+            .expect("create user");
+
+        add_xp(&pool, 1, 2, 100).await.expect("add xp");
+        add_xp(&pool, 3, 2, 50).await.expect("add xp");
+
+        // A gain eight days back is outside the seven-day window.
+        let today = chrono::Utc::now().date_naive();
+        let old_day = (today - chrono::Duration::days(8)).to_string();
+        sqlx::query(
+            "INSERT INTO user_xp_daily (user_id, guild_id, day, xp) VALUES (1, 2, $1, 1000)",
+        )
+        .bind(&old_day)
+        .execute(&pool)
+        .await
+        .expect("seed old day");
+
+        let since = (today - chrono::Duration::days(6)).to_string();
+        let rows = get_windowed_leaderboard(&pool, 2, &since, 10)
+            .await
+            .expect("windowed leaderboard");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].user_id, 1);
+        assert_eq!(
+            rows[0].xp, 100,
+            "the old day's 1000 stays out of the window"
+        );
+        assert_eq!(rows[1].user_id, 3);
+        assert_eq!(rows[1].xp, 50);
+
+        // The all-time board still reports the full totals.
+        let all = get_leaderboard(&pool, 2, 10).await.expect("leaderboard");
+        assert_eq!(all[0].xp, 100);
+    }
+
+    #[tokio::test]
+    async fn windowed_leaderboard_is_empty_before_the_first_day_row() {
+        let pool = setup().await;
+        let today = chrono::Utc::now().date_naive();
+        let since = (today - chrono::Duration::days(6)).to_string();
+        let rows = get_windowed_leaderboard(&pool, 2, &since, 10)
+            .await
+            .expect("windowed leaderboard");
+        assert!(rows.is_empty());
     }
 }
