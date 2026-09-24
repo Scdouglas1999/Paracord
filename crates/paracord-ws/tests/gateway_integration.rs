@@ -1087,7 +1087,24 @@ async fn ready_and_resumed_publish_the_instance_database_history_epoch() {
         guild.created_at.to_rfc3339()
     );
     let session_id = ready["d"]["session_id"].as_str().unwrap().to_owned();
-    let seq = ready["s"].as_u64().unwrap();
+    let ready_seq = ready["s"].as_u64().unwrap();
+    // Coming online dispatches the user's own PRESENCE_UPDATE to this live
+    // session (the user is one of their own presence recipients), and the live
+    // session buffers it for replay under the next sequence. The events seeded
+    // below must come after it: seeded at `ready_seq + 1` they collided with it,
+    // and whenever the presence landed in the buffer first (a slower machine,
+    // or coverage instrumentation) RESUME replayed the presence where this test
+    // expected "first". Wait for that frame, then seed behind it.
+    let presence = timeout(Duration::from_secs(5), identified.next())
+        .await
+        .expect("the live session must receive its own online presence")
+        .unwrap()
+        .unwrap();
+    let presence: Value = serde_json::from_str(presence.to_text().unwrap()).unwrap();
+    assert_eq!(presence["t"], "PRESENCE_UPDATE");
+    assert_eq!(presence["d"]["user_id"], user_id.to_string());
+    assert_eq!(presence["s"], ready_seq + 1);
+    let seq = ready_seq + 1;
     // A live connection need not have disconnected yet for the authenticated
     // resume path to read its cached session, so seed the same known snapshot.
     test_insert_cached_session(

@@ -140,6 +140,34 @@ jobs:
       - name: Installer end-to-end smoke
         run: bash scripts/ci_install_smoke.sh
 
+  install-smoke-windows:
+    name: Installer Smoke (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.91"
+      - uses: Swatinem/rust-cache@v2
+      # The server embeds the web client at compile time and refuses to build
+      # without client/dist. This job checks the installer, not the UI, so an
+      # empty shell is enough and saves the client build.
+      - name: Placeholder web client for the embedded UI
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path client/dist | Out-Null
+          Set-Content -Path client/dist/index.html -Value '<!doctype html><title>placeholder</title>'
+      - name: Build server binary
+        run: cargo build --release --bin paracord-server
+      # Packages that binary the way the release does and runs the real
+      # install.ps1 against it under Windows PowerShell 5.1 and PowerShell 7:
+      # checksum refusal (local .sha256 and downloaded SHA256SUMS.txt), the
+      # one-liner shape, a whole-computer install whose scheduled task serves
+      # /health, an in-place upgrade, both router answers, then cleanup.
+      - name: install.ps1 end-to-end smoke
+        shell: pwsh
+        run: pwsh -NoProfile -File scripts/ci_install_smoke.ps1
+
   rust:
     name: Rust Check
     runs-on: ubuntu-latest
@@ -195,6 +223,17 @@ jobs:
         run: cargo test --workspace --all-targets
       - name: Build server binary
         run: cargo build --release --bin paracord-server
+      - name: Let's Encrypt first start against Pebble
+        # Runs Let's Encrypt's test CA (Pebble) in Docker and points the release
+        # binary at it: the server must start on a temporary certificate, back
+        # off after a failed attempt, then get a real certificate over HTTP-01
+        # and swap it in without a restart. certbot is the ACME client the
+        # server runs, so it is installed here exactly as an operator would.
+        run: |
+          python3 -m venv "$RUNNER_TEMP/certbot"
+          "$RUNNER_TEMP/certbot/bin/pip" install --quiet certbot==5.8.0
+          PARACORD_ACME_SMOKE_CERTBOT="$RUNNER_TEMP/certbot/bin/certbot" \
+            python3 scripts/release_acme_pebble_smoke.py
       - name: Clippy
         run: cargo clippy --workspace -- -D warnings
       - name: Clippy (desktop crate, all targets)

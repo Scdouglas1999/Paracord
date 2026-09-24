@@ -57,6 +57,7 @@ import {
   parseUserIdFromToken,
   reassembleVideoPayload,
   selectPublishedLayer,
+  VideoDecodeGate,
   wrapSenderKeyForRecipients,
   type ReassembledVideoFrame,
   type VideoReassemblyState,
@@ -255,12 +256,25 @@ interface VideoSink {
   onFrame?: () => void;
 }
 
+/** A whole encoded frame on its way through a subscription's decode gate. */
+interface GatedVideoFrame extends ReassembledVideoFrame {
+  /** The chunk timestamp handed to the decoder, in microseconds. */
+  chunkTimestampUs: number;
+}
+
+/** A flurry of decoder desync signals collapses to one keyframe request per track per this long. */
+const KEYFRAME_REQUEST_INTERVAL_MS = 500;
+
 /** State for a remote participant's video stream. */
 interface VideoSubscription {
   userId: string;
   ssrc: number;
   codec: string;
   decoder: MediaVideoDecoder;
+  /** Keeps the decoder on one keyframe-led chain of one layer (see VideoDecodeGate). */
+  gate: VideoDecodeGate<GatedVideoFrame>;
+  /** When this subscription last asked the publisher for a keyframe (ms). */
+  lastKeyframeRequestAt: number;
   /** Every surface this track is painted onto, in subscribe order. */
   sinks: VideoSink[];
   streamId?: string;
@@ -535,13 +549,15 @@ export class BrowserMediaEngine implements MediaEngine {
   private screenGeneration = 0;
 
   /**
-   * The camera's and the screen share's outbound frames, one send in flight
-   * each. `VideoEncoder.onEncoded` is a synchronous callback and publishing is
-   * not; handing the promise straight back to it meant every frame raced every
-   * other frame onto the transport and every refused uni stream became an
-   * uncaught page error. See `VideoSendQueue`.
+   * The camera's and the screen share's outbound frames, one queue — and one
+   * send in flight — per simulcast layer, keyed `camera:0`, `screen:2`.
+   * `VideoEncoder.onEncoded` is a synchronous callback and publishing is not;
+   * handing the promise straight back to it meant every frame raced every other
+   * frame onto the transport and every refused uni stream became an uncaught
+   * page error. Each layer is its own decode chain, so each gets its own queue:
+   * see `VideoSendQueue`.
    */
-  private videoSendQueues = new Map<'camera' | 'screen', VideoSendQueue<QueuedVideoFrame>>();
+  private videoSendQueues = new Map<string, VideoSendQueue<QueuedVideoFrame>>();
 
   private assertOpen(): void {
     if (this.disposed) throw new DOMException('The media session has ended.', 'AbortError');
@@ -1352,24 +1368,21 @@ export class BrowserMediaEngine implements MediaEngine {
       }
 
       const codec = this.decoderCodecForTrack(publishedTrack);
-      const decoder = new MediaVideoDecoder({ codec });
       const created: VideoSubscription = {
         userId,
         ssrc,
         codec,
-        decoder,
+        decoder: new MediaVideoDecoder({ codec }),
+        gate: new VideoDecodeGate<GatedVideoFrame>(),
+        lastKeyframeRequestAt: 0,
         sinks: [sink],
         streamId: publishedTrack?.streamId,
         trackId: publishedTrack?.trackId,
         activeLayer: selectedLayer?.layerId,
       };
-      decoder.onDecoded((frame) => {
-        if (this.disposed || this.videoSubscriptions.get(subscriptionKey) !== created) {
-          frame.close();
-          return;
-        }
-        this.renderToSinks(created, frame);
-      });
+      this.wireSubscriptionDecoder(created, () =>
+        this.videoSubscriptions.get(subscriptionKey) === created,
+      );
       created.stop = () => this.teardownVideoSubscription(subscriptionKey, created);
       this.videoSubscriptions.set(subscriptionKey, created);
       subscription = created;
@@ -1890,21 +1903,36 @@ export class BrowserMediaEngine implements MediaEngine {
   ): void {
     if (this.disposed) return;
     const kind = isScreenShare ? 'screen' : 'camera';
-    let queue = this.videoSendQueues.get(kind);
+    const layerIndex = data.layerIndex;
+    const queueKey = `${kind}:${layerIndex}`;
+    let queue = this.videoSendQueues.get(queueKey);
     if (!queue) {
       queue = new VideoSendQueue<QueuedVideoFrame>(
         (frame) => this.sendEncodedVideo(frame.data, frame.seq, isScreenShare),
         {
           onError: (error, stats) => {
             console.warn(
-              `[BrowserMediaEngine] a ${kind} frame could not be published ` +
+              `[BrowserMediaEngine] a ${kind} frame (layer ${layerIndex}) could not be published ` +
                 `(${stats.failed} failed, ${stats.dropped} dropped for back-pressure):`,
               error,
             );
           },
+          onChainBroken: (stats) => {
+            // Everything this layer sends until its next keyframe would be
+            // undecodable, so ask for that keyframe now.
+            const encoder = isScreenShare ? this.screenEncoder : this.videoEncoder;
+            encoder?.requestKeyframe(layerIndex);
+            if (stats.chainBreaks === 1 || stats.chainBreaks % 60 === 0) {
+              console.warn(
+                `[BrowserMediaEngine] ${kind} layer ${layerIndex} lost a frame to back-pressure or a ` +
+                  `refused send; restarting it from a keyframe (${stats.chainBreaks} restarts, ` +
+                  `${stats.dropped} frames dropped)`,
+              );
+            }
+          },
         },
       );
-      this.videoSendQueues.set(kind, queue);
+      this.videoSendQueues.set(queueKey, queue);
     }
     queue.enqueue({ data, seq }, data.isKeyframe);
   }
@@ -2185,8 +2213,9 @@ export class BrowserMediaEngine implements MediaEngine {
    * unidirectional stream (§5). The wire framing is the native uni-stream layout:
    * a cleartext 16-byte header, a cleartext {@link VideoFrameMetadata}, and the
    * whole frame encrypted as a single AEAD unit (AAD = the 16 header bytes). After
-   * decrypting, the frame feeds the exact same frame_id-ordered decode path the
-   * datagram deltas use, so stream and datagram frames stay interleaved in order.
+   * decrypting, the frame feeds the same decode path the datagram deltas use,
+   * where the subscription's {@link VideoDecodeGate} puts the two lanes — which
+   * do not arrive in capture order — back into one chain.
    */
   private handleVideoStreamFrame(data: Uint8Array): void {
     let parsed: StreamFrameMessage;
@@ -2211,6 +2240,8 @@ export class BrowserMediaEngine implements MediaEngine {
         isKeyframe: metadata.isKeyframe,
         streamId: metadata.streamId,
         trackId: metadata.trackId,
+        layerId: metadata.layerId,
+        timestampUs: metadata.timestampUs,
         codec: codecLabelFromHeader(metadata.codec),
       });
     }).catch(() => {
@@ -2227,7 +2258,7 @@ export class BrowserMediaEngine implements MediaEngine {
     header: MediaHeader,
     reassembled: ReassembledVideoFrame,
   ): void {
-    const { data: videoPayload, isKeyframe, streamId, trackId, codec } = reassembled;
+    const { streamId, trackId, codec } = reassembled;
 
     const publishedTrack = this.publishedTracks.get(this.trackKey(streamId, trackId));
     const userId =
@@ -2241,20 +2272,71 @@ export class BrowserMediaEngine implements MediaEngine {
     subscription.ssrc = header.ssrc;
     const decoderCodec = this.decoderCodecForTrack(publishedTrack, codec);
     if (subscription.codec !== decoderCodec) {
-      subscription.decoder.close();
-      const decoder = new MediaVideoDecoder({ codec: decoderCodec });
-      decoder.onDecoded((frame) => {
-        this.renderToSinks(subscription, frame);
-      });
-      subscription.decoder = decoder;
-      subscription.codec = decoderCodec;
+      this.replaceSubscriptionDecoder(subscription, decoderCodec);
     }
 
-    subscription.decoder.decode(
-      videoPayload,
-      header.timestamp * 1000, // convert ms timestamp to microseconds
-      isKeyframe,
-    );
+    // Arrival order is not decode order: see VideoDecodeGate.
+    const { decode, needKeyframe } = subscription.gate.admit({
+      ...reassembled,
+      chunkTimestampUs: header.timestamp * 1000, // convert ms timestamp to microseconds
+    });
+    if (needKeyframe) {
+      this.requestSubscriptionKeyframe(subscription);
+    }
+    for (const frame of decode) {
+      subscription.decoder.decode(frame.data, frame.chunkTimestampUs, frame.isKeyframe);
+    }
+  }
+
+  /**
+   * Hook a subscription's current decoder up to its surfaces and to the
+   * keyframe request path. The decoder asks for a keyframe whenever it cannot
+   * continue — a runtime decode error, or deltas arriving while it waits for a
+   * keyframe — and without passing that on, the picture stayed frozen until the
+   * publisher's next scheduled keyframe, or for good on a decoder that errored.
+   */
+  private wireSubscriptionDecoder(
+    subscription: VideoSubscription,
+    isCurrent: () => boolean = () => true,
+  ): void {
+    const decoder = subscription.decoder;
+    decoder.onDecoded((frame) => {
+      if (this.disposed || subscription.decoder !== decoder || !isCurrent()) {
+        frame.close();
+        return;
+      }
+      this.renderToSinks(subscription, frame);
+    });
+    decoder.onKeyframeNeeded(() => {
+      if (subscription.decoder === decoder) {
+        this.requestSubscriptionKeyframe(subscription);
+      }
+    });
+  }
+
+  /** Swap in a decoder for another codec; the new one starts from a keyframe. */
+  private replaceSubscriptionDecoder(subscription: VideoSubscription, codec: string): void {
+    subscription.decoder.close();
+    subscription.decoder = new MediaVideoDecoder({ codec });
+    subscription.codec = codec;
+    subscription.gate.reset();
+    this.wireSubscriptionDecoder(subscription);
+  }
+
+  /** Ask this subscription's publisher for a keyframe, at most once per interval. */
+  private requestSubscriptionKeyframe(subscription: VideoSubscription): void {
+    if (!this.transport || !subscription.streamId || !subscription.trackId) return;
+    const now = Date.now();
+    if (now - subscription.lastKeyframeRequestAt < KEYFRAME_REQUEST_INTERVAL_MS) return;
+    subscription.lastKeyframeRequestAt = now;
+    void this.transport
+      .sendStreamControl({
+        type: 'request_keyframe',
+        stream_id: subscription.streamId,
+        track_id: subscription.trackId,
+        layer_id: subscription.activeLayer ?? null,
+      })
+      .catch(() => {});
   }
 
   private handleStreamControlMessage(msg: StreamControlMessage): void {
@@ -2393,15 +2475,10 @@ export class BrowserMediaEngine implements MediaEngine {
               }
               const decoderCodec = this.decoderCodecForTrack(track);
               if (existingSub.codec !== decoderCodec) {
-                existingSub.decoder.close();
-                const decoder = new MediaVideoDecoder({ codec: decoderCodec });
-                decoder.onDecoded((frame) => {
-                  this.renderToSinks(existingSub, frame);
-                });
-                existingSub.decoder = decoder;
-                existingSub.codec = decoderCodec;
+                this.replaceSubscriptionDecoder(existingSub, decoderCodec);
               } else {
                 existingSub.decoder.reset();
+                existingSub.gate.reset();
               }
             }
           }

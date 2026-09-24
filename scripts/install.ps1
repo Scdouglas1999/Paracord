@@ -248,6 +248,11 @@ if ($arch -ne 'AMD64') {
 # the one the elevation step below makes.
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $headers = @{ 'User-Agent' = 'paracord-install' }
+# Every Invoke-WebRequest below passes -UseBasicParsing. Without it, Windows
+# PowerShell 5.1 hands the response to the Internet Explorer engine, and on a
+# machine where Internet Explorer was never opened (or has been removed) the
+# download fails with "Internet Explorer's first-launch configuration is not
+# complete" - even with -OutFile. PowerShell 7 accepts the switch and ignores it.
 
 $IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
     ).IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)
@@ -272,7 +277,7 @@ if ($canElevate) {
             $scriptCopy = $selfPath
         } else {
             $scriptCopy = Join-Path ([System.IO.Path]::GetTempPath()) ("paracord-install-" + [guid]::NewGuid().ToString('N') + ".ps1")
-            Invoke-WebRequest -Uri $SelfUrl -OutFile $scriptCopy -Headers $headers
+            Invoke-WebRequest -UseBasicParsing -Uri $SelfUrl -OutFile $scriptCopy -Headers $headers
         }
         # Administrator processes do not inherit this window's environment, so
         # every override is re-stated on the command line.
@@ -375,7 +380,7 @@ try {
         $archive = Join-Path $TmpDir $asset
         Write-Step "Downloading $downloadUrl"
         try {
-            Invoke-WebRequest -Uri $downloadUrl -OutFile $archive -Headers $headers
+            Invoke-WebRequest -UseBasicParsing -Uri $downloadUrl -OutFile $archive -Headers $headers
         } catch {
             Fail "download failed: $($_.Exception.Message)`nURL: $downloadUrl"
         }
@@ -393,7 +398,7 @@ try {
         foreach ($name in @('SHA256SUMS.txt', "$asset.sha256", 'SHA256SUMS', 'checksums.txt')) {
             $cfile = Join-Path $TmpDir $name
             try {
-                Invoke-WebRequest -Uri "$ReleaseBaseUrl/$tag/$name" -OutFile $cfile -Headers $headers
+                Invoke-WebRequest -UseBasicParsing -Uri "$ReleaseBaseUrl/$tag/$name" -OutFile $cfile -Headers $headers
                 $content = Get-Content $cfile -Raw
                 if ($name -eq "$asset.sha256") {
                     $expected = $content.Trim().Split(' ')[0]

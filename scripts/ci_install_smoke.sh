@@ -110,9 +110,9 @@ if [ -n "$PWSH" ]; then
     else
         fail "PowerShell syntax check on install.ps1"
     fi
-    # Tokenizing accepts text the grammar rejects, so also run the real parser:
-    # this is the only automated check of install.ps1 there is, since nothing in
-    # CI can execute the Windows path.
+    # Tokenizing accepts text the grammar rejects, so also run the real parser.
+    # The Windows job runs install.ps1 for real (scripts/ci_install_smoke.ps1);
+    # this catches a parse error before that job's build finishes.
     # shellcheck disable=SC2016
     if "$PWSH" -NoProfile -Command '
         $errs = $null

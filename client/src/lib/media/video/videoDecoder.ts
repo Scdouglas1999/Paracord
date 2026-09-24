@@ -232,6 +232,21 @@ export class MediaVideoDecoder {
         });
         // On error, require a new keyframe to resynchronize.
         this.needsKeyframe = true;
+        // A WebCodecs decoder that reports an error is closed for good: every
+        // later decode() on it was silently skipped, so one bad chunk ended
+        // the picture for the rest of the call. Build a fresh one, which the
+        // next keyframe starts again.
+        if (!this.closed) {
+          try {
+            this.decoder = this.createDecoder();
+            this.configureDecoder();
+          } catch (rebuildError) {
+            logVoiceDiagnostic('[media] video decoder could not be rebuilt after an error', {
+              codec: this.configuredCodec ?? this.codec,
+              error: rebuildError instanceof Error ? rebuildError.message : String(rebuildError),
+            });
+          }
+        }
         this.notifyKeyframeNeeded();
         const error = err instanceof Error ? err : new Error(String(err));
         for (const cb of this.errorCallbacks) {
