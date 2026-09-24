@@ -6,6 +6,7 @@ use paracord_core::events::ServerEvent;
 use paracord_core::{observability, AppState};
 use paracord_models::gateway::*;
 use paracord_models::permissions::Permissions;
+use paracord_models::presence::{normalize_activities, MAX_ACTIVITY_TEXT_LEN};
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
 use std::num::NonZeroU32;
@@ -280,9 +281,6 @@ fn session_cache() -> &'static moka::future::Cache<String, CachedSession> {
 fn user_connections() -> &'static dashmap::DashMap<i64, usize> {
     USER_CONNECTIONS.get_or_init(dashmap::DashMap::new)
 }
-
-const MAX_ACTIVITY_ITEMS: usize = 8;
-const MAX_ACTIVITY_TEXT_LEN: usize = 256;
 
 #[derive(Clone, Copy)]
 struct WsLimits {
@@ -985,56 +983,6 @@ fn normalize_status(raw: Option<&str>) -> &'static str {
     }
 }
 
-fn extract_activities(raw: Option<&Value>) -> Vec<Value> {
-    let mut activities = Vec::new();
-    let Some(Value::Array(list)) = raw else {
-        return activities;
-    };
-
-    for entry in list.iter().take(MAX_ACTIVITY_ITEMS) {
-        let Some(obj) = entry.as_object() else {
-            continue;
-        };
-        let name = obj
-            .get("name")
-            .and_then(|v| v.as_str())
-            .map(|s| truncate_for_presence(s, MAX_ACTIVITY_TEXT_LEN))
-            .unwrap_or_else(|| "Unknown".to_string());
-        let activity_type = obj
-            .get("type")
-            .or_else(|| obj.get("activity_type"))
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0);
-        let details = obj
-            .get("details")
-            .and_then(|v| v.as_str())
-            .map(|s| truncate_for_presence(s, MAX_ACTIVITY_TEXT_LEN));
-        let state = obj
-            .get("state")
-            .and_then(|v| v.as_str())
-            .map(|s| truncate_for_presence(s, MAX_ACTIVITY_TEXT_LEN));
-        let started_at = obj
-            .get("started_at")
-            .and_then(|v| v.as_str())
-            .map(|s| truncate_for_presence(s, MAX_ACTIVITY_TEXT_LEN));
-        let application_id = obj
-            .get("application_id")
-            .and_then(|v| v.as_str())
-            .map(|s| truncate_for_presence(s, MAX_ACTIVITY_TEXT_LEN));
-
-        activities.push(json!({
-            "name": name,
-            "type": activity_type,
-            "details": details,
-            "state": state,
-            "started_at": started_at,
-            "application_id": application_id,
-        }));
-    }
-
-    activities
-}
-
 fn build_presence_payload(
     user_id: i64,
     status: Option<&str>,
@@ -1045,7 +993,7 @@ fn build_presence_payload(
         "user_id": user_id.to_string(),
         "status": normalize_status(status),
         "custom_status": custom_status.map(|v| truncate_for_presence(v, MAX_ACTIVITY_TEXT_LEN)),
-        "activities": extract_activities(activities),
+        "activities": normalize_activities(activities),
     })
 }
 

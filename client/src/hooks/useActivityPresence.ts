@@ -1,5 +1,4 @@
 import { useEffect, useRef } from 'react';
-import { gateway, LOCAL_SERVER_ID } from '../gateway/manager';
 import { isTauri } from '../lib/tauriEnv';
 import {
   formatActivityLabel,
@@ -8,10 +7,14 @@ import {
   readableAppName,
   recordKnownActivityApp,
 } from '../lib/activityPresence';
+import {
+  currentPresenceStatus,
+  publishPresence,
+  setActivitySource,
+  setAutoIdle,
+} from '../lib/presenceActivities';
 import { useAuthStore } from '../stores/authStore';
-import { usePresenceStore } from '../stores/presenceStore';
-import { useServerListStore } from '../stores/serverListStore';
-import type { Activity, Presence } from '../types';
+import type { Activity } from '../types';
 
 const POLL_INTERVAL_MS = 5000;
 const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
@@ -23,12 +26,6 @@ interface ForegroundApplication {
   display_name?: string | null;
   executable_path?: string | null;
   window_title?: string | null;
-}
-
-function mapStatusForPresence(status: string | undefined): Presence['status'] {
-  if (status === 'idle' || status === 'dnd' || status === 'offline') return status;
-  if (status === 'invisible') return 'offline';
-  return 'online';
 }
 
 function isParacordProcess(app: ForegroundApplication): boolean {
@@ -47,26 +44,6 @@ function buildActivity(app: ForegroundApplication, startedAt: string, appId: str
     started_at: startedAt,
     application_id: appId,
   };
-}
-
-function publishPresence(status: Presence['status'], activities: Activity[]): void {
-  const activeConnections = gateway.getAllConnections().filter((conn) => conn.connected);
-  if (activeConnections.length > 0) {
-    gateway.updatePresenceAll(status, activities);
-    for (const conn of activeConnections) {
-      const localServerUserId = useServerListStore.getState().getServer(conn.serverId)?.userId
-        ?? (conn.serverId === LOCAL_SERVER_ID ? useAuthStore.getState().user?.id : null);
-      if (localServerUserId) {
-        usePresenceStore.getState().updatePresence({
-          user_id: localServerUserId,
-          status,
-          activities,
-        }, conn.serverId);
-      }
-    }
-  } else {
-    gateway.updatePresenceAll(status, activities);
-  }
 }
 
 export function useActivityPresence(options?: { idleTimeoutMs?: number }) {
@@ -106,6 +83,7 @@ export function useActivityPresence(options?: { idleTimeoutMs?: number }) {
       // DND, invisible, and already-idle-by-choice users should not be touched.
       if (userStatus !== 'online') {
         isIdleRef.current = false;
+        setAutoIdle(false);
         return;
       }
 
@@ -113,10 +91,10 @@ export function useActivityPresence(options?: { idleTimeoutMs?: number }) {
 
       if (idle && !isIdleRef.current) {
         isIdleRef.current = true;
-        publishPresence('idle', []);
+        setAutoIdle(true);
       } else if (!idle && isIdleRef.current) {
         isIdleRef.current = false;
-        publishPresence('online', []);
+        setAutoIdle(false);
       }
     }, IDLE_CHECK_INTERVAL_MS);
 
@@ -125,6 +103,7 @@ export function useActivityPresence(options?: { idleTimeoutMs?: number }) {
         document.removeEventListener(event, resetActivity);
       }
       clearInterval(idleTimer);
+      setAutoIdle(false);
     };
   }, [token, idleTimeout]);
 
@@ -136,21 +115,6 @@ export function useActivityPresence(options?: { idleTimeoutMs?: number }) {
     let inFlight = false;
     let activeAppId: string | null = null;
     let startedAt: string | null = null;
-    let lastStatus: Presence['status'] | null = null;
-    let lastAppId: string | null = null;
-    let lastStartedAt: string | null = null;
-
-    const emit = (status: Presence['status'], activities: Activity[]) => {
-      const appId = activities[0]?.application_id ?? null;
-      const emittedStartedAt = activities[0]?.started_at ?? null;
-      if (status === lastStatus && appId === lastAppId && emittedStartedAt === lastStartedAt) {
-        return;
-      }
-      publishPresence(status, activities);
-      lastStatus = status;
-      lastAppId = appId;
-      lastStartedAt = emittedStartedAt;
-    };
 
     const tick = async () => {
       if (cancelled || inFlight) return;
@@ -161,12 +125,7 @@ export function useActivityPresence(options?: { idleTimeoutMs?: number }) {
         const settings = useAuthStore.getState().settings;
         const notifications = (settings?.notifications ?? {}) as Record<string, unknown>;
         const detectionEnabled = notifications['activityDetectionEnabled'] !== false;
-        let status = mapStatusForPresence(settings?.status);
-
-        // If the idle detector has flagged the user as idle, override to 'idle'
-        if (isIdleRef.current && status === 'online') {
-          status = 'idle';
-        }
+        const status = currentPresenceStatus();
 
         const nativeCaptureAllowed = detectionEnabled && status !== 'offline';
         await invoke('set_activity_sharing_enabled', { enabled: nativeCaptureAllowed });
@@ -193,16 +152,17 @@ export function useActivityPresence(options?: { idleTimeoutMs?: number }) {
         if (shouldHideActivity) {
           activeAppId = null;
           startedAt = null;
-          emit(status, []);
-          return;
+          setActivitySource('playing', null);
+        } else {
+          if (activeAppId !== appId || !startedAt) {
+            activeAppId = appId;
+            startedAt = new Date().toISOString();
+          }
+          setActivitySource('playing', buildActivity(candidate, startedAt, appId));
         }
-
-        if (activeAppId !== appId || !startedAt) {
-          activeAppId = appId;
-          startedAt = new Date().toISOString();
-        }
-
-        emit(status, [buildActivity(candidate, startedAt, appId)]);
+        // Also carries a status chosen elsewhere (the status menu on another
+        // device); a no-op when nothing changed.
+        publishPresence();
       } catch {
         // Ignore foreground detection failures and keep last known state.
       } finally {
@@ -217,6 +177,7 @@ export function useActivityPresence(options?: { idleTimeoutMs?: number }) {
 
     return () => {
       cancelled = true;
+      setActivitySource('playing', null);
       void import('@tauri-apps/api/core')
         .then(({ invoke }) => invoke('set_activity_sharing_enabled', { enabled: false }))
         .catch(() => undefined);

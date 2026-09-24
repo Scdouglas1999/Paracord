@@ -5,6 +5,7 @@ import { useGateway } from '../hooks/useGateway';
 import { useTheme } from '../hooks/useTheme';
 import { useVoiceKeybinds } from '../hooks/useVoiceKeybinds';
 import { useActivityPresence } from '../hooks/useActivityPresence';
+import { useNowPlayingPresence } from '../hooks/useNowPlayingPresence';
 import { useAuthStore } from '../stores/authStore';
 import { useGuildStore } from '../stores/guildStore';
 import { startAccountMessagingLifecycle, reconcileAccountMessaging } from './messages/accountMessagingRuntime';
@@ -45,6 +46,8 @@ function AppInitializer({ children }: { children: ReactNode }) {
   useVoiceKeybinds();
   // Detect foreground desktop app and publish "Playing ..." presence.
   useActivityPresence();
+  // "Share what I'm listening to" (desktop app): a "Listening to ..." activity.
+  useNowPlayingPresence();
   const token = useAuthStore((s) => s.token);
   const homeUserId = useAuthStore(s => s.user?.id);
   const activeServerId = useServerListStore((s) => s.activeServerId);

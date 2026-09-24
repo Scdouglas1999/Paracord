@@ -9,6 +9,7 @@
 mod audio_capture;
 mod commands;
 mod native_media;
+mod now_playing;
 #[cfg(target_os = "linux")]
 mod pulse_router;
 mod tray;
@@ -1824,6 +1825,9 @@ pub fn run() {
         commands::secure_store_fallback_decrypt,
         commands::set_activity_sharing_enabled,
         commands::get_foreground_application,
+        now_playing::now_playing_support,
+        now_playing::now_playing_start,
+        now_playing::now_playing_stop,
         update_trusted_server_hosts,
         probe_server,
         native_fetch,

@@ -8,6 +8,7 @@ import { RollingNumber } from '../../lib/motion';
 import type { HereNow } from '../../hooks/useLights';
 import { AvatarStack } from './AvatarStack';
 import { LitAvatar } from './LitAvatar';
+import { PersonStatusLine } from '../user/PresenceActivity';
 
 export interface HereNowStripProps extends Omit<React.HTMLAttributes<HTMLDivElement>, 'children'> {
   hereNow: HereNow;
@@ -111,8 +112,11 @@ export const HereNowStrip = React.forwardRef<HTMLDivElement, HereNowStripProps>(
                 className="flex min-w-0 items-center gap-2.5 rounded-[var(--radius-control)] px-2 py-1.5"
               >
                 <LitAvatar person={person} size={24} hideLabel />
-                <span className="min-w-0 flex-1 truncate text-label text-text-primary">
-                  {person.name}
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-label text-text-primary">{person.name}</span>
+                  {/* Custom status first, else what they are listening to /
+                      watching / playing (lib/activityDisplay.ts). */}
+                  <PersonStatusLine userId={person.userId} />
                 </span>
                 <span className="shrink-0 text-meta text-text-faint">{person.label}</span>
               </li>

@@ -15,6 +15,7 @@ import { StreamViewer } from '../components/voice/StreamViewer';
 import { useChannelStore } from '../stores/channelStore';
 import { useReadStateStore } from '../stores/readStateStore';
 import { usePresenceStore } from '../stores/presenceStore';
+import { PersonStatusLine } from '../components/user/PresenceActivity';
 import { useAccountMessageStore } from '../hooks/useMessageStore';
 import { useServerListStore } from '../stores/serverListStore';
 import { useUIStore } from '../stores/uiStore';
@@ -427,11 +428,16 @@ function DmListRow({ row, onOpen }: { row: DmRow; onOpen: (row: DmRow) => void }
       </div>
 
       <div className="min-w-0">
-        <div className="flex items-center gap-1.5">
-          <span className={cn('pc-display truncate text-name', row.unread ? 'text-text-primary' : 'text-text-primary')}>
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span className={cn('pc-display max-w-full shrink-0 truncate text-name', row.unread ? 'text-text-primary' : 'text-text-primary')}>
             {row.title}
           </span>
           {row.isGroup && <span className="text-meta text-text-faint">group</span>}
+          {/* What they are listening to / playing, or their custom status —
+              beside the name, so the last message keeps its line. */}
+          {!row.isGroup && row.recipientId && status !== 'offline' && (
+            <PersonStatusLine userId={row.recipientId} scope={row.serverId} className="min-w-0 flex-1" />
+          )}
         </div>
         <div className={cn('truncate text-meta', row.unread ? 'text-text-secondary' : 'text-text-faint')}>{subtitle}</div>
       </div>

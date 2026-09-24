@@ -7,9 +7,8 @@ import { LitAvatar } from '../../light';
 import { displayName } from '../../../lib/displayName';
 import { personLight } from '../../../lib/attention/light';
 import { presenceLight } from '../../../lib/presence';
-import { connectionManager as gateway } from '../../../lib/connectionManager';
+import { publishPresence } from '../../../lib/presenceActivities';
 import { useAuthStore } from '../../../stores/authStore';
-import { usePresenceStore } from '../../../stores/presenceStore';
 import { useUIStore } from '../../../stores/uiStore';
 import { toast } from '../../../stores/toastStore';
 import { writeClipboardText } from '../../../lib/clipboard';
@@ -50,12 +49,6 @@ export interface AccountPlateProps {
   onToggleMute: () => void;
   onToggleDeaf: () => void;
   showAdminDashboard: boolean;
-}
-
-function mapForGateway(status: PresenceStatus): 'online' | 'idle' | 'dnd' | 'offline' {
-  if (status === 'invisible') return 'offline';
-  if (status === 'idle' || status === 'dnd') return status;
-  return 'online';
 }
 
 /**
@@ -127,13 +120,9 @@ export function AccountPlate({
         status: next,
         custom_status: custom === undefined ? (settings?.custom_status ?? null) : custom,
       } as Partial<UserSettings>);
-      const gatewayStatus = mapForGateway(next);
-      gateway.updatePresenceAll(gatewayStatus, []);
-      if (user?.id) {
-        usePresenceStore
-          .getState()
-          .updatePresence({ user_id: user.id, status: gatewayStatus, activities: [] });
-      }
+      // The saved settings now carry the new status and custom status; send
+      // them with whatever activities are on (listening, playing …).
+      publishPresence();
     } catch (err) {
       toast.error(`Failed to update status: ${err instanceof Error ? err.message : String(err)}`);
     }

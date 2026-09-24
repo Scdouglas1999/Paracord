@@ -5,6 +5,7 @@ import { useGuildStore } from '../stores/guildStore';
 import { refreshGuildChannelVisibility, useChannelStore } from '../stores/channelStore';
 import { useMemberStore } from '../stores/memberStore';
 import { usePresenceStore } from '../stores/presenceStore';
+import { republishPresenceAfterReconnect } from '../lib/presenceActivities';
 import { useVoiceStore } from '../stores/voiceStore';
 import { useTypingStore } from '../stores/typingStore';
 import { useRelationshipStore } from '../stores/relationshipStore';
@@ -238,6 +239,9 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
           status: 'online',
           activities: [],
         }, serverId);
+        // A fresh connection starts as plain "online"; say again what we are
+        // listening to / playing / our chosen status, if anything.
+        republishPresenceAfterReconnect();
       }
 
       if (memberScope) return getAccountMessagingRuntime(memberScope).acceptHandshake();

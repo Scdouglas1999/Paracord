@@ -6,6 +6,7 @@ import {
   Mic,
   Bell,
   Eye,
+  Music,
   Keyboard,
   Fingerprint,
   Server,
@@ -82,6 +83,9 @@ import { CustomCSS } from '../customization/CustomCSS';
 import { VoiceConnectionCheckButton } from '../voice/VoiceConnectionCheckButton';
 import { getSystemAudioGrant, revokeSystemAudioGrant, type SystemAudioGrant } from '../../lib/media/systemAudioGrant';
 import { ThemeSelector } from '../customization/ThemeSelector';
+import { NOW_PLAYING_SETTING_KEY } from '../../lib/nowPlaying';
+import { useNowPlayingSupport } from '../../hooks/useNowPlayingSupport';
+import { useNowPlayingStore } from '../../stores/nowPlayingStore';
 
 interface UserSettingsProps {
   onClose: () => void;
@@ -478,6 +482,15 @@ export function UserSettings({ onClose }: UserSettingsProps) {
   );
 
   const activityDetectionEnabled = mergedNotifications['activityDetectionEnabled'] !== false;
+  // "Share what I'm listening to": off unless turned on. What is shown as
+  // shared comes from the saved setting, not the unsaved toggle.
+  const nowPlayingSharing = mergedNotifications[NOW_PLAYING_SETTING_KEY] === true;
+  const nowPlayingSaved =
+    (settings?.notifications as Record<string, unknown> | undefined)?.[NOW_PLAYING_SETTING_KEY] === true;
+  const nowPlayingSupport = useNowPlayingSupport();
+  const nowPlayingSupported = nowPlayingSupport?.supported === true;
+  const nowPlayingCurrent = useNowPlayingStore((state) => state.current);
+  const nowPlayingError = useNowPlayingStore((state) => state.error);
   const ownIdentityFingerprint = useMemo(() => {
     const key = (user?.public_key || accountPublicKey || '').trim();
     if (!key) return null;
@@ -1893,6 +1906,40 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                       on={Boolean(activityDetectionEnabled)}
                       onToggle={() => setActivityDetectionEnabled(!activityDetectionEnabled)}
                     />
+                    <ToggleRow
+                      title="Share what I'm listening to"
+                      description="The desktop app reads your system's media controls (the same info your OS media widget shows) and shares only the title, artist and app name, and only while this is on."
+                      on={nowPlayingSharing && nowPlayingSupported}
+                      disabled={!nowPlayingSupported}
+                      onToggle={() =>
+                        setNotifications((prev) => ({
+                          ...prev,
+                          [NOW_PLAYING_SETTING_KEY]: !nowPlayingSharing,
+                        }))
+                      }
+                    >
+                      {nowPlayingSupport && !nowPlayingSupport.supported && nowPlayingSupport.reason && (
+                        <p className="mt-1.5 text-meta text-text-muted" data-testid="now-playing-unavailable">
+                          {nowPlayingSupport.reason}
+                        </p>
+                      )}
+                      {nowPlayingSupported && nowPlayingError && (
+                        <p className="mt-1.5 text-meta text-accent-warning" role="alert">
+                          {nowPlayingError}
+                        </p>
+                      )}
+                      {nowPlayingSupported && nowPlayingSaved && !nowPlayingError && nowPlayingCurrent && (
+                        <p className="mt-1.5 flex min-w-0 items-center gap-1.5 text-meta text-text-secondary">
+                          <Music size={12} aria-hidden className="shrink-0" />
+                          <span className="min-w-0 truncate">
+                            {nowPlayingCurrent.status === 'paused' ? 'Paused: ' : 'Sharing: '}
+                            {nowPlayingCurrent.title}
+                            {nowPlayingCurrent.artist ? ` — ${nowPlayingCurrent.artist}` : ''}
+                            {` · ${nowPlayingCurrent.player}`}
+                          </span>
+                        </p>
+                      )}
+                    </ToggleRow>
                   </div>
                 </section>
 

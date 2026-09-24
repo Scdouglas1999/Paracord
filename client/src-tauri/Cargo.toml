@@ -77,6 +77,9 @@ windows = { version = "0.61", features = [
     "Win32_Security_Cryptography",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_Variant",
+    # Now playing: the system media transport controls (now_playing/gsmtc.rs).
+    "Foundation",
+    "Media_Control",
 ] }
 
 # In-process libavcodec GPU codec engine (hardware H.264/AV1 encode + native
@@ -103,6 +106,10 @@ gtk = "0.18"
 gdk = "0.18"
 glib = "0.18"
 libloading = "0.8"
+# Now playing: read MPRIS players on the session bus (now_playing/mpris.rs).
+# The same zbus 5 (default features, async-io) tauri-plugin-single-instance and
+# notify-rust already pull in, so this adds nothing to the graph.
+zbus = "5"
 # Native camera capture (V4L2). The `decoding` default feature pulls in the
 # MJPEG decoder used by `camera_capture.rs`; `input-v4l` is the pure-Rust ioctl
 # backend (no bindgen, unlike the vpx path).
