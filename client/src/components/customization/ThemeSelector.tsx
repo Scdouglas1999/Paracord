@@ -179,7 +179,7 @@ function ThemeCard({
       }}
       className={cn(
         'pc-focusable flex flex-col rounded-[var(--radius-card)] p-2.5 text-left',
-        'transition-[background-color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
+        'transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]',
         active
           ? // The chosen palette is raised, with the warm top highlight and an
             // accent edge — plus the word "Selected" below, so the state is never
@@ -320,7 +320,7 @@ export function ThemeSelector({ currentTheme, onThemeChange }: ThemeSelectorProp
                   }}
                   className={cn(
                     'pc-focusable flex flex-col rounded-[var(--radius-card)] p-2.5 text-left',
-                    'transition-[background-color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
+                    'transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]',
                     'disabled:pointer-events-none disabled:opacity-60',
                     active
                       ? 'bg-bg-raised shadow-[var(--shadow-raised),0_0_0_1px_var(--accent-primary)]'
@@ -416,7 +416,7 @@ export function ThemeSelector({ currentTheme, onThemeChange }: ThemeSelectorProp
                   // the one place a literal colour is legitimate: it has to paint
                   // the preset's own value to be a swatch at all (spec §1.7).
                   'pc-focusable h-11 w-11 shrink-0 rounded-[var(--radius-full)] sm:h-8 sm:w-8',
-                  'transition-transform duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:scale-110',
+                  'transition-transform duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:scale-[1.06]',
                   'disabled:pointer-events-none disabled:opacity-60',
                   selected &&
                     'shadow-[0_0_0_2px_var(--bg-plate),0_0_0_4px_var(--text-primary)]',
@@ -458,7 +458,7 @@ export function ThemeSelector({ currentTheme, onThemeChange }: ThemeSelectorProp
                 onClick={() => setMotion(option.id)}
                 className={cn(
                   'pc-focusable flex flex-1 flex-col gap-0.5 rounded-[var(--radius-card)] p-3 text-left',
-                  'transition-[background-color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
+                  'transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]',
                   active
                     ? 'bg-bg-raised shadow-[var(--shadow-raised),0_0_0_1px_var(--accent-primary)]'
                     : 'bg-bg-mod-subtle hover:bg-bg-mod-strong',

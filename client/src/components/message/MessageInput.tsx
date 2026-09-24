@@ -5,11 +5,11 @@ import { getAccountChannelView } from '../../lib/channelView';
 import { isGroupDm, pendingGroupMembers, runtimeAttachDecision, runtimeSendDecision } from '../../lib/messages/messagingReadiness';
 import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
 import { entityScopeKey as memberScopeKey, type AccountScope } from '../../lib/serverScope';
-import { Fragment, useState, useRef, useEffect, useMemo, useCallback, lazy, Suspense } from 'react';
+import { Fragment, useState, useRef, useEffect, useMemo, useCallback, lazy, Suspense, type CSSProperties } from 'react';
 
 // §5.3: one reduced-motion switch for the whole app — lib/motion is the only
 // JavaScript motion engine; the composer's enter/exit surfaces are CSS.
-import { emitMotion, flash, liftOut, press, relax, useReducedMotion } from '../../lib/motion';
+import { emitMotion, flash, liftOut, press, relax, useLingering, useReducedMotion } from '../../lib/motion';
 import { Plus, Smile, Send, X, FileText, BarChart3, PlusCircle, MinusCircle, Image, Clock3, EyeOff, Type, Loader2 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { Input, Select } from '../ui/Input';
@@ -49,6 +49,10 @@ import { formatFileSize, toDatetimeLocalValue } from '../../lib/formatters';
 import { toast } from '../../stores/toastStore';
 import { extractApiError } from '../../api/client';
 import { displayName } from '../../lib/displayName';
+
+/** A composer picker opens upward from its button at the composer's right
+ * edge, so it grows from its own bottom-right corner (`--pc-origin`). */
+const PICKER_LAYER_STYLE = { zIndex: 50, '--pc-origin': '100% 100%' } as CSSProperties;
 
 const EmojiPicker = lazy(() =>
   import('../ui/EmojiPicker').then((m) => ({ default: m.EmojiPicker })),
@@ -106,7 +110,7 @@ interface MessageInputProps {
 const ICON_BTN_BASE =
   'pc-focusable h-8 w-8 shrink-0 items-center justify-center ' +
   'rounded-[var(--radius-control)] text-text-muted ' +
-  'transition-[color,background-color] duration-[140ms] ease-[var(--ease-out)] ' +
+  'transition-[color,background-color] duration-[var(--duration-fast)] ease-[var(--ease-out)] ' +
   'hover:bg-bg-mod-subtle hover:text-text-primary ' +
   'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent ' +
   '[@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:w-11';
@@ -373,6 +377,10 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [showGifPicker, setShowGifPicker] = useState(false);
   const [showStickerPicker, setShowStickerPicker] = useState(false);
+  // The pickers leave the way they came (§5.2): kept mounted for their exit.
+  const emojiLayer = useLingering(showEmojiPicker);
+  const gifLayer = useLingering(showGifPicker);
+  const stickerLayer = useLingering(showStickerPicker);
   const [showFormattingTools, setShowFormattingTools] = useState(false);
   const [showPollComposer, setShowPollComposer] = useState(false);
   const [pollQuestion, setPollQuestion] = useState('');
@@ -1329,7 +1337,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
                   </div>
                   <button
                     onClick={() => removeFile(i)}
-                    className="pc-focusable ml-1 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-[var(--radius-chip)] bg-bg-mod-strong text-text-secondary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-danger-well hover:text-accent-danger"
+                    className="pc-focusable ml-1 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-[var(--radius-chip)] bg-bg-mod-strong text-text-secondary transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-danger-well hover:text-accent-danger"
                     aria-label={`Remove ${file.name}`}
                     title={`Remove ${file.name}`}
                   >
@@ -1492,7 +1500,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
           // back" is a settling, not a shrink — it gives way under the press
           // and rises from where it sits.
           'group relative flex min-h-[var(--h-composer)] origin-bottom items-end gap-2 rounded-[var(--radius-card)] py-1.5 pl-2.5 pr-2',
-          'transition-[background-color,box-shadow] duration-[140ms] ease-[var(--ease-out)]',
+          'transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]',
           // §9: the composer is one control, so it shows one ring. The plate
           // lights for the TEXT FIELD only — `focus-within` also matched the
           // plus/poll/emoji/send buttons, which draw their own `pc-focusable`
@@ -1529,7 +1537,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
         )}
 
         {showFormattingTools && (
-          <div className="pc-enter pc-floating absolute bottom-full left-2 right-2 z-10 mb-2 p-1">
+          <div className="pc-pop-in pc-floating absolute bottom-full left-2 right-2 z-10 mb-2 p-1 [--pc-origin:50%_100%]">
             <MarkdownToolbar textareaRef={textareaRef} onContentChange={setContent} />
           </div>
         )}
@@ -1564,7 +1572,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
 
         {/* @mention autocomplete */}
         {mentionQuery !== null && (mentionResults.length > 0 || composerRolesError) && (
-          <div className="pc-enter pc-floating absolute bottom-full left-2 right-2 z-20 mb-2 max-h-64 overflow-y-auto p-1">
+          <div className="pc-pop-in pc-floating absolute bottom-full left-2 right-2 z-20 mb-2 max-h-64 overflow-y-auto p-1 [--pc-origin:50%_100%]">
             {composerRolesError && (
               <p className="px-2 py-1 text-meta text-accent-danger">{composerRolesError}</p>
             )}
@@ -1577,7 +1585,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
                 type="button"
                 className={cn(
                   'pc-focusable flex w-full items-center gap-2.5 rounded-[var(--radius-control)] px-2 py-1.5 text-left',
-                  'transition-colors duration-[140ms] ease-[var(--ease-out)]',
+                  'transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]',
                   i === mentionIndex
                     ? 'bg-bg-mod-strong text-text-primary'
                     : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary',
@@ -1769,10 +1777,11 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
                 <path d="m20 17-1.09-1.09a2 2 0 0 0-2.82 0L10 22" />
               </svg>
             </button>
-            {showStickerPicker && (
-              <div className="absolute bottom-full right-0 mb-2 max-w-[90vw]" style={{ zIndex: 50 }}>
+            {stickerLayer.value && (
+              <div className="absolute bottom-full right-0 mb-2 max-w-[90vw]" style={PICKER_LAYER_STYLE}>
                 <Suspense fallback={null}>
                   <StickerPicker
+                    leaving={stickerLayer.leaving}
                     guildId={guildId}
                     onSelect={(stickerId) => {
                       if (!actions.send.allowed) { setSubmitError(actions.send.reason); return; }
@@ -1806,10 +1815,11 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
           >
             <Image size={18} />
           </button>
-          {showGifPicker && (
-            <div className="absolute bottom-full right-0 mb-2 max-w-[90vw]" style={{ zIndex: 50 }}>
+          {gifLayer.value && (
+            <div className="absolute bottom-full right-0 mb-2 max-w-[90vw]" style={PICKER_LAYER_STYLE}>
               <Suspense fallback={null}>
                 <GifPicker
+                  leaving={gifLayer.leaving}
                   onSelect={(gifUrl) => {
                     if (!actions.send.allowed) { setSubmitError(actions.send.reason); return; }
                     setShowGifPicker(false);
@@ -1841,10 +1851,11 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
           >
             <Smile size={18} />
           </button>
-          {showEmojiPicker && (
-            <div className="absolute bottom-full right-0 mb-2 max-w-[90vw]" style={{ zIndex: 50 }}>
+          {emojiLayer.value && (
+            <div className="absolute bottom-full right-0 mb-2 max-w-[90vw]" style={PICKER_LAYER_STYLE}>
               <Suspense fallback={null}>
                 <EmojiPicker
+                  leaving={emojiLayer.leaving}
                   onSelect={(emoji) => {
                     setContent((prev) => `${prev}${emoji}`);
                     triggerTyping();
@@ -1869,7 +1880,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
           disabled={sendDisabled}
           className={cn(
             'pc-focusable inline-flex h-[34px] shrink-0 items-center justify-center gap-1.5 rounded-[var(--radius-control)] px-3',
-            'transition-colors duration-[140ms] ease-[var(--ease-out)]',
+            'transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]',
             '[@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:px-4',
             sendDisabled
               ? 'cursor-not-allowed bg-bg-mod-subtle text-text-faint'

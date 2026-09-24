@@ -86,6 +86,7 @@ import {
   RollingNumber,
   settleIn,
   springEasing,
+  springTokens,
   SPEAKING_MARK,
   stagger,
   supportsLinearEasing,
@@ -223,10 +224,11 @@ const TYPE_STEPS: Array<{ cls: string; name: string; face: string; use: string }
 const RADII = ['--radius-plate', '--radius-card', '--radius-well', '--radius-control', '--radius-chip', '--radius-stage-control', '--radius-window'];
 const HEIGHTS = ['--h-nav-row', '--h-list-row', '--h-control-sm', '--h-control', '--h-control-phone', '--h-composer', '--h-stage-control', '--h-chip', '--h-search-well'];
 const MOTION = [
-  '--duration-fast', '--duration-normal', '--duration-slow', '--duration-warm-up', '--duration-dim',
+  '--duration-fast', '--duration-normal', '--duration-slow', '--duration-page',
+  '--duration-exit', '--duration-exit-slow', '--duration-warm-up', '--duration-dim',
   '--duration-move', '--duration-roll', '--duration-breathe',
-  '--ease-out', '--ease-in', '--ease-in-out', '--ease-spring-settle',
-  '--stagger-light', '--stagger-chrome',
+  '--ease-out', '--ease-in', '--ease-in-out',
+  '--stagger-page', '--stagger-light', '--stagger-chrome',
   '--spring-stiffness', '--spring-damping', '--spring-mass',
 ];
 
@@ -1282,10 +1284,13 @@ function MotionSection() {
         The switch is one place: Settings › Appearance › Motion, folded with the
         OS setting and published as <code className="pc-mono">data-motion</code> on the document.
         It is currently <span className="text-text-primary">{reduced ? 'reduced — every recipe below lands its end state instantly' : 'on'}</span>.
-        Springs solve <code className="pc-mono">--spring-stiffness</code> 260 /{' '}
-        <code className="pc-mono">--spring-damping</code> 24 and resolve to{' '}
-        <code className="pc-mono">{supportsLinearEasing() ? 'a sampled linear() easing' : '--ease-spring-settle'}</code>:{' '}
-        <code className="pc-mono break-all text-text-faint">{springEasing().slice(0, 96)}</code>
+        Everything arrives on <code className="pc-mono">--ease-out</code> and leaves on the quicker{' '}
+        <code className="pc-mono">--ease-in</code>; nothing overshoots. Only an interrupted animation
+        uses the spring (<code className="pc-mono">--spring-stiffness</code> 260 /{' '}
+        <code className="pc-mono">--spring-damping</code> 34, critically damped), to carry its velocity:{' '}
+        <code className="pc-mono break-all text-text-faint">
+          {supportsLinearEasing() ? springEasing({ ...springTokens(), velocity: 4 }, { durationMs: 240 }).slice(0, 96) : '--ease-out'}
+        </code>
       </p>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -1322,8 +1327,8 @@ function MotionSection() {
         <Recipe
           id="motion-settle"
           name="Settle"
-          tokens="--duration-move · spring-settle"
-          model="A plate entering the street rises 14px with one small overshoot. The same curve carries shared elements and sliding indicators."
+          tokens="--duration-slow · --ease-out"
+          model="A plate entering the street rises 8px and fades in, with no overshoot. The same curve carries shared elements and sliding indicators."
           onPlay={() => settleIn(settleRef.current)}
         >
           <div
@@ -1337,8 +1342,8 @@ function MotionSection() {
         <Recipe
           id="motion-press"
           name="Press"
-          tokens="0.96 · 80ms · spring-settle · --bg-mod-subtle"
-          model="Controls are tactile: hover lifts 1px and takes a faint wash, and the thing you press gives way under the finger and springs back. It answers on the same frame as the pointer. The left one is the engine's recipe, called by hand — the composer's send control uses it. The right one is `.pc-pressable`, which every Button, IconButton, NavRow and Chip in the product carries: hover it and press it rather than replaying it."
+          tokens="0.98 · --duration-fast · --ease-out · --bg-mod-subtle"
+          model="Controls are tactile: hover takes a faint wash, and the thing you press gives way 2% under the finger and comes back, 120ms each way. A row darkens a step instead of shrinking. It answers on the same frame as the pointer. The left one is the engine's recipe, called by hand — the composer's send control uses it. The right one is `.pc-pressable`, which every Button, IconButton, NavRow and Chip in the product carries: hover it and press it rather than replaying it."
           onPlay={() => press(pressRef.current)}
         >
           <div className="flex items-center gap-3">
@@ -1385,7 +1390,7 @@ function MotionSection() {
         <Recipe
           id="motion-reorder"
           name="List reorder"
-          tokens="--duration-move · spring-settle"
+          tokens="--duration-slow · --ease-out"
           model="A list that changes order animates layout: every row travels to its new place on the same curve a plate settles on, so the row you were reaching for is somewhere you watched it go. Nothing moves on the first paint."
           onPlay={() => setOrder((rows) => [rows[rows.length - 1], ...rows.slice(0, -1)])}
         >
@@ -1405,8 +1410,8 @@ function MotionSection() {
         <Recipe
           id="motion-pop"
           name="Reaction pop"
-          tokens="0.6 / 0.8 · spring-settle · --duration-fast out"
-          model="A reaction lands, it does not slide in. Yours pops 0.6 to 1 and the emoji over-rotates 8° on the way; somebody else's pops smaller at 0.8. Removing fades the chip and shrinks it back out the way it came — replay again to see the leave. The row under a real message is this exact hook."
+          tokens="0.9 / 0.96 · --ease-out · --duration-exit out"
+          model="A reaction lands, it does not slide in. Yours grows from 0.9; somebody else's from 0.96. Removing fades the chip and shrinks it back out the way it came — replay again to see the leave. The row under a real message is this exact hook."
           onPlay={() => setPopped((value) => !value)}
         >
           <div ref={popRef} className="flex flex-wrap items-center gap-1.5">
@@ -1459,8 +1464,8 @@ function MotionSection() {
         <Recipe
           id="motion-plate"
           name="Contextual plate"
-          tokens="--duration-move · spring-settle in · --duration-fast ease-in out"
-          model="A pane slides in from the edge it opens against and slides back the way it came. The surface stays mounted for the 120ms the leave takes and is scenery the whole way — the desktop right rail and the profile card run on this."
+          tokens="--duration-slow · --ease-out in · --duration-exit-slow · --ease-in out"
+          model="A pane eases 8px in from the edge it opens against and 6px back the way it came. The surface stays mounted for the 170ms the leave takes and is scenery the whole way — the desktop right rail and the profile card run on this."
           onPlay={() => setPlateOpen((value) => !value)}
         >
           <div className="relative h-24 w-full overflow-hidden rounded-[var(--radius-well)] bg-bg-base">
@@ -1535,7 +1540,7 @@ function MotionSection() {
           <div className="flex items-baseline gap-2">
             <span className="pc-display text-name text-text-primary">Shared element</span>
             <code className="pc-mono ml-auto shrink-0 text-meta text-text-faint">
-              --duration-move · spring-settle · --stagger-chrome
+              --duration-move · --ease-out · --stagger-chrome
             </code>
           </div>
           <div ref={stageRef} className="relative min-h-[9rem] overflow-hidden rounded-[var(--radius-well)] bg-bg-base p-3">

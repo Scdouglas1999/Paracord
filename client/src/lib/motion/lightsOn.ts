@@ -17,7 +17,7 @@ import { ms } from './tokens';
  *
  * One sequence, played over whatever is on screen when presence arrives:
  *
- *   plates settle from 14px below, 120ms apart, as the street first renders
+ *   plates settle from 8px below, 120ms apart, as the street first renders
  *   → each lit window blooms, `--stagger-light` after its neighbour
  *   → a plate's lamp fades in once its own first window is lit
  *   → a person's rim catches 120ms after the room they are in
@@ -60,7 +60,7 @@ export interface LightsOnOptions {
    */
   plates?: readonly HTMLElement[];
   /**
-   * Whether the street ARRIVES — plates settling from 14px below (§5.1).
+   * Whether the street ARRIVES — plates settling from 8px below (§5.1).
    *
    * True when the building is being seen for the first time in this run. False
    * when the plates are already on screen and only their light changed: the
@@ -103,7 +103,7 @@ export function lightsOnStep(count: number, budgetMs = LIGHTS_ON_BUDGET_MS, rese
 function plateStep(count: number, budgetMs: number): number {
   const preferred = ms('--duration-fast');
   if (count <= 1) return preferred;
-  const room = Math.max(0, budgetMs - ms('--duration-move'));
+  const room = Math.max(0, budgetMs - ms('--duration-slow'));
   return Math.max(1, Math.min(preferred, Math.floor(room / (count - 1))));
 }
 
@@ -149,7 +149,7 @@ export function playLightsOn(options: LightsOnOptions = {}): LightsOnSequence {
     endsAt = Math.max(endsAt, delay + duration);
   };
 
-  // 1. The street arrives: plates settle from 14px below, 120ms apart. Not when
+  // 1. The street arrives: plates settle from 8px below, 120ms apart. Not when
   //    the plates are already standing there and only their light changed.
   const settles = options.settle !== false;
   const pStep = plateStep(plates.length, budget);
@@ -160,7 +160,7 @@ export function playLightsOn(options: LightsOnOptions = {}): LightsOnSequence {
     if (!settles) return;
     const animation = settleIn(plate, { delay });
     if (animation) animations.push(animation);
-    ends(delay, ms('--duration-move'));
+    ends(delay, ms('--duration-slow'));
   });
 
   // 2. The windows bloom — a window inside a plate waits for its plate to

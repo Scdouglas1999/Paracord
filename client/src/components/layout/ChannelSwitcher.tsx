@@ -146,7 +146,7 @@ export function ChannelSwitcher({
           // short of its own content and EVERY room name ellipsized ("shop-fl…"),
           // at every viewport, however much free header space there was.
           'pc-focusable -translate-x-1 flex h-8 w-full min-w-0 max-w-[18rem] items-center gap-1.5 rounded-[var(--radius-control)] px-1 text-left outline-none',
-          'text-text-primary transition-colors duration-[140ms] ease-[var(--ease-out)]',
+          'text-text-primary transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]',
           'hover:bg-bg-mod-subtle',
           open && 'bg-bg-mod-subtle',
         )}
@@ -161,7 +161,7 @@ export function ChannelSwitcher({
           size={14}
           aria-hidden
           className={cn(
-            'shrink-0 text-text-muted transition-transform duration-[140ms] ease-[var(--ease-out)]',
+            'shrink-0 text-text-muted transition-transform duration-[var(--duration-fast)] ease-[var(--ease-out)]',
             open && 'rotate-180',
           )}
         />

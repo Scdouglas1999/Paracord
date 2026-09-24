@@ -118,7 +118,7 @@ export function ThreadPanel({
               type="button"
               onClick={() => void restoreThread()}
               disabled={restoring}
-              className="rounded-chip border border-border-subtle bg-bg-mod-subtle px-3 py-1.5 text-label font-semibold text-text-secondary shadow-[var(--shadow-chip)] transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-strong hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
+              className="rounded-chip border border-border-subtle bg-bg-mod-subtle px-3 py-1.5 text-label font-semibold text-text-secondary shadow-[var(--shadow-chip)] transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-strong hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
             >
               Restore
             </button>
@@ -128,14 +128,14 @@ export function ThreadPanel({
               type="button"
               onClick={() => void deleteThread()}
               disabled={deleting}
-              className="rounded-chip border border-border-subtle bg-bg-mod-subtle px-3 py-1.5 text-label font-semibold text-accent-danger shadow-[var(--shadow-chip)] transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-danger-tint focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
+              className="rounded-chip border border-border-subtle bg-bg-mod-subtle px-3 py-1.5 text-label font-semibold text-accent-danger shadow-[var(--shadow-chip)] transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-danger-tint focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
             >
               {deleting ? 'Deleting...' : 'Delete'}
             </button>
           )}
           <button
             onClick={onClose}
-            className="command-icon-btn h-9 w-9 rounded-chip border border-border-subtle bg-bg-mod-subtle text-text-secondary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-strong hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+            className="command-icon-btn h-9 w-9 rounded-chip border border-border-subtle bg-bg-mod-subtle text-text-secondary transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-strong hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
             aria-label="Close thread"
             title="Close thread"
           >

@@ -59,7 +59,7 @@ function TickBox({ checked }: { checked: boolean }) {
       aria-hidden
       className={cn(
         'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-[var(--radius-window)]',
-        'transition-[background-color,color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
+        'transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]',
         checked
           ? 'bg-accent-primary text-text-on-accent'
           : 'bg-bg-mod-strong text-transparent shadow-[var(--shadow-well)]',
@@ -281,7 +281,7 @@ export function GuildOnboardingGate({ guildId }: GuildOnboardingGateProps) {
                       key={option.id}
                       className={cn(
                         'group flex cursor-pointer items-start gap-3 px-3 py-2.5 text-label',
-                        'rounded-[var(--radius-control)] transition-[background-color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
+                        'rounded-[var(--radius-control)] transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]',
                         'focus-within:shadow-[var(--focus-ring)]',
                         checked
                           ? 'bg-bg-raised shadow-[var(--shadow-raised)]'

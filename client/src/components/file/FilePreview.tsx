@@ -125,7 +125,7 @@ export function FilePreview({ url, filename, mimeType, size, resolveObjectUrl }:
             <button
               type="button"
               aria-label="Close image preview"
-              className="pc-focusable absolute right-4 top-4 flex h-9 w-9 items-center justify-center rounded-[var(--radius-control)] bg-bg-raised text-text-primary shadow-[var(--shadow-lifted)] outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-strong"
+              className="pc-focusable absolute right-4 top-4 flex h-9 w-9 items-center justify-center rounded-[var(--radius-control)] bg-bg-raised text-text-primary shadow-[var(--shadow-lifted)] outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-strong"
               onClick={closeLightbox}
             >
               <X size={18} />
@@ -172,7 +172,7 @@ export function FilePreview({ url, filename, mimeType, size, resolveObjectUrl }:
       <a
         href={resolvedSrc}
         download={filename}
-        className="pc-focusable group flex items-center gap-3 rounded-[var(--radius-well)] bg-bg-well p-3 no-underline shadow-[var(--shadow-well)] outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle"
+        className="pc-focusable group flex items-center gap-3 rounded-[var(--radius-well)] bg-bg-well p-3 no-underline shadow-[var(--shadow-well)] outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle"
       >
         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-chip)] bg-bg-mod-strong text-text-secondary">
           <FileText size={20} />
@@ -183,7 +183,7 @@ export function FilePreview({ url, filename, mimeType, size, resolveObjectUrl }:
         </div>
         <Download
           size={18}
-          className="shrink-0 text-text-muted transition-colors duration-[140ms] ease-[var(--ease-out)] group-hover:text-accent-primary"
+          className="shrink-0 text-text-muted transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] group-hover:text-accent-primary"
         />
       </a>
     </div>

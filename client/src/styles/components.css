@@ -20,14 +20,14 @@
   text-align: center;
   white-space: nowrap;
   cursor: pointer;
-  /* The §5.1 pressable recipe (see .pc-pressable in primitives.css): a 1px lift
-     and faint wash on hover, 0.96 for the 80ms press, a spring back on
-     release, and the one-beat brighter flash an accent button takes. */
+  /* The §5.1 pressable recipe (see .pc-pressable in primitives.css): the
+     hover colour and a 0.98 press, both 120ms on the one ease-out, and the
+     one-beat brighter flash an accent button takes. */
   transition:
-    transform var(--duration-normal) var(--ease-spring-settle),
+    transform var(--duration-fast) var(--ease-out),
     background-color var(--duration-fast) var(--ease-out),
-    border-color var(--duration-normal) var(--ease-out),
-    opacity var(--duration-normal) var(--ease-out);
+    border-color var(--duration-fast) var(--ease-out),
+    opacity var(--duration-fast) var(--ease-out);
 }
 
 .btn-primary::after {
@@ -44,20 +44,15 @@
 @media (hover: hover) {
   .btn-primary:hover:not(:disabled) {
     background-color: var(--accent-primary-hover);
-    transform: translateY(-1px);
   }
 }
 
 .btn-primary:active:not(:disabled) {
-  transform: scale(0.96);
-  transition:
-    transform 80ms var(--ease-out),
-    background-color var(--duration-fast) var(--ease-out);
+  transform: scale(0.98);
 }
 
 .btn-primary:active:not(:disabled)::after {
-  opacity: 0.28;
-  transition-duration: 80ms;
+  opacity: 0.2;
 }
 
 .btn-primary:disabled {
@@ -82,7 +77,6 @@
   font-size: var(--text-label);
   line-height: 1.4;
   outline: none;
-  transition: box-shadow var(--duration-fast) var(--ease-out);
 }
 
 .input-field::placeholder {
@@ -117,25 +111,18 @@
   transition:
     color var(--duration-fast) var(--ease-out),
     background-color var(--duration-fast) var(--ease-out),
-    box-shadow var(--duration-fast) var(--ease-out),
-    transform var(--duration-normal) var(--ease-spring-settle);
+    transform var(--duration-fast) var(--ease-out);
 }
 
 @media (hover: hover) {
   .icon-btn:hover:not(:disabled) {
     color: var(--text-primary);
     background-color: var(--bg-mod-subtle);
-    transform: translateY(-1px);
   }
 }
 
 .icon-btn:active:not(:disabled) {
-  transform: scale(0.96);
-  transition:
-    transform 80ms var(--ease-out),
-    color var(--duration-fast) var(--ease-out),
-    background-color var(--duration-fast) var(--ease-out),
-    box-shadow var(--duration-fast) var(--ease-out);
+  transform: scale(0.98);
 }
 
 .icon-btn.active {
@@ -156,27 +143,22 @@
   background: transparent;
   border: none;
   cursor: pointer;
+  /* A row, so the press is a step darker rather than a shrink (see
+     .pc-pressable-row). */
   transition:
     background-color var(--duration-fast) var(--ease-out),
-    color var(--duration-fast) var(--ease-out),
-    box-shadow var(--duration-fast) var(--ease-out),
-    transform var(--duration-normal) var(--ease-spring-settle);
+    color var(--duration-fast) var(--ease-out);
 }
 
 @media (hover: hover) {
   .context-menu-item:hover:not(:disabled) {
     background-color: var(--bg-mod-subtle);
     color: var(--text-primary);
-    transform: translateY(-1px);
   }
 }
 
 .context-menu-item:active:not(:disabled) {
-  transform: scale(0.96);
-  transition:
-    transform 80ms var(--ease-out),
-    background-color var(--duration-fast) var(--ease-out),
-    color var(--duration-fast) var(--ease-out);
+  background-color: var(--bg-mod-strong);
 }
 
 /* Destructive takes danger INK, never a red fill (§1.3). */
@@ -215,23 +197,18 @@
   transition:
     color var(--duration-fast) var(--ease-out),
     background-color var(--duration-fast) var(--ease-out),
-    transform var(--duration-normal) var(--ease-spring-settle);
+    transform var(--duration-fast) var(--ease-out);
 }
 
 @media (hover: hover) {
   .hover-action-btn:hover:not(:disabled) {
     color: var(--interactive-hover);
     background-color: var(--bg-mod-subtle);
-    transform: translateY(-1px);
   }
 }
 
 .hover-action-btn:active:not(:disabled) {
-  transform: scale(0.96);
-  transition:
-    transform 80ms var(--ease-out),
-    color var(--duration-fast) var(--ease-out),
-    background-color var(--duration-fast) var(--ease-out);
+  transform: scale(0.98);
 }
 
 @media (width < 768px) {

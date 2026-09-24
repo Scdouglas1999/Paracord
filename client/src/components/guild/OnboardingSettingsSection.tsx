@@ -193,7 +193,7 @@ export function OnboardingSettingsSection({ guildId, roles }: OnboardingSettings
                         // A picked option is a raised row inside the settings
                         // plate (§4); an unpicked one is bare ground.
                         'flex cursor-pointer items-center gap-2.5 rounded-[var(--radius-control)] px-3 py-2.5 text-label',
-                        'transition-[background-color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
+                        'transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]',
                         checked
                           ? 'bg-bg-raised text-text-primary shadow-[var(--shadow-raised)]'
                           : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary',

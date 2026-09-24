@@ -238,7 +238,7 @@ export function TemplateGalleryPage() {
                           aria-label={`View template ${template.name}`}
                           aria-pressed={active}
                           onClick={() => setSelectedTemplateId(template.id)}
-                          className={`w-full rounded-chip px-3 py-2.5 text-left outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)] ${
+                          className={`w-full rounded-chip px-3 py-2.5 text-left outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)] ${
                             active
                               ? 'bg-accent-tint text-text-primary'
                               : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary'
@@ -274,7 +274,7 @@ export function TemplateGalleryPage() {
                       <button
                         type="button"
                         aria-label={`Delete template ${selectedTemplate.name}`}
-                        className="inline-flex shrink-0 items-center gap-1.5 rounded-chip border border-accent-danger/35 px-2.5 py-1.5 text-meta font-semibold text-accent-danger outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-danger hover:text-text-on-danger focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50"
+                        className="inline-flex shrink-0 items-center gap-1.5 rounded-chip border border-accent-danger/35 px-2.5 py-1.5 text-meta font-semibold text-accent-danger outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-accent-danger hover:text-text-on-danger focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50"
                         onClick={() => void deleteTemplate(selectedTemplate.id)}
                         disabled={busyTemplateId === selectedTemplate.id}
                       >

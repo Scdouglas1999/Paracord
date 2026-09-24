@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, type CSSProperties } from 'react';
 import { Trash2, HardDrive } from 'lucide-react';
 import { guildStorageApi, type GuildStoragePolicy, type GuildStorageInfo, type GuildFile } from '../../api/guildStorage';
 import { confirm } from '../../stores/confirmStore';
@@ -202,8 +202,8 @@ export function FileStorageSection({ guildId, canManage }: FileStorageSectionPro
                 aria-valuetext={`${formatBytes(usage)} of ${formatBytes(quota)} used`}
               >
                 <div
-                  className={`h-full rounded-[var(--radius-full)] transition-[width] duration-[var(--duration-normal)] ${meterTone}`}
-                  style={{ width: `${usagePercent}%` }}
+                  className={`pc-meter-fill ${meterTone}`}
+                  style={{ '--pc-fill': usagePercent / 100 } as CSSProperties}
                 />
               </div>
             )}

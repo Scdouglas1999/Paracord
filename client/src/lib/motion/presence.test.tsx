@@ -149,7 +149,7 @@ describe('useSettleIn', () => {
     expect(waapi.played).toHaveLength(0);
   });
 
-  it('rises 14px on the spring when joining a street that is already standing', async () => {
+  it('rises 8px on the ease-out when joining a street that is already standing', async () => {
     setStreetPaintedForTests(true);
     const { rerender } = render(<Street keys={['a', 'b']} />);
     // The pair arrived together: neither of them had a street to join.
@@ -158,8 +158,8 @@ describe('useSettleIn', () => {
 
     rerender(<Street keys={['a', 'b', 'c']} />);
     expect(waapi.played).toHaveLength(1);
-    expect(waapi.played[0].keyframes[0].transform).toBe('translate3d(0, 14px, 0)');
-    expect(Number(waapi.played[0].options.duration)).toBe(380);
+    expect(waapi.played[0].keyframes[0].transform).toBe('translate3d(0, 8px, 0)');
+    expect(Number(waapi.played[0].options.duration)).toBe(240);
   });
 
   it('does not animate a whole street arriving in one commit', async () => {
@@ -271,7 +271,7 @@ describe('useFlipList', () => {
     expect(waapi.played).toHaveLength(0);
   });
 
-  it('springs a reordered row from where it was to where it landed', () => {
+  it('moves a reordered row from where it was to where it landed', () => {
     tops.set('a', 0);
     tops.set('b', 10);
     const { rerender } = render(<Rows keys={['a', 'b']} />);
@@ -283,7 +283,7 @@ describe('useFlipList', () => {
     const b = waapi.played.find((record) => (record.target as HTMLElement).dataset.flipKey === 'b')!;
     expect(b.keyframes[0].transform).toBe('translate3d(0px, 10px, 0)');
     expect(b.keyframes[1].transform).toBe('translate3d(0, 0, 0)');
-    expect(Number(b.options.duration)).toBe(380);
+    expect(Number(b.options.duration)).toBe(240);
   });
 
   it('fades and rises a row that arrived', () => {
@@ -311,13 +311,13 @@ describe('useFlipList', () => {
     expect(document.body.contains(clone)).toBe(false);
   });
 
-  it('pops an incoming reaction smaller — 0.8 to 1, no glyph flourish', () => {
+  it('pops an incoming reaction quietly — 0.96 to 1, no glyph flourish', () => {
     tops.set('a', 0);
     const { rerender } = render(<Rows keys={['a']} enter="pop" />);
     tops.set('c', 0);
     rerender(<Rows keys={['a', 'c']} enter="pop" />);
     const arrived = waapi.played.find((record) => (record.target as HTMLElement).dataset.flipKey === 'c')!;
-    expect(arrived.keyframes[0].transform).toBe('scale(0.8)');
+    expect(arrived.keyframes[0].transform).toBe('scale(0.96)');
     expect(arrived.keyframes[1].transform).toBe('scale(1)');
     expect(arrived.animation.id).toBe('data-motion-recipe:pop');
     // Somebody else's: the row pops, the emoji does not over-rotate.
@@ -328,18 +328,18 @@ describe('useFlipList', () => {
     ).toHaveLength(0);
   });
 
-  it('pops your own reaction the full 0.6 and over-rotates the emoji', () => {
+  it('pops your own reaction from 0.9, and the emoji does not over-rotate', () => {
     tops.set('a', 0);
     const { rerender } = render(<Rows keys={['a']} enter="pop" />);
     tops.set('c', 0);
     rerender(<Rows keys={['a', 'c']} enter="pop" own={['c']} />);
     const arrived = waapi.played.find((record) => (record.target as HTMLElement).dataset.flipKey === 'c')!;
-    expect(arrived.keyframes[0].transform).toBe('scale(0.6)');
+    expect(arrived.keyframes[0].transform).toBe('scale(0.9)');
     expect(arrived.keyframes[1].transform).toBe('scale(1)');
-    const glyph = waapi.played.find((record) => (record.target as HTMLElement).dataset.flipGlyph !== undefined)!;
-    expect(glyph.keyframes[0].transform).toBe('rotate(-8deg)');
-    expect(glyph.keyframes[1].transform).toBe('rotate(0deg)');
-    expect(glyph.animation.id).toBe('data-motion-recipe:pop');
+    // §5.2: no over-rotation, no flourish — the chip's own scale is the motion.
+    expect(
+      waapi.played.filter((record) => (record.target as HTMLElement).dataset.flipGlyph !== undefined),
+    ).toHaveLength(0);
   });
 
   it('shrinks a leaving pop row back out rather than dropping it', () => {
@@ -351,7 +351,7 @@ describe('useFlipList', () => {
     expect(clone).not.toBeNull();
     const leaving = waapi.played.find((record) => record.target === clone)!;
     expect(leaving.keyframes[1].opacity).toBe(0);
-    expect(leaving.keyframes[1].transform).toBe('scale(0.6)');
+    expect(leaving.keyframes[1].transform).toBe('scale(0.9)');
     expect(leaving.animation.id).toBe('data-motion-recipe:exit');
   });
 

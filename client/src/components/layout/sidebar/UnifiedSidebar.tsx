@@ -53,11 +53,19 @@ import type { RoomAttention } from './RoomRow';
  *     from the deleted `SpacesList`, which was the only writer of the muted set
  */
 
-export function UnifiedSidebar() {
+export function UnifiedSidebar({ alwaysExpanded = false }: {
+  /**
+   * The phone drawer: the sidebar there is always the full column. Closing the
+   * drawer sets `sidebarCollapsed`, and without this the drawer would swap to
+   * the 64px icon rail for the beat its leave takes (§5.2 exits).
+   */
+  alwaysExpanded?: boolean;
+} = {}) {
   const navigate = useNavigate();
   const params = useParams();
   const location = useLocation();
-  const sidebarCollapsed = useUIStore((s) => s.sidebarCollapsed);
+  const storeCollapsed = useUIStore((s) => s.sidebarCollapsed);
+  const sidebarCollapsed = alwaysExpanded ? false : storeCollapsed;
   const activeScope = useCurrentAccountScope();
   const user = useCurrentUser();
   const settings = useAuthStore((s) => s.settings);

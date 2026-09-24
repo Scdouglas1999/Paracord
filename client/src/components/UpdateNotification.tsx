@@ -320,7 +320,7 @@ export function UpdateNotification() {
               : ''}
           </div>
           <a
-            className="mt-1 inline-block rounded-chip text-meta font-medium text-text-link outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:underline focus-visible:shadow-[var(--focus-ring)]"
+            className="mt-1 inline-block rounded-chip text-meta font-medium text-text-link outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:underline focus-visible:shadow-[var(--focus-ring)]"
             href={updateInfo.htmlUrl}
             target="_blank"
             rel="noreferrer"
@@ -329,7 +329,7 @@ export function UpdateNotification() {
           </a>
         </div>
         <button
-          className="-mr-1 -mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-chip text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
+          className="-mr-1 -mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-chip text-text-muted outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
           onClick={onDismiss}
           type="button"
           aria-label="Dismiss update notification"

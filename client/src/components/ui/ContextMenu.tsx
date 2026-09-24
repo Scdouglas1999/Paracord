@@ -1,8 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, useCallback, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { Check } from 'lucide-react';
-// §5.1/§5.3: the shared overlay recipe (pc-enter / pc-exit); the presence hook
-// keeps the menu mounted for its --duration-fast leave.
+// §5.1/§5.3: the small-surface recipe (pc-pop-in / pc-pop-out), grown from the
+// point that opened it; the presence hook keeps the menu mounted for its leave.
 import { usePresence } from '../../lib/motion';
 import { cn } from '../../lib/utils';
 
@@ -179,9 +179,19 @@ export function ContextMenu({ items, position, open = true, onClose, label = 'Co
       ref={menuRef}
       className={cn(
         'pc-floating fixed z-[100] min-w-[min(13rem,calc(100vw-1rem))] max-w-[calc(100vw-1rem)] max-h-[calc(100dvh-1rem)] overflow-y-auto p-1.5 outline-none',
-        exiting ? 'pc-exit' : 'pc-enter',
+        exiting ? 'pc-pop-out' : 'pc-pop-in',
       )}
-      style={{ left: adjustedPosition.x, top: adjustedPosition.y }}
+      style={
+        {
+          left: adjustedPosition.x,
+          top: adjustedPosition.y,
+          // Grow out of the point that opened it: under a button, from the
+          // corner that sits beneath it; at the pointer, from the pointer.
+          '--pc-origin': anchorRef
+            ? '100% 0%'
+            : `${Math.max(0, anchor.x - adjustedPosition.x)}px ${Math.max(0, anchor.y - adjustedPosition.y)}px`,
+        } as React.CSSProperties
+      }
       tabIndex={-1}
       role="menu"
       aria-label={label}

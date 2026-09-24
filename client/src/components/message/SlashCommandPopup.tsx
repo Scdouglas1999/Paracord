@@ -21,9 +21,13 @@ export interface SlashCommandPopupProps {
 const MAX_VISIBLE = 10;
 
 // Popover recipe (lantern-stage-spec §8): --bg-floating, radius-md, 1px --border-subtle,
-// --shadow-plate, the shared pc-enter rise+fade.
+// --shadow-plate, and the small-surface pop grown from its bottom edge, where
+// the composer is. Every state below renders the same root <div>, so moving
+// between loading, empty and a list keeps the element and never replays it.
+// It closes the instant the query stops being a command: an autocomplete
+// follows keystrokes, and a leave would trail behind the typing.
 const POPOVER_CLASS =
-  'absolute bottom-full left-2 right-2 z-30 mb-2 rounded-well border border-border-subtle bg-bg-floating shadow-[var(--shadow-plate)]';
+  'absolute bottom-full left-2 right-2 z-30 mb-2 rounded-well border border-border-subtle bg-bg-floating shadow-[var(--shadow-plate)] [--pc-origin:50%_100%]';
 
 export function SlashCommandPopup({
   query,
@@ -135,21 +139,21 @@ export function SlashCommandPopup({
   if (showingChoices) {
     if (autocompleteLoading && visibleChoices.length === 0) {
       return (
-        <div className={`pc-enter ${POPOVER_CLASS} p-3`}>
+        <div className={`pc-pop-in ${POPOVER_CLASS} p-3`}>
           <LoadingSpinner size="sm" label="Loading suggestions…" />
         </div>
       );
     }
     if (visibleChoices.length === 0) {
       return (
-        <div className={`pc-enter ${POPOVER_CLASS} px-3 py-2.5`}>
+        <div className={`pc-pop-in ${POPOVER_CLASS} px-3 py-2.5`}>
           <p className="text-meta text-text-secondary">No suggestions for this option.</p>
         </div>
       );
     }
     return (
       <div
-        className={`pc-enter ${POPOVER_CLASS} max-h-80 overflow-y-auto p-1`}
+        className={`pc-pop-in ${POPOVER_CLASS} max-h-80 overflow-y-auto p-1`}
       >
         <div ref={listRef} className="flex flex-col gap-0.5">
           {visibleChoices.map((choice, i) => {
@@ -158,7 +162,7 @@ export function SlashCommandPopup({
               <button
                 key={`${choice.name}:${String(choice.value)}`}
                 type="button"
-                className={`flex w-full items-center gap-2.5 rounded-chip px-2 py-1.5 text-left transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
+                className={`flex w-full items-center gap-2.5 rounded-chip px-2 py-1.5 text-left transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
                   selected
                     ? 'bg-accent-tint text-text-primary'
                     : 'text-text-secondary hover:bg-accent-tint hover:text-text-primary'
@@ -192,7 +196,7 @@ export function SlashCommandPopup({
 
   if (loading && !guildCommands.get(guildId)?.length) {
     return (
-      <div className={`pc-enter ${POPOVER_CLASS} p-3`}>
+      <div className={`pc-pop-in ${POPOVER_CLASS} p-3`}>
         <LoadingSpinner size="sm" label="Loading commands…" />
       </div>
     );
@@ -200,7 +204,7 @@ export function SlashCommandPopup({
 
   if (filteredCommands.length === 0) {
     return (
-      <div className={`pc-enter ${POPOVER_CLASS} px-3 py-2.5`}>
+      <div className={`pc-pop-in ${POPOVER_CLASS} px-3 py-2.5`}>
         <p className="text-meta text-text-secondary">
           No commands match{' '}
           <span className="font-semibold text-text-primary">/{query}</span> — check the spelling or
@@ -212,7 +216,7 @@ export function SlashCommandPopup({
 
   return (
     <div
-      className={`pc-enter ${POPOVER_CLASS} max-h-80 overflow-y-auto p-1`}
+      className={`pc-pop-in ${POPOVER_CLASS} max-h-80 overflow-y-auto p-1`}
     >
       <div ref={listRef} className="flex flex-col gap-0.5">
         {filteredCommands.map((cmd, i) => {
@@ -221,7 +225,7 @@ export function SlashCommandPopup({
             <button
               key={cmd.id}
               type="button"
-              className={`flex w-full items-center gap-2.5 rounded-chip px-2 py-1.5 text-left transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
+              className={`flex w-full items-center gap-2.5 rounded-chip px-2 py-1.5 text-left transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
                 selected
                   ? 'bg-accent-tint text-text-primary'
                   : 'text-text-secondary hover:bg-accent-tint hover:text-text-primary'

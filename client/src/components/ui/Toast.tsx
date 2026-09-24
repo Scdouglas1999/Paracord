@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { X, CheckCircle, AlertCircle, Info, AlertTriangle } from 'lucide-react';
 // §5.1: the stack is one FLIP'd list — a new toast fades+rises, a dismissed one
 // falls away as a ghost, and every toast still on screen slides to its new spot
-// on the spring-settle. Reduced motion lands all of it instantly.
+// on the ease-out. Reduced motion lands all of it instantly.
 import { useFlipList } from '../../lib/motion';
 import { useToastStore, type ToastType, type ToastAction } from '../../stores/toastStore';
 
@@ -42,10 +42,11 @@ function ToastItem({
   useEffect(() => {
     const el = progressRef.current;
     if (!el) return;
-    // Trigger the CSS animation on next frame
+    // The time left, drawn as a composited shrink rather than a width: a width
+    // transition re-lays-out the toast on every frame of its life.
     requestAnimationFrame(() => {
-      el.style.transition = `width ${duration}ms linear`;
-      el.style.width = '0%';
+      el.style.transition = `transform ${duration}ms linear`;
+      el.style.transform = 'scaleX(0)';
     });
   }, [duration]);
 
@@ -87,8 +88,8 @@ function ToastItem({
       </button>
       <div
         ref={progressRef}
-        className="absolute bottom-0 left-0 h-0.5"
-        style={{ width: '100%', backgroundColor: color, opacity: 0.45 }}
+        className="absolute bottom-0 left-0 h-0.5 w-full origin-left"
+        style={{ backgroundColor: color, opacity: 0.45 }}
       />
     </div>
   );

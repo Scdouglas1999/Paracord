@@ -170,7 +170,7 @@ export default function CodeBlock({ code, language }: CodeBlockProps) {
             padding: '3px 7px',
             borderRadius: 'var(--radius-chip)',
             outline: 'none',
-            transition: 'color 140ms var(--ease-out), background-color 140ms var(--ease-out), box-shadow 140ms var(--ease-out)',
+            transition: 'color var(--duration-fast) var(--ease-out), background-color var(--duration-fast) var(--ease-out)',
           }}
           onMouseEnter={(e) => {
             if (copied) return;

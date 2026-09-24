@@ -7,7 +7,7 @@ import { motionToken, ms } from './tokens';
 /**
  * FLIP for lists (docs/lantern-stage-spec.md §5.1, §5.3).
  *
- * "A list that changes order animates layout on the spring-settle curve — never
+ * "A list that changes order animates layout on the one ease-out — never
  * a snap." `transitionWith` covers the one-off shared element; this hook covers
  * a container whose rows reorder as data changes (the Buildings column, the
  * toast stack), where the update arrives from a store rather than a click the
@@ -16,12 +16,13 @@ import { motionToken, ms } from './tokens';
  * Rows opt in with a stable `data-flip-key`. On every commit the hook measures
  * them and plays back the deltas:
  *
- *   - a row that MOVED travels on the spring, `--duration-move`, interruptibly —
- *     a second reorder retargets it carrying the velocity it had;
+ *   - a row that MOVED travels over `--duration-slow` on `--ease-out`,
+ *     interruptibly — a second reorder retargets it carrying the velocity it
+ *     had (the critically damped spring, which never overshoots);
  *   - a row that ARRIVED fades and rises like a surface (`pc-enter`'s recipe:
- *     6px, spring-settle, `--duration-slow`);
+ *     6px, `--ease-out`, `--duration-slow`);
  *   - a row that LEFT leaves a falling clone at its old spot (`pc-exit`'s
- *     recipe: 4px, `--ease-in`, `--duration-fast`) — a real removed node cannot
+ *     recipe: 4px, `--ease-in`, `--duration-exit`) — a real removed node cannot
  *     play its own exit, so the engine paints the same leave as scenery;
  *   - a row inside a moved PARENT does not animate twice: when an ancestor
  *     marked with the same attribute travelled the same delta, the ancestor
@@ -35,14 +36,15 @@ export const FLIP_KEY_ATTR = 'data-flip-key';
 
 /**
  * On a `pop` row: the person looking at this screen put this here — the chip
- * takes the full pop (0.6 up, glyph over-rotating) rather than the smaller
- * 0.8 pop a reaction arriving from somebody else gets.
+ * grows from 0.9 rather than the quieter 0.96 a reaction arriving from
+ * somebody else gets.
  */
 export const FLIP_OWN_ATTR = 'data-flip-own';
 
 /**
- * Inside an own `pop` row: the mark that over-rotates ±8° while the row
- * itself scales — the emoji on a reaction chip.
+ * Inside a `pop` row: the mark (the emoji on a reaction chip). It no longer
+ * animates on its own — the motion law has no over-rotation — but the marker
+ * stays so call sites keep compiling and a later recipe can find it.
  */
 export const FLIP_GLYPH_ATTR = 'data-flip-glyph';
 
@@ -264,14 +266,14 @@ function playDeparture(el: HTMLElement, box: Box, frame: Frame, zIndex: string, 
         style === 'shrink'
           ? [
               { opacity: 1, transform: 'scale(1)' },
-              { opacity: 0, transform: 'scale(0.6)' },
+              { opacity: 0, transform: 'scale(0.9)' },
             ]
           : [
               { opacity: 1, transform: 'translate3d(0, 0, 0)' },
               { opacity: 0, transform: 'translate3d(0, 4px, 0)' },
             ],
         {
-          duration: ms('--duration-fast'),
+          duration: ms('--duration-exit'),
           easing: motionToken('--ease-in'),
           fill: 'forwards',
         },
@@ -282,7 +284,7 @@ function playDeparture(el: HTMLElement, box: Box, frame: Frame, zIndex: string, 
     animation.addEventListener('cancel', drop);
   }
   // The clone is scenery: even if the animation never reports, it cannot stay.
-  window.setTimeout(drop, ms('--duration-fast') + 400);
+  window.setTimeout(drop, ms('--duration-exit') + 400);
 }
 
 export interface FlipListOptions {
@@ -378,7 +380,7 @@ export function useFlipList<T extends HTMLElement = HTMLElement>(
       }
 
       const spring = springTokens();
-      const moveDuration = ms('--duration-move');
+      const moveDuration = ms('--duration-slow');
       const enterDuration = ms('--duration-slow');
       for (const el of rows) {
         const key = el.getAttribute(attribute)!;
@@ -403,7 +405,7 @@ export function useFlipList<T extends HTMLElement = HTMLElement>(
             el.animate(
               enterStyle === 'pop'
                 ? [
-                    { opacity: 0, transform: `scale(${own ? 0.6 : 0.8})` },
+                    { opacity: 0, transform: `scale(${own ? 0.9 : 0.96})` },
                     { opacity: 1, transform: 'scale(1)' },
                   ]
                 : [
@@ -419,24 +421,6 @@ export function useFlipList<T extends HTMLElement = HTMLElement>(
             enterStyle === 'pop' ? 'pop' : 'enter',
             ),
           );
-          // The emoji itself over-rotates ±8° on your own reaction — the row
-          // lands and the mark inside it settles a beat behind (§5.1).
-          if (enterStyle === 'pop' && own) {
-            const glyph = el.querySelector<HTMLElement>(`[${FLIP_GLYPH_ATTR}]`);
-            if (glyph && typeof glyph.animate === 'function') {
-              tag(
-                glyph.animate(
-                  [{ transform: 'rotate(-8deg)' }, { transform: 'rotate(0deg)' }],
-                  {
-                    duration: enterDuration,
-                    easing: springEasing(spring, { durationMs: enterDuration }),
-                    fill: 'backwards',
-                  },
-                ),
-                'pop',
-              );
-            }
-          }
           continue;
         }
         // The ancestor moved the same way — the parent carries this row.
@@ -505,9 +489,9 @@ export interface FlipOptions {
   scale?: boolean;
   /** Origin for the scale. Default 'left top'. */
   origin?: string;
-  /** Override `--duration-move`. */
+  /** Override `--duration-slow`. */
   duration?: number;
-  /** The easing — defaults to the spring-settle curve. */
+  /** The easing — defaults to `--ease-out`. */
   easing?: string;
 }
 
@@ -530,7 +514,7 @@ export function flipBetween(
   if (Math.abs(dx) < MOVED_EPSILON_PX && Math.abs(dy) < MOVED_EPSILON_PX && Math.abs(sx - 1) < 0.01 && Math.abs(sy - 1) < 0.01) {
     return null;
   }
-  const duration = options.duration ?? ms('--duration-move');
+  const duration = options.duration ?? ms('--duration-slow');
   const easing = options.easing ?? springEasing(springTokens(), { durationMs: duration });
   const origin = options.origin ?? 'left top';
   return tag(
@@ -548,7 +532,7 @@ export function flipBetween(
 /**
  * One element that re-lays itself out when `deps` change (the chat sheet's
  * height, a tab thumb's anchor): measure across the commit and play the delta
- * back on the spring. Never animates the first commit.
+ * back on `--ease-out`. Never animates the first commit.
  */
 export function useFlip<T extends HTMLElement = HTMLElement>(
   deps: readonly unknown[],
@@ -580,7 +564,7 @@ export function useFlip<T extends HTMLElement = HTMLElement>(
       scale,
       origin,
       duration,
-      easing: easing ?? springEasing({ ...springTokens(), velocity }, { durationMs: duration ?? ms('--duration-move') }),
+      easing: easing ?? springEasing({ ...springTokens(), velocity }, { durationMs: duration ?? ms('--duration-slow') }),
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
@@ -593,7 +577,7 @@ export function useFlip<T extends HTMLElement = HTMLElement>(
 /* -------------------------------------------------------------------------- */
 
 /**
- * §5.1: "the thumb/indicator slides on the spring-settle — never a jump."
+ * §5.1: "the thumb/indicator slides — never a jump."
  * A `useFlip` almost covers this, but a tab indicator has two moving parts in
  * one commit — the mark under the selected child *and* the element that must
  * reach it — so the measure, the placement and the play live in one effect
@@ -602,7 +586,7 @@ export function useFlip<T extends HTMLElement = HTMLElement>(
  * Mark the selected child `data-indicator-target`; attach the returned ref to
  * an absolutely-positioned span at the container's origin. The hook writes its
  * `transform`/`width`/`height` directly (no extra render), glides between
- * marks on `--duration-normal` spring-settle, carries velocity when the mark
+ * marks on `--duration-normal` ease-out, carries velocity when the mark
  * jumps mid-travel, and lands silently on first paint and under reduced
  * motion. A `ResizeObserver` keeps it seated when the row reflows.
  */

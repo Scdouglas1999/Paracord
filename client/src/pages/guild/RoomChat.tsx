@@ -24,6 +24,8 @@ interface RoomChatProps {
   /** Sheet only. */
   expanded?: boolean;
   onToggleExpanded?: () => void;
+  /** Closed, and playing its leave. */
+  leaving?: boolean;
 }
 
 /**
@@ -47,6 +49,7 @@ export function RoomChat({
   onClose,
   expanded = true,
   onToggleExpanded,
+  leaving = false,
 }: RoomChatProps) {
   const hereNow = useHereNow(guildId, channelId);
   const inRoomUserIds = useMemo(
@@ -61,6 +64,8 @@ export function RoomChat({
       surface={isPhone ? 'sheet' : 'ribbon'}
       expanded={expanded}
       onToggle={onToggleExpanded}
+      leaving={leaving}
+      aria-hidden={leaving || undefined}
       actions={
         isPhone ? undefined : (
           <IconButton label="Close the call chat" size="sm" tone="ghost" onClick={onClose}>

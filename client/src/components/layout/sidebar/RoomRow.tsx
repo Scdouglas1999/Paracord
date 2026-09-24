@@ -180,7 +180,7 @@ export const LiveRoomRowView = memo(function LiveRoomRowView({
       className={cn(
         'pc-focusable flex w-full flex-col items-stretch gap-2 p-2 text-left',
         'rounded-[var(--radius-control)]',
-        'transition-[background-color,color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
+        'transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]',
         active
           ? 'bg-[var(--row-selected)] text-text-primary shadow-[var(--shadow-raised)]'
           : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary',

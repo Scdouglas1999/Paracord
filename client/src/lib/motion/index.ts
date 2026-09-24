@@ -8,7 +8,7 @@
  *
  *   tokens ........ the §5 custom properties, read from the document
  *   reducedMotion . the ONE switch (OS setting + user setting + `data-motion`)
- *   spring ........ the damped spring behind `--ease-spring-settle`
+ *   spring ........ the critically damped spring a retarget carries velocity on
  *   animate ....... bloom · dim · flicker · settleIn · stagger · press ·
  *                   flash · liftOut · relax
  *   sharedElement . "the thing you click becomes the thing you look at"
@@ -19,6 +19,7 @@
  *   walk .......... "walk into a room / back to the pill"
  *   flip .......... the things an arrival pushed out of the way
  *   voiceLevel .... "speaking is a breath" — the ring takes the voice
+ *   visibility .... a hidden window pauses every animation that loops
  *   flipCounter ... `<RollingNumber>` — "numbers re-roll"
  *   presence ...... staying mounted for the exit; settling onto the street
  *   flipList ...... a reordered list travels on the spring, never snaps; a tab
@@ -33,6 +34,7 @@
 export {
   arriveIn,
   bloom,
+  contentIn,
   dim,
   fadeIn,
   flash,
@@ -114,10 +116,15 @@ export {
   type IndicatorOptions,
 } from './flipList';
 export {
+  anchorOrigin,
   setStreetPaintedForTests,
   streetIsPainted,
+  useContentSwap,
+  useLingering,
   usePresence,
   useSettleIn,
+  type AnchorAlign,
+  type AnchorSide,
   type Presence,
 } from './presence';
 export {
@@ -146,6 +153,7 @@ export {
   type SharedTransitionResult,
 } from './sharedElement';
 export { motionToken, ms, num, parseDuration, rawToken, MOTION_TOKEN_FALLBACKS } from './tokens';
+export { installVisibilityPause, resetVisibilityPauseForTests } from './visibility';
 export {
   clearVoiceLevels,
   levelFromAnalyser,

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { AlertTriangle, CheckCircle2, CircleDashed, Download, Loader2, MinusCircle, XCircle } from 'lucide-react';
 import { Modal, ModalBody, ModalFooter, ModalHeader, ModalTitle } from '../ui/Modal';
 import { Button } from '../ui/Button';
@@ -308,11 +308,11 @@ function ConnectionCheckPanel({
                         aria-valuemin={0}
                         aria-valuemax={100}
                         aria-valuenow={Math.round(micLevel * 100)}
-                        className="h-1.5 w-full max-w-xs overflow-hidden rounded-full bg-bg-mod-strong"
+                        className="relative h-1.5 w-full max-w-xs overflow-hidden rounded-full bg-bg-mod-strong"
                       >
                         <div
-                          className="h-full rounded-full bg-accent-primary transition-[width] duration-75"
-                          style={{ width: `${Math.min(100, Math.round(micLevel * 100))}%` }}
+                          className="pc-meter-fill is-live bg-accent-primary"
+                          style={{ '--pc-fill': Math.min(1, Math.max(0, micLevel)).toFixed(3) } as CSSProperties}
                         />
                       </div>
                       <p className="mt-1 text-meta text-text-secondary">Speak now — say a few words.</p>

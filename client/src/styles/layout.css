@@ -69,9 +69,21 @@ html[data-theme='high-contrast'] #root {
 @layer utilities {
   .transition-colors {
     transition:
-      color var(--duration-normal) var(--ease-out),
-      background-color var(--duration-normal) var(--ease-out),
-      border-color var(--duration-normal) var(--ease-out);
+      color var(--tw-duration, var(--duration-fast)) var(--tw-ease, var(--ease-out)),
+      background-color var(--tw-duration, var(--duration-fast)) var(--tw-ease, var(--ease-out)),
+      border-color var(--tw-duration, var(--duration-fast)) var(--tw-ease, var(--ease-out));
+  }
+
+  /* Tailwind's bare `transition` lists box-shadow, filter and backdrop-filter
+     among its properties, and the motion law animates none of them: a shadow
+     or a filter transition repaints its element on every frame. Same
+     redefinition, same reasoning as `transition-colors` above — colour,
+     opacity and transform only. */
+  .transition {
+    transition-property: color, background-color, border-color, outline-color, text-decoration-color, fill,
+      stroke, opacity, transform, translate, scale, rotate;
+    transition-duration: var(--tw-duration, var(--duration-fast));
+    transition-timing-function: var(--tw-ease, var(--ease-out));
   }
 }
 
@@ -93,26 +105,24 @@ html[data-theme='high-contrast'] #root {
     color: var(--text-secondary);
     border: none;
     background: transparent;
-    /* The §5.1 pressable recipe: 1px lift on hover, 0.96 for the 80ms press, a
-       spring back on release (see .pc-pressable in primitives.css). */
+    /* The §5.1 pressable recipe: the hover wash and a 0.98 press, 120ms on
+       the one ease-out (see .pc-pressable in primitives.css). */
     transition:
-      background-color var(--duration-normal) var(--ease-out),
-      color var(--duration-normal) var(--ease-out),
-      border-color var(--duration-normal) var(--ease-out),
-      transform var(--duration-normal) var(--ease-spring-settle);
+      background-color var(--duration-fast) var(--ease-out),
+      color var(--duration-fast) var(--ease-out),
+      border-color var(--duration-fast) var(--ease-out),
+      transform var(--duration-fast) var(--ease-out);
   }
 
   @media (hover: hover) {
     .command-icon-btn:hover:not(:disabled) {
       color: var(--text-primary);
       background: var(--bg-mod-subtle);
-      transform: translateY(-1px);
     }
   }
 
   .command-icon-btn:active:not(:disabled) {
-    transform: scale(0.96);
-    transition: transform 80ms var(--ease-out);
+    transform: scale(0.98);
   }
 
   .modal-backdrop {

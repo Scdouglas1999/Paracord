@@ -16,8 +16,8 @@ import { cn } from '../../lib/utils';
 
 /**
  * Single base modal/dialog primitive for the app. Owns the portal, backdrop,
- * enter/exit motion (the shared §5.1 overlay recipe: fade + 6px rise in on
- * spring-settle, fade + 4px fall out on ease-in), ARIA wiring, focus trap and
+ * enter/exit motion (the shared §5.1 overlay recipe: fade + 6px rise and
+ * 0.98 scale in on ease-out, fade out on the quicker ease-in), ARIA wiring, focus trap and
  * Escape handling. Complex consumers that already manage their own focus trap
  * can opt out with `manageFocus={false}` and pass their own `panelRef`.
  *

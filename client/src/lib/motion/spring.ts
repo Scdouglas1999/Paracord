@@ -3,19 +3,17 @@ import { motionToken, num } from './tokens';
 /**
  * The spring solver behind §5.2.
  *
- * The contract names one curve for things that move —
- * `--ease-spring-settle: cubic-bezier(0.34, 1.2, 0.64, 1)` — and one physical
- * model that has to agree with it: stiffness 260 / damping 22–28 / mass 1.
- * Those are the `--spring-*` tokens. This module is the bridge: it integrates
- * the damped spring analytically and hands back either
+ * The motion law has ONE curve for things that arrive or move, `--ease-out`,
+ * and no overshoot anywhere. The spring exists for the one thing a fixed
+ * cubic-bezier cannot do: carry the velocity of an animation that was
+ * interrupted into the one that replaces it (§5.3 "animations are
+ * interruptible and retarget"). So:
  *
- *   - a WAAPI `linear()` easing string sampled from the real solution, which is
- *     what an INTERRUPTIBLE animation needs (a retarget carries the velocity it
- *     had, and a fixed cubic-bezier cannot), or
- *   - the cubic-bezier token itself, where the engine has no velocity to carry
- *     and on any webview without `linear()`.
- *
- * Both land on the same shape: one small overshoot (~5%), no bounce.
+ *   - a fresh animation (no velocity to carry) gets the `--ease-out` token;
+ *   - a retarget gets a WAAPI `linear()` easing sampled from the real
+ *     solution of a critically damped spring (the `--spring-*` tokens:
+ *     stiffness 260 / damping 34 / mass 1), which never overshoots;
+ *   - a webview without `linear()` gets `--ease-out` either way.
  */
 
 export interface SpringConfig {
@@ -67,7 +65,7 @@ export function springDisplacement(tMs: number, config: SpringConfig): number {
   return a * Math.exp(r1 * t) + b * Math.exp(r2 * t);
 }
 
-/** Normalised progress 0 → 1 at `tMs`. Overshoots slightly past 1, then settles. */
+/** Normalised progress 0 → 1 at `tMs`. At the token damping it never passes 1. */
 export function springProgress(tMs: number, config: SpringConfig): number {
   return 1 - springDisplacement(tMs, config);
 }
@@ -118,10 +116,9 @@ export function springLinearEasing(config: SpringConfig, options: SpringEasingOp
   const duration = options.durationMs ?? springDuration(config);
   const raw: number[] = [];
   for (let i = 0; i <= samples; i += 1) raw.push(springProgress((i / samples) * duration, config));
-  // The window is `--duration-move`, which is shorter than the spring's own
-  // settling time, so the last sample sits a whisker past 1. Normalise on it:
-  // an easing MUST end at exactly 1 or the element is left off its mark, and
-  // scaling by ~1.5% keeps the overshoot the curve is there for.
+  // The window is usually shorter than the spring's own settling time, so the
+  // last sample sits a whisker short of 1. Normalise on it: an easing MUST end
+  // at exactly 1 or the element is left off its mark.
   const last = raw[raw.length - 1] || 1;
   const points = raw.map((value, i) =>
     (i === raw.length - 1 ? 1 : Number((value / last).toFixed(4))).toString(),
@@ -130,9 +127,9 @@ export function springLinearEasing(config: SpringConfig, options: SpringEasingOp
 }
 
 /**
- * The easing the engine actually hands WAAPI: the sampled spring where the
- * engine supports it (and where a velocity has to be carried), the
- * `--ease-spring-settle` token otherwise. Both are §5.2-legal.
+ * The easing the engine actually hands WAAPI: the sampled spring where a
+ * velocity has to be carried and the engine supports `linear()`, the
+ * `--ease-out` token otherwise. Both are §5.2-legal and neither overshoots.
  */
 /**
  * Sampling the spring into a `linear()` string is real main-thread arithmetic,
@@ -145,8 +142,13 @@ export function springLinearEasing(config: SpringConfig, options: SpringEasingOp
 const easingCache = new Map<string, string>();
 
 export function springEasing(config?: SpringConfig, options: SpringEasingOptions = {}): string {
-  const spring = config ?? springTokens();
-  if (!supportsLinearEasing()) return motionToken('--ease-spring-settle');
+  const given = config ?? springTokens();
+  if (!given.velocity || !supportsLinearEasing()) return motionToken('--ease-out');
+  // A damped spring released TOWARD its target faster than its natural
+  // frequency crosses the target once before settling — an overshoot by
+  // another door. Cap the carried velocity just under that speed.
+  const cap = 0.9 * Math.sqrt(given.stiffness / given.mass);
+  const spring = { ...given, velocity: Math.min(given.velocity, cap) };
   const key = `${spring.stiffness}/${spring.damping}/${spring.mass}/${spring.velocity ?? 0}/${options.durationMs ?? ''}/${options.samples ?? ''}`;
   const cached = easingCache.get(key);
   if (cached !== undefined) return cached;

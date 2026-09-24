@@ -266,9 +266,15 @@ interface EmojiPickerProps {
   onClose: () => void;
   position?: { x: number; y: number };
   guildId?: string;
+  /**
+   * The picker has been dismissed and is playing its leave (§5.2): it shrinks
+   * back toward its anchor and takes no more input. The host keeps it mounted
+   * for the beat with `useLingering`.
+   */
+  leaving?: boolean;
 }
 
-export function EmojiPicker({ onSelect, onClose, position, guildId }: EmojiPickerProps) {
+export function EmojiPicker({ onSelect, onClose, position, guildId, leaving = false }: EmojiPickerProps) {
   // Server emoji thumbnails are authenticated by a download ticket minted
   // after the first paint; re-render once it lands.
   useDownloadTicket();
@@ -466,13 +472,14 @@ export function EmojiPicker({ onSelect, onClose, position, guildId }: EmojiPicke
   // ---------------------------------------------------------------------------
 
   const emojiCellClass =
-    'flex aspect-square items-center justify-center rounded-chip text-[22px] leading-none outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]';
+    'flex aspect-square items-center justify-center rounded-chip text-[22px] leading-none outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]';
 
   const pickerContent = (
     <div
       ref={pickerRef}
-      className="pc-enter flex w-[min(22rem,calc(100vw-1rem))] max-h-[min(26.25rem,calc(100dvh-1rem))] flex-col overflow-hidden rounded-well border border-border-subtle bg-bg-floating shadow-[var(--shadow-plate)]"
+      className={cn(leaving ? 'pc-pop-out' : 'pc-pop-in', 'flex w-[min(22rem,calc(100vw-1rem))] max-h-[min(26.25rem,calc(100dvh-1rem))] flex-col overflow-hidden rounded-well border border-border-subtle bg-bg-floating shadow-[var(--shadow-plate)]')}
       style={popupStyle}
+      aria-hidden={leaving || undefined}
     >
       {/* ── Frequently used ── */}
       <div className="shrink-0 border-b border-border-subtle px-3 pb-2.5 pt-3">
@@ -485,7 +492,7 @@ export function EmojiPicker({ onSelect, onClose, position, guildId }: EmojiPicke
                 setCustomizeMode(false);
                 setCustomizeSlot(null);
               }}
-              className="rounded-chip px-1.5 py-0.5 text-meta font-semibold text-accent-primary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-tint focus-visible:shadow-[var(--focus-ring)]"
+              className="rounded-chip px-1.5 py-0.5 text-meta font-semibold text-accent-primary outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-accent-tint focus-visible:shadow-[var(--focus-ring)]"
             >
               Done
             </button>
@@ -493,7 +500,7 @@ export function EmojiPicker({ onSelect, onClose, position, guildId }: EmojiPicke
             <button
               type="button"
               onClick={() => setCustomizeMode(true)}
-              className="rounded-chip px-1.5 py-0.5 text-meta font-medium text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-secondary focus-visible:shadow-[var(--focus-ring)]"
+              className="rounded-chip px-1.5 py-0.5 text-meta font-medium text-text-muted outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-secondary focus-visible:shadow-[var(--focus-ring)]"
             >
               Customize
             </button>
@@ -513,7 +520,7 @@ export function EmojiPicker({ onSelect, onClose, position, guildId }: EmojiPicke
                 }
               }}
               className={cn(
-                'flex h-9 flex-1 items-center justify-center rounded-chip text-2xl leading-none outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]',
+                'flex h-9 flex-1 items-center justify-center rounded-chip text-2xl leading-none outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]',
                 customizeMode && customizeSlot === i && 'bg-accent-tint',
               )}
               style={{
@@ -539,7 +546,7 @@ export function EmojiPicker({ onSelect, onClose, position, guildId }: EmojiPicke
               type="button"
               onClick={() => setActiveTab(tab)}
               className={cn(
-                'flex-1 rounded-chip px-2 py-1.5 text-label outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
+                'flex-1 rounded-chip px-2 py-1.5 text-label outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
                 activeTab === tab
                   ? 'bg-accent-tint text-accent-primary'
                   : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary',
@@ -553,7 +560,7 @@ export function EmojiPicker({ onSelect, onClose, position, guildId }: EmojiPicke
 
       {/* ── Inset search ── */}
       <div className="shrink-0 px-3 pb-1 pt-2.5">
-        <div className="flex items-center gap-2 rounded-chip border border-border-subtle bg-bg-well px-2.5 py-2 transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus-within:border-accent-primary focus-within:shadow-[var(--focus-ring-input)]">
+        <div className="flex items-center gap-2 rounded-chip border border-border-subtle bg-bg-well px-2.5 py-2 transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-within:border-accent-primary focus-within:shadow-[var(--focus-ring-input)]">
           <Search size={16} className="shrink-0 text-text-muted" />
           <input
             type="text"
@@ -607,7 +614,7 @@ export function EmojiPicker({ onSelect, onClose, position, guildId }: EmojiPicke
                     type="button"
                     title={`:${emoji.name}:`}
                     onClick={() => handleServerEmojiClick(emoji)}
-                    className="flex min-h-[56px] flex-col items-center justify-center gap-1 rounded-chip px-1 py-1 outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
+                    className="flex min-h-[56px] flex-col items-center justify-center gap-1 rounded-chip px-1 py-1 outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
                   >
                     <CustomEmojiImage
                       guildId={guildId}
@@ -668,7 +675,7 @@ export function EmojiPicker({ onSelect, onClose, position, guildId }: EmojiPicke
                 aria-pressed={active}
                 onClick={() => scrollToCategory(i)}
                 className={cn(
-                  'flex h-8 flex-1 items-center justify-center rounded-chip outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
+                  'flex h-8 flex-1 items-center justify-center rounded-chip outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
                   active
                     ? 'bg-accent-tint text-accent-primary'
                     : 'text-text-muted hover:bg-bg-mod-subtle hover:text-text-secondary',

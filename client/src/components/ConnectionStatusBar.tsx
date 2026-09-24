@@ -41,7 +41,7 @@ const MESSAGES: Record<string, { tone: BannerTone; text: string }> = {
 
 const RETRY_BUTTON =
   'ml-1 inline-flex h-7 items-center rounded-chip border border-current/30 px-2.5 text-meta font-semibold ' +
-  'outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-current/10 ' +
+  'outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-current/10 ' +
   'focus-visible:shadow-[var(--focus-ring)]';
 
 export function ConnectionStatusBar() {

@@ -93,7 +93,7 @@ function sortThreads(threads: Channel[]): Channel[] {
 
 const CLOSE_BUTTON =
   'inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-chip text-text-muted ' +
-  'outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] ' +
+  'outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] ' +
   'hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]';
 
 /**
@@ -380,7 +380,7 @@ export function ContextPanel({
                       aria-current={here ? 'page' : undefined}
                       className={
                         'flex min-h-[44px] w-full items-center gap-2 rounded-chip px-2.5 py-2 text-left outline-none '
-                        + 'transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)] '
+                        + 'transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)] '
                         + (here ? 'bg-bg-raised shadow-[var(--shadow-raised)]' : 'hover:bg-bg-mod-subtle')
                       }
                     >

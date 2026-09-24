@@ -129,7 +129,7 @@ export class ErrorBoundary extends Component<Props, State> {
           </p>
 
           <details className="mt-6 overflow-hidden rounded-chip border border-border-subtle bg-bg-well">
-            <summary className="cursor-pointer list-none px-3.5 py-2.5 text-label text-text-secondary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:text-text-primary">
+            <summary className="cursor-pointer list-none px-3.5 py-2.5 text-label text-text-secondary transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:text-text-primary">
               Technical details
             </summary>
             <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words border-t border-border-subtle px-3.5 py-3 font-code text-meta text-text-muted">
@@ -156,7 +156,7 @@ export class ErrorBoundary extends Component<Props, State> {
               href={BUG_REPORT_URL}
               target="_blank"
               rel="noreferrer"
-              className="ml-auto rounded-chip px-1 text-meta font-semibold text-text-link outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:underline focus-visible:shadow-[var(--focus-ring)]"
+              className="ml-auto rounded-chip px-1 text-meta font-semibold text-text-link outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:underline focus-visible:shadow-[var(--focus-ring)]"
             >
               Report bug
             </a>

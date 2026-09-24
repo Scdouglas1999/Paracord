@@ -189,7 +189,7 @@ async function waitForDestination(
   }
 }
 
-/** The chrome rise: 80ms after the move, 30ms apart, 14px (§5.1). */
+/** The chrome rise: 80ms after the move, 30ms apart, 6px (§5.1). */
 function riseChrome(root: ParentNode, duration: number): Animation[] {
   const base = ms('--stagger-chrome');
   const step = ms('--stagger-light');
@@ -199,7 +199,7 @@ function riseChrome(root: ParentNode, duration: number): Animation[] {
     if (typeof el.animate !== 'function') return;
     const animation = el.animate(
       [
-        { transform: 'translate3d(0, 10px, 0)', opacity: 0 },
+        { transform: 'translate3d(0, 6px, 0)', opacity: 0 },
         { transform: 'translate3d(0, 0, 0)', opacity: 1 },
       ],
       { duration, delay: base + index * step, easing, fill: 'backwards' },

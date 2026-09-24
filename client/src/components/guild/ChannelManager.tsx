@@ -105,7 +105,7 @@ function RoleToggle({
       aria-label={`${role.name} can see this channel`}
       className={cn(
         'pc-focusable inline-flex h-[var(--h-control)] max-w-full items-center gap-1.5 rounded-[var(--radius-chip)] px-2.5',
-        'text-meta font-medium transition-[background-color,color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
+        'text-meta font-medium transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]',
         active
           ? 'bg-bg-raised text-text-primary shadow-[var(--shadow-raised)]'
           : 'bg-bg-mod-subtle text-text-secondary hover:bg-bg-mod-strong hover:text-text-primary',
@@ -573,7 +573,7 @@ export function ChannelManager({ guildId, channels, roles, canManageRoles, highl
                 aria-pressed={active}
                 className={cn(
                   'pc-focusable flex flex-col items-start gap-1 rounded-[var(--radius-well)] p-3 text-left',
-                  'transition-[background-color,color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
+                  'transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]',
                   active
                     ? 'bg-bg-raised shadow-[var(--shadow-raised)]'
                     : 'bg-bg-well shadow-[var(--shadow-well)] hover:bg-bg-mod-subtle',

@@ -26,6 +26,7 @@
   background: var(--bg-raised);
   box-shadow: var(--shadow-lifted);
   text-align: left;
+  transition: transform var(--duration-normal) var(--ease-out);
 }
 
 .pc-sports-card {
@@ -52,7 +53,6 @@
   inset: -12%;
   background: linear-gradient(102deg, var(--pc-away, var(--sports-endzone)) 0 44%, var(--pc-home, var(--sports-endzone)) 56% 100%);
   opacity: 1;
-  animation: pc-sports-drift 40s ease-in-out infinite alternate;
 }
 
 .pc-sports-hero-scrim {
@@ -293,16 +293,32 @@
   background: color-mix(in srgb, var(--pc-flash, var(--bg-mod-strong)) 24%, var(--bg-raised));
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  .pc-sports-row.is-flash,
-  .pc-sports-card.is-flash {
-    animation: pc-sports-flash 6s var(--ease-out);
-  }
+/* The flash after a score is a tint layer fading out, not a background that
+   repaints the whole card for six seconds. `isolation` lets the layer sit under
+   the card's content and over its fill. */
+.pc-sports-row.is-flash,
+.pc-sports-card.is-flash {
+  isolation: isolate;
 }
 
-@keyframes pc-sports-flash {
-  from { background: color-mix(in srgb, var(--pc-flash, var(--bg-mod-strong)) 34%, var(--bg-raised)); }
-  to { background: var(--bg-raised); }
+.pc-sports-row.is-flash::before,
+.pc-sports-card.is-flash::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--pc-flash, var(--bg-mod-strong)) 14%, transparent);
+  opacity: 0;
+  pointer-events: none;
+  animation: pc-sports-tint-fade 6s var(--ease-out);
+}
+
+/* A tint that arrives at full strength and fades away (score flash, fresh
+   play, scoring pin). Opacity only. */
+@keyframes pc-sports-tint-fade {
+  from { opacity: 1; }
+  to { opacity: 0; }
 }
 
 @keyframes pc-sports-pulse {
@@ -320,13 +336,12 @@
   45% { opacity: 0.2; }
 }
 
-@keyframes pc-sports-drift {
-  from { transform: translate3d(-1.5%, 0, 0); }
-  to { transform: translate3d(1.5%, 0, 0); }
-}
-
 :root[data-motion='reduced'] .pc-sports-live,
-:root[data-motion='reduced'] .pc-sports-card.is-featured .pc-sports-wash,
+:root[data-motion='reduced'] .pc-sports-row.is-flash::before,
+:root[data-motion='reduced'] .pc-sports-card.is-flash::before,
+:root[data-motion='reduced'] .pc-sports-play-row.is-fresh::before,
+:root[data-motion='reduced'] .pc-sports-pin.is-score::before,
+:root[data-motion='reduced'] .pc-sports-bug.is-turnover::after,
 :root[data-motion='reduced'] .pc-sports-score.is-score-flash,
 :root[data-motion='reduced'] .pc-sports-hero-score.is-score-flash,
 :root[data-motion='reduced'] .pc-sports-marker.is-arc,
@@ -704,12 +719,20 @@
 }
 
 .pc-sports-play-row.is-fresh {
-  animation: pc-sports-playfresh 2s ease-out;
+  position: relative;
+  isolation: isolate;
 }
 
-@keyframes pc-sports-playfresh {
-  from { background-color: color-mix(in srgb, var(--pc-play, var(--text-primary)) 45%, transparent); }
-  to { background-color: transparent; }
+.pc-sports-play-row.is-fresh::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--pc-play, var(--text-primary)) 45%, transparent);
+  opacity: 0;
+  pointer-events: none;
+  animation: pc-sports-tint-fade 2s var(--ease-out);
 }
 
 .pc-sports-score.is-winner {
@@ -1293,47 +1316,46 @@
   100% { transform: translate3d(calc(var(--x2) * 100cqw), calc(var(--y2) * 100cqh), 0); opacity: 1; }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .pc-sports-field-stage:not(.is-ballpark),
-  .pc-sports-field-stage.is-ballpark {
-    aspect-ratio: 1200 / 533;
-  }
-
-  .pc-sports-field-stage.is-ballpark { aspect-ratio: 1 / 1; }
-
-  .pc-sports-field-plane,
-  .pc-sports-marker,
-  .pc-sports-runner,
-  .pc-sports-ball-dot,
-  .pc-sports-football,
-  .pc-sports-pitch-in,
-  .pc-sports-ripple,
-  .pc-sports-hitball,
-  .pc-sports-endzone-pulse,
-  .pc-sports-bug.is-turnover,
-  .pc-sports-drivebar.is-live,
-  .pc-sports-skeleton-field::after,
-  .pc-sports-skeleton-park::after,
-  .pc-sports-play-row.is-fresh,
-  .pc-sports-pin.is-score,
-  .pc-sports-row:hover,
-  .pc-sports-card:hover {
-    transform: none;
-    animation: none;
-    transition: none;
-  }
-
-  .pc-sports-marker,
-  .pc-sports-runner,
-  .pc-sports-hitball.is-animating {
-    transform: translate3d(calc(var(--nx, var(--x2)) * 100cqw), calc(var(--ny, var(--y2)) * 100cqh), 0);
-  }
-
-  .pc-sports-football::before,
-  .pc-sports-football::after { transform: translateX(-50%); }
-
-  .pc-sports-ripple { opacity: 0.75; }
+/* Reduced motion is the `data-motion` switch (utilities.css), never a media query. */
+:root[data-motion='reduced'] .pc-sports-field-stage:not(.is-ballpark),
+:root[data-motion='reduced'] .pc-sports-field-stage.is-ballpark {
+  aspect-ratio: 1200 / 533;
 }
+
+:root[data-motion='reduced'] .pc-sports-field-stage.is-ballpark { aspect-ratio: 1 / 1; }
+
+:root[data-motion='reduced'] .pc-sports-field-plane,
+:root[data-motion='reduced'] .pc-sports-marker,
+:root[data-motion='reduced'] .pc-sports-runner,
+:root[data-motion='reduced'] .pc-sports-ball-dot,
+:root[data-motion='reduced'] .pc-sports-football,
+:root[data-motion='reduced'] .pc-sports-pitch-in,
+:root[data-motion='reduced'] .pc-sports-ripple,
+:root[data-motion='reduced'] .pc-sports-hitball,
+:root[data-motion='reduced'] .pc-sports-endzone-pulse,
+:root[data-motion='reduced'] .pc-sports-bug.is-turnover,
+:root[data-motion='reduced'] .pc-sports-drivebar.is-live,
+:root[data-motion='reduced'] .pc-sports-skeleton-field::after,
+:root[data-motion='reduced'] .pc-sports-skeleton-park::after,
+:root[data-motion='reduced'] .pc-sports-play-row.is-fresh,
+:root[data-motion='reduced'] .pc-sports-pin.is-score,
+:root[data-motion='reduced'] .pc-sports-row:hover,
+:root[data-motion='reduced'] .pc-sports-card:hover {
+  transform: none;
+  animation: none;
+  transition: none;
+}
+
+:root[data-motion='reduced'] .pc-sports-marker,
+:root[data-motion='reduced'] .pc-sports-runner,
+:root[data-motion='reduced'] .pc-sports-hitball.is-animating {
+  transform: translate3d(calc(var(--nx, var(--x2)) * 100cqw), calc(var(--ny, var(--y2)) * 100cqh), 0);
+}
+
+:root[data-motion='reduced'] .pc-sports-football::before,
+:root[data-motion='reduced'] .pc-sports-football::after { transform: translateX(-50%); }
+
+:root[data-motion='reduced'] .pc-sports-ripple { opacity: 0.75; }
 
 .pc-sports-marker.is-arc {
   transition: none;
@@ -1355,13 +1377,19 @@
   50% { opacity: 1; }
 }
 
-.pc-sports-bug.is-turnover {
-  animation: pc-sports-bugflash 600ms ease-in-out 2;
+.pc-sports-bug.is-turnover::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: 0 0 0 2px var(--sports-chalk);
+  opacity: 0;
+  pointer-events: none;
+  animation: pc-sports-bugflash 600ms var(--ease-in-out) 2;
 }
 
 @keyframes pc-sports-bugflash {
-  0%, 100% { box-shadow: none; }
-  50% { box-shadow: 0 0 0 2px var(--sports-chalk); }
+  50% { opacity: 1; }
 }
 
 .pc-sports-scorecall {
@@ -1964,12 +1992,19 @@
 }
 
 .pc-sports-pin.is-score {
-  animation: pc-sports-pinflash 6s ease-out;
+  position: relative;
+  isolation: isolate;
 }
 
-@keyframes pc-sports-pinflash {
-  0% { background-color: color-mix(in srgb, var(--pc-score, var(--sports-endzone)) 62%, var(--bg-raised)); }
-  100% { background-color: var(--bg-raised); }
+.pc-sports-pin.is-score::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: color-mix(in srgb, var(--pc-score, var(--sports-endzone)) 62%, transparent);
+  opacity: 0;
+  pointer-events: none;
+  animation: pc-sports-tint-fade 6s var(--ease-out);
 }
 
 .pc-sports-pin-chip {

@@ -36,7 +36,7 @@ import { resolveResourceUrl } from '../../lib/config/apiBaseUrl';
 import { getDownloadTicket } from '../../lib/downloadTicket';
 import { writeClipboardText } from '../../lib/clipboard';
 import { SkeletonMessage } from '../ui/Skeleton';
-import { fadeIn, flicker, motionToken, ms, onMotion, prefersReducedMotion, settleIn, useFlipList, walkIntoRoom } from '../../lib/motion';
+import { fadeIn, flicker, motionToken, ms, onMotion, prefersReducedMotion, settleIn, useFlipList, useLingering, walkIntoRoom } from '../../lib/motion';
 import { messagePreviewText, parseMarkdown } from '../../lib/markdown';
 import { useDownloadTicket } from '../../hooks/useDownloadTicket';
 import { getHighestRoleColor, getIdentityColor, getIdentityInk } from '../../lib/colors';
@@ -95,8 +95,8 @@ interface ReactionTally {
  * The reactions under a message (§5.1: "a reaction pops").
  *
  * A reaction is something somebody put there, so it lands rather than slides:
- * 0.6 to 1 on the spring-settle when it's yours — and the emoji itself
- * over-rotates ±8° on the way — 0.8 to 1 when it arrives from somebody else.
+ * 0.9 to 1 on the ease-out when it's yours, 0.96 to 1 when it arrives from
+ * somebody else.
  * Removing fades and shrinks the chip back out the way it came. It is its own
  * component because that is the only way the engine's list hook can watch the
  * row — and the hook is what keeps the pop honest: nothing plays on the first
@@ -815,8 +815,8 @@ function OwnedMessageList({
   /* ---------------------------------------------------------------------- */
   /* §5.1 "a message has mass" — the landing half of the send                */
   /*                                                                        */
-  /* The composer's words lift out; this row arrives from 26px below on the  */
-  /* spring-settle curve, so the two read as one object moving. Three rules  */
+  /* The composer's words lift out; this row rises 8px onto its mark on the   */
+  /* ease-out, so the two read as one object moving. Three rules           */
   /* keep it honest:                                                        */
   /*   · only a row the person at this keyboard CAUSED lands — the gesture   */
   /*     arrives on the motion bus, and without one nothing animates (§5.3:  */
@@ -861,12 +861,12 @@ function OwnedMessageList({
     if (landingFrame.current !== null) cancelAnimationFrame(landingFrame.current);
     landingFrame.current = requestAnimationFrame(() => {
       landingFrame.current = null;
-      // 26px, arriving as the typed words leave (§5.1 / the MotionSay study).
-      settleIn(document.getElementById(`msg-${arrived.id}`), { distance: 26 });
+      // 8px, arriving as the typed words leave (§5.1).
+      settleIn(document.getElementById(`msg-${arrived.id}`));
       // The receipt is the last thing to arrive: it is the server's answer, and
       // it waits for the row to be on its mark before it fades in.
       fadeIn(scrollRef.current?.querySelector<HTMLElement>('[data-motion-receipt]'), {
-        delay: ms('--duration-move'),
+        delay: ms('--duration-slow'),
       });
     });
   }, [messages, me]);
@@ -995,8 +995,48 @@ function OwnedMessageList({
 
   // Popup/overlay slice
   const { hoveredMessageId, focusedMessageId, menuMessageId, profileUser, profilePos, emojiPickerFor, deleteConfirmId } = uiState.popup;
+  // The reaction picker leaves the way it came (§5.2): kept for its exit beat.
+  const reactionPicker = useLingering(emojiPickerFor);
   const setHoveredMessageId = (hoveredMessageId: string | null) =>
     dispatchUI({ slice: 'popup', patch: { hoveredMessageId } });
+  // Hover follows the pointer, not the scroll. A wheel scroll slides row after
+  // row under a resting pointer, and each one used to set the hovered row —
+  // a timeline re-render and a hover toolbar animating in, per row, many times
+  // a second. While the timeline is scrolling the hover is held (and the
+  // toolbar put away); the row under the pointer when it stops gets it.
+  const hoverHold = useRef<{ until: number; dirty: boolean; pending: string | null; timer: number | null }>({
+    until: 0,
+    dirty: false,
+    pending: null,
+    timer: null,
+  });
+  const hoveredRef = useRef<string | null>(hoveredMessageId);
+  hoveredRef.current = hoveredMessageId;
+  const hoverRow = (id: string | null) => {
+    const hold = hoverHold.current;
+    if (performance.now() < hold.until) {
+      hold.pending = id;
+      hold.dirty = true;
+      return;
+    }
+    if (hoveredRef.current !== id) setHoveredMessageId(id);
+  };
+  const holdHoverForScroll = () => {
+    const hold = hoverHold.current;
+    hold.until = performance.now() + 140;
+    if (hoveredRef.current !== null) {
+      hold.pending = null;
+      hold.dirty = true;
+      setHoveredMessageId(null);
+    }
+    if (hold.timer !== null) window.clearTimeout(hold.timer);
+    hold.timer = window.setTimeout(() => {
+      hold.timer = null;
+      if (!hold.dirty) return;
+      hold.dirty = false;
+      if (hoveredRef.current !== hold.pending) setHoveredMessageId(hold.pending);
+    }, 150);
+  };
   const setFocusedMessageId = (value: string | null | ((curr: string | null) => string | null)) =>
     dispatchUI({ slice: 'popup', patch: (s) => ({ focusedMessageId: typeof value === 'function' ? value(s.focusedMessageId) : value }) });
   const setMenuMessageId = (value: string | null | ((curr: string | null) => string | null)) =>
@@ -1025,6 +1065,10 @@ function OwnedMessageList({
     }
     dispatchUI({ slice: 'popup', patch: { deleteConfirmId } });
   };
+  useEffect(() => () => {
+    const hold = hoverHold.current;
+    if (hold.timer !== null) window.clearTimeout(hold.timer);
+  }, []);
   useEffect(() => () => {
     deleteDialogGeneration.current++;
     const context = deleteContext.current; deleteContext.current = null; context?.dispose();
@@ -2000,6 +2044,7 @@ function OwnedMessageList({
 
   const handleScroll = useCallback(() => {
     if (!scrollRef.current) return;
+    holdHoverForScroll();
     const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
     const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
     const nearBottom = distanceFromBottom <= 140;
@@ -2736,7 +2781,7 @@ function OwnedMessageList({
         tabIndex={msg.id === activeRowMessageId ? 0 : -1}
         className={cn(
           'group relative flex gap-[14px] rounded-[var(--radius-control)] py-1.5',
-          'transition-colors duration-[140ms] ease-[var(--ease-out)]',
+          'transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]',
           'focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]',
           TIMELINE_GUTTER,
           ribbon && 'gap-2.5 px-3.5 py-1',
@@ -2759,8 +2804,8 @@ function OwnedMessageList({
           '--row-bg': rowBackground === 'transparent' && fromRoom ? 'var(--bg-raised)' : rowBackground,
           '--who': getIdentityColor(msg.author.id),
         } as CSSProperties}
-        onMouseEnter={() => setHoveredMessageId(msg.id)}
-        onMouseLeave={() => setHoveredMessageId(null)}
+        onMouseEnter={() => hoverRow(msg.id)}
+        onMouseLeave={() => hoverRow(null)}
         onKeyDown={(e) => rowActions.handleMessageRowKeyDown(e, msg.id)}
         onFocus={() => {
           setFocusedMessageId(msg.id);
@@ -2795,7 +2840,7 @@ function OwnedMessageList({
                 lower than the message it belongs to. Let it overflow its column
                 centred instead — the row's own padding and the 14px gap either
                 side leave room. */}
-            <span className="pc-mono whitespace-nowrap text-[11px] text-text-faint opacity-0 transition-opacity duration-[140ms] ease-[var(--ease-out)] group-hover:opacity-100">
+            <span className="pc-mono whitespace-nowrap text-[11px] text-text-faint opacity-0 transition-opacity duration-[var(--duration-fast)] ease-[var(--ease-out)] group-hover:opacity-100">
               {wallClock(getTimestamp(msg))}
             </span>
           </div>
@@ -2809,7 +2854,7 @@ function OwnedMessageList({
             type="button"
             aria-label={`Open profile for ${authorName}`}
             className={cn(
-              'relative flex h-9 w-9 flex-shrink-0 rounded-full border-0 p-0 transition-transform duration-[140ms] ease-[var(--ease-out)] active:scale-95 focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]',
+              'relative flex h-9 w-9 flex-shrink-0 rounded-full border-0 p-0 transition-transform duration-[var(--duration-fast)] ease-[var(--ease-out)] active:scale-[0.98] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]',
               ribbon && 'h-7 w-7',
             )}
             onClick={(e) => rowActions.openAuthorProfile(e, msg)}
@@ -2923,7 +2968,7 @@ function OwnedMessageList({
               <textarea
                 autoFocus
                 aria-label={`Edit message from ${authorName}`}
-className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 text-body text-text-primary shadow-[var(--shadow-well)] outline-none transition-[box-shadow] duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring-input)]"
+className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 text-body text-text-primary shadow-[var(--shadow-well)] outline-none focus-visible:shadow-[var(--focus-ring-input)]"
                 style={{ minHeight: '2.5rem', maxHeight: '50vh' }}
                 value={editContent}
                 onChange={(e) => setEditContent(e.target.value)}
@@ -2947,13 +2992,13 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                 <button
                   onClick={() => void rowActions.saveEditMessage()}
                   disabled={editSaving}
-                  className="inline-flex items-center gap-1 rounded-chip px-2 py-1 text-meta font-semibold text-accent-primary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-tint focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
+                  className="inline-flex items-center gap-1 rounded-chip px-2 py-1 text-meta font-semibold text-accent-primary transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-accent-tint focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
                 >
                   <Check size={13} /> {editSaving ? 'Saving…' : 'Save'}
                 </button>
                 <button
                   onClick={rowActions.cancelEditing}
-                  className="inline-flex items-center gap-1 rounded-chip px-2 py-1 text-meta font-semibold text-text-muted transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+                  className="inline-flex items-center gap-1 rounded-chip px-2 py-1 text-meta font-semibold text-text-muted transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                 >
                   <XIcon size={13} /> Cancel
                 </button>
@@ -3767,7 +3812,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                 {threadCreating ? 'Creating…' : 'Create thread'}
               </button>
               <button
-                className="rounded-chip px-3.5 py-2 text-label font-semibold text-text-secondary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+                className="rounded-chip px-3.5 py-2 text-label font-semibold text-text-secondary transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                 onClick={closeThreadCreateDialog}
               >
                 Cancel
@@ -3830,7 +3875,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                 {reportSubmitting ? 'Submitting...' : 'Submit report'}
               </button>
               <button
-                className="rounded-chip px-3.5 py-2 text-label font-semibold text-text-secondary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+                className="rounded-chip px-3.5 py-2 text-label font-semibold text-text-secondary transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                 onClick={closeReportDialog}
                 disabled={reportSubmitting}
               >
@@ -3844,7 +3889,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
       {showScrollButton && (
         <button
           onClick={scrollToBottom}
-          className="pc-focusable absolute bottom-[calc(var(--safe-bottom)+0.75rem)] left-1/2 flex h-[var(--h-control)] -translate-x-1/2 items-center gap-2 rounded-[var(--radius-control)] bg-bg-raised px-4 text-label font-semibold text-text-primary shadow-[var(--shadow-lifted)] transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-strong"
+          className="pc-focusable absolute bottom-[calc(var(--safe-bottom)+0.75rem)] left-1/2 flex h-[var(--h-control)] -translate-x-1/2 items-center gap-2 rounded-[var(--radius-control)] bg-bg-raised px-4 text-label font-semibold text-text-primary shadow-[var(--shadow-lifted)] transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-strong"
         >
           <ArrowDown size={16} className="text-accent-primary" />
           Jump to present
@@ -3858,7 +3903,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              className="rounded-chip px-3 py-1.5 text-label font-semibold text-text-secondary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+              className="rounded-chip px-3 py-1.5 text-label font-semibold text-text-secondary transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
               onClick={cancelBulkDelete}
               disabled={bulkDeleting}
             >
@@ -3866,7 +3911,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
             </button>
             <button
               type="button"
-              className="rounded-chip bg-danger-well px-3 py-1.5 text-label font-semibold text-text-on-danger shadow-[var(--shadow-chip)] transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-danger-well-hover focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
+              className="rounded-chip bg-danger-well px-3 py-1.5 text-label font-semibold text-text-on-danger shadow-[var(--shadow-chip)] transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-danger-well-hover focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
               onClick={() => void executeBulkDelete()}
               disabled={bulkDeleting || selectedMessageIds.length === 0}
             >
@@ -3875,9 +3920,10 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
           </div>
         </div>
       )}
-      {emojiPickerFor && createPortal(
+      {reactionPicker.value && createPortal(
         <EmojiPicker
-          position={emojiPickerFor.position}
+          position={reactionPicker.value.position}
+          leaving={reactionPicker.leaving}
           onSelect={(emoji) => void handleReactionSelect(emoji)}
           onClose={() => setEmojiPickerFor(null)}
           guildId={activeGuildId || undefined}

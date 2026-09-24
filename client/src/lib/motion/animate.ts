@@ -1,6 +1,6 @@
 import { prefersReducedMotion } from './reducedMotion';
 import { springEasing, springTokens, type SpringConfig } from './spring';
-import { motionToken, ms, rawToken as motionRawToken } from './tokens';
+import { motionToken, ms } from './tokens';
 
 /**
  * The engine's recipes (docs/lantern-stage-spec.md §5.1).
@@ -8,9 +8,9 @@ import { motionToken, ms, rawToken as motionRawToken } from './tokens';
  * Every one of these is Web Animations over the §5 tokens — no framework, no
  * a motion framework, nothing that owns the render loop. They obey three rules:
  *
- *   1. **Budget (§5.3).** `transform` and `opacity` only, plus `box-shadow` and
- *      `background` on the small light elements — a window, a rim, a dot — and
- *      nowhere else. No layout property is ever in a keyframe.
+ *   1. **Budget (§5.3).** `transform` and `opacity` only. Not a shadow, not a
+ *      background, not a filter, and never a layout property: a light that
+ *      comes on or goes out does it by crossfading still glows in opacity.
  *   2. **One switch (§5.3).** Under reduced motion every recipe lands its end
  *      state on the spot and returns a finished animation, so a caller that
  *      awaits `.finished` still resolves and a caller that cancels still can.
@@ -56,10 +56,8 @@ function run(el: Element, id: string, keyframes: Keyframe[], options: KeyframeAn
 
 /**
  * Scale a computed `box-shadow` — every length by `spread`, every alpha by
- * `alpha`. This is how a light blooms "20% past its resting glow" (§5.1)
- * without the engine inventing a glow of its own: the resting recipe is
- * whatever `tokens.css` put on the element, and the bloom is that recipe
- * turned up.
+ * `alpha`. Kept for callers that DRAW a brighter still glow (a layer they then
+ * crossfade); no recipe here animates a shadow.
  */
 export function scaleShadow(shadow: string, { spread = 1, alpha = 1 } = {}): string {
   if (!shadow || shadow === 'none') return shadow;
@@ -73,101 +71,55 @@ export function scaleShadow(shadow: string, { spread = 1, alpha = 1 } = {}): str
     });
 }
 
-function restingShadow(el: Element): string {
-  if (typeof getComputedStyle !== 'function') return 'none';
-  return getComputedStyle(el as HTMLElement).boxShadow || 'none';
-}
-
 /**
- * A light coming on: 20% past its resting glow, then settle. 220ms,
- * `--ease-out` (§5.1 "light has a source and a speed").
+ * A light coming on: it warms up from 55% to full over 220ms, `--ease-out`
+ * (§5.1 "light has a source and a speed"). Opacity only — the glow itself is
+ * a still layer the stylesheet already crossfaded in.
  */
 export function bloom(el: Element | null | undefined, options: { delay?: number } = {}): Animation | null {
   if (!animatable(el)) return null;
   if (prefersReducedMotion()) return landed(el);
-  const rest = restingShadow(el);
-  if (rest === 'none') {
-    return run(el, 'bloom', [{ opacity: 0.4 }, { opacity: 1 }], {
-      duration: ms('--duration-warm-up'),
-      easing: motionToken('--ease-out'),
-      delay: options.delay ?? 0,
-      fill: 'none',
-    });
-  }
-  return run(
-    el,
-    'bloom',
-    [
-      { boxShadow: rest, offset: 0 },
-      { boxShadow: scaleShadow(rest, { spread: 1.35, alpha: 1.2 }), offset: 0.45 },
-      { boxShadow: rest, offset: 1 },
-    ],
-    {
-      duration: ms('--duration-warm-up'),
-      easing: motionToken('--ease-out'),
-      delay: options.delay ?? 0,
-      fill: 'none',
-    },
-  );
+  return run(el, 'bloom', [{ opacity: 0.55 }, { opacity: 1 }], {
+    duration: ms('--duration-warm-up'),
+    easing: motionToken('--ease-out'),
+    delay: options.delay ?? 0,
+    fill: 'none',
+  });
 }
 
 /**
- * A light going out: it lingers a beat, then goes. 400ms, `--ease-in` (§5.1).
- * The element is expected to have lost its lit class already; this animates the
- * glow it is leaving behind.
+ * A light going out. The stylesheet already fades a window's glow layer over
+ * `--duration-dim` when it loses its lit class, and an avatar's rim is a
+ * shadow that may not animate, so there is nothing left for script to do:
+ * this lands on the spot. It stays in the engine's surface so the arrival
+ * choreography reads the same either way.
  */
-export function dim(el: Element | null | undefined, from?: string): Animation | null {
+export function dim(el: Element | null | undefined, _from?: string): Animation | null {
   if (!animatable(el)) return null;
-  if (prefersReducedMotion()) return landed(el);
-  const rest = from ?? restingShadow(el);
-  if (rest === 'none') return landed(el);
-  return run(
-    el,
-    'dim',
-    [{ boxShadow: rest }, { boxShadow: scaleShadow(rest, { spread: 0.6, alpha: 0 }) }],
-    { duration: ms('--duration-dim'), easing: motionToken('--ease-in'), fill: 'none' },
-  );
+  return landed(el);
 }
 
 /**
- * Reading light flickers once when a message lands — two 40ms pulses (§5.1).
- * The room's amber window is the only thing in the product that does this.
+ * Reading light flickers once when a message lands — two short opacity
+ * pulses, 200ms in all (§5.1). The room's amber window is the only thing in
+ * the product that does this.
  */
 export function flicker(el: Element | null | undefined): Animation | null {
   if (!animatable(el)) return null;
   if (prefersReducedMotion()) return landed(el);
-  const rest = restingShadow(el);
-  // The reference study takes the amber window's 8px/.5 glow to 18px/.95 and
-  // then to 14px/.8, and pushes the fill toward white at the first peak. These
-  // ratios are that, applied to whatever glow the element actually carries.
-  const bright = rest === 'none' ? null : scaleShadow(rest, { spread: 2.25, alpha: 1.9 });
-  const half = rest === 'none' ? null : scaleShadow(rest, { spread: 1.75, alpha: 1.6 });
-  const restFill = typeof getComputedStyle === 'function' ? getComputedStyle(el as HTMLElement).backgroundColor : '';
-  // `--light-white` is resolved here rather than written as a keyframe: WAAPI
-  // does not substitute `var()` inside a keyframe value.
-  const litFill = motionRawToken('--light-white');
-  const fills = restFill && litFill ? { rest: restFill, lit: litFill } : null;
-  // 200ms total: pulse (40) · fall (40) · pulse (50) · settle (70).
-  const keyframes: Keyframe[] = bright
-    ? [
-        { boxShadow: rest, ...(fills && { background: fills.rest }), offset: 0 },
-        { boxShadow: bright, ...(fills && { background: fills.lit }), offset: 0.2 },
-        { boxShadow: rest, ...(fills && { background: fills.rest }), offset: 0.4 },
-        { boxShadow: half, ...(fills && { background: fills.rest }), offset: 0.65 },
-        { boxShadow: rest, ...(fills && { background: fills.rest }), offset: 1 },
-      ]
-    : [
-        { opacity: 1, offset: 0 },
-        { opacity: 0.55, offset: 0.2 },
-        { opacity: 1, offset: 0.4 },
-        { opacity: 0.7, offset: 0.65 },
-        { opacity: 1, offset: 1 },
-      ];
-  return run(el, 'flicker', keyframes, {
-    duration: 200,
-    easing: motionToken('--ease-out'),
-    fill: 'none',
-  });
+  // 200ms total: pulse (40) · rise (40) · pulse (50) · settle (70).
+  return run(
+    el,
+    'flicker',
+    [
+      { opacity: 1, offset: 0 },
+      { opacity: 0.55, offset: 0.2 },
+      { opacity: 1, offset: 0.4 },
+      { opacity: 0.7, offset: 0.65 },
+      { opacity: 1, offset: 1 },
+    ],
+    { duration: 200, easing: motionToken('--ease-out'), fill: 'none' },
+  );
 }
 
 /* -------------------------------------------------------------------------- */
@@ -175,23 +127,23 @@ export function flicker(el: Element | null | undefined): Animation | null {
 /* -------------------------------------------------------------------------- */
 
 export interface SettleOptions {
-  /** Rise distance in px. 14 for a plate entering the street (§5.1). */
+  /** Rise distance in px. 8 by default — nothing travels further (§5.2). */
   distance?: number;
   delay?: number;
-  /** Override `--duration-move`. */
+  /** Override `--duration-slow`. */
   duration?: number;
   spring?: SpringConfig;
 }
 
 /**
- * A thing arriving: it rises `distance` px onto its mark on the spring-settle
- * curve, fading in as it comes (§5.1 "plates settle").
+ * A thing arriving: it rises `distance` px onto its mark on `--ease-out`,
+ * fading in as it comes (§5.1 "plates settle").
  */
 export function settleIn(el: Element | null | undefined, options: SettleOptions = {}): Animation | null {
   if (!animatable(el)) return null;
   if (prefersReducedMotion()) return landed(el);
-  const distance = options.distance ?? 14;
-  const duration = options.duration ?? ms('--duration-move');
+  const distance = Math.min(8, options.distance ?? 8);
+  const duration = options.duration ?? ms('--duration-slow');
   return run(
     el,
     'settle',
@@ -226,21 +178,20 @@ export function stagger(
   return [...elements].map((el, index) => settleIn(el, { ...options, delay: base + index * step }));
 }
 
-/** A control under a finger: 0.96 scale in 80ms, then springs back (§5.1). */
+/** A control under a finger: 0.98 over 120ms, and back over 120ms (§5.1). */
 export function press(el: Element | null | undefined): Animation | null {
   if (!animatable(el)) return null;
   if (prefersReducedMotion()) return landed(el);
-  const back = ms('--duration-normal');
-  const down = 80;
+  const step = ms('--duration-fast');
   return run(
     el,
     'press',
     [
-      { transform: 'scale(1)', offset: 0, easing: motionToken('--ease-out') },
-      { transform: 'scale(0.96)', offset: down / (down + back), easing: motionToken('--ease-spring-settle') },
+      { transform: 'scale(1)', offset: 0 },
+      { transform: 'scale(0.98)', offset: 0.5 },
       { transform: 'scale(1)', offset: 1 },
     ],
-    { duration: down + back, fill: 'none' },
+    { duration: step * 2, easing: motionToken('--ease-out'), fill: 'none' },
   );
 }
 
@@ -253,8 +204,8 @@ export function press(el: Element | null | undefined): Animation | null {
  * earlier. React does not own this element's `style`, so the beat survives. It
  * is removed after 80ms, or if the animation is cancelled.
  *
- * This is a light element for the length of that beat, which is why it may
- * paint `background` and `box-shadow` (§5.3).
+ * The light is a state, not an animation: it is on for the beat and off
+ * after it. Only the press is animated, and only in transform.
  */
 const FLASH_LIGHT: ReadonlyArray<readonly [string, string]> = [
   // A beat, not a fade: the control almost always carries a colour transition
@@ -264,16 +215,15 @@ const FLASH_LIGHT: ReadonlyArray<readonly [string, string]> = [
   ['transition', 'none'],
   ['background', 'var(--light-white)'],
   ['color', 'var(--text-on-light)'],
-  ['box-shadow', 'var(--glow-control-on)'],
 ];
 
 export function flash(el: Element | null | undefined): Animation | null {
   if (!animatable(el)) return null;
   if (prefersReducedMotion()) return landed(el);
   for (const [property, value] of FLASH_LIGHT) el.style.setProperty(property, value, 'important');
-  const animation = run(el, 'flash', [{ transform: 'scale(0.94)' }, { transform: 'scale(1)' }], {
-    duration: 80 + ms('--duration-normal'),
-    easing: motionToken('--ease-spring-settle'),
+  const animation = run(el, 'flash', [{ transform: 'scale(0.98)' }, { transform: 'scale(1)' }], {
+    duration: ms('--duration-normal'),
+    easing: motionToken('--ease-out'),
     fill: 'none',
   });
   const unlight = () => {
@@ -287,8 +237,9 @@ export function flash(el: Element | null | undefined): Animation | null {
 }
 
 /**
- * A message leaving the composer: it lifts along the path it lands in the
- * timeline — 220ms, `--ease-out`, transform and opacity only (§5.1).
+ * A message leaving the composer: the words lift 8px and fade as the row
+ * lands in the timeline — `--duration-exit-slow`, `--ease-out`, transform and
+ * opacity only (§5.1).
  */
 export function liftOut(
   el: Element | null | undefined,
@@ -296,7 +247,7 @@ export function liftOut(
 ): Animation | null {
   if (!animatable(el)) return null;
   if (prefersReducedMotion()) return landed(el);
-  const distance = options.distance ?? 64;
+  const distance = Math.min(8, options.distance ?? 8);
   return run(
     el,
     'lift',
@@ -305,10 +256,29 @@ export function liftOut(
       { transform: `translate3d(0, ${-distance}px, 0)`, opacity: 0 },
     ],
     {
-      duration: options.duration ?? ms('--duration-slow'),
+      duration: options.duration ?? ms('--duration-exit-slow'),
       easing: motionToken('--ease-out'),
       fill: 'forwards',
     },
+  );
+}
+
+/**
+ * New content settling into a surface that stayed put — the channel you
+ * switched to, a settings section, another panel mode. A crossfade with a 4px
+ * rise over `--duration-slow`, never a slide (§5.2).
+ */
+export function contentIn(el: Element | null | undefined): Animation | null {
+  if (!animatable(el)) return null;
+  if (prefersReducedMotion()) return landed(el);
+  return run(
+    el,
+    'content',
+    [
+      { transform: 'translate3d(0, 4px, 0)', opacity: 0 },
+      { transform: 'translate3d(0, 0, 0)', opacity: 1 },
+    ],
+    { duration: ms('--duration-slow'), easing: motionToken('--ease-out'), fill: 'backwards' },
   );
 }
 
@@ -332,16 +302,16 @@ export function fadeIn(el: Element | null | undefined, options: { delay?: number
 export function relax(el: Element | null | undefined): Animation | null {
   if (!animatable(el)) return null;
   if (prefersReducedMotion()) return landed(el);
-  const duration = ms('--duration-move');
+  const duration = ms('--duration-slow');
   return run(
     el,
     'relax',
     [
-      { transform: 'scale(1)', offset: 0, easing: motionToken('--ease-out') },
-      { transform: 'scale(0.992)', offset: 0.22 },
+      { transform: 'scale(1)', offset: 0 },
+      { transform: 'scale(0.992)', offset: 0.3 },
       { transform: 'scale(1)', offset: 1 },
     ],
-    { duration, easing: motionToken('--ease-spring-settle'), fill: 'none' },
+    { duration, easing: motionToken('--ease-out'), fill: 'none' },
   );
 }
 
@@ -366,7 +336,7 @@ export function recede(el: Element | null | undefined, options: { duration?: num
     'recede',
     [
       { transform: 'scale(1)', opacity: 1 },
-      { transform: 'scale(0.96)', opacity: 0 },
+      { transform: 'scale(0.98)', opacity: 0 },
     ],
     {
       duration: options.duration ?? ms('--duration-move'),
@@ -392,13 +362,13 @@ export function arriveIn(
 ): Animation | null {
   if (!animatable(el)) return null;
   if (prefersReducedMotion()) return landed(el);
-  const duration = ms('--duration-move');
-  const distance = options.distance ?? 10;
+  const duration = ms('--duration-slow');
+  const distance = Math.min(8, options.distance ?? 6);
   return run(
     el,
     'arrive',
     [
-      { transform: `translate3d(${distance}px, 0, 0) scale(0.6)`, opacity: 0 },
+      { transform: `translate3d(${distance}px, 0, 0) scale(0.9)`, opacity: 0 },
       { transform: 'translate3d(0, 0, 0) scale(1)', opacity: 1 },
     ],
     {
@@ -420,16 +390,16 @@ export function slideOut(
 ): Animation | null {
   if (!animatable(el)) return null;
   if (prefersReducedMotion()) return landed(el);
-  const distance = options.distance ?? 6;
+  const distance = Math.min(8, options.distance ?? 6);
   return run(
     el,
     'leave',
     [
       { transform: 'translate3d(0, 0, 0) scale(1)', opacity: 1 },
-      { transform: `translate3d(${distance}px, 0, 0) scale(0.6)`, opacity: 0 },
+      { transform: `translate3d(${distance}px, 0, 0) scale(0.9)`, opacity: 0 },
     ],
     {
-      duration: ms('--duration-slow'),
+      duration: ms('--duration-exit-slow'),
       delay: options.delay ?? 0,
       easing: motionToken('--ease-in'),
       fill: 'forwards',

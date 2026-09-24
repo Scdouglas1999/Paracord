@@ -7,7 +7,7 @@ import { registerAppNavigate } from '../lib/appNavigate';
 // (pc-fade), panels enter/exit on pc-enter/pc-exit, drawers slide on the
 // pc-drawer set — and usePresence keeps each mounted for its leave. The
 // engine's data-motion switch is the only reduced-motion source of truth.
-import { usePresence } from '../lib/motion';
+import { useContentSwap, useLingering, usePresence } from '../lib/motion';
 import { cn } from '../lib/utils';
 import { UnifiedSidebar } from '../components/layout/sidebar/UnifiedSidebar';
 import { ContextPanel } from '../components/layout/ContextPanel';
@@ -44,8 +44,8 @@ import { ErrorBoundary } from '../components/ErrorBoundary';
  * docked — it mounts only when `uiStore.contextPanelMode` is set (single source
  * of truth), and collapses to an overlay on narrow widths (§6).
  *
- * Overlay motion is the shared §5.1 set: drawers slide in from their edge on
- * the spring-settle and leave on ease-in, dialogs rise on pc-enter, backdrops
+ * Overlay motion is the shared §5.1 set: drawers ease 8px in from their edge
+ * on ease-out and leave on ease-in, dialogs rise on pc-enter, backdrops
  * fade — all of it instant under `html[data-motion="reduced"]` (§5.3, §9).
  */
 export function AppShell() {
@@ -152,6 +152,9 @@ export function AppShell() {
     || location.pathname === '/app/developers'
     || /^\/app\/guilds\/[^/]+\/settings$/.test(location.pathname);
 
+  const routeContentRef = useContentSwap<HTMLDivElement>(location.pathname);
+  const contextContentRef = useContentSwap<HTMLDivElement>(contextPanelMode);
+
   const isDmConversationRoute = /^\/app\/dms\/[^/]+$/.test(location.pathname);
   const isGroupDmContext =
     isDmConversationRoute
@@ -216,6 +219,11 @@ export function AppShell() {
   const onAirDockPresence = usePresence(showOnAirDock);
   const sidebarPresence = usePresence(showSidebarOverlay);
   const contextPresence = usePresence(isMobile && showContextPanel);
+  // The phone overlay's shape (a full sheet for search, a side drawer for the
+  // rest) is chosen by the mode, and closing clears the mode on the same commit
+  // the leave starts — so the leave keeps the mode it was opened with.
+  const lingeringMode = useLingering(contextPanelMode);
+  const overlayMode = contextPanelMode ?? lingeringMode.value;
   const desktopContextPresence = usePresence(!isMobile && showContextPanel);
   const userSettingsPresence = usePresence(userSettingsOpen);
   const guildSettingsPresence = usePresence(Boolean(guildSettingsId));
@@ -269,7 +277,9 @@ export function AppShell() {
             data-native-underlay-clear=""
             className="relative flex min-w-0 flex-1 flex-col overflow-hidden bg-bg-plate"
           >
-            <div className={cn('min-h-0 w-full flex-1 overflow-hidden', isSettingsRoute && 'p-3')}>
+            {/* Switching channels (or anywhere else) crossfades the page in
+                with a 4px rise — never a slide (§5.2). */}
+            <div ref={routeContentRef} className={cn('min-h-0 w-full flex-1 overflow-hidden', isSettingsRoute && 'p-3')}>
               <Outlet />
             </div>
             {onAirDockPresence.mounted && (
@@ -287,10 +297,13 @@ export function AppShell() {
 
           {/* Right rail — ContextPanel (desktop inline; toggleable, not
               docked). A contextual plate slides in from the edge it opens
-              against on the spring-settle and slides back out on --ease-in —
+              against on the ease-out and eases back out on --ease-in —
               the same choreography the mobile overlay already has (§5.1). */}
           {!isMobile && desktopContextPresence.mounted && (
             <div
+              // Members → search → threads: the plate stays, its content
+              // crossfades (§5.2).
+              ref={contextContentRef}
               className={cn(
                 'h-full min-h-0 shrink-0',
                 desktopContextPresence.exiting ? 'pc-drawer-out-right' : 'pc-drawer-in-right',
@@ -304,7 +317,7 @@ export function AppShell() {
 
         {/* Mobile: Unified Sidebar as a left overlay (§6 — full overlay, never the
             64px rail on mobile). The backdrop fades while the drawer slides in
-            from its edge on the spring-settle and leaves on ease-in. */}
+            from its edge on the ease-out and leaves on ease-in. */}
         {sidebarPresence.mounted && (
           <div
             className={cn(
@@ -327,7 +340,7 @@ export function AppShell() {
               {...sidebarPresence.scenery}
             >
               <ErrorBoundary variant="section" label="the sidebar">
-                <UnifiedSidebar />
+                <UnifiedSidebar alwaysExpanded />
               </ErrorBoundary>
             </div>
           </div>
@@ -338,7 +351,7 @@ export function AppShell() {
           <div
             className={cn(
               'fixed inset-0 z-[80] flex md:hidden modal-backdrop',
-              contextPanelMode !== 'search' && 'justify-end',
+              overlayMode !== 'search' && 'justify-end',
               contextPresence.exiting ? 'pc-fade-out' : 'pc-fade-in',
             )}
             onClick={() => setContextPanelMode(null)}
@@ -347,15 +360,15 @@ export function AppShell() {
               ref={contextOverlayRef}
               role="dialog"
               aria-modal="true"
-              aria-label={contextPanelMode === 'search' ? 'Search messages' : 'Details'}
+              aria-label={overlayMode === 'search' ? 'Search messages' : 'Details'}
               tabIndex={-1}
               onClick={(e) => e.stopPropagation()}
               className={cn(
                 'context-panel-overlay h-full overflow-hidden shadow-[var(--shadow-plate)] outline-none',
-                contextPanelMode === 'search'
+                overlayMode === 'search'
                   ? 'w-full'
                   : 'w-[var(--w-context-panel)] max-w-[88vw]',
-                contextPanelMode === 'search'
+                overlayMode === 'search'
                   ? (contextPresence.exiting ? 'pc-sheet-out' : 'pc-search-sheet-in')
                   : (contextPresence.exiting ? 'pc-drawer-out-right' : 'pc-drawer-in-right'),
               )}

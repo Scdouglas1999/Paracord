@@ -36,7 +36,7 @@ export interface TabsProps<T extends string = string>
  * Selection is a **raised** surface inside a well, exactly like a selected row
  * anywhere else — never an accent bar on the segmented pill, never a light
  * token. That surface is ONE element the engine slides between the tabs on the
- * spring-settle (`useIndicator`): the mark moves, the pill travels to it — it
+ * one ease-out (`useIndicator`): the mark moves, the pill travels to it — it
  * never jumps (§5.1). Arrow keys move between tabs; Home/End jump to the ends
  * (WAI-ARIA tabs pattern).
  *
@@ -142,7 +142,7 @@ export function Tabs<T extends string = string>({
             onKeyDown={(event) => onKeyDown(event, index)}
             className={cn(
               'pc-focusable relative inline-flex shrink-0 select-none items-center justify-center gap-2 whitespace-nowrap',
-              'text-label transition-[background-color,color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
+              'text-label transition-[color,background-color,transform] duration-[var(--duration-fast)] ease-[var(--ease-out)] active:scale-[0.98]',
               'disabled:pointer-events-none disabled:opacity-60',
               size === 'sm' ? 'h-[var(--h-control-sm)] px-2.5' : 'h-[var(--h-control)] px-3',
               fill && 'flex-1',

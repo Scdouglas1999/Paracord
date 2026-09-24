@@ -1,6 +1,6 @@
 import * as React from 'react';
 // §5.1 "plates settle": a plate mounting into an already-rendered street
-// rises 14px on the spring-settle; the first paint of the app is exempt
+// rises 8px on the ease-out; the first paint of the app is exempt
 // (WP9b owns lights-on). The engine's hook decides which case a mount is.
 import { useSettleIn } from '../../lib/motion';
 import { cn, mergeRefs } from '../../lib/utils';

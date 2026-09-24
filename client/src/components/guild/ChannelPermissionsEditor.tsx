@@ -444,7 +444,7 @@ export function ChannelPermissionsEditor({
                       aria-pressed={selectedOverwriteId === ow.target_id}
                       className={cn(
                         'pc-focusable flex h-[var(--h-list-row)] w-full items-center gap-2 rounded-[var(--radius-control)] px-2 text-left',
-                        'text-label transition-[background-color,color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
+                        'text-label transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]',
                         selectedOverwriteId === ow.target_id
                           ? 'bg-bg-raised font-semibold text-text-primary shadow-[var(--shadow-raised)]'
                           : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary'

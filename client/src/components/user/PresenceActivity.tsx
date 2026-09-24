@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { Gamepad2, Music, Radio, Trophy, Tv, type LucideIcon } from 'lucide-react';
 
 import {
@@ -133,8 +133,8 @@ export function ActivityCard({ view, className }: { view: ActivityView; classNam
               aria-valuetext={`${formatTrackTime(progress.elapsedMs)} of ${formatTrackTime(progress.durationMs)}`}
             >
               <div
-                className="h-full rounded-[var(--radius-full)] bg-text-secondary transition-[width] duration-[var(--duration-normal)] ease-linear"
-                style={{ width: `${(progress.fraction * 100).toFixed(2)}%` }}
+                className="pc-meter-fill is-live bg-text-secondary"
+                style={{ '--pc-fill': progress.fraction.toFixed(4) } as CSSProperties}
               />
             </div>
             <div className="pc-mono mt-1 flex justify-between text-[11px] text-text-muted" aria-hidden>
