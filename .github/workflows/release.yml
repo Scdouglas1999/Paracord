@@ -154,7 +154,7 @@ jobs:
           Compress-Archive -Path "$pkgDir/*" -DestinationPath "dist/paracord-server-windows-x64-${version}.zip" -Force
 
       - name: Upload server artifact (Windows)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: server-windows
           path: dist/paracord-server-windows-x64-*.zip
@@ -245,7 +245,7 @@ jobs:
           printf '%s\n' "$listing" | grep -q "livekit-server"
 
       - name: Upload server artifact (Linux)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: server-linux
           path: dist/paracord-server-linux-x64-*.tar.gz
@@ -314,7 +314,7 @@ jobs:
             -C dist paracord-server
 
       - name: Upload server artifact (macOS)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: server-macos-${{ matrix.arch }}
           path: dist/paracord-server-macos-*.tar.gz
@@ -440,7 +440,7 @@ jobs:
           ls -l "$dir"
 
       - name: Upload client macOS bundles
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: client-macos-${{ matrix.arch }}
           path: |
@@ -548,14 +548,14 @@ jobs:
           & "$env:ISCC_EXE" /DAppVersion=$version installer/paracord-client.iss
 
       - name: Upload client installer (Inno)
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: client-windows-installer
           path: installer/output/Paracord-Setup-*.exe
           if-no-files-found: error
 
       - name: Upload client MSI
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: client-windows-msi
           path: |
@@ -652,7 +652,7 @@ jobs:
           bash scripts/finalize-appimage.sh "${appimages[0]}"
 
       - name: Upload client AppImage
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: client-linux-appimage
           path: |
@@ -661,7 +661,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload client deb
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: client-linux-deb
           path: |
@@ -670,7 +670,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload client rpm
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: client-linux-rpm
           path: |
