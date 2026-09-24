@@ -649,7 +649,7 @@ jobs:
             echo "expected exactly one AppImage, found ${#appimages[@]}: ${appimages[*]}" >&2
             exit 1
           fi
-          scripts/finalize-appimage.sh "${appimages[0]}"
+          bash scripts/finalize-appimage.sh "${appimages[0]}"
 
       - name: Upload client AppImage
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
