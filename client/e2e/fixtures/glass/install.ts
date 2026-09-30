@@ -52,6 +52,12 @@ export interface GlassSceneOptions {
   quiet?: boolean;
   /** Suppress Eric's typing indicator. Default false. */
   noTyping?: boolean;
+  /**
+   * Light the room (and anything else that samples a live stream through
+   * `lib/room`) from the DEV fixture scene, since no media server runs here
+   * (WP-G8, `src/lib/room/devFixture.ts`). Default true.
+   */
+  roomFixture?: boolean;
 }
 
 function channelRecord(seed: (typeof CHANNELS)[number]) {
@@ -286,6 +292,12 @@ export async function installGlassScene(page: Page, options: GlassSceneOptions =
       /* storage unavailable: the tour simply shows */
     }
   });
+
+  if (options.roomFixture ?? true) {
+    await page.addInitScript(() => {
+      (window as unknown as Record<string, unknown>).__PARACORD_ROOM_FIXTURE__ = 'stream';
+    });
+  }
 
   // The gateway: a persistent EventSource that replays READY once and the
   // typing signal on a beat.

@@ -45,18 +45,6 @@
   background-color: var(--street);
 }
 
-/* ---- The room (stub; WP-G8 replaces it with one canvas) -------------------- */
-.glass-room-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  background:
-    radial-gradient(70% 65% at 88% 16%, rgba(var(--room-rgb), 0.16), transparent 72%),
-    radial-gradient(60% 55% at 6% 96%, rgba(var(--room-rgb), 0.1), transparent 70%),
-    var(--street);
-}
-
 /* ---- The frame ------------------------------------------------------------ */
 .glass-frame {
   position: relative;
@@ -75,9 +63,8 @@
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  /* glass-pane's room blend, plus the layout moves (transform/opacity only). */
+  /* Layout moves only (transform/opacity); no pane color blend (WebKitGTK cost). */
   transition:
-    background-color var(--glass-ms-room) ease,
     transform var(--glass-ms-layout) var(--glass-spring),
     opacity var(--glass-ms-layout) ease;
 }

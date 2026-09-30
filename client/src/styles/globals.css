@@ -52,6 +52,7 @@
    transitional adapters must beat the utilities on the Lantern components
    they fit into the frame. */
 @import './glass-layout.css';
+@import './glass-room.css';
 @import './glass-conversation.css';
 /* The places panel (WP-G9). Unlayered, like the frame it fills. */
 /* The Glass timeline: bubbles in the column (WP-G10). */

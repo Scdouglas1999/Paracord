@@ -30,6 +30,8 @@ pub mod linux;
 #[cfg(target_os = "macos")]
 pub mod macos;
 
+pub mod sample;
+
 /// Opaque identity for one native surface. Allocated by the [`SurfaceRegistry`],
 /// carried to the TS side so its geometry reporter can address the surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -281,6 +283,14 @@ pub async fn native_render_attach(
     };
 
     slot.owners.check(&owner_id)?;
+    // Every surface keeps the room light's sample of what it presents (taken
+    // only while the room asks; see `sample`).
+    let surface: Box<dyn VideoSurface> = Box::new(sample::SampledSurface::wrap(
+        Some(surface),
+        &stream_id,
+        &track_id,
+        id,
+    ));
     let shared: SharedSurface = Arc::new(Mutex::new(surface));
     registry().insert(id, shared.clone());
     super::video_pipeline::attach_native_surface(&stream_id, &track_id, id, shared, app.clone());
@@ -292,6 +302,55 @@ pub async fn native_render_attach(
         ),
     );
     Ok(AttachResponse { surface_id: id.0 })
+}
+
+/// Attach a sampler to `stream_id:track_id`: a native-surface binding with
+/// nothing on screen, so the native side decodes the track and keeps only the
+/// room light's downsample of it (Glass spec §4). For a stream the webview
+/// samples but does not show (the room's ambient view) on the native-surface
+/// route. Detach it with [`native_render_detach`] like any surface. A surface
+/// attached later for the same track takes the binding over (one per track).
+#[tauri::command]
+pub async fn native_render_attach_sampler(
+    stream_id: String,
+    track_id: String,
+    app: tauri::AppHandle,
+    owner_id: String,
+    state: tauri::State<'_, super::MediaState>,
+) -> Result<AttachResponse, String> {
+    let slot = state.slot_for(&owner_id)?;
+    let _transition = slot.owners.transition.lock().await;
+    slot.owners.check(&owner_id)?;
+    let app = super::CallEventSink::new(app, owner_id.clone());
+    let id = registry().allocate_id();
+    let surface: Box<dyn VideoSurface> = Box::new(sample::SampledSurface::wrap(
+        None, &stream_id, &track_id, id,
+    ));
+    let shared: SharedSurface = Arc::new(Mutex::new(surface));
+    registry().insert(id, shared.clone());
+    super::video_pipeline::attach_native_surface(&stream_id, &track_id, id, shared, app.clone());
+    super::video_pipeline::native_diag(
+        Some(&app),
+        &format!(
+            "native_render_attach_sampler: track={stream_id}:{track_id} surface_id={}",
+            id.0
+        ),
+    );
+    Ok(AttachResponse { surface_id: id.0 })
+}
+
+/// The room light's sample of a natively presented track (Glass spec §4): the
+/// latest 32×18 RGB downsample of what its surface presented, `waiting` until
+/// one exists, or `noSurface` when nothing on this device decodes the track.
+/// Each call keeps the track sampled for two more seconds; nothing is sampled
+/// for a track nobody asks about. A surface whose frames cannot be read back
+/// (a GPU-resident handle) is an error, not a quiet `waiting`.
+#[tauri::command]
+pub async fn native_render_sample(
+    stream_id: String,
+    track_id: String,
+) -> Result<sample::SampleResponse, String> {
+    sample::board().read(&sample::track_key(&stream_id, &track_id))
 }
 
 /// Update a surface's geometry / corner radius / visibility (spec §3.6). Physical

@@ -102,8 +102,8 @@
   background-color: var(--pane);
   box-shadow: var(--sh-pane);
   color: var(--ink-1);
-  /* The room eases over 1-2s; a pane blends between the writes. */
-  transition: background-color var(--glass-ms-room) ease;
+  /* No color transition: the room already eases in its canvas and --room-rgb is
+     written in small steps. Animating pane colors cost ~50% of a core on WebKitGTK. */
 }
 
 .glass-pane--deep {

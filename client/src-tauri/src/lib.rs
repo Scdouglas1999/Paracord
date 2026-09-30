@@ -1887,6 +1887,8 @@ pub fn run() {
         native_media::native_render::native_render_update_geometry,
         native_media::native_render::native_render_detach,
         native_media::native_render::native_render_set_ground_color,
+        native_media::native_render::native_render_sample,
+        native_media::native_render::native_render_attach_sampler,
     ]);
 
     let app = builder

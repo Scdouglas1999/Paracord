@@ -6,9 +6,9 @@
  * a `color-mix()` of one channel triplet, `--room-rgb`, into a neutral step,
  * and the room controller (WP-G8) writes that triplet from whatever is live in
  * the current server. So this script resolves the real tokens, for BOTH
- * themes, and sweeps the room over the two reference tints (spec §2.1), a dim
- * warm and a bright cool tint, the two extremes (white and black), and a hue x
- * saturation x brightness grid that covers the clamp box WP-G8 will enforce.
+ * themes, and sweeps the room over the two reference tints (spec §2.1), the
+ * neutral room, and a hue x saturation x value grid over exactly the clamp box
+ * the room controller enforces (read from `src/lib/room/color.ts`).
  * At every one of those it requires:
  *
  *   - the Glass ink set (spec §2.2) on every Glass surface: 7:1 for `--ink-1`,
@@ -394,19 +394,53 @@ const hsvToRgb = (h, sat, v) => {
   return [r + m, g + m, b + m].map((channel) => Math.round(channel * 255)).join(', ');
 };
 
+/* The clamp box. The room controller (WP-G8, `src/lib/room/color.ts`) writes
+   only colors inside an HSV box: any hue, saturation 0..ROOM_CLAMP.saturationMax,
+   value ROOM_CLAMP.valueMin..valueMax. The edges are read from that file, so
+   the audit sweeps exactly what the room can write and the two cannot drift:
+   every 15 degrees of hue at the box's low, middle and high saturation and
+   value, plus the neutral room (ROOM_NEUTRAL) and the two reference samples,
+   which must lie inside the box too. */
+const roomColorSource = fs.readFileSync(path.join(path.dirname(tokensPath), '..', 'lib', 'room', 'color.ts'), 'utf8');
+const readRoomNumber = (name) => {
+  const match = roomColorSource.match(new RegExp(`${name}:\\s*([0-9.]+)`));
+  if (!match) throw new Error(`[contrast] ${name} not found in src/lib/room/color.ts`);
+  return Number(match[1]);
+};
+const CLAMP = {
+  saturationMax: readRoomNumber('saturationMax'),
+  valueMin: readRoomNumber('valueMin'),
+  valueMax: readRoomNumber('valueMax'),
+};
+const neutralMatch = roomColorSource.match(/ROOM_NEUTRAL: Rgb = \[(\d+), (\d+), (\d+)\]/);
+if (!neutralMatch) throw new Error('[contrast] ROOM_NEUTRAL not found in src/lib/room/color.ts');
+const rgbToHsv = (triplet) => {
+  const [r, g, b] = triplet.split(',').map((c) => Number(c) / 255);
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  return { s: max === 0 ? 0 : (max - min) / max, v: max };
+};
+
 const namedTints = {
   'warm (spec §2.1)': extractBlocks('.glass-tint-warm')['--room-rgb'],
   'cool (spec §2.1)': extractBlocks('.glass-tint-cool')['--room-rgb'],
-  'dim warm': '150, 96, 52',
-  'bright cool': '150, 200, 255',
-  'white (extreme)': '255, 255, 255',
-  'black (extreme)': '0, 0, 0',
+  'neutral room': neutralMatch.slice(1, 4).join(', '),
 };
+for (const [name, triplet] of Object.entries(namedTints)) {
+  const { s, v } = rgbToHsv(triplet);
+  if (s > CLAMP.saturationMax + 0.006 || v < CLAMP.valueMin - 0.006 || v > CLAMP.valueMax + 0.006) {
+    failures += 1;
+    console.error(`[contrast] ${name} (${triplet}) lies outside the room's clamp box (s ${s.toFixed(3)}, v ${v.toFixed(3)})`);
+  }
+}
 const tints = { ...namedTints };
-// The clamp box: every hue at three saturations and three brightnesses.
-for (let hue = 0; hue < 360; hue += 30) {
-  for (const sat of [0.3, 0.65, 1]) {
-    for (const v of [0.35, 0.7, 1]) tints[`hue ${hue} s${sat} v${v}`] = hsvToRgb(hue, sat, v);
+const boxSaturations = [0, CLAMP.saturationMax / 2, CLAMP.saturationMax];
+const boxValues = [CLAMP.valueMin, (CLAMP.valueMin + CLAMP.valueMax) / 2, CLAMP.valueMax];
+for (let hue = 0; hue < 360; hue += 15) {
+  for (const sat of boxSaturations) {
+    // Saturation 0 has no hue: sweep it once.
+    if (sat === 0 && hue > 0) continue;
+    for (const v of boxValues) tints[`hue ${hue} s${sat.toFixed(3)} v${v.toFixed(2)}`] = hsvToRgb(hue, sat, v);
   }
 }
 
@@ -638,7 +672,8 @@ if (failures > 0) {
 console.log(
   `[contrast] ${comparisons} comparisons passed — ${Object.keys(THEMES).length} themes `
     + `(${Object.keys(THEMES).join(', ')}) x ${Object.keys(tints).length} room tints `
-    + `(${Object.keys(namedTints).join(', ')}, and a hue x saturation x brightness grid).`,
+    + `(${Object.keys(namedTints).join(', ')}, and the clamp box: s 0..${CLAMP.saturationMax}, `
+    + `v ${CLAMP.valueMin}..${CLAMP.valueMax}, every 15 degrees).`,
 );
 console.log('[contrast] one danger ink: --accent-danger is declared once and every other danger token is made from it.');
 console.log(`[contrast] glass reference tints reproduced: worst delta-E ${worstDelta.toFixed(2)} (limit 2).`);
