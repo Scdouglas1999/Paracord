@@ -171,6 +171,14 @@ pub fn schemas() -> Value {
         "VoiceWatchers".into(),
         response_schema::<voice::VoiceWatchers>(),
     );
+    schemas.insert(
+        "SendStreamReactionRequest".into(),
+        request_schema::<voice::SendStreamReactionRequest>(),
+    );
+    schemas.insert(
+        "StreamReactions".into(),
+        response_schema::<voice::StreamReactions>(),
+    );
     for (name, schema) in &mut schemas {
         schema["title"] = json!(name);
         schema["$id"] = json!(format!("urn:paracord:contract:{name}"));
@@ -284,6 +292,43 @@ mod tests {
             watchers["required"],
             json!(["guild_id", "channel_id", "streams"])
         );
+    }
+
+    #[test]
+    fn stream_reaction_contracts_bound_the_request_and_require_the_event_fields() {
+        let schemas = schemas();
+        let request = &schemas["schemas"]["SendStreamReactionRequest"];
+        assert_eq!(request["required"], json!(["kind", "stream_user_id"]));
+        let parsed: voice::SendStreamReactionRequest =
+            serde_json::from_value(json!({"kind": "flame", "stream_user_id": "7"})).unwrap();
+        assert_eq!(parsed.count, 1, "count defaults to one tap");
+        assert!(parsed.nonce.is_none());
+        assert!(
+            serde_json::from_value::<voice::SendStreamReactionRequest>(
+                json!({"kind": "fire", "stream_user_id": "7"})
+            )
+            .is_err(),
+            "only the known kinds are accepted"
+        );
+        assert_eq!(
+            voice::MAX_STREAM_REACTION_COUNT,
+            request["properties"]["count"]["maximum"].as_u64().unwrap() as u32
+        );
+        let event = &schemas["schemas"]["StreamReactions"];
+        assert_eq!(
+            event["required"],
+            json!(["guild_id", "channel_id", "reactions"])
+        );
+        let reaction = &event["$defs"]["StreamReaction"];
+        for name in ["nonce", "display_name", "avatar_hash", "count", "kind"] {
+            assert!(
+                reaction["required"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!(name)),
+                "missing: {name}"
+            );
+        }
     }
 
     #[test]

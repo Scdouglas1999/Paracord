@@ -1102,6 +1102,11 @@ pub fn build_router(state: &AppState) -> Router<AppState> {
             "/api/v2/voice/{channel_id}/watchers",
             get(routes::voice::get_voice_watchers),
         )
+        // Reactions on the stream: flame and heart to the channel's members and viewers.
+        .route(
+            "/api/v2/voice/{channel_id}/stream-reactions",
+            post(routes::voice_reactions::send_stream_reaction),
+        )
         .route(
             "/api/v2/voice/{channel_id}/leave",
             post(routes::voice_v2::leave_voice_v2),

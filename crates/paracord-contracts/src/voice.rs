@@ -153,3 +153,77 @@ pub struct VoiceWatchers {
     pub channel_id: String,
     pub streams: Vec<VoiceStreamWatchers>,
 }
+
+/// What a reaction on a stream is. Extensible: a later version adds kinds, and
+/// a client that does not know a kind skips that reaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum StreamReactionKind {
+    Flame,
+    Heart,
+}
+
+/// The most taps one request may carry. A client merges the taps it could not
+/// send inside the one-a-second limit into its next request.
+pub const MAX_STREAM_REACTION_COUNT: u32 = 20;
+/// The longest echo nonce a client may attach.
+pub const MAX_STREAM_REACTION_NONCE_LEN: usize = 64;
+
+fn one() -> u32 {
+    1
+}
+
+/// `POST /api/v2/voice/{channel_id}/stream-reactions`: react to a stream in
+/// that voice channel. The caller must be in the channel's call or watching it
+/// through a view session. One request a second per person (429 with
+/// `Retry-After` otherwise).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SendStreamReactionRequest {
+    pub kind: StreamReactionKind,
+    /// The streamer whose stream this reacts to (sharing in this channel now).
+    #[schemars(length(min = 1), regex(pattern = r"^[0-9]+$"))]
+    pub stream_user_id: String,
+    /// How many taps this request merges (default 1).
+    #[serde(default = "one")]
+    #[schemars(range(min = 1, max = 20))]
+    pub count: u32,
+    /// Echoed back in the event, so the sending client can drop the echo of a
+    /// reaction it has already drawn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1, max = 64), regex(pattern = r"^[A-Za-z0-9_-]+$"))]
+    pub nonce: Option<String>,
+}
+
+/// One reaction (possibly several merged taps) from one person.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct StreamReaction {
+    /// Who reacted.
+    #[schemars(length(min = 1), regex(pattern = r"^[0-9]+$"))]
+    pub user_id: String,
+    /// The streamer whose stream it reacts to.
+    #[schemars(length(min = 1), regex(pattern = r"^[0-9]+$"))]
+    pub stream_user_id: String,
+    pub kind: StreamReactionKind,
+    #[schemars(range(min = 1, max = 20))]
+    pub count: u32,
+    /// The sender's nonce, when it sent one.
+    pub nonce: Option<String>,
+    /// For the face in the bubble's corner when the roster does not have the
+    /// sender (a viewer outside the call).
+    pub username: String,
+    pub display_name: Option<String>,
+    pub avatar_hash: Option<String>,
+}
+
+/// The `STREAM_REACTIONS` gateway event: the reactions one voice channel
+/// received in the last quarter second, in the order they arrived. Sent to
+/// the channel's voice members and its watch viewers only.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct StreamReactions {
+    #[schemars(length(min = 1), regex(pattern = r"^[0-9]+$"))]
+    pub guild_id: String,
+    #[schemars(length(min = 1), regex(pattern = r"^[0-9]+$"))]
+    pub channel_id: String,
+    #[schemars(length(min = 1))]
+    pub reactions: Vec<StreamReaction>,
+}

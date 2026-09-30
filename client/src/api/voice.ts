@@ -4,6 +4,7 @@ import type { VoiceMode } from '../types/voice.types';
 import type { VoiceModeResponse } from './generated/VoiceModeResponse';
 import type { VoiceViewKind, VoiceViewSession } from './generated/VoiceViewSession';
 import type { VoiceWatchers } from './generated/VoiceWatchers';
+import type { SendStreamReactionRequest } from './generated/SendStreamReactionRequest';
 
 export type { VoiceModeResponse, VoiceViewKind, VoiceViewSession, VoiceWatchers };
 
@@ -186,6 +187,15 @@ export function createCallVoiceApi(context: OperationContext, membership?: () =>
       url: `/api/v2/voice/${encodeURIComponent(channelId)}/watchers`,
       timeout: 10_000,
     }),
+    /**
+     * React to a stream in this voice channel (flame, heart): 204, then the
+     * reaction reaches everyone there in the next `STREAM_REACTIONS`. One
+     * request a second per person; a 429 carries `Retry-After`.
+     */
+    streamReaction: (channelId: string, body: SendStreamReactionRequest) => post<void>(
+      `/api/v2/voice/${encodeURIComponent(channelId)}/stream-reactions`,
+      body,
+    ),
     leave: (channelId: string, dm: boolean, sessionId: string) => post(
       `/api/${dm ? `v1/dms/${encodeURIComponent(channelId)}/voice` : `v2/voice/${encodeURIComponent(channelId)}`}/leave?session_id=${encodeURIComponent(sessionId)}`,
     ),
