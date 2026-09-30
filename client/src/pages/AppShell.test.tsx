@@ -52,7 +52,6 @@ vi.mock('../components/glass/stage', () => ({
     <div data-testid="stage-slot" data-mode={mode}>{target.streamerId}</div>
   ),
 }));
-vi.mock('../components/onboarding/LayoutTour', () => ({ LayoutTour: () => null }));
 vi.mock('../components/motion/MotionDirector', () => ({ MotionDirector: () => null }));
 vi.mock('../components/voice/together/TogetherHost', () => ({ TogetherHost: () => null }));
 

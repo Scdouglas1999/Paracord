@@ -85,19 +85,14 @@ export interface ConversationPaneProps {
   subject: ConversationSubject;
   /**
    * Strips between the header and the timeline: a thread's origin line, the
-   * welcome and onboarding gates, a pinned score, a DM call's stream. Rendered
-   * in the column.
+   * welcome and onboarding gates, a pinned score, a stage channel's session.
+   * Rendered in the column.
    */
   notices?: ReactNode;
   /** The timeline (MessageList). Full pane width; its rows sit in the column. */
   timeline: ReactNode;
   /** The message box (MessageInput), column width. */
   composer?: ReactNode;
-  /**
-   * Controls docked under the composer (a DM call's control bar) until the call
-   * pill (G12) carries them.
-   */
-  dock?: ReactNode;
 }
 
 /* ---- CallPill (G12) --------------------------------------------------------- */
@@ -109,6 +104,11 @@ export interface CallPillProps {
    * channel, else a live channel elsewhere named with its server).
    */
   guildId: string | null;
+  /**
+   * The conversation's channel, when the pill sits on one. A voice channel's
+   * own chat shows that channel's pill, even while nobody is in it.
+   */
+  channelId?: string | null;
   /** `row` is the desktop header capsule; `stacked` the phone's two rows (§8). */
   layout: 'row' | 'stacked';
 }

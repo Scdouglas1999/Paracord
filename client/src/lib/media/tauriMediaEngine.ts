@@ -2143,7 +2143,7 @@ export class TauriMediaEngine implements MediaEngine {
             // watchdog (the native side owns delivery). The relay track
             // subscription below shares the keyframe/layer/viewport plumbing
             // with the passthrough route; the tile owns visibility.
-            // Underlay hole-punch: tell the tile's component (StreamViewer)
+            // Underlay hole-punch: tell the tile's component (the stage's stream box or camera tile)
             // when the surface below is actually visible, so it can clear its
             // backgrounds down to the GL underlay — and restore its opaque
             // backdrop the moment the surface hides. Overlay platforms never
@@ -2458,7 +2458,7 @@ export class TauriMediaEngine implements MediaEngine {
     if (!this.localUserId) {
       return () => {};
     }
-    // Self-preview uses the same channel-push path but is skipped when StreamViewer hides it.
+    // Self-preview uses the same channel-push path as any other tile.
     return this.subscribeVideo(this.localUserId, canvas, onFrame);
   }
 

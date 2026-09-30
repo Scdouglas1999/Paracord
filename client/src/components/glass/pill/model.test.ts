@@ -74,6 +74,56 @@ describe('which channel the pill shows', () => {
     expect(pickPillTarget(input())).toBeNull();
   });
 
+  it("shows the voice channel whose chat is open, even with nobody in it (rule 0)", () => {
+    const quiet = chan('quiet', 'Quiet room', 'g1');
+    const target = pickPillTarget(input({ routeChannelId: 'quiet', channels: new Map([['quiet', quiet]]) }));
+    expect(target).toMatchObject({ channelId: 'quiet', title: 'Quiet room', relation: 'idle', crossServer: false, occupants: [] });
+  });
+
+  it('shows the open voice channel over a call held elsewhere, so it can be joined', () => {
+    const quiet = chan('quiet', 'Quiet room', 'g1');
+    const target = pickPillTarget(
+      input({
+        routeChannelId: 'quiet',
+        channels: new Map([['quiet', quiet], ['lounge', lounge]]),
+        held: { scope: SCOPE, channelId: 'lounge', guildId: 'g1', phase: 'connected', mode: 'joined' },
+        channelParticipants: new Map([['lounge', [state('me')]]]),
+      }),
+    );
+    expect(target).toMatchObject({ channelId: 'quiet', relation: 'idle' });
+  });
+
+  it('is the held call when the open voice channel is the one you are in', () => {
+    const target = pickPillTarget(
+      input({
+        routeChannelId: 'lounge',
+        channels: new Map([['lounge', lounge]]),
+        held: { scope: SCOPE, channelId: 'lounge', guildId: 'g1', phase: 'reconnecting', mode: 'joined' },
+        channelParticipants: new Map([['lounge', [state('me')]]]),
+      }),
+    );
+    expect(target).toMatchObject({ channelId: 'lounge', relation: 'joined', reconnecting: true });
+  });
+
+  it("marks a stage channel's audience, who has no microphone to offer", () => {
+    const hall = chan('hall', 'Town hall', 'g1', { type: ChannelType.Stage });
+    const held = { scope: SCOPE, channelId: 'hall', guildId: 'g1', phase: 'connected' as const, mode: 'joined' as const };
+    const audience = pickPillTarget(
+      input({ channels: new Map([['hall', hall]]), held, channelParticipants: new Map([['hall', [state('me', { suppress: true })]]]) }),
+    );
+    expect(audience?.audience).toBe(true);
+    const speaker = pickPillTarget(
+      input({ channels: new Map([['hall', hall]]), held, channelParticipants: new Map([['hall', [state('me', { suppress: false })]]]) }),
+    );
+    expect(speaker?.audience).toBe(false);
+  });
+
+  it('ignores a route channel that is text, or in another server', () => {
+    const text = chan('general', 'General', 'g1', { type: ChannelType.Text });
+    expect(pickPillTarget(input({ routeChannelId: 'general', channels: new Map([['general', text]]) }))).toBeNull();
+    expect(pickPillTarget(input({ routeChannelId: 'camp', channels: new Map([['camp', camp]]) }))).toBeNull();
+  });
+
   it("shows this server's live voice channel, named plainly", () => {
     const target = pickPillTarget(
       input({
@@ -364,6 +414,8 @@ describe('the line under the name', () => {
     isDm: false,
     relation: 'idle',
     mode: null,
+    reconnecting: false,
+    audience: false,
     occupants: [],
     faces: [],
     talkers: [],
@@ -387,6 +439,10 @@ describe('the line under the name', () => {
     expect(pillLine(make({ talkers: [p('Brendan')] }), false)).toBe('Brendan is talking');
     expect(pillLine(make({ talkers: [p('Brendan'), p('Nick')] }), false)).toBe('Brendan and Nick are talking');
     expect(pillLine(make({ talkers: [p('A'), p('B'), p('C')] }), false)).toBe('3 people are talking');
+  });
+
+  it('says the call is reconnecting before anything else', () => {
+    expect(pillLine(make({ relation: 'joined', reconnecting: true, talkers: [p('Brendan')] }), true)).toBe('Reconnecting…');
   });
 
   it('says you are listening, or muted, before it says who talks', () => {

@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useRef, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { useLocation } from 'react-router';
 import { RoomBackdrop } from '../room';
 import { PlacesPanel } from '../places';
 import { Stage } from '../stage';
+import { useStageAudienceGuard } from '../stage/useStageAudienceGuard';
 import { MORPH_OVER_CLASS, MORPH_UNDER_CLASS, useStageTransitions } from '../stage/stageTransition';
 import { Sheets } from '../sheets';
-import { useGlassStore, type OpenStageMode } from '../../../stores/glassStore';
+import { stageTargetOf, useGlassStore, type OpenStageMode } from '../../../stores/glassStore';
 import { PhoneFrame } from './PhoneFrame';
 import { PlacesOverlay } from './PlacesOverlay';
 import { PlacesToggle } from './PlacesToggle';
@@ -54,6 +55,8 @@ export interface GlassFrameProps {
  */
 export function GlassFrame({ layout, guildId, channelId, children }: GlassFrameProps) {
   const location = useLocation();
+  // A stage channel's audience publishes nothing, wherever you are in the app.
+  useStageAudienceGuard();
   const stage = useGlassStore((s) => s.stage);
   const browseOpen = useGlassStore((s) => s.browseOpen);
   const chatHidden = useGlassStore((s) => s.chatHidden);
@@ -71,10 +74,10 @@ export function GlassFrame({ layout, guildId, channelId, children }: GlassFrameP
 
   const stageOpen = stage.mode !== 'none';
   const stageMode = stage.mode === 'none' ? null : (stage.mode as OpenStageMode);
-  const stageTarget =
-    stageOpen && stage.serverId && stage.guildId && stage.channelId && stage.streamerId
-      ? { serverId: stage.serverId, guildId: stage.guildId, channelId: stage.channelId, streamerId: stage.streamerId }
-      : null;
+  const stageTarget = useMemo(
+    () => stageTargetOf(stage),
+    [stage],
+  );
 
   // Picking a channel or a server closes the places overlay and browse, and
   // brings that channel's conversation back (§3, §6.3). The first render is not

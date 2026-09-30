@@ -3,11 +3,12 @@ import { ChevronLeft } from 'lucide-react';
 
 import { glassKeyAction, keyBelongsElsewhere } from '../../../hooks/useGlassKeybinds';
 import { useClip } from '../../../lib/media/clips/useClip';
-import { useGlassStore, type OpenStageMode, type StageTarget } from '../../../stores/glassStore';
+import { isStreamTarget, useGlassStore, type OpenStageMode, type StageTarget } from '../../../stores/glassStore';
 import { toast } from '../../../stores/toastStore';
 import { ClipGlyph, WatchGlyph } from '../primitives';
 import { controlsFit, watchingLabel, type ControlsFit } from '../stage/stageModel';
 import { StageControls } from '../stage/StageControls';
+import { StreamSoundButton } from '../stage/StreamSound';
 import { useStageData } from '../stage/useStageData';
 import { stopWatching } from '../stage/useStageWatch';
 
@@ -28,8 +29,11 @@ import { stopWatching } from '../stage/useStageWatch';
  */
 export function PhoneStageChrome({ target, mode }: { target: StageTarget; mode: OpenStageMode }) {
   const { model, watchers } = useStageData(target);
-  const clip = useClip({ ...target, streamerName: model.streamerName });
+  // The call itself (no stream): nothing to clip or count, and back closes it.
+  const stream = isStreamTarget(target) ? target : null;
+  const clip = useClip(stream ? { ...stream, streamerName: model.streamerName } : null);
   const setStageMode = useGlassStore((state) => state.setStageMode);
+  const closeStage = useGlassStore((state) => state.closeStage);
   const fullScreen = mode === 'theater';
   const count = watchingLabel(watchers);
 
@@ -65,12 +69,12 @@ export function PhoneStageChrome({ target, mode }: { target: StageTarget; mode: 
   useLayoutEffect(() => {
     const box = capsuleRef.current;
     if (!fullScreen || !box) return;
-    const measure = () => setFit(controlsFit(box.clientWidth - 20, model.controls));
+    const measure = () => setFit(controlsFit(box.clientWidth - 20, model.controls, model.view));
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(box);
     return () => observer.disconnect();
-  }, [fullScreen, model.controls]);
+  }, [fullScreen, model.controls, model.view]);
 
   return (
     <div className="glass-phone-stage" data-mode={fullScreen ? 'fullscreen' : 'card'}>
@@ -80,16 +84,17 @@ export function PhoneStageChrome({ target, mode }: { target: StageTarget; mode: 
       <button
         type="button"
         className="glass-stage__sbtn glass-phone-stage__btn glass-phone-stage__back glass-focusable"
-        aria-label={fullScreen ? 'Exit full screen' : 'Stop watching'}
+        aria-label={fullScreen ? 'Exit full screen' : stream ? 'Stop watching' : 'Close the call view'}
         aria-keyshortcuts={fullScreen ? undefined : 'Escape'}
-        title={fullScreen ? 'Back to the stream card' : 'Stop watching. You stay in the call.'}
-        onClick={fullScreen ? () => setStageMode('side') : stopWatching}
+        title={fullScreen ? 'Back to the card' : stream ? 'Stop watching. You stay in the call.' : 'Close. You stay in the call.'}
+        onClick={fullScreen ? () => setStageMode('side') : stream ? stopWatching : closeStage}
       >
         <ChevronLeft size={17} strokeWidth={2} aria-hidden="true" />
       </button>
 
       <span className="glass-phone-stage__tools">
-        {!fullScreen && (
+        {stream && <StreamSoundButton className="glass-phone-stage__btn" />}
+        {!fullScreen && stream && (
           <button
             type="button"
             className="glass-stage__sbtn glass-phone-stage__btn glass-phone-stage__clip glass-focusable"

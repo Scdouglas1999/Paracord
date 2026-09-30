@@ -1,15 +1,12 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type PointerEvent, type ReactNode, type RefObject } from 'react';
 import { extractApiError } from '../../api/client';
 import { reactionUsersApi, type ReactionPerson } from '../../api/reminders';
 import { reactionTitle } from '../../lib/reactionPeople';
-import { personLight } from '../../lib/attention/personLight';
 import { Popover } from '../ui/Popover';
-import { LitAvatar } from '../light';
 import { Chip } from '../ui';
 import { RollingNumber } from '../../lib/motion';
 import { cn } from '../../lib/utils';
-import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
-import { usePresenceStore } from '../../stores/presenceStore';
+import { TimelineAvatar } from './TimelineParts';
 
 /** People shown before "and N more". */
 const PREVIEW = 12;
@@ -20,6 +17,225 @@ const LEAVE_GRACE_MS = 160;
 
 function personName(person: ReactionPerson): string {
   return person.display_name?.trim() || person.username;
+}
+
+export interface ReactionPeopleState {
+  open: boolean;
+  expanded: boolean;
+  people: ReactionPerson[] | null;
+  error: string | null;
+  /** What the reaction says when you rest on it: "Brendan and nick reacted with ...". */
+  title: string;
+  close: () => void;
+  cancelClose: () => void;
+  scheduleClose: () => void;
+  expand: () => void;
+  /** Spread these on the element that wraps the reaction's button and its list. */
+  triggerProps: {
+    onPointerEnter: (event: PointerEvent) => void;
+    onPointerLeave: (event: PointerEvent) => void;
+    onPointerDown: (event: PointerEvent) => void;
+    onPointerUp: (event: PointerEvent) => void;
+    onPointerCancel: () => void;
+    onContextMenu: (event: React.MouseEvent) => void;
+  };
+  /**
+   * True exactly once after a long press opened the list: the click that ends
+   * the press must not toggle the reaction as well.
+   */
+  consumeSuppressedClick: () => boolean;
+}
+
+/**
+ * The "who reacted" behavior of one reaction, shared by the feed's chips
+ * ({@link ReactionChip}) and the timeline's (`ReactionBite`). Resting on the
+ * reaction (or a long press on touch) opens a short list; right-clicking opens
+ * the whole list; clicking is the caller's (it toggles your own reaction).
+ */
+export function useReactionPeople({
+  channelId,
+  messageId,
+  emoji,
+  count,
+}: {
+  channelId: string;
+  messageId: string;
+  emoji: string;
+  count: number;
+}): ReactionPeopleState {
+  const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const suppressClick = useRef(false);
+  const [open, setOpen] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [people, setPeople] = useState<ReactionPerson[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  // A new tally means the list we have is stale.
+  const [listedFor, setListedFor] = useState(count);
+  if (listedFor !== count) {
+    setListedFor(count);
+    setPeople(null);
+    setError(null);
+  }
+
+  useEffect(() => () => {
+    if (openTimer.current) clearTimeout(openTimer.current);
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+  }, []);
+
+  const cancelOpen = () => {
+    if (openTimer.current) clearTimeout(openTimer.current);
+    openTimer.current = null;
+  };
+  const cancelClose = () => {
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+    closeTimer.current = null;
+  };
+  const close = () => {
+    cancelOpen();
+    cancelClose();
+    setOpen(false);
+    setExpanded(false);
+  };
+  /** A hover-opened list closes when the pointer leaves; a right-click list stays. */
+  const scheduleClose = () => {
+    cancelOpen();
+    if (!open || expanded) return;
+    cancelClose();
+    closeTimer.current = setTimeout(close, LEAVE_GRACE_MS);
+  };
+
+  const load = async () => {
+    try {
+      const { data } = await reactionUsersApi.list(channelId, messageId, emoji, 100);
+      setPeople(data);
+      setError(null);
+    } catch (err) {
+      setError(extractApiError(err));
+    }
+  };
+  const show = (full: boolean) => {
+    cancelClose();
+    setExpanded(full);
+    setOpen(true);
+    if (!people) void load();
+  };
+
+  const title = error
+    ? error
+    : reactionTitle((people ?? []).slice(0, 2).map(personName), people?.length ?? count, emoji);
+
+  return {
+    open,
+    expanded,
+    people,
+    error,
+    title,
+    close,
+    cancelClose,
+    scheduleClose,
+    expand: () => setExpanded(true),
+    triggerProps: {
+      onPointerEnter: (event) => {
+        if (event.pointerType === 'touch') return;
+        cancelClose();
+        if (open) return;
+        cancelOpen();
+        openTimer.current = setTimeout(() => show(false), HOVER_DELAY_MS);
+      },
+      onPointerLeave: (event) => {
+        if (event.pointerType === 'touch') return;
+        scheduleClose();
+      },
+      onPointerDown: (event) => {
+        if (event.pointerType !== 'touch') return;
+        cancelOpen();
+        openTimer.current = setTimeout(() => {
+          suppressClick.current = true;
+          show(false);
+        }, HOVER_DELAY_MS);
+      },
+      onPointerUp: (event) => {
+        if (event.pointerType === 'touch') cancelOpen();
+      },
+      onPointerCancel: cancelOpen,
+      onContextMenu: (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        show(true);
+      },
+    },
+    consumeSuppressedClick: () => {
+      if (!suppressClick.current) return false;
+      suppressClick.current = false;
+      return true;
+    },
+  };
+}
+
+/**
+ * The list a reaction opens: its glyph and how many, then the people (faces and
+ * names, solid and plain as the timeline's own faces are), "and N more" while
+ * it is the short list.
+ */
+export function ReactionPeopleList({
+  state,
+  anchor,
+  emoji,
+  count,
+  glyph,
+}: {
+  state: ReactionPeopleState;
+  /** The element the list opens against: the reaction itself. */
+  anchor: RefObject<HTMLSpanElement | null>;
+  emoji: string;
+  count: number;
+  /** The reaction drawn large: an emoji, a custom emoji's picture or a line mark. */
+  glyph: ReactNode;
+}) {
+  const { open, expanded, people, error, close, cancelClose, scheduleClose } = state;
+  const visible = expanded ? people ?? [] : (people ?? []).slice(0, PREVIEW);
+  const hidden = Math.max(0, (people?.length ?? 0) - PREVIEW);
+  return (
+    <Popover
+      anchor={anchor}
+      open={open}
+      onClose={close}
+      side="top"
+      align="start"
+      label={`People who reacted with ${emoji}`}
+      className="w-60 p-0"
+    >
+      <div onPointerEnter={cancelClose} onPointerLeave={scheduleClose} className="glass-bite__people">
+        <div className="glass-bite__people-head">
+          <span className="glass-bite__people-glyph" aria-hidden>
+            {glyph}
+          </span>
+          <span className="glass-bite__people-count">
+            {people ? (people.length === 1 ? '1 person' : `${people.length} people`) : `${count} ${count === 1 ? 'person' : 'people'}`}
+          </span>
+        </div>
+        {error && <p role="alert" className="glass-bite__people-note" data-tone="error">{error}</p>}
+        {!error && !people && <p className="glass-bite__people-note">Loading who reacted…</p>}
+        {people && (
+          <ul className="glass-bite__people-list" data-expanded={expanded || undefined}>
+            {visible.map((person) => (
+              <li key={person.id} className="glass-bite__person">
+                <TimelineAvatar userId={person.id} name={personName(person)} avatar={person.avatar_hash} size={22} />
+                <span className="glass-bite__person-name">{personName(person)}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        {!expanded && hidden > 0 && (
+          <button type="button" className="glass-bite__more glass-focusable" onClick={state.expand}>
+            and {hidden} more
+          </button>
+        )}
+      </div>
+    </Popover>
+  );
 }
 
 /**
@@ -45,76 +261,7 @@ export function ReactionChip({
   onToggle: () => void;
 }) {
   const anchorRef = useRef<HTMLSpanElement>(null);
-  const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const suppressClick = useRef(false);
-  const [open, setOpen] = useState(false);
-  const [expanded, setExpanded] = useState(false);
-  const [people, setPeople] = useState<ReactionPerson[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const scope = useCurrentAccountScope();
-  const getPresence = usePresenceStore((state) => state.getPresence);
-  // Re-render an open list when someone's status changes.
-  usePresenceStore((state) => (open ? state.presences : null));
-
-  // A new tally means the list we have is stale.
-  useEffect(() => {
-    setPeople(null);
-    setError(null);
-  }, [count]);
-
-  useEffect(() => () => {
-    if (openTimer.current) clearTimeout(openTimer.current);
-    if (closeTimer.current) clearTimeout(closeTimer.current);
-  }, []);
-
-  function cancelOpen() {
-    if (openTimer.current) clearTimeout(openTimer.current);
-    openTimer.current = null;
-  }
-
-  function cancelClose() {
-    if (closeTimer.current) clearTimeout(closeTimer.current);
-    closeTimer.current = null;
-  }
-
-  function close() {
-    cancelOpen();
-    cancelClose();
-    setOpen(false);
-    setExpanded(false);
-  }
-
-  /** Hover-opened lists close when the pointer leaves; a right-click list stays. */
-  function scheduleClose() {
-    cancelOpen();
-    if (!open || expanded) return;
-    cancelClose();
-    closeTimer.current = setTimeout(close, LEAVE_GRACE_MS);
-  }
-
-  async function load() {
-    try {
-      const { data } = await reactionUsersApi.list(channelId, messageId, emoji, 100);
-      setPeople(data);
-      setError(null);
-    } catch (err) {
-      setError(extractApiError(err));
-    }
-  }
-
-  function show(full: boolean) {
-    cancelClose();
-    setExpanded(full);
-    setOpen(true);
-    if (!people) void load();
-  }
-
-  const title = error
-    ? error
-    : reactionTitle((people ?? []).slice(0, 2).map(personName), people?.length ?? count, emoji);
-  const visible = expanded ? people ?? [] : (people ?? []).slice(0, PREVIEW);
-  const hidden = Math.max(0, (people?.length ?? 0) - PREVIEW);
+  const state = useReactionPeople({ channelId, messageId, emoji, count });
 
   return (
     <span
@@ -122,43 +269,13 @@ export function ReactionChip({
       data-flip-key={emoji}
       data-flip-own={me || undefined}
       className="inline-flex"
-      onPointerEnter={(event) => {
-        if (event.pointerType === 'touch') return;
-        cancelClose();
-        if (open) return;
-        cancelOpen();
-        openTimer.current = setTimeout(() => show(false), HOVER_DELAY_MS);
-      }}
-      onPointerLeave={(event) => {
-        if (event.pointerType === 'touch') return;
-        scheduleClose();
-      }}
-      onPointerDown={(event) => {
-        if (event.pointerType !== 'touch') return;
-        cancelOpen();
-        openTimer.current = setTimeout(() => {
-          suppressClick.current = true;
-          show(false);
-        }, HOVER_DELAY_MS);
-      }}
-      onPointerUp={(event) => {
-        if (event.pointerType === 'touch') cancelOpen();
-      }}
-      onPointerCancel={cancelOpen}
-      onContextMenu={(event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        show(true);
-      }}
+      {...state.triggerProps}
     >
       <Chip
         as="button"
-        title={title}
+        title={state.title}
         onClick={() => {
-          if (suppressClick.current) {
-            suppressClick.current = false;
-            return;
-          }
+          if (state.consumeSuppressedClick()) return;
           onToggle();
         }}
         className={cn(
@@ -171,55 +288,7 @@ export function ReactionChip({
           <RollingNumber value={count} announce={false} />
         </span>
       </Chip>
-      <Popover
-        anchor={anchorRef}
-        open={open}
-        onClose={close}
-        side="top"
-        align="start"
-        label={`People who reacted with ${emoji}`}
-        className="w-60 p-0"
-      >
-        <div onPointerEnter={cancelClose} onPointerLeave={scheduleClose} className="p-2">
-          <div className="flex items-center gap-2 px-1 pb-2">
-            <span className="flex h-9 w-9 items-center justify-center text-[1.75rem] leading-none [&_img]:h-8 [&_img]:w-8" aria-hidden>
-              {glyph}
-            </span>
-            <span className="text-meta text-text-muted">
-              {people ? (people.length === 1 ? '1 person' : `${people.length} people`) : `${count} ${count === 1 ? 'person' : 'people'}`}
-            </span>
-          </div>
-          {error && <p role="alert" className="px-1 py-1 text-meta text-accent-danger">{error}</p>}
-          {!error && !people && <p className="px-1 py-1 text-meta text-text-muted">Loading who reacted…</p>}
-          {people && (
-            <ul className={cn('flex flex-col gap-0.5', expanded && 'max-h-64 overflow-y-auto scrollbar-thin')}>
-              {visible.map((person) => (
-                <li key={person.id} className="flex items-center gap-2 rounded-[var(--radius-chip)] px-1 py-1">
-                  <LitAvatar
-                    size={22}
-                    person={personLight({
-                      userId: person.id,
-                      name: personName(person),
-                      status: getPresence(person.id, scope?.serverId)?.status ?? null,
-                      avatar: person.avatar_hash,
-                    })}
-                  />
-                  <span className="min-w-0 truncate text-label text-text-primary">{personName(person)}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-          {!expanded && hidden > 0 && (
-            <button
-              type="button"
-              className="pc-focusable mt-1 w-full rounded-[var(--radius-chip)] px-1 py-1 text-left text-meta font-medium text-text-secondary transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary"
-              onClick={() => setExpanded(true)}
-            >
-              and {hidden} more
-            </button>
-          )}
-        </div>
-      </Popover>
+      <ReactionPeopleList state={state} anchor={anchorRef} emoji={emoji} count={count} glyph={glyph} />
     </span>
   );
 }

@@ -17,7 +17,8 @@ import {
 //
 // It asserts four separate things, because each one has failed on its own:
 //
-//   1. the UI reaches a connected call and reports no error;
+//   1. the UI reaches a connected call and reports no error (the call pill in
+//      the voice channel's chat offers Leave, and no refusal is toasted);
 //   2. the *server* agrees — the relay names this account as a live participant
 //      of the room, on the `webtransport` path, under the same media-session
 //      receipt the REST join issued;
@@ -33,6 +34,10 @@ import {
 
 const PORT = process.env.PARACORD_E2E_PORT ?? '18150';
 const BASE = `http://127.0.0.1:${PORT}`;
+// The voice channel every case here creates. Its route is that channel's chat,
+// and the call pill in the chat's header is the door to the call (Join, Leave,
+// the microphone, who is in it), so every control below is found through it.
+const ROOM = 'lounge';
 
 // Joining runs a real handshake, a real getUserMedia, a WebCodecs Opus encoder
 // and an AudioWorklet before the first packet leaves, and the relay counters are
@@ -453,38 +458,87 @@ async function signIn(page: Page, account: Account): Promise<void> {
 }
 
 /**
- * Two first-run panels sit on top of the app and swallow clicks: the layout
- * tour, and the per-space welcome screen that appears the first time a member
- * opens a guild. Both are dismissible and neither is what these cases are about.
+ * The per-space welcome screen appears the first time a member opens a guild
+ * and sits on top of the app, swallowing clicks. It is dismissible and is not
+ * what these cases are about.
  *
- * The welcome screen renders only once the guild's channels have loaded, so it
- * can appear *after* the Join button is already on screen — dismissing once on
+ * It renders only once the guild's channels have loaded, so it can appear
+ * *after* the pill's Join button is already on screen — dismissing once on
  * arrival is a race.
  */
 async function dismissFirstRunOverlays(page: Page): Promise<void> {
-  for (const name of ['Skip tour', 'Close welcome screen']) {
-    const button = page.getByRole('button', { name, exact: true });
-    if (await button.isVisible().catch(() => false)) {
-      await button.click().catch(() => {});
-      await expect(button).toHaveCount(0);
-    }
+  const button = page.getByRole('button', { name: 'Close welcome screen', exact: true });
+  if (await button.isVisible().catch(() => false)) {
+    await button.click().catch(() => {});
+    await expect(button).toHaveCount(0);
   }
 }
 
 /**
- * Press Join voice, re-clearing the first-run overlays if one of them appears
- * between the button rendering and the click landing.
+ * The call pill in a voice channel's chat header: the region named
+ * "<Channel>, live voice channel". It is drawn for the channel whose chat is
+ * open even while nobody is in it, which is how a call is joined.
  */
-async function joinVoice(page: Page): Promise<void> {
-  // The welcome screen and layout tour are dialogs that mark the rest of the
-  // app aria-hidden, and they can mount a beat after the room renders — so
-  // clear them, then look for the button, and repeat until the click lands.
-  const joinButton = page.getByRole('button', { name: 'Join voice', exact: true });
+const pillOf = (page: Page): Locator =>
+  page.getByRole('main').getByRole('region', { name: `${ROOM}, live voice channel`, exact: true });
+
+/** The stage (the call itself, or a watched screen) that takes the conversation's side. */
+const stagePane = (page: Page): Locator => page.getByRole('region', { name: 'Stage', exact: true });
+
+/**
+ * Click a control, clearing the welcome screen if it lands between the page
+ * rendering the control and the click (it mounts once the guild's channels load).
+ */
+async function clickPastOverlays(page: Page, control: Locator): Promise<void> {
+  let failure: unknown;
+  for (let attempt = 0; attempt < 8; attempt++) {
+    await dismissFirstRunOverlays(page);
+    try {
+      await control.click({ timeout: 3_000 });
+      return;
+    } catch (error) {
+      failure = error;
+    }
+  }
+  throw failure;
+}
+
+/** "Show who's in <Channel>" expands the pill into its roster: one row per person, with their state. */
+async function openRoster(page: Page): Promise<Locator> {
+  const pill = pillOf(page);
+  const who = pill.getByRole('button', { name: `Show who's in ${ROOM}`, exact: true });
+  if ((await who.getAttribute('aria-expanded')) !== 'true') await clickPastOverlays(page, who);
+  const roster = pill.getByRole('list', { name: `In ${ROOM}`, exact: true });
+  await expect(roster).toBeVisible();
+  return roster;
+}
+
+/**
+ * Join the voice channel whose chat is open, through the pill.
+ *
+ * A call starts muted: the pill's "Microphone on when you join" is the
+ * preference the join applies, and it defaults to off. These cases are about
+ * audio leaving the browser, so the preference is turned on first (and its state
+ * is asserted, so a join that silently kept the default fails here rather than
+ * as "no audio datagrams" sixty seconds later).
+ *
+ * The welcome screen can mount a beat after the room renders, so clear it, then
+ * look for the button, and repeat until the click lands.
+ */
+async function joinVoice(page: Page, options: { micOn?: boolean } = {}): Promise<void> {
+  const { micOn = true } = options;
+  const pill = pillOf(page);
+  const joinButton = pill.getByRole('button', { name: `Join ${ROOM}`, exact: true });
+  const preference = pill.getByRole('button', { name: 'Microphone on when you join', exact: true });
   let clicked = false;
   for (let attempt = 0; attempt < 8 && !clicked; attempt++) {
     await dismissFirstRunOverlays(page);
     if (await joinButton.isVisible().catch(() => false)) {
       try {
+        if ((await preference.getAttribute('aria-pressed', { timeout: 3_000 })) !== String(micOn)) {
+          await preference.click({ timeout: 3_000 });
+        }
+        await expect(preference).toHaveAttribute('aria-pressed', String(micOn), { timeout: 3_000 });
         await joinButton.click({ timeout: 3_000 });
         clicked = true;
       } catch {
@@ -494,7 +548,47 @@ async function joinVoice(page: Page): Promise<void> {
       await page.waitForTimeout(500);
     }
   }
-  expect(clicked, 'the Join the room button never became clickable').toBe(true);
+  expect(clicked, 'the pill\'s Join button never became clickable').toBe(true);
+}
+
+/** Wait for the pill to say the call is connected: Leave is offered, and nothing was refused. */
+async function expectJoined(page: Page): Promise<void> {
+  await expect(pillOf(page).getByRole('button', { name: `Leave ${ROOM}`, exact: true })).toBeVisible({
+    timeout: 60_000,
+  });
+  // A refused or failed join is toasted: "Could not join lounge: …".
+  await expect(page.getByText(/Could not (join|listen in to)/)).toHaveCount(0);
+}
+
+/** Leave through the pill, and wait for it to offer Join again. */
+async function leaveVoice(page: Page): Promise<void> {
+  await pillOf(page).getByRole('button', { name: `Leave ${ROOM}`, exact: true }).click();
+  await expect(pillOf(page).getByRole('button', { name: `Join ${ROOM}`, exact: true })).toBeVisible({
+    timeout: 30_000,
+  });
+  await expect(pillOf(page).getByRole('button', { name: `Leave ${ROOM}`, exact: true })).toHaveCount(0);
+}
+
+/**
+ * Open the call itself on the stage, where its controls (camera, share, More)
+ * live, and return the control row. "Show the call" is the pill's door to it
+ * when nobody else is sharing; if somebody is, the stage is already open (a test
+ * switches to their stream from it) or the pill offers their stream instead.
+ */
+async function openCallStage(page: Page): Promise<Locator> {
+  const controls = stagePane(page).getByRole('group', { name: 'Call controls', exact: true });
+  if (!(await controls.isVisible().catch(() => false))) {
+    await pillOf(page).getByRole('button', { name: 'Show the call', exact: true }).click();
+  }
+  await expect(controls).toBeVisible();
+  return controls;
+}
+
+/** Press a stage toggle (Camera, Microphone) until its aria-pressed says `on`. */
+async function setStageToggle(controls: Locator, name: string, on: boolean): Promise<void> {
+  const toggle = controls.getByRole('button', { name, exact: true });
+  if ((await toggle.getAttribute('aria-pressed')) !== String(on)) await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-pressed', String(on), { timeout: 30_000 });
 }
 
 interface RelayParticipant {
@@ -593,13 +687,21 @@ test('a browser joins a guild voice room, its audio reaches the relay, and leavi
     const voiceSessionId = joinBody.session_id as string;
     expect(typeof voiceSessionId).toBe('string');
 
-    // 1. The UI reaches a connected call. The call dock only renders while
-    //    `voiceStore.connected` is true, and the lobby replaces the Join button
-    //    with an error block on failure — so assert the absence of that too,
-    //    otherwise a failed join that re-renders quickly could slip through.
-    await expect(page.getByTestId('call-dock')).toBeVisible({ timeout: 60_000 });
-    await expect(page.getByText(/Voice connection failed:/)).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Disconnect from voice' })).toBeVisible();
+    // 1. The UI reaches a connected call. The pill offers Leave only once the
+    //    call is connected (it offers Join before that, and a refused join is
+    //    toasted "Could not join lounge: …"), so assert the absence of that too,
+    //    otherwise a failed join that re-renders quickly could slip through. The
+    //    microphone toggle is on: the join took the "Microphone on when you
+    //    join" preference.
+    await expectJoined(page);
+    await expect(pillOf(page).getByRole('button', { name: 'Microphone', exact: true })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    // The pill's roster (the faces, expanded) names the one person in the room: you.
+    const ownRoster = await openRoster(page);
+    await expect(ownRoster.getByRole('listitem')).toHaveCount(1);
+    await expect(ownRoster.getByRole('listitem')).toContainText('You');
 
     // 2. The server agrees: the relay holds a live WebTransport connection for
     //    this account in this room, under the receipt the REST join issued.
@@ -647,8 +749,7 @@ test('a browser joins a guild voice room, its audio reaches the relay, and leavi
     //    that watches only the connection keeps the departed participant
     //    registered until the ~30 s idle timeout. That is what this bound
     //    catches.
-    await page.getByRole('button', { name: 'Disconnect from voice' }).click();
-    await expect(page.getByTestId('call-dock')).toHaveCount(0, { timeout: 30_000 });
+    await leaveVoice(page);
     const empty = await waitForRelay(
       page,
       channelId,
@@ -701,8 +802,7 @@ test('two browsers in one room exchange audio through the relay', async ({ playw
       await signIn(page, account);
       await page.goto(`${BASE}/app/guilds/${guildId}/channels/${channelId}`);
       await joinVoice(page);
-      await expect(page.getByTestId('call-dock')).toBeVisible({ timeout: 60_000 });
-      await expect(page.getByText(/Voice connection failed:/)).toHaveCount(0);
+      await expectJoined(page);
     }
 
     // Both are live on the WebTransport path…
@@ -759,8 +859,7 @@ test('two browsers in one room exchange audio through the relay', async ({ playw
     await host.screenshot({ path: shotPath('browser-voice-two-party.png') });
 
     // One leaving must not disturb the other.
-    await guest.getByRole('button', { name: 'Disconnect from voice' }).click();
-    await expect(guest.getByTestId('call-dock')).toHaveCount(0, { timeout: 30_000 });
+    await leaveVoice(guest);
     const remaining = await waitForRelay(
       host,
       channelId,
@@ -769,9 +868,9 @@ test('two browsers in one room exchange audio through the relay', async ({ playw
       15_000,
     );
     expect(remaining.participants[0].session_id).not.toBe('');
-    await expect(host.getByTestId('call-dock')).toBeVisible();
+    await expect(pillOf(host).getByRole('button', { name: `Leave ${ROOM}`, exact: true })).toBeVisible();
 
-    await host.getByRole('button', { name: 'Disconnect from voice' }).click();
+    await leaveVoice(host);
     await waitForRelay(
       host,
       channelId,
@@ -818,12 +917,14 @@ test('a participant who closes their tab stops being in the room for everyone el
       await signIn(page, account);
       await page.goto(`${BASE}/app/guilds/${guildId}/channels/${channelId}`);
       await joinVoice(page);
-      await expect(page.getByTestId('call-dock')).toBeVisible({ timeout: 60_000 });
+      await expectJoined(page);
     }
     await waitForRelay(host, channelId, 'two connected participants', (room) => room.connected_participants === 2);
-    // The host's Stage says two people are here before the guest disappears,
-    // so the assertion below is a transition and not a state that was never true.
-    await expect(host.getByText('2 here', { exact: false }).first()).toBeVisible({ timeout: 30_000 });
+    // The host's pill, opened on its roster, lists two people before the guest
+    // disappears, so the assertion below is a transition and not a state that
+    // was never true.
+    const hostRoster = await openRoster(host);
+    await expect(hostRoster.getByRole('listitem')).toHaveCount(2, { timeout: 30_000 });
 
     // No leave, no disconnect click: the tab is simply gone, which is how most
     // calls actually end. Nothing on the client gets to tell the server.
@@ -836,12 +937,11 @@ test('a participant who closes their tab stops being in the room for everyone el
     // the room's light from, and nothing retired it on the native transport, so
     // the room stayed lit with a ghost in it until the server was restarted.
     // The host must see the room empty out.
-    await expect(host.getByText('1 here', { exact: false }).first()).toBeVisible({ timeout: 15_000 });
-    await expect(host.getByText('2 here', { exact: false })).toHaveCount(0);
-    await expect(host.getByTestId('call-dock')).toBeVisible();
+    await expect(hostRoster.getByRole('listitem')).toHaveCount(1, { timeout: 15_000 });
+    await expect(pillOf(host).getByRole('button', { name: `Leave ${ROOM}`, exact: true })).toBeVisible();
 
     // And a member who was never in the call sees a room with one person in it,
-    // not two — the lobby reads the same voice state.
+    // not two — their pill reads the same voice state.
     const bystander = await newParticipant();
     const bystanderAccount = await register(bystander.request);
     const joined = await bystander.request.post(`${BASE}/api/v1/invites/${inviteCode}`, {
@@ -854,7 +954,10 @@ test('a participant who closes their tab stops being in the room for everyone el
     expect(joined.ok(), `bystander invite accept: ${await joined.text()}`).toBeTruthy();
     await signIn(bystander, bystanderAccount);
     await bystander.goto(`${BASE}/app/guilds/${guildId}/channels/${channelId}`);
-    await expect(bystander.getByText('In this channel — 1')).toBeVisible({ timeout: 30_000 });
+    await dismissFirstRunOverlays(bystander);
+    const bystanderRoster = await openRoster(bystander);
+    await expect(bystanderRoster.getByRole('listitem')).toHaveCount(1, { timeout: 30_000 });
+    await expect(pillOf(bystander).getByRole('button', { name: `Join ${ROOM}`, exact: true })).toBeVisible();
   });
 });
 
@@ -904,8 +1007,7 @@ async function twoInOneRoom(
     await signIn(page, account);
     await page.goto(`${BASE}/app/guilds/${guildId}/channels/${channelId}`);
     await joinVoice(page);
-    await expect(page.getByTestId('call-dock')).toBeVisible({ timeout: 60_000 });
-    await expect(page.getByText(/Voice connection failed:/)).toHaveCount(0);
+    await expectJoined(page);
   }
 
   await waitForRelay(
@@ -922,7 +1024,7 @@ test('two browsers in one room see each other — one on camera, one sharing a s
   playwright,
 }) => {
   await withChromium(playwright, async (newParticipant) => {
-    const { host, guest, hostAccount, channelId } =
+    const { host, guest, hostAccount, guestAccount, channelId } =
       await twoInOneRoom(newParticipant);
 
     const pageErrors: string[] = [];
@@ -933,17 +1035,18 @@ test('two browsers in one room see each other — one on camera, one sharing a s
     // The host goes on camera; the guest shares a screen. One publisher each
     // way, and the guest's own share preview is off by default — so every video
     // frame the *guest* decodes came from the host's camera and nothing else.
+    //
+    // Camera and share are the stage's controls. Nobody is sharing yet, so each
+    // browser puts the call itself on the stage ("Show the call" on its pill) and
+    // turns its own on from the control row; both stages stay open for the case.
     await dismissFirstRunOverlays(host);
     await dismissFirstRunOverlays(guest);
-    await host.getByRole('button', { name: 'Turn on camera', exact: true }).click();
-    await expect(host.getByRole('button', { name: 'Turn off camera', exact: true })).toBeVisible({
-      timeout: 30_000,
-    });
-    await guest.getByRole('button', { name: 'Share screen', exact: true }).click();
-    // The share is offered in two places at once — the call dock's Stop and the
-    // Stage control bar's — so take the first.
+    const hostControls = await openCallStage(host);
+    const guestControls = await openCallStage(guest);
+    await setStageToggle(hostControls, 'Camera', true);
+    await guestControls.getByRole('button', { name: 'Share your screen', exact: true }).click();
     await expect(
-      guest.getByRole('button', { name: 'Stop streaming', exact: true }).first(),
+      guestControls.getByRole('button', { name: 'Stop sharing your screen', exact: true }),
     ).toBeVisible({ timeout: 30_000 });
 
     // 1. The keyframe path itself. A VP9 decoder emits nothing until it has a
@@ -992,24 +1095,26 @@ test('two browsers in one room see each other — one on camera, one sharing a s
       expect(probe.decodedFrames, `${label} decoded the host’s camera`).toBeGreaterThanOrEqual(30);
     }
 
-    // 3. And it reached the screen. The guest's tile for the host stops
-    //    reporting a camera that is off — that flag is set by the first frame
-    //    the renderer actually paints for *that participant* — and the tile is
-    //    a picture rather than the well color with initials on it.
-    const hostTileOnGuest = guest.locator(`[data-motion-speaking="${hostAccount.userId}"]`).first();
-    await expect(hostTileOnGuest).toBeVisible({ timeout: 30_000 });
+    // 3. And it reached the screen. The host's camera tile on the guest's stage
+    //    stops showing the host's face where the picture will be — the face is
+    //    drawn until the first frame the renderer actually paints for *that
+    //    participant* — and the tile is a picture rather than the well color with
+    //    a face on it.
+    const hostTileOnGuest = () =>
+      stagePane(guest).locator('.glass-stage__tile').filter({ hasText: hostAccount.username });
+    await expect(hostTileOnGuest()).toBeVisible({ timeout: 30_000 });
     await expect(
-      hostTileOnGuest.getByText(/camera is off/),
-      'the tile must stop reporting a camera that is off once frames arrive',
+      hostTileOnGuest().locator('.glass-stage__tile-face'),
+      'the tile must stop showing the face stand-in once frames arrive',
     ).toHaveCount(0, { timeout: 60_000 });
-    // The flag flips on the first *decoded* frame; the renderer paints it on the
-    // next animation frame. Measuring once, straight after the flag, raced that
-    // paint and read the empty well — so wait for the picture itself.
-    let cameraTile = await tileBrightness(guest, hostTileOnGuest);
+    // The face goes on the first *decoded* frame; the renderer paints it on the
+    // next animation frame. Measuring once, straight after, raced that paint and
+    // read the empty well — so wait for the picture itself.
+    let cameraTile = await tileBrightness(guest, hostTileOnGuest());
     await expect
       .poll(
         async () => {
-          cameraTile = await tileBrightness(guest, hostTileOnGuest);
+          cameraTile = await tileBrightness(guest, hostTileOnGuest());
           return cameraTile.litFraction > 0.2 && cameraTile.distinctColors > 8;
         },
         {
@@ -1024,34 +1129,55 @@ test('two browsers in one room see each other — one on camera, one sharing a s
     //
     //    The host's camera goes off first, and that is what makes this
     //    countable: with nothing of its own to publish, every video frame the
-    //    host decodes from here on is the guest's screen. The viewer's own
-    //    empty state is the second half of the proof — it says "X is not
-    //    sharing" until a frame is *painted for that person's screen track*,
-    //    which is exactly what it said for every share before this round.
-    await host.getByRole('button', { name: 'Turn off camera', exact: true }).click();
-    await expect(host.getByRole('button', { name: 'Turn on camera', exact: true })).toBeVisible({
-      timeout: 30_000,
-    });
+    //    host decodes from here on is the guest's screen. The stream's own
+    //    empty state is the second half of the proof — the stage says
+    //    "Connecting to…", "Waiting for…" or "… stopped sharing." in place of the
+    //    picture until a frame is *painted for that person's screen track*
+    //    (`data-picture`), which is exactly what it said for every share before
+    //    this round.
+    await setStageToggle(hostControls, 'Camera', false);
     await host.waitForTimeout(2_000);
     const beforeWatching = (await readVideoProbe(host)).decodedFrames;
 
-    const watch = host.getByRole('button', { name: 'Watch', exact: true }).first();
-    if (await watch.isVisible().catch(() => false)) await watch.click();
+    // The guest is sharing. The call view goes away (Close; the call stays), and
+    // the host's pill now says so: its roster lists the guest as "Sharing
+    // screen", and it offers their stream ("Watch …") in place of "Show the
+    // call". Watching is the stage's and never joins: the host is already in the
+    // call, so the stream rides it.
+    await stagePane(host).getByRole('button', { name: 'Close', exact: true }).click();
+    await expect(stagePane(host)).toHaveCount(0);
+    const hostPill = pillOf(host);
+    await expect(hostPill.getByRole('button', { name: 'Show the call', exact: true })).toHaveCount(0);
+    const hostRoster = await openRoster(host);
+    await expect(hostRoster.getByRole('listitem').filter({ hasText: guestAccount.username })).toContainText(
+      'Sharing screen',
+      { timeout: 30_000 },
+    );
+    // Expanded, the pill's stream preview is a second way to the same stream; the
+    // bar's own Watch comes first.
+    await hostPill
+      .getByRole('button', { name: `Watch ${guestAccount.username}'s screen`, exact: true })
+      .first()
+      .click();
+    const shareStream = stagePane(host).locator('.glass-stage__stream');
+    await expect(shareStream).toBeVisible({ timeout: 30_000 });
     await expect(
-      host.getByText(/is not sharing/),
-      'the share viewer must stop claiming nobody is sharing',
+      shareStream.locator('.glass-stage__notice'),
+      'the share viewer must stop saying it is connecting, waiting or that nobody is sharing',
     ).toHaveCount(0, { timeout: 60_000 });
+    await expect(shareStream).toHaveAttribute('data-picture', 'true', { timeout: 60_000 });
 
     const watching = await waitForDecodedVideo(
       [{ label: 'host', page: host }],
       beforeWatching + 30,
     );
+    const shareFrames = watching.get('host')!.decodedFrames - beforeWatching;
     expect(
-      watching.get('host')!.decodedFrames - beforeWatching,
+      shareFrames,
       'the host must decode the guest’s screen, with no camera of its own running',
     ).toBeGreaterThanOrEqual(30);
 
-    const shareCanvas = host.locator('[data-stream-canvas]').first();
+    const shareCanvas = shareStream.locator('[data-stream-canvas]');
     await expect(shareCanvas).toBeVisible({ timeout: 30_000 });
     const shareTile = await tileBrightness(host, shareCanvas);
     // A headless tab capture of the app's own dark UI is very nearly black, so
@@ -1063,6 +1189,17 @@ test('two browsers in one room see each other — one on camera, one sharing a s
     ).toBeGreaterThan(32);
 
     await host.screenshot({ path: shotPath('browser-video-share-seen.png') });
+
+    // Both directions at once for the settled window below: the host's camera
+    // comes back on while it keeps watching the share. Watching never leaves the
+    // call, and the call's own controls are still on the stream's stage, so the
+    // guest's tile for the host returns with a picture.
+    await setStageToggle(hostControls, 'Camera', true);
+    await expect(
+      hostTileOnGuest().locator('.glass-stage__tile-face'),
+      'the host’s camera returned to the guest’s stage',
+    ).toHaveCount(0, { timeout: 60_000 });
+    await expect(shareStream).toHaveAttribute('data-picture', 'true');
 
     // 5. A settled call builds NOTHING more. One decoder per subscribed track
     //    is the contract; a re-render upstream must not cost another. This used
@@ -1112,7 +1249,7 @@ test('two browsers in one room see each other — one on camera, one sharing a s
           )
           .join(' | ') +
         ` — guest decoded ${(await readVideoProbe(guest)).decodedFrames} camera frames, ` +
-        `host decoded ${(await readVideoProbe(host)).decodedFrames - beforeWatching} share frames ` +
+        `host decoded ${shareFrames} share frames ` +
         `with its own camera off; camera tile ${JSON.stringify(cameraTile)}, ` +
         `share canvas ${JSON.stringify(shareTile)}`,
     );

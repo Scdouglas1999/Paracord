@@ -134,14 +134,12 @@ describe('voiceStore call ownership across deferred boundaries', () => {
       self_stream: true, self_video: true, self_mute: true, self_deaf: false, mute: false, deaf: false, suppress: false,
     }], { serverId: 'A', userId: '1' });
     await useVoiceStore.getState().joinChannel('one', 'guild');
-    useVoiceStore.getState().setWatchedStreamer('7');
 
     media.callbacks.join?.('7');
 
     expect(useVoiceStore.getState().participants.get('7')).toMatchObject({
       channel_id: 'one', session_id: 'receipt-7', username: 'vincent', self_stream: true, self_video: true, self_mute: true,
     });
-    expect(useVoiceStore.getState().watchedStreamerId).toBe('7');
   });
 
   it('keeps everybody else\'s name and sharing through a leave and a cold join', async () => {

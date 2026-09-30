@@ -367,14 +367,14 @@ describe('PlacesPanel: a server', () => {
     expect(screen.getByTestId('pathname')).toHaveTextContent('/app/guilds/g1/channels/clips');
   });
 
-  it('opens the stage on the stream from the live row, and closes the panel it is in', () => {
+  it('opens the live channel’s chat with the stage on its stream beside it, and closes the panel it is in', () => {
     const onClose = vi.fn();
     renderPanel('/app/guilds/g1/channels/general', { presentation: 'browse', onClose });
     fireEvent.click(screen.getByRole('link', { name: /Lounge/ }));
     expect(useGlassStore.getState().stage).toMatchObject({ mode: 'side', guildId: 'g1', channelId: 'lounge', streamerId: 'vincent' });
     expect(onClose).toHaveBeenCalledTimes(1);
-    // Watching is not a navigation.
-    expect(screen.getByTestId('pathname')).toHaveTextContent('/app/guilds/g1/channels/general');
+    // The voice channel's chat beside the stage (owner decision, glass-plan §8.4).
+    expect(screen.getByTestId('pathname')).toHaveTextContent('/app/guilds/g1/channels/lounge');
   });
 
   it('opens the voice channel itself when nobody is streaming', () => {

@@ -309,20 +309,6 @@ a.glass-prow__main {
   color: var(--ink-3);
 }
 
-/* A DM call's stream, in the column until the stage carries it (§6): content is
-   solid, so it is a surface, not a strip with rules. */
-.glass-dmstream {
-  position: relative;
-  box-sizing: border-box;
-  max-height: 40vh;
-  min-height: 180px;
-  margin: 0 var(--glass-column-inset) 12px;
-  overflow: hidden;
-  border-radius: var(--r-bubble);
-  background-color: var(--deep);
-  box-shadow: var(--sh-content);
-}
-
 /* Where somebody is, when it is a live room: amber (§1.3). */
 .glass-prow__voice {
   color: var(--amber-ink);

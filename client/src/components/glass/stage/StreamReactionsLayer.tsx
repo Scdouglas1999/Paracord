@@ -43,7 +43,8 @@ export function toWireKind(kind: StreamReactionKind): WireReactionKind {
 /** The stream being reacted to: the watch's target. */
 export interface StreamReactionTarget {
   serverId: string;
-  guildId: string;
+  /** The server, or null for a direct message call (no reactions there). */
+  guildId: string | null;
   channelId: string;
   streamerId: string;
 }
@@ -91,7 +92,7 @@ export function useStreamReactions(target: StreamReactionTarget | null): StreamR
   const serverId = target?.serverId ?? null;
   const channelId = target?.channelId ?? null;
   const streamerId = target?.streamerId ?? null;
-  const dm = !target || !target.guildId || target.guildId === 'dm';
+  const dm = !target || target.guildId === null;
   const available = !dm && (inCall || watching);
 
   return useMemo<StreamReactions>(() => {

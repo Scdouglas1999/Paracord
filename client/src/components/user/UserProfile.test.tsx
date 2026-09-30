@@ -157,6 +157,18 @@ describe('UserProfilePopup action feedback', () => {
     );
   });
 
+  it('draws their face with initials and says how they are here, in words and as ink', () => {
+    const { container } = renderProfile();
+
+    // A plain Glass face (no photo: initials on their identity color) with the
+    // presence mark beside it; offline is a faint ring, and the words say it too.
+    expect(container.querySelector('.glass-face')).toHaveTextContent('G');
+    expect(container.querySelector('.glass-presence')).toHaveAttribute('data-status', 'offline');
+    expect(container.querySelector('.glass-presence')).not.toHaveAttribute('data-live');
+    expect(screen.getByText('Offline')).toBeInTheDocument();
+    expect(container.querySelector('[title="Status: Offline"]')).not.toBeNull();
+  });
+
   // The card's own height cap used to be an absolute `100dvh - 1rem`, which
   // ignores where the card starts: a profile taller than the layout estimate
   // (every enrolled account's, once the identity fingerprint section renders)

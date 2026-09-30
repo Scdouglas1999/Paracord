@@ -3,6 +3,7 @@ import { MicOff } from 'lucide-react';
 
 import type { MediaEngine } from '../../../lib/media/mediaEngine';
 import { cn } from '../../../lib/utils';
+import { SoundboardBurst } from '../../voice/SoundboardBurst';
 import { Face } from '../places/Lead';
 import { Waveform } from '../primitives';
 import { useNativeUnderlay } from './nativeUnderlay';
@@ -30,7 +31,8 @@ export interface StagePeopleProps {
   joined: boolean;
   /** The voice is heard here (joined or listening): the waveform follows the real level. */
   realVoice: boolean;
-  watchedId: string;
+  /** Whose screen the stage shows; null for the call itself. */
+  watchedId: string | null;
   onSwitch: (userId: string) => void;
 }
 
@@ -140,6 +142,8 @@ export function CameraTile({
         </span>
       )}
       <span className="glass-stage__tile-shade" aria-hidden="true" />
+      {/* Who just played a soundboard sound: its emoji, and a ring on the edge. */}
+      <SoundboardBurst userId={person.userId} />
       <span className="glass-stage__tile-name">
         <span className="glass-stage__tile-who">{person.name}</span>
         <span className="sr-only">, {describeState(person, watched)}</span>
@@ -205,6 +209,7 @@ function PersonChip({
         </span>
       </span>
       {person.muted && <MicOff size={15} strokeWidth={1.9} className="glass-stage__chip-mic" aria-hidden="true" />}
+      <SoundboardBurst userId={person.userId} />
     </>
   );
   return (

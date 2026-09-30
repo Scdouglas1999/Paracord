@@ -1753,7 +1753,7 @@ function registerRoomListeners(
     publication: RemoteTrackPublication,
     participant: RemoteParticipant
   ) => {
-    // ScreenShareAudio is managed by StreamViewer, not the voice audio pipeline.
+    // Screen-share audio is the watch's (view sessions), not the voice audio pipeline.
     if (publication.source === livekit().Track.Source.ScreenShareAudio) return;
     detachRemoteAudioTrack(track, publication, participant.identity);
     // Update presence when video tracks are removed so camera/stream icons update
@@ -2017,8 +2017,6 @@ export interface VoiceStoreState {
   systemAudioCaptureActive: boolean;
   showSystemAudioPrivacyWarning: boolean;
   voiceSuppressedForStream: boolean;
-  watchedStreamerId: string | null;
-  previewStreamerId: string | null;
   /** True while the PTT key is held down and the mic is unmuted via PTT. */
   pttEngaged: boolean;
 
@@ -2049,8 +2047,6 @@ export interface VoiceStoreState {
   clearConnectionError: () => void;
   handleMediaTransportLost: (reason: string) => Promise<void>;
   acknowledgeSystemAudioPrivacyWarning: () => void;
-  setWatchedStreamer: (userId: string | null) => void;
-  setPreviewStreamer: (userId: string | null) => void;
   setPttEngaged: (engaged: boolean) => void;
 
   // ── Glass media contract (docs/design/glass-g6-checkpoint.md) ──────────
@@ -2086,6 +2082,11 @@ export interface VoiceStoreState {
   stopAmbient: () => void;
   /** Playback gain (0..2) of the watched stream's own audio. */
   setWatchVolume: (gain: number) => void;
+  /**
+   * The gain a watched stream's own audio plays at (0..2; 1 is as sent). Kept
+   * for the session, so the next stream you watch starts where you left it.
+   */
+  watchVolume: number;
   /** Load a channel's watcher counts now (open a stage with it). */
   fetchWatchers: (target: { serverId?: string; channelId: string }) => Promise<void>;
   /** `VOICE_WATCHERS_UPDATE` from the gateway. */
@@ -2145,8 +2146,6 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
   systemAudioCaptureActive: false,
   showSystemAudioPrivacyWarning: false,
   voiceSuppressedForStream: false,
-  watchedStreamerId: null,
-  previewStreamerId: null,
   pttEngaged: false,
 
   useNativeMedia: true,
@@ -2190,10 +2189,13 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
   startAmbient: (target) => { watchAmbientEnvironment(); startAmbientView(target); },
   stopAmbient: () => stopAmbientView(),
 
+  watchVolume: 1,
   setWatchVolume: (gain) => {
+    const next = Math.min(2, Math.max(0, gain));
+    set({ watchVolume: next });
     const view = get().watchView;
     if (!view?.engine) return;
-    view.engine.setSourceVolume(view.streamerId, Math.min(2, Math.max(0, gain)));
+    view.engine.setSourceVolume(view.streamerId, next);
   },
 
   fetchWatchers: async ({ serverId, channelId }) => {
@@ -2370,8 +2372,8 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
             get().stopStream();
           }
         });
-        // Update local voice state for stream indicator and auto-watch self
-        // so the StreamViewer subscribes to the published stream immediately.
+        // Update the local voice state for the stream indicator,
+        // so everything that reads who is sharing sees it immediately.
         const localUserId = currentCallUser()?.id;
         if (action.current()) set((state) => {
           const participants = new Map(state.participants);
@@ -2403,7 +2405,6 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
             selfStream: true,
             participants,
             channelParticipants,
-            watchedStreamerId: localUserId ?? state.watchedStreamerId,
             streamAudioWarning: nativeStreamAudioWarning,
             systemAudioCaptureActive: nativeStreamAudioActive,
           };
@@ -2617,8 +2618,8 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
       } catch (err) {
         console.warn('[voice] Post-publish sender tuning failed (non-critical):', err);
       }
-      // Update local voice state for stream indicator and auto-watch self
-      // so the StreamViewer subscribes to the published stream immediately.
+      // Update the local voice state for the stream indicator,
+      // so everything that reads who is sharing sees it immediately.
       const localUserId = currentCallUser()?.id;
       if (action.current()) set((state) => {
         const participants = new Map(state.participants);
@@ -2650,7 +2651,6 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
           systemAudioCaptureActive,
           participants,
           channelParticipants,
-          watchedStreamerId: localUserId ?? state.watchedStreamerId,
         };
       });
     } catch (error) {
@@ -2723,14 +2723,10 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
           channelParticipants.set(state.channelId, chMembers);
         }
       }
-      // If the user was auto-watching their own stream, clear the viewer.
-      const clearWatched =
-        localUserId && state.watchedStreamerId === localUserId;
       return {
         selfStream: false,
         participants,
         channelParticipants,
-        ...(clearWatched ? { watchedStreamerId: null } : {}),
         streamAudioWarning: null,
         systemAudioCaptureActive: false,
         voiceSuppressedForStream: false,
@@ -3060,16 +3056,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
         channelParticipants.set(mergedVoiceState.channel_id, [...existing, mergedVoiceState]);
       }
 
-      const watchedStreamerId =
-        state.watchedStreamerId && participants.has(state.watchedStreamerId)
-          ? state.watchedStreamerId
-          : null;
-      const previewStreamerId =
-        state.previewStreamerId && participants.has(state.previewStreamerId)
-          ? state.previewStreamerId
-          : null;
-
-      return { participants, channelParticipants, watchedStreamerId, previewStreamerId };
+      return { participants, channelParticipants };
     });
   },
 
@@ -3151,16 +3138,6 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
         return state;
       }
       return { speakingUsers: new Set(userIds) };
-    }),
-
-  setWatchedStreamer: (userId) =>
-    set({
-      watchedStreamerId: userId,
-    }),
-
-  setPreviewStreamer: (userId) =>
-    set({
-      previewStreamerId: userId,
     }),
 
   setPttEngaged: (engaged) => set({ pttEngaged: engaged }),
@@ -3311,7 +3288,7 @@ initViewSessions({
     const selected = useGuildStore.getState().selectedGuild;
     return !!selected && selected.id === guildId && accountScopeKey(selected.scope) === accountScopeKey(scope);
   },
-  streamVolume: () => 1,
+  streamVolume: () => useVoiceStore.getState().watchVolume,
 });
 
 // The ambient view follows the window and the server on screen. Subscribed
@@ -3442,7 +3419,7 @@ function closeCall(owner: CallSession, error?: string, errorCode: VoiceErrorCode
         selfMute: false, selfDeaf: false, selfVideo: false, selfStream: false,
         participants: new Map(), channelParticipants, speakingUsers: new Set(),
         streamAudioWarning: null, systemAudioCaptureActive: false, voiceSuppressedForStream: false,
-        watchedStreamerId: null, previewStreamerId: null, pttEngaged: false,
+        pttEngaged: false,
       };
     });
   }

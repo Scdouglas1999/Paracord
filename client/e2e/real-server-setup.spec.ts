@@ -1,5 +1,5 @@
-import { expect, test, type ChildProcess } from '@playwright/test';
-import { spawn } from 'node:child_process';
+import { expect, test } from '@playwright/test';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { createSocket } from 'node:dgram';
 import { existsSync } from 'node:fs';

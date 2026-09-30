@@ -212,6 +212,21 @@ async function watchFromPill(page: Page) {
   await expect(page.locator('.glass-stage__stream[data-picture="true"]')).toBeVisible();
 }
 
+/** No Glass layout move still playing (stageTransition.ts names its animations `glass-morph:*`). */
+async function settled(page: Page) {
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () =>
+            document.getAnimations().filter((a) => a.id.startsWith('glass-morph:') && a.playState === 'running').length
+            + document.querySelectorAll('.glass-morph > *').length,
+        ),
+      { timeout: 5_000 },
+    )
+    .toBe(0);
+}
+
 async function shoot(page: Page, name: string) {
   const size = page.viewportSize();
   if (size) await page.mouse.move(size.width - 3, size.height - 3);
@@ -265,6 +280,8 @@ test('the conversation keeps working beside the stage (a staged reply survives)'
   await watchFromPill(page);
   await expect(page.getByRole('main')).not.toHaveAttribute('inert', '');
   await expect(box).toHaveValue('on my way');
+  // The pill-to-stage move (WP-G15) plays on transforms for 650ms: measure once it settled.
+  await settled(page);
   const main = await page.getByRole('main').boundingBox();
   expect(Math.round(main?.width ?? 0)).toBe(420);
 });

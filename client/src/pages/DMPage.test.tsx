@@ -37,13 +37,6 @@ vi.mock('../components/message/DmPickerModal', () => ({
     open ? <div data-testid="dm-picker" /> : null,
 }));
 
-vi.mock('../components/voice/VoiceControlBar', () => ({
-  VoiceControlBar: () => <div data-testid="voice-control-bar" />,
-}));
-
-vi.mock('../components/voice/StreamViewer', () => ({
-  StreamViewer: () => <div data-testid="stream-viewer" />,
-}));
 
 const currentUser = {
   id: 'me',
@@ -301,19 +294,18 @@ describe('DMPage — all-conversations index (/app/dms)', () => {
     expect(container.querySelector('.glass-place-dot')).toBeNull();
   });
 
-  it('gives a DM call’s stream a solid surface in the column, not a strip with rules', () => {
-    // The stream itself is WP-G14's; the surface it sits on is this page's.
+  it('keeps a DM call out of the conversation: the pill and the stage carry it', () => {
+    // No stream box and no control bar in the column: the header's call button,
+    // the pill ("Show the call") and the stage are the call's surfaces.
     seedChannel(directDm());
-    useVoiceStore.setState({ connected: true, channelId: 'dm-2', guildId: 'dm', watchedStreamerId: 'bob' });
+    useVoiceStore.setState({ connected: true, channelId: 'dm-2', guildId: 'dm' });
     try {
       const { container } = renderDmPage('/app/dms/dm-2');
-      const surface = container.querySelector('.glass-dmstream');
-      expect(surface).not.toBeNull();
-      expect(surface).toContainElement(screen.getByTestId('stream-viewer'));
-      expect(surface?.className).not.toMatch(/border|bg-black/);
-      expect(screen.getByTestId('voice-control-bar')).toBeInTheDocument();
+      expect(container.querySelector('.glass-conversation__notices')).toBeNull();
+      expect(container.querySelector('[aria-label="Call controls"]')).toBeNull();
+      expect(screen.getByTestId('message-list')).toBeInTheDocument();
     } finally {
-      useVoiceStore.setState({ connected: false, channelId: null, guildId: null, watchedStreamerId: null });
+      useVoiceStore.setState({ connected: false, channelId: null, guildId: null });
     }
   });
 });

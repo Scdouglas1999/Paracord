@@ -1,3 +1,5 @@
+import { activityLine } from '../../../lib/together/model';
+import { useTogetherActivity } from '../../../stores/togetherStore';
 import type { MouseEvent, ReactNode } from 'react';
 
 import { InstrumentText } from '../primitives/InstrumentText';
@@ -199,6 +201,10 @@ export interface LiveRowProps extends RowFocus {
  * the channel itself.
  */
 export function LiveRow({ row, href, onOpen, onContextMenu, tabIndex, onFocus }: LiveRowProps) {
+  // What the room watches or listens to together, when it does: that is what
+  // the room is doing, so it is the row's line.
+  const together = useTogetherActivity(row.channelId);
+  const line = together ? activityLine(together.kind, together.title) : row.line;
   return (
     <RowLink
       id={row.id}
@@ -221,7 +227,7 @@ export function LiveRow({ row, href, onOpen, onContextMenu, tabIndex, onFocus }:
           <FaceStack faces={row.occupants} size={22} overlap={7} className="glass-place-live__faces" />
           {row.more > 0 && <InstrumentText className="glass-place-live__more">+{row.more}</InstrumentText>}
           {row.talking && <Waveform />}
-          <span className="glass-place-live__line">{row.line}</span>
+          <span className="glass-place-live__line" data-together={together ? together.kind : undefined}>{line}</span>
         </span>
         <span className="sr-only">In the room: {row.people.join(', ')}</span>
       </span>

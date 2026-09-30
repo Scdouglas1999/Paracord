@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
+import { fakeLoungeMedia, type SceneCall } from './fixtures/glass/calls';
 import { installGlassScene } from './fixtures/glass/install';
 import { BASECAMP_ID, CH, GAME_NIGHT_ID } from './fixtures/glass/scene';
 
@@ -22,11 +23,12 @@ import { BASECAMP_ID, CH, GAME_NIGHT_ID } from './fixtures/glass/scene';
  * the naming is uniform and a package can diff either size against its own
  * reference.
  *
- * TODAY THESE SHOW THE PRE-GLASS UI. A state whose surface does not exist yet
- * navigates to the route where it will live and shoots whatever the app renders
- * there. Each such state names, in `pending`, the package that will make the
- * frame match the reference; when that package lands it changes the driver
- * (a click, a key, a store action) in this file, not the harness.
+ * Every state is reached the way a person reaches it (a click on the pill, a
+ * key on the stage), with what a relay would do put into the stores from the
+ * page (`fixtures/glass/calls.ts`): the watch paints the DEV fixture stream and
+ * the call paints Brendan's fixture camera. The live scene
+ * (`scripts/glass-scene.mjs --shot all`) shoots the same seven states on a real
+ * instance with real media.
  */
 
 const WP = process.env.PARACORD_E2E_GLASS_WP || 'latest';
@@ -44,14 +46,24 @@ interface GlassState {
   name: string;
   /** Where the app puts this state. */
   route: string;
-  /** Scene text that must be on screen, on the pre-Glass UI as well. */
+  /** Scene text that must be on screen. */
   expectText?: RegExp[];
   /** Nobody in the Lounge. */
   quiet?: boolean;
-  /** Packages that make this frame match the reference. Empty when it already can. */
-  pending?: string;
+  /** The call this client holds (and the watch fakes), put in before driving. */
+  call?: SceneCall | 'none';
   /** Extra driving once the route has loaded (a click, a key). */
   drive?: (page: Page, viewport: keyof typeof VIEWPORTS) => Promise<void>;
+}
+
+const pill = (page: Page) => page.getByRole('main').getByRole('region', { name: /live voice channel/ });
+const stagePane = (page: Page) => page.getByRole('region', { name: 'Stage' });
+
+/** The pill's Watch: the stage opens on Vincent's screen and the fixture paints it. */
+async function watchVincent(page: Page) {
+  await pill(page).getByRole('button', { name: "Watch Vincent's screen" }).click();
+  await expect(stagePane(page)).toBeVisible();
+  await expect(page.locator('.glass-stage__stream[data-picture="true"]')).toBeVisible();
 }
 
 const STATES: GlassState[] = [
@@ -60,45 +72,67 @@ const STATES: GlassState[] = [
     // Game Night, General: unread with a mention, the Lounge live above it.
     route: channelRoute(GAME_NIGHT_ID, CH.general),
     expectText: [/what are we playing tonight/, /haz 5 run/i, /new personal best btw/, /still on\? I'm bringing the projector/],
-    pending: 'G7 shell, G9 places, G10 conversation, G11 composer, G12 pill (compact), G13 cards',
   },
   {
     name: '02-quiet',
     // Basecamp, Trips: the cool server, with Game Night's Lounge live elsewhere.
     route: channelRoute(BASECAMP_ID, CH.trips),
     expectText: [/permits came through for Saturday/, /rim trail, north lot at 7/, /28° at the trailhead/],
-    pending: 'G8 (cool temperature, banner), G9 (quiet rows), G12 (cross-server pill name)',
   },
   {
     name: '03-listen',
-    // The pill expanded with "Listening". Today: General with the Lounge live.
+    // Listening in, the pill grown to show who is there.
     route: channelRoute(GAME_NIGHT_ID, CH.general),
-    pending: 'G6 (listen()) and G12 (expanded pill, Listening): drive by clicking the pill Listen button',
+    call: { mode: 'listen' },
+    drive: async (page) => {
+      await expect(pill(page).getByRole('button', { name: 'Stop listening in to Lounge' })).toBeVisible();
+      await pill(page).getByRole('button', { name: "Show who's in Lounge" }).click();
+      await expect(pill(page).getByText("Everyone in Lounge can see you're listening in.")).toBeVisible();
+    },
   },
   {
     name: '04-side-by-side',
-    // Joined: the stage beside the conversation. Today: the Lounge voice channel.
-    route: channelRoute(GAME_NIGHT_ID, CH.lounge),
-    pending: 'G14 (joined stage), G16 (clip toast), G17 (reactions), G13 (narrow plan card)',
+    // Joined, watching Vincent beside the conversation.
+    route: channelRoute(GAME_NIGHT_ID, CH.general),
+    call: { mode: 'joined', watchers: 2 },
+    drive: async (page) => {
+      await watchVincent(page);
+    },
   },
   {
     name: '05-theater',
-    // Theater: the stream fills the pane. Today: the Lounge voice channel.
-    route: channelRoute(GAME_NIGHT_ID, CH.lounge),
-    pending: 'G15 (theater, surfacing messages, mention edge)',
+    // Theater: the stream fills the window (T); on a phone, full screen.
+    route: channelRoute(GAME_NIGHT_ID, CH.general),
+    call: { mode: 'joined', watchers: 2 },
+    drive: async (page, viewport) => {
+      await watchVincent(page);
+      if (viewport === 'phone') await page.getByRole('button', { name: 'Full screen' }).click();
+      else await page.keyboard.press('t');
+      await expect(page.locator('.glass-frame')).toHaveAttribute('data-stage', 'theater');
+    },
   },
   {
     name: '06-browse',
-    // Watching while browsing another channel. Today: Clips, the channel you browse to.
+    // Watching (not joined) while browsing: from Clips, Watch, then S.
     route: channelRoute(GAME_NIGHT_ID, CH.clips),
-    pending: 'G15 (browse, not-joined controls)',
+    call: 'none',
+    drive: async (page, viewport) => {
+      await watchVincent(page);
+      if (viewport === 'desktop') {
+        await page.keyboard.press('s');
+        await expect(page.locator('.glass-frame__places')).toBeVisible();
+      }
+    },
   },
   {
     name: '07-phone',
-    // The phone conversation with the pill and stream above it.
+    // The conversation with the pill and the stream above it (not joined).
     route: channelRoute(GAME_NIGHT_ID, CH.general),
     expectText: [/still on\? I'm bringing the projector/, /new personal best btw/],
-    pending: 'G20 and every component’s phone variant',
+    call: 'none',
+    drive: async (page) => {
+      await watchVincent(page);
+    },
   },
 ];
 
@@ -128,6 +162,7 @@ for (const state of STATES) {
       for (const text of state.expectText ?? []) {
         await expect(page.getByText(text).first()).toBeVisible();
       }
+      if (state.call) await fakeLoungeMedia(page, state.call === 'none' ? {} : state.call);
       await state.drive?.(page, viewport);
       await shoot(page, state.name, viewport);
     });

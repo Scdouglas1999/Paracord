@@ -1,434 +1,243 @@
 import type { Page } from '@playwright/test';
 
-import { guildDetailFixture, guildSummaryFixture } from '../../src/test/guildContractFixtures';
+import { installGlassScene } from './glass/install';
+import { CAST, CH, GAME_NIGHT_ID } from './glass/scene';
 
 /**
- * The mocked world the motion gate drives (`e2e/motion-gate.spec.ts`).
+ * The mocked world the motion gate drives (`e2e/motion-gate.spec.ts`): the Glass
+ * reference scene (fixtures/glass), with no server and no media stack, so every
+ * Glass moment can be measured on the same page a person would see it on.
  *
- * It is the smoke fixture's shape, trimmed to the one moment the gate measures:
- * a signed-in account, one building, one text room, and a send that actually
- * completes. The send is the load-bearing part — §5.1's "a message has mass"
- * only exists if a message can leave the composer and a row can land — so the
- * two routes that make that possible are exactly the smoke's:
- *
- *   · `POST /channels/:id/messages` echoes the request `nonce` back, which is
- *     how the durable-delivery transport recognizes its own send;
- *   · `GET  /channels/:id/messages/recovery` can vouch for every message the
- *     fixture has ever served, including the one just posted — the runtime will
- *     not publish a row the authoritative feed has not confirmed.
- *
- * Every response carries `X-Paracord-History-Epoch`, matching the READY the
- * realtime stub emits; without it no send is ever accepted.
+ *   - `installMotionMocks` is `installGlassScene`: Game Night with its live
+ *     Lounge (Vincent sharing, Brendan on camera), Basecamp behind it, and the
+ *     DEV fixture stream lighting the room;
+ *   - `fakeMedia` puts the media a relay would deliver into the stores, so a
+ *     stream exists for the stage to draw (the same fake the stage, theater and
+ *     pill specs use, through the DEV fixture frame source);
+ *   - `readMotionConstants` reads, from the running app, every number the gate
+ *     holds a moment to: each package's own constant and the `--glass-ms*`
+ *     tokens. The gate cites them; it never hard-codes a duration of its own.
  */
 
-export const MOTION_GUILD_ID = '1001';
-export const MOTION_TEXT_CHANNEL_ID = '2001';
-export const MOTION_CHANNEL_NAME = 'build-log';
-export const MOTION_HISTORY_EPOCH = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+export const GENERAL = `/app/guilds/${GAME_NIGHT_ID}/channels/${CH.general}`;
+export const BASECAMP = 'Basecamp';
 
-/**
- * WP9b's three moments all happen to a BUILDING, so the fixture grew one: a
- * voice room to walk into and three other people to turn their lights on and
- * walk in and out of it.
- */
-/** The guild's name — the server home is the region `${name} home`. */
-export const MOTION_GUILD_NAME = 'Kestrel Robotics';
-export const MOTION_VOICE_CHANNEL_ID = '2002';
-export const MOTION_VOICE_CHANNEL_NAME = 'Shop floor';
-export const MOTION_LOUNGE_CHANNEL_ID = '2003';
-export const MOTION_LOUNGE_CHANNEL_NAME = 'Lounge';
-/** The people who are not you. `42` is the local account. */
-export const MOTION_PEOPLE = [
-  { id: '43', username: 'priya.raman', display_name: 'Priya Raman' },
-  { id: '44', username: 'tomas.lindqvist', display_name: 'Tomas Lindqvist' },
-  { id: '45', username: 'ren.okada', display_name: 'Ren Okada' },
-  { id: '46', username: 'mara.osei', display_name: 'Mara Osei' },
-  { id: '47', username: 'aisha.khan', display_name: 'Aisha Khan' },
-] as const;
-
-/** The realtime stub's back door — see `e2e/realtime-stub.mjs`. */
-const STUB = `http://127.0.0.1:${process.env.PARACORD_E2E_RT_PORT ?? '4175'}`;
-
-async function stub(path: string, body: unknown): Promise<void> {
-  const response = await fetch(`${STUB}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  if (!response.ok) throw new Error(`the realtime stub refused ${path}: ${response.status}`);
-}
-
-/** Write one gateway frame (or a batch) to every open stream. */
-export function emitGateway(frames: unknown): Promise<void> {
-  return stub('/__emit', frames);
-}
-
-/**
- * The world every stream opens into — merged into its READY, plus any frames
- * replayed behind it.
- *
- * A gate that measures the app WAKING UP needs the world to be there before the
- * page is, and READY is where the real server puts it: the buildings you are
- * in, their rooms, who is in those rooms and whose lights are on. Call it with
- * nothing to clear.
- */
-export function setStandingWorld(
-  options: { world?: Record<string, unknown>; frames?: unknown[] } = {},
-): Promise<void> {
-  return stub('/__standing', { world: options.world ?? {}, frames: options.frames ?? [] });
-}
-
-/** Cut every open stream, so the client reconnects (§5.1's second trigger). */
-export function dropStreams(): Promise<void> {
-  return stub('/__drop', {});
-}
-
-/**
- * Take the gateway away, and bring it back (WP9d).
- *
- * `dropStreams` is a blip: the client's first retry is 0ms, so it is back
- * before anybody could see it. An OUTAGE is a gateway that is really away —
- * long enough for the building's lights to go down and stay down — and the only
- * honest way to drive one is to stop answering the stream at all.
- */
-export function setGatewayOffline(offline: boolean): Promise<void> {
-  return stub('/__offline', { offline });
-}
-
-/**
- * A lit building, as READY delivers one.
- *
- * Everybody's lights are on; whoever `inRoom` names is in Shop floor. The rest
- * have the app open and are somewhere else, which is what makes the window map
- * worth looking at — some windows lit, some dark.
- */
-export function litBuilding(inRoom: readonly string[] = ['43', '45', '46']): Record<string, unknown> {
-  return {
-    guilds: [
-      {
-        id: MOTION_GUILD_ID,
-        owner_id: '42',
-        name: MOTION_GUILD_NAME,
-        icon_hash: null,
-        created_at: new Date().toISOString(),
-        member_count: 24,
-        channels: [
-          { id: MOTION_TEXT_CHANNEL_ID, guild_id: MOTION_GUILD_ID, name: MOTION_CHANNEL_NAME, type: 0, channel_type: 0, position: 0 },
-          { id: MOTION_VOICE_CHANNEL_ID, guild_id: MOTION_GUILD_ID, name: MOTION_VOICE_CHANNEL_NAME, type: 2, channel_type: 2, position: 1 },
-          { id: MOTION_LOUNGE_CHANNEL_ID, guild_id: MOTION_GUILD_ID, name: MOTION_LOUNGE_CHANNEL_NAME, type: 2, channel_type: 2, position: 2 },
-        ],
-        voice_states: inRoom.map((id) => voiceFrame(id, MOTION_VOICE_CHANNEL_ID).d),
-        presences: MOTION_PEOPLE.map((person) => presenceFrame(person.id).d),
-      },
-    ],
-  };
-}
-
-/** Somebody's lights coming on, as the gateway sends it. */
-export function presenceFrame(userId: string, status: 'online' | 'idle' | 'offline' = 'online') {
-  return {
-    op: 0,
-    t: 'PRESENCE_UPDATE',
-    d: { user_id: userId, guild_id: MOTION_GUILD_ID, status, activities: [] },
-  };
-}
-
-/** Somebody walking into (or out of) a voice room, as the gateway sends it. */
-export function voiceFrame(userId: string, channelId: string | null) {
-  const person = MOTION_PEOPLE.find((entry) => entry.id === userId);
-  return {
-    op: 0,
-    t: 'VOICE_STATE_UPDATE',
-    d: {
-      user_id: userId,
-      guild_id: MOTION_GUILD_ID,
-      channel_id: channelId,
-      session_id: `motion-voice-${userId}`,
-      deaf: false,
-      mute: false,
-      self_deaf: false,
-      self_mute: false,
-      self_stream: false,
-      self_video: false,
-      suppress: false,
-      username: person?.username,
-      display_name: person?.display_name ?? null,
-      avatar_hash: null,
-    },
-  };
-}
+const IDS = {
+  sean: CAST.sean.id,
+  vincent: CAST.vincent.id,
+  brendan: CAST.brendan.id,
+  lounge: CH.lounge,
+  guild: GAME_NIGHT_ID,
+};
 
 export async function installMotionMocks(page: Page): Promise<void> {
-  const nowIso = new Date().toISOString();
-  /** Everything the fixture has served on a `/messages` path, by id. */
-  const served = new Map<string, Record<string, unknown>>();
-  let messageCounter = 1;
+  await installGlassScene(page);
+}
 
-  const user = {
-    id: '42',
-    username: 'sam.douglas',
-    display_name: 'Sam Douglas',
-    discriminator: 1,
-    avatar_hash: null,
-    banner_hash: null,
-    bio: null,
-    pronouns: null,
-    email: 'sam@example.test',
-    email_verified: true,
-    has_public_key: false,
-    public_key: null,
-    linked_accounts: [],
-    bot: false,
-    system: false,
-    flags: 0,
-    created_at: nowIso,
-  };
-  const peer = { ...user, id: '43', username: 'priya.raman', display_name: 'Priya Raman' };
-  const people = MOTION_PEOPLE.map((entry) => ({ ...user, ...entry, email: `${entry.username}@example.test` }));
-  const members = [user, ...people].map((person) => ({
-    user: person,
-    user_id: person.id,
-    guild_id: MOTION_GUILD_ID,
-    nick: null,
-    roles: [],
-    joined_at: nowIso,
-    deaf: false,
-    mute: false,
-  }));
+/** Every duration the gate measures against, read from the app itself. */
+export interface MotionConstants {
+  /** `pill/pillMotion.ts`: the pill's grow and shrink ("spring, 550ms", §5). */
+  PILL_SPRING_MS: number;
+  /** `pill/pillMotion.ts`: the words fading before the capsule shrinks, and its reduced-motion twin. */
+  PILL_FADE_MS: number;
+  PILL_FADE_REDUCED_MS: number;
+  /** `stage/stageTransition.ts`: pill -> stage, side by side <-> theater, browse, H (§6, §9). */
+  STAGE_MOVE_MS: number;
+  /** `stage/stageTransition.ts`: what every one of those becomes under reduced motion (§9). */
+  STAGE_CROSSFADE_MS: number;
+  /** `shell/phoneMotion.ts`: the phone's screen change, and its reduced-motion crossfade. */
+  PHONE_SLIDE_MS: number;
+  PHONE_FADE_MS: number;
+  /** `styles/tokens.css` §9: hover and press. */
+  glassMs: number;
+  /** `--glass-ms-layout`: the CSS side of the layout moves (the conversation stepping aside). */
+  glassMsLayout: number;
+  /** `--glass-ms-room`: the room's crossfade on a server switch. */
+  glassMsRoom: number;
+  /** `--glass-ms-reduced`: the crossfade that replaces a move. */
+  glassMsReduced: number;
+  /** `--duration-slow`: the engine's content swap, a route change's 4px rise (`lib/motion/animate.ts`, `contentIn`). */
+  durationSlow: number;
+  /** `--duration-move`: the shared element (`lib/motion/sharedElement.ts`, `transitionWith`). */
+  durationMove: number;
+}
 
-  const textChannel = {
-    id: MOTION_TEXT_CHANNEL_ID,
-    guild_id: MOTION_GUILD_ID,
-    name: MOTION_CHANNEL_NAME,
-    type: 0,
-    channel_type: 0,
-    position: 0,
-    nsfw: false,
-    parent_id: null,
-    required_role_ids: [],
-    created_at: nowIso,
-  };
-
-  const voiceChannel = {
-    ...textChannel,
-    id: MOTION_VOICE_CHANNEL_ID,
-    name: MOTION_VOICE_CHANNEL_NAME,
-    type: 2,
-    channel_type: 2,
-    position: 1,
-  };
-  const loungeChannel = {
-    ...textChannel,
-    id: MOTION_LOUNGE_CHANNEL_ID,
-    name: MOTION_LOUNGE_CHANNEL_NAME,
-    type: 2,
-    channel_type: 2,
-    position: 2,
-  };
-  const channels = [textChannel, voiceChannel, loungeChannel];
-
-  const messages: Array<Record<string, unknown>> = [
-    {
-      id: '3000',
-      channel_id: MOTION_TEXT_CHANNEL_ID,
-      author: peer,
-      content: "thermal rig is booked 1–3 pm. I'll be in the shop if anyone wants to watch it cook.",
-      created_at: nowIso,
-      timestamp: nowIso,
-      attachments: [],
-      reactions: [],
-    },
-  ];
-
-  // The first-run tour and the welcome sheet would sit on top of the composer.
-  //
-  // `paracord:auth:session-seen` is the marker a returning browser carries. The
-  // gate never signs in through the form — it opens /app directly and lets the
-  // mocked POST /auth/refresh hand it a session — and since `685a6bf` the
-  // client does not make that request on a cold load unless this origin has
-  // held a session before (an anonymous visitor used to spend a 401 and a
-  // console error on every page view). Without the marker every gate case lands
-  // on /login. See `src/lib/authToken.ts`.
-  await page.addInitScript(() => {
-    try {
-      window.localStorage.setItem('paracord:auth:session-seen', '1');
-      window.localStorage.setItem('paracord:v2:layout-tour-shell', 'done');
-      window.localStorage.setItem('paracord:v2:layout-tour-guild-home', 'done');
-      window.localStorage.setItem('paracord:v2:onboarding-complete', '1');
-      window.localStorage.setItem('paracord:v2:guild-welcomed:1001', '1');
-    } catch {
-      /* storage unavailable — the tour simply shows */
-    }
-  });
-
-  await page.route('**/health', (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: '{"status":"ok"}' }),
-  );
-
-  await page.route('**/api/v1/**', async (route) => {
-    const request = route.request();
-    const method = request.method();
-    const url = new URL(request.url());
-    const path = url.pathname;
-
-    const json = (status: number, payload: unknown) => {
-      if (/\/messages$/.test(path)) {
-        for (const value of Array.isArray(payload) ? payload : [payload]) {
-          const message = value as { id?: unknown; channel_id?: unknown; author?: unknown };
-          if (message && typeof message.id === 'string' && typeof message.channel_id === 'string' && message.author) {
-            served.set(message.id, message as Record<string, unknown>);
-          }
-        }
-      }
-      return route.fulfill({
-        status,
-        contentType: 'application/json',
-        headers: { 'X-Paracord-History-Epoch': MOTION_HISTORY_EPOCH },
-        body: JSON.stringify(payload),
-      });
+export async function readMotionConstants(page: Page): Promise<MotionConstants> {
+  return page.evaluate(async () => {
+    const pill = (await import('/src/components/glass/pill/pillMotion.ts' as string)) as Record<string, number>;
+    const stage = (await import('/src/components/glass/stage/stageTransition.ts' as string)) as Record<string, number>;
+    const phone = (await import('/src/components/glass/shell/phoneMotion.ts' as string)) as Record<string, number>;
+    const css = getComputedStyle(document.documentElement);
+    const token = (name: string) => Number.parseFloat(css.getPropertyValue(name));
+    return {
+      PILL_SPRING_MS: pill.PILL_SPRING_MS,
+      PILL_FADE_MS: pill.PILL_FADE_MS,
+      PILL_FADE_REDUCED_MS: pill.PILL_FADE_REDUCED_MS,
+      STAGE_MOVE_MS: stage.STAGE_MOVE_MS,
+      STAGE_CROSSFADE_MS: stage.STAGE_CROSSFADE_MS,
+      PHONE_SLIDE_MS: phone.PHONE_SLIDE_MS,
+      PHONE_FADE_MS: phone.PHONE_FADE_MS,
+      glassMs: token('--glass-ms'),
+      glassMsLayout: token('--glass-ms-layout'),
+      glassMsRoom: token('--glass-ms-room'),
+      glassMsReduced: token('--glass-ms-reduced'),
+      durationSlow: token('--duration-slow'),
+      durationMove: token('--duration-move'),
     };
-
-    if (path.endsWith('/messages/recovery') && method === 'GET') {
-      const channelId = path.split('/')[4];
-      const after = url.searchParams.get('after') ?? '0';
-      const knownIds = (url.searchParams.get('known_ids') ?? '').split(',').filter(Boolean);
-      const missing = knownIds.filter((id) => !served.has(id));
-      if (missing.length) {
-        return json(500, { message: `The motion fixture has no authoritative state for ${missing.join(',')}` });
-      }
-      return json(200, {
-        database_history_epoch: MOTION_HISTORY_EPOCH,
-        channel_id: channelId,
-        after,
-        through: after,
-        floor: '0',
-        next: after,
-        complete: true,
-        projection_head: after,
-        changes: [],
-        states: knownIds.map((id) => ({
-          message_id: id,
-          state: 'present',
-          revision: after,
-          message: { ...served.get(id), message_revision: after },
-        })),
-      });
-    }
-
-    if (path === `/api/v1/channels/${MOTION_TEXT_CHANNEL_ID}/messages` && method === 'POST') {
-      const payload = request.postDataJSON() as { content?: string; nonce?: string };
-      const message = {
-        id: `${3000 + messageCounter++}`,
-        channel_id: MOTION_TEXT_CHANNEL_ID,
-        author: { id: user.id, username: user.username, discriminator: user.discriminator, avatar_hash: null },
-        content: payload?.content ?? '',
-        // The transport matches its own send on this; a fixture that forgets it
-        // leaves the message queued forever and the row never lands.
-        nonce: payload?.nonce,
-        pinned: false,
-        type: 0,
-        message_type: 0,
-        timestamp: new Date().toISOString(),
-        created_at: new Date().toISOString(),
-        edited_timestamp: null,
-        edited_at: null,
-        reference_id: null,
-        attachments: [],
-        reactions: [],
-      };
-      messages.push(message);
-      return json(201, message);
-    }
-
-    if (path === '/api/v1/auth/refresh' && method === 'POST') {
-      return json(200, { token: 'motion-token', refresh_token: 'motion-refresh', user });
-    }
-    if (path === '/api/v1/users/@me' && method === 'GET') return json(200, user);
-    if (path === '/api/v1/stream/ticket' && method === 'POST') return json(200, { ticket: 'motion-stream-ticket' });
-    if (path.endsWith('/capabilities') && path.startsWith('/api/v1/channels/') && method === 'GET') {
-      return json(200, {
-        version: 1,
-        channel_id: path.split('/')[4],
-        user_id: user.id,
-        encrypted: false,
-        own_identity_enrolled: false,
-        peers_ready: true,
-        actions: Object.fromEntries(
-          ['send', 'poll', 'schedule', 'attach', 'summary', 'voice', 'video', 'screen_share'].map((action) => [
-            action,
-            { supported: true, allowed: true, reason: null },
-          ]),
-        ),
-      });
-    }
-    if (path === '/api/v1/users/@me/settings' && method === 'GET') {
-      return json(200, {
-        user_id: user.id,
-        theme: 'dark',
-        locale: 'en-US',
-        message_display_compact: false,
-        custom_css: null,
-        status: 'online',
-        custom_status: null,
-        crypto_auth_enabled: false,
-        notifications: {},
-        keybinds: {},
-      });
-    }
-    if (path === '/api/v1/users/@me/notification-settings' && method === 'GET') return json(200, { spaces: [], channels: [] });
-    if (path === '/api/v1/users/@me/read-states' && method === 'GET') return json(200, []);
-    if (path === '/api/v1/users/@me/dms' && method === 'GET') return json(200, []);
-    if (path === '/api/v1/users/@me/guilds' && method === 'GET') {
-      return json(200, [
-        guildSummaryFixture({
-          id: MOTION_GUILD_ID,
-          name: MOTION_GUILD_NAME,
-          server_url: 'https://motion.paracord.local',
-          owner_id: user.id,
-          member_count: 24,
-          created_at: nowIso,
-        }),
-      ]);
-    }
-    if (path === `/api/v1/guilds/${MOTION_GUILD_ID}` && method === 'GET') {
-      return json(
-        200,
-        guildDetailFixture({
-          id: MOTION_GUILD_ID,
-          name: MOTION_GUILD_NAME,
-          server_url: 'https://motion.paracord.local',
-          owner_id: user.id,
-          member_count: 24,
-          created_at: nowIso,
-        }),
-      );
-    }
-    if (path === `/api/v1/guilds/${MOTION_GUILD_ID}/channels` && method === 'GET') return json(200, channels);
-    if (path === `/api/v1/guilds/${MOTION_GUILD_ID}/channels/visible` && method === 'GET') {
-      return json(200, { channel_ids: channels.map((channel) => channel.id) });
-    }
-    if (path === `/api/v1/guilds/${MOTION_GUILD_ID}/members` && method === 'GET') return json(200, members);
-    for (const channel of channels) {
-      if (path === `/api/v1/channels/${channel.id}` && method === 'GET') return json(200, channel);
-    }
-    if (path === `/api/v1/channels/${MOTION_TEXT_CHANNEL_ID}/messages` && method === 'GET') return json(200, messages);
-    if (path === `/api/v1/guilds/${MOTION_GUILD_ID}/onboarding/me` && method === 'GET') {
-      return json(200, {
-        settings: { welcome_title: 'Kestrel Robotics', welcome_body: null, rules_text: null, role_prompt: null, role_options: [] },
-        member_state: { accepted_rules: true, selected_role_ids: [], completed_at: nowIso },
-      });
-    }
-    if (method === 'GET') return json(200, []);
-    return route.fulfill({ status: 204, body: '' });
   });
+}
 
-  await page.route('**/api/v2/rt/session', (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ ws_url: 'ws://127.0.0.1:0/gateway', session_id: 'motion-session', token: 'motion-rt-token' }),
-    }),
+/**
+ * The media a relay would deliver, faked in the page: `startWatch` goes live on
+ * an engine that paints the fixture stream into whatever canvas it is given (and
+ * taps it for the glow), `stopWatch` clears it, and the watcher count and the
+ * stream's start time are what the server would say. `joined` also puts this
+ * client in the Lounge's call, with Brendan's camera and voice level.
+ */
+export async function fakeMedia(page: Page, options: { joined: boolean; watchers?: number }): Promise<void> {
+  await page.evaluate(
+    async ({ ids, joined, watchers }) => {
+      const voice = (await import('/src/stores/voiceStore.ts' as string)) as any;
+      const list = (await import('/src/stores/serverListStore.ts' as string)) as any;
+      const scopeModule = (await import('/src/lib/serverScope.ts' as string)) as any;
+      const fixture = (await import('/src/lib/room/fixtureFrameSource.ts' as string)) as any;
+      const serverId = list.useServerListStore.getState().activeServerId ?? scopeModule.LOCAL_SERVER_ID;
+      const scope = { serverId, userId: ids.sean };
+      const store = voice.useVoiceStore;
+
+      /** An engine that paints a fixture scene into a canvas, like the WebCodecs route does. */
+      const engineFor = (scenes: Record<string, string>) => {
+        const sources = new Map<string, any>();
+        const source = (scene: string) => {
+          // Half the stage specs' size and a slower beat: the gate measures the page's frames, and a
+          // fixture that paints 1280x720 eight times a second would be the heaviest thing on the main
+          // thread (createImageBitmap alone was a tenth of it). A real stream is decoded off it.
+          if (!sources.has(scene)) sources.set(scene, fixture.createFixtureFrameSource({ scene, width: 320, height: 180 }));
+          return sources.get(scene);
+        };
+        return {
+          subscribeVideo(userId: string, canvas: HTMLCanvasElement, onFrame?: () => void, opts?: { preferredTrackId?: string }) {
+            const scene = scenes[`${userId}:${opts?.preferredTrackId ?? 'screen'}`];
+            if (!scene) return () => {};
+            const context = canvas.getContext('2d');
+            const stop = source(scene).subscribe((bitmap: ImageBitmap) => {
+              const w = Math.max(1, Math.round(canvas.clientWidth * devicePixelRatio));
+              const h = Math.max(1, Math.round(canvas.clientHeight * devicePixelRatio));
+              if (canvas.width !== w) canvas.width = w;
+              if (canvas.height !== h) canvas.height = h;
+              // Cover, like a camera tile (the stream is 16:9 in a 16:9 box anyway).
+              const scale = Math.max(w / bitmap.width, h / bitmap.height);
+              const dw = bitmap.width * scale;
+              const dh = bitmap.height * scale;
+              context?.drawImage(bitmap, (w - dw) / 2, (h - dh) / 2, dw, dh);
+              bitmap.close();
+              onFrame?.();
+            }, 2);
+            return stop;
+          },
+          tapVideoFrames(userId: string, trackId: string, onFrame: (frame: unknown) => void) {
+            const scene = scenes[`${userId}:${trackId}`];
+            if (!scene) return { route: Promise.resolve('no-track'), release: () => {} };
+            const stop = source(scene).subscribe((bitmap: unknown) => onFrame(bitmap), 1);
+            return { route: Promise.resolve('frames'), release: stop };
+          },
+        };
+      };
+
+      const watchEngine = engineFor({ [`${ids.vincent}:screen`]: 'stream' });
+      const callEngine = engineFor({ [`${ids.brendan}:camera`]: 'camera', [`${ids.vincent}:screen`]: 'stream' });
+
+      store.setState({
+        startWatch: async (target: any) => {
+          store.setState({
+            watchView: {
+              id: 'e2e-watch',
+              kind: 'watch',
+              scope,
+              guildId: target.guildId,
+              channelId: target.channelId,
+              streamerId: target.streamerId,
+              route: joined ? 'call' : 'session',
+              phase: 'live',
+              engine: joined ? callEngine : watchEngine,
+              sessionId: 'e2e-view',
+              endReason: null,
+              pauseReason: null,
+              error: null,
+            },
+          });
+        },
+        stopWatch: async () => store.setState({ watchView: null }),
+        fetchWatchers: async () => {
+          if (!watchers) return;
+          store.getState().handleWatchersUpdate(
+            { channel_id: ids.lounge, guild_id: ids.guild, streams: [{ user_id: ids.vincent, watchers }] },
+            scope,
+          );
+        },
+      });
+
+      // Vincent went live 42 minutes before the scene's clock, as the server would say.
+      const startedAt = new Date(Date.now() - 42 * 60_000 - 10_000).toISOString();
+      const me = {
+        user_id: ids.sean,
+        channel_id: ids.lounge,
+        guild_id: ids.guild,
+        session_id: 'e2e-session',
+        username: 'sean',
+        display_name: 'Sean',
+        avatar_hash: null,
+        deaf: false,
+        mute: false,
+        self_deaf: false,
+        self_mute: false,
+        self_stream: false,
+        self_video: false,
+        suppress: false,
+        mode: 'joined',
+      };
+      // The mocked gateway replays READY now and then; put the call's rows back each time.
+      const put = () => {
+        const current = store.getState();
+        const there = current.channelParticipants.get(ids.lounge) ?? [];
+        const vincent = there.find((s: any) => s.user_id === ids.vincent);
+        const settled = vincent?.self_stream_started_at && (!joined || there.some((s: any) => s.user_id === ids.sean));
+        if (settled) return;
+        const rows = there
+          .filter((s: any) => s.user_id !== ids.sean)
+          .map((s: any) => (s.user_id === ids.vincent ? { ...s, self_stream_started_at: startedAt } : s));
+        if (joined) rows.push(me);
+        const channelParticipants = new Map(current.channelParticipants);
+        channelParticipants.set(ids.lounge, rows);
+        store.setState({
+          channelParticipants,
+          ...(joined
+            ? {
+                callId: 'e2e-call',
+                callScope: scope,
+                callPhase: 'connected',
+                callMode: 'joined',
+                connected: true,
+                joining: false,
+                channelId: ids.lounge,
+                guildId: ids.guild,
+                selfMute: false,
+                mediaEngine: callEngine,
+                participants: new Map(rows.map((s: any) => [s.user_id, s])),
+                speakingUsers: new Set([ids.brendan]),
+              }
+            : {}),
+        });
+      };
+      put();
+      store.subscribe(put);
+      if (joined) {
+        const levels = (await import('/src/lib/motion/voiceLevel.ts' as string)) as any;
+        const speak = () => levels.publishVoiceLevels('room', new Map([[ids.brendan, 0.55 + 0.35 * Math.sin(Date.now() / 260)]]));
+        speak();
+        setInterval(speak, 250);
+      }
+    },
+    { ids: IDS, joined: options.joined, watchers: options.watchers ?? 0 },
   );
-  await page.route('**/api/v2/rt/commands', (route) => route.fulfill({ status: 204, body: '' }));
-  await page.route('**/api/v2/voice/**', (route) => route.fulfill({ status: 204, body: '' }));
 }

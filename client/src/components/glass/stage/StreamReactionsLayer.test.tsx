@@ -180,7 +180,7 @@ describe('useStreamReactions', () => {
 
   it('is not available in a direct message call', () => {
     useVoiceStore.setState({ callScope: { serverId: 'srv', userId: 'me' }, callPhase: 'connected', channelId: 'lounge' });
-    const { result } = renderHook(() => useStreamReactions({ ...TARGET, guildId: 'dm' }));
+    const { result } = renderHook(() => useStreamReactions({ ...TARGET, guildId: null }));
     expect(result.current).toMatchObject({ available: false, unavailableReason: 'Reactions on the stream are for server voice channels.' });
   });
 });

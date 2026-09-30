@@ -315,6 +315,15 @@ describe('the catch-up summary', () => {
     renderSheet();
     expect(await screen.findByRole('alert')).toHaveTextContent('Failed to summarize channel');
   });
+
+  it('gives the reason it could not, not only that it could not', async () => {
+    vi.mocked(channelApi.summarizeChannel).mockRejectedValue(new Error('AI provider is not configured.'));
+    openChannelSheet('summary');
+    renderSheet();
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Failed to summarize channel: AI provider is not configured.',
+    );
+  });
 });
 
 describe('channel follows', () => {
@@ -348,6 +357,15 @@ describe('channel follows', () => {
     renderSheet({ channelId: 'ann' });
     await user.click(await screen.findByRole('button', { name: 'Unfollow' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Failed to unfollow channel');
+  });
+
+  it('says why following failed, with the reason the server gave', async () => {
+    const user = userEvent.setup();
+    vi.mocked(channelApi.getFollowers).mockResolvedValue({ data: [] } as never);
+    vi.mocked(channelApi.addFollower).mockRejectedValue(new Error('Manage Webhooks is required.'));
+    renderSheet({ channelId: 'ann' });
+    await user.click(await screen.findByRole('button', { name: 'Follow' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Failed to follow channel: Manage Webhooks is required.');
   });
 });
 

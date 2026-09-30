@@ -149,25 +149,6 @@
   background-color: var(--deep);
 }
 
-/* ---- Phone (today's phone frame until WP-G20) ------------------------------- */
-/* One pane on the Lantern phone gutter, the bottom bar under the frame. A
-   stage, when one is open, stacks above the conversation (§8). */
-.glass-frame[data-layout='phone'] {
-  flex-direction: column;
-  gap: var(--gutter);
-  padding: var(--gutter);
-}
-
-.glass-frame[data-layout='phone'] .glass-pane {
-  border-radius: var(--radius-plate-phone);
-}
-
-.glass-frame[data-layout='phone'] .glass-frame__stage {
-  flex: 0 0 auto;
-  aspect-ratio: 16 / 9;
-  max-height: 40dvh;
-}
-
 /* ---- The places overlay (< 860px, and browse on a narrow window) ------------ */
 .glass-places-overlay {
   position: fixed;
@@ -242,15 +223,6 @@
   flex: 0 0 auto;
   align-items: center;
   min-height: var(--glass-header-h);
-}
-
-.glass-conversation__heading {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.glass-conversation__places-toggle {
-  margin-inline-start: var(--glass-gutter);
 }
 
 .glass-conversation__notices {

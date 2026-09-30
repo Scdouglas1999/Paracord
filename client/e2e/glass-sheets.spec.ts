@@ -490,7 +490,18 @@ test('a sheet fits the conversation beside a stream, in the 420px pane', async (
   });
   // Side by side: the frame says so, whatever the stage draws inside itself.
   await expect(page.locator('.glass-frame[data-stage="side"]')).toBeVisible();
-  await page.waitForTimeout(500);
+  // The move into side by side (WP-G15) plays on transforms: measure once it settled.
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () =>
+            document.getAnimations().filter((a) => a.id.startsWith('glass-morph:') && a.playState === 'running').length
+            + document.querySelectorAll('.glass-morph > *').length,
+        ),
+      { timeout: 5_000 },
+    )
+    .toBe(0);
   await page.getByRole('button', { name: 'Members' }).click();
   const sheet = dialog(page, 'Members');
   await expect(sheet).toBeVisible();

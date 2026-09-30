@@ -154,54 +154,6 @@
   color: var(--accent-danger);
 }
 
-/* Someone is in the room and talking (spec §5): the rim breathes between the
-   lit and the speaking ring at ~1.6s. It never bounces and never scales.
-
-   The breath is the speaking ring's two still layers (`.pc-speaking` in
-   primitives.css), so it is composited rather than repainted. The dot's own
-   shadow and ring come from utilities at the call site and are what reduced
-   motion shows; while the layers draw the breath they have to be off, and a
-   utility outranks this layer, hence `!important`. */
-.voice-connected-pulse {
-  position: relative;
-}
-
-:root:not([data-motion='reduced']) .voice-connected-pulse {
-  box-shadow: none !important;
-}
-
-/* Hover action button (message action bar items): one step lighter on hover,
-   one darker on press; nothing scales. */
-.hover-action-btn {
-  padding: 7px 9px;
-  color: var(--interactive-normal);
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  transition:
-    color var(--glass-ms) var(--glass-ease),
-    background-color var(--glass-ms) var(--glass-ease);
-}
-
-@media (hover: hover) {
-  .hover-action-btn:hover:not(:disabled) {
-    color: var(--interactive-hover);
-    background-color: var(--wash-hover);
-  }
-}
-
-.hover-action-btn:active:not(:disabled) {
-  background-color: var(--wash-press);
-}
-
-@media (width < 768px) {
-  :root {
-    --spacing-sidebar-width: 4.5rem;
-    --sidebar-item-size: 2.75rem;
-  }
-
-}
-
 @media (hover: none) and (pointer: coarse) {
 
   .command-icon-btn,
@@ -211,81 +163,9 @@
     min-height: 2.75rem;
   }
 
-  .hover-action-btn {
-    min-width: 2.75rem;
-    min-height: 2.75rem;
-    padding: 10px;
-  }
-
   .context-menu-item {
     min-height: 2.75rem;
     padding: 0.625rem 0.78rem;
   }
 
-}
-
-/* Use the actual composer width: an open sidebar or 200% zoom can make even
-   a desktop viewport too narrow for seven tool buttons beside the draft. */
-.message-composer-surface {
-  container-type: inline-size;
-  container-name: message-composer;
-}
-/* The two halves of the tool row. These own `display` outright — the call site
-   must NOT also carry an `inline-flex` utility, or the utility layer would win
-   and both halves would show at once (see ICON_BTN_BASE in MessageInput). */
-.message-composer-secondary {
-  display: none;
-}
-.message-composer-more {
-  display: inline-flex;
-}
-@container message-composer (min-width: 640px) {
-  .message-composer-secondary {
-    display: inline-flex;
-  }
-  .message-composer-more {
-    display: none;
-  }
-}
-
-/* Chat header: navigation and frequent actions first, one labeled secondary menu. */
-.chat-header { container-type: inline-size; }
-
-.chat-header-actions { display: flex; align-items: center; gap: .125rem; }
-
-.chat-header-more-label { display: none; }
-
-.chat-header-mention-badge {
-  position: absolute; right: -.25rem; top: -.125rem; min-width: 1.25rem;
-  border-radius: 999px; padding: 0 .25rem; font-size: .625rem; line-height: 1rem; font-weight: 700;
-  background: var(--danger-well); color: var(--text-on-danger); font-variant-numeric: tabular-nums;
-}
-.chat-header-unread-badge {
-  position: absolute; right: .125rem; top: .125rem; width: .5rem; height: .5rem;
-  border: 2px solid var(--text-primary); border-radius: 999px; background: var(--bg-raised);
-}
-@container (min-width: 640px) {
-  .chat-header-more-label { display: inline; font-size: .8125rem; font-weight: 500; }
-}
-
-@container (max-width: 480px) { .chat-header-avatar { display: none; } }
-@media (pointer: coarse) { .chat-header-navigation { min-width: 2.75rem; min-height: 2.75rem; } }
-
-/* Desktop panel width must not clip the close control inside the mobile overlay. */
-.context-panel-overlay > * { max-width: 100%; }
-
-.chat-header-capture-status {
-  display: flex; align-items: center; gap: .5rem;
-  margin-bottom: .5rem; padding: .375rem .625rem; border-radius: var(--radius-chip);
-  background: var(--warning-tint); color: var(--accent-warning); font-size: .8125rem;
-}
-
-.chat-header-mobile-dm-title { display: none; }
-@container (max-width: 480px) {
-  .chat-header-group-dm .chat-header-dm-name { display: none; }
-  .chat-header-mobile-dm-title {
-    display: block; min-width: 0; padding-bottom: .5rem;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    color: var(--text-primary); font-size: .875rem; font-weight: 600;
-  }
 }

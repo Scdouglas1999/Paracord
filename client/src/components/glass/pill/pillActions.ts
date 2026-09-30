@@ -2,8 +2,11 @@ import { create } from 'zustand';
 
 import { toast } from '../../../stores/toastStore';
 import { useGlassStore } from '../../../stores/glassStore';
+import { useUIStore } from '../../../stores/uiStore';
+import { toggleVoiceMute } from '../../../hooks/useVoice';
 import { useVoiceStore } from '../../../stores/voiceStore';
 import { voiceErrorMessage } from '../../../stores/voice/errors';
+import { DM_GUILD } from './model';
 import { useJoinMuteStore } from './muteStore';
 
 /**
@@ -28,6 +31,7 @@ import { useJoinMuteStore } from './muteStore';
 
 export interface PillActionTarget {
   serverId: string;
+  /** In `voiceStore`'s convention: the guild id, or `DM_GUILD` for a DM call. */
   guildId: string;
   channelId: string;
   /** For the sentence that names a failure. */
@@ -109,9 +113,19 @@ function reportRefusal(target: PillActionTarget, verb: 'join' | 'listen in to'):
     toast.info(voice.connectionError);
     return true;
   }
-  toast.error(`Could not ${verb} ${target.title}: ${voice.connectionError}`);
+  toast.error(`Could not ${verb} ${target.title}: ${voice.connectionError}`, undefined, CONNECTION_CHECK);
   return true;
 }
+
+/**
+ * A call that would not open offers the guided connection check (Settings, Voice
+ * and video), which says which part of the network path failed. Chat keeps
+ * working either way; calls take a separate path.
+ */
+const CONNECTION_CHECK = {
+  label: 'Run connection check',
+  onClick: () => useUIStore.getState().setUserSettingsOpen(true, 'voice'),
+};
 
 /** Listen in, or (while listening) stop. */
 export async function toggleListen(target: PillActionTarget, listening: boolean): Promise<void> {
@@ -125,7 +139,7 @@ export async function toggleListen(target: PillActionTarget, listening: boolean)
   try {
     await useVoiceStore.getState().listen(target.channelId, target.guildId);
   } catch (error) {
-    toast.error(`Could not listen in to ${target.title}: ${voiceErrorMessage(error, 'Try again.')}`);
+    toast.error(`Could not listen in to ${target.title}: ${voiceErrorMessage(error, 'Try again.')}`, undefined, CONNECTION_CHECK);
     return;
   }
   reportRefusal(target, 'listen in to');
@@ -138,19 +152,23 @@ export async function joinCall(target: PillActionTarget): Promise<void> {
     await useVoiceStore.getState().joinChannel(target.channelId, target.guildId);
   } catch (error) {
     const modeError = useVoiceStore.getState().modeError;
-    toast.error(`Could not join ${target.title}: ${modeError ?? voiceErrorMessage(error, 'Try again.')}`);
+    toast.error(`Could not join ${target.title}: ${modeError ?? voiceErrorMessage(error, 'Try again.')}`, undefined, CONNECTION_CHECK);
     return;
   }
-  reportRefusal(target, 'join');
+  if (reportRefusal(target, 'join')) return;
+  // The join's REST call carries no mute state: say it now, so everyone in the
+  // call sees "Muted" for a person who joined muted (the join-mute preference).
+  const voice = useVoiceStore.getState();
+  if (voice.selfMute || voice.selfDeaf || voice.selfVideo) voice.publishVoiceState();
 }
 
 export async function leaveCall(): Promise<void> {
   await useVoiceStore.getState().leaveChannel();
 }
 
-/** The microphone button once you have joined. */
+/** The microphone button once you have joined: the store's toggle, then the server is told. */
 export async function toggleMic(): Promise<void> {
-  await useVoiceStore.getState().toggleMute();
+  await toggleVoiceMute();
 }
 
 /**
@@ -162,16 +180,44 @@ export async function toggleJoinMute(listening: boolean): Promise<void> {
   const next = !useJoinMuteStore.getState().joinMuted;
   useJoinMuteStore.getState().setJoinMuted(next);
   if (listening && useVoiceStore.getState().selfMute !== next) {
-    await useVoiceStore.getState().toggleMute();
+    await toggleVoiceMute();
   }
+}
+
+/**
+ * The two spellings of "this call has no server". `voiceStore` (and so the pill
+ * and every action above) passes `DM_GUILD` for a DM call, because that selects
+ * the DM voice endpoints; the stage's target says null, because a DM belongs to
+ * no server. They meet only here.
+ */
+export function stageGuildOf(voiceGuildId: string): string | null {
+  return voiceGuildId === DM_GUILD ? null : voiceGuildId;
+}
+
+export function voiceGuildOf(stageGuildId: string | null): string {
+  return stageGuildId ?? DM_GUILD;
 }
 
 /** Watch: the stage grows out of the pill. It never joins the call. */
 export function watchStream(target: Omit<PillActionTarget, 'title'>, streamerId: string): void {
   useGlassStore.getState().openStage({
     serverId: target.serverId,
-    guildId: target.guildId,
+    guildId: stageGuildOf(target.guildId),
     channelId: target.channelId,
     streamerId,
+  });
+}
+
+/**
+ * Show the call: the stage opens on the call itself (its people, their cameras
+ * and the call's controls) when there is nobody else's screen to watch. Like
+ * Watch it grows out of the pill, and closing it never leaves the call.
+ */
+export function showCall(target: Omit<PillActionTarget, 'title'>): void {
+  useGlassStore.getState().openStage({
+    serverId: target.serverId,
+    guildId: stageGuildOf(target.guildId),
+    channelId: target.channelId,
+    streamerId: null,
   });
 }

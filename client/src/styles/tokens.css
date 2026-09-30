@@ -519,7 +519,7 @@
 :root {
   color-scheme: dark;
 
-  /* The generated server cover (styles/server-home.css): the lightness of its
+  /* The generated server cover (styles/glass-pages.css): the lightness of its
      ground, its deep end and its soft lights. The hue and chroma are the
      server's own, set per server; only these steps belong to the theme. */
   --cover-l-ground: 17%;
@@ -747,10 +747,6 @@
   --sidebar-bg: var(--bg-base);
   --sidebar-border: var(--border-subtle);
   --sidebar-active-indicator: var(--accent-primary);
-  /* The phone's bottom tab bar, while it is on screen. `MobileBottomNav`
-     measures itself into this; anything that floats above the fold (toasts)
-     adds it so it never lands on top of the navigation. 0 everywhere else. */
-  --h-mobile-nav: 0px;
 
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-right: env(safe-area-inset-right, 0px);
@@ -1040,14 +1036,6 @@
     --h-stage-control: var(--h-stage-control-phone);
     --radius-stage-control: var(--radius-stage-control-phone);
     --shadow-plate: var(--shadow-plate-phone);
-  }
-
-  .workspace-canvas {
-    padding: 0;
-  }
-
-  .workspace-stage {
-    gap: 0;
   }
 }
 

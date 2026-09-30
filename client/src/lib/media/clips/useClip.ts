@@ -22,7 +22,8 @@ import { saveClip, startClipLifecycle, useClipStore, type ClipStoreState } from 
 export interface ClipTarget {
   /** The instance (AccountScope.serverId) whose relay carries the stream. */
   serverId: string;
-  guildId: string;
+  /** The server, or null for a direct message call. */
+  guildId: string | null;
   channelId: string;
   streamerId: string;
   /** "Vincent": for "From Vincent's screen, 9:14 PM". */
@@ -72,7 +73,7 @@ export function useClip(target: ClipTarget | null): ClipControl {
   const streamerId = target?.streamerId;
   const streamerName = target?.streamerName;
   useEffect(() => {
-    if (!serverId || !guildId || !channelId || !streamerId || streamerName === undefined) return;
+    if (!serverId || guildId === undefined || !channelId || !streamerId || streamerName === undefined) return;
     const entry: ClipTarget = { serverId, guildId, channelId, streamerId, streamerName };
     registered.push(entry);
     return () => {

@@ -401,7 +401,7 @@ test('reduced motion: the screens crossfade in 150ms and nothing travels', async
   await screenIs(page, 'places');
 });
 
-test('a message: back to messages returns to the list, and Friends is a page with a way back', async ({ page }) => {
+test('a message: back to places returns to the list, and Friends is a page with a way back', async ({ page }) => {
   await open(page, '/app');
   await screenIs(page, 'places');
   await page.getByRole('link', { name: /brendan/ }).first().click();
@@ -409,9 +409,11 @@ test('a message: back to messages returns to the list, and Friends is a page wit
   await expect(page).toHaveURL(/\/app\/dms\/[^/]+$/);
   await settled(page);
   await shoot(page, 'phone-dm');
-  await page.getByRole('button', { name: 'Back to messages' }).click();
+  // The header's first button is the way back to places, for a message as for a
+  // channel (WP-G22: `PlacesToggle`); the list of messages is on that screen.
+  await page.getByRole('button', { name: 'Back to places' }).click();
   await screenIs(page, 'places');
-  await expect(page).toHaveURL(/\/app\/dms$/);
+  await expect(page.getByRole('link', { name: /brendan/ }).first()).toBeVisible();
   await settled(page);
 
   await page.getByRole('link', { name: /Friends/ }).first().click();

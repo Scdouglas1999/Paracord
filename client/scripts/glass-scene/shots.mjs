@@ -108,7 +108,34 @@ export const STATES = {
     },
   },
 
-  '03-listen': { reference: '03-listen.png', pending: 'G6 + G12 (listen-in and the call pill)' },
+  /**
+   * Listening in to the Lounge from General, the pill grown to show who is there
+   * (screens/03), through the pill's own controls: Listen, then the faces. The
+   * relay must count Sean as a listener, never as joined.
+   */
+  '03-listen': {
+    reference: '03-listen.png',
+    viewport: DESKTOP,
+    async run({ page, go, api, people, ids, log }) {
+      await go('gameNight', 'general');
+      await settleOn(page, 'bringing the projector');
+      await press(page, ['Listen in to Lounge'], { timeoutMs: 45_000 });
+      await page.getByRole('button', { name: 'Stop listening in to Lounge' }).waitFor({ state: 'visible', timeout: 45_000 });
+      const lounge = ids.servers.gameNight.channels.lounge;
+      const states = await api.request(people.sean.token, 'GET', `/api/v1/guilds/${ids.servers.gameNight.id}/voice-states`).catch(() => null);
+      const mine = Array.isArray(states) ? states.find(s => String(s.user_id) === people.sean.id && String(s.channel_id) === lounge) : null;
+      if (mine) log(`  ${' '.repeat(17)} the server has Sean in the Lounge as mode "${mine.mode ?? 'joined'}"`);
+      await press(page, ["Show who's in Lounge"]);
+      await page.getByText("Everyone in Lounge can see you're listening in.").waitFor({ state: 'visible', timeout: 15_000 });
+      await page.waitForTimeout(1200);
+    },
+    async after({ page, api, people, ids }) {
+      const stop = await findControl(page, ['Stop listening in to Lounge']);
+      if (stop) await stop.click().catch(() => {});
+      await leaveCall(api, people.sean, ids.servers.gameNight.channels.lounge);
+      await page.waitForTimeout(1500);
+    },
+  },
 
   /**
    * Watching Vincent's share beside General, joined (screens/04), through the

@@ -4,7 +4,7 @@
 
 import { CALL, CAST } from './scene.mjs';
 import { FACES, STREAM_SCENE } from './art.mjs';
-import { CONTROLS, channelPath, findControl, joinVoice, launchBrowser, openAs, press, waitForControl } from './ui.mjs';
+import { CONTROLS, channelPath, closeCallStage, findControl, joinVoice, launchBrowser, openAs, openCallStage, press, setToggle, waitForControl } from './ui.mjs';
 
 /** Read the relay's live view of the room (side-effect free). */
 export async function readRoom(api, token, channelId) {
@@ -59,18 +59,20 @@ export async function startCall({ api, base, people, ids, headless = true, log =
     const member = { spec, person, browser, session };
     await joinVoice(session, path, { log });
     const { page } = session;
-    if (spec.share) {
-      await press(page, CONTROLS.share);
-      await waitForControl(page, CONTROLS.stopShare, 30_000);
+    // Camera and share are the stage's controls: open it on the call (or on the
+    // stream somebody already shares), switch them on, and put it away again.
+    if (spec.share || spec.camera) {
+      await openCallStage(page);
+      if (spec.share) {
+        await press(page, CONTROLS.share);
+        await waitForControl(page, CONTROLS.stopShare, 30_000);
+      }
+      if (spec.camera) await setToggle(page, CONTROLS.camera, true);
+      await closeCallStage(page);
     }
-    if (spec.camera) {
-      await press(page, CONTROLS.cameraOn);
-      await waitForControl(page, CONTROLS.cameraOff, 30_000);
-    }
-    if (spec.mute) {
-      await press(page, CONTROLS.mute);
-      await waitForControl(page, CONTROLS.unmute, 15_000);
-    }
+    // The pill's microphone once joined. The pill joins with the join-mute
+    // preference (muted by default), so everyone who talks turns it on.
+    await setToggle(page, CONTROLS.microphone, !spec.mute, { timeoutMs: 15_000 });
     const doing = [spec.share && 'sharing', spec.camera && 'camera on', spec.voice === 'talking' && 'talking', spec.mute && 'muted'].filter(Boolean);
     log(`  ${person.name} joined Lounge${doing.length ? ` (${doing.join(', ')})` : ''}`);
     return member;

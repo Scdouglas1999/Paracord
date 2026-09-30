@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -7,8 +7,11 @@ import { useSheetPages } from '../sheets';
 import { useUIStore } from '../../../stores/uiStore';
 import { useVoiceStore } from '../../../stores/voiceStore';
 import { useAuthStore } from '../../../stores/authStore';
+import { useToastStore } from '../../../stores/toastStore';
 import type { ConversationSubject } from '../shell/slots';
 import { ConversationPane } from './ConversationPane';
+import { usePhoneNavStore } from '../shell/phoneNav';
+import { attentionCaption } from './useChannelMenu';
 
 /**
  * The Glass conversation pane and its header (docs/glass-spec.md §3.2, §8).
@@ -61,8 +64,9 @@ vi.mock('../../../hooks/useChannels', () => ({
 }));
 
 vi.mock('../../../hooks/useMutedGuilds', () => ({ useMutedGuilds: () => ({ mutedGuildKeys: [] }) }));
+const mockPermissions = vi.hoisted(() => ({ value: { permissions: 0n, isAdmin: false } }));
 vi.mock('../../../hooks/usePermissions', () => ({
-  usePermissions: () => ({ permissions: 0n, isAdmin: false }),
+  usePermissions: () => mockPermissions.value,
 }));
 vi.mock('../../../hooks/useReadStates', () => ({
   useCurrentReadStates: () => mockReadStates.value,
@@ -72,11 +76,13 @@ const mockMessages = vi.hoisted(() => ({ value: {} as Record<string, unknown[]> 
 vi.mock('../../../hooks/useMessageStore', () => ({
   useCurrentMessageStore: (selector: (s: unknown) => unknown) => selector({ messages: mockMessages.value }),
 }));
+const mockRefreshReadStates = vi.hoisted(() => ({ value: vi.fn() }));
 vi.mock('../../../stores/readStateStore', () => ({
-  useReadStateStore: { getState: () => ({ refreshAll: vi.fn(), refresh: vi.fn() }) },
+  useReadStateStore: { getState: () => ({ refreshAll: vi.fn(), refresh: mockRefreshReadStates.value }) },
 }));
+const mockVoiceApi = vi.hoisted(() => ({ joinChannel: vi.fn() }));
 vi.mock('../../../hooks/useVoice', () => ({
-  useVoice: () => ({ connected: false, channelId: null, joinChannel: vi.fn(), leaveChannel: vi.fn() }),
+  useVoice: () => ({ connected: false, channelId: null, joinChannel: mockVoiceApi.joinChannel, leaveChannel: vi.fn() }),
 }));
 vi.mock('../../voice/VoiceConnectionCheck', () => ({ VoiceConnectionCheck: () => null }));
 vi.mock('../../../api/channels', () => ({
@@ -136,6 +142,8 @@ beforeEach(() => {
   };
   mockReadStates.value = {};
   mockMessages.value = {};
+  mockPermissions.value = { permissions: 0n, isAdmin: false };
+  mockRefreshReadStates.value = vi.fn().mockResolvedValue(undefined);
   useGlassStore.getState().reset();
   useUIStore.setState({ contextPanelMode: null, sidebarCollapsed: false, userSettingsOpen: false });
   useVoiceStore.setState({ systemAudioCaptureActive: false });
@@ -143,17 +151,15 @@ beforeEach(() => {
 });
 
 describe('the conversation pane', () => {
-  it('fills the shell’s regions: header, notices, timeline, message box, dock', () => {
+  it('fills the shell’s regions: header, notices, timeline, message box', () => {
     const { container } = renderPane(CHANNEL, {
       notices: <div data-testid="notice" />,
-      dock: <div data-testid="dock" />,
     });
     const pane = container.querySelector('.glass-conversation')!;
     expect(pane.querySelector('.glass-conversation__header')).toHaveTextContent('General');
     expect(pane.querySelector('.glass-conversation__notices')).toContainElement(screen.getByTestId('notice'));
     expect(pane.querySelector('.glass-conversation__timeline')).toContainElement(screen.getByTestId('timeline'));
     expect(pane.querySelector('.glass-conversation__composer')).toContainElement(screen.getByTestId('composer'));
-    expect(screen.getByTestId('dock')).toBeInTheDocument();
   });
 
   it('omits the notices and message box regions when it is handed none', () => {
@@ -333,6 +339,27 @@ describe('the header of a direct message', () => {
     expect(screen.getByRole('button', { name: 'Start direct message voice call' })).toBeEnabled();
   });
 
+  it('says why a call could not start, and offers the connection check', async () => {
+    const user = userEvent.setup();
+    useToastStore.setState({ toasts: [] });
+    mockVoiceApi.joinChannel.mockImplementation(async () => {
+      useVoiceStore.setState({ connectionError: 'Microphone permission denied', connectionErrorChannelId: 'dm1' });
+    });
+    renderPane(DM);
+    await user.click(screen.getByRole('button', { name: 'Start direct message voice call' }));
+    await waitFor(() =>
+      expect(useToastStore.getState().toasts).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: 'error',
+            message: 'Could not start voice call: Microphone permission denied',
+            action: expect.objectContaining({ label: 'Run connection check' }),
+          }),
+        ]),
+      ),
+    );
+  });
+
   it('refuses the call control, with the reason, when calls are not allowed', () => {
     mockActions.value = {
       ...mockActions.value,
@@ -399,23 +426,81 @@ describe('the phone header (screens/07)', () => {
     expect(screen.getByRole('button', { name: 'Search messages' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Members' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Your profile/ })).not.toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Collapse sidebar' }));
-    expect(useUIStore.getState().sidebarCollapsed).toBe(true);
-    await user.click(screen.getByRole('button', { name: 'Expand sidebar' }));
-    expect(useUIStore.getState().sidebarCollapsed).toBe(false);
+    // Places is its own screen on a phone: the header's first button goes back to it.
+    await user.click(screen.getByRole('button', { name: 'Back to places' }));
+    expect(usePhoneNavStore.getState().screen).toBe('places');
   });
 
-  it('has the way back to messages on a DM', async () => {
+  it('goes back to places from a DM too, without changing the route', async () => {
     const user = userEvent.setup();
+    usePhoneNavStore.getState().showConversation();
     renderPane(DM);
-    await user.click(screen.getByRole('button', { name: 'Back to messages' }));
-    expect(screen.getByTestId('pathname')).toHaveTextContent('/app/dms');
+    await user.click(screen.getByRole('button', { name: 'Back to places' }));
+    expect(usePhoneNavStore.getState().screen).toBe('places');
+    expect(screen.queryByRole('button', { name: /sidebar|Back to messages/ })).not.toBeInTheDocument();
   });
 
   it('mounts the call pill above the header, in two rows', () => {
     const { container } = renderPane();
     const pane = container.querySelector('.glass-conversation')!;
     expect(pane.firstElementChild).toHaveClass('glass-conversation__phone-pill');
+  });
+});
+
+describe('the inbox, from the channel menu', () => {
+  async function openInbox() {
+    const user = userEvent.setup();
+    renderPane();
+    await user.click(screen.getByRole('button', { name: 'General' }));
+    await user.click(screen.getByRole('menuitem', { name: /^Inbox/ }));
+  }
+
+  it('says what is waiting elsewhere in the row, in the singular and the plural', () => {
+    expect(attentionCaption(1, 0)).toBe('1 unread conversation');
+    expect(attentionCaption(1, 1)).toBe('1 mention in 1 unread conversation');
+    expect(attentionCaption(4, 3)).toBe('3 mentions in 4 unread conversations');
+    expect(attentionCaption(0, 0)).toBe('No unread conversations');
+  });
+
+  it('lists the unread conversations elsewhere, never the one you are reading', async () => {
+    await openInbox();
+    const inbox = await screen.findByRole('dialog', { name: 'Inbox' });
+    // The rows name a channel without the `#`.
+    expect(await within(inbox).findByText('Clips')).toBeInTheDocument();
+    expect(within(inbox).queryByText('General')).not.toBeInTheDocument();
+  });
+
+  it('says so in an alert when the unread state cannot load, instead of pretending all is read', async () => {
+    mockRefreshReadStates.value.mockRejectedValue(new Error('Read-state service unavailable.'));
+    await openInbox();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Failed to load inbox: Read-state service unavailable.');
+    expect(screen.queryByText("You're all caught up")).not.toBeInTheDocument();
+  });
+});
+
+describe('server settings, from the channel menu', () => {
+  it('is not offered without management permissions', async () => {
+    const user = userEvent.setup();
+    renderPane();
+    await user.click(screen.getByRole('button', { name: 'General' }));
+    expect(screen.queryByRole('menuitem', { name: 'Server settings' })).not.toBeInTheDocument();
+  });
+
+  it('is offered to a server admin, and opens the settings of that server', async () => {
+    const user = userEvent.setup();
+    mockPermissions.value = { permissions: 0n, isAdmin: true };
+    renderPane();
+    await user.click(screen.getByRole('button', { name: 'General' }));
+    await user.click(screen.getByRole('menuitem', { name: /^Server settings/ }));
+    expect(useUIStore.getState().guildSettingsId).toBe('g1');
+  });
+
+  it('is not offered in a direct message', async () => {
+    const user = userEvent.setup();
+    mockPermissions.value = { permissions: 0n, isAdmin: true };
+    renderPane(DM);
+    await user.click(screen.getByRole('button', { name: 'Mara' }));
+    expect(screen.queryByRole('menuitem', { name: 'Server settings' })).not.toBeInTheDocument();
   });
 });
 

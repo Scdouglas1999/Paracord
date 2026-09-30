@@ -1,630 +1,414 @@
-import { expect, test } from '@playwright/test';
-import { guildDetailFixture, guildSummaryFixture } from '../src/test/guildContractFixtures';
+import { expect, test as base, type Page } from '@playwright/test';
 import { THEME_IDS } from '../src/lib/themes';
-import { isGuildDetail, isGuildSummaryList } from '../src/api/generated/validators';
+import {
+  ATTENTION_CHANNEL_ID,
+  ATTENTION_CHANNEL_NAME,
+  COMPOSER_PLACEHOLDER,
+  GUILD_ID,
+  GUILD_NAME,
+  TEXT_CHANNEL_ID,
+  TEXT_CHANNEL_NAME,
+  VOICE_CHANNEL_ID,
+  VOICE_CHANNEL_NAME,
+  fitsWidth,
+  installSmokeApp,
+  literal,
+  type SmokeApp,
+} from './fixtures/smokeApp';
 
 /**
- * The fixture building is deliberately long: the Buildings column has to
- * truncate it without breaking the layout. Every locator that names it uses
- * this constant, so an assertion matches the *whole* accessible name rather
- * than a prefix that silently stops matching.
+ * The default mocked CI gate: `npm run test:e2e` runs this against `npm run dev`
+ * with every `/api` call intercepted (fixtures/smokeApp.ts), in desktop Chromium
+ * and again with touch. It is the Glass product walked the way a person walks it
+ * (docs/glass-spec.md §3, §8; docs/design/glass-plan.md §5):
+ *
+ *   - the account signs in through a session refresh, the contract-checked
+ *     payloads load, and the places panel and the conversation appear;
+ *   - the conversation header (the title that opens the channel menu, search,
+ *     members, your face) and the sheets it opens;
+ *   - the composer, on every width, through a revoked permission;
+ *   - a voice channel opens as its own chat, with the call pill in its header;
+ *   - Home, a server's overview, direct messages, the command palette;
+ *   - on a phone places is its own screen and the header's first button goes back to it.
+ *
+ * Nothing here needs a media relay: the stage, theater and the room are proved
+ * by the Glass review specs and by the motion gate. What a call does when a join
+ * is refused is here, because it is the path a mocked page can actually reach.
  */
-const GUILD_NAME =
-  'QA Guild With A Very Long Name That Should Truncate Instead Of Breaking Layout';
 
-/** `name:` accepts a RegExp; a literal fixture string has to be escaped for it. */
-const literal = (value: string) => new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+/**
+ * Every test gets its own mocked world, and ends by asserting the page raised
+ * no uncaught error. `welcomed: false` is for the one test about the welcome.
+ */
+const test = base.extend<{ app: SmokeApp; welcomed: boolean }>({
+  welcomed: [true, { option: true }],
+  // `auto`: a test that never names `app` still runs in the mocked world. A
+  // lazy fixture would leave it with no mocks at all, on the login page.
+  app: [
+    async ({ page, welcomed }, use) => {
+      const app = await installSmokeApp(page, { welcomed });
+      await use(app);
+      expect(app.pageErrors, 'the page raised an uncaught error').toEqual([]);
+    },
+    { auto: true },
+  ],
+});
 
-test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo) => {
-  // This one test walks the whole product, and it reloads the channel once per
-  // theme. Seven themes instead of four took it past the suite's 45 s budget on
-  // a CI runner (it is ~33 s locally), which showed up as a composer that never
-  // appeared. The budget is this test's, not the suite's.
-  test.setTimeout(120_000);
-  const guildId = '1001';
-  const textChannelId = '2001';
-  const voiceChannelId = '2002';
-  const nowIso = new Date().toISOString();
-  const historyEpoch = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
-  const served = new Map<string, Record<string, unknown>>();
-  const pageErrors: string[] = [];
-  // The server stores the theme as an opaque string, so an old build's id is
-  // as valid a value here as one of ours.
-  let serverTheme: string = 'glass';
-  let adminStatsRequests = 0;
-  let compositionRevoked = false;
-  let headerAttention: 'read' | 'unread' | 'mentions' = 'read';
-  const attentionChannel = { id: '2003', guild_id: guildId, name: 'updates', type: 0, channel_type: 0, position: 2, nsfw: false, created_at: nowIso, last_message_id: '4000' };
+const textChannelUrl = `/app/guilds/${GUILD_ID}/channels/${TEXT_CHANNEL_ID}`;
 
-  // This spec never signs in through the form: it opens /app directly and lets
-  // the mocked POST /auth/refresh hand it a session, the way a returning
-  // browser with a refresh cookie does. Since `685a6bf` the client no longer
-  // makes that request on a cold load unless this origin has held a session
-  // before — an anonymous visitor used to spend a 401 and a console error on
-  // every page view — so the browser has to carry the same marker a real
-  // returning browser would (`src/lib/authToken.ts`, `noteSessionEstablished`).
-  // Without it the app is correctly anonymous and the whole flow lands on
-  // /login.
-  await page.addInitScript(() => {
-    try {
-      localStorage.setItem('paracord:auth:session-seen', '1');
-    } catch {
-      // A browser refusing storage keeps the old ask-and-see behavior anyway.
-    }
+/** The window sizes the product has to fit, by the frame each one gets. */
+const PHONE_WIDTHS = [320, 375, 414] as const;
+const COMPACT_WIDTH = 768;
+const DESKTOPS = [
+  { width: 1366, height: 768 },
+  { width: 1440, height: 900 },
+  { width: 1920, height: 1080 },
+] as const;
+
+const layoutOf = (page: Page) => page.locator('.glass-frame').getAttribute('data-layout');
+
+/** The conversation pane's header: its title button, and what sits beside it. */
+const header = (page: Page) => page.locator('.glass-header');
+const titleButton = (page: Page) => header(page).getByRole('heading', { level: 1 }).getByRole('button');
+const composerOf = (page: Page) => page.getByPlaceholder(COMPOSER_PLACEHOLDER);
+
+/** Places: the server row, the server's title and its channel rows. */
+const serverRow = (page: Page) => page.getByRole('navigation', { name: 'Servers' });
+const channelRows = (page: Page) => page.getByRole('navigation', { name: 'Channels' });
+const channelRow = (page: Page, name: RegExp | string) => channelRows(page).getByRole('link', { name });
+
+/** The call pill: a region named for its channel. */
+const pillFor = (page: Page, name: string) => page.getByRole('region', { name: `${name}, live voice channel` });
+
+test('signs in by refresh, serves contract-valid payloads, and opens the server', async ({ page, app }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(textChannelUrl);
+  await expect(page).toHaveURL(new RegExp(`/app/guilds/${GUILD_ID}/channels/${TEXT_CHANNEL_ID}`));
+  await expect(page.locator('.glass-frame')).toHaveAttribute('data-layout', 'wide');
+
+  // The places panel, on the left: the server row, the server's title, its channels.
+  const servers = serverRow(page);
+  await expect(servers.getByRole('button', { name: 'Home and direct messages' })).toBeVisible();
+  await expect(servers.getByRole('button', { name: literal(GUILD_NAME) })).toHaveAttribute('aria-current', 'true');
+  await expect(servers.getByRole('button', { name: 'Add or join a server' })).toBeVisible();
+  await expect(page.getByRole('button', { name: literal(`${GUILD_NAME} menu. 4 members`) })).toBeVisible();
+
+  // Channel rows show what is in them (no `#`): the newest message, by whom, and when.
+  const general = channelRow(page, literal(TEXT_CHANNEL_NAME));
+  await expect(general).toHaveAttribute('aria-current', 'page');
+  await expect(general).toContainText('Ada: Kickoff is at nine, bring a chair.');
+  await expect(channelRow(page, ATTENTION_CHANNEL_NAME)).toContainText('An update waiting for you.');
+  await expect(channelRow(page, VOICE_CHANNEL_NAME)).toBeVisible();
+
+  // The conversation, on the right: the 76px header with the channel's title and
+  // its server, search, members and your face; then the timeline and the message box.
+  await expect(page.getByRole('main')).toBeVisible();
+  await expect(titleButton(page)).toHaveText(TEXT_CHANNEL_NAME);
+  await expect(header(page).getByText(GUILD_NAME)).toBeVisible();
+  const tools = header(page).getByRole('group', { name: 'Conversation actions' });
+  await expect(tools.getByRole('button', { name: 'Search messages' })).toBeVisible();
+  await expect(tools.getByRole('button', { name: 'Members', exact: true })).toBeVisible();
+  await expect(tools.getByRole('button', { name: 'Your profile, online' })).toBeVisible();
+  expect((await header(page).boundingBox())?.height).toBe(76);
+  await expect(page.getByLabel('Message history')).toBeVisible();
+  await expect(composerOf(page)).toBeVisible();
+
+  // Nothing is live and nobody is in a call: no call pill is drawn.
+  await expect(page.getByRole('region', { name: /live voice channel|voice call/ })).toHaveCount(0);
+
+  // The guild list came through the generated contract validators, and they ran.
+  expect(app.validated.guildList).toBeGreaterThan(0);
+});
+
+test.describe('the first visit', () => {
+  test.use({ welcomed: false });
+
+  test('welcomes you to the server once', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(textChannelUrl);
+    const welcome = page.getByRole('dialog', { name: literal(GUILD_NAME) });
+    await expect(welcome).toBeVisible();
+    await expect(welcome.getByText('Welcome aboard')).toBeVisible();
+    await welcome.getByRole('button', { name: 'Jump in' }).click();
+    await expect(welcome).toBeHidden();
+    // It is remembered: the next visit goes straight to the conversation.
+    await page.reload();
+    await expect(composerOf(page)).toBeVisible();
+    await expect(page.getByRole('dialog', { name: literal(GUILD_NAME) })).toHaveCount(0);
   });
+});
 
-  page.on('pageerror', (error) => {
-    pageErrors.push(error.message);
-  });
-  if (process.env.PARACORD_E2E_DEBUG) page.on('console', message => console.log(`[browser:${message.type()}]`, message.text()));
+test('fits every window, phone to wide desktop, with the frame each one gets', async ({ page }) => {
+  await page.goto(textChannelUrl);
 
-  // The mocked account must match the real `CurrentUser` projection: the client
-  // verifies it against the generated contract before it will use the account
-  // at all, so a short fixture leaves the app with no verified server account.
-  const userPayload = {
-    id: '42',
-    username: 'smoke-user-with-a-very-long-unbroken-name-for-overflow-coverage',
-    display_name: null,
-    discriminator: 1,
-    avatar_hash: null,
-    banner_hash: null,
-    accent_color: null,
-    bio: null,
-    pronouns: null,
-    email: 'smoke-user@example.test',
-    email_verified: true,
-    has_public_key: false,
-    public_key: null,
-    linked_accounts: [],
-    bot: false,
-    system: false,
-    flags: 0,
-    created_at: nowIso,
-  };
-
-  let showHomeFixtures = false;
-  const homeSpaces = ['Design', 'Support'].map((name, index) => guildSummaryFixture({ id: String(1100 + index), name, owner_id: userPayload.id, member_count: 8, created_at: nowIso }));
-  const homeChannels = homeSpaces.map((space, index) => ({ ...attentionChannel, id: String(2100 + index), guild_id: space.id, name: index ? 'questions' : 'feedback', last_message_id: String(4100 + index) }));
-  let showDmFixtures = false;
-  const dmPeer = { ...userPayload, id: '43', username: 'Ada with a long name for header coverage' };
-  const dmFixtures = [
-    { id: '2004', type: 1, channel_type: 1, recipient: dmPeer, recipients: [dmPeer], position: 0, nsfw: false, created_at: nowIso },
-    { id: '2005', type: 3, channel_type: 3, name: 'Design discussion with a long group title', recipients: [userPayload, dmPeer], position: 0, nsfw: false, created_at: nowIso },
-  ];
-  let messageCounter = 1;
-  const messages: Array<Record<string, unknown>> = [];
-
-  await page.route('**/health', async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ status: 'ok' }),
-    });
-  });
-
-  await page.route('**/api/v1/**', async (route) => {
-    const request = route.request();
-    const method = request.method();
-    const url = new URL(request.url());
-    const path = url.pathname;
-
-    const json = (status: number, payload: unknown) => {
-      if (status === 200 && method === 'GET') {
-        if (path === '/api/v1/users/@me/guilds') expect(isGuildSummaryList(payload)).toBe(true);
-        if (/^\/api\/v1\/guilds\/[^/]+$/.test(path)) expect(isGuildDetail(payload)).toBe(true);
-      }
-      // The authoritative recovery feed must be able to answer for every message
-      // this fixture has ever shown, exactly as the real server does.
-      if (/\/messages$/.test(path)) for (const value of Array.isArray(payload) ? payload : [payload]) {
-        const message = value as { id?: unknown; channel_id?: unknown; author?: unknown };
-        if (message && typeof message.id === 'string' && typeof message.channel_id === 'string' && message.author) served.set(message.id, message as Record<string, unknown>);
-      }
-      return route.fulfill({
-        status,
-        contentType: 'application/json',
-        headers: { 'X-Paracord-History-Epoch': historyEpoch },
-        body: JSON.stringify(payload),
-      });
-    };
-
-    if (path === '/api/v1/stream/ticket' && method === 'POST') {
-      return json(200, { ticket: 'smoke-stream-ticket' });
-    }
-    if (path.endsWith('/messages/recovery') && method === 'GET') {
-      const channelId = path.split('/')[4];
-      const after = url.searchParams.get('after') ?? '0';
-      const knownIds = (url.searchParams.get('known_ids') ?? '').split(',').filter(Boolean);
-      const missing = knownIds.filter(id => !served.has(id));
-      if (missing.length) return json(500, { message: `The smoke fixture has no authoritative state for ${missing.join(',')}` });
-      return json(200, {
-        database_history_epoch: historyEpoch, channel_id: channelId, after, through: after, floor: '0', next: after, complete: true, projection_head: after,
-        changes: [],
-        states: knownIds.map(id => ({ message_id: id, state: 'present', revision: after, message: { ...served.get(id), message_revision: after } })),
-      });
-    }
-    if (path.endsWith('/messages/attention') && method === 'GET') {
-      const id = path.split('/')[4];
-      const extra = homeChannels.find(channel => channel.id === id);
-      const message = extra
-        ? { id: extra.last_message_id, channel_id: id, author: dmPeer, content: `Could you review ${extra.name}?`, attachments: [], reactions: [] }
-        : { id: '4000', channel_id: id, author: userPayload, content: 'An update waiting for you.', attachments: [], reactions: [] };
-      return json(200, { channel_id: id, user_id: userPayload.id, kind: url.searchParams.get('kind'), message });
-    }
-    if (showHomeFixtures && method === 'GET') {
-      const visible = homeChannels.find(item => path === `/api/v1/guilds/${item.guild_id}/channels/visible`);
-      if (visible) return json(200, { channel_ids: [visible.id] });
-      const channel = homeChannels.find(item => path === `/api/v1/guilds/${item.guild_id}/channels` || path === `/api/v1/channels/${item.id}/messages`);
-      if (channel) return json(200, path.endsWith('/messages') ? [{ id: channel.last_message_id, channel_id: channel.id, author: dmPeer, content: `Could you review ${channel.name}?`, created_at: nowIso, attachments: [], reactions: [] }] : [channel]);
-    }
-    if (path === '/api/v1/auth/refresh' && method === 'POST') {
-      return json(200, { token: 'smoke-token', refresh_token: 'smoke-refresh', user: userPayload });
-    }
-    if (path === '/api/v1/auth/login' && method === 'POST') {
-      return json(200, { token: 'smoke-token', user: userPayload });
-    }
-    if (path === '/api/v1/users/@me' && method === 'GET') {
-      return json(200, userPayload);
-    }
-    if (path.endsWith('/capabilities') && path.startsWith('/api/v1/channels/') && method === 'GET') {
-      return json(200, { version: 1, channel_id: path.split('/')[4], user_id: userPayload.id, encrypted: false, own_identity_enrolled: false, peers_ready: true,
-        actions: Object.fromEntries(['send', 'poll', 'schedule', 'attach', 'summary', 'voice', 'video', 'screen_share'].map(action => [action, { supported: true, allowed: !(compositionRevoked && ['send', 'poll', 'attach', 'schedule'].includes(action)), reason: compositionRevoked && ['send', 'poll', 'attach', 'schedule'].includes(action) ? 'Your role no longer allows posting in this channel.' : null }])) });
-    }
-    if (path === '/api/v1/users/@me/dms' && method === 'GET') return json(200, showDmFixtures ? dmFixtures : []);
-    if (path === '/api/v1/users/@me/reminders' && method === 'GET') return json(200, { items: [] });
-    if (path === `/api/v1/guilds/${guildId}/feed` && method === 'GET') return json(200, { items: [], next_cursor: null });
-    if (path === `/api/v1/guilds/${guildId}/attachments` && method === 'GET') return json(200, { items: [], next_cursor: null });
-    if (showDmFixtures && method === 'GET') {
-      const dm = dmFixtures.find(item => path === `/api/v1/channels/${item.id}` || path === `/api/v1/channels/${item.id}/recipients`);
-      if (dm) return json(200, path.endsWith('/recipients') ? dm.recipients : dm);
-    }
-    if (path === '/api/v1/users/@me/read-states' && method === 'GET') {
-      return json(200, [{ channel_id: attentionChannel.id, last_message_id: headerAttention === 'read' ? '4000' : '3999', mention_count: headerAttention === 'mentions' ? 3 : 0 }]);
-    }
-    if (path === `/api/v1/channels/${attentionChannel.id}/messages` && method === 'GET') {
-      return json(200, [{ id: '4000', channel_id: attentionChannel.id, author: userPayload, content: 'An update waiting for you.', created_at: nowIso, attachments: [], reactions: [] }]);
-    }
-    if (path === '/api/v1/users/@me/settings' && method === 'GET') {
-      return json(200, {
-        user_id: userPayload.id,
-        theme: serverTheme,
-        locale: 'en-US',
-        message_display_compact: false,
-        custom_css: null,
-        status: 'online',
-        custom_status: null,
-        crypto_auth_enabled: false,
-        notifications: {},
-        keybinds: {},
-      });
-    }
-    if (path === '/api/v1/users/@me/notification-settings' && method === 'GET') {
-      return json(200, { spaces: [], channels: [] });
-    }
-    if (path === '/api/v1/users/@me/guilds' && method === 'GET') {
-      return json(200, [
-        guildSummaryFixture({
-          id: guildId,
-          name: GUILD_NAME,
-          server_url: 'https://smoke.paracord.local',
-          owner_id: userPayload.id,
-          member_count: 4,
-          created_at: nowIso,
-        }),
-        ...(showHomeFixtures ? homeSpaces : []),
-      ]);
-    }
-    if (path === `/api/v1/guilds/${guildId}/channels/visible` && method === 'GET') {
-      return json(200, { channel_ids: [textChannelId, voiceChannelId, attentionChannel.id] });
-    }
-    if ((path === `/api/v1/channels/${textChannelId}` || path === `/api/v1/channels/${voiceChannelId}`) && method === 'GET') {
-      const isVoice = path.endsWith(`/${voiceChannelId}`);
-      return json(200, {
-        id: isVoice ? voiceChannelId : textChannelId,
-        guild_id: guildId,
-        name: isVoice ? 'Voice Lounge' : 'qa-general-channel-with-a-very-long-name-for-overflow-coverage',
-        type: isVoice ? 2 : 0,
-        channel_type: isVoice ? 2 : 0,
-        position: isVoice ? 1 : 0,
-        nsfw: false,
-        parent_id: null,
-        required_role_ids: [],
-        created_at: nowIso,
-      });
-    }
-    if (path === `/api/v1/guilds/${guildId}/channels` && method === 'GET') {
-      return json(200, [
-        attentionChannel,
-        {
-          id: textChannelId,
-          guild_id: guildId,
-          name: 'qa-general-channel-with-a-very-long-name-for-overflow-coverage',
-          type: 0,
-          channel_type: 0,
-          position: 0,
-          nsfw: false,
-          parent_id: null,
-          required_role_ids: [],
-          created_at: nowIso,
-        },
-        {
-          id: voiceChannelId,
-          guild_id: guildId,
-          name: 'Voice Lounge',
-          type: 2,
-          channel_type: 2,
-          position: 1,
-          nsfw: false,
-          parent_id: null,
-          required_role_ids: [],
-          created_at: nowIso,
-        },
-      ]);
-    }
-    if (path === `/api/v1/guilds/${guildId}` && method === 'GET') {
-      return json(200, guildDetailFixture({
-        id: guildId,
-        name: GUILD_NAME,
-        server_url: 'https://smoke.paracord.local',
-        owner_id: userPayload.id,
-        member_count: 4,
-        created_at: nowIso,
-      }));
-    }
-    if (path === `/api/v1/guilds/${guildId}/onboarding/me` && method === 'GET') {
-      return json(200, {
-        settings: {
-          welcome_title: `Welcome to ${GUILD_NAME}`,
-          welcome_body: 'Quick start onboarding',
-          rules_text: null,
-          role_prompt: null,
-          role_options: [],
-        },
-        member_state: {
-          accepted_rules: true,
-          selected_role_ids: [],
-          completed_at: nowIso,
-        },
-      });
-    }
-    if (path === `/api/v1/guilds/${guildId}/onboarding/me` && method === 'PATCH') {
-      const payload = request.postDataJSON() as {
-        accepted_rules?: boolean;
-        selected_role_ids?: string[];
-        completed?: boolean;
-      };
-      return json(200, {
-        accepted_rules: Boolean(payload?.accepted_rules),
-        selected_role_ids: payload?.selected_role_ids ?? [],
-        completed_at: payload?.completed ? nowIso : null,
-      });
-    }
-    if (path === `/api/v1/channels/${textChannelId}/messages` && method === 'GET') {
-      return json(200, messages);
-    }
-    if (path === `/api/v1/channels/${textChannelId}/messages` && method === 'POST') {
-      const payload = request.postDataJSON() as { content?: string; nonce?: string };
-      const message = {
-        id: `${3000 + messageCounter++}`,
-        channel_id: textChannelId,
-        author: {
-          id: userPayload.id,
-          username: userPayload.username,
-          discriminator: userPayload.discriminator,
-          avatar_hash: null,
-        },
-        content: payload?.content ?? '',
-        nonce: payload.nonce,
-        pinned: false,
-        type: 0,
-        message_type: 0,
-        timestamp: nowIso,
-        created_at: nowIso,
-        edited_timestamp: null,
-        edited_at: null,
-        reference_id: null,
-        attachments: [],
-        reactions: [],
-      };
-      messages.push(message);
-      return json(201, message);
-    }
-    if (path === `/api/v1/channels/${textChannelId}/typing` && method === 'POST') {
-      return route.fulfill({ status: 204 });
-    }
-    if (path === `/api/v1/channels/${textChannelId}/read` && method === 'PUT') {
-      return json(200, { channel_id: textChannelId, last_message_id: messages.at(-1)?.id ?? null, mention_count: 0 });
-    }
-    if (path === `/api/v1/channels/${voiceChannelId}/messages` && method === 'GET') {
-      return json(200, []);
-    }
-    if (path === `/api/v1/guilds/${guildId}/members` && method === 'GET') {
-      return json(200, []);
-    }
-    if (path === `/api/v1/guilds/${guildId}/economy/leaderboard` && method === 'GET') {
-      return json(200, {
-        guild_id: guildId,
-        entries: [],
-        limit: 8,
-      });
-    }
-    if (path === `/api/v1/guilds/${guildId}/economy/me` && method === 'GET') {
-      return json(200, {
-        guild_id: guildId,
-        user_id: userPayload.id,
-        xp: 0,
-        level: 0,
-        rank: null,
-        last_xp_at: nowIso,
-        progress: {
-          current_level_floor: 0,
-          next_level_at: 100,
-          xp_into_level: 0,
-          xp_required_this_level: 100,
-        },
-        streak: {
-          days: 0,
-          longest_days: 0,
-          last_active_date: nowIso.slice(0, 10),
-        },
-        achievements: [],
-      });
-    }
-    if (path === `/api/v1/guilds/${guildId}/economy/level-roles` && method === 'GET') {
-      return json(200, {
-        guild_id: guildId,
-        mappings: [],
-      });
-    }
-    if (path === '/api/v1/discovery/guilds' && method === 'GET') {
-      return json(200, {
-        guilds: [],
-        total: 0,
-      });
-    }
-    if (path === '/api/v1/templates' && method === 'GET') {
-      return json(200, []);
-    }
-    if (path === '/api/v1/bots/applications' && method === 'GET') {
-      return json(200, []);
-    }
-    if (path === '/api/v1/admin/stats' && method === 'GET') {
-      adminStatsRequests += 1;
-      return json(403, { error: 'admin required' });
-    }
-
-    if (method === 'GET') {
-      return json(200, []);
-    }
-    return route.fulfill({ status: 204, body: '' });
-  });
-
-  await page.route('**/api/v2/rt/session', async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        ws_url: 'ws://127.0.0.1:0/gateway',
-        session_id: 'smoke-session',
-        token: 'smoke-rt-token',
-      }),
-    });
-  });
-  // The realtime stream is served by e2e/realtime-stub.mjs through the dev
-  // proxy so READY arrives on one connection that stays open.
-  await page.route('**/api/v2/rt/commands', async (route) => {
-    await route.fulfill({ status: 204, body: '' });
-  });
-  await page.route('**/api/v2/voice/**', async (route) => {
-    const path = new URL(route.request().url()).pathname;
-    if (path.endsWith('/join')) {
-      await route.fulfill({
-        status: 503,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          error: 'Voice unavailable in smoke harness',
-        }),
-      });
-      return;
-    }
-    await route.fulfill({ status: 204, body: '' });
-  });
-
-  await page.goto(`/app/guilds/${guildId}/channels/${textChannelId}`);
-  await expect(page).toHaveURL(new RegExp(`/app/guilds/${guildId}/channels/${textChannelId}`));
-
-  const responsiveWidths = [320, 375, 414, 768];
-  for (const width of responsiveWidths) {
+  // Phone (< 768): places is its own screen, so the header's first button goes back to it.
+  for (const width of PHONE_WIDTHS) {
     await page.setViewportSize({ width, height: 900 });
     await expect(page.getByRole('main')).toBeVisible();
-    await expect(page.getByPlaceholder(/^(Message #qa-general-channel|Message |Write a message$)/)).toBeVisible();
-    await expect
-      .poll(async () =>
-        page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1),
-      )
-      .toBe(true);
+    await expect.poll(() => layoutOf(page)).toBe('phone');
+    await expect(header(page).getByRole('button', { name: 'Back to places' })).toBeVisible();
+    await expect(composerOf(page)).toBeVisible();
+    await expect.poll(() => fitsWidth(page)).toBe(true);
   }
 
-  const desktopViewports = [
-    { width: 1366, height: 768 },
-    { width: 1440, height: 900 },
-    { width: 1920, height: 1080 },
-  ];
-  for (const viewport of desktopViewports) {
+  // Compact (768 to 859): the conversation alone; places opens from the header.
+  await page.setViewportSize({ width: COMPACT_WIDTH, height: 900 });
+  await expect.poll(() => layoutOf(page)).toBe('compact');
+  await expect(header(page).getByRole('button', { name: 'Show places' })).toBeVisible();
+  await expect(composerOf(page)).toBeVisible();
+  await expect.poll(() => fitsWidth(page)).toBe(true);
+
+  // Wide (>= 860): both panes, and nothing to open.
+  for (const viewport of DESKTOPS) {
     await page.setViewportSize(viewport);
+    await expect.poll(() => layoutOf(page)).toBe('wide');
     await expect(page.getByRole('main')).toBeVisible();
-    await expect(page.getByPlaceholder(/^(Message #qa-general-channel|Message |Write a message$)/)).toBeVisible();
-    await expect
-      .poll(async () =>
-        page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1),
-      )
-      .toBe(true);
+    await expect(serverRow(page)).toBeVisible();
+    await expect(channelRows(page)).toBeVisible();
+    await expect(header(page).getByRole('button', { name: /^(Show places|Back to places)$/ })).toHaveCount(0);
+    await expect(composerOf(page)).toBeVisible();
+    await expect.poll(() => fitsWidth(page)).toBe(true);
   }
-  await page.setViewportSize({ width: 1280, height: 900 });
+});
 
-  const lazyRoutes = [
-    { path: '/app', text: /Your servers/i },
-    { path: '/app/friends', text: /Friends/i },
-    { path: '/app/dms', text: /Pick up a conversation/i },
+test('compact: places opens as an overlay from the header and a pick closes it', async ({ page }) => {
+  await page.setViewportSize({ width: COMPACT_WIDTH, height: 900 });
+  await page.goto(textChannelUrl);
+  const toggle = header(page).getByRole('button', { name: 'Show places' });
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(channelRows(page)).toBeVisible();
+  await channelRow(page, ATTENTION_CHANNEL_NAME).click();
+  await expect(page).toHaveURL(new RegExp(`/channels/${ATTENTION_CHANNEL_ID}$`));
+  await expect(titleButton(page)).toHaveText(ATTENTION_CHANNEL_NAME);
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+});
+
+test('phone: places is its own screen, and the header goes back to it', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(textChannelUrl);
+  const frame = page.locator('.glass-frame');
+  // A deep link opens on the conversation; the screen behind it is inert.
+  await expect(frame).toHaveAttribute('data-screen', 'conversation');
+  await expect(page.locator('.glass-phone__screen--places')).toHaveAttribute('inert', '');
+
+  await header(page).getByRole('button', { name: 'Back to places' }).click();
+  await expect(frame).toHaveAttribute('data-screen', 'places');
+  await expect(page.locator('.glass-phone__screen--conversation')).toHaveAttribute('inert', '');
+  // The places screen: the server row, the server's title and its channels, full width.
+  await expect(serverRow(page).getByRole('button', { name: literal(GUILD_NAME) })).toBeVisible();
+  await expect(channelRow(page, ATTENTION_CHANNEL_NAME)).toBeVisible();
+  await expect.poll(() => fitsWidth(page)).toBe(true);
+
+  // Picking a row brings that conversation in.
+  await channelRow(page, ATTENTION_CHANNEL_NAME).click();
+  await expect(page).toHaveURL(new RegExp(`/channels/${ATTENTION_CHANNEL_ID}$`));
+  await expect(frame).toHaveAttribute('data-screen', 'conversation');
+  await expect(titleButton(page)).toHaveText(ATTENTION_CHANNEL_NAME);
+  await expect(page.locator('.glass-phone__screen--places')).toHaveAttribute('inert', '');
+  await expect(composerOf(page).or(page.getByRole('textbox', { name: `Message ${ATTENTION_CHANNEL_NAME}` }))).toBeVisible();
+});
+
+test('every lazy route loads and fits, and the admin page stays shut to a member', async ({ page, app }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const routes = [
+    // Home: the greeting is the title ("Afternoon, <name>."), and For you is its first group.
+    { path: '/app', region: 'Home', text: /, smoke-user/ },
+    { path: '/app/friends', region: 'Friends', text: /Friends/ },
+    { path: '/app/dms', region: 'Messages', text: /Messages/ },
     { path: '/app/discovery', text: /Discover servers/i },
     { path: '/app/templates', text: /Template Gallery/i },
     { path: '/app/developers', text: /Developer portal/i },
   ];
-  for (const lazyRoute of lazyRoutes) {
-    await page.goto(lazyRoute.path);
+  for (const route of routes) {
+    await page.goto(route.path);
     await expect(page.getByRole('main')).toBeVisible();
-    await expect(page.getByText(lazyRoute.text).first()).toBeVisible();
-    await expect
-      .poll(async () =>
-        page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1),
-      )
-      .toBe(true);
+    if (route.region) await expect(page.getByRole('region', { name: route.region, exact: true })).toBeVisible();
+    await expect(page.getByText(route.text).first()).toBeVisible();
+    await expect.poll(() => fitsWidth(page)).toBe(true);
   }
 
   await page.goto('/app/admin');
   await expect(page.getByRole('heading', { name: 'Access denied' })).toBeVisible();
-  expect(adminStatsRequests).toBe(0);
+  expect(app.adminStatsRequests).toBe(0);
+});
 
-  await page.goto(`/app/guilds/${guildId}/channels/${textChannelId}`);
-  await expect(page).toHaveURL(new RegExp(`/app/guilds/${guildId}/channels/${textChannelId}`));
-
-  // Every id the client knows — `src/lib/themes.ts` is the list, so a theme
-  // added there is exercised here without editing this array.
-  const themes = THEME_IDS;
-  for (const theme of themes) {
-    serverTheme = theme;
-    await page.goto(`/app/guilds/${guildId}/channels/${textChannelId}`);
+test('every theme the client knows loads, and a retired one opens Glass', async ({ page, app }) => {
+  // One page, reloaded once per theme: seven themes in one long test would be
+  // past the suite's budget on a CI runner, so this one is only the themes.
+  test.setTimeout(120_000);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  // `src/lib/themes.ts` is the list, so a theme added there is exercised here
+  // without editing this array.
+  for (const theme of THEME_IDS) {
+    app.serverTheme = theme;
+    await page.goto(textChannelUrl);
     await expect(page.getByRole('main')).toBeVisible();
-    await expect.poll(
-      async () => page.evaluate(() => document.documentElement.getAttribute('data-theme')),
-    ).toBe(theme);
-    await expect
-      .poll(async () =>
-        page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1),
-      )
-      .toBe(true);
+    await expect.poll(() => page.evaluate(() => document.documentElement.getAttribute('data-theme'))).toBe(theme);
+    await expect.poll(() => fitsWidth(page)).toBe(true);
   }
-
-  // Inspect the refined header in the default visual theme after validating all
-  // theme variants above.
-  serverTheme = 'glass';
-  await page.goto(`/app/guilds/${guildId}/channels/${textChannelId}`);
-  await expect(page.locator('html')).toHaveAttribute('data-theme', 'glass');
 
   // An account whose stored theme is one of the retired looks opens Glass, and
-  // nothing refuses it.
-  serverTheme = 'paper';
-  await page.goto(`/app/guilds/${guildId}/channels/${textChannelId}`);
+  // nothing refuses it; high contrast opens the Glass contrast theme.
+  app.serverTheme = 'paper';
+  await page.goto(textChannelUrl);
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'glass');
-  serverTheme = 'high-contrast';
-  await page.goto(`/app/guilds/${guildId}/channels/${textChannelId}`);
+  app.serverTheme = 'high-contrast';
+  await page.goto(textChannelUrl);
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'glass-contrast');
-  serverTheme = 'glass';
-  await page.goto(`/app/guilds/${guildId}/channels/${textChannelId}`);
+  app.serverTheme = 'glass';
+  await page.goto(textChannelUrl);
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'glass');
+});
 
+test('the conversation header: the title opens the channel menu; search, members and your face open sheets', async ({ page }, testInfo) => {
+  test.setTimeout(90_000);
+  await page.goto(textChannelUrl);
 
-  await expect(page.getByRole('button', { name: /Switch channel, current:/ })).toBeVisible();
-
-  const closeWelcome = page.getByRole('button', { name: /Close welcome screen/i });
-  if (await closeWelcome.isVisible().catch(() => false)) {
-    await closeWelcome.click();
-  }
-  await page.getByRole('button', { name: 'Skip tour' }).click();
-
-  const conversationHeader = page.locator('.chat-header');
   for (const width of [320, 390, 767, 768, 1280]) {
     await page.setViewportSize({ width, height: 800 });
-    await expect(conversationHeader.getByRole('button', { name: 'Search messages' })).toBeVisible();
-    // lantern-stage-spec §6.5: no docked member list anywhere — the people who
-    // are here now are the header's lit strip, and its sheet is the only full
-    // list. §7.4 puts search, pins and threads in the header; below the small
-    // breakpoint pins and threads fold into the overflow menu (layout-spec §7.8).
-    await expect(conversationHeader.getByRole('button', { name: 'Member List' })).toHaveCount(0);
-    // Search, pins, threads and the overflow menu. Pins and threads are in the
-    // DOM at every width and hidden below the small breakpoint, where the
-    // overflow menu carries them (layout-spec §7.8).
-    await expect(conversationHeader.locator('.chat-header-actions button')).toHaveCount(4);
-    await expect(conversationHeader.getByRole('button', { name: 'Threads' })).toBeVisible({ visible: width >= 640 });
-    const moreActions = conversationHeader.getByRole('button', { name: 'More channel actions' });
-    await moreActions.focus();
+    const phone = width < 768;
+    // The frame changes with the window (a phone, compact and wide frame are three
+    // trees); act on the one this width gets, not on the one being torn down.
+    await expect.poll(() => layoutOf(page)).toBe(phone ? 'phone' : width < 860 ? 'compact' : 'wide');
+    await expect(titleButton(page)).toBeVisible();
+    await expect(titleButton(page)).toHaveAttribute('aria-haspopup', 'menu');
+    await expect(header(page).getByRole('button', { name: 'Search messages' })).toBeInViewport();
+    await expect(header(page).getByRole('button', { name: 'Members', exact: true })).toBeInViewport();
+    // Your face is the header's last tool on a window; on a phone it lives on the places screen.
+    await expect(header(page).getByRole('button', { name: 'Your profile, online' })).toHaveCount(phone ? 0 : 1);
+    // No docked member list anywhere (docs/glass-spec.md §1.7); members is a sheet.
+    await expect(page.getByRole('complementary', { name: /members/i })).toHaveCount(0);
+
+    // The title's menu: ArrowDown opens it and hands it focus; Escape closes it and gives focus back.
+    await titleButton(page).focus();
     await page.keyboard.press('ArrowDown');
-    const actionMenu = page.getByRole('menu', { name: 'Channel actions' });
-    await expect(actionMenu).toBeFocused();
-    await expect(actionMenu.getByRole('menuitem', { name: 'Server leaderboard' })).toBeVisible();
+    const menu = page.getByRole('menu', { name: 'Channel actions' });
+    await expect(menu).toBeFocused();
+    await expect(menu.getByRole('menuitem', { name: 'Server leaderboard' })).toBeVisible();
     await page.keyboard.press('Escape');
-    await expect(moreActions).toBeFocused();
-    await moreActions.click();
-    await actionMenu.getByRole('menuitem', { name: 'Pinned messages' }).click();
-    const pinsPanel = page.getByRole('complementary', { name: 'Pinned messages' });
-    await expect(pinsPanel).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Close pinned messages panel' })).toBeInViewport();
-    if (width >= 768) {
-      const activePanel = conversationHeader.getByRole('button', { name: 'Close Pinned messages', exact: true });
-      await expect(activePanel).toBeInViewport();
-      await expect(activePanel).toHaveAttribute('aria-expanded', 'true');
-      if (width === 1280) await page.screenshot({ path: testInfo.outputPath('header-active-panel-desktop.png'), fullPage: true });
-      await activePanel.click();
-    } else {
-      await page.getByRole('button', { name: 'Close pinned messages panel' }).click();
+    await expect(menu).toBeHidden();
+    await expect(titleButton(page)).toBeFocused();
+
+    // A row of the menu opens its page in a sheet over the conversation, and closing it gives focus back.
+    await titleButton(page).click();
+    await menu.getByRole('menuitem', { name: 'Pinned messages' }).click();
+    const pins = page.getByRole('dialog', { name: 'Pinned messages' });
+    await expect(pins).toBeVisible();
+    // The menu finishes leaving before a person could answer the sheet; closing
+    // the sheet inside that beat hands focus to a node that is already going.
+    // (By CSS: a leaving menu is `aria-hidden`, so a role query no longer sees it.)
+    await expect(page.locator('[role="menu"]')).toHaveCount(0);
+    await expect(pins.getByRole('button', { name: 'Close pinned messages' })).toBeInViewport();
+    if (width === 1280) await page.screenshot({ path: testInfo.outputPath('header-pins-sheet-desktop.png') });
+    await page.keyboard.press('Escape');
+    await expect(pins).toBeHidden();
+    await expect(titleButton(page), `focus returns to the title at ${width}px`).toBeFocused();
+
+    // Search and members.
+    const search = header(page).getByRole('button', { name: 'Search messages' });
+    await search.click();
+    await expect(search).toHaveAttribute('aria-expanded', 'true');
+    const searchSheet = page.getByRole('dialog', { name: 'Search messages' });
+    await expect(searchSheet).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(searchSheet).toBeHidden();
+    await expect(search).toBeFocused();
+
+    const members = header(page).getByRole('button', { name: 'Members', exact: true });
+    await members.click();
+    const membersSheet = page.getByRole('dialog', { name: 'Members' });
+    await expect(membersSheet).toBeVisible();
+    await expect(membersSheet.getByRole('button', { name: 'Close members' })).toBeInViewport();
+    await page.keyboard.press('Escape');
+    await expect(membersSheet).toBeHidden();
+    await expect(members).toBeFocused();
+
+    // Your face opens the account menu.
+    if (!phone) {
+      const face = header(page).getByRole('button', { name: 'Your profile, online' });
+      await face.click();
+      const account = page.getByRole('menu', { name: 'Account' });
+      await expect(account).toBeVisible();
+      await expect(account.getByRole('menuitem', { name: 'Settings' })).toBeVisible();
+      await expect(account.getByRole('menuitemradio', { name: 'Online' })).toBeChecked();
+      await page.keyboard.press('Escape');
+      await expect(account).toBeHidden();
+      await expect(face).toBeFocused();
     }
-    await expect(pinsPanel).toBeHidden();
-    await expect(moreActions).toBeFocused();
-    await expect.poll(async () => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await expect.poll(() => fitsWidth(page)).toBe(true);
     if (width === 390) {
-      await moreActions.click();
-      await page.screenshot({ path: testInfo.outputPath('header-menu-mobile.png'), fullPage: true });
+      await titleButton(page).click();
+      await page.screenshot({ path: testInfo.outputPath('header-menu-mobile.png') });
       await page.keyboard.press('Escape');
     }
   }
+});
 
+test('attention: what needs you is said in words, in the menu, the inbox and the places panel', async ({ page, app }, testInfo) => {
   await page.setViewportSize({ width: 390, height: 800 });
+  await page.goto(textChannelUrl);
   for (const attention of ['unread', 'mentions', 'read'] as const) {
-    headerAttention = attention;
-    const more = conversationHeader.getByRole('button', { name: 'More channel actions' });
-    await more.click();
+    app.headerAttention = attention;
+    // The read states are refreshed by the inbox row itself; the title's own
+    // description is the summary a screen reader hears.
+    await titleButton(page).click();
     await page.getByRole('menuitem', { name: /^Inbox/ }).click();
     await expect(page.getByRole('dialog', { name: 'Inbox', exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Close inbox', exact: true }).click();
     await expect(page.getByRole('dialog', { name: 'Inbox', exact: true })).toBeHidden();
-    await expect(more).toHaveAccessibleDescription(attention === 'mentions' ? '3 mentions in 1 unread conversation' : attention === 'unread' ? '1 unread conversation' : 'No unread conversations');
-    if (attention === 'read') await expect(more.locator('[data-attention-kind]')).toHaveCount(0);
-    else {
-      await expect(more.locator(`[data-attention-kind="${attention}"]`)).toBeVisible();
-      if (attention === 'mentions') await expect(more).toContainText('@3');
-      await page.screenshot({ path: testInfo.outputPath(`header-${attention}-mobile.png`), fullPage: true });
-    }
+    const description =
+      attention === 'mentions'
+        ? '3 mentions in 1 unread conversation'
+        : attention === 'unread'
+          ? '1 unread conversation'
+          : 'No unread conversations';
+    await expect(titleButton(page)).toHaveAccessibleDescription(description);
+    if (attention !== 'read') await page.screenshot({ path: testInfo.outputPath(`header-${attention}-mobile.png`) });
   }
 
-  showDmFixtures = true;
-  for (const dm of dmFixtures) {
+  // On the places screen the channel row says it too: a white @ chip for mentions.
+  app.headerAttention = 'mentions';
+  await page.goto(textChannelUrl);
+  await page.getByRole('button', { name: 'Back to places' }).click();
+  await expect(channelRow(page, ATTENTION_CHANNEL_NAME)).toContainText('3 mentions');
+  await expect(serverRow(page).getByRole('button', { name: new RegExp(`^${GUILD_NAME.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}, 3 mentions`) })).toBeVisible();
+});
+
+test('direct messages: the header keeps search, the call and the people, at every width', async ({ page, app }, testInfo) => {
+  test.setTimeout(90_000);
+  app.showDmFixtures = true;
+  for (const dm of app.dmFixtures) {
     await page.goto(`/app/dms/${dm.id}`);
-    const dmHeader = page.locator('.chat-header');
-    await expect(dmHeader.getByRole('button', { name: 'Back to messages' })).toBeVisible();
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await expect(titleButton(page)).toBeVisible();
     for (const width of [320, 390, 768, 1280]) {
       await page.setViewportSize({ width, height: 800 });
-      await expect(dmHeader.getByRole('button', { name: 'Search messages' })).toBeInViewport();
-      await expect(dmHeader.getByRole('button', { name: 'Start direct message voice call' })).toBeInViewport();
-      // A group DM is a room too (§7.6): its people live in the header's strip
-      // and its sheet, never in a docked list.
-      await expect(dmHeader.getByRole('button', { name: 'Member List' })).toHaveCount(0);
-      if (dm.type === 3 && width < 480) {
-        await expect(dmHeader.locator('.chat-header-mobile-dm-title')).toBeInViewport();
-      }
-      await expect.poll(async () => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
-      if (width === 390) await page.screenshot({ path: testInfo.outputPath(`header-dm-${dm.type}-mobile.png`), fullPage: true });
+      if (width < 768) await expect(header(page).getByRole('button', { name: 'Back to places' })).toBeVisible();
+      await expect(header(page).getByRole('button', { name: 'Search messages' })).toBeInViewport();
+      await expect(header(page).getByRole('button', { name: 'Start direct message voice call' })).toBeInViewport();
+      await expect(header(page).getByRole('button', { name: 'People in this message' })).toBeInViewport();
+      // A long title is bounded inside the header on a narrow screen, never pushed off it.
+      if (dm.type === 3 && width < 480) await expect(titleButton(page)).toBeInViewport();
+      await expect.poll(() => fitsWidth(page)).toBe(true);
+      if (width === 390) await page.screenshot({ path: testInfo.outputPath(`header-dm-${dm.type}-mobile.png`) });
     }
-    if (dm.type === 3) {
-      await page.setViewportSize({ width: 1280, height: 800 });
-      // The strip's sheet is the only full list of people in the product.
-      await dmHeader.getByRole('button', { name: / here · / }).click();
-      await expect(page.getByRole('dialog', { name: 'People here now' })).toBeVisible();
-      await page.keyboard.press('Escape');
-    }
+    // The people of a message or a group are a sheet, never a docked list.
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await header(page).getByRole('button', { name: 'People in this message' }).click();
+    await expect(page.getByRole('dialog', { name: 'People in this message' })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog', { name: 'People in this message' })).toBeHidden();
   }
-  showDmFixtures = false;
-  await page.goto(`/app/guilds/${guildId}/channels/${textChannelId}`);
+});
 
-  const composer = page.getByPlaceholder(/^(Message #qa-general-channel|Message |Write a message$)/);
+test('the composer keeps a draft, bounds a long one, sends, and obeys a revoked permission', async ({ page, app }, testInfo) => {
+  test.setTimeout(120_000);
+  await page.goto(textChannelUrl);
+  const composer = composerOf(page);
+
+  // A draft survives opening the message tools, at every width.
   for (const width of [320, 390, 768]) {
     await page.setViewportSize({ width, height: 800 });
     await expect(composer).toBeVisible();
@@ -641,14 +425,17 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
     }
     await expect(composer).toHaveValue('A draft that remains intact while opening message tools.');
     await expect.poll(async () => (await composer.boundingBox())?.width ?? 0).toBeGreaterThanOrEqual(160);
-    if (width === 390) await page.screenshot({ path: testInfo.outputPath('composer-390.png'), fullPage: true });
+    if (width === 390) await page.screenshot({ path: testInfo.outputPath('composer-390.png') });
   }
+
   // A reduced visual viewport represents the room available above an open
   // on-screen keyboard. Long drafts must stay bounded and leave send visible.
   await page.setViewportSize({ width: 390, height: 420 });
   await composer.fill('A multiline draft\n'.repeat(30));
   await expect.poll(async () => (await composer.boundingBox())?.height ?? 0).toBeLessThanOrEqual(190);
   await expect(page.getByRole('button', { name: 'Send message', exact: true })).toBeInViewport();
+
+  // Zoomed to 200% the box is still a usable width; then a message goes out and lands.
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.evaluate(() => { document.documentElement.style.zoom = '2'; });
   await expect.poll(async () => (await composer.boundingBox())?.width ?? 0).toBeGreaterThanOrEqual(160);
@@ -657,127 +444,327 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
   await composer.press('Enter');
   const history = page.getByLabel('Message history');
   await expect(history.getByText('e2e smoke message')).toBeVisible();
+
+  // One word longer than the window is wrapped inside its bubble, and the page does not scroll sideways.
   await composer.fill('SuperLongUnbrokenMessageContentForOverflowCoverage'.repeat(4));
   await composer.press('Enter');
   await expect(history.getByText(/SuperLongUnbrokenMessageContentForOverflowCoverage/)).toBeVisible();
   await page.setViewportSize({ width: 320, height: 900 });
-  await expect
-    .poll(async () => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1))
-    .toBe(true);
+  await expect.poll(() => fitsWidth(page)).toBe(true);
   await page.setViewportSize({ width: 1280, height: 900 });
 
   // Permission discovery updates an already-mounted composer without erasing
   // the draft or allowing Enter/picker actions to bypass the decision.
   await composer.fill('Keep this draft after my role changes.');
-  const countBeforeRevocation = messages.length;
-  compositionRevoked = true;
+  const countBeforeRevocation = app.messages.length;
+  app.compositionRevoked = true;
   await page.evaluate(() => window.dispatchEvent(new CustomEvent('paracord:roles-changed')));
   await expect(page.getByRole('status').filter({ hasText: 'Your role no longer allows posting in this channel.' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Send message', exact: true })).toBeDisabled();
   await composer.press('Enter');
   await expect(composer).toHaveValue('Keep this draft after my role changes.');
-  expect(messages.length).toBe(countBeforeRevocation);
+  expect(app.messages.length).toBe(countBeforeRevocation);
+
+  // The message tools menu names what is off and stays inside the window, even on a short one.
   await page.setViewportSize({ width: 390, height: 800 });
   await page.getByRole('button', { name: 'More message tools' }).click();
   await expect(page.getByRole('menuitem', { name: /Create a poll/ })).toBeDisabled();
   await expect(page.getByRole('menuitem', { name: /Attach files/ })).toBeDisabled();
   const permissionMenu = page.getByRole('menu', { name: 'Message tools' });
-  await expect.poll(async () => permissionMenu.evaluate(menu => menu.getBoundingClientRect().bottom <= window.innerHeight - 7)).toBe(true);
+  await expect.poll(async () => permissionMenu.evaluate((menu) => menu.getBoundingClientRect().bottom <= window.innerHeight - 7)).toBe(true);
   await expect(page.getByRole('menuitem', { name: /^Emoji/ })).toBeInViewport();
-  await page.screenshot({ path: testInfo.outputPath('composer-permission-390.png'), fullPage: true });
+  await page.screenshot({ path: testInfo.outputPath('composer-permission-390.png') });
   await page.setViewportSize({ width: 390, height: 420 });
-  await expect.poll(async () => permissionMenu.evaluate(menu => menu.getBoundingClientRect().bottom <= window.innerHeight - 7)).toBe(true);
+  await expect.poll(async () => permissionMenu.evaluate((menu) => menu.getBoundingClientRect().bottom <= window.innerHeight - 7)).toBe(true);
   await page.keyboard.press('End');
   await expect(page.getByRole('menuitem', { name: /^Emoji/ })).toBeInViewport();
   await expect(permissionMenu).toBeVisible();
   await page.setViewportSize({ width: 390, height: 800 });
   await page.keyboard.press('Escape');
-  compositionRevoked = false;
+
+  // Giving the permission back re-enables send, and the draft was never lost.
+  app.compositionRevoked = false;
   await page.evaluate(() => window.dispatchEvent(new CustomEvent('paracord:roles-changed')));
   await expect(page.getByRole('button', { name: 'Send message', exact: true })).toBeEnabled();
   await expect(composer).toHaveValue('Keep this draft after my role changes.');
+});
+
+test('the command palette jumps to a voice channel, which opens as its own chat', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(textChannelUrl);
+  await expect(composerOf(page)).toBeVisible();
 
   // Ctrl+K inside the draft inserts a Markdown link; leave the editor before
   // exercising the global jump shortcut.
-  await composer.press('Tab');
-  await expect(composer).not.toBeFocused();
+  await composerOf(page).press('Tab');
+  await expect(composerOf(page)).not.toBeFocused();
   await page.keyboard.press('Control+K');
-  const commandPaletteInput = page.getByPlaceholder(/Jump to a channel, server, or setting/i);
-  await expect(commandPaletteInput).toBeVisible();
-  await expect(commandPaletteInput).toBeFocused();
+  const paletteInput = page.getByPlaceholder(/Jump to a channel, server, or setting/i);
+  await expect(paletteInput).toBeVisible();
+  await expect(paletteInput).toBeFocused();
   await page.keyboard.press('Escape');
-  await expect(commandPaletteInput).toBeHidden();
+  await expect(paletteInput).toBeHidden();
 
   await page.keyboard.press('Control+K');
-  await expect(commandPaletteInput).toBeVisible();
-  await commandPaletteInput.fill('Voice Lounge');
+  await expect(paletteInput).toBeVisible();
+  await paletteInput.fill(VOICE_CHANNEL_NAME);
   await page.keyboard.press('Enter');
-  await expect(page).toHaveURL(new RegExp(`/app/guilds/${guildId}/channels/${voiceChannelId}`));
+  await expect(page).toHaveURL(new RegExp(`/app/guilds/${GUILD_ID}/channels/${VOICE_CHANNEL_ID}`));
+  await expect(titleButton(page)).toHaveText(VOICE_CHANNEL_NAME);
+});
 
-  // The server home (docs/server-home-spec.md): cover and head, voice channels
-  // (or what is live), then the Latest feed. It deliberately lists no text
-  // channels; those live in the sidebar.
-  await page.goto(`/app/guilds/${guildId}`);
-  await expect(page).toHaveURL(new RegExp(`/app/guilds/${guildId}$`));
-  await expect(page.getByRole('heading', { name: /QA Guild/i })).toBeVisible();
-  await expect(page.getByRole('region', { name: 'Voice channels', exact: true })).toBeVisible();
-  await expect(page.getByRole('region', { name: 'Latest', exact: true })).toBeVisible();
+test('a voice channel opens as its own chat, with the call pill for it in the header', async ({ page, app }) => {
+  test.setTimeout(90_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(textChannelUrl);
 
-  // Server settings open from the home's header (MANAGE_GUILD-gated).
-  await page.getByRole('button', { name: 'Server settings' }).click();
-  const serverSettingsDialog = page.getByRole('dialog', { name: 'Server settings' });
-  await expect(serverSettingsDialog).toBeVisible();
+  // Opened from its row in the places panel, the way a person reaches it.
+  await channelRow(page, VOICE_CHANNEL_NAME).click();
+  await expect(page).toHaveURL(new RegExp(`/app/guilds/${GUILD_ID}/channels/${VOICE_CHANNEL_ID}`));
+  await expect(channelRow(page, VOICE_CHANNEL_NAME)).toHaveAttribute('aria-current', 'page');
+
+  // What the conversation pane holds is the channel's text chat: its title, a
+  // timeline and a message box. The voice page, its lobby and its "Join voice"
+  // header are gone.
+  await expect(titleButton(page)).toHaveText(VOICE_CHANNEL_NAME);
+  await expect(page.getByLabel('Message history')).toBeVisible();
+  await expect(page.getByRole('textbox', { name: `Message ${VOICE_CHANNEL_NAME}` })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Join voice', exact: true })).toHaveCount(0);
+
+  // The pill in the header is for this channel even though nobody is in it.
+  const pill = pillFor(page, VOICE_CHANNEL_NAME);
+  await expect(pill).toBeVisible();
+  await expect(pill.getByRole('button', { name: `Listen in to ${VOICE_CHANNEL_NAME}` })).toBeVisible();
+  await expect(pill.getByRole('button', { name: 'Microphone on when you join' })).toBeVisible();
+  const join = pill.getByRole('button', { name: `Join ${VOICE_CHANNEL_NAME}` });
+  await expect(join).toBeVisible();
+  await expect(pill.getByRole('button', { name: `Leave ${VOICE_CHANNEL_NAME}` })).toHaveCount(0);
+
+  // There is no relay behind a mocked page, so the join is refused. The product
+  // says so out loud and leaves you where you were: out of the call, with Join still there.
+  await join.click();
+  await expect.poll(() => app.voiceRequests).toContain(`join ${VOICE_CHANNEL_ID}`);
+  await expect(page.getByText(new RegExp(`Could not join ${VOICE_CHANNEL_NAME}`)).first()).toBeVisible();
+  await expect(pill.getByRole('button', { name: `Join ${VOICE_CHANNEL_NAME}` })).toBeVisible();
+  await expect(pill.getByRole('button', { name: `Leave ${VOICE_CHANNEL_NAME}` })).toHaveCount(0);
+
+  // A call this client holds (what `voiceStore` has after a real join) moves the pill to its joined set.
+  await holdCall(page);
+  const leave = pill.getByRole('button', { name: `Leave ${VOICE_CHANNEL_NAME}` });
+  await expect(leave).toBeVisible();
+  await expect(pill.getByRole('button', { name: 'Microphone', exact: true })).toBeVisible();
+  await expect(pill.getByRole('button', { name: `Join ${VOICE_CHANNEL_NAME}` })).toHaveCount(0);
+  await expect(pill.getByRole('button', { name: `Listen in to ${VOICE_CHANNEL_NAME}` })).toHaveCount(0);
+  // Nobody else is sharing a screen, so there is nothing to Watch; the stage can show the call itself.
+  await expect(pill.getByRole('button', { name: /^Watch / })).toHaveCount(0);
+  const showCall = pill.getByRole('button', { name: 'Show the call' });
+  await expect(showCall).toBeVisible();
+  await expect(leave).toBeEnabled();
+
+  // Somebody else starts sharing a screen: Watch is offered for theirs, and there is no need to "show the call".
+  await someoneShares(page);
+  await expect(pill.getByRole('button', { name: "Watch Ada's screen" })).toBeVisible();
+  await expect(pill.getByRole('button', { name: 'Show the call' })).toHaveCount(0);
+  await someoneStopsSharing(page);
+  await expect(pill.getByRole('button', { name: "Watch Ada's screen" })).toHaveCount(0);
+  await expect(showCall).toBeVisible();
+
+  // Show the call grows the stage out of the pill: the people in the call and the
+  // call's own controls, with Leave among them. Escape puts it away and the call
+  // goes on (closing the stage never leaves; Leave is the only way out).
+  await showCall.click();
+  const stage = page.getByRole('region', { name: 'Stage' });
+  await expect(stage).toBeVisible();
+  await expect(stage.getByRole('list', { name: 'People in the call' })).toBeVisible();
+  const controls = stage.getByRole('group', { name: 'Call controls' });
+  await expect(controls.getByRole('button', { name: 'Microphone' })).toBeVisible();
+  await expect(controls.getByRole('button', { name: `Leave ${VOICE_CHANNEL_NAME}` })).toBeVisible();
   await page.keyboard.press('Escape');
-  await expect(serverSettingsDialog).toBeHidden();
+  await expect(stage).toHaveCount(0);
+  await expect(pill.getByRole('button', { name: `Leave ${VOICE_CHANNEL_NAME}` })).toBeVisible();
+  // (The held call is store state with no session behind it, so Leave is not pressed
+  // here: there is no relay to leave. The real join and leave are proved by the
+  // real-server voice specs, `PARACORD_E2E_REAL=1`.)
+});
 
-  // The Buildings column merges every connected server's guilds into buildings
-  // (lantern-stage-spec §7.1). The expanded column is one roving listbox whose
-  // grouped options are the buildings and their rooms; a building's window-map
-  // plate is its front door and opens the Lobby.
-  const buildingsColumn = page.getByRole('listbox', { name: 'Servers and channels' });
-  const building = buildingsColumn.getByRole('group', { name: literal(GUILD_NAME) });
-  // The lobby option is labeled "<building> lobby — <caption>", so the name to
-  // match is the building's full name, not a prefix of it.
-  await expect(
-    building.getByRole('option', { name: literal(`${GUILD_NAME} lobby`) }),
-  ).toBeVisible();
+test('a voice channel on a phone: its chat, and the stacked pill above the header', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(textChannelUrl);
+  await header(page).getByRole('button', { name: 'Back to places' }).click();
+  await channelRow(page, VOICE_CHANNEL_NAME).click();
+  await expect(page).toHaveURL(new RegExp(`/channels/${VOICE_CHANNEL_ID}$`));
+  await expect(page.locator('.glass-frame')).toHaveAttribute('data-screen', 'conversation');
+  await expect(titleButton(page)).toHaveText(VOICE_CHANNEL_NAME);
+  const pill = pillFor(page, VOICE_CHANNEL_NAME);
+  await expect(pill).toHaveAttribute('data-layout', 'stacked');
+  await expect(pill.getByRole('button', { name: `Join ${VOICE_CHANNEL_NAME}` })).toBeInViewport();
+  await expect.poll(() => fitsWidth(page)).toBe(true);
+});
 
-  // A text channel opens from its row in the column, by keyboard.
-  const textChannelOption = building.getByRole('option', { name: /qa-general-channel/i });
-  await textChannelOption.focus();
-  await expect(textChannelOption).toBeFocused();
-  await page.keyboard.press('Enter');
-  await expect(page).toHaveURL(new RegExp(`/app/guilds/${guildId}/channels/${textChannelId}`));
+test('a server overview opens from the server menu, with its settings', async ({ page, app }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(textChannelUrl);
+  await page.getByRole('button', { name: literal(`${GUILD_NAME} menu. 4 members`) }).click();
+  const serverMenu = page.getByRole('menu', { name: literal(`${GUILD_NAME} menu`) });
+  await expect(serverMenu.getByRole('menuitem', { name: 'Server settings' })).toBeVisible();
+  await serverMenu.getByRole('menuitem', { name: 'Overview' }).click();
+  await expect(page).toHaveURL(new RegExp(`/app/guilds/${GUILD_ID}$`));
 
-  await page.goto(`/app/guilds/${guildId}/channels/999999999`);
+  // The overview (docs/server-home-spec.md): the server's name, its voice
+  // channels (or what is live), then the Latest feed. It lists no text channels;
+  // those are the places panel's.
+  const overview = page.getByRole('region', { name: literal(`${GUILD_NAME} home`) });
+  await expect(overview.getByRole('heading', { level: 1, name: literal(GUILD_NAME) })).toBeVisible();
+  await expect(overview.getByRole('region', { name: 'Voice channels', exact: true })).toBeVisible();
+  await expect(overview.getByRole('region', { name: 'Latest', exact: true })).toBeVisible();
+
+  // Server settings open from the overview's header (MANAGE_GUILD-gated), and
+  // read the guild's full record, which is validated against its contract.
+  await overview.getByRole('button', { name: 'Server settings' }).click();
+  const settings = page.getByRole('dialog', { name: 'Server settings' });
+  await expect(settings).toBeVisible();
+  await expect.poll(() => app.validated.guild).toBeGreaterThan(0);
+  await page.keyboard.press('Escape');
+  await expect(settings).toBeHidden();
+
+  // A channel row in places takes you back to a conversation.
+  await channelRow(page, literal(TEXT_CHANNEL_NAME)).click();
+  await expect(page).toHaveURL(new RegExp(`/app/guilds/${GUILD_ID}/channels/${TEXT_CHANNEL_ID}`));
+});
+
+test('an unknown channel says so, and Home keeps direct mentions in view', async ({ page, app }, testInfo) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(`/app/guilds/${GUILD_ID}/channels/999999999`);
   await expect(page.getByRole('heading', { name: 'Channel not found' })).toBeVisible();
+
   // Home keeps direct mentions visible and never calls an unknown state quiet.
-  headerAttention = 'mentions';
-  showHomeFixtures = true;
+  app.headerAttention = 'mentions';
+  app.showHomeFixtures = true;
   await page.goto('/app');
-  const home = page.getByRole('main');
-  await expect(home.getByText('Your servers')).toBeVisible();
-  const attention = home.getByRole('region', { name: 'For you' });
+  const home = page.getByRole('region', { name: 'Home', exact: true });
+  await expect(home.getByRole('heading', { level: 1 })).toHaveText(/, smoke-user/);
+  const forYou = home.getByRole('region', { name: 'For you' });
   // The attention preview's author is the reader, so the row keeps the count.
-  await expect(attention.getByText('3 mentions for you', { exact: true })).toBeVisible();
-  await expect(attention.getByText(/An update waiting for you/)).toBeVisible();
+  await expect(forYou.getByText('3 mentions for you', { exact: true })).toBeVisible();
+  await expect(forYou.getByText(/An update waiting for you/)).toBeVisible();
   const conversations = home.getByRole('region', { name: 'Pick up the conversation' });
-  for (const channel of homeChannels) {
-    await expect(attention.getByRole('button', { name: `Open ${channel.name}` })).toHaveCount(0);
+  for (const channel of app.homeChannels) {
+    await expect(forYou.getByRole('button', { name: `Open ${channel.name}` })).toHaveCount(0);
     const conversation = conversations.getByRole('button', { name: `Open ${channel.name}` });
     await expect(conversation).toContainText(`Could you review ${channel.name}?`);
-    await expect(conversation).toHaveAccessibleDescription(new RegExp(homeSpaces.find(space => space.id === channel.guild_id)!.name));
+    const space = app.homeSpaces.find((candidate) => candidate.id === channel.guild_id);
+    await expect(conversation).toContainText(space!.name);
   }
   await expect(home.getByText(/is quiet|No data|Nothing new for you/)).toHaveCount(0);
-  const openAttention = attention.getByRole('button', { name: `Open ${attentionChannel.name}` });
+
+  const openAttention = forYou.getByRole('button', { name: `Open ${ATTENTION_CHANNEL_NAME}` });
   for (const width of [320, 390, 768, 1280]) {
     await page.setViewportSize({ width, height: 900 });
-    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+    await expect.poll(() => fitsWidth(page)).toBe(true);
     await expect(openAttention).toBeVisible();
-    if (width === 320 || width === 1280) await page.screenshot({ path: testInfo.outputPath(`home-needs-you-${width}.png`), fullPage: true });
+    if (width === 320 || width === 1280) await page.screenshot({ path: testInfo.outputPath(`home-needs-you-${width}.png`) });
   }
   await openAttention.click();
-  await expect(page).toHaveURL(new RegExp(`/app/guilds/${guildId}/channels/${attentionChannel.id}`));
-  expect(pageErrors).toEqual([]);
+  await expect(page).toHaveURL(new RegExp(`/app/guilds/${GUILD_ID}/channels/${ATTENTION_CHANNEL_ID}`));
 });
+
+/** Ada, in the voice channel's call, sharing her screen (or not), as the gateway would say. */
+async function setAdaSharing(page: Page, sharing: boolean) {
+  await page.evaluate(
+    async ({ guildId, channelId, on }) => {
+      const voice = (await import('/src/stores/voiceStore.ts' as string)) as {
+        useVoiceStore: { getState: () => Record<string, unknown>; setState: (state: Record<string, unknown>) => void };
+      };
+      const store = voice.useVoiceStore;
+      const current = store.getState() as { channelParticipants: Map<string, Array<{ user_id: string }>> };
+      const others = (current.channelParticipants.get(channelId) ?? []).filter((state) => state.user_id !== '43');
+      const ada = {
+        user_id: '43',
+        channel_id: channelId,
+        guild_id: guildId,
+        session_id: 'e2e-ada',
+        username: 'ada',
+        display_name: 'Ada',
+        avatar_hash: null,
+        deaf: false,
+        mute: false,
+        self_deaf: false,
+        self_mute: false,
+        self_stream: on,
+        self_stream_started_at: on ? new Date().toISOString() : null,
+        self_video: false,
+        suppress: false,
+        mode: 'joined',
+      };
+      const members = [...others, ada];
+      const channelParticipants = new Map(current.channelParticipants);
+      channelParticipants.set(channelId, members);
+      store.setState({ channelParticipants, participants: new Map(members.map((state) => [state.user_id, state])) });
+    },
+    { guildId: GUILD_ID, channelId: VOICE_CHANNEL_ID, on: sharing },
+  );
+}
+const someoneShares = (page: Page) => setAdaSharing(page, true);
+const someoneStopsSharing = (page: Page) => setAdaSharing(page, false);
+
+/**
+ * Put this client in the voice channel's call: the state `voiceStore` holds
+ * after a real join (the call, its mode, and this person's own voice state). A
+ * mocked page has no relay to join through, so this is how the pill's joined set
+ * is reached (e2e/glass-pill.spec.ts does the same).
+ */
+async function holdCall(page: Page) {
+  await page.evaluate(
+    async ({ guildId, channelId }) => {
+      const voice = (await import('/src/stores/voiceStore.ts' as string)) as {
+        useVoiceStore: { getState: () => Record<string, unknown>; setState: (state: Record<string, unknown>) => void; subscribe: (listener: () => void) => void };
+      };
+      const servers = (await import('/src/stores/serverListStore.ts' as string)) as {
+        useServerListStore: { getState: () => { activeServerId: string | null } };
+      };
+      const scopes = (await import('/src/lib/serverScope.ts' as string)) as { LOCAL_SERVER_ID: string };
+      const store = voice.useVoiceStore;
+      const scope = { serverId: servers.useServerListStore.getState().activeServerId ?? scopes.LOCAL_SERVER_ID, userId: '42' };
+      const me = {
+        user_id: '42',
+        channel_id: channelId,
+        guild_id: guildId,
+        session_id: 'e2e-session',
+        username: 'smoke-user',
+        display_name: null,
+        avatar_hash: null,
+        deaf: false,
+        mute: false,
+        self_deaf: false,
+        self_mute: false,
+        self_stream: false,
+        self_video: false,
+        suppress: false,
+        mode: 'joined',
+      };
+      const put = () => {
+        const current = store.getState() as { channelParticipants: Map<string, Array<{ user_id: string }>> };
+        const there = current.channelParticipants.get(channelId) ?? [];
+        if (there.some((state) => state.user_id === '42')) return;
+        const members = [...there, me];
+        const channelParticipants = new Map(current.channelParticipants);
+        channelParticipants.set(channelId, members);
+        store.setState({
+          callId: 'e2e-call',
+          callScope: scope,
+          callPhase: 'connected',
+          callMode: 'joined',
+          connected: true,
+          joining: false,
+          channelId,
+          guildId,
+          selfMute: false,
+          channelParticipants,
+          participants: new Map(members.map((state) => [state.user_id, state])),
+        });
+      };
+      put();
+    },
+    { guildId: GUILD_ID, channelId: VOICE_CHANNEL_ID },
+  );
+}

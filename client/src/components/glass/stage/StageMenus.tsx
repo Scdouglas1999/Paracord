@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
-import { Headphones, HeadphoneOff } from 'lucide-react';
+import { Check, Headphones, HeadphoneOff } from 'lucide-react';
 
 import { useFocusTrap } from '../../../hooks/useFocusTrap';
 import { useMediaDevices } from '../../../hooks/useMediaDevices';
+import { toggleVoiceDeaf } from '../../../hooks/useVoice';
 import { buildDevicePickerOptions, systemDefaultOptionLabel } from '../../../lib/media/deviceLabels';
 import { useAuthStore } from '../../../stores/authStore';
 import { toast } from '../../../stores/toastStore';
 import { useVoiceStore } from '../../../stores/voiceStore';
+import { SHARE_QUALITIES, useShareQualityStore } from './useShareScreen';
 import {
   StreamOverlayPortal,
   useAnchoredOverlayCoords,
@@ -65,9 +67,84 @@ export function DeviceMenu({
   );
 }
 
-function DeviceMenuBody() {
+/**
+ * How the microphone is doing, in words (from the Lantern in-call device menu):
+ * muted, push to talk waiting for its key, not reaching the call, working, or
+ * waiting to hear you.
+ */
+export function micStatus({
+  micMuted,
+  micInputActive,
+  micUplinkState,
+  isPttMode,
+  pttEngaged,
+}: {
+  micMuted: boolean;
+  micInputActive: boolean;
+  micUplinkState: string;
+  isPttMode: boolean;
+  pttEngaged: boolean;
+}): { label: string; detail: string; warning: boolean } {
+  if (micMuted) return { label: 'Microphone muted', detail: 'Unmute to check your level.', warning: false };
+  if (isPttMode && !pttEngaged) {
+    return { label: 'Push to talk ready', detail: 'Hold your shortcut to test your microphone.', warning: false };
+  }
+  if (micUplinkState === 'stalled' || micUplinkState === 'recovering' || micUplinkState === 'no_track') {
+    return {
+      label: micUplinkState === 'recovering' ? 'Restoring microphone' : 'Microphone needs attention',
+      detail: micUplinkState === 'no_track'
+        ? 'No microphone track is reaching the call.'
+        : 'Your microphone is detected locally, but audio is not reaching the call reliably.',
+      warning: true,
+    };
+  }
+  if (micInputActive) return { label: 'Microphone is working', detail: 'Your voice is being sent to the call.', warning: false };
+  return { label: 'Listening for your voice', detail: 'Speak to confirm your input level.', warning: false };
+}
+
+/** Push to talk, from the account's voice settings. */
+export function usePushToTalk(): { isPttMode: boolean; pttEngaged: boolean } {
+  const mode = useAuthStore((state) => (state.settings?.notifications as Record<string, unknown> | undefined)?.voiceInputMode);
+  const pttEngaged = useVoiceStore((state) => state.pttEngaged);
+  return { isPttMode: (mode ?? 'voice_activity') === 'push_to_talk', pttEngaged };
+}
+
+/** The microphone check: its state in words and its input level (in the call only). */
+function MicCheck() {
+  const selfMute = useVoiceStore((state) => state.selfMute);
   const selfDeaf = useVoiceStore((state) => state.selfDeaf);
-  const toggleDeaf = useVoiceStore((state) => state.toggleDeaf);
+  const micInputActive = useVoiceStore((state) => state.micInputActive);
+  const micInputLevel = useVoiceStore((state) => state.micInputLevel);
+  const micUplinkState = useVoiceStore((state) => state.micUplinkState);
+  const { isPttMode, pttEngaged } = usePushToTalk();
+  const status = micStatus({ micMuted: selfMute || selfDeaf, micInputActive, micUplinkState, isPttMode, pttEngaged });
+  const level = Math.min(1, Math.max(0, micInputLevel));
+  const percent = Math.round(level * 100);
+  return (
+    <div className="glass-stage-popover__check" data-warning={status.warning ? 'true' : undefined}>
+      <span className="glass-stage-popover__check-head">
+        <span className="glass-stage-popover__label">{status.label}</span>
+        <span className="glass-instrument glass-stage-popover__hint">{percent}%</span>
+      </span>
+      <span
+        role="meter"
+        aria-label="Microphone input level"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={percent}
+        className="glass-stage-popover__meter"
+      >
+        {/* A composited scale, never a width: the level changes many times a second. */}
+        <span className="glass-stage-popover__meter-fill" style={{ transform: `scaleX(${level.toFixed(3)})` }} />
+      </span>
+      <span className="glass-stage-popover__hint">{status.detail}</span>
+    </div>
+  );
+}
+
+function DeviceMenuBody() {
+  const inCall = useVoiceStore((state) => state.connected);
+  const selfDeaf = useVoiceStore((state) => state.selfDeaf);
   const applyAudioInputDevice = useVoiceStore((state) => state.applyAudioInputDevice);
   const applyAudioOutputDevice = useVoiceStore((state) => state.applyAudioOutputDevice);
   const settings = useAuthStore((state) => state.settings);
@@ -126,11 +203,12 @@ function DeviceMenuBody() {
 
   return (
     <div className="glass-stage-popover__body">
+      {inCall && <MicCheck />}
       <button
         type="button"
         className="glass-stage-popover__row glass-focusable"
         aria-pressed={selfDeaf}
-        onClick={() => void toggleDeaf()}
+        onClick={() => void toggleVoiceDeaf()}
       >
         {selfDeaf ? <HeadphoneOff size={18} aria-hidden="true" /> : <Headphones size={18} aria-hidden="true" />}
         <span className="glass-stage-popover__label">Deafen</span>
@@ -263,3 +341,62 @@ export function MoreMenu({
     </StreamOverlayPortal>
   );
 }
+
+/* ---- Share quality -------------------------------------------------------------- */
+
+/**
+ * The quality you send when you share your screen (from the Lantern control
+ * bar's chevron menu). Chosen before sharing; the next share uses it.
+ */
+export function ShareQualityMenu({
+  open,
+  anchorRef,
+  onClose,
+}: {
+  open: boolean;
+  anchorRef: RefObject<HTMLElement | null>;
+  onClose: () => void;
+}) {
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const coords = useAnchoredOverlayCoords(open, anchorRef, 'above-end', SHARE_PANEL_W, 10);
+  const quality = useShareQualityStore((state) => state.quality);
+  const setQuality = useShareQualityStore((state) => state.setQuality);
+  const inside = useCallback(
+    (target: Node) => Boolean(panelRef.current?.contains(target) || anchorRef.current?.contains(target)),
+    [anchorRef],
+  );
+  useOverlayDismiss(open, onClose, inside, { escape: false });
+  useFocusTrap(panelRef, open && coords !== null, onClose);
+  if (!open || !coords) return null;
+  return (
+    <StreamOverlayPortal
+      panelRef={panelRef}
+      role="dialog"
+      aria-label="Share quality"
+      className="glass-stage-popover"
+      style={{ ...coords, width: SHARE_PANEL_W }}
+    >
+      <div className="glass-stage-popover__body">
+        <span className="glass-stage-popover__kicker">Share quality</span>
+        <span className="glass-stage-popover__hint">Sets the quality you send. Viewers can adapt playback for their connection.</span>
+        {SHARE_QUALITIES.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            className="glass-stage-popover__row glass-focusable"
+            aria-pressed={quality === option.value}
+            onClick={() => {
+              setQuality(option.value);
+              onClose();
+            }}
+          >
+            <span className="glass-stage-popover__label">{option.label}</span>
+            {quality === option.value && <Check size={16} aria-hidden="true" />}
+          </button>
+        ))}
+      </div>
+    </StreamOverlayPortal>
+  );
+}
+
+const SHARE_PANEL_W = 280;

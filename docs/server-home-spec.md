@@ -1,3 +1,11 @@
+> **Superseded in part by Glass** (`docs/glass-spec.md`, branch `design/glass`,
+> 2026-09-30). The server home is now the server's Overview, drawn in the
+> conversation pane's 720px column: Live now, the owner's widgets in their order,
+> then Latest, one column at every width (see
+> `docs/design/glass-g19-checkpoint.md`). The layout, cover, head, two-column,
+> phone and motion sections below describe the retired Lantern page. The content
+> rules, the feed API and `hub_settings.widgets` still hold.
+
 # Server home: spec
 
 Chosen 2026-09-22: direction **A · Front page**, with the side column borrowed from

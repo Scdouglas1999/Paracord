@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 
 import { useCurrentAccountScope } from '../../../hooks/useCurrentUser';
 import { displayName } from '../../../lib/displayName';
+import { dmTitleFor } from '../../../lib/dmTitle';
 import { entityScopeKey } from '../../../lib/serverScope';
 import { channelSpeakers } from '../../../lib/voice/speakingSource';
 import type { StageTarget } from '../../../stores/glassStore';
@@ -10,8 +11,9 @@ import { useGuildStore } from '../../../stores/guildStore';
 import { useMemberStore } from '../../../stores/memberStore';
 import { useRemoteSpeakingStore } from '../../../stores/remoteSpeakingStore';
 import { selectWatcherCount, useVoiceStore } from '../../../stores/voiceStore';
-import type { VoiceState } from '../../../types';
+import { ChannelType, type VoiceState } from '../../../types';
 import type { PillRelation } from '../pill/model';
+import { voiceGuildOf } from '../pill/pillActions';
 import { buildStageModel, type StageModel } from './stageModel';
 
 /**
@@ -61,20 +63,31 @@ export function useStageData(target: StageTarget): StageData {
   const localSpeaking = useVoiceStore((state) => state.speakingUsers);
   const remoteSpeaking = useRemoteSpeakingStore((state) => state.byChannel);
   const watchers = useVoiceStore((state) =>
-    selectWatcherCount(state, scope && scope.serverId === target.serverId ? scope : null, target.channelId, target.streamerId),
+    target.streamerId === null
+      ? 0
+      : selectWatcherCount(state, scope && scope.serverId === target.serverId ? scope : null, target.channelId, target.streamerId),
   );
 
-  const channelName = useChannelStore((state) =>
-    scope ? state.channelsById[entityScopeKey({ serverId: target.serverId, userId: scope.userId }, target.channelId)]?.name ?? null : null,
+  const channel = useChannelStore((state) =>
+    scope ? state.channelsById[entityScopeKey({ serverId: target.serverId, userId: scope.userId }, target.channelId)] : undefined,
   );
   const guildName = useGuildStore((state) =>
-    scope
-      ? state.guilds.find((guild) => guild.key === entityScopeKey({ serverId: target.serverId, userId: scope.userId }, target.guildId))?.name ?? null
+    scope && target.guildId !== null
+      ? state.guilds.find((guild) => guild.key === entityScopeKey({ serverId: target.serverId, userId: scope.userId }, target.guildId as string))?.name ?? null
       : null,
   );
   const roster = useMemberStore((state) =>
-    scope ? state.members.get(entityScopeKey({ serverId: target.serverId, userId: scope.userId }, target.guildId)) : undefined,
+    scope && target.guildId !== null
+      ? state.members.get(entityScopeKey({ serverId: target.serverId, userId: scope.userId }, target.guildId))
+      : undefined,
   );
+  // A DM call has no server: it is named for the people in it, and a DM's voice
+  // states carry no names, so the conversation's recipients say who they are.
+  const isDm = target.guildId === null;
+  const stageChannel = channel?.type === ChannelType.Stage || channel?.channel_type === ChannelType.Stage;
+  const channelName = isDm
+    ? dmTitleFor(channel, scope?.userId ?? null, 'Voice call')
+    : channel?.name ?? null;
 
   // How this client stands to the watched channel: the call it holds, if that is this one.
   const relation: PillRelation = useMemo(() => {
@@ -84,19 +97,26 @@ export function useStageData(target: StageTarget): StageData {
     return callMode === 'listen' ? 'listening' : 'joined';
   }, [callId, callScope, callChannelId, callPhase, callMode, target.channelId, target.serverId]);
 
+  const recipients = useMemo(
+    () => (isDm ? channel?.recipients ?? (channel?.recipient ? [channel.recipient] : undefined) : undefined),
+    [isDm, channel],
+  );
   const people = useMemo(() => {
     const map = new Map<string, { name: string; avatar: string | null }>();
     for (const member of roster ?? []) {
       map.set(member.user.id, { name: displayName(member.user, member.nick), avatar: member.user.avatar_hash ?? null });
     }
+    for (const person of recipients ?? []) {
+      map.set(person.id, { name: displayName(person), avatar: person.avatar_hash ?? null });
+    }
     return map;
-  }, [roster]);
+  }, [roster, recipients]);
 
   const speaking = useMemo(() => {
     const local = callConnected && callScope && callChannelId && callGuildId
       ? { serverId: callScope.serverId, guildId: callGuildId, channelId: callChannelId, speakingUsers: localSpeaking }
       : null;
-    return channelSpeakers(target.serverId, target.guildId, target.channelId, local, remoteSpeaking);
+    return channelSpeakers(target.serverId, voiceGuildOf(target.guildId), target.channelId, local, remoteSpeaking);
   }, [callConnected, callScope, callChannelId, callGuildId, localSpeaking, remoteSpeaking, target.serverId, target.guildId, target.channelId]);
 
   const model = useMemo(
@@ -112,8 +132,9 @@ export function useStageData(target: StageTarget): StageData {
         relation,
         joiningMode: relation === 'joining' ? callMode : null,
         nowMs,
+        stageChannel,
       }),
-    [target, states, people, speaking, scope?.userId, channelName, guildName, relation, callMode, nowMs],
+    [target, states, people, speaking, scope?.userId, channelName, guildName, relation, callMode, nowMs, stageChannel],
   );
 
   return { model, watchers };

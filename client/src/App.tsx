@@ -33,15 +33,10 @@ const TemplateGalleryPage = lazy(() => import('./pages/TemplateGalleryPage').the
 // in production (import.meta.env.DEV is statically false), so Rollup drops the
 // dynamic import and the harness never ships to end users.
 const MediaTest = import.meta.env.DEV ? lazy(() => import('./pages/MediaTest')) : null;
-// The design-system reference page (docs/lantern-stage-spec.md made visible).
+// The design-token reference page (docs/glass-spec.md made visible).
 // Dev builds only, by the same fold-to-null trick as the media harness.
 const DesignTokensPage = import.meta.env.DEV
   ? lazy(() => import('./pages/DesignTokensPage'))
-  : null;
-// The Stage, at full size, from fixture models — the WP3 screenshot gate
-// (docs/design/wp3-checkpoint.md). Dev builds only, same fold-to-null.
-const StagePreviewPage = import.meta.env.DEV
-  ? lazy(() => import('./pages/StagePreviewPage'))
   : null;
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { Button } from './components/ui/Button';
@@ -509,12 +504,6 @@ export default function App() {
         <Route path="templates" element={lazyRoute(<TemplateGalleryPage />)} />
         <Route path="oauth2/authorize" element={lazyRoute(<BotAuthorizePage />)} />
         <Route path="developers" element={lazyRoute(<DeveloperPage />)} />
-        {/* The Stage inside the real shell, so the Buildings column stands
-            beside it as it does in a call (lantern-stage-spec §7.1/§7.2).
-            Dev builds only, stripped from production. */}
-        {import.meta.env.DEV && StagePreviewPage && (
-          <Route path="design-stage" element={lazyRoute(<StagePreviewPage />)} />
-        )}
       </Route>
 
       {/* Media engine test harness — registered in dev builds only, stripped from production. */}
@@ -525,11 +514,6 @@ export default function App() {
       {/* Design-system reference — dev builds only, stripped from production. */}
       {import.meta.env.DEV && DesignTokensPage && (
         <Route path="/design-tokens" element={lazyRoute(<DesignTokensPage />)} />
-      )}
-
-      {/* The Stage at full size — dev builds only, stripped from production. */}
-      {import.meta.env.DEV && StagePreviewPage && (
-        <Route path="/design-stage" element={lazyRoute(<StagePreviewPage />)} />
       )}
 
       {/* Default: send to app (which handles auth redirects) */}

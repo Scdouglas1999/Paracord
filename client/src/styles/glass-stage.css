@@ -400,6 +400,7 @@
 }
 
 .glass-stage__chip-inner {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -573,6 +574,80 @@
   color: var(--ink-2);
 }
 
+/* The microphone check (in the call): its state, the level, what to do. */
+.glass-stage-popover__check {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 4px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background-color: var(--glass-fill-quiet);
+}
+
+.glass-stage-popover__check-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.glass-stage-popover__meter {
+  position: relative;
+  display: block;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background-color: var(--glass-hair);
+}
+
+.glass-stage-popover__meter-fill {
+  position: absolute;
+  inset: 0;
+  transform-origin: left center;
+  background-color: var(--ink-1);
+}
+
+.glass-stage-popover__check[data-warning='true'] .glass-stage-popover__meter-fill {
+  background-color: var(--amber);
+}
+
+/* The watched stream's volume: mute, a slider, the percentage. */
+.glass-stage-popover__volume {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.glass-stage-popover__mute {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-ctl);
+  cursor: pointer;
+  color: var(--ink-1);
+  background-color: var(--glass-fill-quiet);
+  transition: background-color var(--glass-ms) var(--glass-ease);
+}
+
+.glass-stage-popover__mute:hover {
+  background-color: var(--glass-fill-on);
+}
+
+.glass-stage-popover__mute[aria-pressed='true'] {
+  background-color: var(--glass-fill-on);
+}
+
+.glass-stage-popover__range {
+  flex: 1 1 auto;
+  min-width: 0;
+  accent-color: var(--ink-1);
+}
+
 .glass-stage-popover__field {
   display: flex;
   flex-direction: column;
@@ -600,6 +675,170 @@
   box-shadow: inset 0 0 0 1px var(--glass-hair);
 }
 
+/* ---- The call itself (stage/CallStage.tsx): no stream, the people take the stage -- */
+/* The title row sits on the pane instead of over a picture; the cameras fill
+   what the stream would have, in a grid; people without a camera keep their
+   chips at the end. A Watch together video takes the space instead, with the
+   people in a 120px row under it. */
+.glass-stage__call-bar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-height: 44px;
+  padding: 2px 2px 0;
+}
+
+.glass-stage__call-main {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+}
+
+.glass-stage__call-row {
+  display: flex;
+  flex: 0 0 120px;
+  width: 100%;
+  min-height: 0;
+}
+
+.glass-stage__call-together {
+  flex: 0 0 auto;
+  width: 100%;
+}
+
+.glass-stage__call-notice {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  padding: 24px;
+  font-size: 15px;
+  line-height: 1.4;
+  text-align: center;
+  color: var(--ink-2);
+  pointer-events: none;
+}
+
+.glass-stage__call-notice[data-chips='true'] {
+  right: calc(var(--stage-chip-w) + var(--stage-gap));
+}
+
+.glass-stage[data-view='call'] .glass-stage__tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  grid-auto-rows: minmax(0, 1fr);
+}
+
+.glass-stage[data-view='call'] .glass-stage__tile {
+  height: auto;
+  min-height: 0;
+}
+
+/* A stage channel's audience: one text decision instead of the microphone. */
+.glass-stage__request {
+  gap: 8px;
+}
+
+/* ---- A stage channel's session over its chat (stage/StageChannelPanel.tsx) --------- */
+.glass-stage-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 4px 0 8px;
+  padding: 12px 14px;
+  border-radius: var(--r-tile);
+  background-color: var(--raise);
+  color: var(--ink-1);
+}
+
+.glass-stage-panel__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
+
+.glass-stage-panel__what {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.glass-stage-panel__topic {
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.glass-stage-panel__actions,
+.glass-stage-panel__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.glass-stage-panel__manage,
+.glass-stage-panel__hands {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.glass-stage-panel__people {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.glass-stage-panel__person {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+}
+
+.glass-stage-panel__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 14px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.glass-stage-panel__role,
+.glass-stage-panel__line {
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.glass-stage-panel__line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+
+.glass-stage-panel__error {
+  margin: 0;
+  font-size: 13px;
+  color: var(--accent-danger);
+}
+
 /* ---- The phone: the stream alone above the conversation (§8; G20 finishes it) ----- */
 .glass-stage[data-layout='phone'] {
   padding: 0;
@@ -610,17 +849,6 @@
   height: 100%;
   aspect-ratio: auto;
   border-radius: 0;
-}
-
-.glass-stage[data-layout='phone'] .glass-stage__overlay {
-  top: 10px;
-  right: 10px;
-  left: 12px;
-}
-
-.glass-stage[data-layout='phone'] .glass-stage__sbtn {
-  width: 36px;
-  height: 36px;
 }
 
 /* ---- Reduced transparency, and the native video route ------------------------------ */

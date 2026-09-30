@@ -6,24 +6,6 @@ pre, code,
   -webkit-user-select: text;
 }
 
-html[data-theme='light'],
-html[data-theme='light'] body,
-html[data-theme='light'] #root {
-  color-scheme: light;
-}
-
-html[data-theme='amoled'],
-html[data-theme='amoled'] body,
-html[data-theme='amoled'] #root {
-  color-scheme: dark;
-}
-
-html[data-theme='high-contrast'],
-html[data-theme='high-contrast'] body,
-html[data-theme='high-contrast'] #root {
-  color-scheme: dark;
-}
-
 ::selection {
   color: var(--text-primary);
   background: var(--accent-tint-strong);
@@ -130,16 +112,10 @@ html[data-theme='high-contrast'] #root {
   }
 }
 
-/* Unlayered on purpose, with the native-underlay block below it. Both are
+/* The native-underlay blocks below are unlayered on purpose. They are
    `!important` escape hatches, and important declarations reverse the layer
-   order: an important inside a layer beats an unlayered one. Layering this and
-   not that would flip which of the two wins on a Linux underlay, which is a
-   change to a feature, not to a utility. They stay peers. */
-.topbar-overlay-backdrop {
-  background: transparent !important;
-  -webkit-backdrop-filter: none !important;
-  backdrop-filter: none !important;
-}
+   order: an important inside a layer would beat an unlayered one, so layering
+   one of them would flip which wins on a Linux underlay. */
 
 /* Native video underlay hole (Linux desktop only).
    While a stream tile is composited on the native GL surface BELOW the

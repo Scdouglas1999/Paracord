@@ -1,6 +1,6 @@
 import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
 import { useSelectedGuildId } from '../../hooks/useGuilds';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { useNavigate } from 'react-router';
 import { MessageSquare, UserPlus, Ban, Users, CalendarDays, Link2, ShieldCheck, ShieldAlert, ShieldQuestion, QrCode, Copy, Flag, BadgeCheck, StickyNote, UserCheck, UserX, UserMinus } from 'lucide-react';
 import { isAdmin, type User } from '../../types/index';
@@ -26,8 +26,7 @@ import { accentCssColor } from './bannerCrop';
 import { ResourceImage } from '../ui/ResourceImage';
 import { useDownloadTicket } from '../../hooks/useDownloadTicket';
 import { presenceLight } from '../../lib/presence';
-import { personLight } from '../../lib/attention/light';
-import { LitAvatar } from '../light';
+import { Face } from '../glass/places/Lead';
 import { usePresence, type Presence } from '../../lib/motion';
 import { cn } from '../../lib/utils';
 import {
@@ -328,14 +327,14 @@ function UserProfileCard({
   const isStreaming = activity ? getActivityType(activity) === 1 : false;
   const statusLight = presenceLight(isStreaming ? 'streaming' : status);
   const displayName = user.display_name || user.username;
-  // The profile's face is WP1's avatar: the rim IS their light, the initials
-  // fallback is their identity hue, and the label says it in words (§1.5, §9).
-  const person = personLight({
+  // The profile's face and the mark that says whether they are here. The mark
+  // is ink, not color (a dot, a ring, a dot with a bar); amber only when they
+  // are live in a voice channel. The label says it in words too.
+  const face = {
     userId: user.id,
     name: displayName,
-    status: isStreaming ? 'streaming' : status,
     avatar: profileData?.user?.avatar_hash ?? user.avatar_hash ?? user.avatar ?? null,
-  });
+  };
 
   useEffect(() => {
     try {
@@ -537,7 +536,20 @@ function UserProfileCard({
         {/* Identity header — avatar overlaps the banner */}
         <div className="px-5 pb-4">
           <div className="relative -mt-9 mb-3 w-max">
-            <LitAvatar person={person} size={72} hideLabel title={`Status: ${statusLight.label}`} />
+            {/* The ring is the card's own color, so the face bites the banner and the mark bites the face. */}
+            <span
+              className="glass-person"
+              style={{ width: 72, height: 72, '--face-ring': 'var(--bg-floating)' } as CSSProperties}
+              title={`Status: ${statusLight.label}`}
+            >
+              <Face face={face} size={72} style={{ boxShadow: '0 0 0 4px var(--bg-floating)' }} />
+              <span
+                className="glass-presence"
+                data-status={isStreaming ? 'online' : status}
+                data-live={isStreaming ? '' : undefined}
+                aria-hidden
+              />
+            </span>
             <span className="sr-only">{statusLight.label}</span>
           </div>
 

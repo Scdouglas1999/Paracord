@@ -1,13 +1,11 @@
 import { useRef, useState, type CSSProperties } from 'react';
-import { ChevronLeft, PanelLeft, PanelLeftClose, Phone, PhoneOff, Search, Users } from 'lucide-react';
-import { useNavigate } from 'react-router';
+import { Phone, PhoneOff, Search, Users } from 'lucide-react';
 import { useConversationActions } from '../../../hooks/useConversationActions';
 import { useCurrentAccountScope, useCurrentUser } from '../../../hooks/useCurrentUser';
 import { useCurrentReadStates } from '../../../hooks/useReadStates';
 import { useCurrentMessageStore } from '../../../hooks/useMessageStore';
 import { isMessageUnread } from '../../../hooks/useUnreadCounts';
 import { entityScopeKey } from '../../../lib/serverScope';
-import { useUIStore } from '../../../stores/uiStore';
 import { ContextMenu } from '../../ui/ContextMenu';
 import { Tooltip } from '../../ui/Tooltip';
 import { VoiceConnectionCheck } from '../../voice/VoiceConnectionCheck';
@@ -30,9 +28,8 @@ import { useDmCall } from './useDmCall';
  *
  * Phone (§8, `screens/07`): the pill sits above the header (the pane mounts it
  * there); the header is the title (17/600), the server under it, and how many
- * messages are new, with search and members as quiet icons. Until the phone
- * frame is rebuilt (WP-G20) it keeps the Lantern navigation: the drawer button
- * on a channel, the way back to messages on a DM.
+ * messages are new, with search and members as quiet icons. Its first button
+ * is "Back to places" (`PlacesToggle`): on a phone places is its own screen.
  */
 export function ConversationHeader({ subject }: { subject: ConversationSubject }) {
   const scope = useCurrentAccountScope();
@@ -85,7 +82,6 @@ function encryptionCaption(encrypted: boolean, encryption: string): string {
 }
 
 function OwnedConversationHeader({ subject }: { subject: ConversationSubject }) {
-  const navigate = useNavigate();
   const layout = useGlassLayout();
   const phone = layout === 'phone';
   const isDM = subject.kind === 'dm';
@@ -97,7 +93,6 @@ function OwnedConversationHeader({ subject }: { subject: ConversationSubject }) 
 
   const searchOpen = useHeaderSheetOpen('search');
   const peopleOpen = useHeaderSheetOpen('people', { isGroupDm });
-  const sidebarCollapsed = useUIStore((s) => s.sidebarCollapsed);
   const newCount = useNewOnEntry(subject.channelId, phone && !isDM);
 
   // The title's menu opens under the title and hands focus to what it opened.
@@ -149,43 +144,11 @@ function OwnedConversationHeader({ subject }: { subject: ConversationSubject }) 
 
   const descriptionId = `${subject.channelId}-attention`;
 
-  const drawerButton = (
-    <button
-      type="button"
-      className="glass-header__btn glass-header__nav glass-focusable"
-      aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-      title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-      onClick={() => {
-        const ui = useUIStore.getState();
-        // Opening the drawer must dismiss the details overlay; both float at
-        // the same level on a phone.
-        if (ui.sidebarCollapsed) {
-          ui.setContextPanelMode(null);
-          ui.setSidebarCollapsed(false);
-          return;
-        }
-        ui.setSidebarCollapsed(true);
-      }}
-    >
-      {sidebarCollapsed ? <PanelLeft size={18} aria-hidden /> : <PanelLeftClose size={18} aria-hidden />}
-    </button>
-  );
-
-  const backButton = (
-    <button
-      type="button"
-      className="glass-header__btn glass-header__nav glass-focusable"
-      aria-label="Back to messages"
-      title="Back to messages"
-      onClick={() => navigate('/app/dms')}
-    >
-      <ChevronLeft size={20} aria-hidden />
-    </button>
-  );
-
   return (
     <div className="glass-header" data-layout={layout} data-subject={subject.kind} style={style}>
-      {phone ? (isDM ? backButton : drawerButton) : <PlacesToggle className="glass-header__places" />}
+      {/* Phone: places is its own screen and this is the way back to it; compact:
+          it opens the places overlay; wide: nothing (places is a pane). */}
+      <PlacesToggle className={phone ? 'glass-header__btn glass-header__nav' : 'glass-header__places'} />
 
       <div className="glass-header__heading">
         <h1 className="glass-header__name">
@@ -221,7 +184,11 @@ function OwnedConversationHeader({ subject }: { subject: ConversationSubject }) 
 
       {!phone && (
         <div className="glass-header__pill">
-          <CallPill guildId={subject.kind === 'channel' ? subject.guildId : null} layout="row" />
+          <CallPill
+            guildId={subject.kind === 'channel' ? subject.guildId : null}
+            channelId={subject.kind === 'channel' ? subject.channelId : null}
+            layout="row"
+          />
         </div>
       )}
 

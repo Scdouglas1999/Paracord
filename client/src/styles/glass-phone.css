@@ -179,10 +179,34 @@
 }
 
 /* The stage (components/glass/stage) draws the stream and its notices, the clip
-   toast and the reactions. Its own phone overlay (title and a stop button) is
-   replaced by `.glass-phone-stage` below, which is the one the reference shows. */
-.glass-stage[data-layout='phone'] .glass-stage__overlay,
-.glass-stage[data-layout='phone'] .glass-stage__scrim {
+   toast and the reactions, and no overlay of its own on a phone: `.glass-phone-stage`
+   below is the one the reference shows. */
+/* The call itself on a phone (stage/CallStage.tsx): the cameras fill the card
+   (and full screen) clear of the chrome drawn over it (back and full screen at
+   the top, the call's name at the bottom, the controls capsule in full screen).
+   The pill above keeps the roster, so the chips give way to the cameras; with no
+   camera on, the people are the card. */
+.glass-stage[data-view='call'][data-layout='phone'] .glass-stage__call-main {
+  padding: 52px 10px 34px;
+}
+
+.glass-frame[data-layout='phone'][data-stage='theater'] .glass-stage[data-view='call'] .glass-stage__call-main {
+  padding: calc(var(--safe-top, 0px) + 60px) 10px calc(max(var(--safe-bottom, 0px), 12px) + 96px);
+}
+
+.glass-stage[data-view='call'][data-layout='phone'][data-cameras='true'] .glass-stage__chips {
+  display: none;
+}
+
+.glass-stage[data-view='call'][data-layout='phone'] .glass-stage__chips {
+  flex: 1 1 auto;
+  flex-flow: row wrap;
+  align-content: center;
+  justify-content: center;
+  margin: 0;
+}
+
+.glass-stage[data-view='call'][data-layout='phone'] .glass-stage__call-notice {
   display: none;
 }
 
@@ -346,8 +370,9 @@
   left: calc(var(--safe-left, 0px) + 54px);
 }
 
+/* Left of the tools: stream sound and full screen (36px each, 8px apart). */
 .glass-phone-stage[data-mode='fullscreen'] .glass-phone-stage__count {
-  right: calc(var(--safe-right, 0px) + 54px);
+  right: calc(var(--safe-right, 0px) + 98px);
 }
 
 .glass-phone-stage[data-mode='fullscreen'] .glass-phone-stage__shade--bottom {
@@ -481,11 +506,7 @@
   --stream-reactions-right: 20px;
 }
 
-/* ---- Call pill: edge to edge (pill/CallPill owns it; the header pads it 8px) ------------ */
-.glass-conversation[data-layout='phone'] .glass-conversation__phone-pill {
-  padding: 0 12px;
-}
-
+/* ---- Call pill: edge to edge (pill/CallPill owns it) --------------------------------------- */
 .glass-conversation[data-layout='phone'] .glass-conversation__phone-pill:not(:empty) {
   margin-bottom: 9px;
 }
@@ -504,23 +525,6 @@
 
 .glass-conversation[data-layout='phone'] .glass-conversation__timeline {
   margin-top: 6px;
-}
-
-/* The header's own drawer button (`sidebarCollapsed`) now opens the places screen
-   (phoneNav.ts turns the request into it), so it is the way back. It draws the
-   chevron of a back button. Delete this block when the header swaps the button
-   for `PlacesToggle` (docs/design/glass-g20-checkpoint.md). */
-.glass-header[data-layout='phone'] .glass-header__nav[aria-label$='sidebar'] > svg {
-  display: none;
-}
-
-.glass-header[data-layout='phone'] .glass-header__nav[aria-label$='sidebar']::before {
-  content: '';
-  width: 22px;
-  height: 22px;
-  background-color: currentColor;
-  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m15 18-6-6 6-6'/%3E%3C/svg%3E") center / contain no-repeat;
-  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m15 18-6-6 6-6'/%3E%3C/svg%3E") center / contain no-repeat;
 }
 
 /* ---- Message box: 12px in, above the home indicator (screens/07: 34px up) ---------------- */

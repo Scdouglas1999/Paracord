@@ -30,7 +30,7 @@ async function account(browser: Browser, playwright: Playwright, name: string) {
   return { context, page, api, user: credentials.user, email };
 }
 async function dismiss(page: Page) {
-  for (const name of ['Skip tour', 'Jump in', 'Close welcome screen']) {
+  for (const name of ['Jump in', 'Close welcome screen']) {
     const button = page.getByRole('button', { name, exact: true });
     if (await button.isVisible()) await button.click();
   }
@@ -45,7 +45,7 @@ async function setup(page: Page, id: string, returnTo: string) {
   if (await page.getByRole('alert').isVisible()) throw new Error(await page.getByRole('alert').innerText());
   await page.getByRole('checkbox').check(); await page.getByRole('button', { name: 'Continue', exact: true }).click();
   await expect(page).toHaveURL(new RegExp(returnTo));
-  await expect(page.getByRole('button', { name: 'Skip tour', exact: true })).toBeVisible(); await dismiss(page);
+  await dismiss(page);
 
 }
 /** Attaching a device identity revokes earlier sessions, so read-back needs a fresh login. */

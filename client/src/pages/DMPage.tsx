@@ -2,7 +2,7 @@ import { activateChannel } from '../lib/channelNavigation';
 import { accountScopeKey, type AccountScope } from '../lib/serverScope';
 import { getServerAccountScope } from '../lib/serverIdentity';
 import { useCurrentChannelStore, useAvailableChannels } from '../hooks/useChannels';
-import { useCurrentUser, useCurrentAccountScope } from '../hooks/useCurrentUser';
+import { useCurrentAccountScope } from '../hooks/useCurrentUser';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { MessagesSquare, PenSquare, Search } from 'lucide-react';
@@ -15,15 +15,11 @@ import { formatRowTime } from '../components/glass/places/model';
 import { MessageList } from '../components/message/MessageList';
 import { MessageInput } from '../components/message/MessageInput';
 import { DmPickerModal } from '../components/message/DmPickerModal';
-import { VoiceControlBar } from '../components/voice/VoiceControlBar';
-import { StreamViewer } from '../components/voice/StreamViewer';
 import { useChannelStore } from '../stores/channelStore';
 import { useReadStateStore } from '../stores/readStateStore';
 import { usePresenceStore } from '../stores/presenceStore';
 import { useAccountMessageStore } from '../hooks/useMessageStore';
 import { useServerListStore } from '../stores/serverListStore';
-import { useUIStore } from '../stores/uiStore';
-import { useVoiceStore } from '../stores/voiceStore';
 import { LOCAL_SERVER_ID } from '../lib/connectionManager';
 import { computeGuildUnread } from '../hooks/useUnreadCounts';
 import { snowflakeToMs } from '../lib/attention/conversationModel';
@@ -78,9 +74,9 @@ function formatDmActivity(id: string | null): { short: string; full: string } | 
  * by last activity, carry presence dots + unread/mention badges, and open the
  * conversation via the standard DM-open flow.
  *
- * `/app/dms/:channelId` renders the conversation exactly as before — message
- * internals (`MessageList` + composer) reused untouched; the group-DM recipient
- * surface lives in the shell-owned `ContextPanel` `members` mode.
+ * `/app/dms/:channelId` renders the conversation — message internals
+ * (`MessageList` + composer) reused untouched; the group-DM recipients are the
+ * people sheet (header, Members).
  */
 export function DMPage() {
   const scope = useCurrentAccountScope();
@@ -95,21 +91,9 @@ function OwnedDMPage() {
   const availableChannels = useAvailableChannels();
   const byAccount = useReadStateStore((s) => s.byAccount);
   const activeServerId = useServerListStore((s) => s.activeServerId);
-  const setContextPanelMode = useUIStore((s) => s.setContextPanelMode);
   const [replyingTo, setReplyingTo] = useState<{ id: string; author: string; content: string } | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [conversationQuery, setConversationQuery] = useState('');
-
-  // Voice hooks must run unconditionally (before any early return).
-  const voiceConnected = useVoiceStore((s) => s.connected);
-  const voiceChannelId = useVoiceStore((s) => s.channelId);
-  const voiceGuildId = useVoiceStore((s) => s.guildId);
-  const watchedStreamerId = useVoiceStore((s) => s.watchedStreamerId);
-  const setWatchedStreamer = useVoiceStore((s) => s.setWatchedStreamer);
-  const selfStream = useVoiceStore((s) => s.selfStream);
-  const stopStream = useVoiceStore((s) => s.stopStream);
-  const participants = useVoiceStore((s) => s.participants);
-  const currentUserId = useCurrentUser()?.id ?? null;
 
   const dmChannelInfo = useMemo(() => {
     if (!channelId) return null;
@@ -126,11 +110,10 @@ function OwnedDMPage() {
     isGroupDM ? 'Just you' : 'Direct message',
   );
 
-  // Reset transient chat state and any lingering context panel when the DM changes.
+  // Reset transient chat state when the DM changes.
   useEffect(() => {
     setReplyingTo(null);
-    setContextPanelMode(null);
-  }, [channelId, setContextPanelMode]);
+  }, [channelId]);
 
   // Reuse the sidebar's cross-server DM fetch path (no new endpoint) so past and
   // present conversations across every connected server land in the list.
@@ -188,19 +171,6 @@ function OwnedDMPage() {
     activateChannel({ id: row.channelId, scope: row.scope });
     navigate(`/app/dms/${row.channelId}`);
   };
-
-  const inThisDmCall =
-    voiceConnected &&
-    channelId != null &&
-    voiceChannelId === channelId &&
-    voiceGuildId === 'dm';
-
-  const watchedStreamerName = useMemo(() => {
-    if (!watchedStreamerId) return undefined;
-    if (currentUserId != null && watchedStreamerId === currentUserId) return 'You';
-    const vs = participants.get(watchedStreamerId);
-    return vs ? displayName(vs) : undefined;
-  }, [watchedStreamerId, currentUserId, participants]);
 
   // ---- Index view: the all-conversations destination -----------------------
   if (!channelId) {
@@ -285,36 +255,12 @@ function OwnedDMPage() {
   // ---- Conversation view ---------------------------------------------------
   // A DM is a conversation between people, so it is the same Glass
   // conversation pane as a channel: header, timeline in the column, message
-  // box. A DM call's stream and controls sit in it until the call pill and the
-  // stage (WP-G12, WP-G14) carry them.
+  // box. A DM call is the header's call button and the call pill; "Show the
+  // call" on the pill puts the call on the stage (the people, their cameras,
+  // the microphone and camera, devices, Leave), like a server voice channel's.
   return (
     <ConversationPane
       subject={{ kind: 'dm', channelId, title: recipientName, isGroup: isGroupDM }}
-      notices={
-        inThisDmCall && watchedStreamerId ? (
-          <div className="glass-dmstream">
-            <ErrorBoundary variant="section" label="the stream">
-            <StreamViewer
-              streamerId={watchedStreamerId}
-              streamerName={watchedStreamerName}
-              expectingStream={
-                Boolean(
-                  currentUserId != null &&
-                    watchedStreamerId === currentUserId &&
-                    selfStream,
-                )
-              }
-              onStopWatching={() => setWatchedStreamer(null)}
-              onStopStream={
-                currentUserId != null && watchedStreamerId === currentUserId
-                  ? () => stopStream()
-                  : undefined
-              }
-            />
-            </ErrorBoundary>
-          </div>
-        ) : undefined
-      }
       timeline={
         <ErrorBoundary variant="section" label="the message feed">
           <MessageList
@@ -338,7 +284,6 @@ function OwnedDMPage() {
           onCancelReply={() => setReplyingTo(null)}
         />
       }
-      dock={inThisDmCall ? <VoiceControlBar /> : undefined}
     />
   );
 }

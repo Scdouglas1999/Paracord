@@ -1,3 +1,8 @@
+> **Superseded by [`docs/glass-spec.md`](glass-spec.md).** The visual contract is
+> now Glass (branch `design/glass`, 2026-09-30). Both the Emerald Commons system
+> this file used to hold and the Lantern Stage spec it points to below are
+> history.
+
 # Paracord Design Language — superseded
 
 **The visual contract is [`docs/lantern-stage-spec.md`](lantern-stage-spec.md)

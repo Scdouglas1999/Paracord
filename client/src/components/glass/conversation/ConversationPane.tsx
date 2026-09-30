@@ -16,13 +16,12 @@ import { ConversationHeader } from './ConversationHeader';
  *   notices     strips between the header and the timeline, in the column
  *   timeline    full pane width, its rows sit in the column (WP-G10)
  *   composer    the message box, a 52px capsule (styles/glass-conversation.css)
- *   dock        a DM call's control bar, until the pill carries it (WP-G12)
  *
  * The shell sizes and paints the pane; this fills it and never sets its own
  * outer size, radius or position. Region class names are the shell's contract
  * (`.glass-conversation__*`, styles/glass-layout.css).
  */
-export function ConversationPane({ subject, notices, timeline, composer, dock }: ConversationPaneProps) {
+export function ConversationPane({ subject, notices, timeline, composer }: ConversationPaneProps) {
   const layout = useGlassLayout();
   const capturing = useVoiceStore((s) => s.systemAudioCaptureActive);
 
@@ -30,7 +29,11 @@ export function ConversationPane({ subject, notices, timeline, composer, dock }:
     <div className="glass-conversation" data-subject={subject.kind} data-layout={layout}>
       {layout === 'phone' && (
         <div className="glass-conversation__phone-pill">
-          <CallPill guildId={subject.kind === 'channel' ? subject.guildId : null} layout="stacked" />
+          <CallPill
+            guildId={subject.kind === 'channel' ? subject.guildId : null}
+            channelId={subject.kind === 'channel' ? subject.channelId : null}
+            layout="stacked"
+          />
         </div>
       )}
       <div className="glass-conversation__header">
@@ -46,7 +49,6 @@ export function ConversationPane({ subject, notices, timeline, composer, dock }:
       {notices != null && <div className="glass-conversation__notices">{notices}</div>}
       <div className="glass-conversation__timeline">{timeline}</div>
       {composer != null && <div className="glass-conversation__composer">{composer}</div>}
-      {dock}
     </div>
   );
 }

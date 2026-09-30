@@ -25,6 +25,7 @@ import {
   toggleListen,
   toggleMic,
   useListenBlockStore,
+  showCall,
   watchStream,
   type PillActionTarget,
 } from './pillActions';
@@ -74,8 +75,8 @@ function announce(before: PillTarget['relation'], now: PillTarget['relation'], t
   return null;
 }
 
-export function CallPill({ guildId, layout }: CallPillProps) {
-  const target = useCallPillTarget(guildId);
+export function CallPill({ guildId, channelId = null, layout }: CallPillProps) {
+  const target = useCallPillTarget(guildId, channelId);
   const stageOpen = useGlassStore(selectStageOpen);
   // On the row the pill becomes the stage (screens/04): it is not drawn while one
   // is open. On the phone the stream sits above it and the pill stays (screens/07).
@@ -140,6 +141,9 @@ function PillBody({
   const streamer = target.streamer;
   const watchLabel = streamer ? streamLabel(streamer) : null;
   const canWatch = Boolean(streamer) && !stageOpen;
+  // Nobody else's screen to watch: in the call, the stage can still show the
+  // call itself (cameras, sharing, the call's controls).
+  const canShowCall = joined && !streamer && !stageOpen;
   const blockReason = listenBlockReason(blocked, target);
   const line = pillLine(target, joined && selfMute);
   const talker = target.talkers[0] ?? null;
@@ -184,6 +188,7 @@ function PillBody({
     Math.min(target.faces.length, PILL_FACES),
     target.faces.length > PILL_FACES,
     canWatch,
+    canShowCall,
     listening,
     line ?? '',
   ].join('|');
@@ -270,6 +275,7 @@ function PillBody({
   const onWatch = () => {
     if (streamer) watchStream(action, streamer.userId);
   };
+  const onShowCall = () => showCall(action);
 
   const expanded = phase !== 'compact';
   const faces = target.faces.map((person) => ({ userId: person.userId, name: person.name, avatar: person.avatar }));
@@ -321,6 +327,19 @@ function PillBody({
     >
       <WatchGlyph className="glass-pill__watch-icon" size={17} />
       <span className="glass-pill__label">Watch</span>
+    </GlassButton>
+  );
+
+  const showCallButton = canShowCall && (
+    <GlassButton
+      variant="text"
+      className="glass-pill__watch glass-pill__show-call"
+      aria-label="Show the call"
+      title="Show the call: cameras, screen sharing and the call's controls"
+      onClick={onShowCall}
+    >
+      <WatchGlyph className="glass-pill__watch-icon" size={17} />
+      <span className="glass-pill__label">Show call</span>
     </GlassButton>
   );
 
@@ -431,8 +450,9 @@ function PillBody({
           <div className="glass-pill__actions">
             {joined ? (
               <>
-                {micButton}
+                {!target.audience && micButton}
                 {watchButton}
+                {showCallButton}
                 {leaveButton}
               </>
             ) : (
@@ -462,13 +482,14 @@ function PillBody({
               {moreFaces > 0 && <span className="glass-pill__more">+{moreFaces}</span>}
               <span className="glass-pill__name" title={target.title}>{target.title}</span>
               {wave}
-              {expanded && line && <span className="glass-pill__sub">{line}</span>}
+              {(expanded || target.reconnecting) && line && <span className="glass-pill__sub">{line}</span>}
             </button>
             <div className="glass-pill__controls">
               {joined ? (
                 <>
-                  {micButton}
+                  {!target.audience && micButton}
                   {watchButton}
+                  {showCallButton}
                   {leaveButton}
                 </>
               ) : (

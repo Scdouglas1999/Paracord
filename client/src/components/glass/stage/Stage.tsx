@@ -2,11 +2,12 @@ import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { MessageSquareText, PanelLeft, X } from 'lucide-react';
 
 import { useGlassKeybinds } from '../../../hooks/useGlassKeybinds';
-import { useGlassStore } from '../../../stores/glassStore';
+import { isStreamTarget, useGlassStore, type OpenStageMode, type StreamStageTarget } from '../../../stores/glassStore';
 import { useVoiceStore } from '../../../stores/voiceStore';
 import { GlassButton, SplitGlyph, TheaterGlyph } from '../primitives';
 import type { StageProps } from '../shell/slots';
 import { useGlassLayout } from '../shell/useGlassLayout';
+import { CallStage } from './CallStage';
 import { ClipToast } from './ClipToast';
 import {
   controlsFit,
@@ -20,6 +21,7 @@ import {
 import { StageControls } from './StageControls';
 import { StagePeople } from './StagePeople';
 import { StreamReactionsLayer } from './StreamReactionsLayer';
+import { StreamSoundButton } from './StreamSound';
 import { StreamSurface } from './StreamSurface';
 import { SurfacingMessages } from './SurfacingMessages';
 import { useStreamPoster } from './stageTransition';
@@ -57,8 +59,17 @@ import { stopWatching, useStageWatch } from './useStageWatch';
  * Watching: the stage starts the watch when it opens and stops it when it
  * closes (`useStageWatch`); watching never joins and Stop watching never leaves.
  * Keys: `useGlassKeybinds` (S, T, H, C, Esc).
+ *
+ * The call itself (`target.streamerId === null`, "Show the call" on the pill)
+ * is `CallStage`: nobody's stream, the people and their cameras, the call's
+ * controls. A direct message call is either, with no server (`guildId` null).
  */
 export function Stage({ target, mode }: StageProps) {
+  return isStreamTarget(target) ? <StreamStage target={target} mode={mode} /> : <CallStage target={target} mode={mode} />;
+}
+
+/** A stream on the stage: side by side, or theater. */
+function StreamStage({ target, mode }: { target: StreamStageTarget; mode: OpenStageMode }) {
   const layout = useGlassLayout();
   const rootRef = useRef<HTMLDivElement | null>(null);
   const posterRef = useRef<HTMLCanvasElement | null>(null);
@@ -143,22 +154,22 @@ export function Stage({ target, mode }: StageProps) {
     </span>
   ) : null;
 
-  const overlay = (
+  // On a phone the card draws its own chrome (shell/PhoneStageChrome.tsx): back,
+  // clip "30s", full screen, the name and the count.
+  const overlay = phone ? null : (
     <div className="glass-stage__overlay">
       <div className="glass-stage__title-group" data-glass-move="title">
-        {!phone && (
-          <button
-            type="button"
-            className="glass-stage__sbtn glass-focusable"
-            aria-label={browseOpen ? 'Hide servers and channels' : 'Show servers and channels'}
-            aria-pressed={browseOpen}
-            aria-keyshortcuts="S"
-            title="Servers and channels (S)"
-            onClick={toggleBrowse}
-          >
-            <PanelLeft size={18} strokeWidth={1.7} aria-hidden="true" />
-          </button>
-        )}
+        <button
+          type="button"
+          className="glass-stage__sbtn glass-focusable"
+          aria-label={browseOpen ? 'Hide servers and channels' : 'Show servers and channels'}
+          aria-pressed={browseOpen}
+          aria-keyshortcuts="S"
+          title="Servers and channels (S)"
+          onClick={toggleBrowse}
+        >
+          <PanelLeft size={18} strokeWidth={1.7} aria-hidden="true" />
+        </button>
         <span className="glass-stage__live-dot" aria-hidden="true" />
         <span className="glass-stage__titles">
           <span className="glass-stage__title">{model.label}</span>
@@ -174,6 +185,7 @@ export function Stage({ target, mode }: StageProps) {
         </span>
       </div>
       <div className="glass-stage__actions" data-glass-move="actions">
+        <StreamSoundButton />
         {theater && (
           <button
             type="button"
@@ -195,28 +207,25 @@ export function Stage({ target, mode }: StageProps) {
             <MessageSquareText size={18} strokeWidth={1.7} aria-hidden="true" />
           </button>
         )}
-        {!phone && (
-          <button
-            type="button"
-            className="glass-stage__sbtn glass-focusable"
-            aria-label={theater ? 'Show side by side with chat' : 'Theater mode'}
-            aria-keyshortcuts="T"
-            title={theater ? 'Show side by side with chat (T)' : 'Theater mode (T)'}
-            onClick={() => setStageMode(theater ? 'side' : 'theater')}
-          >
-            {theater ? <SplitGlyph size={18} /> : <TheaterGlyph size={18} />}
-          </button>
-        )}
+        <button
+          type="button"
+          className="glass-stage__sbtn glass-focusable"
+          aria-label={theater ? 'Show side by side with chat' : 'Theater mode'}
+          aria-keyshortcuts="T"
+          title={theater ? 'Show side by side with chat (T)' : 'Theater mode (T)'}
+          onClick={() => setStageMode(theater ? 'side' : 'theater')}
+        >
+          {theater ? <SplitGlyph size={18} /> : <TheaterGlyph size={18} />}
+        </button>
         <button
           type="button"
           className="glass-stage__sbtn glass-stage__stop glass-focusable"
-          aria-label={phone ? 'Stop watching' : undefined}
           aria-keyshortcuts="Escape"
           title="Stop watching (Esc). You stay in the call."
           onClick={stopWatching}
         >
           <X size={16} strokeWidth={2} aria-hidden="true" />
-          {!phone && <span>Stop watching</span>}
+          <span>Stop watching</span>
         </button>
       </div>
     </div>
@@ -243,7 +252,7 @@ export function Stage({ target, mode }: StageProps) {
         style={streamStyle}
       >
         <canvas ref={posterRef} className="glass-stage__poster" aria-hidden="true" width={32} height={18} />
-        <span className="glass-stage__scrim" aria-hidden="true" />
+        {!phone && <span className="glass-stage__scrim" aria-hidden="true" />}
         {overlay}
         <ClipToast target={clipTarget} />
         <StreamReactionsLayer target={target} />

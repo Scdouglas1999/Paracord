@@ -1071,8 +1071,8 @@ export class BrowserMediaEngine implements MediaEngine {
 
   /**
    * Set per-source playback gain (0..2) for screen-share audio and remote voice.
-   * Mirrors TauriMediaEngine → voice_set_source_volume so StreamViewer volume
-   * works on both engines.
+   * Mirrors TauriMediaEngine → voice_set_source_volume so the stage's stream
+   * volume (`voiceStore.setWatchVolume`) works on both engines.
    */
   setSourceVolume(userId: string, gain: number): void {
     const clamped = Math.min(2, Math.max(0, gain));
@@ -1156,8 +1156,8 @@ export class BrowserMediaEngine implements MediaEngine {
       void this.applyDeliveredTrackKeys(publishedTrack);
     }
 
-    // Initial gain applied above; StreamViewer drives later changes via
-    // setSourceVolume — no 100ms poll.
+    // Initial gain applied above; the stage's stream volume drives later changes
+    // via setSourceVolume — no 100ms poll.
 
     return () => {
       const sub = this.screenAudioSubscriptions.get(userId);

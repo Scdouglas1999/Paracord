@@ -1,32 +1,29 @@
-import { useMobile } from '../hooks/useMobile';
 import { captureScopedOperation } from '../lib/operationContext';
 import { useCurrentChannelStore, getAccountChannelView, useGuildChannels } from '../hooks/useChannels';
 import { useCurrentGuilds } from '../hooks/useGuilds';
 import { entityScopeKey as memberScopeKey } from '../lib/serverScope';
-import { useCurrentUser, useCurrentAccountScope } from '../hooks/useCurrentUser';
-import { useEffect, useRef, useState } from 'react';
+import { useCurrentAccountScope } from '../hooks/useCurrentUser';
+import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { ForumView } from '../components/channel/ForumView';
 import { useChannelStore } from '../stores/channelStore';
 import { useGuildStore } from '../stores/guildStore';
 import { useMemberStore } from '../stores/memberStore';
 import { cancelMessageFetch } from '../stores/messageStore';
-import { useVoiceStore } from '../stores/voiceStore';
 import { BuildingNotFound } from '../components/guild/BuildingNotFound';
 import { GuildWelcomeScreen } from '../components/guild/GuildWelcomeScreen';
 import { GuildOnboardingGate } from '../components/guild/GuildOnboardingGate';
 import { createChannelApi } from '../api/channels';
-import { usePermissions } from '../hooks/usePermissions';
-import { ChannelType, Permissions, hasPermission } from '../types';
+import { ChannelType } from '../types';
 import {
   getVersionedStorageItem,
   setVersionedStorageItem,
 } from '../lib/versionedStorage';
 import { GuildLoadingScreen, ChannelNotFoundScreen, ChannelLoadErrorScreen } from './guild/GuildStateScreens';
-import { VoiceStageChannel } from './guild/VoiceStageChannel';
 import { TextChannelView } from './guild/TextChannelView';
 import { ChannelAmbient } from '../components/sports/ChannelPin';
 import { ConversationPane, type ConversationSubject } from '../components/glass/conversation';
+import { StageChannelPanel } from '../components/glass/stage/StageChannelPanel';
 export function GuildPage() {
   const { guildId, channelId } = useParams();
   const navigate = useNavigate();
@@ -44,10 +41,6 @@ export function GuildPage() {
   );
   const selectChannel = useCurrentChannelStore((s) => s.selectChannel);
   const channel = channels.find((c) => c.id === channelId);
-  const currentUserId = useCurrentUser()?.id ?? null;
-  const setWatchedStreamer = useVoiceStore((s) => s.setWatchedStreamer);
-
-  const isPhoneLayout = useMobile();
 
   // Welcome screen state
   const guilds = useCurrentGuilds();
@@ -67,16 +60,9 @@ export function GuildPage() {
     setShowWelcome(false);
   };
 
-  const { permissions, isAdmin: isGuildAdmin } = usePermissions(guildId || null);
-
   const channelName = channel?.name || 'Unknown channel';
-  const isVoice = channel?.type === 2;
-  const isStage = channel?.type === 13 || channel?.channel_type === 13;
-  const isVoiceLike = isVoice || isStage;
+  const isStage = channel?.type === ChannelType.Stage || channel?.channel_type === ChannelType.Stage;
   const isForum = channel?.type === 7 || channel?.channel_type === 7;
-  const canManageStage = Boolean(
-    guildId && (isGuildAdmin || hasPermission(permissions, Permissions.MANAGE_CHANNELS)),
-  );
 
   // Fetch channels when guildId changes
   useEffect(() => {
@@ -97,23 +83,13 @@ export function GuildPage() {
     if (memberScope && channelId) cancelMessageFetch(memberScope, channelId);
   }, [memberScope, channelId]);
 
-  const prevChannelIdRef = useRef<string | undefined>(channelId);
-
+  // Watching is the stage's (glassStore), not the route's: switching channels
+  // keeps a stream playing beside the new conversation (docs/glass-spec.md §6.3).
   useEffect(() => {
-    const prevChannelId = prevChannelIdRef.current;
-    prevChannelIdRef.current = channelId;
-
-    if (prevChannelId && prevChannelId !== channelId) {
-      // Only drop a watched stream when the user actually switches channels.
-      // Clearing on the initial mount would stomp a RoomCard "Watch" handoff,
-      // which sets voiceStore.watchedStreamerId *before* navigating here.
-      setWatchedStreamer(null);
-    }
-
     if (channelId && channel) {
       selectChannel(channelId);
     }
-  }, [channelId, channel, selectChannel, setWatchedStreamer]);
+  }, [channelId, channel, selectChannel]);
 
   useEffect(() => {
     if (!channelId || !memberScope) return;
@@ -165,27 +141,6 @@ export function GuildPage() {
     </>
   );
 
-  /* The Stage carries its own header (spec §7.2: room name, building and
-     duration, the here-now strip, Invite / Layout / more), so it is not a
-     conversation and keeps its own page inside the conversation pane until
-     the Glass stage (WP-G14) takes the voice route over. */
-  if (isVoiceLike) {
-    return (
-      <div className="flex h-full min-h-0 flex-col">
-        {entryChrome}
-        <VoiceStageChannel
-          guildId={guildId}
-          channelId={channelId}
-          channelName={channelName}
-          isStage={isStage}
-          canManageStage={canManageStage}
-          currentUserId={currentUserId}
-          isPhoneLayout={isPhoneLayout}
-        />
-      </div>
-    );
-  }
-
   // Every route that gets here has both ids (`guilds/:guildId/channels/:channelId`).
   if (!guildId || !channelId) return null;
 
@@ -210,8 +165,13 @@ export function GuildPage() {
     );
   }
 
-  // A text channel or a thread: the conversation pane the shell floats on the
-  // room, with its header, its timeline in the 720px column and its message box.
+  // A text channel, a thread, or a voice channel's chat: the conversation pane
+  // the shell floats on the room, with its header, its timeline in the 720px
+  // column and its message box. A voice or stage channel's header carries that
+  // channel's pill (join, listen, watch; "Show the call" once you are in), and
+  // the call itself is the stage (docs/design/glass-plan.md §8.4: voice channel
+  // chat beside the stage; stage channels use the stage look). A stage channel
+  // adds its session (topic, moderators, raised hands) over the chat.
   return (
     <TextChannelView
       guildId={guildId}
@@ -225,6 +185,7 @@ export function GuildPage() {
           {channel?.type === ChannelType.Text && (
             <ChannelAmbient guildId={guildId} channelId={channelId} />
           )}
+          {isStage && <StageChannelPanel guildId={guildId} channelId={channelId} channelName={channelName} />}
           {entryChrome}
         </>
       }

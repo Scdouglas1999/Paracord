@@ -1,3 +1,9 @@
+> **Superseded by [`docs/glass-spec.md`](glass-spec.md).** Glass is the only
+> layout and look since the Glass redesign on branch `design/glass`
+> (2026-09-30). The Lantern Stage surfaces, tokens and looks described below are
+> retired. This file is kept as history. What shipped is summarized in
+> [`docs/design/glass-summary.md`](design/glass-summary.md).
+
 # Paracord Design Language v2 — "Lantern Stage"
 
 > **This file is the contract for the v2 UI overhaul.** It supersedes the visual

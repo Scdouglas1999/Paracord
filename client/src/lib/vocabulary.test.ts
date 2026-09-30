@@ -291,9 +291,11 @@ describe('the thing inside a server is a channel', () => {
     expect(copy).toContain('Voice channels');
   });
 
-  it('joins a voice channel by joining voice, not by entering a room', () => {
-    const copy = copyOf('pages/guild/VoiceLobby.tsx');
-    expect(copy).toContain('Join voice');
+  it('joins a voice channel by joining it, not by entering a room', () => {
+    // The call pill names what you join: "Join Lounge".
+    const copy = copyOf('components/glass/pill/CallPill.tsx');
+    expect(copy).toMatch(/^Join\b/m);
+    expect(copy).not.toMatch(/enter (?:the )?room/i);
   });
 });
 
@@ -365,9 +367,10 @@ describe('presence and activity are plain words', () => {
   });
 
   it('calls the status you set on yourself Online, and invisible stays invisible', () => {
-    const plate = copyOf('components/layout/sidebar/AccountPlate.tsx');
-    expect(plate).toContain('Online');
-    expect(plate).toContain('Invisible');
+    // The status you set is the account menu's (behind your face).
+    const menu = copyOf('components/glass/sheets/AccountMenu.tsx');
+    expect(menu).toContain('Online');
+    expect(menu).toContain('Invisible');
     expect(copyOf('lib/presence.ts')).toContain('Online');
   });
 });

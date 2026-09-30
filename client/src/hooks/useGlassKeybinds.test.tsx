@@ -15,8 +15,8 @@ vi.mock('../lib/media/clips/useClip', () => ({ triggerClip: clip.triggerClip }))
 
 const LOUNGE: StageTarget = { serverId: '__local__', guildId: 'g1', channelId: 'lounge', streamerId: 'vincent' };
 
-function Keys({ phone = false, onStop }: { phone?: boolean; onStop: () => void }) {
-  useGlassKeybinds({ enabled: true, phone, onStop });
+function Keys({ phone = false, stream = true, onStop }: { phone?: boolean; stream?: boolean; onStop: () => void }) {
+  useGlassKeybinds({ enabled: true, phone, stream, onStop });
   return null;
 }
 
@@ -139,16 +139,32 @@ describe('useGlassKeybinds', () => {
     expect(useGlassStore.getState().browseOpen).toBe(false);
   });
 
-  it('the phone stage answers Esc only', () => {
+  it('the phone stage answers Esc and C (its card has a Clip button), not S or T', () => {
     const onStop = vi.fn();
     render(<Keys phone onStop={onStop} />);
     useGlassStore.getState().openStage(LOUNGE);
     press('s');
     press('t');
-    press('c');
     expect(useGlassStore.getState().browseOpen).toBe(false);
     expect(useGlassStore.getState().stage.mode).toBe('side');
+    press('c');
+    expect(clip.triggerClip).toHaveBeenCalledTimes(1);
+    press('Escape');
+    expect(onStop).toHaveBeenCalledTimes(1);
+  });
+
+  it('the call itself (no stream) leaves T, H and C alone, and keeps S and Esc', () => {
+    const onStop = vi.fn();
+    render(<Keys stream={false} onStop={onStop} />);
+    useGlassStore.getState().openStage({ ...LOUNGE, streamerId: null });
+    press('t');
+    press('c');
+    expect(useGlassStore.getState().stage.mode).toBe('side');
     expect(clip.triggerClip).not.toHaveBeenCalled();
+    press('s');
+    expect(useGlassStore.getState().browseOpen).toBe(true);
+    press('Escape');
+    expect(useGlassStore.getState().browseOpen).toBe(false);
     press('Escape');
     expect(onStop).toHaveBeenCalledTimes(1);
   });

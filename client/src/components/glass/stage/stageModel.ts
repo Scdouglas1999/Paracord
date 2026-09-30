@@ -16,6 +16,13 @@
  *
  * The person being watched is kept even after they leave the channel, so the
  * overlay can still say whose stream this was ("Vincent stopped sharing").
+ *
+ * THE CALL ITSELF (`target.streamerId === null`, `view: 'call'`): nobody's
+ * screen is on the stage. The people take the stage (camera tiles fill it,
+ * chips at the end), the title is the call's name and the subtitle says who is
+ * in it; the row keeps the call's controls and drops the stream's (reactions,
+ * Clip). A direct message call (`target.guildId === null`) is named for the
+ * people in it, and has no server.
  */
 
 import type { VoiceMode, VoiceState } from '../../../types';
@@ -54,9 +61,15 @@ export interface StageInput {
   joiningMode: VoiceMode | null;
   /** Epoch ms, for "live for 42 min". */
   nowMs: number;
+  /** A stage channel (type 13): people the moderators have not invited to speak are its audience. */
+  stageChannel?: boolean;
 }
 
 export interface StageModel {
+  /** A stream is watched, or the call itself is on the stage (no stream). */
+  view: 'stream' | 'call';
+  /** A direct message call: no server, no invite, no soundboard, no screen sharing. */
+  dm: boolean;
   /** "Game Night Lounge": the server and the channel, always both (screens/04). */
   place: string;
   channelName: string;
@@ -65,13 +78,13 @@ export interface StageModel {
   streamer: StagePerson | null;
   /** Their name for the sentences ("Vincent"); "You" for your own screen. */
   streamerName: string;
-  /** "Vincent's screen". */
+  /** "Vincent's screen"; the call's name ("Game Night Lounge", "Jeremy") for the call itself. */
   label: string;
   /** Whether the server still says they are sharing. */
   streamerSharing: boolean;
   /** Whole minutes live, from `self_stream_started_at`; null when the server did not say. */
   liveMinutes: number | null;
-  /** "Game Night Lounge, live for 42 min". */
+  /** "Game Night Lounge, live for 42 min"; for the call itself, who is in it ("3 in the call"). */
   subtitle: string;
   cameras: StagePerson[];
   chips: StagePerson[];
@@ -84,6 +97,15 @@ export interface StageModel {
   busy: boolean;
   /** Listening in (or connecting to listen): the mute circle moves the live preference too. */
   listening: boolean;
+  /** A stage channel's call. */
+  stageChannel: boolean;
+  /**
+   * In a stage channel's call as its audience (not invited to speak): the row
+   * offers "Request to speak" instead of the microphone, camera and share.
+   */
+  audience: boolean;
+  /** Your hand is raised (a request to speak is waiting for a moderator). */
+  handRaised: boolean;
 }
 
 function toStagePerson(state: VoiceState, input: StageInput): StagePerson {
@@ -107,32 +129,55 @@ function minutesSince(startedAtIso: string | null | undefined, nowMs: number): n
   return Math.max(0, Math.floor((nowMs - at) / 60_000));
 }
 
+/** "3 in the call", "Just you", "Nobody is in the call": who the call itself holds. */
+export function callLine(people: readonly StagePerson[]): string {
+  const joined = people.filter((person) => !person.listening);
+  const listeners = people.length - joined.length;
+  const head =
+    joined.length === 0
+      ? 'Nobody is in the call'
+      : joined.length === 1 && joined[0].self
+        ? 'Just you'
+        : `${joined.length} in the call`;
+  return listeners > 0 ? `${head}, ${listeners} listening in` : head;
+}
+
 export function buildStageModel(input: StageInput): StageModel {
   const { target } = input;
   const everyone = orderOccupants(input.states.map((state) => toStagePerson(state, input))) as StagePerson[];
   const others = everyone.filter((person) => !person.self);
   const self = everyone.filter((person) => person.self);
   const ordered = [...others, ...self];
+  const dm = target.guildId === null;
+  const watchedId = target.streamerId;
 
-  const streamerState = input.states.find((state) => state.user_id === target.streamerId) ?? null;
-  const streamer = ordered.find((person) => person.userId === target.streamerId) ?? null;
-  const knownName = input.people?.get(target.streamerId)?.name;
-  const streamerName = streamer?.name ?? knownName ?? 'Someone';
-  const isSelf = target.streamerId === input.selfUserId;
-  const label = isSelf ? 'Your screen' : `${streamerName}'s screen`;
+  const channelName = input.channelName?.trim() || (dm ? 'Voice call' : 'Voice channel');
+  const place = !dm && input.guildName?.trim() ? `${input.guildName.trim()} ${channelName}` : channelName;
+
+  const streamerState = watchedId === null ? null : input.states.find((state) => state.user_id === watchedId) ?? null;
+  const streamer = watchedId === null ? null : ordered.find((person) => person.userId === watchedId) ?? null;
+  const knownName = watchedId === null ? undefined : input.people?.get(watchedId)?.name;
+  const streamerName = watchedId === null ? '' : streamer?.name ?? knownName ?? 'Someone';
+  const isSelf = watchedId !== null && watchedId === input.selfUserId;
+  const label = watchedId === null ? place : isSelf ? 'Your screen' : `${streamerName}'s screen`;
   const streamerSharing = Boolean(streamerState?.self_stream) && streamerState?.mode !== 'listen';
 
-  const channelName = input.channelName?.trim() || 'Voice channel';
-  const place = input.guildName?.trim() ? `${input.guildName.trim()} ${channelName}` : channelName;
   const liveMinutes = streamerSharing ? minutesSince(streamerState?.self_stream_started_at, input.nowMs) : null;
-  const subtitle = liveMinutes === null ? place : `${place}, ${liveFor(liveMinutes)}`;
+  const subtitle =
+    watchedId === null ? callLine(ordered) : liveMinutes === null ? place : `${place}, ${liveFor(liveMinutes)}`;
 
   const cameras = ordered.filter((person) => person.camera);
   const chips = ordered.filter((person) => !person.camera);
-  const otherSharers = ordered.filter((person) => person.sharing && !person.self && person.userId !== target.streamerId);
+  const otherSharers = ordered.filter((person) => person.sharing && !person.self && person.userId !== watchedId);
 
   const listening = input.relation === 'listening' || (input.relation === 'joining' && input.joiningMode === 'listen');
+  const stageChannel = Boolean(input.stageChannel);
+  // Until the server's voice state says you may speak, you are the audience.
+  const selfState = input.selfUserId ? input.states.find((state) => state.user_id === input.selfUserId) : undefined;
+  const audience = stageChannel && selfState?.suppress !== false;
   return {
+    view: watchedId === null ? 'call' : 'stream',
+    dm,
     place,
     channelName,
     guildName: input.guildName?.trim() || null,
@@ -149,6 +194,9 @@ export function buildStageModel(input: StageInput): StageModel {
     controls: input.relation === 'joined' ? 'joined' : 'not-joined',
     busy: input.relation === 'joining',
     listening,
+    stageChannel,
+    audience,
+    handRaised: audience && Boolean(selfState?.request_to_speak_at),
   };
 }
 
@@ -268,7 +316,9 @@ export function stageGeometry(args: { width: number; height: number; cameras: nu
  */
 export type ControlsFit = 0 | 1 | 2;
 
-export function controlsFit(innerWidth: number, controls: 'joined' | 'not-joined'): ControlsFit {
+export function controlsFit(innerWidth: number, controls: 'joined' | 'not-joined', view: 'stream' | 'call' = 'stream'): ControlsFit {
+  // The call itself draws no reactions and no Clip: nothing to give up.
+  if (view === 'call') return 0;
   // Widths of the full rows at 44px buttons, 10px gaps (the prototype's).
   const full = controls === 'joined' ? 640 : 420;
   if (!(innerWidth > 0) || innerWidth >= full) return 0;

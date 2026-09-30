@@ -1,23 +1,53 @@
 import { useNavigate } from 'react-router';
 import { Compass } from 'lucide-react';
-import { TopBar } from '../../components/layout/TopBar';
+import { GlassPage, PageBar, PageScroll } from '../../components/home/GlassPage';
 import { Button } from '../../components/ui/Button';
+import { useGlassLayout } from '../../components/glass/shell/useGlassLayout';
+import { EmptyState } from '../../components/ui/Feedback';
+import { cn } from '../../lib/utils';
 
-// A skeleton row that mimics a grouped message (avatar + author line + body).
-function SkeletonMessage({ lines = 2, wide = false }: { lines?: number; wide?: boolean }) {
+/**
+ * The three states of a channel route that has no conversation to draw yet
+ * (docs/glass-spec.md §3.2): loading, not found or not yours, and could not
+ * load. They fill the conversation pane, so each one sits where the
+ * conversation's own header, column and message box sit.
+ */
+
+/** A placeholder shape: a solid tonal wash, pulsed on opacity alone. */
+const WASH = 'pc-skeleton bg-[var(--bub)]';
+
+/**
+ * One group of bubbles in the timeline's own geometry (the 720px column, a 32px
+ * face at the group's foot, 20px bubbles joined on the face's side): widths are
+ * the share of the column the bubble fills. Yours mirror it, on the right, with
+ * no face.
+ */
+function SkeletonGroup({ widths, own = false }: { widths: readonly number[]; own?: boolean }) {
   return (
-    <div className="flex gap-4 px-4 py-2">
-      <div className="h-10 w-10 shrink-0 pc-skeleton rounded-full bg-bg-mod-subtle" />
-      <div className="flex min-w-0 flex-1 flex-col gap-2 pt-1">
-        <div className="flex items-center gap-2">
-          <div className="h-3.5 w-28 pc-skeleton rounded-window bg-bg-mod-subtle" />
-          <div className="h-2.5 w-14 pc-skeleton rounded-window bg-bg-mod-subtle/70" />
-        </div>
-        {Array.from({ length: lines }, (_, i) => (
-          <div
-            key={i}
-            className="h-3 pc-skeleton rounded-window bg-bg-mod-subtle/70"
-            style={{ width: wide && i === 0 ? '82%' : `${68 - i * 16}%` }}
+    <div className="glass-msg glass-tl-col" data-own={own || undefined}>
+      {!own && (
+        <span className="glass-msg__face">
+          <span className={cn(WASH, 'h-8 w-8 rounded-full')} />
+        </span>
+      )}
+      <div className="glass-msg__body">
+        {!own && (
+          <div className="glass-msg__head">
+            <span className={cn(WASH, 'h-3 w-24 rounded-[6px]')} />
+            <span className={cn(WASH, 'h-2.5 w-10 rounded-[6px]')} />
+          </div>
+        )}
+        {widths.map((width, index) => (
+          <span
+            key={index}
+            className={cn(
+              own ? 'pc-skeleton bg-[var(--raise)]' : WASH,
+              'block h-[38px] rounded-[var(--r-bubble)]',
+              // The joined corner faces the author's side; the last bubble keeps its 6px tail.
+              own ? 'rounded-br-[6px]' : 'rounded-bl-[6px]',
+              index > 0 && (own ? 'rounded-tr-[6px]' : 'rounded-tl-[6px]'),
+            )}
+            style={{ width: `${width}%`, maxWidth: 560 }}
           />
         ))}
       </div>
@@ -26,24 +56,38 @@ function SkeletonMessage({ lines = 2, wide = false }: { lines?: number; wide?: b
 }
 
 /**
- * Loading state — a skeleton of the real channel layout (message stream +
- * composer), never a bare centered spinner (lantern-stage-spec §6).
+ * Loading: a skeleton of the conversation it becomes (header row, bubbles in the
+ * column, the message box), never a bare spinner. It reads as one polite status.
  */
 export function GuildLoadingScreen() {
+  const layout = useGlassLayout();
   return (
-    <div className="flex h-full min-h-0 flex-col" role="status" aria-busy="true">
-      <TopBar channelName="Loading..." />
-      <div className="flex min-h-0 flex-1 flex-col bg-bg-plate">
-        <div className="flex min-h-0 flex-1 flex-col justify-end gap-1 overflow-hidden py-3">
-          <SkeletonMessage lines={1} />
-          <SkeletonMessage lines={2} wide />
-          <SkeletonMessage lines={1} />
-          <SkeletonMessage lines={3} wide />
-          <SkeletonMessage lines={1} />
-          <SkeletonMessage lines={2} />
+    <div className="glass-conversation" data-layout={layout} role="status" aria-busy="true">
+      <div className="glass-conversation__header">
+        <div className="glass-header" data-layout={layout} aria-hidden="true">
+          <div className="glass-header__heading">
+            <span className={cn(WASH, 'mb-1 h-5 w-40 rounded-[8px]')} />
+            <span className={cn(WASH, 'h-3 w-56 rounded-[6px]')} />
+          </div>
+          <div className="glass-header__tools">
+            <span className={cn(WASH, 'mr-1 h-8 w-8 rounded-full')} />
+          </div>
         </div>
-        <div className="shrink-0 px-4 pb-6 pt-1">
-          <div className="h-11 pc-skeleton rounded-well border border-border-subtle bg-bg-raised" />
+      </div>
+      <div className="glass-conversation__timeline" aria-hidden="true">
+        <div className="glass-timeline flex min-h-0 flex-1 flex-col justify-end overflow-hidden pb-2">
+          <SkeletonGroup widths={[46]} />
+          <SkeletonGroup widths={[62, 38]} />
+          <SkeletonGroup widths={[34]} own />
+          <SkeletonGroup widths={[54, 70, 28]} />
+        </div>
+      </div>
+      <div className="glass-conversation__composer" aria-hidden="true">
+        <div className="glass-composer">
+          <div className="glass-composer__capsule items-center">
+            <span className={cn(WASH, 'h-9 w-9 shrink-0 rounded-full')} />
+            <span className={cn(WASH, 'h-3 flex-1 rounded-[6px]')} style={{ maxWidth: '40%' }} />
+          </div>
         </div>
       </div>
       <span className="sr-only">Loading channels...</span>
@@ -52,50 +96,42 @@ export function GuildLoadingScreen() {
 }
 
 /**
- * No-channel / no-access state — a real designed empty state per the spec
- * recipe: left-aligned line icon in a tinted well, a Subhead title, warm
- * specific copy, and a primary way back. Covers both "deleted" and
- * "you can't see this" without leaking which.
+ * No-channel / no-access state: one specific line of copy and a way back.
+ * Covers both "deleted" and "you can't see this" without leaking which.
  */
 export function ChannelNotFoundScreen({ guildId }: { guildId: string | undefined }) {
   const navigate = useNavigate();
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <TopBar channelName="Channel not found" />
-      <div className="flex flex-1 items-center bg-bg-plate px-6 sm:px-10">
-        <div className="w-full max-w-md">
-          <div className="mb-5 flex h-11 w-11 items-center justify-center rounded-chip bg-accent-tint text-accent-primary">
-            <Compass size={20} strokeWidth={2} />
-          </div>
-          <h2 className="font-display text-heading text-text-primary">Channel not found</h2>
-          <p className="mt-2 max-w-prose text-body text-text-secondary">
-            This channel may have been deleted, or you might not have permission to
-            see it. Head back to the server to pick one you can open.
-          </p>
-          {guildId && (
-            <div className="mt-6">
-              <Button onClick={() => navigate(`/app/guilds/${guildId}`)}>
-                Back to a channel you can see
-              </Button>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
+    <GlassPage label="Channel not found">
+      <PageBar title="Channel not found" />
+      <PageScroll>
+        <EmptyState
+          icon={<Compass size={18} strokeWidth={1.7} aria-hidden="true" />}
+          title="Nothing to open here"
+          description="This channel may have been deleted, or you might not have permission to see it. Head back to the server to pick one you can open."
+          action={
+            guildId ? (
+              <Button onClick={() => navigate(`/app/guilds/${guildId}`)}>Back to a channel you can see</Button>
+            ) : undefined
+          }
+        />
+      </PageScroll>
+    </GlassPage>
   );
 }
 
 export function ChannelLoadErrorScreen({ error, onRetry }: { error: string; onRetry: () => void }) {
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <TopBar channelName="Channels unavailable" />
-      <div className="flex flex-1 items-center bg-bg-plate px-6 sm:px-10">
-        <div className="w-full max-w-md">
-          <h2 className="font-display text-heading text-text-primary">Couldn't load channels</h2>
-          <p role="alert" className="mt-2 break-words text-body text-text-secondary">{error}</p>
-          <Button className="mt-6" onClick={onRetry}>Try again</Button>
-        </div>
-      </div>
-    </div>
+    <GlassPage label="Channels unavailable">
+      <PageBar title="Channels unavailable" />
+      <PageScroll>
+        <EmptyState
+          role="alert"
+          title="Couldn't load channels"
+          description={error}
+          action={<Button onClick={onRetry}>Try again</Button>}
+        />
+      </PageScroll>
+    </GlassPage>
   );
 }

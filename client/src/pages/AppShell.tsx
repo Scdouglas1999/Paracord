@@ -19,7 +19,6 @@ import { useKeyboardNavigation } from '../hooks/useKeyboardNavigation';
 import { useSwipeGesture } from '../hooks/useSwipeGesture';
 import { SettingsPage } from './SettingsPage';
 import { GuildSettingsPage } from './GuildSettingsPage';
-import { LayoutTour } from '../components/onboarding/LayoutTour';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 import { InteractionModal } from '../components/message/InteractionModal';
 import { ErrorBoundary } from '../components/ErrorBoundary';
@@ -186,7 +185,6 @@ export function AppShell() {
         <CommandPalette />
         <ConfirmDialog />
         <InteractionModal />
-        <LayoutTour />
 
         {/* Windowed settings overlays — the shared §5.1 recipe: backdrop fades,
             the surface rises on pc-enter and falls on pc-exit. */}

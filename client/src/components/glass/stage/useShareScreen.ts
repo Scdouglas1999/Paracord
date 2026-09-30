@@ -1,4 +1,5 @@
 import { useCallback, useState } from 'react';
+import { create } from 'zustand';
 
 import type { ScreenShareSource } from '../../../lib/media/mediaEngine';
 import { logVoiceDiagnostic } from '../../../lib/desktopDiagnostics';
@@ -9,12 +10,35 @@ import { useVoiceStore } from '../../../stores/voiceStore';
  * The stage's share button (joined only): start or stop sharing your screen in
  * the call. The desktop app asks which screen or window first (its own picker);
  * the browser asks through `getDisplayMedia`. The same store calls and quality
- * default as the Lantern control bar (`components/voice/VoiceControlBar.tsx`),
- * and a failure is said out loud with the reason.
+ * presets the Lantern control bar offered (chosen under More, "Share quality"),
+ * and a failure, or a share without the computer's sound, is said with the reason.
  */
 
-/** The Lantern bar's starting quality. */
-const DEFAULT_QUALITY = '720p30';
+/** What a share can send (the store's native presets, `voiceStore.startStream`). */
+export const SHARE_QUALITIES = [
+  { value: '720p30', label: '720p 30fps' },
+  { value: '1080p60', label: '1080p 60fps' },
+  { value: '1440p60', label: '1440p 60fps' },
+  { value: '4k60', label: '4K 60fps' },
+  { value: 'movie-50', label: 'Movie 4K (50 Mbps)' },
+  { value: 'movie-100', label: 'Movie 4K (100 Mbps)' },
+] as const;
+
+export type ShareQuality = (typeof SHARE_QUALITIES)[number]['value'];
+
+/** 720p30 by default, for what capture costs; every higher preset stays one choice away. */
+export const DEFAULT_SHARE_QUALITY: ShareQuality = '720p30';
+
+export const useShareQualityStore = create<{ quality: ShareQuality; setQuality: (quality: ShareQuality) => void }>()(
+  (set) => ({
+    quality: DEFAULT_SHARE_QUALITY,
+    setQuality: (quality) => set({ quality }),
+  }),
+);
+
+export function shareQualityLabel(quality: ShareQuality): string {
+  return SHARE_QUALITIES.find((option) => option.value === quality)?.label ?? quality;
+}
 
 export function shareErrorMessage(error: unknown): string {
   const err = error as { name?: string; message?: string };
@@ -76,8 +100,11 @@ export function useShareScreen(): ShareScreen {
     setError(null);
     try {
       logVoiceDiagnostic('[glass-stage] start stream requested', { sourceId: sourceId ?? null });
-      await useVoiceStore.getState().startStream(DEFAULT_QUALITY, sourceId);
+      await useVoiceStore.getState().startStream(useShareQualityStore.getState().quality, sourceId);
       setPickerOpen(false);
+      // Sharing without the computer's own sound is said, with the reason.
+      const warning = useVoiceStore.getState().streamAudioWarning;
+      if (warning) toast.warning(warning, 10_000);
     } catch (failure) {
       const message = shareErrorMessage(failure);
       setError(message);

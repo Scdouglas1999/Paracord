@@ -16,24 +16,24 @@ import { defineConfig, devices } from '@playwright/test';
 // mocked invocation never runs the real-server project or triggers the heavier
 // real-server webServer.
 const REAL_SERVER = process.env.PARACORD_E2E_REAL === '1';
-// Design-review screenshots (design-review.spec.ts): opt-in, mocked like the
-// smoke, output under output/design-reference/<WP>/. Gated out of the default
-// run so the CI smoke stays fast. See docs/lantern-stage-spec.md §10.
-const DESIGN_REVIEW = !REAL_SERVER && process.env.PARACORD_E2E_DESIGN === '1';
-// The motion gate (motion-gate.spec.ts): opt-in, mocked like the smoke. It
-// samples requestAnimationFrame across each signature moment and fails a frame
-// over 32ms or an animation over 500ms (docs/lantern-stage-spec.md §5.3).
+// The motion gate (motion-gate.spec.ts): opt-in, mocked like the smoke, on the
+// Glass reference scene (e2e/fixtures/glass). It samples requestAnimationFrame
+// across each Glass moment (the hover step, the pill growing, the pill becoming
+// the stage, theater, browse, the room crossfade, the phone's screen slide, the
+// reduced-motion crossfades) and fails a frame over 32ms while an animation is
+// in flight (the stage's own known cost is named and bounded in the spec), a
+// move that does not run exactly the constant its package declares, or a
+// property other than transform and opacity moving (docs/glass-spec.md §9).
 // Gated out of the default run: it deliberately sits and watches frames, which
 // is the opposite of what a fast CI smoke should do. `npm run test:motion`.
-const MOTION_GATE = !REAL_SERVER && !DESIGN_REVIEW && process.env.PARACORD_E2E_MOTION === '1';
+const MOTION_GATE = !REAL_SERVER && process.env.PARACORD_E2E_MOTION === '1';
 // Glass review screenshots (glass-review.spec.ts): opt-in, mocked like the
 // smoke, output under output/design-reference/glass-build/<WP>/. It renders the
 // Glass reference scene from fixtures (e2e/fixtures/glass) with no server, so a
 // package can shoot its surface and hold it against the reference PNGs.
 //   PARACORD_E2E_GLASS=1 PARACORD_E2E_GLASS_WP=g9 npx playwright test e2e/glass-review.spec.ts
-// Gated out of the default run for the same reason design-review is.
-const GLASS_REVIEW =
-  !REAL_SERVER && !DESIGN_REVIEW && !MOTION_GATE && process.env.PARACORD_E2E_GLASS === '1';
+// Gated out of the default run for the same reason the motion gate is.
+const GLASS_REVIEW = !REAL_SERVER && !MOTION_GATE && process.env.PARACORD_E2E_GLASS === '1';
 const REAL_SERVER_PORT = process.env.PARACORD_E2E_PORT ?? '18150';
 
 export default defineConfig({
@@ -80,14 +80,6 @@ export default defineConfig({
             // exactly the moment being measured.
             trace: 'off',
           },
-        },
-      ]
-    : DESIGN_REVIEW
-    ? [
-        {
-          name: 'design-review',
-          testMatch: /[\\/]design-review\.spec\.ts$/,
-          use: { ...devices['Desktop Chrome'] },
         },
       ]
     : GLASS_REVIEW

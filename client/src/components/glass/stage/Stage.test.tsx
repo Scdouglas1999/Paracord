@@ -13,6 +13,8 @@ import { useVoiceStore } from '../../../stores/voiceStore';
 import type { VoiceState } from '../../../types';
 import { useJoinMuteStore } from '../pill/muteStore';
 import { Stage } from './Stage';
+import { useWatchQualityStore } from './StreamSound';
+import { useShareQualityStore } from './useShareScreen';
 import { underlayHoleCount } from './nativeUnderlay';
 
 /**
@@ -27,6 +29,13 @@ const SCOPE = { serverId: '__local__', userId: 'me' };
 vi.mock('../../../hooks/useCurrentUser', () => ({
   useCurrentAccountScope: () => SCOPE,
   useCurrentUser: () => ({ id: 'me', username: 'sean', display_name: 'Sean', avatar_hash: null }),
+}));
+vi.mock('../../../api/stage', () => ({
+  stageApi: {
+    getForChannel: vi.fn(async () => ({ data: { id: 'st1', channel_id: 'lounge', guild_id: 'g1', topic: 'Q&A', privacy_level: 2, created_at: '' } })),
+    requestToSpeak: vi.fn(async () => ({})),
+    cancelSpeakerRequest: vi.fn(async () => ({})),
+  },
 }));
 vi.mock('../../../api/files', () => ({
   fileApi: { resolveAttachmentObjectUrl: vi.fn(async () => 'blob:face') },
@@ -77,6 +86,9 @@ const original = {
   leaveChannel: useVoiceStore.getState().leaveChannel,
   toggleMute: useVoiceStore.getState().toggleMute,
   toggleVideo: useVoiceStore.getState().toggleVideo,
+  setWatchVolume: useVoiceStore.getState().setWatchVolume,
+  toggleDeaf: useVoiceStore.getState().toggleDeaf,
+  publishVoiceState: useVoiceStore.getState().publishVoiceState,
 };
 
 const actions = {
@@ -89,6 +101,8 @@ const actions = {
     useVoiceStore.setState((state) => ({ selfMute: !state.selfMute }));
   }),
   toggleVideo: vi.fn(async () => {}),
+  toggleDeaf: vi.fn(async () => {}),
+  publishVoiceState: vi.fn(),
 };
 
 function fakeEngine(): MediaEngine & { subscribeVideo: ReturnType<typeof vi.fn> } {
@@ -398,6 +412,27 @@ describe('controls', () => {
     expect(row.querySelectorAll('.glass-btn--primary')).toHaveLength(0);
   });
 
+  it('the microphone, camera and Deafen tell the server, so the call sees them', async () => {
+    joined();
+    renderStage();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Microphone' }));
+    });
+    expect(actions.toggleMute).toHaveBeenCalledTimes(1);
+    expect(actions.publishVoiceState).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Camera' }));
+    });
+    expect(actions.toggleVideo).toHaveBeenCalledTimes(1);
+    expect(actions.publishVoiceState).toHaveBeenCalledTimes(2);
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Microphone' }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /^Deafen/ }));
+    });
+    expect(actions.toggleDeaf).toHaveBeenCalledTimes(1);
+    expect(actions.publishVoiceState).toHaveBeenCalledTimes(3);
+  });
+
   it('Leave is the only way out of the call', () => {
     joined();
     renderStage();
@@ -426,9 +461,34 @@ describe('controls', () => {
     expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
       'Soundboard',
       'Invite people',
+      'Share quality: 720p 30fps',
       'Microphone and speaker',
       'Connection check',
     ]);
+  });
+
+  it('Share quality picks what the next share sends', () => {
+    joined();
+    renderStage();
+    fireEvent.click(screen.getByRole('button', { name: 'More call actions' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Share quality: 720p 30fps' }));
+    const dialog = screen.getByRole('dialog', { name: 'Share quality' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Movie 4K (50 Mbps)' }));
+    expect(useShareQualityStore.getState().quality).toBe('movie-50');
+    useShareQualityStore.setState({ quality: 'movie-50' });
+    fireEvent.click(screen.getByRole('button', { name: 'More call actions' }));
+    expect(screen.getByRole('menuitem', { name: 'Share quality: Movie 4K (50 Mbps)' })).toBeInTheDocument();
+    act(() => useShareQualityStore.setState({ quality: '720p30' }));
+  });
+
+  it("the microphone's menu checks the microphone in the call", () => {
+    joined();
+    useVoiceStore.setState({ micInputActive: true, micInputLevel: 0.42, micUplinkState: 'flowing' as never });
+    renderStage();
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Microphone' }));
+    const dialog = screen.getByRole('dialog', { name: 'Microphone and speaker' });
+    expect(within(dialog).getByText('Microphone is working')).toBeInTheDocument();
+    expect(within(dialog).getByRole('meter', { name: 'Microphone input level' })).toHaveAttribute('aria-valuenow', '42');
   });
 
   it('flame, heart and Clip say they are not available yet instead of pretending', () => {
@@ -439,6 +499,137 @@ describe('controls', () => {
     fireEvent.click(clip);
     // WP-G16: no watch is live here, so Clip waits for the stream and says so.
     expect(useToastStore.getState().toasts.at(-1)?.message).toBe("Waiting for Vincent's screen.");
+  });
+});
+
+describe('the stream sound', () => {
+  it("sets the watched stream's volume and mute, and asks for a viewing quality", () => {
+    const setWatchVolume = vi.fn((gain: number) => useVoiceStore.setState({ watchVolume: gain }));
+    useVoiceStore.setState({ watchVolume: 1, setWatchVolume });
+    renderStage();
+    fireEvent.click(screen.getByRole('button', { name: 'Stream sound and quality' }));
+    const dialog = screen.getByRole('dialog', { name: 'Stream sound and quality' });
+    fireEvent.change(within(dialog).getByRole('slider', { name: 'Stream volume' }), { target: { value: '40' } });
+    expect(setWatchVolume).toHaveBeenLastCalledWith(0.4);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Mute the stream' }));
+    expect(setWatchVolume).toHaveBeenLastCalledWith(0);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Unmute the stream' }));
+    expect(setWatchVolume).toHaveBeenLastCalledWith(0.4);
+    fireEvent.change(within(dialog).getByRole('combobox'), { target: { value: 'low' } });
+    expect(useWatchQualityStore.getState().quality).toBe('low');
+    act(() => useWatchQualityStore.setState({ quality: 'auto' }));
+    useVoiceStore.setState({ setWatchVolume: original.setWatchVolume, watchVolume: 1 });
+  });
+});
+
+describe('the call itself (no stream)', () => {
+  const CALL: StageTarget = { ...LOUNGE, streamerId: null };
+
+  it('never starts a watch, and stops one that was running', () => {
+    useVoiceStore.setState({ watchView: watchView('live') });
+    renderStage(CALL);
+    expect(actions.startWatch).not.toHaveBeenCalled();
+    expect(actions.stopWatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('names the call and who is in it, and closes without leaving', () => {
+    joined();
+    renderStage(CALL);
+    expect(screen.getByText('Game Night Lounge')).toBeInTheDocument();
+    expect(screen.getByText('4 in the call')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Close/ }));
+    expect(useGlassStore.getState().stage.mode).toBe('none');
+    expect(actions.leaveChannel).not.toHaveBeenCalled();
+  });
+
+  it("keeps the call's controls and drops the stream's (no reactions, no Clip)", () => {
+    joined();
+    renderStage(CALL);
+    const row = screen.getByRole('group', { name: 'Call controls' });
+    const names = within(row).getAllByRole('button').map((b) => b.getAttribute('aria-label') ?? b.textContent);
+    expect(names).toEqual(['Microphone', 'Camera', 'Share your screen', 'More call actions', 'Leave Lounge']);
+  });
+
+  it('draws the cameras big, and switches to somebody who shares', () => {
+    joined();
+    const engine = fakeEngine();
+    useVoiceStore.setState({ mediaEngine: engine });
+    renderStage(CALL);
+    expect(engine.subscribeVideo).toHaveBeenCalledWith('brendan', expect.any(HTMLCanvasElement), expect.any(Function), {
+      preferredTrackId: 'camera',
+      fit: 'cover',
+    });
+    fireEvent.click(screen.getByRole('button', { name: "Watch Vincent's screen" }));
+    expect(useGlassStore.getState().stage.streamerId).toBe('vincent');
+  });
+
+  it('says nobody has a camera on when nobody does', () => {
+    joined();
+    useVoiceStore.setState({ channelParticipants: new Map([['lounge', [NICK, voiceState('me')]]]) });
+    renderStage(CALL);
+    expect(screen.getByRole('status')).toHaveTextContent('Nobody has a camera on.');
+  });
+});
+
+describe('a direct message call', () => {
+  const DM: StageTarget = { serverId: '__local__', guildId: null, channelId: 'dm-1', streamerId: null };
+
+  beforeEach(() => {
+    useChannelStore.setState({
+      channelsById: {
+        [entityScopeKey(SCOPE, 'dm-1')]: {
+          id: 'dm-1',
+          type: 1,
+          guild_id: null,
+          recipients: [{ id: 'jeremy', username: 'jeremy', display_name: 'Jeremy', avatar_hash: null }],
+        },
+      } as never,
+    });
+    useVoiceStore.setState({
+      callId: 'call-dm',
+      callScope: SCOPE,
+      callPhase: 'connected',
+      callMode: 'joined',
+      connected: true,
+      channelId: 'dm-1',
+      guildId: 'dm',
+      channelParticipants: new Map([
+        ['dm-1', [voiceState('jeremy', { channel_id: 'dm-1', guild_id: null as never, display_name: null as never }), voiceState('me', { channel_id: 'dm-1' })]],
+      ]),
+    });
+  });
+
+  it('is named for the person, with no server, and says who is there by name', () => {
+    renderStage(DM);
+    expect(screen.getByText('Jeremy', { selector: '.glass-stage__title' })).toBeInTheDocument();
+    expect(screen.getByText('Jeremy', { selector: '.glass-stage__chip-name' })).toBeInTheDocument();
+  });
+
+  it('offers no screen share, invite or soundboard, and leaves through the DM call', () => {
+    renderStage(DM);
+    const row = screen.getByRole('group', { name: 'Call controls' });
+    expect(within(row).queryByRole('button', { name: 'Share your screen' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'More call actions' }));
+    const items = within(screen.getByRole('menu', { name: 'More call actions' })).getAllByRole('menuitem').map((item) => item.textContent);
+    expect(items).toEqual(['Microphone and speaker', 'Connection check']);
+  });
+});
+
+describe('a stage channel', () => {
+  it("gives the audience a Request to speak instead of the microphone", () => {
+    joined();
+    useChannelStore.setState({
+      channelsById: {
+        [entityScopeKey(SCOPE, 'lounge')]: { id: 'lounge', name: 'Town hall', guild_id: 'g1', type: 13, position: 0 },
+      } as never,
+    });
+    useVoiceStore.setState({
+      channelParticipants: new Map([['lounge', [VINCENT, voiceState('me', { suppress: true })]]]),
+    });
+    renderStage({ ...LOUNGE, streamerId: null });
+    const row = screen.getByRole('group', { name: 'Call controls' });
+    expect(within(row).queryByRole('button', { name: 'Microphone' })).toBeNull();
+    expect(within(row).getByRole('button', { name: /Request to speak/ })).toBeInTheDocument();
   });
 });
 

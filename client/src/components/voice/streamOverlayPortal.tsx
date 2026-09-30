@@ -14,8 +14,8 @@ import { cn } from '../../lib/utils';
 
 /**
  * z-index for floating UI over live video.
- * Stack: maximized StreamViewer z-50 → VoiceControlBar z-70 → these overlays
- * z-80 (same as InCallDeviceMenu). Must mount on `document.body` so menus sit
+ * These overlays sit at z-80, above the stage and its controls. Must mount on
+ * `document.body` so menus sit
  * in the webview paint order ABOVE the Linux underlay hole (not nested inside
  * `data-native-surface-boundary` / CSS-transformed video ancestors, which
  * break outside-click and glue translucent panels into the stream).

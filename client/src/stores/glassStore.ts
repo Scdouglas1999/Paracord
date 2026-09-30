@@ -24,13 +24,39 @@ import { registerSessionReset } from './sessionReset';
 export type StageMode = 'none' | 'side' | 'theater';
 export type OpenStageMode = Exclude<StageMode, 'none'>;
 
-/** What is being watched: one person's stream in one voice channel. */
+/**
+ * What the stage shows: one person's stream in a call, or the call itself.
+ *
+ * A call is a server voice channel or a direct message call. A DM belongs to no
+ * server, so its `guildId` is null (never a sentinel string: `voiceStore`'s
+ * `'dm'` is its own wire convention and stays at that boundary, see
+ * `pill/pillActions.ts` `voiceGuildOf`).
+ *
+ * `streamerId` null is the call itself: nobody's screen, the people and their
+ * cameras, and the call's controls (share, camera, More). A joined person
+ * opens it from the pill ("Show the call") when there is no stream to watch.
+ */
 export interface StageTarget {
-  /** The instance (AccountScope.serverId) whose API and relay carry the stream. */
+  /** The instance (AccountScope.serverId) whose API and relay carry the call. */
   serverId: string;
-  guildId: string;
+  /** The server, or null for a direct message call. */
+  guildId: string | null;
   channelId: string;
-  streamerId: string;
+  /** Whose screen is watched, or null for the call itself. */
+  streamerId: string | null;
+}
+
+/** A stage target that watches somebody's screen. */
+export type StreamStageTarget = StageTarget & { streamerId: string };
+
+export function isStreamTarget(target: StageTarget): target is StreamStageTarget {
+  return target.streamerId !== null;
+}
+
+/** The stage target the store holds, or null while no stage is open. */
+export function stageTargetOf(stage: StageState): StageTarget | null {
+  if (stage.mode === 'none' || !stage.serverId || !stage.channelId) return null;
+  return { serverId: stage.serverId, guildId: stage.guildId, channelId: stage.channelId, streamerId: stage.streamerId };
 }
 
 export interface StageState {

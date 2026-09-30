@@ -238,6 +238,16 @@ describe('UserSettings session management', () => {
     expect(screen.getByText('Session revoked.')).toBeInTheDocument();
   });
 
+  it('heads the account page with your face and how you are here, as the header shows it', async () => {
+    const { container } = renderSettings();
+
+    await screen.findByText('Old laptop');
+    // Initials on your identity color (no photo), and the same ink mark the header's face has.
+    expect(container.querySelector('.glass-face')).toHaveTextContent('A');
+    expect(container.querySelector('.glass-presence')).toHaveAttribute('data-status', 'online');
+    expect(screen.getByText('Online')).toHaveClass('sr-only');
+  });
+
   it('logs out and closes the panel from the Log out control', async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();

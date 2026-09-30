@@ -21,9 +21,9 @@ import { reportGroundColor } from '../../../lib/nativeGround';
  *   - after the page has painted the hole, the surface is nudged
  *     (`paracord:native-underlay-hole-ready`) to report its geometry once more.
  *
- * The same attribute is refcounted by the Lantern `StreamViewer`, which keeps
- * its own count; the two never show a live surface at once on the watching
- * path, which is the stage's alone now (WP-G14). WP-G22 retires StreamViewer.
+ * This is the only owner of the attribute: the stage (and its camera tiles) is
+ * the one surface that draws a native video (WP-G14; the Lantern stream viewer
+ * that kept a count of its own was retired in WP-G22).
  */
 
 let holes = 0;

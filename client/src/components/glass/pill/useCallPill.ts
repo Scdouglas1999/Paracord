@@ -36,7 +36,7 @@ const asPillChannel = (channel: Channel): PillChannel => ({
 const sameAccount = (a: AccountScope | null, b: AccountScope | null) =>
   Boolean(a && b) && accountScopeKey(a as AccountScope) === accountScopeKey(b as AccountScope);
 
-export function useCallPillTarget(routeGuildId: string | null): PillTarget | null {
+export function useCallPillTarget(routeGuildId: string | null, routeChannelId: string | null = null): PillTarget | null {
   const scope = useCurrentAccountScope();
 
   // The call this client holds.
@@ -71,8 +71,10 @@ export function useCallPillTarget(routeGuildId: string | null): PillTarget | nul
       if (states.some((state) => state.mode !== 'listen')) ids.add(channelId);
     }
     if (callChannelId) ids.add(callChannelId);
+    // The route's channel: when it is a voice channel the pill shows it (rule 0).
+    if (routeChannelId) ids.add(routeChannelId);
     return [...ids].sort();
-  }, [channelParticipants, callChannelId]);
+  }, [channelParticipants, callChannelId, routeChannelId]);
 
   const heldInOtherAccount = Boolean(held && scope && !sameAccount(held.scope, scope));
 
@@ -134,6 +136,7 @@ export function useCallPillTarget(routeGuildId: string | null): PillTarget | nul
     return pickPillTarget({
       scope,
       routeGuildId,
+      routeChannelId,
       held,
       channelParticipants,
       channels,
@@ -153,7 +156,7 @@ export function useCallPillTarget(routeGuildId: string | null): PillTarget | nul
       selfUserId: scope.userId,
     });
   }, [
-    scope, routeGuildId, held, heldInOtherAccount, heldElsewhere, found, wanted, guilds, memberRosters, channelParticipants,
+    scope, routeGuildId, routeChannelId, held, heldInOtherAccount, heldElsewhere, found, wanted, guilds, memberRosters, channelParticipants,
     callScope, callConnected, callChannelId, callGuildId, localSpeaking, remoteSpeaking,
   ]);
 }

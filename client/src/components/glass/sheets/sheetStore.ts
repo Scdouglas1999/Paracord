@@ -111,7 +111,9 @@ export function restoreSheetTrigger(sheet: GlassSheet | null): void {
   if (!lost) return;
   if (remembered && document.contains(remembered)) {
     remembered.focus({ preventScroll: true });
-    return;
+    // A trigger inside something that is leaving (a menu playing its exit,
+    // `inert`) cannot take focus: fall through to the header's own button.
+    if (document.activeElement === remembered) return;
   }
   const fallback = sheet ? document.querySelector<HTMLElement>(TRIGGER_FALLBACK[sheet]) : null;
   fallback?.focus({ preventScroll: true });

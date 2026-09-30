@@ -3,13 +3,13 @@ import { extractApiError } from '../../api/client';
 import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
 import { fetchGuildRoles } from '../../lib/permissionDataCache';
 import { roleColorToHex } from '../../lib/colors';
-import { personLight } from '../../lib/attention/personLight';
 import { displayName } from '../../lib/displayName';
 import { entityScopeKey } from '../../lib/serverScope';
 import { useMemberStore } from '../../stores/memberStore';
 import { usePresenceStore } from '../../stores/presenceStore';
 import type { Role } from '../../types';
-import { LitAvatar } from '../light';
+import { presenceLabel } from '../../lib/presence';
+import { Face } from '../glass/places/Lead';
 import { Popover } from '../ui/Popover';
 
 function here(status: string | undefined): boolean {
@@ -130,16 +130,16 @@ export function RoleMentionChip({ guildId, roleId }: { guildId?: string; roleId:
             const name = displayName(member.user, member.nick);
             return (
               <li key={member.user.id} className="flex items-center gap-2 px-1 py-0.5">
-                <LitAvatar
-                  size={22}
-                  person={personLight({
-                    userId: member.user.id,
-                    name,
-                    status,
-                    avatar: member.user.avatar_hash,
-                  })}
+                <Face face={{ userId: member.user.id, name, avatar: member.user.avatar_hash ?? null }} size={22} />
+                <span className="min-w-0 flex-1 truncate text-label text-text-primary">{name}</span>
+                {/* Presence is ink, not color: a dot (here), a ring (away), a dot
+                    with a bar (do not disturb). The word is for assistive tech. */}
+                <span
+                  className="glass-sheet-presence glass-sheet-presence--inline shrink-0"
+                  data-status={status}
+                  aria-hidden
                 />
-                <span className="min-w-0 truncate text-label text-text-primary">{name}</span>
+                <span className="sr-only">{presenceLabel(status)}</span>
               </li>
             );
           })}

@@ -1,14 +1,10 @@
-import { memo, useEffect, useRef, useState, type ReactNode } from 'react';
+import { memo, useRef, type ReactNode } from 'react';
 
-import { extractApiError } from '../../../api/client';
-import { reactionUsersApi, type ReactionPerson } from '../../../api/reminders';
 import { useDownloadTicket } from '../../../hooks/useDownloadTicket';
 import { parseCustomEmojiToken } from '../../../lib/customEmoji';
 import { RollingNumber, useFlipList } from '../../../lib/motion';
-import { reactionTitle } from '../../../lib/reactionPeople';
-import { TimelineAvatar } from '../../message/TimelineParts';
+import { ReactionPeopleList, useReactionPeople } from '../../message/ReactionPeople';
 import { CustomEmojiImage } from '../../ui/ResourceImage';
-import { Popover } from '../../ui/Popover';
 import { HeartMark } from './CardGlyphs';
 import { Glyph } from '../primitives';
 
@@ -17,8 +13,9 @@ import { Glyph } from '../primitives';
  * (docs/glass-spec.md §3.2): `#34353a`, a 3px ring in the opaque pane color,
  * and an icon and a count for each reaction. Each reaction is still its own
  * button, so pressing one still toggles yours and resting on it still says who
- * reacted (the list `ReactionChip` in `message/ReactionPeople.tsx` gives the
- * feed's own chips).
+ * reacted (that behavior and its list are `useReactionPeople` and
+ * `ReactionPeopleList` in `message/ReactionPeople.tsx`, shared with the feed's
+ * own chips).
  *
  * Where it bites is the caller's business: `placement="corner"` hangs it off
  * the top right of its (positioned) parent, the media's or the bubble's;
@@ -43,13 +40,6 @@ export interface ReactionTally {
   count: number;
   me: boolean;
 }
-
-/** People shown before "and N more". */
-const PREVIEW = 12;
-/** How long a pointer rests on a reaction before the list opens. */
-const HOVER_DELAY_MS = 400;
-/** Grace period for crossing the gap between the reaction and its list. */
-const LEAVE_GRACE_MS = 160;
 
 /** The reactions drawn as a line mark instead of an emoji (the reference's flame and heart). */
 const FLAME = new Set(['\u{1F525}']);
@@ -76,8 +66,6 @@ function reactionMark(emoji: string, guildId: string | null | undefined, size: n
   return <span aria-hidden className="glass-bite__emoji">{emoji}</span>;
 }
 
-const personName = (person: ReactionPerson): string => person.display_name?.trim() || person.username;
-
 /** How a reaction reads to assistive tech: the emoji, how many, and whether one is yours. */
 export function reactionLabel(reaction: ReactionTally): string {
   const custom = parseCustomEmojiToken(reaction.emoji);
@@ -89,7 +77,8 @@ export function reactionLabel(reaction: ReactionTally): string {
 /**
  * One reaction inside the chip. Resting on it (or a long press on touch) opens a
  * short list of who reacted; right-clicking opens the whole list; clicking
- * toggles your own.
+ * toggles your own. The who-reacted behavior and its list are
+ * `useReactionPeople` and `ReactionPeopleList`, shared with the feed's chips.
  */
 function ReactionSegment({
   reaction,
@@ -106,70 +95,7 @@ function ReactionSegment({
 }) {
   const { emoji, count, me } = reaction;
   const anchorRef = useRef<HTMLSpanElement>(null);
-  const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const suppressClick = useRef(false);
-  const [open, setOpen] = useState(false);
-  const [expanded, setExpanded] = useState(false);
-  const [people, setPeople] = useState<ReactionPerson[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  // A new tally means the list we have is stale.
-  const [listedFor, setListedFor] = useState(count);
-  if (listedFor !== count) {
-    setListedFor(count);
-    setPeople(null);
-    setError(null);
-  }
-
-  useEffect(() => () => {
-    if (openTimer.current) clearTimeout(openTimer.current);
-    if (closeTimer.current) clearTimeout(closeTimer.current);
-  }, []);
-
-  const cancelOpen = () => {
-    if (openTimer.current) clearTimeout(openTimer.current);
-    openTimer.current = null;
-  };
-  const cancelClose = () => {
-    if (closeTimer.current) clearTimeout(closeTimer.current);
-    closeTimer.current = null;
-  };
-  const close = () => {
-    cancelOpen();
-    cancelClose();
-    setOpen(false);
-    setExpanded(false);
-  };
-  /** A hover-opened list closes when the pointer leaves; a right-click list stays. */
-  const scheduleClose = () => {
-    cancelOpen();
-    if (!open || expanded) return;
-    cancelClose();
-    closeTimer.current = setTimeout(close, LEAVE_GRACE_MS);
-  };
-
-  const load = async () => {
-    try {
-      const { data } = await reactionUsersApi.list(channelId, messageId, emoji, 100);
-      setPeople(data);
-      setError(null);
-    } catch (err) {
-      setError(extractApiError(err));
-    }
-  };
-  const show = (full: boolean) => {
-    cancelClose();
-    setExpanded(full);
-    setOpen(true);
-    if (!people) void load();
-  };
-
-  const title = error
-    ? error
-    : reactionTitle((people ?? []).slice(0, 2).map(personName), people?.length ?? count, emoji);
-  const visible = expanded ? people ?? [] : (people ?? []).slice(0, PREVIEW);
-  const hidden = Math.max(0, (people?.length ?? 0) - PREVIEW);
+  const state = useReactionPeople({ channelId, messageId, emoji, count });
 
   return (
     <span
@@ -177,34 +103,7 @@ function ReactionSegment({
       data-flip-key={emoji}
       data-flip-own={me || undefined}
       className="glass-bite__seg-wrap"
-      onPointerEnter={(event) => {
-        if (event.pointerType === 'touch') return;
-        cancelClose();
-        if (open) return;
-        cancelOpen();
-        openTimer.current = setTimeout(() => show(false), HOVER_DELAY_MS);
-      }}
-      onPointerLeave={(event) => {
-        if (event.pointerType === 'touch') return;
-        scheduleClose();
-      }}
-      onPointerDown={(event) => {
-        if (event.pointerType !== 'touch') return;
-        cancelOpen();
-        openTimer.current = setTimeout(() => {
-          suppressClick.current = true;
-          show(false);
-        }, HOVER_DELAY_MS);
-      }}
-      onPointerUp={(event) => {
-        if (event.pointerType === 'touch') cancelOpen();
-      }}
-      onPointerCancel={cancelOpen}
-      onContextMenu={(event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        show(true);
-      }}
+      {...state.triggerProps}
     >
       <button
         type="button"
@@ -212,12 +111,9 @@ function ReactionSegment({
         data-me={me || undefined}
         aria-pressed={me}
         aria-label={reactionLabel(reaction)}
-        title={title}
+        title={state.title}
         onClick={() => {
-          if (suppressClick.current) {
-            suppressClick.current = false;
-            return;
-          }
+          if (state.consumeSuppressedClick()) return;
           onToggle();
         }}
       >
@@ -228,43 +124,13 @@ function ReactionSegment({
           <RollingNumber value={count} announce={false} />
         </span>
       </button>
-      <Popover
+      <ReactionPeopleList
+        state={state}
         anchor={anchorRef}
-        open={open}
-        onClose={close}
-        side="top"
-        align="start"
-        label={`People who reacted with ${emoji}`}
-        className="w-60 p-0"
-      >
-        <div onPointerEnter={cancelClose} onPointerLeave={scheduleClose} className="glass-bite__people">
-          <div className="glass-bite__people-head">
-            <span className="glass-bite__people-glyph" aria-hidden>
-              {reactionMark(emoji, guildId, 22)}
-            </span>
-            <span className="glass-bite__people-count">
-              {people ? (people.length === 1 ? '1 person' : `${people.length} people`) : `${count} ${count === 1 ? 'person' : 'people'}`}
-            </span>
-          </div>
-          {error && <p role="alert" className="glass-bite__people-note" data-tone="error">{error}</p>}
-          {!error && !people && <p className="glass-bite__people-note">Loading who reacted…</p>}
-          {people && (
-            <ul className="glass-bite__people-list" data-expanded={expanded || undefined}>
-              {visible.map((person) => (
-                <li key={person.id} className="glass-bite__person">
-                  <TimelineAvatar userId={person.id} name={personName(person)} avatar={person.avatar_hash} size={22} />
-                  <span className="glass-bite__person-name">{personName(person)}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-          {!expanded && hidden > 0 && (
-            <button type="button" className="glass-bite__more glass-focusable" onClick={() => setExpanded(true)}>
-              and {hidden} more
-            </button>
-          )}
-        </div>
-      </Popover>
+        emoji={emoji}
+        count={count}
+        glyph={reactionMark(emoji, guildId, 22)}
+      />
     </span>
   );
 }

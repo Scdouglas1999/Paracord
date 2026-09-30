@@ -8,14 +8,9 @@ import { useChannelStore } from '../stores/channelStore';
 import { useGuildStore, scopeGuild } from '../stores/guildStore';
 import { useMemberStore } from '../stores/memberStore';
 import { useUIStore } from '../stores/uiStore';
-import { useVoiceStore } from '../stores/voiceStore';
 import type { Channel } from '../types';
 import { GuildPage } from './GuildPage';
 
-// The state screens (loading, failed, not found) still draw the Lantern TopBar.
-vi.mock('../components/layout/TopBar', () => ({
-  TopBar: ({ channelName }: { channelName: string }) => <div data-testid="topbar">{channelName}</div>,
-}));
 // The conversation header (WP-G11) is covered in components/glass/conversation.
 vi.mock('../components/glass/conversation/ConversationHeader', () => ({
   ConversationHeader: ({ subject }: { subject: { kind: string; channelName?: string; title?: string } }) => (
@@ -27,14 +22,27 @@ vi.mock('../components/channel/ForumView', () => ({
   ForumView: () => <div data-testid="forum-view" />,
 }));
 
-vi.mock('./guild/VoiceStageChannel', () => ({
-  VoiceStageChannel: () => <div data-testid="voice-stage" />,
+vi.mock('../components/glass/stage/StageChannelPanel', () => ({
+  StageChannelPanel: ({ channelId }: { channelId: string }) => <div data-testid="stage-panel">{channelId}</div>,
 }));
 
 // The text view renders the page's notices (welcome, onboarding gate, pinned
-// score) into its conversation pane, so the stub keeps them.
+// score, a stage channel's session) into its conversation pane, so the stub
+// keeps them, and says which channel and header it was given.
 vi.mock('./guild/TextChannelView', () => ({
-  TextChannelView: ({ notices }: { notices?: ReactNode }) => <div data-testid="text-view">{notices}</div>,
+  TextChannelView: ({
+    notices,
+    channelId,
+    subject,
+  }: {
+    notices?: ReactNode;
+    channelId: string;
+    subject: { kind: string; channelName?: string };
+  }) => (
+    <div data-testid="text-view" data-channel={channelId} data-title={subject.channelName}>
+      {notices}
+    </div>
+  ),
 }));
 
 vi.mock('../components/guild/GuildWelcomeScreen', () => ({
@@ -132,8 +140,9 @@ describe('GuildPage composition shell', () => {
 
     renderGuildPage('any');
 
-    expect(screen.getByTestId('topbar')).toHaveTextContent('Loading...');
-    expect(screen.getByText('Loading channels...')).toBeInTheDocument();
+    const status = screen.getByRole('status');
+    expect(status).toHaveAttribute('aria-busy', 'true');
+    expect(status).toHaveTextContent(/Loading channels/);
   });
 
   it('distinguishes a failed channel request from a missing channel and retries its account', () => {
@@ -158,26 +167,24 @@ describe('GuildPage composition shell', () => {
     expect(screen.queryByTestId('text-view')).not.toBeInTheDocument();
   });
 
-  it('renders the voice/stage section for voice channels', () => {
+  it('opens a voice channel as its chat: the conversation pane, not a separate page', () => {
     seedChannels([makeChannel('vc', 2)]);
 
     renderGuildPage('vc');
 
-    expect(screen.getByTestId('voice-stage')).toBeInTheDocument();
-    expect(screen.queryByTestId('text-view')).not.toBeInTheDocument();
+    const view = screen.getByTestId('text-view');
+    expect(view).toHaveAttribute('data-channel', 'vc');
+    expect(view).toHaveAttribute('data-title', 'chan-vc');
+    expect(screen.queryByTestId('stage-panel')).not.toBeInTheDocument();
   });
 
-  it('preserves a RoomCard Watch handoff (watchedStreamerId) when landing on the voice channel', () => {
-    // CHAT-4 handoff seam: RoomCard.Watch sets voiceStore.watchedStreamerId THEN
-    // navigates to the voice channel route. GuildPage must NOT clear it on the
-    // initial mount — only when the user actually switches channels.
-    useVoiceStore.setState({ watchedStreamerId: 'streamer-1' });
-    seedChannels([makeChannel('vc', 2)]);
+  it('opens a stage channel as its chat with the stage session over it', () => {
+    seedChannels([makeChannel('stage', 13)]);
 
-    renderGuildPage('vc');
+    renderGuildPage('stage');
 
-    expect(screen.getByTestId('voice-stage')).toBeInTheDocument();
-    expect(useVoiceStore.getState().watchedStreamerId).toBe('streamer-1');
+    expect(screen.getByTestId('text-view')).toHaveAttribute('data-channel', 'stage');
+    expect(screen.getByTestId('stage-panel')).toHaveTextContent('stage');
   });
 
   it('renders the forum section for forum channels', () => {
@@ -186,7 +193,7 @@ describe('GuildPage composition shell', () => {
     renderGuildPage('forum');
 
     expect(screen.getByTestId('forum-view')).toBeInTheDocument();
-    expect(screen.queryByTestId('voice-stage')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('text-view')).not.toBeInTheDocument();
   });
 
   it('renders the text section for text channels', () => {
@@ -195,7 +202,7 @@ describe('GuildPage composition shell', () => {
     renderGuildPage('text');
 
     expect(screen.getByTestId('text-view')).toBeInTheDocument();
-    expect(screen.queryByTestId('voice-stage')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('stage-panel')).not.toBeInTheDocument();
   });
 
   it('dismisses the welcome screen and persists the dismissal', async () => {

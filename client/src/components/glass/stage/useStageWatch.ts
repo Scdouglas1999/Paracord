@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef } from 'react';
 
-import { useGlassStore, type StageTarget } from '../../../stores/glassStore';
+import { useGlassStore, type StageTarget, type StreamStageTarget } from '../../../stores/glassStore';
 import { useVoiceStore } from '../../../stores/voiceStore';
 import type { MediaViewState } from '../../../stores/voice/viewSessions';
+import { voiceGuildOf } from '../pill/pillActions';
 
 /**
  * The stage owns the watch (docs/design/glass-g6-checkpoint.md, "How to use it,
@@ -30,14 +31,14 @@ export function targetKey(target: StageTarget): string {
 }
 
 /** Start the watch for `target`; errors land in `watchView` (phase `failed`), so the promise is only observed. */
-function start(target: StageTarget): void {
+function start(target: StreamStageTarget): void {
   void useVoiceStore
     .getState()
-    .startWatch({ serverId: target.serverId, guildId: target.guildId, channelId: target.channelId, streamerId: target.streamerId })
+    .startWatch({ serverId: target.serverId, guildId: voiceGuildOf(target.guildId), channelId: target.channelId, streamerId: target.streamerId })
     .catch(() => {});
 }
 
-export function useStageWatch(target: StageTarget): { view: MediaViewState | null; watchAgain: () => void } {
+export function useStageWatch(target: StreamStageTarget): { view: MediaViewState | null; watchAgain: () => void } {
   const key = targetKey(target);
   // The target object is rebuilt on every frame render; the key says when it changed.
   const latest = useRef(target);

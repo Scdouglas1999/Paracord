@@ -1,10 +1,8 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRouter } from 'react-router';
-import { buildingLight } from '../../lib/attention/light';
 import { sportsApi, type SportsBoard, type SportsGame, type SportsSettings, type SportsTeam } from '../../api/sports';
-import { BuildingSection } from '../layout/sidebar/BuildingSection';
+import { AddonRows, useAddons } from '../glass/places/AddonRows';
 import { useSportsStore } from '../../stores/sportsStore';
 
 vi.mock('../../api/sports', async () => {
@@ -20,7 +18,9 @@ vi.mock('../../api/sports', async () => {
   };
 });
 
-const SCOPE = { serverId: 'srv', userId: 'viewer' };
+// The other two add-ons the places panel lists are off: this file is about sports.
+vi.mock('../../hooks/useDailyWord', () => ({ useDailyWordSettings: () => ({ enabled: false }) }));
+vi.mock('../../hooks/useGameServers', () => ({ useGameServers: () => ({ servers: [] }) }));
 
 function settings(over: Partial<SportsSettings> = {}): SportsSettings {
   return {
@@ -87,31 +87,23 @@ function board(games: SportsGame[]): SportsBoard {
   };
 }
 
-function renderSection(onOpenSports = vi.fn()) {
-  const building = buildingLight({
-    scope: SCOPE,
-    guildId: 'g1',
-    name: 'Kestrel Robotics',
-    rooms: [],
-    members: [],
-    memberCount: 1,
-  });
-  render(
-    <BuildingSection
-      building={building}
-      active
-      rooms={[]}
-      hiddenRoomCount={0}
-      expanded={false}
-      onToggleRooms={vi.fn()}
-      onOpenLobby={vi.fn()}
-      onOpenRoom={vi.fn()}
-      navIndexStart={2}
-      activeNavIndex={2}
-      onOpenSports={onOpenSports}
-    />,
+/**
+ * The places panel lists a server's add-ons as rows under its channels
+ * (`glass/places/AddonRows.tsx`). The rows are the only door to the sports
+ * page, so these hold that it opens, shows where you are, and says what is live.
+ */
+function Rows({ pathname = '/app/guilds/g1', onOpen }: { pathname?: string; onOpen: (id: string) => void }) {
+  const addons = useAddons('g1', 'Kestrel Robotics', pathname);
+  return (
+    <nav aria-label="Places">
+      <AddonRows addons={addons} focusOf={(id) => ({ tabIndex: id === 'addon:sports' ? 0 : -1, onFocus: () => {} })} onOpen={(addon) => onOpen(addon.id)} />
+    </nav>
   );
-  return onOpenSports;
+}
+
+function renderRows(pathname?: string, onOpen = vi.fn()) {
+  render(<Rows pathname={pathname} onOpen={onOpen} />);
+  return onOpen;
 }
 
 describe('sports entry points', () => {
@@ -125,77 +117,49 @@ describe('sports entry points', () => {
   afterEach(() => {
     cleanup();
     useSportsStore.getState().reset();
-    window.history.pushState({}, '', '/');
   });
 
-  it('hides the sidebar row and does not load a board when sports is off', async () => {
-    renderSection();
+  it('has no row and does not load a board when sports is off', async () => {
+    renderRows();
     await waitFor(() => expect(useSportsStore.getState().byGuild.g1?.settingsStatus).toBe('ready'));
-    expect(screen.queryByRole('option', { name: 'Sports' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Sports/ })).not.toBeInTheDocument();
     expect(sportsApi.getBoard).not.toHaveBeenCalled();
   });
 
-  it('opens the sports page from the sidebar row', async () => {
+  it('opens the sports page from its row', async () => {
     const user = userEvent.setup();
     vi.mocked(sportsApi.getSettings).mockResolvedValue({
       data: settings({ enabled: true }),
     } as never);
-    const onOpen = renderSection();
-    const row = await screen.findByRole('option', { name: 'Sports' });
+    const onOpen = renderRows();
+    const row = await screen.findByRole('link', { name: /Sports/ });
     expect(row).toHaveAttribute('href', '/app/guilds/g1/sports');
-    expect(row).toHaveAttribute('tabindex', '-1');
+    expect(row).toHaveAttribute('tabindex', '0');
+    expect(row).not.toHaveAttribute('aria-current');
     await user.click(row);
-    expect(onOpen).toHaveBeenCalledWith('g1');
+    expect(onOpen).toHaveBeenCalledWith('addon:sports');
     await waitFor(() => expect(sportsApi.getBoard).toHaveBeenCalledTimes(1));
   });
 
-  it('makes the sports row the selected tab stop when that page is open', async () => {
-    window.history.pushState({}, '', '/app/guilds/g1/sports');
+  it('marks the sports row as the page you are on', async () => {
     vi.mocked(sportsApi.getSettings).mockResolvedValue({
       data: settings({ enabled: true }),
     } as never);
-    renderSection();
-    const row = await screen.findByRole('option', { name: 'Sports' });
-    expect(row).toHaveAttribute('data-selected-row', 'true');
+    renderRows('/app/guilds/g1/sports');
+    const row = await screen.findByRole('link', { name: /Sports/ });
+    expect(row).toHaveAttribute('data-selected');
     expect(row).toHaveAttribute('aria-current', 'page');
-    expect(row).toHaveAttribute('tabindex', '0');
-    const lobby = screen.getByRole('option', { name: /Kestrel Robotics lobby/ });
-    expect(lobby).not.toHaveAttribute('aria-current');
-    expect(lobby).toHaveAttribute('tabindex', '-1');
   });
 
-  it('shows a live count on the sidebar row once a board lands', async () => {
+  it('says how many games are live once a board lands', async () => {
     vi.mocked(sportsApi.getSettings).mockResolvedValue({
       data: settings({ enabled: true, show_on_server_page: true }),
     } as never);
     vi.mocked(sportsApi.getBoard).mockResolvedValue({
       data: board([liveGame('Chiefs', 80), liveGame('Bills', 40)]),
     } as never);
-    const building = buildingLight({
-      scope: SCOPE,
-      guildId: 'g1',
-      name: 'Kestrel Robotics',
-      rooms: [],
-      members: [],
-      memberCount: 1,
-    });
-    render(
-      <MemoryRouter>
-        <BuildingSection
-          building={building}
-          rooms={[]}
-          hiddenRoomCount={0}
-          expanded={false}
-          onToggleRooms={vi.fn()}
-          onOpenLobby={vi.fn()}
-          onOpenRoom={vi.fn()}
-          navIndexStart={2}
-          activeNavIndex={2}
-        />
-      </MemoryRouter>,
-    );
-    const liveChip = await screen.findByText('2 live');
-    expect(liveChip.querySelector('.pc-sports-live')).not.toBeNull();
+    renderRows();
+    expect(await screen.findByText('2 live now')).toBeInTheDocument();
     expect(sportsApi.getSettings).toHaveBeenCalledTimes(1);
     expect(sportsApi.getBoard).toHaveBeenCalledTimes(1);
   });

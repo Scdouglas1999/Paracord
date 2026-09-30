@@ -2,8 +2,10 @@
 // first-run panels, and pressing the call controls.
 //
 // Controls are found by their accessible names. Each action lists every name
-// it answers to, current (Lantern) first; when a Glass package renames a
-// control, add the new name here rather than reaching for CSS selectors.
+// it answers to; when a package renames a control, add the new name here rather
+// than reaching for CSS selectors. Since WP-G22 these are the Glass controls
+// only: a voice channel's route is its chat with the call pill, and the call's
+// own controls (camera, share, More) are the stage's.
 
 import { chromium } from '@playwright/test';
 import { mediaInitScript } from './media-init.mjs';
@@ -20,17 +22,20 @@ export const MEDIA_ARGS = [
 ];
 
 export const CONTROLS = {
-  join: ['Join voice', 'Join', 'Join Lounge'],
-  leave: ['Disconnect from voice', 'Leave', 'Leave Lounge'],
-  share: ['Share screen', 'Share your screen'],
-  stopShare: ['Stop streaming', 'Stop sharing'],
-  cameraOn: ['Turn on camera'],
-  cameraOff: ['Turn off camera'],
-  mute: ['Mute microphone', 'Mute'],
-  unmute: ['Unmute microphone', 'Unmute'],
-  // The lobby's per-person Watch joins and opens that share in one go.
-  watch: [/^Watch \w+'s screen$/i, 'Watch'],
-  retryJoin: ['Try joining again'],
+  // The call pill (WP-G12): "Join Lounge", "Leave Lounge".
+  join: [/^Join \w+$/],
+  leave: [/^Leave \w+$/],
+  // The stage's control row (WP-G14): camera and the microphone are toggles
+  // named "Camera" and "Microphone" whose state is aria-pressed.
+  share: ['Share your screen'],
+  stopShare: ['Stop sharing your screen'],
+  camera: ['Camera'],
+  microphone: ['Microphone'],
+  // The pill's Watch (never joins), and its door to the call itself when
+  // nobody else is sharing (WP-G22).
+  watch: [/^Watch \w+'s screen$/i],
+  showCall: ['Show the call'],
+  closeCall: ['Close'],
   // The Glass stage (WP-G14).
   stopWatching: ['Stop watching'],
   browse: ['Show servers and channels'],
@@ -41,7 +46,7 @@ export const CONTROLS = {
   showChat: ['Show chat'],
 };
 
-const OVERLAYS = ['Close welcome screen', 'Skip tour', 'Got it', 'Maybe later', 'Dismiss'];
+const OVERLAYS = ['Close welcome screen', 'Got it', 'Maybe later', 'Dismiss'];
 
 export function launchBrowser({ headless = true } = {}) {
   return chromium.launch({ headless, args: MEDIA_ARGS });
@@ -131,9 +136,9 @@ export function channelPath(ids, serverKey, channelKey) {
 }
 
 /**
- * Wait until the call is connected. A join the app refuses (its "Try joining
- * again" appears) is a failure, reported with the reason the app gave: the
- * driver does not retry. Rejoining a running call used to be refused
+ * Wait until the call is connected (the pill offers Leave). A join the app
+ * refuses is a failure, reported with the reason the app gave (the pill's toast,
+ * "Could not join Lounge: …"): the driver does not retry. Rejoining a running call used to be refused
  * (docs/design/glass-fix-rejoin.md), and this used to paper over it with
  * retries and a 15s pause; that fix landed, so a refusal now is a finding.
  */
@@ -142,7 +147,6 @@ export async function awaitJoined(session, { timeoutMs = 60_000, log = () => {} 
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (await findControl(page, CONTROLS.leave)) return;
-    if (await findControl(page, CONTROLS.retryJoin)) break;
     await page.waitForTimeout(400);
   }
   const reason = (await page.locator('text=/could not|couldn.t|failed/i').allTextContents().catch(() => []))
@@ -151,13 +155,39 @@ export async function awaitJoined(session, { timeoutMs = 60_000, log = () => {} 
   throw new Error(`${person.name} could not join the call: ${reason}`);
 }
 
-/** Join a voice channel through the UI and wait for the call to connect. */
+/** Join a voice channel through the UI (its chat's pill) and wait for the call to connect. */
 export async function joinVoice(session, path, { log = () => {} } = {}) {
   const { page } = session;
   await page.goto(path);
   await dismissOverlays(page, 800, 8000);
   await press(page, CONTROLS.join, { timeoutMs: 45_000 });
   return awaitJoined(session, { log });
+}
+
+/**
+ * Put the call on the stage, where its controls are: "Show the call" when
+ * nobody else is sharing, else the pill's Watch (the stream's stage has the
+ * same call controls). Resolves once the stage's control row is on screen.
+ */
+export async function openCallStage(page) {
+  await press(page, [...CONTROLS.showCall, ...CONTROLS.watch], { timeoutMs: 30_000 });
+  await page.getByRole('group', { name: 'Call controls' }).waitFor({ state: 'visible', timeout: 30_000 });
+}
+
+/** Put the stage away again (Close, or Stop watching). The call stays. */
+export async function closeCallStage(page) {
+  await press(page, [...CONTROLS.closeCall, ...CONTROLS.stopWatching], { timeoutMs: 15_000 });
+}
+
+/** Press a toggle (Camera, Microphone) until its aria-pressed says `on`. */
+export async function setToggle(page, names, on, { timeoutMs = 30_000 } = {}) {
+  const control = await waitForControl(page, names, timeoutMs);
+  if ((await control.getAttribute('aria-pressed')) !== String(on)) await control.click({ timeout: 5000 });
+  const deadline = Date.now() + timeoutMs;
+  while ((await control.getAttribute('aria-pressed').catch(() => null)) !== String(on)) {
+    if (Date.now() > deadline) throw new Error(`${names[0]} did not turn ${on ? 'on' : 'off'} within ${timeoutMs / 1000}s`);
+    await page.waitForTimeout(300);
+  }
 }
 
 /**

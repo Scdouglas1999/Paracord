@@ -14,8 +14,7 @@ import { isTauri } from '../lib/tauriEnv';
  * - Ctrl+, : open user settings
  * - Ctrl+Shift+, : open current guild settings
  * - Mod+F: open channel message search (ContextPanel search mode)
- * - Ctrl+B: toggle Unified Sidebar collapse
- * - ArrowUp/Down + Home/End: roving-tabindex nav within the sidebar row list
+ * - Ctrl+B: the old sidebar toggle; on a phone it brings places back (usePhoneNavigation)
  * - Escape: Command palette → ContextPanel → narrow sidebar overlay (§5 precedence)
  *
  * Mute/deafen keybinds are owned by useVoiceKeybinds (not duplicated here).
@@ -120,40 +119,6 @@ export function useKeyboardNavigation() {
           useUIStore.getState().setGuildSettingsId(currentGuildId);
         }
         return;
-      }
-
-      // -- Sidebar roving-tabindex navigation (layout-spec §5) --
-      // When focus is inside the Unified Sidebar's flat row list (Needs-you →
-      // Pinned → Recent → Spaces, exposed via [data-nav-index] rows inside the
-      // [data-roving-container]), ArrowUp/Down move between rows, Home/End jump to
-      // the ends. Enter/Space fall through to the row's native <button> activation.
-      if (
-        (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'Home' || e.key === 'End')
-        && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey
-        && typeof document !== 'undefined'
-      ) {
-        const container = document.querySelector('[data-roving-container]');
-        const active = document.activeElement as HTMLElement | null;
-        if (container && active && container.contains(active)) {
-          const rows = Array.from(
-            container.querySelectorAll<HTMLElement>('[data-nav-index]'),
-          );
-          if (rows.length === 0) return;
-          const currentIndex = rows.findIndex((r) => r === active || r.contains(active));
-          let nextIndex: number;
-          if (e.key === 'Home') {
-            nextIndex = 0;
-          } else if (e.key === 'End') {
-            nextIndex = rows.length - 1;
-          } else if (e.key === 'ArrowUp') {
-            nextIndex = currentIndex <= 0 ? rows.length - 1 : currentIndex - 1;
-          } else {
-            nextIndex = currentIndex >= rows.length - 1 ? 0 : currentIndex + 1;
-          }
-          e.preventDefault();
-          rows[nextIndex]?.focus();
-          return;
-        }
       }
 
       // The remaining shortcuts should not fire when editing text

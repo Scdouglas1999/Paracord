@@ -12,12 +12,14 @@
 //    Clip, sees the toast, posts to General. The posted file is downloaded
 //    with Sean's token and checked with ffprobe and by playing it in Chromium:
 //    about 30 s, VP9 frames of Vincent's scene.
-// 2. Eric joins Lounge and shares a screen that carries its own audio (a
-//    pulsing tone). Sean switches the stage to Eric and clips while still not
-//    joined (whether that clip has audio is a NOTE: the view session does not
-//    receive stream audio yet, an engine gap outside clips), then joins from
-//    the stage and clips again: that file must have an Opus track that is not
-//    silent, and play with decoded audio.
+// 2. Eric joins Lounge (the Lounge's own chat and its call pill, then "Show the
+//    call" for the stage, where the share button is) and shares a screen that
+//    carries its own audio (a pulsing tone). Sean switches the stage to Eric and
+//    clips while still not joined, then joins from the stage and clips again.
+//    Both files must have an Opus track that is not silent, and play with
+//    decoded audio: watching without joining plays the stream's own audio, never
+//    the voices (docs/design/glass-fix-watch-audio.md), so the not-joined clip
+//    carries it too. Each of those is a PASS or a FAIL.
 // Everything is read from the page, the server or the file. PASS/FAIL per step;
 // exits non-zero on any FAIL.
 //
@@ -33,7 +35,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createApi } from './api.mjs';
 import { STREAM_SCENE } from './art.mjs';
-import { CONTROLS, dismissOverlays, joinVoice, launchBrowser, openAs, press, waitForControl } from './ui.mjs';
+import { CONTROLS, dismissOverlays, joinVoice, launchBrowser, openAs, openCallStage, press, waitForControl } from './ui.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..', '..', '..');
@@ -61,12 +63,6 @@ const results = [];
 const t0 = Date.now();
 const log = (line) => console.log(`[${((Date.now() - t0) / 1000).toFixed(1).padStart(6)}s] ${line}`);
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
-const notes = [];
-/** A finding that is not this package's to pass or fail (reported, not counted). */
-function note(name, detail) {
-  notes.push({ name, detail });
-  log(`NOTE  ${name}${detail ? `: ${detail}` : ''}`);
-}
 function check(name, ok, detail) {
   results.push({ name, ok: Boolean(ok), detail });
   log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? `: ${detail}` : ''}`);
@@ -237,9 +233,7 @@ async function clipAndPost(session, browser, token, source, name, { expectAudio 
   const audio = probe.streams.find((s) => s.codec_type === 'audio');
   check(`${name}: ffprobe reads ~30 s (30–36 s: from the last keyframe before now − 30 s)`, duration >= 29.5 && duration <= 36.5, `${probe.format?.format_name}, ${duration}s`);
   check(`${name}: ffprobe decodes the video`, video && Number(video.nb_read_frames) > duration * 5, video ? `${video.codec_name} ${video.width}x${video.height}, ${video.nb_read_frames} frames` : 'no video stream');
-  if (expectAudio === 'note') {
-    note(`${name}: stream audio in a clip cut while watching without joining`, audio ? `${audio.codec_name}, ${audio.nb_read_frames} packets` : 'none: the view session never receives the stream audio (see docs/design/glass-g16-checkpoint.md, "Stream audio when not joined")');
-  } else if (expectAudio) {
+  if (expectAudio) {
     check(`${name}: ffprobe finds the stream's own audio`, audio?.codec_name === 'opus', audio ? `${audio.codec_name}, ${audio.channels} ch, ${audio.nb_read_frames} packets` : 'no audio stream');
     const volume = meanVolume(file);
     const mean = Number(/mean_volume: (-?[\d.]+) dB/.exec(volume)?.[1] ?? '-inf');
@@ -288,6 +282,9 @@ async function main() {
     eric = await openAs(browser, BASE, accounts.eric, { media: { display: true, voice: 'quiet', scene: STREAM_SCENE } });
     await eric.context.addInitScript({ content: SHARE_WITH_AUDIO });
     await joinVoice(eric, loungePath, { log });
+    // The Lounge's page is its chat with the call pill; sharing is a control of
+    // the call on the stage ("Show the call", or Watch while Vincent shares).
+    await openCallStage(eric.page);
     await press(eric.page, CONTROLS.share);
     await waitForControl(eric.page, CONTROLS.stopShare, 30_000);
     const ericSending = await until(() => relaySending(seanToken, ids.eric), 30_000, 1000);
@@ -303,7 +300,8 @@ async function main() {
     check("switching streams freed Vincent's unposted clip (the toast went with it)", !(await visible(toast(page))));
     const ericLive = await until(async () => (await clipButton(page).getAttribute('aria-disabled').catch(() => 'true')) !== 'true', 45_000, 500);
     check("Clip is available on Eric's stream", ericLive);
-    await clipAndPost(sean, browser, seanToken, "Eric's screen", 'eric-watching', { expectAudio: 'note' });
+    // Not joined: the view session receives the stream's own audio, so this clip has it too.
+    await clipAndPost(sean, browser, seanToken, "Eric's screen", 'eric-watching', { expectAudio: true });
 
     // Joined, the watch rides the call, whose engine carries the stream's own audio.
     await stage(page).getByRole('button', { name: 'Join Lounge' }).click();
@@ -328,7 +326,7 @@ async function main() {
     }
     await browser.close();
   }
-  writeFileSync(join(OUT, 'results.json'), JSON.stringify({ results, notes }, null, 2));
+  writeFileSync(join(OUT, 'results.json'), JSON.stringify({ results }, null, 2));
   const failed = results.filter((r) => !r.ok);
   log(`${results.length - failed.length} of ${results.length} passed`);
   process.exit(failed.length ? 1 : 0);

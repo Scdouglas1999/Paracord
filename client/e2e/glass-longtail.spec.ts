@@ -174,14 +174,8 @@ for (const size of ['desktop', 'phone'] as const) {
     await page.keyboard.press('Escape');
     await page.mouse.click(size === 'desktop' ? 1000 : 200, 120);
     await page.waitForTimeout(300);
-    // The header's channel title opens the switcher; a tooltip from any labeled icon.
-    const title = page.getByRole('button', { name: /Switch channel/ });
-    if ((await title.count()) > 0) {
-      await title.first().click();
-      await page.waitForTimeout(500);
-      await shoot(page, 'channel-switcher', size);
-      await page.keyboard.press('Escape');
-    }
+    // A tooltip from any labeled icon. (The Lantern channel switcher is retired:
+    // the header's title opens the channel menu, and places lists the channels.)
     if (size === 'desktop') {
       await page.getByRole('button', { name: /^Search$/ }).first().hover({ timeout: 4_000 }).catch(() => undefined);
       await page.waitForTimeout(900);
@@ -211,55 +205,6 @@ test('dialogs opened from the places panel', async ({ page }) => {
     await page.waitForTimeout(700);
     await shoot(page, 'dialog-invite', 'desktop');
   }
-});
-
-/**
- * The channel switcher is mounted by the old header only, which the new one
- * replaces, so it is mounted here directly from the running dev server: the same
- * React and router instances the page loaded, found by their resource URLs.
- */
-test('channel switcher', async ({ page }) => {
-  test.setTimeout(90_000);
-  await page.setViewportSize(SIZES.desktop);
-  const seen: string[] = [];
-  page.on('request', (request) => {
-    if (/\/deps\/react(-dom_client|-router)?\.js\?v=/.test(request.url())) seen.push(request.url());
-  });
-  await installGlassScene(page);
-  await page.goto(general);
-  await expect(page.getByRole('main')).toBeVisible();
-  const pick = (name: string) => seen.find((u) => u.includes(`/deps/${name}.js?v=`)) as string;
-  await page.evaluate(
-    async ({ reactUrl, domUrl, routerUrl }) => {
-      // The optimized dependencies are CommonJS wrapped as ESM: the API may sit on `default`.
-      const load = async (url: string, probe: string) => {
-        const mod = (await import(/* @vite-ignore */ url)) as any; // eslint-disable-line @typescript-eslint/no-explicit-any
-        return mod[probe] ? mod : mod.default;
-      };
-      const React = await load(reactUrl, 'createElement');
-      const Dom = await load(domUrl, 'createRoot');
-      const Router = await load(routerUrl, 'MemoryRouter');
-      const { ChannelSwitcher } = (await import('/src/components/layout/ChannelSwitcher.tsx' as string)) as any; // eslint-disable-line @typescript-eslint/no-explicit-any
-      const host = document.createElement('div');
-      host.style.cssText = 'position:fixed;left:560px;top:24px;z-index:80;width:20rem';
-      document.body.appendChild(host);
-      const ch = (id: string, name: string, type: number, position: number, topic: string | null = null) => ({
-        id, guild_id: '1001', name, type, channel_type: type, position, topic, parent_id: null, nsfw: false,
-      });
-      const channels = [ch('2001', 'General', 0, 0, 'Haz 5 runs from 9. Bring snacks.'), ch('2002', 'Lounge', 2, 1), ch('2003', 'Clips', 0, 2), ch('2004', 'LFG', 0, 3), ch('2005', 'Patch notes', 0, 4)];
-      Dom.createRoot(host).render(
-        React.createElement(
-          Router.MemoryRouter,
-          null,
-          React.createElement(ChannelSwitcher, { guildId: '1001', guildName: 'Game Night', channelId: '2001', channelName: 'General', channelType: 0, channels }),
-        ),
-      );
-    },
-    { reactUrl: pick('react'), domUrl: pick('react-dom_client'), routerUrl: pick('react-router') },
-  );
-  await page.getByRole('button', { name: /Switch channel/ }).click();
-  await page.waitForTimeout(500);
-  await shoot(page, 'channel-switcher', 'desktop');
 });
 
 /**

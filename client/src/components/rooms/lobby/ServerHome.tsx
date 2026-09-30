@@ -25,7 +25,7 @@ import { useChannelStore } from '../../../stores/channelStore';
 import { useMemberStore } from '../../../stores/memberStore';
 import { toast } from '../../../stores/toastStore';
 import { useUIStore } from '../../../stores/uiStore';
-import { useVoiceStore } from '../../../stores/voiceStore';
+import { useGlassStore } from '../../../stores/glassStore';
 import { ChannelType, type Channel } from '../../../types';
 import { BuildingNotFound } from '../../guild/BuildingNotFound';
 import { EventList } from '../../guild/EventList';
@@ -210,21 +210,32 @@ export function ServerHome({ guildId }: ServerHomeProps) {
     [guildId, navigate],
   );
 
-  /** You walk into a call rather than teleport (lib/motion/walk.ts). */
+  /**
+   * Join from the Overview: the channel's chat opens with its pill, the call is
+   * joined (a stage channel only opens: its audience joins from the pill), and
+   * somebody's screen, if one is shared, goes on the stage (docs/glass-spec.md §6).
+   */
   const joinRoom = useCallback(
     (room: RoomLight, origin: Element | null) => {
-      const sharer = room.screenSharer ?? room.cameraSharer;
-      if (sharer) useVoiceStore.getState().setWatchedStreamer(sharer.person.userId);
+      const sharer = room.screenSharer;
       void walkIntoRoom({
         channelId: room.channelId,
         origin,
         go: () => {
           openChannel(room.channelId);
           if (!stageChannelIds.has(room.channelId)) void joinChannel(room.channelId, guildId);
+          if (sharer && scope) {
+            useGlassStore.getState().openStage({
+              serverId: scope.serverId,
+              guildId,
+              channelId: room.channelId,
+              streamerId: sharer.person.userId,
+            });
+          }
         },
       });
     },
-    [guildId, joinChannel, openChannel, stageChannelIds],
+    [guildId, joinChannel, openChannel, stageChannelIds, scope],
   );
 
   const sayHi = useCallback(

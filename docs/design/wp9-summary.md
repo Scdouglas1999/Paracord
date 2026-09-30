@@ -1,3 +1,8 @@
+> **History.** This summarizes the Lantern Stage motion work. Glass replaced that
+> UI (`docs/glass-spec.md`), and WP-G22 rewrote `client/e2e/motion-gate.spec.ts`
+> for the Glass moments; the gate cases this file maps no longer exist. See
+> [`glass-summary.md`](glass-summary.md).
+
 # WP9 — every motion moment in the product
 
 One page. What moves, where it lives, which gate case watches it, and what the

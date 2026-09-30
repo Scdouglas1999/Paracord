@@ -48,28 +48,6 @@ import {
   Tooltip,
   Well,
 } from '../components/ui';
-import {
-  AvatarStack,
-  BuildingPlate,
-  HereNowStrip,
-  LightCaption,
-  LitAvatar,
-  OnAirPill,
-  RoomDuration,
-  RoomThumbnail,
-  WindowMap,
-  roomCaptionFor,
-} from '../components/light';
-import {
-  aroundNowSentence,
-  buildingLight,
-  hereNowCaption,
-  lightsOnOverflowCaption,
-  litMembersCaption,
-  personLight,
-  textRoomLight,
-  voiceRoomLight,
-} from '../lib/attention/light';
 import { presenceLight } from '../lib/presence';
 import { toast } from '../stores/toastStore';
 import {
@@ -96,14 +74,12 @@ import {
   useReducedMotion,
 } from '../lib/motion';
 import { cn } from '../lib/utils';
-import { AccountPlate } from '../components/layout/sidebar/AccountPlate';
-import { BuildingsColumn } from '../components/layout/sidebar/BuildingsColumn';
 import { useMobile } from '../hooks/useMobile';
 import { useUIStore } from '../stores/uiStore';
 import { GlassShowcase } from '../components/glass/primitives/GlassShowcase';
 
 /**
- * `/design-tokens` — the Lantern Stage reference page. **Dev builds only**
+ * `/design-tokens` — the design-token reference page. **Dev builds only**
  * (`App.tsx` mounts the route behind `import.meta.env.DEV`, so it is tree-shaken
  * out of production).
  *
@@ -188,7 +164,7 @@ function TokenGrid({ names, kind }: { names: string[]; kind: 'fill' | 'ink' | 's
 }
 
 /* -------------------------------------------------------------------------- */
-/* Token inventories — the vocabulary in docs/lantern-stage-spec.md §1–§5       */
+/* Token inventories                                                           */
 /* -------------------------------------------------------------------------- */
 
 const SURFACES = ['--bg-base', '--bg-plate', '--bg-raised', '--bg-well', '--bg-floating', '--window-dark'];
@@ -264,7 +240,7 @@ function LightSection() {
     <Section
       id="light"
       title="Light"
-      blurb="Three lights, three meanings. White is talking or live, amber is somebody in a text channel, emerald is an action you can take — and emerald is not a light. Every glow has a source, and light is state, never style: if a thing glows, a person is there right now."
+      blurb="The light tokens, and the window, live-dot and presence-rim recipes built on them. Every glow has a source, and light is state, never style: if a thing glows, a person is there right now."
     >
       <TokenGrid names={LIGHTS} kind="fill" />
       <Row>
@@ -354,7 +330,7 @@ function PrimitivesSection() {
     <Section
       id="primitives"
       title="Primitives"
-      blurb="Every shared shell, in every variant and state. WP1's light components (WindowMap, LitAvatar, HereNowStrip, RoomThumbnail, StageTile) compose these."
+      blurb="Every shared shell, in every variant and state."
     >
       <SectionLabel meta="4 variants">Button</SectionLabel>
       <Row>
@@ -446,7 +422,7 @@ function PrimitivesSection() {
         <Textarea rows={3} placeholder="What is this channel for?" aria-label="Channel topic" />
       </div>
 
-      <SectionLabel meta="off is a well, on is the emerald">Switch and toggle row</SectionLabel>
+      <SectionLabel meta="off is glass, on is the accent">Switch and toggle row</SectionLabel>
       <div className="flex max-w-[32rem] flex-col">
         <Row>
           <Switch checked={switchOn} onChange={setSwitchOn} label="Compact messages" />
@@ -660,467 +636,6 @@ function ThemePreview({ theme, label }: { theme: string; label: string }) {
         </Chip>
       </Raised>
     </div>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
-/* WP1 — the light components                                                  */
-/* -------------------------------------------------------------------------- */
-
-const LIGHT_SCOPE = { serverId: 'design', userId: 'viewer' };
-const LIGHT_NOW = 1_800_000_000_000;
-
-function demoPerson(userId: string, name: string, over: Partial<Parameters<typeof personLight>[0]> = {}) {
-  return personLight({ userId, name, status: 'online', ...over });
-}
-
-const DEMO_MARA = demoPerson('101', 'Mara');
-const DEMO_PRIYA = demoPerson('102', 'Priya');
-const DEMO_REN = demoPerson('103', 'Ren');
-const DEMO_TOMAS = demoPerson('104', 'Tomas');
-const DEMO_AISHA = demoPerson('105', 'Aisha');
-const DEMO_DEVON = demoPerson('106', 'Devon', { status: 'idle' });
-const DEMO_SASHA = demoPerson('107', 'Sasha', { status: 'dnd' });
-const DEMO_JO = demoPerson('108', 'Jo', { status: 'offline' });
-const DEMO_SPEAKER = demoPerson('101', 'Mara', {
-  speaking: true,
-  inRoom: true,
-  roomName: 'Shop floor',
-});
-
-function demoVoice(
-  over: Partial<Parameters<typeof voiceRoomLight>[0]> = {},
-): ReturnType<typeof voiceRoomLight> {
-  return voiceRoomLight({
-    scope: LIGHT_SCOPE,
-    guildId: 'g1',
-    channelId: 'v1',
-    name: 'Shop floor',
-    occupants: [],
-    nowMs: LIGHT_NOW,
-    ...over,
-  });
-}
-
-function demoText(
-  over: Partial<Parameters<typeof textRoomLight>[0]> = {},
-): ReturnType<typeof textRoomLight> {
-  return textRoomLight({
-    scope: LIGHT_SCOPE,
-    guildId: 'g1',
-    channelId: 't1',
-    name: 'build-log',
-    candidates: [DEMO_TOMAS, DEMO_AISHA],
-    nowMs: LIGHT_NOW,
-    ...over,
-  });
-}
-
-const DEMO_LIT_ROOM = demoVoice({
-  occupants: [
-    { person: DEMO_SPEAKER, speaking: true, sharingScreen: true },
-    { person: DEMO_PRIYA },
-    { person: DEMO_REN },
-  ],
-  startedAtMs: LIGHT_NOW - 34 * 60_000 - 12_000,
-});
-const DEMO_DARK_ROOM = demoVoice({
-  channelId: 'v2',
-  name: 'Lounge',
-  order: 1,
-  lastLitMs: LIGHT_NOW - 2 * 3_600_000,
-});
-const DEMO_READ_ROOM = demoText({ typingUserIds: ['104', '105'], order: 2 });
-const DEMO_QUIET_ROOM = demoText({ channelId: 't2', name: 'general', order: 3 });
-
-/** A real building has more rooms than fit on one row — that is what the two-row
- *  cap and the overflow count are for, so the demo carries a realistic set. */
-const DEMO_QUIET_ROOMS = [
-  'firmware',
-  'shipping',
-  'pcb-review',
-  'purchasing',
-  'off-topic',
-  'bench-notes',
-  'calibration',
-  'archive',
-].map((name, index) =>
-  demoText({ channelId: `t${index + 3}`, name, order: index + 4, candidates: [] }),
-);
-
-const DEMO_BUILDING = buildingLight({
-  scope: LIGHT_SCOPE,
-  guildId: 'g1',
-  name: 'Kestrel Robotics',
-  rooms: [
-    DEMO_LIT_ROOM,
-    demoVoice({ channelId: 'v3', name: 'Quiet corner', order: 1, occupants: [{ person: DEMO_AISHA }] }),
-    DEMO_DARK_ROOM,
-    DEMO_READ_ROOM,
-    DEMO_QUIET_ROOM,
-    ...DEMO_QUIET_ROOMS,
-  ],
-  members: [DEMO_MARA, DEMO_PRIYA, DEMO_REN, DEMO_TOMAS, DEMO_AISHA, DEMO_DEVON],
-  memberCount: 61,
-});
-
-const DEMO_DARK_BUILDING = buildingLight({
-  scope: LIGHT_SCOPE,
-  guildId: 'g2',
-  name: 'Saltmarsh Sailing',
-  rooms: [
-    demoVoice({ channelId: 'v9', name: 'Clubhouse' }),
-    demoText({ channelId: 't90', name: 'regatta-2026', order: 1, candidates: [] }),
-    demoText({ channelId: 't91', name: 'crew-list', order: 2, candidates: [] }),
-    demoText({ channelId: 't92', name: 'boat-swap', order: 3, candidates: [] }),
-    demoText({ channelId: 't93', name: 'tides', order: 4, candidates: [] }),
-  ],
-  members: [DEMO_JO],
-  memberCount: 12,
-});
-
-const DEMO_HERE_NOW = {
-  people: [DEMO_SPEAKER, DEMO_PRIYA, DEMO_REN, DEMO_TOMAS],
-  here: 4,
-  lightsOn: 20,
-  caption: '4 here · 20 online',
-};
-
-const DEMO_ON_AIR = {
-  isDirectMessage: false,
-  others: [{ userId: 'u-ada', name: 'Ada', speaking: false }],
-  room: DEMO_LIT_ROOM,
-  roomName: 'Shop floor',
-  buildingName: 'Kestrel Robotics',
-  durationMs: 34 * 60_000 + 12_000,
-  micOn: true,
-  deafened: false,
-  sharing: true,
-  speaking: true,
-};
-
-function LightComponentsSection() {
-  return (
-    <Section
-      id="light-components"
-      title="Light components"
-      blurb="The WP1 vocabulary: a window map, a server plate, lit avatars, a here-now strip, a channel thumbnail and the on-air pill. Every state below is real data from lib/attention/light.ts — the models decide what is lit, the components only draw it, and each one renders its words as well as its light."
-    >
-      <div id="light-avatars" className="flex flex-col gap-4">
-      <SectionLabel meta="rim · breathe · dim · slash">Lit avatars</SectionLabel>
-      <Row>
-        {[DEMO_MARA, DEMO_SPEAKER, DEMO_DEVON, DEMO_SASHA, DEMO_JO].map((person, index) => (
-          <div key={`${person.userId}-${index}`} className="flex w-[9rem] flex-col items-center gap-2">
-            <LitAvatar person={person} size={40} />
-            <span className="text-meta text-text-faint">{person.label}</span>
-          </div>
-        ))}
-      </Row>
-      <Row>
-        {[18, 22, 24, 28, 32, 36].map((size) => (
-          <div key={size} className="flex flex-col items-center gap-1.5">
-            <LitAvatar person={DEMO_MARA} size={size} hideLabel />
-            <span className="pc-mono text-meta text-text-faint">{size}</span>
-          </div>
-        ))}
-      </Row>
-
-      <SectionLabel meta="overlap · max N · +M">Avatar stacks</SectionLabel>
-      <Row>
-        <AvatarStack people={[DEMO_MARA, DEMO_PRIYA, DEMO_REN]} size={26} context="in Shop floor" />
-        <AvatarStack
-          people={[DEMO_MARA, DEMO_PRIYA, DEMO_REN, DEMO_TOMAS, DEMO_AISHA, DEMO_DEVON, DEMO_JO]}
-          size={28}
-          max={5}
-          context="online"
-        />
-        <AvatarStack people={[DEMO_MARA]} size={18} max={3} context="in Shop floor" />
-      </Row>
-
-      </div>
-
-      <div id="light-windows" className="flex flex-col gap-4">
-      <SectionLabel meta="≤ 2 rows of 8">Window map</SectionLabel>
-      <div className="flex flex-col gap-4">
-        <Well className="w-full max-w-[26rem]">
-          <WindowMap
-            windows={DEMO_BUILDING.windows}
-            overflowCount={DEMO_BUILDING.overflowCount}
-            caption={DEMO_BUILDING.caption}
-          />
-        </Well>
-        <Well className="w-full max-w-[30rem]">
-          <WindowMap
-            windows={DEMO_BUILDING.windows}
-            caption={DEMO_BUILDING.caption}
-            scale="home"
-          />
-        </Well>
-      </div>
-
-      <SectionLabel meta="lit · dark">Server plate</SectionLabel>
-      <div className="flex max-w-[var(--w-buildings-column)] flex-col gap-2">
-        <SectionLabel meta={litMembersCaption(DEMO_BUILDING.lightsOn)}>
-          {DEMO_BUILDING.name}
-        </SectionLabel>
-        <BuildingPlate building={DEMO_BUILDING} />
-        <SectionLabel meta={litMembersCaption(DEMO_DARK_BUILDING.lightsOn)}>
-          {DEMO_DARK_BUILDING.name}
-        </SectionLabel>
-        <BuildingPlate building={DEMO_DARK_BUILDING} />
-      </div>
-
-      </div>
-
-      <div id="light-thumbnails" className="flex flex-col gap-4">
-      <SectionLabel meta="64 · 168 · 176">Channel thumbnails</SectionLabel>
-      <div className="flex flex-wrap items-start gap-4">
-        <div className="flex w-full max-w-[17rem] flex-col gap-1.5">
-          <RoomThumbnail room={DEMO_LIT_ROOM} height={64} />
-          <div className="flex items-center gap-2">
-            <span className="pc-display truncate text-name text-text-primary">
-              {DEMO_LIT_ROOM.name}
-            </span>
-            <LightCaption className="ml-auto">{roomCaptionFor(DEMO_LIT_ROOM)}</LightCaption>
-          </div>
-        </div>
-        <div className="flex w-full max-w-[17rem] flex-col gap-1.5">
-          <RoomThumbnail room={DEMO_DARK_ROOM} height={64} />
-          <div className="flex items-center gap-2">
-            <span className="pc-display truncate text-name text-text-secondary">
-              {DEMO_DARK_ROOM.name}
-            </span>
-            <LightCaption className="ml-auto">
-              {roomCaptionFor(DEMO_DARK_ROOM, {
-                surface: 'card',
-                withLastLit: true,
-                nowMs: LIGHT_NOW,
-              })}
-            </LightCaption>
-          </div>
-        </div>
-        {/* The Lobby card (§7.3): the thumbnail carries the light, the body
-            carries the people and the Join. WP4 builds the real one. */}
-        <Plate bare lit className="relative w-full max-w-[22rem] overflow-hidden">
-          <RoomThumbnail
-            room={DEMO_LIT_ROOM}
-            height={168}
-            showOccupants={false}
-            className="rounded-b-none"
-          />
-          <div className="flex flex-col gap-2.5 p-3.5">
-            <div className="flex items-center gap-2">
-              <span className="pc-display text-heading text-text-primary">
-                {DEMO_LIT_ROOM.name}
-              </span>
-              <RoomDuration durationMs={DEMO_LIT_ROOM.durationMs} />
-            </div>
-            <div className="flex items-center gap-2.5">
-              <AvatarStack
-                people={DEMO_LIT_ROOM.occupants.map((occupant) => occupant.person)}
-                size={26}
-                context={`in ${DEMO_LIT_ROOM.name}`}
-              />
-              <span className="text-label text-text-body">Mara speaking</span>
-              <Button size="sm" variant="light" className="ml-auto">
-                Join
-              </Button>
-            </div>
-          </div>
-        </Plate>
-        {/* Home's 176px thumbnail (§7.5) puts the people and the Join on the
-            frame itself. */}
-        <div className="w-full max-w-[22rem]">
-          <RoomThumbnail
-            room={DEMO_LIT_ROOM}
-            height={176}
-            action={
-              <Button size="sm" variant="light">
-                Join
-              </Button>
-            }
-          />
-        </div>
-      </div>
-
-      </div>
-
-      <div id="light-herenow" className="flex flex-col gap-4">
-      <SectionLabel meta="the only full list is the sheet">Here now</SectionLabel>
-      <Plate className="flex w-full max-w-[42rem] flex-wrap items-center gap-3">
-        <span className="pc-display text-title text-text-primary">Shop floor</span>
-        <LightCaption mono>34:12</LightCaption>
-        <HereNowStrip
-          hereNow={DEMO_HERE_NOW}
-          context="in Shop floor"
-          everyone={[
-            DEMO_SPEAKER,
-            DEMO_PRIYA,
-            DEMO_REN,
-            DEMO_TOMAS,
-            DEMO_AISHA,
-            DEMO_DEVON,
-            DEMO_SASHA,
-            DEMO_JO,
-          ]}
-        />
-      </Plate>
-
-      <SectionLabel meta="returns you to the Stage">On-air pill</SectionLabel>
-      <Row>
-        <OnAirPill onAir={DEMO_ON_AIR} />
-        <OnAirPill onAir={{ ...DEMO_ON_AIR, micOn: false, sharing: false }} />
-        <OnAirPill onAir={{ ...DEMO_ON_AIR, deafened: true, durationMs: 3_782_000 }} />
-      </Row>
-
-      <SectionLabel meta="light is never the only cue">Captions</SectionLabel>
-      <div className="flex flex-col gap-1.5">
-        {[
-          roomCaptionFor(DEMO_LIT_ROOM),
-          roomCaptionFor(DEMO_READ_ROOM),
-          roomCaptionFor(DEMO_DARK_ROOM, { surface: 'row' }),
-          roomCaptionFor(DEMO_DARK_ROOM, { surface: 'card', withLastLit: true, nowMs: LIGHT_NOW }),
-          DEMO_BUILDING.caption,
-          hereNowCaption(4, 20),
-          lightsOnOverflowCaption(17),
-          aroundNowSentence({
-            rooms: [DEMO_LIT_ROOM, DEMO_READ_ROOM],
-            people: [DEMO_DEVON],
-          }),
-        ].map((caption) => (
-          <LightCaption key={caption} className="text-text-secondary">
-            {caption}
-          </LightCaption>
-        ))}
-      </div>
-      </div>
-    </Section>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
-/* WP2 — the Buildings column                                                  */
-/* -------------------------------------------------------------------------- */
-
-/** The lit room with you in it, so the caption reads "you're here" (§7.1). */
-const DEMO_YOUR_ROOM = demoVoice({
-  channelId: 'v1',
-  occupants: [
-    { person: DEMO_SPEAKER, speaking: true, sharingScreen: true },
-    { person: DEMO_PRIYA },
-    { person: DEMO_REN },
-    { person: demoPerson('viewer', 'Sam Douglas', { inRoom: true, roomName: 'Shop floor' }) },
-  ],
-  selfUserId: 'viewer',
-  startedAtMs: LIGHT_NOW - 34 * 60_000 - 12_000,
-});
-
-const DEMO_IN_CALL_BUILDING = buildingLight({
-  scope: LIGHT_SCOPE,
-  guildId: 'g1',
-  name: 'Kestrel Robotics',
-  rooms: [
-    DEMO_YOUR_ROOM,
-    DEMO_DARK_ROOM,
-    DEMO_READ_ROOM,
-    DEMO_QUIET_ROOM,
-    ...DEMO_QUIET_ROOMS,
-  ],
-  members: [DEMO_MARA, DEMO_PRIYA, DEMO_REN, DEMO_TOMAS, DEMO_AISHA, DEMO_DEVON],
-  memberCount: 61,
-});
-
-const DEMO_ACCOUNT = {
-  user: { id: 'viewer', username: 'sam.douglas', display_name: null, avatar_hash: null, flags: 0 },
-  navigate: () => undefined,
-  muted: false,
-  deafened: false,
-  onToggleMute: () => undefined,
-  onToggleDeaf: () => undefined,
-  showAdminDashboard: false,
-};
-
-const DEMO_COLUMN_HANDLERS = {
-  onOpenHome: () => undefined,
-  onOpenMessages: () => undefined,
-  onOpenLobby: () => undefined,
-  onOpenRoom: () => undefined,
-  onAddBuilding: () => undefined,
-};
-
-function ColumnFrame({
-  id,
-  label,
-  children,
-}: {
-  id: string;
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div id={id} className="flex flex-col gap-2">
-      <SectionLabel>{label}</SectionLabel>
-      <div className="h-[44rem] w-[calc(var(--w-buildings-column)+var(--gutter)+var(--gutter))] max-w-full shrink-0 bg-bg-base p-3">
-        {children}
-      </div>
-    </div>
-  );
-}
-
-function BuildingsColumnSection() {
-  return (
-    <Section
-      id="buildings-column"
-      title="Servers column"
-      blurb="The sidebar, in the three states worth reviewing: a Lobby open, a text channel open, and you in a call. Every server, channel and caption below is a real model from lib/attention — the column only draws them."
-    >
-      <div className="flex flex-wrap items-start gap-6">
-        <ColumnFrame id="column-lobby" label="A Lobby is open">
-          <BuildingsColumn
-            buildings={[DEMO_BUILDING, DEMO_DARK_BUILDING]}
-            needsYouCount={3}
-            messagesCount={2}
-            activeBuildingKey={DEMO_BUILDING.key}
-            {...DEMO_COLUMN_HANDLERS}
-            footer={<AccountPlate {...DEMO_ACCOUNT} />}
-          />
-        </ColumnFrame>
-
-        <ColumnFrame id="column-room" label="A text channel is open">
-          <BuildingsColumn
-            buildings={[DEMO_BUILDING, DEMO_DARK_BUILDING]}
-            needsYouCount={3}
-            messagesCount={2}
-            activeRoomKey={DEMO_READ_ROOM.key}
-            attention={new Map([[DEMO_QUIET_ROOM.key, { unread: true, mentionCount: 2 }]])}
-            {...DEMO_COLUMN_HANDLERS}
-            footer={<AccountPlate {...DEMO_ACCOUNT} />}
-          />
-        </ColumnFrame>
-
-        <ColumnFrame id="column-call" label="You are in a call">
-          <BuildingsColumn
-            buildings={[DEMO_IN_CALL_BUILDING, DEMO_DARK_BUILDING]}
-            needsYouCount={3}
-            messagesCount={2}
-            activeRoomKey={DEMO_YOUR_ROOM.key}
-            {...DEMO_COLUMN_HANDLERS}
-            footer={<AccountPlate {...DEMO_ACCOUNT} />}
-          />
-        </ColumnFrame>
-
-        <ColumnFrame id="column-empty" label="No servers yet">
-          <BuildingsColumn
-            buildings={[]}
-            needsYouCount={0}
-            messagesCount={0}
-            homeActive
-            {...DEMO_COLUMN_HANDLERS}
-            footer={<AccountPlate {...DEMO_ACCOUNT} />}
-          />
-        </ColumnFrame>
-      </div>
-    </Section>
   );
 }
 
@@ -1594,12 +1109,11 @@ export default function DesignTokensPage() {
     <div className="h-full overflow-y-auto bg-bg-base">
       <div className="mx-auto flex max-w-[76rem] flex-col gap-12 px-6 py-10">
         <header className="flex flex-col gap-2">
-          <p className="text-section text-text-faint">Dev only · docs/lantern-stage-spec.md</p>
-          <h1 className="pc-display text-display text-text-primary">Lantern Stage tokens</h1>
+          <p className="text-section text-text-faint">Dev only · docs/glass-spec.md</p>
+          <h1 className="pc-display text-display text-text-primary">Design tokens</h1>
           <p className="max-w-[70ch] text-text-body">
-            Windows at night, and light means people. Everything that is not light is dark, matte
-            and quiet. This page is the contract made visible: if a component disagrees with what is
-            here, the component is wrong.
+            Content is solid and controls are glass. This page is the contract made visible: if a
+            component disagrees with what is here, the component is wrong.
           </p>
         </header>
 
@@ -1720,10 +1234,6 @@ export default function DesignTokensPage() {
         <MotionSection />
 
         <PrimitivesSection />
-
-        <LightComponentsSection />
-
-        <BuildingsColumnSection />
 
         <Section
           id="themes"

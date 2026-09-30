@@ -1,10 +1,10 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { gameServersApi, type GameServer } from '../../api/gameServers';
 import { useGameServerStore } from '../../stores/gameServerStore';
 import { GameServersSection } from './GameServersSection';
-import { GameServersSidebarRow } from './GameServersSidebarRow';
+import { AddonRows } from '../glass/places/AddonRows';
 
 vi.mock('../../api/gameServers', async () => {
   const actual = await vi.importActual<typeof import('../../api/gameServers')>('../../api/gameServers');
@@ -86,18 +86,28 @@ describe('GameServersSection', () => {
   });
 });
 
-describe('GameServersSidebarRow', () => {
+describe('the game servers row in the places panel', () => {
   it('counts the ones up and lists each with copy, and connect for Steam games', async () => {
     const user = userEvent.setup();
-    render(<GameServersSidebarRow guildName="Lantern Works" servers={[smp, { ...tf2, status: { state: 'up', players_online: 4, players_max: 24, map: 'ctf_2fort' } }]} />);
-    expect(screen.getByLabelText('2 of 2 up')).toBeInTheDocument();
-    await user.click(screen.getByRole('option', { name: /Game servers/ }));
-    const dialog = await screen.findByRole('dialog', { name: 'Lantern Works game servers' });
+    const servers = [smp, { ...tf2, status: { state: 'up' as const, players_online: 4, players_max: 24, map: 'ctf_2fort' } }];
+    render(
+      <AddonRows
+        addons={[{ id: 'addon:games', kind: 'games', name: 'Game servers', line: '2 of 2 up', selected: false, servers, guildName: 'Lantern Works' }]}
+        focusOf={() => ({ tabIndex: 0, onFocus: () => {} })}
+        onOpen={() => {}}
+      />,
+    );
+    expect(screen.getByText('2 of 2 up')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /Game servers/ }));
+    // jsdom has no layout, so the popover keeps `visibility: hidden` (no accessible
+    // names) until measured: it is read from the DOM.
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"][aria-label="Lantern Works game servers"]')!;
+    expect(dialog).not.toBeNull();
     expect(dialog).toHaveTextContent('5/20 online');
     expect(dialog).toHaveTextContent('4/24 online · ctf_2fort');
-    const connects = screen.getAllByRole('link', { name: 'Connect' });
+    const connects = within(dialog).getAllByText('Connect').map((node) => node.closest('a'));
     expect(connects).toHaveLength(1);
     expect(connects[0]).toHaveAttribute('href', 'steam://connect/203.0.113.10:27015');
-    expect(screen.getByRole('button', { name: 'Copy the address of Lantern SMP' })).toBeInTheDocument();
+    expect(dialog.querySelector('[aria-label="Copy the address of Lantern SMP"]')).not.toBeNull();
   });
 });

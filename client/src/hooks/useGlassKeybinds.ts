@@ -28,8 +28,13 @@ export type GlassKeyAction = 'browse' | 'theater' | 'chat' | 'clip' | 'stop';
 export interface GlassKeybindOptions {
   /** A stage is on screen. */
   enabled: boolean;
-  /** The phone stage has no browse, no theater and no control row: only Esc applies. */
+  /** The phone stage has no browse and its own full screen: Esc and C apply. */
   phone: boolean;
+  /**
+   * A stream is on the stage (the default). The call itself has no stream: no
+   * theater, no chat to hide beside it, nothing to clip, so T, H and C stay free.
+   */
+  stream?: boolean;
   /** Stop watching (closes the stage and stops the watch). */
   onStop: () => void;
 }
@@ -73,7 +78,7 @@ export function keyBelongsElsewhere(event: KeyboardEvent): boolean {
   return [...layers].some((layer) => layer.getClientRects().length > 0 && getComputedStyle(layer).visibility !== 'hidden');
 }
 
-export function useGlassKeybinds({ enabled, phone, onStop }: GlassKeybindOptions): void {
+export function useGlassKeybinds({ enabled, phone, stream = true, onStop }: GlassKeybindOptions): void {
   useEffect(() => {
     if (!enabled) return;
     const onKey = (event: KeyboardEvent) => {
@@ -97,19 +102,18 @@ export function useGlassKeybinds({ enabled, phone, onStop }: GlassKeybindOptions
           glass.toggleBrowse();
           return;
         case 'theater':
-          if (phone) return;
+          if (phone || !stream) return;
           event.preventDefault();
           glass.setStageMode(glass.stage.mode === 'theater' ? 'side' : 'theater');
           return;
         case 'chat':
           // H only means something in theater; elsewhere the key stays free.
-          if (phone || glass.stage.mode !== 'theater') return;
+          if (phone || !stream || glass.stage.mode !== 'theater') return;
           event.preventDefault();
           glass.toggleChatHidden();
           return;
         case 'clip':
-          // The phone stage has no Clip of its own yet (G20); the key leaves it be.
-          if (phone) return;
+          if (!stream) return;
           event.preventDefault();
           void triggerClip();
           return;
@@ -117,5 +121,5 @@ export function useGlassKeybinds({ enabled, phone, onStop }: GlassKeybindOptions
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [enabled, phone, onStop]);
+  }, [enabled, phone, stream, onStop]);
 }

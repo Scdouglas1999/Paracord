@@ -98,6 +98,7 @@ const actions = {
   toggleMute: vi.fn(async () => {
     useVoiceStore.setState((state) => ({ selfMute: !state.selfMute }));
   }),
+  publishVoiceState: vi.fn(),
 };
 
 function live(states: VoiceState[] = [VINCENT, BRENDAN, NICK]) {
@@ -279,6 +280,10 @@ describe('not joined (compact)', () => {
     expect(useVoiceStore.getState().selfMute).toBe(true);
     expect(actions.joinChannel).toHaveBeenCalledWith('lounge', 'g1');
     expect(actions.toggleMute.mock.invocationCallOrder[0]).toBeLessThan(actions.joinChannel.mock.invocationCallOrder[0]);
+    // The join carries no mute state: the server is told right after, so the
+    // call sees "Muted", not "Mic on".
+    expect(actions.publishVoiceState).toHaveBeenCalledTimes(1);
+    expect(actions.joinChannel.mock.invocationCallOrder[0]).toBeLessThan(actions.publishVoiceState.mock.invocationCallOrder[0]);
   });
 
   it('Join with the microphone on joins unmuted', async () => {
@@ -290,6 +295,8 @@ describe('not joined (compact)', () => {
     expect(actions.toggleMute).not.toHaveBeenCalled();
     expect(useVoiceStore.getState().selfMute).toBe(false);
     expect(actions.joinChannel).toHaveBeenCalledWith('lounge', 'g1');
+    // Nothing to say beyond the defaults the join already set.
+    expect(actions.publishVoiceState).not.toHaveBeenCalled();
   });
 
   it('Listen listens in, muted by preference, and never joins', async () => {

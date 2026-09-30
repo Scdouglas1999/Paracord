@@ -262,14 +262,13 @@ async function login(page: Page, base: string, email: string, password: string) 
 }
 
 async function dismissOnboarding(page: Page) {
-  for (const name of ['Skip tour', 'Close welcome screen']) {
-    try {
-      const button = page.getByRole('button', { name, exact: true });
-      await button.waitFor({ state: 'visible', timeout: 1500 });
-      await button.click();
-    } catch {
-      // Overlay never appeared.
-    }
+  // The per-server welcome screen is the only first-run panel left.
+  try {
+    const button = page.getByRole('button', { name: 'Close welcome screen', exact: true });
+    await button.waitFor({ state: 'visible', timeout: 1500 });
+    await button.click();
+  } catch {
+    // Overlay never appeared.
   }
 }
 
@@ -490,7 +489,13 @@ test('restored backup replaces live history for connected browsers without a rel
     expect(channelAtNine.message_revision).toBe('9');
 
     // Newer activity is actually live in both clients before the cutover.
-    await expect(ownerPage.getByText(new RegExp(signalPhrase))).toBeVisible();
+    // The newest message is on screen twice now: in the conversation's feed, and
+    // as the preview line under the channel's name in the places panel. Both are
+    // live state, so each is asserted where it is drawn.
+    await expect(ownerPage.getByLabel('Message history').getByText(new RegExp(signalPhrase))).toBeVisible();
+    await expect(
+      ownerPage.getByRole('navigation', { name: 'Channels' }).getByRole('link', { name: /^anchor/ }).getByText(new RegExp(signalPhrase)),
+    ).toBeVisible();
     await expect(ownerPage.getByText('after-backup').first()).toBeVisible();
     await expect(memberAttention.getByText(/mentioned you|2 mentions for you/)).toBeVisible();
     await ownerPage.screenshot({ path: testInfo.outputPath('restore-before-owner.png'), fullPage: true });

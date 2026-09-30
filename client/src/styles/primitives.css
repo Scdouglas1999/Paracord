@@ -88,18 +88,6 @@
   backdrop-filter: blur(30px) saturate(1.2);
 }
 
-/* A coach-mark: a floating card that deliberately sits ON the surface it is
-   introducing, so unlike a menu it cannot be translucent: the display-size
-   heading beneath it ghosted straight through 97% alpha. Opaque plate fill,
-   the floating depth, and a hairline so it separates from a plate of the same
-   color underneath. */
-.pc-coach {
-  background: var(--bg-plate);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--r-bubble);
-  box-shadow: var(--shadow-floating);
-}
-
 /* A card that floats over the page without a scrim (a profile card) carries
    text of its own, so the page must not read through it. The floating color
    laid over the opaque plate: the same shade, with nothing ghosting behind. */
@@ -159,9 +147,8 @@
    It is DECLARED here rather than in `tokens.css` on purpose: a custom property
    is substituted where it is declared, so a recipe composed on `:root` would
    read the root's level and never the level of the person this ring belongs to.
-   Every element without one inherits the inert value `tokens.css` declares
-   (`.voice-connected-pulse` borrows these layers and has no level of its
-   own), so the layer costs nothing where nobody is speaking.
+   Every element without one inherits the inert value `tokens.css` declares,
+   so the layer costs nothing where nobody is speaking.
 
    The breath is two still rings crossfading, never an animated box-shadow.
    Animating the shadow itself repaints the blurred glow on every frame of the
@@ -192,15 +179,10 @@
 }
 
 /* The two ends of the breath, each at whatever the voice is doing to the ring
-   right now. The fallbacks are for the dots that borrow the breath
-   (`.voice-connected-pulse`, `.pc-live-dot.is-speaking`), which have no voice of
-   their own — at `--voice-level: 0` the two are the same value anyway. */
+   right now. The fallbacks are for a ring with no voice of its own — at
+   `--voice-level: 0` the two are the same value anyway. */
 .pc-speaking::before,
-.pc-speaking::after,
-.pc-live-dot.is-speaking::before,
-.pc-live-dot.is-speaking::after,
-.voice-connected-pulse::before,
-.voice-connected-pulse::after {
+.pc-speaking::after {
   content: '';
   position: absolute;
   inset: 0;
@@ -209,16 +191,12 @@
   animation: var(--duration-breathe) var(--ease-in-out) infinite;
 }
 
-.pc-speaking::before,
-.pc-live-dot.is-speaking::before,
-.voice-connected-pulse::before {
+.pc-speaking::before {
   box-shadow: var(--ring-lit-voice, var(--ring-lit));
   animation-name: pc-breathe-rest;
 }
 
-.pc-speaking::after,
-.pc-live-dot.is-speaking::after,
-.voice-connected-pulse::after {
+.pc-speaking::after {
   box-shadow: var(--ring-peak-voice, var(--ring-speaking-peak));
   opacity: 0;
   animation-name: pc-breathe-peak;
@@ -234,18 +212,6 @@
   50% {
     opacity: 1;
   }
-}
-
-/* A `LitAvatar`'s face while its ring breathes. The face clips its picture to
-   the circle, so it cannot carry the breathing layers itself — the avatar's
-   frame (`.pc-speaking` on the square around it) does. The face keeps the
-   resting ring as its own shadow, clipped out of sight, so that when the
-   person stops talking and the face goes back to `.pc-lit` the shadow is
-   already where it lands and `.pc-dimming` has nothing to fade in. The face is
-   square by construction, so the circle is its border-radius. */
-.pc-speaking-face {
-  box-shadow: var(--ring-lit);
-  clip-path: circle(50%);
 }
 
 /* Away / offline: matte, no rim (§1.5). */
@@ -283,8 +249,8 @@
   transition: none;
 }
 
-/* A window in a building's window map. Sizes come from the WindowMap component
-   (WP1); the fill and the glow are fixed here.
+/* A lit window (the design-tokens page draws them). Sizes come from the call
+   site; the fill and the glow are fixed here.
 
    The window itself is the unlit hole — recessed, not raised: an unlit window
    is a well, and the warm top highlight of a tile was what made a dark one
@@ -321,15 +287,6 @@
 .pc-window::after {
   background: var(--light-amber);
   box-shadow: var(--glow-window-amber);
-}
-
-/* Home draws 12×16 windows; the glow scales with them. */
-.pc-window.is-large::before {
-  box-shadow: var(--glow-window-white-lg);
-}
-
-.pc-window.is-large::after {
-  box-shadow: var(--glow-window-amber-lg);
 }
 
 .pc-window.is-talking::before,
@@ -396,18 +353,6 @@
   pointer-events: none;
   background: var(--lamp-radial);
   border-radius: var(--radius-full);
-}
-
-/* A lit room thumbnail's own glow (§7.1, §7.3, §8 RoomThumbnail). It is not the
-   lamp: the lamp is an ellipse floating over a card, this one is painted INTO
-   the window and anchored to its top-left corner — the reference renders'
-   `radial-gradient(70% 120% at 20% 0%)` over a tinted frame. A dark room has
-   neither. Apply to a positioned child that fills the thumbnail. */
-.pc-thumb-glow {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background: var(--thumb-glow);
 }
 
 /* -----------------------------------------------------------------------------
@@ -510,20 +455,6 @@
   }
 }
 
-@keyframes pc-sheet-in {
-  from {
-    opacity: 0;
-    transform: translate3d(0, 8px, 0);
-  }
-}
-
-@keyframes pc-sheet-out {
-  to {
-    opacity: 0;
-    transform: translate3d(0, 6px, 0);
-  }
-}
-
 @keyframes pc-banner-in {
   from {
     opacity: 0;
@@ -535,14 +466,6 @@
   to {
     opacity: 0;
     transform: translate3d(0, -4px, 0);
-  }
-}
-
-/* A hover toolbar or a small control arriving under the pointer: 4px, fast. */
-@keyframes pc-hover-in {
-  from {
-    opacity: 0;
-    transform: translate3d(0, 4px, 0);
   }
 }
 
@@ -607,7 +530,6 @@
 .pc-exit,
 .pc-pop-out,
 .pc-fade-out,
-.pc-sheet-out,
 .pc-banner-out,
 .pc-drawer-out-left,
 .pc-drawer-out-right {
@@ -634,14 +556,6 @@
   animation: pc-drawer-out-right var(--duration-exit-slow) var(--ease-in) forwards;
 }
 
-.pc-sheet-in {
-  animation: pc-sheet-in var(--duration-slow) var(--ease-out) backwards;
-}
-
-.pc-sheet-out {
-  animation: pc-sheet-out var(--duration-exit-slow) var(--ease-in) forwards;
-}
-
 /* Message search: result rows fade up 4px over 180ms, the first eight
    staggered by the light step. */
 @keyframes pc-search-row {
@@ -657,10 +571,6 @@
 
 :root[data-motion='reduced'] .pc-search-row {
   animation: none;
-}
-
-.pc-search-sheet-in {
-  animation: pc-sheet-in var(--duration-slow) var(--ease-out) backwards;
 }
 
 /* A matched word in a search result. */
@@ -683,10 +593,6 @@
 
 .pc-banner-out {
   animation: pc-banner-out var(--duration-exit) var(--ease-in) forwards;
-}
-
-.pc-hover-in {
-  animation: pc-hover-in var(--duration-fast) var(--ease-out) backwards;
 }
 
 .pc-mark-breathe {
@@ -798,22 +704,6 @@
 /* -----------------------------------------------------------------------------
    §5 Loading and presence indicators.
    -------------------------------------------------------------------------- */
-
-/* The 10px mark that carries a server's identity color, in front of its
-   section label in the sidebar — the same color as that server's Home card and
-   its Lobby header, so the eye learns it. Identity, never state (§6.3): it is
-   not a light, it never glows, and it says nothing about who is in there.
-   `--identity` is written on the group by `BuildingSection`. */
-.pc-identity-mark {
-  display: inline-block;
-  width: 10px;
-  height: 10px;
-  flex: none;
-  margin-right: 7px;
-  vertical-align: -1px;
-  border-radius: 3px;
-  background: var(--identity, var(--text-faint));
-}
 
 /* A matte placeholder pulse — the breath timing, like every other slow pulse
    in the product, and it stops dead under reduced motion rather than freezing
@@ -942,18 +832,6 @@
   animation: pc-fade-out var(--duration-burst) var(--ease-in) forwards;
 }
 
-/* The on-air pill's live dot breathes only while somebody is actually
-   speaking — never as decoration (§5.1, §6.7). */
-/* The breath is the speaking ring's two still layers (see `.pc-speaking`); the
-   dot's own glow is off while they draw it. */
-.pc-live-dot.is-speaking {
-  position: relative;
-}
-
-:root:not([data-motion='reduced']) .pc-live-dot.is-speaking {
-  box-shadow: none;
-}
-
 /* Reduced motion is the `data-motion` attribute, never a media query — see the
    header of utilities.css. Warm-up and dim become instant; breathing stops with
    the ring at its resting alpha. */
@@ -969,23 +847,8 @@
   box-shadow: var(--ring-speaking);
 }
 
-/* Still, the face carries its own speaking ring again, exactly as it did
-   before the breath moved to its frame, and the frame none. */
-:root[data-motion='reduced'] .pc-speaking-face {
-  box-shadow: var(--ring-speaking);
-  clip-path: none;
-}
-
-:root[data-motion='reduced'] .pc-speaking:has(> .pc-speaking-face) {
-  box-shadow: none;
-}
-
 :root[data-motion='reduced'] .pc-speaking::before,
-:root[data-motion='reduced'] .pc-speaking::after,
-:root[data-motion='reduced'] .pc-live-dot.is-speaking::before,
-:root[data-motion='reduced'] .pc-live-dot.is-speaking::after,
-:root[data-motion='reduced'] .voice-connected-pulse::before,
-:root[data-motion='reduced'] .voice-connected-pulse::after {
+:root[data-motion='reduced'] .pc-speaking::after {
   display: none;
 }
 
@@ -1301,11 +1164,4 @@
   .pc-auth-fields.is-paired > .pc-auth-span {
     grid-column: 1 / -1;
   }
-}
-
-/* A timeline row's fill (hover, mention, jump highlight) arrives as `--row-bg`
-   from MessageList rather than as an inline background, so a look can restyle
-   the row (`looks.css`) without an `!important`. */
-.pc-message-row {
-  background-color: var(--row-bg, transparent);
 }

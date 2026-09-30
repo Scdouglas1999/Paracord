@@ -2,7 +2,9 @@ import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 
 
 import type { MediaEngine } from '../../../lib/media/mediaEngine';
 import { cn } from '../../../lib/utils';
+import { toast } from '../../../stores/toastStore';
 import { useNativeUnderlay } from './nativeUnderlay';
+import { layerFor, useWatchQualityStore } from './StreamSound';
 
 /**
  * The watched stream, 16:9, radius 18 (docs/glass-spec.md §6.1).
@@ -67,6 +69,46 @@ export function StreamSurface({ engine, streamerId, notice, onPicture, className
       setHasPicture(false);
     };
   }, [engine, streamerId]);
+
+  // Viewing quality (Stream sound and quality): a simulcast layer asked of the
+  // watch's engine. Auto asks nothing, unless a layer was asked before, which
+  // is then released so the relay chooses again.
+  const quality = useWatchQualityStore((state) => state.quality);
+  const askedLayer = useRef(false);
+  useEffect(() => {
+    const layer = layerFor(quality);
+    if (!engine || (layer === null && !askedLayer.current)) return;
+    let canceled = false;
+    engine
+      .listPublishedTracks()
+      .then((tracks) => {
+        if (canceled) return undefined;
+        const track = tracks.find(
+          (entry) => String(entry.publisherUserId) === streamerId && entry.trackId === 'screen' && entry.kind === 'video',
+        );
+        if (!track) return undefined;
+        const canvas = canvasRef.current;
+        const ratio = window.devicePixelRatio || 1;
+        askedLayer.current = layer !== null;
+        return engine.registerTrackSubscription({
+          streamId: track.streamId,
+          trackId: track.trackId,
+          requestedLayer: layer ?? undefined,
+          viewport: canvas
+            ? {
+                width: Math.max(1, Math.round((canvas.clientWidth || canvas.width || 1) * ratio)),
+                height: Math.max(1, Math.round((canvas.clientHeight || canvas.height || 1) * ratio)),
+              }
+            : undefined,
+        });
+      })
+      .catch((error: unknown) => {
+        if (!canceled) toast.error(`Could not change the viewing quality: ${error instanceof Error ? error.message : String(error)}`);
+      });
+    return () => {
+      canceled = true;
+    };
+  }, [engine, streamerId, quality]);
 
   const showPicture = hasPicture && !notice;
   return (

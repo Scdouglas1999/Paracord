@@ -3,7 +3,7 @@
  * REST call the app makes, and a gateway stream that delivers READY carrying the
  * voice states, presences and channels, then a steady typing signal.
  *
- * Modeled on `e2e/design-review.spec.ts` (its WP4 section): the API is
+ * Modeled on the Lantern design-review harness (retired in WP-G22): the API is
  * intercepted with `page.route`, and `window.EventSource` is replaced in the
  * page by a stub that replays whatever `window.__pcStream` holds — a real
  * persistent stream, because an intercepted SSE response always ends, which

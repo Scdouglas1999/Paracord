@@ -255,7 +255,7 @@
 
 .glass-conversation__phone-pill {
   flex: 0 0 auto;
-  padding: 8px 8px 0;
+  padding: 0 12px;
 }
 
 .glass-conversation__phone-pill:empty {
@@ -287,6 +287,13 @@
 
 .glass-header__nav {
   margin-inline-start: 0;
+}
+
+/* The phone's "Back to places" is `PlacesToggle` (a glass icon button) wearing
+   the header's quiet button: no glass edge, the header's own fills. */
+.glass-header .glass-header__nav {
+  width: 40px;
+  box-shadow: none;
 }
 
 /* "6 NEW": how many messages were new when you opened it. */

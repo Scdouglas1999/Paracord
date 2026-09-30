@@ -22,20 +22,31 @@ import { isGuildDetail, isGuildSummaryList } from '../src/api/generated/validato
 const PORT = process.env.PARACORD_E2E_PORT ?? '18150';
 const BASE = `http://127.0.0.1:${PORT}`;
 
-/** Click away the shell tour and the welcome screen in whatever order they arrive. */
+/**
+ * Click away the welcome screen, which a member's first visit to a server puts
+ * on top of it a beat after the channels load: keep looking until it has not
+ * appeared for a while.
+ */
 async function dismissFirstRunOverlays(page: Page, quietMs = 2_500, deadlineMs = 30_000): Promise<void> {
   const deadline = Date.now() + deadlineMs;
   let lastSeen = Date.now();
   while (Date.now() < deadline && Date.now() - lastSeen < quietMs) {
-    for (const name of ['Close welcome screen', 'Skip tour']) {
-      const control = page.getByRole('button', { name, exact: true });
-      if (await control.isVisible().catch(() => false)) {
-        await control.click();
-        lastSeen = Date.now();
-      }
+    const control = page.getByRole('button', { name: 'Close welcome screen', exact: true });
+    if (await control.isVisible().catch(() => false)) {
+      await control.click();
+      lastSeen = Date.now();
     }
     await page.waitForTimeout(250);
   }
+}
+
+/**
+ * Your face at the conversation header's right edge (on Home, in its header
+ * too) opens the account menu: status, Reminders, Settings, Sign out.
+ */
+async function openAccountMenu(page: Page): Promise<void> {
+  await page.getByRole('button', { name: /^Your profile, / }).first().click();
+  await expect(page.getByRole('menu', { name: 'Account' })).toBeVisible();
 }
 
 test('embedded UI boots and real auth round trip succeeds', async ({ page, request, playwright }) => {
@@ -166,8 +177,8 @@ test('real identity setup survives rejected credentials and reload, then adopts 
     if (request.url().endsWith('/auth/attach-public-key')) implicitAttachments.push(request.url());
   });
   async function logout() {
-    await page.getByRole('button', { name: 'Open user settings', exact: true }).click();
-    await page.getByRole('button', { name: 'Log out', exact: true }).click();
+    await openAccountMenu(page);
+    await page.getByRole('menuitem', { name: 'Sign out', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Welcome back' })).toBeVisible();
     // A device that holds an identity is asked to unlock it after a sign-out,
     // not to sign in. "Welcome back" heads both screens; the way on to another
@@ -200,7 +211,8 @@ test('real identity setup survives rejected credentials and reload, then adopts 
   await page.locator('input[autocomplete="current-password"]').fill(password);
   await page.getByRole('button', { name: 'Log in', exact: true }).click();
   await expect(page).toHaveURL(/\/app/);
-  await page.getByRole('button', { name: 'Open user settings', exact: true }).click();
+  await openAccountMenu(page);
+  await page.getByRole('menuitem', { name: 'Settings', exact: true }).click();
   expect(implicitAttachments).toEqual([]);
   expect(await page.evaluate(() => localStorage.getItem('paracord:encrypted-identity:v1'))).toBe(original);
 
@@ -286,12 +298,11 @@ test('real message edits retain readable history after reload', async ({ page, r
     await page.getByRole('button', { name: 'Log in', exact: true }).click();
     await expect(page).toHaveURL(/\/app/);
     await page.goto(`/app/guilds/${guild.id}/channels/${channel.id}`);
-    // First-run overlays arrive one at a time and not in a fixed order (the
-    // tour, then the welcome screen a beat later, or the reverse), so keep
-    // dismissing whichever is up until neither has appeared for a while.
+    // The welcome screen arrives a beat after the channels load, so keep
+    // dismissing it until it has not appeared for a while.
     await dismissFirstRunOverlays(page);
     const original = 'First version from the real composer';
-    await page.getByPlaceholder('Message #edit-history', { exact: true }).fill(original);
+    await page.getByPlaceholder('Message edit-history', { exact: true }).fill(original);
     const creation = page.waitForResponse(response => response.request().method() === 'POST' && response.url().endsWith(`/channels/${channel.id}/messages`));
     await page.getByRole('button', { name: 'Send message', exact: true }).click();
     const created = await creation; expect(created.status()).toBe(201);
@@ -329,6 +340,14 @@ test('real message edits retain readable history after reload', async ({ page, r
     await expect(history.getByText('No earlier versions are available.', { exact: true })).not.toBeVisible();
     for (const width of [320, 768, 320]) {
       await page.setViewportSize({ width, height: 640 });
+      // The window swaps frames across the phone breakpoint (phone below 768,
+      // the conversation alone from there), and the conversation it remounts
+      // does not keep a dialog its predecessor held open. So the dialog is opened
+      // afresh at each width, still offline: Escape clears one that did survive.
+      await page.keyboard.press('Escape');
+      await expect(history).toHaveCount(0);
+      await page.getByRole('button', { name: `Show edit history for message ${message.id}`, exact: true }).click();
+      await expect(history.getByRole('alert')).toContainText('Couldn’t load edit history');
       const bounds = await history.boundingBox();
       expect(bounds!.x).toBeGreaterThanOrEqual(8); expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width - 8);
       expect(bounds!.y).toBeGreaterThanOrEqual(8); expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(632);
@@ -445,13 +464,12 @@ test('Home follows live mention creation, edits and deletion and opens the survi
     await expect(home.getByRole('heading', { level: 1 })).toBeVisible();
     // Give the live transport an observed authenticated READY before emitting
     // the mention. No reload or mocked gateway event is used for this check.
-    // §7.5 replaced the per-room "Continue in <room>" region. The building the
-    // member just joined is the landmark that is always there — a dark building
-    // is a `group`, a lit one an `article` — and it is enough to know Home has
-    // rendered before the wire check below.
+    // The server the member just joined is the landmark that is always there:
+    // its circle in the server row (named for the server, then its mention
+    // count once it has one). It is enough to know Home has rendered before the
+    // wire check below.
     await expect(
-      home.getByRole('group', { name: 'Attention verification' })
-        .or(home.getByRole('article', { name: 'Attention verification' })),
+      page.getByRole('navigation', { name: 'Servers' }).getByRole('button', { name: /^Attention verification/ }),
     ).toBeVisible();
     await page.waitForFunction(id => (window as unknown as { attentionWire: { readyUser: string } }).attentionWire.readyUser === id, member.user.id);
     const sent = await ownerApi.post(`${BASE}/api/v1/channels/${channel.id}/messages`, { data: { content: `<@${member.user.id}> Please review the original design`, nonce: 'real-home-attention' } });
@@ -485,15 +503,11 @@ test('Home follows live mention creation, edits and deletion and opens the survi
     await expect(attention.getByText(/The surviving design decision/)).toBeVisible();
     await expect(attention.getByText(/Review the revised original design/)).toHaveCount(0);
     await expect(attention.getByText(/Still later unrelated chatter/)).toHaveCount(0);
-    const homeTour = page.getByRole('button', { name: 'Skip tour', exact: true });
-    if (await homeTour.isVisible()) await homeTour.click();
     await page.screenshot({ path: testInfo.outputPath('home-surviving-mention.png'), fullPage: true });
     const jump = page.waitForURL(new RegExp(`/channels/${channel.id}\\?message=${survivor.id}`));
     // §7.5: a Needs-you row carries one action, labeled for the room it opens.
     await attention.getByRole('button', { name: 'Open decisions', exact: true }).click();
     await jump;
-    const skip = page.getByRole('button', { name: 'Skip tour', exact: true });
-    if (await skip.isVisible()) await skip.click();
     const welcome = page.getByRole('button', { name: 'Close welcome screen', exact: true });
     if (await welcome.isVisible()) await welcome.click();
     await expect(page.getByText(/The surviving design decision/).last()).toBeVisible();

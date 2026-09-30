@@ -119,11 +119,6 @@
   scroll-behavior: auto !important;
 }
 
-:root[data-motion='reduced'] .voice-connected-pulse::before,
-:root[data-motion='reduced'] .voice-connected-pulse::after {
-  animation: none !important;
-}
-
 /* A window nobody can see runs no animation (`lib/motion/visibility.ts`). The
    loops that are allowed at all — live indicators, the speaking breath, a
    loading pulse — hold where they are and resume when the window is shown. */

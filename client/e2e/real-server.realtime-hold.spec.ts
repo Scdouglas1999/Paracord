@@ -31,12 +31,10 @@ async function dismissFirstRunOverlays(page: Page, quietMs = 2_500, deadlineMs =
   const deadline = Date.now() + deadlineMs;
   let lastSeen = Date.now();
   while (Date.now() < deadline && Date.now() - lastSeen < quietMs) {
-    for (const name of ['Close welcome screen', 'Skip tour']) {
-      const control = page.getByRole('button', { name, exact: true });
-      if (await control.isVisible().catch(() => false)) {
-        await control.click();
-        lastSeen = Date.now();
-      }
+    const control = page.getByRole('button', { name: 'Close welcome screen', exact: true });
+    if (await control.isVisible().catch(() => false)) {
+      await control.click();
+      lastSeen = Date.now();
     }
     await page.waitForTimeout(250);
   }

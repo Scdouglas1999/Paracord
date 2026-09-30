@@ -76,8 +76,8 @@ import { clearAuthenticatedImageCache } from '../../lib/authenticatedImage';
 import { BannerEditor } from './BannerEditor';
 import { displayName as resolveDisplayName } from '../../lib/displayName';
 import { getIdentityColor } from '../../lib/colors';
-import { personLight } from '../../lib/attention/light';
-import { LitAvatar } from '../light';
+import { Face } from '../glass/places/Lead';
+import { presenceLabel } from '../../lib/presence';
 import { formatShortcut } from '../../lib/keyboardShortcuts';
 import { CustomCSS } from '../customization/CustomCSS';
 import { VoiceConnectionCheckButton } from '../voice/VoiceConnectionCheckButton';
@@ -149,6 +149,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
   }, [initialSection]);
   const user = useAuthStore(s => s.user);
   const settings = useAuthStore(s => s.settings);
+  const ownStatus = settings?.status ?? 'online';
   const logout = useAuthStore(s => s.logout);
   const fetchUser = useAuthStore(s => s.fetchUser);
   const fetchSettings = useAuthStore(s => s.fetchSettings);
@@ -1047,29 +1048,37 @@ export function UserSettings({ onClose }: UserSettingsProps) {
             {activeSection === 'account' && (
               <div>
                 <header className="mb-8 flex items-center gap-4">
-                  {/* Your own face, with your own light: you are looking at
-                      this, so your lights are on (§1.5). A preview of an avatar
-                      you have not saved yet bypasses the resolver, which only
-                      knows stored hashes. */}
-                  {avatarPreview ? (
-                    <span
-                      className="pc-lit pc-display flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-full text-title text-text-on-light"
-                      style={{ backgroundColor: getIdentityColor(user?.id ?? 'me') }}
-                    >
-                      <ResourceImage src={avatarPreview} alt="" className="h-full w-full object-cover" />
-                    </span>
-                  ) : (
-                    <LitAvatar
-                      person={personLight({
-                        userId: user?.id ?? 'me',
-                        name: resolveDisplayName(user),
-                        status: 'online',
-                        avatar: user?.avatar_hash ?? null,
-                      })}
-                      size={64}
-                      hideLabel
-                    />
-                  )}
+                  {/* Your own face, with the same presence mark as your face in the
+                      header. A preview of an avatar you have not saved yet is
+                      already a resolved URL, which the face's resolver (it only
+                      knows stored values) would refuse, so it is drawn directly. */}
+                  <span className="glass-person" style={{ width: 64, height: 64 }}>
+                    {avatarPreview ? (
+                      <span
+                        className="glass-face"
+                        style={{
+                          width: 64,
+                          height: 64,
+                          fontSize: 24,
+                          backgroundColor: getIdentityColor(user?.id ?? 'me'),
+                        }}
+                        aria-hidden
+                      >
+                        <ResourceImage src={avatarPreview} alt="" draggable={false} />
+                      </span>
+                    ) : (
+                      <Face
+                        face={{
+                          userId: user?.id ?? 'me',
+                          name: resolveDisplayName(user),
+                          avatar: user?.avatar_hash ?? null,
+                        }}
+                        size={64}
+                      />
+                    )}
+                    <span className="glass-presence" data-status={ownStatus} aria-hidden />
+                    <span className="sr-only">{ownStatus === 'invisible' ? 'Invisible' : presenceLabel(ownStatus)}</span>
+                  </span>
                   <div className="min-w-0">
                     <h2 className="truncate text-heading text-text-primary">{user ? resolveDisplayName(user) : 'My account'}</h2>
                     <p className="mt-0.5 text-body text-text-secondary">

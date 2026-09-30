@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * The literal-color lint (docs/lantern-stage-spec.md §0, §1, §8).
+ * The literal-color lint (docs/glass-spec.md §2: every color is a token).
  *
  * "Consume tokens, never hard-code hex." WP0 pinned that for the `ui/`
  * primitives with a render test that walks the DOM; this is the repo-wide
@@ -154,5 +154,5 @@ if (findings.length > 0) {
 console.log(
   `Literal-color audit passed: ${scanned} files hold no hex, rgb(), hsl() or named color.`
   + ` ${ALLOWED.size} files are allowed one, each for a stated reason`
-  + ' (docs/lantern-stage-spec.md §1).',
+  + ' (docs/glass-spec.md §2).',
 );

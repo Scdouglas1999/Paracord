@@ -17,6 +17,10 @@ import { expect, test, type Browser, type Page } from '@playwright/test';
 //
 // The blocked case is produced with Chromium's own host resolver rather than by
 // intercepting a response, so the failure is a genuine QUIC timeout.
+//
+// The check has two doors, and each is exercised: Settings, Voice & video (from
+// your face, the account menu) for someone not in a call, and "More call
+// actions", Connection check on the stage for someone who is.
 
 const PORT = process.env.PARACORD_E2E_PORT ?? '18150';
 const MEDIA_PORT = process.env.PARACORD_E2E_MEDIA_PORT ?? '8443';
@@ -121,29 +125,27 @@ async function signIn(page: Page): Promise<void> {
   await page.locator('input[autocomplete="current-password"]').fill(password);
   await page.getByRole('button', { name: 'Log in', exact: true }).click();
   await expect(page).toHaveURL(/\/app/);
-
-  await dismissLayoutTour(page);
 }
 
-/** A first-run layout tour overlays the app and swallows clicks. */
-async function dismissLayoutTour(page: Page): Promise<void> {
-  const skipTour = page.getByRole('button', { name: 'Skip tour', exact: true });
-  if (await skipTour.isVisible().catch(() => false)) {
-    await skipTour.click();
-    await expect(skipTour).toHaveCount(0);
-  }
+/**
+ * Settings open from your face: the account face at the conversation header's
+ * right edge (on a phone, at the top of the places screen, which is its own
+ * screen there), then "Settings" in the account menu it opens.
+ */
+async function openSettings(page: Page): Promise<void> {
+  const face = page.getByRole('button', { name: /^Your profile, / }).first();
+  const back = page.getByRole('button', { name: 'Back to places', exact: true });
+  // A phone that opened on a page is one tap from its places screen, where the
+  // face is; a window wide enough for the panes shows it on the header. Wait
+  // for whichever the layout draws before choosing.
+  await expect(face.or(back).first()).toBeVisible();
+  if (!(await face.isVisible())) await back.click();
+  await face.click();
+  await page.getByRole('menuitem', { name: 'Settings', exact: true }).click();
 }
 
 async function openConnectionCheck(page: Page): Promise<void> {
-  // Pick the entry point by viewport rather than by probing: the desktop user
-  // panel and the phone navigation bar swap at Tailwind's `md` breakpoint, and
-  // the losing one is unmounted a tick later.
-  const width = page.viewportSize()?.width ?? 1280;
-  const entry =
-    width < 768
-      ? page.getByRole('button', { name: 'Settings', exact: true })
-      : page.getByRole('button', { name: 'Open user settings', exact: true });
-  await entry.click();
+  await openSettings(page);
   await page.getByRole('button', { name: 'Voice & video', exact: true }).click();
   await page.getByRole('button', { name: /Run connection check/i }).click();
   await expect(page.getByRole('dialog').filter({ hasText: 'Voice connection check' })).toBeVisible();
@@ -307,4 +309,80 @@ test.describe('voice connection check with the media UDP path blocked', () => {
     });
   });
 
+});
+
+test.describe('voice connection check from inside a call', () => {
+  test('More call actions on the stage opens the same check and leaves the call running', async ({
+    playwright,
+  }) => {
+    await withChromium(playwright, MEDIA_LAUNCH_ARGS, {}, async (page) => {
+      // Somewhere to be in a call: a server and a voice channel, over REST.
+      const unique = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
+      const email = `voicecheckcall-${unique}@example.test`;
+      const password = 'Voice-Check-Password-123!';
+      const registered = await page.request.post(`${BASE}/api/v1/auth/register`, {
+        data: { email, username: `vcc${unique}`.slice(0, 32), password },
+      });
+      expect(registered.ok(), `register failed: ${registered.status()} ${await registered.text()}`).toBeTruthy();
+      const token = (await registered.json()).token as string;
+      const csrf = (await page.request.storageState()).cookies.find((cookie) => cookie.name === 'paracord_csrf')?.value;
+      expect(csrf, 'register should set a readable paracord_csrf cookie').toBeTruthy();
+      const headers = { Authorization: `Bearer ${token}`, 'x-paracord-csrf': csrf! };
+      const guild = await page.request.post(`${BASE}/api/v1/guilds`, { headers, data: { name: 'Check from a call' } });
+      expect(guild.status(), await guild.text()).toBe(201);
+      const guildId = String((await guild.json()).id);
+      const channel = await page.request.post(`${BASE}/api/v1/guilds/${guildId}/channels`, {
+        headers,
+        data: { name: 'lounge', channel_type: 2 },
+      });
+      expect(channel.status(), await channel.text()).toBe(201);
+      const channelId = String((await channel.json()).id);
+
+      await page.context().clearCookies();
+      await page.goto(`${BASE}/login`);
+      await page.locator('input[autocomplete="username"]').fill(email);
+      await page.locator('input[autocomplete="current-password"]').fill(password);
+      await page.getByRole('button', { name: 'Log in', exact: true }).click();
+      await expect(page).toHaveURL(/\/app/);
+
+      // A voice channel's route is its chat, with the call pill in its header.
+      await page.goto(`${BASE}/app/guilds/${guildId}/channels/${channelId}`);
+      const pill = page.getByRole('main').getByRole('region', { name: 'lounge, live voice channel', exact: true });
+      const welcome = page.getByRole('button', { name: 'Close welcome screen', exact: true });
+      const join = pill.getByRole('button', { name: 'Join lounge', exact: true });
+      // The per-server welcome screen mounts a beat after the channels load and
+      // covers the pill: clear it, then press Join, until the press lands.
+      for (let attempt = 0; attempt < 8; attempt++) {
+        if (await welcome.isVisible().catch(() => false)) await welcome.click().catch(() => {});
+        try {
+          await join.click({ timeout: 3_000 });
+          break;
+        } catch {
+          // Not rendered yet, or the welcome screen landed between the look and the click.
+        }
+      }
+      await expect(pill.getByRole('button', { name: 'Leave lounge', exact: true })).toBeVisible({ timeout: 60_000 });
+
+      // The call's own controls are the stage's: "Show the call" puts the call there.
+      await pill.getByRole('button', { name: 'Show the call', exact: true }).click();
+      const controls = page.getByRole('region', { name: 'Stage', exact: true }).getByRole('group', { name: 'Call controls', exact: true });
+      await expect(controls).toBeVisible();
+      await controls.getByRole('button', { name: 'More call actions', exact: true }).click();
+      await page.getByRole('menu', { name: 'More call actions' }).getByRole('menuitem', { name: 'Connection check', exact: true }).click();
+
+      const dialog = page.getByRole('dialog').filter({ hasText: 'Voice connection check' });
+      await expect(dialog).toBeVisible();
+      await expect(dialog.getByRole('button', { name: /^Run check$/ })).toBeVisible();
+      // The dialog fades in; wait out the fade so the evidence shows it.
+      await page.waitForTimeout(600);
+      await page.screenshot({ path: shotPath('voice-check-from-call-desktop.png') });
+
+      // Closing it puts the person back in the call, which is still there.
+      await dialog.getByText('Close', { exact: true }).click();
+      await expect(dialog).toHaveCount(0);
+      await expect(controls.getByRole('button', { name: 'Leave lounge', exact: true })).toBeVisible();
+      await controls.getByRole('button', { name: 'Leave lounge', exact: true }).click();
+      await expect(controls.getByRole('button', { name: 'Join lounge', exact: true })).toBeVisible({ timeout: 30_000 });
+    });
+  });
 });

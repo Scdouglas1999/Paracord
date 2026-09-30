@@ -21,6 +21,17 @@ export async function toggleVoiceDeaf(): Promise<void> {
   state.publishVoiceState();
 }
 
+/**
+ * Toggle the camera and sync the resulting state to the owning server, so
+ * everyone in the call sees the camera tile (the store's toggle alone only
+ * starts or stops the local track).
+ */
+export async function toggleVoiceVideo(): Promise<void> {
+  await useVoiceStore.getState().toggleVideo();
+  const state = useVoiceStore.getState();
+  state.publishVoiceState();
+}
+
 export function useVoice() {
   const connected = useVoiceStore((s) => s.connected);
   const joining = useVoiceStore((s) => s.joining);
@@ -80,11 +91,7 @@ export function useVoice() {
     stopStreamStore();
   }, [stopStreamStore]);
 
-  const toggleVideo = useCallback(async () => {
-    await useVoiceStore.getState().toggleVideo();
-    const state = useVoiceStore.getState();
-    state.publishVoiceState();
-  }, []);
+  const toggleVideo = useCallback(() => toggleVoiceVideo(), []);
 
   return {
     connected,

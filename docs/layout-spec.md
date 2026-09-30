@@ -1,3 +1,19 @@
+> **Superseded in part by [`docs/glass-spec.md`](glass-spec.md)** (Glass, branch
+> `design/glass`, 2026-09-30). Where this file and `glass-spec.md` disagree,
+> `glass-spec.md` wins. What Glass replaced: the frame and every surface drawn
+> here, meaning §1 (the `AppShell` tree with `UnifiedSidebar`, `ContextPanel`,
+> `TopBar`, `OnAirDock` and the Lobby), §2 (surface map), §5's sidebar arrow
+> navigation, `Ctrl+B` sidebar collapse and the `ContextPanel` step of the Esc
+> rule, §6 (narrow rules: there is no drawer or bottom nav, places is a screen of
+> its own), §7 (component recipes) and §8 (migration plan, history only). What
+> still holds: §3 (the conversation data model and Needs-you scoring, now the
+> data layer behind Home's "For you" and the places panel's Home mode), §4 (the
+> route table is unchanged; what each route shows is described in
+> `glass-spec.md` §3 and `docs/design/glass-g19-checkpoint.md`), §5's `⌘K`,
+> channel and server stepping and settings shortcuts (Glass adds `S`, `T`, `H`,
+> `C` and `Esc` for the stage), and §9's flags. What shipped:
+> [`docs/design/glass-summary.md`](design/glass-summary.md).
+
 # Paracord Layout Spec — "Channels + Unified Stream" (v1.0 overhaul)
 
 > **Status: SHIPPED (v1.0).** All four migration waves in §8 have landed on

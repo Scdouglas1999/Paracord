@@ -9,6 +9,9 @@
  *
  * WHICH CHANNEL THE PILL SHOWS (first that applies):
  *
+ *   0. **The voice channel whose chat you are reading** (its route), even when
+ *      nobody is in it: the pill is how you join, listen to or watch the
+ *      channel you opened. When that is the call you hold, it is rule 1's pill.
  *   1. **The call you hold**, anywhere (joining, listening or joined). Named
  *      with its server when it is not the one you are reading ("Game Night
  *      Lounge"). A DM call is named for the person.
@@ -67,6 +70,8 @@ export interface PillInput {
   scope: AccountScope;
   /** The route's server, null in a DM or on a page with no server. */
   routeGuildId: string | null;
+  /** The route's channel, when the page is a conversation; a voice channel here wins (rule 0). */
+  routeChannelId?: string | null;
   held: HeldCall | null;
   /** Voice states by channel, as `voiceStore` holds them. */
   channelParticipants: ReadonlyMap<string, readonly VoiceState[]>;
@@ -126,6 +131,13 @@ export interface PillTarget {
   relation: PillRelation;
   /** What this client is joining or doing, for the moment it is still connecting. */
   mode: VoiceMode | null;
+  /** The call this client holds lost its connection and is getting it back. */
+  reconnecting: boolean;
+  /**
+   * In a stage channel's call as its audience (not invited to speak): there is
+   * no microphone to offer; the stage's row and the channel's panel ask to speak.
+   */
+  audience: boolean;
   /** Everyone in the channel: people who joined first, listeners after. */
   occupants: PillOccupant[];
   /** Who joined (not listeners), the faces on the compact pill. */
@@ -203,6 +215,7 @@ export function rosterState(occupant: PillOccupant): RosterState {
 
 /** A sentence for the row under the name (expanded, and the phone's first row). */
 export function pillLine(target: PillTarget, selfMuted: boolean): string | null {
+  if (target.reconnecting) return 'Reconnecting…';
   if (target.relation === 'listening') return 'Listening in quietly';
   if (target.relation === 'joined' && selfMuted) return "You're muted";
   const others = target.talkers.filter((person) => !person.self);
@@ -238,6 +251,9 @@ function buildTarget(args: {
   relation: PillRelation;
   mode: VoiceMode | null;
   crossServer: boolean;
+  reconnecting?: boolean;
+  /** A stage channel (type 13). */
+  stage?: boolean;
 }): PillTarget {
   const { input, guildId, channelId } = args;
   const speaking = input.speakers(guildId, channelId) ?? NOBODY;
@@ -255,6 +271,11 @@ function buildTarget(args: {
     isDm,
     relation: args.relation,
     mode: args.mode,
+    reconnecting: Boolean(args.reconnecting),
+    audience:
+      Boolean(args.stage)
+      && args.relation === 'joined'
+      && args.states.find((state) => state.user_id === input.selfUserId)?.suppress !== false,
     occupants,
     faces: occupants.filter((person) => !person.listening),
     talkers: occupants.filter((person) => person.talking),
@@ -313,7 +334,37 @@ export function rankLiveChannels(
 /** The channel the pill shows, or null when there is nothing to show. */
 export function pickPillTarget(input: PillInput): PillTarget | null {
   const { held } = input;
-  if (held && held.phase !== 'closed' && held.phase !== 'closing' && held.phase !== 'idle' && held.phase !== 'failed') {
+  const holding = Boolean(
+    held && held.phase !== 'closed' && held.phase !== 'closing' && held.phase !== 'idle' && held.phase !== 'failed',
+  );
+
+  // Rule 0: the voice channel on the route, unless that is the call you hold.
+  const routeChannel = input.routeChannelId ? input.channels.get(input.routeChannelId) : undefined;
+  if (
+    routeChannel
+    && isVoiceType(routeChannel.type)
+    && routeChannel.guildId
+    && routeChannel.guildId === input.routeGuildId
+    && !(holding && held
+      && held.channelId === routeChannel.id
+      && held.scope.serverId === input.scope.serverId
+      && held.scope.userId === input.scope.userId)
+  ) {
+    return buildTarget({
+      input,
+      serverId: input.scope.serverId,
+      guildId: routeChannel.guildId,
+      channelId: routeChannel.id,
+      channelName: routeChannel.name.trim() || 'Voice channel',
+      guildName: input.guildNames.get(routeChannel.guildId) ?? null,
+      states: input.channelParticipants.get(routeChannel.id) ?? [],
+      relation: 'idle',
+      mode: null,
+      crossServer: false,
+    });
+  }
+
+  if (held && holding) {
     const sameAccount =
       held.scope.serverId === input.scope.serverId && held.scope.userId === input.scope.userId;
     const channel = sameAccount ? input.channels.get(held.channelId) ?? input.heldChannel : input.heldChannel;
@@ -334,6 +385,8 @@ export function pickPillTarget(input: PillInput): PillTarget | null {
       states,
       relation: relationOf(held),
       mode: held.mode,
+      reconnecting: held.phase === 'reconnecting',
+      stage: channel?.type === ChannelType.Stage,
       crossServer: !isDm && (!sameAccount || guildId !== input.routeGuildId),
     });
   }

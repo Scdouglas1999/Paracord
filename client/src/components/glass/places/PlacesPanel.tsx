@@ -1,3 +1,4 @@
+import { useGuildTogether } from '../../../hooks/useGuildTogether';
 import { useCallback, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { useNavigate } from 'react-router';
 
@@ -41,7 +42,7 @@ import type { PlacesPanelProps } from '../shell/slots';
  * One component for every presentation: the shell paints the pane (or the overlay,
  * or the browse panel) and this fills it. Picking a channel navigates; the frame
  * closes the overlay and browse when the route changes, so a row only has to
- * navigate. The live row is the exception: opening the stage is not a navigation,
+ * navigate. The live row also opens the stage when somebody streams there,
  * so it closes the overlay or browse itself.
  *
  * Keyboard: the server row and the list are each one Tab stop; the arrow keys
@@ -297,6 +298,8 @@ function ServerBody({
     [lights, current],
   );
   const places = useServerPlaces(current.guildId, building, route.channelId);
+  // Keep the server's Watch and Listen together sessions fresh for the live rows.
+  useGuildTogether(current.guildId);
   const addons = useAddons(current.guildId, current.name, route.pathname);
 
   const events = places.events;
@@ -324,9 +327,14 @@ function ServerBody({
     [navigate, current.guildId, current.scope],
   );
 
-  /** Watch: the stage opens on the stream; with nobody streaming, the channel opens. */
+  /**
+   * A live row opens the channel's own chat (its pill, its people), and when
+   * somebody is streaming, the stage on that stream beside it: the voice
+   * channel's chat beside the stage (docs/design/glass-plan.md §8.4).
+   */
   const openLive = useCallback(
     (row: Extract<ChannelRowModel, { kind: 'live' }>) => {
+      openChannel(row.channelId);
       if (row.streamerId) {
         useGlassStore.getState().openStage({
           serverId: useServerListStore.getState().activeServerId ?? LOCAL_SERVER_ID,
@@ -335,9 +343,7 @@ function ServerBody({
           streamerId: row.streamerId,
         });
         onClose?.();
-        return;
       }
-      openChannel(row.channelId);
     },
     [current.guildId, onClose, openChannel],
   );

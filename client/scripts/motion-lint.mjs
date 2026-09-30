@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * The motion lint (docs/lantern-stage-spec.md §5.2 — the motion law).
+ * The motion lint (docs/glass-spec.md §9 — only transform and opacity move).
  *
  * "Only `transform` and `opacity` animate." A transition or a keyframe that
  * moves `box-shadow`, `width`, `height`, `filter`, `top` or `left` repaints (or
@@ -58,13 +58,6 @@ const ALLOWED = [
     'styles/daily-word.css',
     'box-shadow: none',
     'the other half of the same edge-on swap in the tile flip',
-  ],
-  [
-    'styles/server-home.css',
-    'transition: filter var(--duration-dim)',
-    'the speaking glow on a live card fades out through `filter: opacity()` on '
-      + 'its own composited glow layer — a one-off fade when the talking stops, '
-      + 'kept by decision of the speaking-signal work (server-home-spec)',
   ],
 ];
 
@@ -214,7 +207,7 @@ if (failures.length || stale.length) {
   if (failures.length) {
     console.error(`Motion lint: ${failures.length} animation(s) of a property that may not animate (only transform and opacity may):\n`);
     for (const f of failures) console.error(`  ${f}`);
-    console.error('\nUse a still layer whose opacity crossfades, or a transform. docs/lantern-stage-spec.md §5.2.');
+    console.error('\nUse a still layer whose opacity crossfades, or a transform. docs/glass-spec.md §9.');
   }
   if (stale.length) {
     console.error(`\nMotion lint: allowances that no longer match anything — remove them:\n  ${stale.join('\n  ')}`);

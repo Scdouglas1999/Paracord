@@ -1,13 +1,13 @@
 import * as React from 'react';
 
 import { Chip } from '../ui';
-import { AvatarStack, avatarInitials } from '../light';
+import { FaceStack, initialsOf } from '../glass/places/Lead';
 import { cn } from '../../lib/utils';
 import { getIdentityColor } from '../../lib/colors';
 import { resolveUserAvatarUrl } from '../../lib/userAvatar';
 import { useAuthenticatedImage } from '../../lib/authenticatedImage';
 import { useDownloadTicket } from '../../hooks/useDownloadTicket';
-import type { PersonLight } from '../../lib/attention/light';
+import { nameList, type PersonLight } from '../../lib/attention/light';
 import { roomSharedName } from '../../lib/motion';
 import type { RoomLitEvent } from './messageLight';
 
@@ -112,7 +112,7 @@ export function TimelineAvatar({
       }}
       aria-hidden
     >
-      {src ? <img src={src} alt="" draggable={false} /> : avatarInitials(name)}
+      {src ? <img src={src} alt="" draggable={false} /> : initialsOf(name)}
     </span>
   );
 }
@@ -313,7 +313,22 @@ export function ThreadRow({
 }) {
   return (
     <button type="button" onClick={onOpen} className="glass-tl-thread">
-      {people.length > 0 && <AvatarStack people={people} size={20} max={3} context={`in ${name}`} />}
+      {people.length > 0 && (
+        <>
+          <FaceStack
+            faces={people.slice(0, 3).map(({ userId, name: person, avatar }) => ({ userId, name: person, avatar }))}
+            size={20}
+            overlap={5}
+          />
+          {people.length > 3 && (
+            <span className="glass-tl-thread__meta" aria-hidden>
+              +{people.length - 3}
+            </span>
+          )}
+          {/* The faces are drawn, not read: one sentence says who is in the thread. */}
+          <span className="sr-only">{`${nameList(people.map((person) => person.name))} in ${name}`}</span>
+        </>
+      )}
       <span className="glass-tl-thread__name">{name}</span>
       <span className="glass-tl-thread__meta">{meta}</span>
       {archived && (
