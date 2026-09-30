@@ -229,6 +229,43 @@ describe('AppShell', () => {
     expect(container.querySelector('.glass-frame')).toHaveAttribute('data-chat-hidden', 'true');
   });
 
+  it('theater browsing floats places and puts the chat aside; a pick closes it and brings the chat back', async () => {
+    const { container } = render(
+      <MemoryRouter initialEntries={['/app/guilds/g1/channels/c1']}>
+        <Routes>
+          <Route path="/app" element={<AppShell />}>
+            <Route
+              path="guilds/:guildId/channels/:channelId"
+              element={<Link to="/app/guilds/g1/channels/c2">open Clips</Link>}
+            />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+    act(() => useGlassStore.getState().openStage(LOUNGE, 'theater'));
+    act(() => useGlassStore.getState().toggleChatHidden());
+    act(() => useGlassStore.getState().toggleBrowse());
+    expect(container.querySelector('.glass-frame__places')).toHaveAttribute('data-presentation', 'browse');
+    expect(container.querySelector('#main-content')).toHaveAttribute('data-away', 'true');
+
+    act(() => screen.getByRole('link', { name: 'open Clips' }).click());
+    await waitFor(() => expect(useGlassStore.getState().browseOpen).toBe(false));
+    expect(useGlassStore.getState().chatHidden).toBe(false);
+    expect(useGlassStore.getState().stage.mode).toBe('theater');
+    expect(container.querySelector('.glass-frame__places')).toBeNull();
+    expect(container.querySelector('#main-content')).not.toHaveAttribute('data-away');
+  });
+
+  it('frames the moves: two empty morph layers around the frame, hidden from assistive tech', () => {
+    const { container } = renderShell('/app/guilds/g1/channels/c1');
+    const layers = container.querySelectorAll('.glass-morph');
+    expect(layers).toHaveLength(2);
+    for (const layer of layers) {
+      expect(layer).toHaveAttribute('aria-hidden', 'true');
+      expect(layer).toBeEmptyDOMElement();
+    }
+  });
+
   it('mounts the sheets slot after the conversation pane, with the route it is over', () => {
     const { container } = renderShell('/app/guilds/g1/channels/c1');
 

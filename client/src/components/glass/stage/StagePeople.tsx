@@ -81,7 +81,7 @@ function describeState(person: StagePerson, watched: boolean): string {
   return parts.join(', ');
 }
 
-function CameraTile({
+export function CameraTile({
   person,
   engine,
   realVoice,

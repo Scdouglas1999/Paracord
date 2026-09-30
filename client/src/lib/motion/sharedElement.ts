@@ -338,3 +338,344 @@ export async function transitionWith(
   window.setTimeout(unstamp, duration + ms('--stagger-chrome') + ms('--duration-move'));
   return { engine: 'flip', animations };
 }
+
+/* =============================================================================
+   Morph: one layout move of nested boxes (docs/glass-spec.md §6, §9; WP-G15).
+
+   The Glass layout changes (the pill growing into the stage, side by side <->
+   theater, browsing) move whole panes, and a pane's content must not stretch
+   while its box does. `transitionWith` above moves ONE named element; a morph
+   moves a small tree of them in one timeline:
+
+     box    a pane or the pill: scaled from its first box to its last, its corner
+            radius riding the same curve (counter-scaled, so the corners stay
+            round instead of squashing). Its `overflow: hidden` clips what it
+            holds, which is what makes a box that grows look like it opens.
+     fit    the stream: a uniform scale that carries its picture (16:9 inside
+            the box) from where it was to where it is, so video never stretches.
+     rigid  chrome that keeps its size: moved from its first center to its last,
+            counter-scaled against every moving ancestor.
+     ride   content inside a moving box that keeps its size and rides one of the
+            box's corners (a pane's column riding its right edge, say).
+
+   Every item's transform is computed from its ancestors' transforms at the same
+   moment, so nesting cancels exactly. The easing is baked into the keyframes
+   (`MORPH_SAMPLES` of them, linear between), because a counter-scale is the
+   inverse of a scale at each instant, and two animations with the same easing
+   curve are only inverse at their ends.
+
+   Only `transform`, `opacity` and `border-radius` move (the motion lint); the
+   radius only on boxes whose corners change, and the caller takes the heavy
+   shadows off those boxes for the length of the move (a shadow repainted per
+   frame is the WebKitGTK cost glass-plan §6 warns about).
+
+   One engine on every platform: this is Web Animations on transform, not the
+   View Transitions API. See docs/design/glass-g15-checkpoint.md ("Why not View
+   Transitions") for why; WebKitGTK 2.52 has the API, it is not missing.
+   ============================================================================= */
+
+export interface MorphBox {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+export type MorphKind = 'box' | 'fit' | 'rigid' | 'ride';
+
+/** An opacity ramp over part of the move (fractions of its duration). */
+export interface MorphFade {
+  from: number;
+  to: number;
+  /** Where the ramp starts, 0..1 of the duration. Default 0. */
+  start?: number;
+  /** Where it ends, 0..1 of the duration. Default 1. */
+  end?: number;
+}
+
+export interface MorphItem {
+  el: HTMLElement;
+  kind: MorphKind;
+  /** The element's untransformed box as laid out now, in viewport px. */
+  layout: MorphBox;
+  /**
+   * Where it is seen at the start and the end. `box`: the whole box. `fit`: the
+   * picture. `rigid`: only the centers count (it keeps its layout size).
+   * `ride` ignores both. Each defaults to `layout` (or `picture` for `fit`).
+   */
+  from?: MorphBox;
+  to?: MorphBox;
+  /** `fit`: the picture's box inside `layout`, in the same viewport px. */
+  picture?: MorphBox;
+  /** The nearest moving ancestor; this item's transform compensates for it. */
+  parent?: MorphItem;
+  /** `ride`: the point of the parent's box it keeps its distance to: [0,0] top left, [1,0] top right. */
+  anchor?: readonly [number, number];
+  /**
+   * `rigid`: which point of it travels from `from` to `to` ([0,0] its top left,
+   * [1,0] its top right). Default [0.5, 0.5], its center. It matters when it is
+   * not the same size at both ends (a group that gained a button).
+   */
+  align?: readonly [number, number];
+  /** The corner radius it is SEEN with at the start and the end (`box`, `fit`), px. */
+  radius?: { from: number; to: number };
+  fade?: MorphFade;
+  /** Names the animation (`glass-morph:<name>`), for tests and the frame gate. */
+  name?: string;
+}
+
+export interface MorphOptions {
+  duration: number;
+  /** Progress along the move for a time fraction, 0..1 -> 0..1 (it may overshoot). */
+  easing: (t: number) => number;
+  /** Keyframes per item. Default MORPH_SAMPLES. */
+  samples?: number;
+}
+
+export const MORPH_SAMPLES = 24;
+
+/** The Glass layout curve, `--glass-spring: cubic-bezier(0.2, 0.8, 0.2, 1)` (tokens.css). */
+export const GLASS_LAYOUT_CURVE = [0.2, 0.8, 0.2, 1] as const;
+
+/**
+ * A CSS `cubic-bezier(x1, y1, x2, y2)` as a function of time: Newton's method on
+ * x(u) = t, bisection when the slope is too flat to trust.
+ */
+export function cubicBezier(x1: number, y1: number, x2: number, y2: number): (t: number) => number {
+  const cx = 3 * x1;
+  const bx = 3 * (x2 - x1) - cx;
+  const ax = 1 - cx - bx;
+  const cy = 3 * y1;
+  const by = 3 * (y2 - y1) - cy;
+  const ay = 1 - cy - by;
+  const x = (u: number) => ((ax * u + bx) * u + cx) * u;
+  const y = (u: number) => ((ay * u + by) * u + cy) * u;
+  const dx = (u: number) => (3 * ax * u + 2 * bx) * u + cx;
+  const solve = (t: number): number => {
+    let u = t;
+    for (let i = 0; i < 8; i += 1) {
+      const error = x(u) - t;
+      if (Math.abs(error) < 1e-6) return u;
+      const slope = dx(u);
+      if (Math.abs(slope) < 1e-6) break;
+      u -= error / slope;
+    }
+    let lo = 0;
+    let hi = 1;
+    u = t;
+    for (let i = 0; i < 40; i += 1) {
+      const value = x(u);
+      if (Math.abs(value - t) < 1e-6) return u;
+      if (value < t) lo = u;
+      else hi = u;
+      u = (lo + hi) / 2;
+    }
+    return u;
+  };
+  return (t: number) => {
+    if (t <= 0) return 0;
+    if (t >= 1) return 1;
+    return y(solve(t));
+  };
+}
+
+interface Affine {
+  ax: number;
+  ay: number;
+  bx: number;
+  by: number;
+}
+
+const IDENTITY: Affine = { ax: 1, ay: 1, bx: 0, by: 0 };
+
+const lerp = (a: number, b: number, p: number) => a + (b - a) * p;
+
+function lerpBox(a: MorphBox, b: MorphBox, p: number): MorphBox {
+  return {
+    left: lerp(a.left, b.left, p),
+    top: lerp(a.top, b.top, p),
+    width: lerp(a.width, b.width, p),
+    height: lerp(a.height, b.height, p),
+  };
+}
+
+/** A fade's value at time fraction `t`, eased in and out over its window. */
+export function fadeAt(fade: MorphFade, t: number): number {
+  const start = fade.start ?? 0;
+  const end = fade.end ?? 1;
+  if (t <= start) return fade.from;
+  if (t >= end || end <= start) return fade.to;
+  const x = (t - start) / (end - start);
+  const smooth = x * x * (3 - 2 * x);
+  return lerp(fade.from, fade.to, smooth);
+}
+
+/** One item at one moment: its own transform and the net map from layout to screen it leaves its children. */
+interface Solved {
+  translateX: number;
+  translateY: number;
+  scaleX: number;
+  scaleY: number;
+  net: Affine;
+}
+
+function solveAt(item: MorphItem, p: number, parentNet: Affine): Solved {
+  const L = item.layout;
+  const P = parentNet;
+  let desiredX = 1;
+  let desiredY = 1;
+  // A point of the item's layout, and where on screen it must be now.
+  let refX = L.left;
+  let refY = L.top;
+  let toX = L.left;
+  let toY = L.top;
+  switch (item.kind) {
+    case 'box': {
+      const box = lerpBox(item.from ?? L, item.to ?? L, p);
+      desiredX = L.width > 0 ? box.width / L.width : 1;
+      desiredY = L.height > 0 ? box.height / L.height : 1;
+      toX = box.left;
+      toY = box.top;
+      break;
+    }
+    case 'fit': {
+      const picture = item.picture ?? L;
+      const box = lerpBox(item.from ?? picture, item.to ?? picture, p);
+      const scale = picture.width > 0 ? box.width / picture.width : 1;
+      desiredX = scale;
+      desiredY = scale;
+      refX = picture.left;
+      refY = picture.top;
+      toX = box.left;
+      toY = box.top;
+      break;
+    }
+    case 'rigid': {
+      const from = item.from ?? L;
+      const to = item.to ?? L;
+      const [ax, ay] = item.align ?? [0.5, 0.5];
+      const pointX = lerp(from.left + ax * from.width, to.left + ax * to.width, p);
+      const pointY = lerp(from.top + ay * from.height, to.top + ay * to.height, p);
+      toX = pointX - ax * L.width;
+      toY = pointY - ay * L.height;
+      break;
+    }
+    case 'ride': {
+      const parent = item.parent;
+      if (parent) {
+        const [fx, fy] = item.anchor ?? [0, 0];
+        const PL = parent.layout;
+        // The parent's box as seen now.
+        const seenLeft = P.ax * PL.left + P.bx;
+        const seenTop = P.ay * PL.top + P.by;
+        const anchorX = seenLeft + fx * P.ax * PL.width;
+        const anchorY = seenTop + fy * P.ay * PL.height;
+        toX = anchorX + (L.left - (PL.left + fx * PL.width));
+        toY = anchorY + (L.top - (PL.top + fy * PL.height));
+      }
+      break;
+    }
+  }
+  const kx = desiredX / P.ax;
+  const ky = desiredY / P.ay;
+  // X(x) = L.tl + k(x - L.tl) + t, and the parent's map of X(ref) must land on (toX, toY).
+  const translateX = (toX - P.bx) / P.ax - L.left - kx * (refX - L.left);
+  const translateY = (toY - P.by) / P.ay - L.top - ky * (refY - L.top);
+  const net: Affine = {
+    ax: P.ax * kx,
+    ay: P.ay * ky,
+    bx: P.ax * (L.left - kx * L.left + translateX) + P.bx,
+    by: P.ay * (L.top - ky * L.top + translateY) + P.by,
+  };
+  return { translateX, translateY, scaleX: kx, scaleY: ky, net };
+}
+
+const round = (value: number, digits = 4) => {
+  const f = 10 ** digits;
+  return Math.round(value * f) / f;
+};
+
+/**
+ * The keyframes of every item (pure; the math, testable without a DOM). An item
+ * whose every frame is at rest and fully opaque gets none.
+ */
+export function morphFrames(items: readonly MorphItem[], options: MorphOptions): Map<MorphItem, Keyframe[]> {
+  const samples = Math.max(2, options.samples ?? MORPH_SAMPLES);
+  const frames = new Map<MorphItem, Keyframe[]>();
+  const moving = new Set<MorphItem>();
+  for (const item of items) frames.set(item, []);
+  for (let i = 0; i <= samples; i += 1) {
+    const t = i / samples;
+    const p = options.easing(t);
+    const nets = new Map<MorphItem, Affine>();
+    const netOf = (item: MorphItem): Affine => {
+      const known = nets.get(item);
+      if (known) return known;
+      const parentNet = item.parent ? netOf(item.parent) : IDENTITY;
+      const solved = solveAt(item, p, parentNet);
+      nets.set(item, solved.net);
+      return solved.net;
+    };
+    for (const item of items) {
+      const parentNet = item.parent ? netOf(item.parent) : IDENTITY;
+      const solved = solveAt(item, p, parentNet);
+      nets.set(item, solved.net);
+      const frame: Keyframe = {
+        offset: t,
+        transformOrigin: '0px 0px',
+        transform: `translate(${round(solved.translateX, 3)}px, ${round(solved.translateY, 3)}px) scale(${round(solved.scaleX, 6)}, ${round(solved.scaleY, 6)})`,
+      };
+      const still =
+        Math.abs(solved.translateX) < 0.05
+        && Math.abs(solved.translateY) < 0.05
+        && Math.abs(solved.scaleX - 1) < 1e-4
+        && Math.abs(solved.scaleY - 1) < 1e-4;
+      if (!still) moving.add(item);
+      if (item.radius) {
+        const seen = lerp(item.radius.from, item.radius.to, p);
+        const sx = Math.max(1e-3, Math.abs(solved.net.ax));
+        const sy = Math.max(1e-3, Math.abs(solved.net.ay));
+        frame.borderRadius = `${round(seen / sx, 2)}px / ${round(seen / sy, 2)}px`;
+        if (item.radius.from !== item.radius.to) moving.add(item);
+      }
+      if (item.fade) {
+        frame.opacity = round(fadeAt(item.fade, t), 3);
+        if (item.fade.from !== 1 || item.fade.to !== 1) moving.add(item);
+      }
+      frames.get(item)!.push(frame);
+    }
+  }
+  for (const item of items) if (!moving.has(item)) frames.delete(item);
+  return frames;
+}
+
+/**
+ * Play a morph: every item starts on this frame, with the same duration, and
+ * holds its last frame until the move is over, when all of them are dropped
+ * together (their last frames are their resting state, so nothing jumps).
+ * Returns the animations, or none where Web Animations are missing (jsdom).
+ */
+export function playMorph(items: readonly MorphItem[], options: MorphOptions): Animation[] {
+  const frames = morphFrames(items, options);
+  const animations: Animation[] = [];
+  for (const [item, keyframes] of frames) {
+    if (typeof item.el.animate !== 'function') continue;
+    const animation = item.el.animate(keyframes, { duration: options.duration, easing: 'linear', fill: 'both' });
+    animation.id = `glass-morph:${item.name ?? item.kind}`;
+    animations.push(animation);
+  }
+  return animations;
+}
+
+/** The box a 16:9 picture takes inside `box` when it is contained (letterboxed). */
+export function containedPicture(box: MorphBox, aspect = 16 / 9): MorphBox {
+  if (!(box.width > 0) || !(box.height > 0)) return box;
+  const width = Math.min(box.width, box.height * aspect);
+  const height = width / aspect;
+  return {
+    left: box.left + (box.width - width) / 2,
+    top: box.top + (box.height - height) / 2,
+    width,
+    height,
+  };
+}

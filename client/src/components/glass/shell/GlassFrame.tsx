@@ -3,6 +3,7 @@ import { useLocation } from 'react-router';
 import { RoomBackdrop } from '../room';
 import { PlacesPanel } from '../places';
 import { Stage } from '../stage';
+import { MORPH_OVER_CLASS, MORPH_UNDER_CLASS, useStageTransitions } from '../stage/stageTransition';
 import { Sheets } from '../sheets';
 import { useGlassStore, type OpenStageMode } from '../../../stores/glassStore';
 import { PlacesOverlay } from './PlacesOverlay';
@@ -28,7 +29,14 @@ export interface GlassFrameProps {
  *     + browse (S)     [places 316] [stage]                    conversation steps aside
  *   theater            stage fills the window; conversation floats 380 on the right
  *     + chat hidden    the conversation slides out
- *     + browse         places floats over the stream's left edge
+ *     + browse         places floats over the stream's left edge; the chat steps out
+ *                      of the way until a pick (or H) brings it back
+ *
+ * The moves between these (650ms, the pill growing into the stage and back)
+ * are `stage/stageTransition.ts`'s. It measures the panes around each store
+ * change and plays the difference; the two morph layers here hold what it
+ * needs outside the panes (the clones of what just left, above the frame; the
+ * panes' shadows while their corners move, under it).
  *
  * Panes float on the room with 16px from the window and from each other,
  * radius 28, full height (styles/glass-layout.css). The places pane is never
@@ -51,6 +59,14 @@ export function GlassFrame({ layout, guildId, channelId, children }: GlassFrameP
   const placesOverlayOpen = useGlassStore((s) => s.placesOverlayOpen);
   const setPlacesOverlayOpen = useGlassStore((s) => s.setPlacesOverlayOpen);
   const setBrowseOpen = useGlassStore((s) => s.setBrowseOpen);
+  const frameRef = useRef<HTMLDivElement | null>(null);
+  const morphOverRef = useRef<HTMLDivElement | null>(null);
+  const morphUnderRef = useRef<HTMLDivElement | null>(null);
+  useStageTransitions(frameRef, morphOverRef, morphUnderRef, {
+    mode: stage.mode,
+    browse: browseOpen,
+    chatHidden,
+  });
 
   const stageOpen = stage.mode !== 'none';
   const stageMode = stage.mode === 'none' ? null : (stage.mode as OpenStageMode);
@@ -68,7 +84,11 @@ export function GlassFrame({ layout, guildId, channelId, children }: GlassFrameP
     lastPath.current = location.pathname;
     const glass = useGlassStore.getState();
     if (glass.placesOverlayOpen) glass.setPlacesOverlayOpen(false);
-    if (glass.browseOpen) glass.setBrowseOpen(false);
+    if (glass.browseOpen) {
+      glass.setBrowseOpen(false);
+      // In theater, a pick brings that conversation back beside the stream.
+      if (glass.stage.mode === 'theater' && glass.chatHidden) glass.setChatHidden(false);
+    }
   }, [location.pathname]);
 
   // The overlay belongs to the compact frame; growing the window past 860px
@@ -87,14 +107,18 @@ export function GlassFrame({ layout, guildId, channelId, children }: GlassFrameP
   // On the compact frame there is no room for a places pane beside a stage;
   // browse opens the same overlay the header does.
   const showPlacesOverlay = layout === 'compact' && (placesOverlayOpen || (stageOpen && browseOpen));
+  // Theater browsing floats places over the stream's left edge and puts the chat
+  // out of the way (the prototype's layout), so the stream is what is left.
   const conversationAway =
     (stageMode === 'side' && browseOpen && layout !== 'phone')
-    || (stageMode === 'theater' && chatHidden);
+    || (stageMode === 'theater' && (chatHidden || (browseOpen && layout === 'wide')));
 
   return (
     <>
       <RoomBackdrop guildId={guildId} />
+      <div ref={morphUnderRef} className={MORPH_UNDER_CLASS} aria-hidden="true" />
       <div
+        ref={frameRef}
         className="glass-frame"
         data-native-underlay-clear=""
         data-layout={layout}
@@ -146,6 +170,7 @@ export function GlassFrame({ layout, guildId, channelId, children }: GlassFrameP
 
         <Sheets guildId={guildId} channelId={channelId} layout={layout} />
       </div>
+      <div ref={morphOverRef} className={MORPH_OVER_CLASS} aria-hidden="true" />
 
       <PlacesOverlay open={showPlacesOverlay} onClose={closeOverlay} browsing={stageOpen && browseOpen} />
     </>

@@ -10,8 +10,11 @@
    into the frame, and an unlayered rule outranks the whole utility layer.
 
    Motion: only transform and opacity move (motion lint). Pane width changes
-   between stage modes are not animated here; the 650ms moves are WP-G15's.
-   Reduced motion needs nothing here: utilities.css zeroes every duration.
+   between stage modes are not animated here: the 650ms moves are
+   stage/stageTransition.ts's (WP-G15), which measures these panes around each
+   change. The conversation stepping aside (browse, H) is the panes' own CSS
+   transition (transform, opacity); under reduced motion utilities.css zeroes
+   it and the move crossfades the conversation instead.
    ============================================================================= */
 
 .glass-shell {
@@ -141,6 +144,9 @@
   left: var(--glass-gutter);
   z-index: 3;
   width: var(--glass-places-w);
+  /* Floating on the stream like the theater chat column, so it takes the same
+     near-opaque stage fill (a bright frame read through the .94 pane). */
+  background-color: var(--deep);
 }
 
 /* ---- Phone (today's phone frame until WP-G20) ------------------------------- */

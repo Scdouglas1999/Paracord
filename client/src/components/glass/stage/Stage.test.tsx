@@ -435,7 +435,8 @@ describe('controls', () => {
     expect(clip).toHaveAttribute('aria-disabled', 'true');
     expect(screen.getByRole('button', { name: 'React with fire' })).toHaveAttribute('aria-disabled', 'true');
     fireEvent.click(clip);
-    expect(useToastStore.getState().toasts.at(-1)?.message).toMatch(/not available/);
+    // WP-G16: no watch is live here, so Clip waits for the stream and says so.
+    expect(useToastStore.getState().toasts.at(-1)?.message).toBe("Waiting for Vincent's screen.");
   });
 });
 

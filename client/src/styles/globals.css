@@ -60,6 +60,9 @@
 /* The stage: the stream beside the conversation, its people and controls (WP-G14).
    Unlayered, after the frame and the pill it grows out of. */
 @import './glass-stage.css';
+/* The stage's theater and browse layouts and its moves (WP-G15). Unlayered, after
+   the side-by-side stage it refines. */
+@import './glass-stage-modes.css';
 /* The places panel (WP-G9). Unlayered, like the frame it fills. */
 /* The Glass timeline: bubbles in the column (WP-G10). */
 @import './glass-places.css';

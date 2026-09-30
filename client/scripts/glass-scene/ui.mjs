@@ -34,6 +34,11 @@ export const CONTROLS = {
   // The Glass stage (WP-G14).
   stopWatching: ['Stop watching'],
   browse: ['Show servers and channels'],
+  // Theater and the chat over it (WP-G15).
+  theater: ['Theater mode'],
+  sideBySide: ['Show side by side with chat'],
+  hideChat: ['Hide chat'],
+  showChat: ['Show chat'],
 };
 
 const OVERLAYS = ['Close welcome screen', 'Skip tour', 'Got it', 'Maybe later', 'Dismiss'];
