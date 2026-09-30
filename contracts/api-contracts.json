@@ -61,6 +61,304 @@
       "title": "ChangePasswordRequest",
       "type": "object"
     },
+    "ChannelPreview": {
+      "$defs": {
+        "ChannelPreviewAuthorKind": {
+          "description": "Who a preview's message reads as. `author_id` means a different thing for\neach: a user id, a webhook id, a feed id, or (for an anonymous message the\nviewer may not unmask) the `anon:{channel_id}:{alias}` pseudo-id that the\nmessage itself carries. Only `user` ids name a member.",
+          "enum": [
+            "user",
+            "webhook",
+            "feed",
+            "anonymous"
+          ],
+          "type": "string"
+        },
+        "ChannelPreviewMedia": {
+          "description": "The first attachment of a preview's message, so a row can lead with a\nthumbnail. The client builds the file URL from `attachment_id`.",
+          "properties": {
+            "attachment_id": {
+              "minLength": 1,
+              "pattern": "^[0-9]+$",
+              "type": "string"
+            },
+            "content_type": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "filename": {
+              "type": "string"
+            },
+            "height": {
+              "format": "int32",
+              "maximum": 2147483647,
+              "minimum": -2147483648,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "width": {
+              "format": "int32",
+              "maximum": 2147483647,
+              "minimum": -2147483648,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "attachment_id",
+            "content_type",
+            "filename",
+            "width",
+            "height"
+          ],
+          "type": "object"
+        }
+      },
+      "$id": "urn:paracord:contract:ChannelPreview",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "The newest message of one guild channel, for the channel row of the\nplaces panel (`GET /api/v1/guilds/{guild_id}/channel-previews`).\n\n`content` is the message's raw text (markdown and `<@id>` tokens intact)\nwith whitespace runs collapsed to single spaces, cut to at most 140\ncharacters including a trailing `…` when `truncated`; a cut never ends\ninside a `<…>` token. Rendering (mentions, spoilers, emphasis) is the\nclient's job. It is null for an encrypted message, whose body the server\ncannot read, and for a message without text (only media or a sticker).\nA poll's text is its question (`message_type` 20).\n`media` is null for an encrypted message as well.",
+      "properties": {
+        "attachment_count": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "author_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "author_kind": {
+          "$ref": "#/$defs/ChannelPreviewAuthorKind"
+        },
+        "author_name": {
+          "description": "Guild nickname, else display name, else username; the webhook, feed or\nanonymous alias for those kinds. Null when the author record is gone.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "channel_id": {
+          "minLength": 1,
+          "pattern": "^[0-9]+$",
+          "type": "string"
+        },
+        "content": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "created_at": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "encrypted": {
+          "type": "boolean"
+        },
+        "has_sticker": {
+          "type": "boolean"
+        },
+        "media": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChannelPreviewMedia"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "message_id": {
+          "minLength": 1,
+          "pattern": "^[0-9]+$",
+          "type": "string"
+        },
+        "message_type": {
+          "format": "int32",
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "type": "integer"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "channel_id",
+        "message_id",
+        "message_type",
+        "author_id",
+        "author_kind",
+        "author_name",
+        "content",
+        "truncated",
+        "encrypted",
+        "created_at",
+        "media",
+        "attachment_count",
+        "has_sticker"
+      ],
+      "title": "ChannelPreview",
+      "type": "object"
+    },
+    "ChannelPreviewList": {
+      "$defs": {
+        "ChannelPreview": {
+          "description": "The newest message of one guild channel, for the channel row of the\nplaces panel (`GET /api/v1/guilds/{guild_id}/channel-previews`).\n\n`content` is the message's raw text (markdown and `<@id>` tokens intact)\nwith whitespace runs collapsed to single spaces, cut to at most 140\ncharacters including a trailing `…` when `truncated`; a cut never ends\ninside a `<…>` token. Rendering (mentions, spoilers, emphasis) is the\nclient's job. It is null for an encrypted message, whose body the server\ncannot read, and for a message without text (only media or a sticker).\nA poll's text is its question (`message_type` 20).\n`media` is null for an encrypted message as well.",
+          "properties": {
+            "attachment_count": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "author_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "author_kind": {
+              "$ref": "#/$defs/ChannelPreviewAuthorKind"
+            },
+            "author_name": {
+              "description": "Guild nickname, else display name, else username; the webhook, feed or\nanonymous alias for those kinds. Null when the author record is gone.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "channel_id": {
+              "minLength": 1,
+              "pattern": "^[0-9]+$",
+              "type": "string"
+            },
+            "content": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "created_at": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "encrypted": {
+              "type": "boolean"
+            },
+            "has_sticker": {
+              "type": "boolean"
+            },
+            "media": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ChannelPreviewMedia"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "message_id": {
+              "minLength": 1,
+              "pattern": "^[0-9]+$",
+              "type": "string"
+            },
+            "message_type": {
+              "format": "int32",
+              "maximum": 2147483647,
+              "minimum": -2147483648,
+              "type": "integer"
+            },
+            "truncated": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "channel_id",
+            "message_id",
+            "message_type",
+            "author_id",
+            "author_kind",
+            "author_name",
+            "content",
+            "truncated",
+            "encrypted",
+            "created_at",
+            "media",
+            "attachment_count",
+            "has_sticker"
+          ],
+          "type": "object"
+        },
+        "ChannelPreviewAuthorKind": {
+          "description": "Who a preview's message reads as. `author_id` means a different thing for\neach: a user id, a webhook id, a feed id, or (for an anonymous message the\nviewer may not unmask) the `anon:{channel_id}:{alias}` pseudo-id that the\nmessage itself carries. Only `user` ids name a member.",
+          "enum": [
+            "user",
+            "webhook",
+            "feed",
+            "anonymous"
+          ],
+          "type": "string"
+        },
+        "ChannelPreviewMedia": {
+          "description": "The first attachment of a preview's message, so a row can lead with a\nthumbnail. The client builds the file URL from `attachment_id`.",
+          "properties": {
+            "attachment_id": {
+              "minLength": 1,
+              "pattern": "^[0-9]+$",
+              "type": "string"
+            },
+            "content_type": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "filename": {
+              "type": "string"
+            },
+            "height": {
+              "format": "int32",
+              "maximum": 2147483647,
+              "minimum": -2147483648,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "width": {
+              "format": "int32",
+              "maximum": 2147483647,
+              "minimum": -2147483648,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "attachment_id",
+            "content_type",
+            "filename",
+            "width",
+            "height"
+          ],
+          "type": "object"
+        }
+      },
+      "$id": "urn:paracord:contract:ChannelPreviewList",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "items": {
+        "$ref": "#/$defs/ChannelPreview"
+      },
+      "title": "ChannelPreviewList",
+      "type": "array"
+    },
     "CreateGuildRequest": {
       "$id": "urn:paracord:contract:CreateGuildRequest",
       "$schema": "https://json-schema.org/draft/2020-12/schema",

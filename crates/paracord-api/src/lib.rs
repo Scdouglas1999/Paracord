@@ -383,6 +383,10 @@ pub fn build_router(state: &AppState) -> Router<AppState> {
             get(routes::channels::get_visible_channels),
         )
         .route(
+            "/api/v1/guilds/{guild_id}/channel-previews",
+            get(routes::channels::get_channel_previews),
+        )
+        .route(
             "/api/v1/guilds/{guild_id}/members",
             get(routes::members::list_members),
         )

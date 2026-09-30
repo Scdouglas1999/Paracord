@@ -1,6 +1,9 @@
 import type { RestClient } from './restClient';
 import { getApi as getActiveApi } from './activeClient';
-import type { AxiosRequestConfig } from 'axios';
+import type { AxiosRequestConfig, AxiosResponse } from 'axios';
+import { ApiContractError } from './responseContracts';
+import { loadValidators } from './contractValidators';
+import type { ChannelPreviewList } from './generated/ChannelPreviewList';
 import type {
   Channel,
   ChannelOverwrite,
@@ -254,6 +257,27 @@ export function createChannelApi(getApi: () => RestClient) {
     // Visibility
     getVisibleChannels: async (guildId: string, config?: AxiosRequestConfig) =>
       getApi().get<{ channel_ids: string[] }>(`/guilds/${guildId}/channels/visible`, config),
+
+    /**
+     * The newest message of every channel the caller can read in a guild, for
+     * the places panel's channel rows (one entry per channel that has a
+     * message; see the `ChannelPreview` contract for what each field holds).
+     * Validated against the generated contract like `responseContract`; the
+     * validator is read from the lazily loaded module, which loads alongside
+     * the request.
+     */
+    getChannelPreviews: async (
+      guildId: string,
+      config?: AxiosRequestConfig,
+    ): Promise<AxiosResponse<ChannelPreviewList>> => {
+      const [response, validators] = await Promise.all([
+        getApi().get<unknown>(`/guilds/${guildId}/channel-previews`, config),
+        loadValidators(),
+      ]);
+      const data = response.data;
+      if (!validators.isChannelPreviewList(data)) throw new ApiContractError('ChannelPreviewList');
+      return { ...response, data };
+    },
 
     // Permission overwrites
     getOverwrites: async (channelId: string) =>

@@ -1,6 +1,7 @@
 //! JSON wire types shared by actual HTTP handlers, generated client validation,
 //! and OpenAPI. Database rows and client-only state are intentionally separate.
 
+pub mod channel;
 pub mod emoji;
 pub mod guild;
 pub mod invite;
@@ -137,6 +138,14 @@ pub fn schemas() -> Value {
         "UpdateEmojiRequest".into(),
         request_schema::<emoji::UpdateEmojiRequest>(),
     );
+    schemas.insert(
+        "ChannelPreview".into(),
+        response_schema::<channel::ChannelPreview>(),
+    );
+    schemas.insert(
+        "ChannelPreviewList".into(),
+        response_schema::<Vec<channel::ChannelPreview>>(),
+    );
     for (name, schema) in &mut schemas {
         schema["title"] = json!(name);
         schema["$id"] = json!(format!("urn:paracord:contract:{name}"));
@@ -170,6 +179,46 @@ mod tests {
         assert!(
             serde_json::from_value::<guild::CreateGuildRequest>(json!({"name":"Space"})).is_ok()
         );
+    }
+
+    #[test]
+    fn channel_preview_nulls_are_present_and_ids_are_decimal() {
+        let schemas = schemas();
+        let preview = &schemas["schemas"]["ChannelPreview"];
+        let required = preview["required"].as_array().unwrap();
+        for name in [
+            "author_name",
+            "content",
+            "media",
+            "encrypted",
+            "truncated",
+            "attachment_count",
+        ] {
+            assert!(
+                required.contains(&json!(name)),
+                "missing preview requirement: {name}"
+            );
+        }
+        assert_eq!(
+            preview["properties"]["channel_id"]["pattern"],
+            json!("^[0-9]+$")
+        );
+        assert!(serde_json::from_value::<channel::ChannelPreview>(json!({
+            "channel_id": "1",
+            "message_id": "2",
+            "message_type": 0,
+            "author_id": "anon:1:Quiet Fox",
+            "author_kind": "anonymous",
+            "author_name": "Quiet Fox",
+            "content": null,
+            "truncated": false,
+            "encrypted": true,
+            "created_at": "2026-09-29T12:00:00+00:00",
+            "media": null,
+            "attachment_count": 0,
+            "has_sticker": false
+        }))
+        .is_ok());
     }
 
     #[test]

@@ -11,6 +11,7 @@ pub mod bot_reviews;
 pub mod channel_features;
 pub mod channel_follows;
 pub mod channel_overwrites;
+pub mod channel_previews;
 pub mod channels;
 pub mod daily_word;
 pub mod dms;
