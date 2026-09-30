@@ -26,6 +26,14 @@ const DESIGN_REVIEW = !REAL_SERVER && process.env.PARACORD_E2E_DESIGN === '1';
 // Gated out of the default run: it deliberately sits and watches frames, which
 // is the opposite of what a fast CI smoke should do. `npm run test:motion`.
 const MOTION_GATE = !REAL_SERVER && !DESIGN_REVIEW && process.env.PARACORD_E2E_MOTION === '1';
+// Glass review screenshots (glass-review.spec.ts): opt-in, mocked like the
+// smoke, output under output/design-reference/glass-build/<WP>/. It renders the
+// Glass reference scene from fixtures (e2e/fixtures/glass) with no server, so a
+// package can shoot its surface and hold it against the reference PNGs.
+//   PARACORD_E2E_GLASS=1 PARACORD_E2E_GLASS_WP=g9 npx playwright test e2e/glass-review.spec.ts
+// Gated out of the default run for the same reason design-review is.
+const GLASS_REVIEW =
+  !REAL_SERVER && !DESIGN_REVIEW && !MOTION_GATE && process.env.PARACORD_E2E_GLASS === '1';
 const REAL_SERVER_PORT = process.env.PARACORD_E2E_PORT ?? '18150';
 
 export default defineConfig({
@@ -80,6 +88,20 @@ export default defineConfig({
           name: 'design-review',
           testMatch: /[\\/]design-review\.spec\.ts$/,
           use: { ...devices['Desktop Chrome'] },
+        },
+      ]
+    : GLASS_REVIEW
+    ? [
+        {
+          name: 'glass-review',
+          testMatch: /[\\/]glass-review\.spec\.ts$/,
+          use: {
+            ...devices['Desktop Chrome'],
+            // Fixed so every label in a frame ("9:09 PM", "Fri") is the same on
+            // every machine; the scene clock itself is pinned in fixtures/glass.
+            timezoneId: 'America/Chicago',
+            locale: 'en-US',
+          },
         },
       ]
     : [
