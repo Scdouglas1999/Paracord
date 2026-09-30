@@ -170,10 +170,15 @@ export function useServerPlaces(guildId: string, building: BuildingLight | null,
     [building],
   );
 
+  // The server's calendar, for "Coming up" and for the name a shared event has in a
+  // preview (`<event:id>` reads as "Movie night" when the calendar has it).
+  const { events } = useUpcomingEvents(guildId);
+  const eventNames = useMemo(() => new Map(events.map((event) => [event.id, event.name])), [events]);
+
   const selfUserId = scope?.userId ?? null;
   const context = useMemo<PreviewContext>(
-    () => ({ selfUserId, memberNames, channelNames }),
-    [selfUserId, memberNames, channelNames],
+    () => ({ selfUserId, memberNames, channelNames, eventNames }),
+    [selfUserId, memberNames, channelNames, eventNames],
   );
 
   const rows = useMemo(
@@ -205,7 +210,6 @@ export function useServerPlaces(guildId: string, building: BuildingLight | null,
     [guildId, channels, rooms, previews, readStates, mutedChannelIds, guildMuted, people, counts, context, selectedChannelId, nowMs, channelParticipants],
   );
 
-  const { events } = useUpcomingEvents(guildId);
   const eventRoomName = useMemo(
     () => (event: HomeEvent) => (event.channelId ? channelNames.get(event.channelId) || null : null),
     [channelNames],

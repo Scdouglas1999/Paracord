@@ -114,6 +114,23 @@ void main() {
 `;
 
 /**
+ * How a frame sits in a canvas whose shape is not its own.
+ *
+ *   * `contain` (the default): the whole frame is shown, scaled to fit, with
+ *     black bars on the sides or top and bottom where the shapes differ. A
+ *     shared screen wants this: every pixel of it is content.
+ *   * `cover`: the frame fills the canvas and what overflows is cropped, centered,
+ *     so there are no bars. A camera tile wants this: a 4:3 camera in a 16:9 tile
+ *     reads as a face filling the tile, not as a picture with bars either side.
+ */
+export type CanvasFit = 'contain' | 'cover';
+
+export interface CanvasRendererOptions {
+  /** How a frame sits in the canvas. Default `contain`. */
+  fit?: CanvasFit;
+}
+
+/**
  * Renders decoded VideoFrame objects and raw pixel frames onto an HTML canvas.
  *
  * Uses requestAnimationFrame for efficient rendering, automatically
@@ -123,6 +140,8 @@ void main() {
 export class CanvasRenderer {
   private canvas: HTMLCanvasElement;
   private readonly mode: 'webgl' | '2d';
+  /** How frames sit in the canvas; chosen at construction, like the backend. */
+  readonly fit: CanvasFit;
 
   // Shared scheduling state.
   private pendingFrame: VideoFrame | null = null;
@@ -156,8 +175,9 @@ export class CanvasRenderer {
   private currentWidth = 0;
   private currentHeight = 0;
 
-  constructor(canvas: HTMLCanvasElement) {
+  constructor(canvas: HTMLCanvasElement, options: CanvasRendererOptions = {}) {
     this.canvas = canvas;
+    this.fit = options.fit === 'cover' ? 'cover' : 'contain';
 
     const gl = this.tryCreateWebglContext(canvas);
     if (gl) {
@@ -798,9 +818,10 @@ export class CanvasRenderer {
       this.canvas.height = target.canvasHeight;
     }
 
-    // Black letterbox bars, then draw the fitted image into the centered
-    // viewport. The GL viewport origin is bottom-left; measureRenderSize gives
-    // drawY from the top, so flip it.
+    // Black letterbox bars (`contain`), then draw the fitted image into the
+    // centered viewport; with `cover` the viewport is larger than the canvas and
+    // the canvas's edge crops it. The GL viewport origin is bottom-left;
+    // measureRenderSize gives drawY from the top, so flip it.
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
     gl.clearColor(0, 0, 0, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
@@ -996,9 +1017,23 @@ export class CanvasRenderer {
     const cssHeight = Math.max(1, this.canvas.clientHeight || frameHeight);
     const canvasWidth = Math.max(1, Math.round(cssWidth * ratio));
     const canvasHeight = Math.max(1, Math.round(cssHeight * ratio));
-    const scale = Math.min(canvasWidth / frameWidth, canvasHeight / frameHeight);
-    const drawWidth = Math.max(1, Math.round(frameWidth * scale));
-    const drawHeight = Math.max(1, Math.round(frameHeight * scale));
+    // `contain` scales by the tighter axis so the whole frame fits; `cover` by the
+    // looser one so the canvas is filled and the rest is cropped. Either way the
+    // frame keeps its shape and is centered: with `cover` the draw rectangle is
+    // larger than the canvas, so drawX/drawY are zero or negative and both backends
+    // clip what falls outside (a 2D drawImage and a GL viewport larger than the
+    // drawing buffer are both cut at the canvas's edge).
+    const cover = this.fit === 'cover';
+    const scale = cover
+      ? Math.max(canvasWidth / frameWidth, canvasHeight / frameHeight)
+      : Math.min(canvasWidth / frameWidth, canvasHeight / frameHeight);
+    let drawWidth = Math.max(1, Math.round(frameWidth * scale));
+    let drawHeight = Math.max(1, Math.round(frameHeight * scale));
+    if (cover) {
+      // Rounding must never leave a one-pixel bar on the axis that sets the scale.
+      drawWidth = Math.max(drawWidth, canvasWidth);
+      drawHeight = Math.max(drawHeight, canvasHeight);
+    }
     const drawX = Math.floor((canvasWidth - drawWidth) / 2);
     const drawY = Math.floor((canvasHeight - drawHeight) / 2);
     return { canvasWidth, canvasHeight, drawX, drawY, drawWidth, drawHeight };

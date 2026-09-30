@@ -60,6 +60,11 @@ function record(scope: AccountScope, id: string, mutation: GuildMutation) {
   if (mutation.kind === 'patch' && previous) {
     if (previous.kind === 'delete') return;
     request.mutations.set(id, { ...previous, guild: { ...previous.guild, ...mutation.guild } } as GuildMutation);
+  } else if (mutation.kind === 'put' && previous && previous.kind !== 'delete') {
+    // A later put is a partial projection too (READY carries six fields and no
+    // banner), so it adds to what an earlier one of the same guild brought
+    // rather than erasing it. The later one wins where both speak.
+    request.mutations.set(id, { kind: 'put', guild: { ...previous.guild, ...mutation.guild } });
   } else request.mutations.set(id, mutation);
 }
 function own(scope: AccountScope) {
@@ -93,7 +98,10 @@ export const useGuildStore = create<GuildState>()((set, get) => ({
         const guilds = new Map<string, Guild>(data.map(guild => [guild.id, guild]));
         for (const [id, mutation] of request.mutations) {
           if (mutation.kind === 'delete') guilds.delete(id);
-          else if (mutation.kind === 'put') guilds.set(id, mutation.guild);
+          // A put is what the gateway knew when it spoke: READY names six fields
+          // per guild and no banner, so it is merged over the fetched guild, not
+          // put in its place. The fields it lacks stay as the list had them.
+          else if (mutation.kind === 'put') guilds.set(id, { ...guilds.get(id), ...mutation.guild });
           else {
             const existing = guilds.get(id);
             if (existing) guilds.set(id, { ...existing, ...mutation.guild });

@@ -140,11 +140,11 @@ export function ServerHubSettings({ guild, channels, roles = [], onUpdate, setEr
 
             <Divider />
 
-            {/* The server home page's widget column (docs/server-home-spec.md) */}
+            {/* The Overview's widgets: one column, between Live now and Latest, in this order */}
             <section>
-                <GroupLabel>Home page</GroupLabel>
+                <GroupLabel>Overview page</GroupLabel>
                 <p className="mt-2 text-body leading-relaxed text-text-secondary">
-                    The widgets beside the feed on this server&apos;s home page, top to bottom. One with nothing to show stays hidden.
+                    The widgets on this server&apos;s Overview page, top to bottom, between Live now and Latest. One with nothing to show stays hidden.
                 </p>
                 <div className="mt-4">
                     <HomePageSettings widgets={shownWidgets} onChange={setHomeWidgets} />

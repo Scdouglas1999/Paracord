@@ -419,6 +419,43 @@ describe('PlacesPanel: a server', () => {
     expect(screen.getByTestId('pathname')).toHaveTextContent('/app/guilds/g1/channels/lounge');
   });
 
+  describe('a shared event in a preview', () => {
+    const sharedIn = (content: string) => {
+      const ready = previews.value as { previews: Map<string, ChannelPreviewEntry> };
+      ready.previews.set('general', previewEntry({ channelId: 'general', content, createdAt: new Date(NOW - 3 * 60_000).toISOString() }));
+    };
+    const calendar = (id: string, name: string) => ({
+      id,
+      name,
+      startsAt: new Date(2026, 9, 2, 21, 0),
+      endsAt: null,
+      channelId: null,
+      location: null,
+      creatorId: 'brendan',
+      going: 0,
+      youAreGoing: false,
+      happeningNow: false,
+    });
+
+    it('reads as the event’s name when the calendar has it', () => {
+      sharedIn('<@42> is <event:7002> still on?');
+      events.value = [calendar('7002', 'Movie night')];
+      renderPanel();
+      const channels = screen.getByRole('navigation', { name: 'Channels' });
+      expect(within(channels).getByRole('link', { name: /General/ })).toHaveTextContent('Jeremy: @someone is Movie night still on?');
+    });
+
+    it('reads as "an event" when the client does not know it, never as the id', () => {
+      sharedIn('<@42> is <event:7002> still on?');
+      events.value = [calendar('7001', 'Haz 5 run')];
+      renderPanel();
+      const channels = screen.getByRole('navigation', { name: 'Channels' });
+      const line = within(channels).getByRole('link', { name: /General/ });
+      expect(line).toHaveTextContent('Jeremy: @someone is an event still on?');
+      expect(line).not.toHaveTextContent('7002');
+    });
+  });
+
   it('has no Coming up when there is nothing coming up', () => {
     renderPanel();
     expect(screen.queryByRole('heading', { name: 'Coming up' })).toBeNull();

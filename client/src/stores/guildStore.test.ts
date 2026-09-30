@@ -130,6 +130,62 @@ describe('guild account ownership', () => {
     expect(cached()).toMatchObject({ name: 'New name', owner_id: 'new-owner' });
     expect(cached(a, 'removed')).toBeUndefined(); expect(cached(a, 'new')?.name).toBe('New');
   });
+  describe('a partial gateway projection that lands while the list is loading', () => {
+    // READY names six fields per guild (id, owner, name, icon, created_at,
+    // member_count): no banner, no description, no visibility. The REST list has them all.
+    const ready = (overrides: Partial<Guild> = {}): Guild => ({
+      id: '1', owner_id: '42', name: 'Ready name', icon_hash: null,
+      created_at: '2026-09-12T12:00:00+00:00', member_count: 11, ...overrides,
+    });
+    const rest = (overrides: Partial<Guild> = {}): Guild =>
+      guildDetailFixture({ id: '1', name: 'Rest name', banner_hash: 'banner-1', description: 'About us', visibility: 'public', member_count: 10, ...overrides });
+
+    it('merges into the fetched guild instead of replacing it, so the banner survives', async () => {
+      const pending = delay(); const load = snapshot().fetchGuilds(a);
+      await vi.waitFor(() => expect(pending.adapter).toHaveBeenCalledTimes(1));
+      snapshot().addGuild(ready(), a);
+      pending.finish([rest()]); await load;
+      expect(cached()).toMatchObject({ banner_hash: 'banner-1', description: 'About us', visibility: 'public' });
+      // What the gateway did say wins over the older snapshot.
+      expect(cached()).toMatchObject({ name: 'Ready name', member_count: 11 });
+    });
+
+    it('still adds a guild the fetched list does not have', async () => {
+      const pending = delay(); const load = snapshot().fetchGuilds(a);
+      await vi.waitFor(() => expect(pending.adapter).toHaveBeenCalledTimes(1));
+      snapshot().addGuild(ready({ id: 'new', name: 'Brand new' }), a);
+      pending.finish([rest()]); await load;
+      expect(cached(a, 'new')).toMatchObject({ name: 'Brand new' });
+      expect(cached()?.banner_hash).toBe('banner-1');
+    });
+
+    it('keeps a change the gateway sent earlier when a partial projection follows it', async () => {
+      const pending = delay(); const load = snapshot().fetchGuilds(a);
+      await vi.waitFor(() => expect(pending.adapter).toHaveBeenCalledTimes(1));
+      snapshot().updateGuildData('1', { banner_hash: 'banner-2' }, a);
+      snapshot().addGuild(ready(), a);
+      pending.finish([rest()]); await load;
+      expect(cached()?.banner_hash).toBe('banner-2');
+    });
+
+    it('lets a later full projection add to an earlier partial one', async () => {
+      const pending = delay(); const load = snapshot().fetchGuilds(a);
+      await vi.waitFor(() => expect(pending.adapter).toHaveBeenCalledTimes(1));
+      snapshot().addGuild(ready(), a);
+      snapshot().addGuild(guildDetailFixture({ id: '1', name: 'Joined name', banner_hash: 'banner-3' }), a);
+      pending.finish([rest({ banner_hash: null })]); await load;
+      expect(cached()).toMatchObject({ name: 'Joined name', banner_hash: 'banner-3' });
+    });
+
+    it('does not bring a removed guild back from the fetched list', async () => {
+      const pending = delay(); const load = snapshot().fetchGuilds(a);
+      await vi.waitFor(() => expect(pending.adapter).toHaveBeenCalledTimes(1));
+      snapshot().addGuild(ready(), a);
+      snapshot().removeGuild('1', a);
+      pending.finish([rest()]); await load;
+      expect(cached()).toBeUndefined();
+    });
+  });
   it('does not repopulate after reset, including a delayed create response', async () => {
     const pending = delay(); const create = snapshot().createGuild('Created', a);
     const rejected = expect(create).rejects.toThrow();

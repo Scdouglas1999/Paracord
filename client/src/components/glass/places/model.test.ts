@@ -188,6 +188,7 @@ const CONTEXT = {
   selfUserId: 'u1',
   memberNames: new Map([['42', 'Sean'], ['u2', 'Jeremy']]),
   channelNames: new Map([['9', 'Lounge']]),
+  eventNames: new Map([['7002', 'Movie night'], ['7003', 'snake_case_run *final*']]),
 };
 
 describe('previewLine', () => {
@@ -203,6 +204,23 @@ describe('previewLine', () => {
     const line = previewLine(preview({ content: 'meet in <#9> and <#77>' }), CONTEXT);
     expect(line).toBe('Jeremy: meet in Lounge and a channel');
     expect(line).not.toContain('#');
+  });
+
+  it('names a shared event when the client knows it, and says "an event" when it does not', () => {
+    // The reference: "Jeremy: @Sean is movie n…". An `<event:id>` is only an id on the wire.
+    expect(previewLine(preview({ content: '<@42> is <event:7002> still on?' }), CONTEXT)).toBe('Jeremy: @Sean is Movie night still on?');
+    const unknown = previewLine(preview({ content: '<@42> is <event:9999> still on?' }), CONTEXT);
+    expect(unknown).toBe('Jeremy: @Sean is an event still on?');
+    expect(unknown).not.toContain('9999');
+  });
+
+  it('names an event that is the whole message, and every event in a message that shares two', () => {
+    expect(previewLine(preview({ content: '<event:7002>' }), CONTEXT)).toBe('Jeremy: Movie night');
+    expect(previewLine(preview({ content: '<event:7002> <event:9999>' }), CONTEXT)).toBe('Jeremy: Movie night an event');
+  });
+
+  it('does not read a name as formatting', () => {
+    expect(previewLine(preview({ content: 'come to <event:7003>' }), CONTEXT)).toBe('Jeremy: come to snake_case_run *final*');
   });
 
   it('strips markdown and collapses whitespace', () => {

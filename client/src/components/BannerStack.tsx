@@ -7,6 +7,19 @@ import { useEffect, useRef, type ReactNode } from 'react';
 export const BANNER_INSET_PROPERTY = '--pc-banner-inset';
 
 /**
+ * What takes the Glass incoming-call capsule (`.glass-callbanner`) out of the
+ * column's flow, as {@link BannerStack} explains. The classes are spelled out
+ * whole so Tailwind finds each one.
+ */
+const FLOATING_NOTICE = [
+  '[&>.glass-callbanner]:absolute',
+  '[&>.glass-callbanner]:inset-x-0',
+  '[&>.glass-callbanner]:top-full',
+  '[&>.glass-callbanner]:pointer-events-none',
+  '[&>.glass-callbanner>*]:pointer-events-auto',
+].join(' ');
+
+/**
  * Where the app's banners live, and the room they take.
  *
  * Each banner used to position itself: `fixed; inset-x-0; top-0`, full width,
@@ -21,6 +34,14 @@ export const BANNER_INSET_PROPERTY = '--pc-banner-inset';
  * [`BANNER_INSET_PROPERTY`]. The shell reserves exactly that much at its top,
  * so a banner arriving moves the app down rather than covering it, and the app
  * comes back up when the banner leaves.
+ *
+ * One kind of notice does not take part: the Glass incoming-call capsule
+ * (`.glass-callbanner`, `IncomingCallBanner`). It is a floating object like the
+ * call pill, a capsule with its own air over the panes, not a bar across the
+ * top, so it is taken out of the column's flow. It is laid just under whatever
+ * banners are in flow, over the app, and reserves nothing: the panes stay where
+ * they are while a call rings instead of dropping 62px and coming back up. Only
+ * the capsule takes the pointer; the strip around it reaches the app.
  */
 export function BannerStack({ children }: { children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -51,7 +72,7 @@ export function BannerStack({ children }: { children: ReactNode }) {
     <div
       ref={ref}
       data-banner-stack=""
-      className="fixed inset-x-0 top-0 z-[9999] flex flex-col"
+      className={`fixed inset-x-0 top-0 z-[9999] flex flex-col ${FLOATING_NOTICE}`}
     >
       {children}
     </div>

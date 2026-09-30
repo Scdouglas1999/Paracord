@@ -238,8 +238,8 @@ The server **can** see:
 - reactions in DMs, which are stored in plain form,
 - typing indicators, online status and read activity,
 - your IP address and browser or app details, which it records for each sign-in session,
-- for voice and video, who is in each call, for how long, and the size and timing of media
-  packets.
+- for voice and video, who is in each call, for how long, who is watching a screen share
+  without being in the call, and the size and timing of media packets.
 
 ## Server channels are not end-to-end encrypted
 
@@ -253,18 +253,112 @@ the instance.
 
 - Voice and video frames are encrypted with AES-128-GCM before they leave your device. The
   relay that forwards them has no key.
-- Each person in a call makes a sender key and sends it to the others, wrapped with
-  AES-GCM under an X25519 key made for that one call. Senders make a new key when someone
-  joins or leaves.
+- The server setting `[voice] e2ee_required` (on by default) is only reported by the
+  connection check. The client always encrypts media whatever it is set to, and has no
+  unencrypted path.
+
+### Members and viewers
+
+Two kinds of connection can receive media from a call:
+
+- A **member** is in the call: they joined, or they are listening in. A member hears the
+  voices.
+- A **viewer** is watching one person's screen share without being in the call. A *watch*
+  (you pressed Watch) receives that stream's video and its own audio. An *ambient view* (the
+  app opens one by itself, for example to light the room from the busiest stream in the
+  server) receives video only, at a low, capped rate. A viewer never receives the voices or
+  anyone's camera.
+
+The relay marks every entry in a call's roster `member` or `viewer`. It sets the marker
+from how the connection was admitted, so no client has to guess from voice states. A
+client reading a marker it does not know refuses the entry instead of treating it as a
+member, because a member is owed the voice key. (The browser drops that one entry. The
+desktop app refuses the whole control message, which is safe but blunt.) A relay that
+sends no marker is an older one with no viewers, so every entry reads as a member.
+
+### One key per track
+
+Each person in a call makes a separate random sender key for their voice and for each
+video or stream-audio track they publish: camera, screen video and screen audio. A key
+opens one track and nothing else, so handing someone the screen share's key does not hand
+them the voice.
+
+The sender wraps each key once per person entitled to it, with AES-GCM under an X25519 key
+made for that one call, and the server passes the wrapped keys along:
+
+| Key | Sent to |
+|---|---|
+| Voice | Members only |
+| Screen video and screen audio | Members, and viewers of that screen share |
+| Camera | Members only. Never a viewer |
+
+The sender applies this when it chooses who to wrap for. The relay applies it again when it
+delivers: a viewer is never handed any key or track outside the one stream it is watching
+(`ViewTarget::allows`), so a sender that got it wrong would still not reach a viewer.
+
+### When keys change
+
+A sender makes new keys when the people who can open them change. Whoever leaves stops
+being sent new keys, so every key they could open is replaced. A member could open all
+three kinds, and a viewer only the screen share's.
+
+| What changes in the call | Voice | Camera | Screen video and audio |
+|---|---|---|---|
+| A member arrives | new key | new key | new keys |
+| A member leaves | new key | new key | new keys |
+| A member leaves the call but keeps watching (now a viewer) | new key | new key | new keys |
+| A viewer leaves | kept | kept | new keys |
+| A viewer arrives, or the same account's newer view replaces its old one | kept | kept | kept. The viewer is sent the current keys |
+
+Each track counts its key periods (its epoch) by itself, so a screen share can move to a new
+key without the voice moving.
+
+### Closing a connection, and why
+
+When the relay ends a connection it says why, with a code and words that clients match. A
+client never reconnects by itself after any of these.
+
+| Reason | Code | Words | When |
+|---|---|---|---|
+| Superseded | 4001 | `superseded by a newer media connection` | A newer connection from the same account took its place: a second device's view, or a reconnect that won the race |
+| Ended | 4002 | `view session ended` | The view was stopped, went unused past its deadline, or was carried over into joining the call |
+| Revoked | 4003 | `media access revoked` | The account was removed or banned, or may no longer view that channel |
+
+The server re-checks every active view about every 5 seconds against the account's
+current permissions. A view whose account has lost View Channel, or lost Connect for a
+watch, or whose channel is gone, is ended as revoked. So the picture stops within one
+sweep of the change (0.2 to 5.1 seconds in our live runs). A database error leaves the
+view for the next sweep rather than ending views on a passing fault.
+
+### Limits
+
 - Those per-call keys are **not** tied to your identity key, and there is no way to verify
   them. The server passes them between participants, so the call's privacy depends on the
   server passing along the right keys. This protects against a relay that only records
   traffic. It does not protect against an operator who changes the server to swap keys.
-- The server setting `[voice] e2ee_required` (on by default) is only reported by the
-  connection check. The client always encrypts media whatever it is set to, and has no
-  unencrypted path.
+- A viewer arriving does not start new screen share keys, unlike a member arriving. The
+  viewer is given the keys the stream uses now, and the stream does not freeze for everyone
+  watching each time someone starts or stops an ambient view. The cost: an operator who had
+  recorded the stream's earlier packets could hand them to a new viewer, who could open those
+  from the current key period. A member arriving does not have this problem, because it
+  starts new keys.
+- The roster marker does not say whether a view is a watch or an ambient view, so the sender
+  also wraps the screen audio key for ambient viewers. The relay does not deliver it to them
+  and sends them no audio.
+- Only views are re-checked while they run. A member who loses access to a call's channel
+  stays in the call until they leave or are removed.
+- When a viewer leaves, everyone watching that screen share sees a short stall while the new
+  screen key reaches them (in our live runs, the longest gap in the picture was 0.1 to 0.7
+  seconds).
 - Source: `client/src/lib/media/mediaKeyring.ts`, `client/src/lib/media/senderKeys.ts`,
-  `crates/paracord-codec/src/crypto.rs`, `crates/paracord-relay/src/e2ee.rs`.
+  `client/src/lib/media/engineShared.ts` (`keyRecipients`, `isViewableStream`),
+  `client/src/lib/media/browserMediaEngine.ts`, `client/src/lib/media/tauriMediaEngine.ts`,
+  `client/src-tauri/src/native_media/events.rs` (what each roster change rotates),
+  `crates/paracord-codec/src/crypto.rs`, `crates/paracord-relay/src/e2ee.rs`,
+  `crates/paracord-relay/src/participant.rs` (`ViewTarget`),
+  `crates/paracord-relay/src/relay.rs` (`roster_kind`),
+  `crates/paracord-transport/src/control.rs` (`SessionParticipantKind`, `MediaCloseReason`),
+  `crates/paracord-api/src/routes/voice.rs` (`revoke_views_without_access`).
 
 ## Our own implementation, and not audited
 

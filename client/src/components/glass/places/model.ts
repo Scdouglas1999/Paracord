@@ -216,6 +216,8 @@ export interface PreviewContext {
   memberNames: ReadonlyMap<string, string>;
   /** Channel id → its name, so `<#id>` reads as a name and never as `#`. */
   channelNames: ReadonlyMap<string, string>;
+  /** Event id → its name, so `<event:id>` reads as "Movie night". An event the client does not know reads as "an event". */
+  eventNames: ReadonlyMap<string, string>;
 }
 
 function mediaWords(entry: ChannelPreviewEntry): string | null {
@@ -242,9 +244,16 @@ export function authorLabel(entry: ChannelPreviewEntry, selfUserId: string | nul
 }
 
 /** Plain words for a message's text: markup gone, mentions as names, spoilers hidden. */
-export function previewText(content: string, context: Pick<PreviewContext, 'memberNames' | 'channelNames'>): string {
+export function previewText(
+  content: string,
+  context: Pick<PreviewContext, 'memberNames' | 'channelNames' | 'eventNames'>,
+): string {
   const withChannels = content.replace(/<#(\d+)>/g, (_match, id: string) => context.channelNames.get(id) ?? 'a channel');
-  return messageSnippetText(withChannels, context.memberNames).replace(/\s+/g, ' ').trim();
+  // An event's name goes in after the markup is stripped (inside `messageSnippetText`), so a
+  // name with an underscore or asterisk in it is not read as formatting.
+  return messageSnippetText(withChannels, context.memberNames, undefined, undefined, context.eventNames)
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 /**

@@ -114,6 +114,13 @@ function resolveResource(url: string): Promise<string> {
   return entry.promise;
 }
 
+/** What a resolution settled on, and for which input and cache generation. */
+interface Settled {
+  src: string;
+  generation: number;
+  url: string | null;
+}
+
 /**
  * Resolve an authenticated server resource for `<img src>`.
  *
@@ -125,10 +132,16 @@ function resolveResource(url: string): Promise<string> {
  *
  * Returns null while a desktop resolution is in flight, or if it failed — the
  * caller should draw whatever it draws for "no image", not a broken glyph.
+ *
+ * What it returns always belongs to the `src` it was called with. The settled
+ * value is stored with the input and the cache generation it answered, and
+ * read back only while both still match, so the render in which `src` changes
+ * cannot show the last input's image: it is the new URL itself, or null until
+ * the new one resolves.
  */
 export function useAuthenticatedImage(src: string | null | undefined): string | null {
   const immediate = !src || src.startsWith('data:') || src.startsWith('blob:') || !isTauri();
-  const [resolved, setResolved] = useState<string | null>(immediate ? (src ?? null) : null);
+  const [settled, setSettled] = useState<Settled | null>(null);
   const cacheGeneration = useSyncExternalStore(
     subscribeGeneration,
     () => generation,
@@ -136,18 +149,15 @@ export function useAuthenticatedImage(src: string | null | undefined): string | 
   );
 
   useEffect(() => {
-    if (immediate) {
-      setResolved(src ?? null);
-      return;
-    }
+    if (immediate) return;
+    const input = src as string;
     let canceled = false;
-    setResolved(null);
-    void resolveResource(src as string).then(
+    void resolveResource(input).then(
       (objectUrl) => {
-        if (!canceled) setResolved(objectUrl);
+        if (!canceled) setSettled({ src: input, generation: cacheGeneration, url: objectUrl });
       },
       () => {
-        if (!canceled) setResolved(null);
+        if (!canceled) setSettled({ src: input, generation: cacheGeneration, url: null });
       },
     );
     return () => {
@@ -155,5 +165,6 @@ export function useAuthenticatedImage(src: string | null | undefined): string | 
     };
   }, [src, immediate, cacheGeneration]);
 
-  return resolved;
+  if (immediate) return src ?? null;
+  return settled && settled.src === src && settled.generation === cacheGeneration ? settled.url : null;
 }

@@ -45,7 +45,7 @@ function inputs(over: Partial<RowInputs> = {}): RowInputs {
     guildMuted: false,
     people: new Map(),
     counts: new Map(),
-    context: { selfUserId: 'u1', memberNames: new Map(), channelNames: new Map() },
+    context: { selfUserId: 'u1', memberNames: new Map(), channelNames: new Map(), eventNames: new Map() },
     selectedChannelId: null,
     nowMs: NOW,
     streamStartedAt: () => null,
