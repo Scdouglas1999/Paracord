@@ -2980,7 +2980,6 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
       if (voiceState.session_id !== owner.membershipSessionId) return;
       if (!voiceState.channel_id) { void closeCall(owner); return; }
     }
-    if (owner?.current && voiceState.channel_id === owner.target.channelId) owner.seenMembers.add(voiceState.user_id);
     // Determine join/leave sounds BEFORE mutating state so we can compare
     // the previous channel of the updating user against our current channel.
     const currentState = get();
@@ -3505,25 +3504,21 @@ function ownLivekitRoom(owner: CallSession, room: Room): () => Promise<void> {
 function bindEngine(owner: CallSession, engine: MediaEngine): void {
   const { channelId, guildId, scope } = owner.target;
   // Someone watching this client's stream without joining is in its relay
-  // roster too. A call member always has a voice state in the channel; a view
-  // session never does (G5). "Member" wins: see CallSession.seenMembers. A DM
-  // call has no view sessions.
-  engine.setPeerRoleResolver((userId) => {
-    if (guildId === 'dm') return 'member';
-    if (owner.seenMembers.has(userId)) return 'member';
-    if (useVoiceStore.getState().participants.get(userId)?.channel_id === channelId) {
-      owner.seenMembers.add(userId);
-      return 'member';
-    }
-    return 'viewer';
-  });
+  // roster too, marked `viewer` by the relay. The engines read that mark and
+  // never report a viewer here: only call members join and leave.
   engine.onParticipantJoin(owner.guard(userId => {
     // The engine knows only that this person's media session is in the call.
     // Their voice state (sharing, camera, mute, name) comes from the gateway,
     // and every member already in the call is "joined" again when this client
     // joins. Writing blanks over it said that nobody was sharing a screen, so
     // a share opened through the lobby's Watch was closed a second later.
-    const known = useVoiceStore.getState().participants.get(userId);
+    // The call's own participants are empty on a cold join (a leave cleared
+    // them, and the engine reports everyone before the call commits), so the
+    // server's voice states for this channel are the next thing to keep: a
+    // placeholder only for somebody neither has reported.
+    const state = useVoiceStore.getState();
+    const known = state.participants.get(userId)
+      ?? state.channelParticipants.get(channelId)?.find((member) => member.user_id === userId);
     const guild = guildId === 'dm' ? undefined : guildId ?? undefined;
     useVoiceStore.getState().handleVoiceStateUpdate(known
       ? { ...known, channel_id: channelId, guild_id: known.guild_id ?? guild }
@@ -3593,7 +3588,6 @@ function commitCall(owner: CallSession, data: VoiceJoinResponse, media: { room: 
     const participants = new Map<string, VoiceState>();
     for (const member of channelParticipants.get(owner.target.channelId) ?? []) {
       participants.set(member.user_id, member);
-      owner.seenMembers.add(member.user_id);
     }
     if (local) {
       participants.set(local.user_id, local);

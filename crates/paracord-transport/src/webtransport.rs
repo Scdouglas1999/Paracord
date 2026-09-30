@@ -190,10 +190,13 @@ impl H3Session {
                     .expect("a 200 response with an empty body is always valid");
                 stream.send_response(response).await?;
 
+                let streams = WebTransportStreams::new(self.quinn_conn.clone(), session_id);
+                let close_requests = Some(streams.watch_close_requests());
                 return Ok(Some(WebTransportSession {
-                    streams: WebTransportStreams::new(self.quinn_conn.clone(), session_id),
+                    streams,
                     path: parts.uri.path().to_string(),
                     connect_stream: Some(stream),
+                    close_requests,
                 }));
             }
 
@@ -524,6 +527,52 @@ struct StreamDemux {
     conn: quinn::Connection,
     session_id: u64,
     queues: tokio::sync::OnceCell<SessionStreamQueues>,
+    /// A close the relay asked for, carried out by whoever holds the session's
+    /// CONNECT stream (see [`WebTransportSession::closed`]). The first request
+    /// wins; later ones keep its code and words.
+    close_request: tokio::sync::watch::Sender<Option<SessionCloseRequest>>,
+}
+
+/// A close of one WebTransport session, with the code and words the browser
+/// is told (`WebTransportCloseInfo.closeCode` / `.reason`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionCloseRequest {
+    pub code: u32,
+    pub reason: String,
+}
+
+/// HTTP capsule type of `CLOSE_WEBTRANSPORT_SESSION`
+/// (draft-ietf-webtrans-http3 §5).
+pub const CLOSE_WEBTRANSPORT_SESSION_CAPSULE: u64 = 0x2843;
+
+/// Longest application error message a `CLOSE_WEBTRANSPORT_SESSION` capsule
+/// may carry, in bytes.
+pub const MAX_CLOSE_REASON_LEN: usize = 1024;
+
+/// How long a session the relay closes waits for the browser to acknowledge the
+/// close capsule (by ending its half of the CONNECT stream) before the QUIC
+/// connection is closed under it. The capsule is stream data: closing the
+/// connection at once would discard it unsent, and the browser would see only
+/// "Connection lost".
+pub const SESSION_CLOSE_ACK_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Encode a `CLOSE_WEBTRANSPORT_SESSION` capsule: type, length, a 32-bit
+/// application error code, then the UTF-8 message (cut at a character
+/// boundary to [`MAX_CLOSE_REASON_LEN`] bytes). In HTTP/3 a capsule travels as
+/// the payload of DATA frames on the session's CONNECT stream (RFC 9297 §3.2).
+pub fn encode_close_session_capsule(code: u32, reason: &str) -> Vec<u8> {
+    let mut end = reason.len().min(MAX_CLOSE_REASON_LEN);
+    while !reason.is_char_boundary(end) {
+        end -= 1;
+    }
+    let message = &reason.as_bytes()[..end];
+    let mut body = Vec::with_capacity(4 + message.len());
+    body.extend_from_slice(&code.to_be_bytes());
+    body.extend_from_slice(message);
+    let mut capsule = encode_quic_varint(CLOSE_WEBTRANSPORT_SESSION_CAPSULE);
+    capsule.extend_from_slice(&encode_quic_varint(body.len() as u64));
+    capsule.extend_from_slice(&body);
+    capsule
 }
 
 impl StreamDemux {
@@ -639,13 +688,55 @@ impl WebTransportStreams {
     /// `session_id` is the stream id of the extended-CONNECT request the session
     /// was established on.
     pub fn new(conn: quinn::Connection, session_id: u64) -> Self {
+        let (close_request, _) = tokio::sync::watch::channel(None);
         Self {
             demux: Arc::new(StreamDemux {
                 conn,
                 session_id,
                 queues: tokio::sync::OnceCell::new(),
+                close_request,
             }),
         }
+    }
+
+    /// Close this WebTransport session with a code and words the browser can
+    /// read (`WebTransport.closed` resolves with them).
+    ///
+    /// Closing the QUIC connection instead, as the relay used to, tells a
+    /// browser only "Connection lost.": Chromium does not surface a QUIC
+    /// application close reason. So the request goes to whoever holds the
+    /// session's CONNECT stream, which sends a `CLOSE_WEBTRANSPORT_SESSION`
+    /// capsule, waits for the browser to acknowledge it, and then closes the
+    /// connection ([`WebTransportSession::closed`]). When nobody holds the
+    /// session any more (or never did, as in tests), the connection is closed
+    /// directly with the same code and words. The first request wins.
+    pub fn close_session(&self, code: u32, reason: &str) {
+        let request = SessionCloseRequest {
+            code,
+            reason: reason.to_string(),
+        };
+        self.demux.close_request.send_if_modified(|slot| {
+            if slot.is_some() {
+                return false;
+            }
+            *slot = Some(request);
+            true
+        });
+        if self.demux.close_request.receiver_count() == 0 {
+            self.demux
+                .conn
+                .close(quinn::VarInt::from_u32(code), reason.as_bytes());
+        }
+    }
+
+    /// The close the relay asked for, if it has asked.
+    pub fn requested_close(&self) -> Option<SessionCloseRequest> {
+        self.demux.close_request.borrow().clone()
+    }
+
+    /// Watch for a requested close (held by the session's owner).
+    fn watch_close_requests(&self) -> tokio::sync::watch::Receiver<Option<SessionCloseRequest>> {
+        self.demux.close_request.subscribe()
     }
 
     /// The WebTransport session id these streams are tagged with.
@@ -738,6 +829,10 @@ pub struct WebTransportSession {
     /// stream. [`Self::closed`] watches for the latter. `None` only in tests
     /// that synthesise a session over a raw QUIC pair.
     connect_stream: Option<h3::server::RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>>,
+    /// Close requests from the relay ([`WebTransportStreams::close_session`]).
+    /// Held for as long as the CONNECT stream is, so a request that arrives
+    /// before anybody awaits [`Self::closed`] still finds an owner.
+    close_requests: Option<tokio::sync::watch::Receiver<Option<SessionCloseRequest>>>,
 }
 
 impl WebTransportSession {
@@ -838,17 +933,39 @@ impl WebTransportSession {
     /// So watch both: whichever ends first ends the session. Capsule bodies are
     /// drained and discarded — the only fact needed here is that the stream
     /// stopped.
+    ///
+    /// A close the relay asked for ([`WebTransportStreams::close_session`]) is
+    /// carried out here, because this is where the CONNECT stream lives: the
+    /// `CLOSE_WEBTRANSPORT_SESSION` capsule goes out on it, then the stream is
+    /// finished, and the browser gets up to [`SESSION_CLOSE_ACK_TIMEOUT`] to end
+    /// its half before the connection is closed under it. However the session
+    /// ends, the QUIC connection is closed before this returns: it carries
+    /// exactly this session.
     pub async fn closed(&mut self) -> String {
         let conn = self.streams.connection().clone();
         let Some(stream) = self.connect_stream.as_mut() else {
             return conn.closed().await.to_string();
         };
-        tokio::select! {
+        let mut requests = self
+            .close_requests
+            .take()
+            .unwrap_or_else(|| self.streams.watch_close_requests());
+        let outcome = tokio::select! {
             reason = conn.closed() => reason.to_string(),
             () = drain_connect_stream(stream) => {
+                conn.close(
+                    quinn::VarInt::from_u32(0),
+                    b"WebTransport session closed by the client",
+                );
                 "WebTransport session closed by the client".to_string()
             }
-        }
+            request = next_close_request(&mut requests) => {
+                close_with_capsule(&conn, stream, &request).await;
+                format!("closed by the relay: {}", request.reason)
+            }
+        };
+        self.close_requests = Some(requests);
+        outcome
     }
 
     /// Close the session.
@@ -857,6 +974,59 @@ impl WebTransportSession {
             .connection()
             .close(quinn::VarInt::from_u32(1), reason.as_bytes());
     }
+}
+
+/// Resolve with the relay's close request: at once when one was made before
+/// this was polled, otherwise when one is. A sender that is gone (impossible
+/// while the session's streams live) never resolves.
+async fn next_close_request(
+    requests: &mut tokio::sync::watch::Receiver<Option<SessionCloseRequest>>,
+) -> SessionCloseRequest {
+    loop {
+        if let Some(request) = requests.borrow_and_update().clone() {
+            return request;
+        }
+        if requests.changed().await.is_err() {
+            std::future::pending::<()>().await;
+        }
+    }
+}
+
+/// Send the close capsule on the CONNECT stream, finish it, give the browser
+/// [`SESSION_CLOSE_ACK_TIMEOUT`] to end its half, then close the connection
+/// with the same code and words (a raw QUIC close is what a peer that did not
+/// read the capsule sees).
+async fn close_with_capsule(
+    conn: &quinn::Connection,
+    stream: &mut h3::server::RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>,
+    request: &SessionCloseRequest,
+) {
+    let capsule = Bytes::from(encode_close_session_capsule(request.code, &request.reason));
+    let sent = async {
+        stream.send_data(capsule).await?;
+        stream.finish().await
+    };
+    match tokio::time::timeout(SESSION_CLOSE_ACK_TIMEOUT, sent).await {
+        Ok(Ok(())) => {
+            let _ = tokio::time::timeout(SESSION_CLOSE_ACK_TIMEOUT, async {
+                tokio::select! {
+                    _ = conn.closed() => {}
+                    () = drain_connect_stream(stream) => {}
+                }
+            })
+            .await;
+        }
+        Ok(Err(error)) => {
+            tracing::debug!(%error, "WebTransport: could not send the session close capsule");
+        }
+        Err(_) => {
+            tracing::debug!("WebTransport: timed out sending the session close capsule");
+        }
+    }
+    conn.close(
+        quinn::VarInt::from_u32(request.code),
+        request.reason.as_bytes(),
+    );
 }
 
 /// Read the CONNECT stream until it stops producing data, for any reason.
@@ -976,6 +1146,7 @@ mod tests {
             streams: WebTransportStreams::new(conn, session_id),
             path: "/media".to_string(),
             connect_stream: None,
+            close_requests: None,
         }
     }
 
@@ -1361,5 +1532,73 @@ mod tests {
             b"right",
             "the mis-addressed datagram must not reach the relay"
         );
+    }
+
+    /// The capsule is what draft-ietf-webtrans-http3 §5 specifies: type
+    /// 0x2843, the length of what follows, a 32-bit code, then the message.
+    #[test]
+    fn the_close_capsule_is_type_length_code_message() {
+        let capsule = encode_close_session_capsule(4001, "superseded");
+        let (capsule_type, type_len) = decode_quic_varint(&capsule).unwrap();
+        assert_eq!(capsule_type, CLOSE_WEBTRANSPORT_SESSION_CAPSULE);
+        let (length, length_len) = decode_quic_varint(&capsule[type_len..]).unwrap();
+        let body = &capsule[type_len + length_len..];
+        assert_eq!(length as usize, body.len());
+        assert_eq!(u32::from_be_bytes(body[..4].try_into().unwrap()), 4001);
+        assert_eq!(&body[4..], b"superseded");
+
+        // An over-long message is cut at a character boundary to the limit.
+        let long = "\u{e9}".repeat(MAX_CLOSE_REASON_LEN);
+        let capsule = encode_close_session_capsule(1, &long);
+        let (_, type_len) = decode_quic_varint(&capsule).unwrap();
+        let (length, length_len) = decode_quic_varint(&capsule[type_len..]).unwrap();
+        let message = &capsule[type_len + length_len + 4..];
+        assert_eq!(length as usize, 4 + message.len());
+        assert!(message.len() <= MAX_CLOSE_REASON_LEN);
+        assert!(std::str::from_utf8(message).is_ok());
+    }
+
+    /// With nobody holding the session (no CONNECT stream to write a capsule
+    /// on), a requested close still closes the connection, with the same code
+    /// and words, and the first request's code and words are the ones kept.
+    #[tokio::test]
+    async fn a_close_request_without_an_owner_closes_the_connection_with_its_reason() {
+        let (server, client) = quinn_pair().await;
+        let streams = WebTransportStreams::new(server, 0);
+        streams.close_session(4002, "view session ended");
+        streams.close_session(4001, "superseded by a newer media connection");
+        assert_eq!(
+            streams.requested_close(),
+            Some(SessionCloseRequest {
+                code: 4002,
+                reason: "view session ended".into()
+            })
+        );
+        match client.closed().await {
+            quinn::ConnectionError::ApplicationClosed(close) => {
+                assert_eq!(close.error_code, quinn::VarInt::from_u32(4002));
+                assert_eq!(&close.reason[..], b"view session ended");
+            }
+            other => panic!("expected an application close, got {other:?}"),
+        }
+    }
+
+    /// A session that is held (its owner will write the capsule) is not closed
+    /// under the owner by the request itself: the owner's `closed()` resolves
+    /// with the relay's words and closes the connection afterwards.
+    #[tokio::test]
+    async fn a_held_session_hands_the_close_to_its_owner() {
+        let (server, client) = quinn_pair().await;
+        let streams = WebTransportStreams::new(server.clone(), 0);
+        let mut requests = streams.watch_close_requests();
+        streams.close_session(4003, "media access revoked");
+        assert!(
+            server.close_reason().is_none(),
+            "the owner closes it, after the capsule"
+        );
+        let request = next_close_request(&mut requests).await;
+        assert_eq!(request.code, 4003);
+        assert_eq!(request.reason, "media access revoked");
+        drop(client);
     }
 }

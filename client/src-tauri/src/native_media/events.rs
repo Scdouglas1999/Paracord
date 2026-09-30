@@ -4,7 +4,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use paracord_codec::crypto::{FrameDecryptor, KEY_SIZE};
-use paracord_transport::control::SessionParticipant;
+use paracord_transport::control::{SessionParticipant, SessionParticipantKind};
 use tokio::time::interval;
 
 use super::session::NativeMediaSession;
@@ -186,8 +186,18 @@ pub fn spawn_speaking_detector(session: &mut NativeMediaSession, app: super::Cal
 
 /// Emit a participant join event.
 #[allow(dead_code)]
-pub fn emit_participant_join(app: &super::CallEventSink, user_id: &str) {
-    let _ = app.emit("media_participant_join", user_id);
+/// A roster entry arrived (or changed): `{ userId, kind }`. `kind` is the
+/// relay's mark (`member` or `viewer`); the renderer reports only members to
+/// the call.
+pub fn emit_participant_join(
+    app: &super::CallEventSink,
+    user_id: &str,
+    kind: SessionParticipantKind,
+) {
+    let _ = app.emit(
+        "media_participant_join",
+        serde_json::json!({ "userId": user_id, "kind": kind }),
+    );
 }
 
 pub fn emit_participant_join_details(app: &super::CallEventSink, participant: &SessionParticipant) {
@@ -198,17 +208,193 @@ pub fn emit_participant_join_details(app: &super::CallEventSink, participant: &S
             "sessionId": participant.session_id,
             "videoCapabilities": participant.video_capabilities,
             "mediaPublicKey": participant.media_public_key,
+            "kind": participant.kind,
         }),
     );
 }
 
 /// Emit a participant leave event.
-#[allow(dead_code)]
-pub fn emit_participant_leave(app: &super::CallEventSink, user_id: &str, session_id: Option<&str>) {
+pub fn emit_participant_leave(
+    app: &super::CallEventSink,
+    user_id: &str,
+    session_id: Option<&str>,
+    kind: SessionParticipantKind,
+) {
     let _ = app.emit(
         "media_participant_leave",
-        serde_json::json!({ "userId": user_id, "sessionId": session_id }),
+        serde_json::json!({ "userId": user_id, "sessionId": session_id, "kind": kind }),
     );
+}
+
+/// Ask the renderer (which holds this call's keys) to wrap and announce some of
+/// this client's sender keys: the voice key when `voice`, and the named tracks'
+/// keys. `recipients` null means everyone in the roster entitled to each key
+/// (the voice key to members only, a track key to members and, for the
+/// viewable stream, its viewers); otherwise exactly those peers, still subject
+/// to the same entitlement.
+fn emit_announce_sender_keys(
+    app: &super::CallEventSink,
+    voice: bool,
+    tracks: &[(StreamId, TrackId)],
+    recipients: Option<&[i64]>,
+) {
+    if !voice && tracks.is_empty() {
+        return;
+    }
+    let _ = app.emit(
+        "media_announce_sender_keys",
+        serde_json::json!({
+            "voice": voice,
+            "tracks": tracks
+                .iter()
+                .map(|(stream_id, track_id)| serde_json::json!({
+                    "streamId": stream_id.0,
+                    "trackId": track_id.0,
+                }))
+                .collect::<Vec<_>>(),
+            "recipients": recipients.map(|ids| ids.iter().map(i64::to_string).collect::<Vec<_>>()),
+        }),
+    );
+}
+
+/// Which of this client's sender keys a roster change rotates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum KeyRotation {
+    /// Nothing rotates.
+    None,
+    /// Only the keys a viewer can hold (the viewable stream's tracks): a viewer
+    /// left, so it must not open what follows. The voice key never reached it.
+    ViewableTracks,
+    /// Every key, the voice and each track: a call member arrived or left.
+    All,
+}
+
+/// Which keys go out, and to whom, after a roster change.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum KeyAnnouncement {
+    None,
+    /// The voice key and every track key, to everyone entitled to each.
+    All,
+    /// The viewable stream's track keys, to everyone entitled to them.
+    Viewable,
+    /// The viewable stream's current track keys, to these new viewers only.
+    ViewableTo(Vec<i64>),
+}
+
+/// What one roster change does to this client's keys.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct KeyPlan {
+    pub rotation: KeyRotation,
+    pub announcement: KeyAnnouncement,
+}
+
+impl KeyPlan {
+    const NOTHING: Self = Self {
+        rotation: KeyRotation::None,
+        announcement: KeyAnnouncement::None,
+    };
+    const ROTATE_ALL: Self = Self {
+        rotation: KeyRotation::All,
+        announcement: KeyAnnouncement::All,
+    };
+    const ROTATE_VIEWABLE: Self = Self {
+        rotation: KeyRotation::ViewableTracks,
+        announcement: KeyAnnouncement::Viewable,
+    };
+}
+
+fn is_member(participant: &super::session::RemoteSessionParticipant) -> bool {
+    !participant.kind.is_viewer()
+}
+
+/// The key plan for a fresh roster snapshot, against the roster known before.
+///
+/// The first snapshot rotates nothing and announces everything. After that a
+/// change among the call members rotates every key; a viewer gone rotates the
+/// viewable stream's keys only; a viewer that arrived (or whose view session was
+/// replaced by a newer one of the same account, which is entitled to the same
+/// stream) rotates nothing and is sent the viewable stream's current keys.
+pub(crate) fn plan_session_state(
+    known: &HashMap<i64, super::session::RemoteSessionParticipant>,
+    desired: &HashMap<i64, super::session::RemoteSessionParticipant>,
+) -> KeyPlan {
+    if known.is_empty() {
+        return KeyPlan {
+            rotation: KeyRotation::None,
+            announcement: KeyAnnouncement::All,
+        };
+    }
+    let members = |roster: &HashMap<i64, super::session::RemoteSessionParticipant>| {
+        roster
+            .iter()
+            .filter(|(_, participant)| is_member(participant))
+            .map(|(user_id, participant)| (*user_id, participant.clone()))
+            .collect::<HashMap<_, _>>()
+    };
+    if members(known) != members(desired) {
+        return KeyPlan::ROTATE_ALL;
+    }
+    let viewer_gone = known
+        .iter()
+        .filter(|(_, participant)| !is_member(participant))
+        .any(|(user_id, _)| desired.get(user_id).is_none_or(is_member));
+    if viewer_gone {
+        return KeyPlan::ROTATE_VIEWABLE;
+    }
+    let mut new_viewers = desired
+        .iter()
+        .filter(|(_, participant)| !is_member(participant))
+        .filter(|(user_id, participant)| known.get(user_id) != Some(participant))
+        .map(|(user_id, _)| *user_id)
+        .collect::<Vec<_>>();
+    if new_viewers.is_empty() {
+        return KeyPlan::NOTHING;
+    }
+    new_viewers.sort_unstable();
+    KeyPlan {
+        rotation: KeyRotation::None,
+        announcement: KeyAnnouncement::ViewableTo(new_viewers),
+    }
+}
+
+/// The key plan for one roster entry arriving (or changing) as `joined`.
+pub(crate) fn plan_join(
+    user_id: i64,
+    previous: Option<&super::session::RemoteSessionParticipant>,
+    joined: &super::session::RemoteSessionParticipant,
+) -> KeyPlan {
+    if previous == Some(joined) {
+        return KeyPlan::NOTHING;
+    }
+    match (previous, is_member(joined)) {
+        // A member arrived (or rejoined with a new receipt or call key).
+        (_, true) => KeyPlan::ROTATE_ALL,
+        // A member left the call and now only watches: it is gone from the
+        // call, and everything it could open rotates.
+        (Some(previous), false) if is_member(previous) => KeyPlan::ROTATE_ALL,
+        // Somebody started watching, or a viewer's view session was replaced
+        // by a newer one of the same account (entitled to the same stream): it
+        // gets the viewable stream's keys as they are, and nothing rotates.
+        (_, false) => KeyPlan {
+            rotation: KeyRotation::None,
+            announcement: KeyAnnouncement::ViewableTo(vec![user_id]),
+        },
+    }
+}
+
+/// The key plan for one roster entry leaving.
+pub(crate) fn plan_leave(departed: &super::session::RemoteSessionParticipant) -> KeyPlan {
+    if is_member(departed) {
+        KeyPlan::ROTATE_ALL
+    } else {
+        KeyPlan::ROTATE_VIEWABLE
+    }
+}
+
+/// Whether a track belongs to the stream a view session may receive (a screen
+/// share's video and its own audio). Mirrors the relay's `ViewTarget::allows`.
+pub(crate) fn is_viewable_stream(stream_id: &StreamId) -> bool {
+    stream_id.0.ends_with(":screen")
 }
 
 /// Emit a session error event.
@@ -350,6 +536,21 @@ pub fn note_decrypt_result(app: &super::CallEventSink, ssrc: u32, success: bool)
     }
 }
 
+/// Say why the media connection ended. When the relay closed it on purpose
+/// (`MediaCloseReason`: superseded, ended, revoked) its own words are used,
+/// because the renderer decides from them whether the session may be dialed
+/// back (a view closed for any of the three may not).
+pub(crate) fn describe_connection_close(reason: &quinn::ConnectionError) -> String {
+    if let quinn::ConnectionError::ApplicationClosed(close) = reason {
+        if let Some(relay_reason) =
+            paracord_transport::control::MediaCloseReason::from_code(close.error_code.into_inner())
+        {
+            return format!("Closed by the relay: {}", relay_reason.reason());
+        }
+    }
+    format!("Native voice connection lost: {reason}")
+}
+
 /// Spawn a task that watches the QUIC connection and notifies the UI on loss.
 pub fn spawn_connection_monitor(session: &mut NativeMediaSession, app: super::CallEventSink) {
     let shutdown = session.shutdown.clone();
@@ -359,9 +560,7 @@ pub fn spawn_connection_monitor(session: &mut NativeMediaSession, app: super::Ca
         tokio::select! {
             _ = shutdown.notified() => {}
             reason = conn.closed() => {
-
-                let message = format!("Native voice connection lost: {reason}");
-                let _ = app.emit("media_transport_lost", message);
+                let _ = app.emit("media_transport_lost", describe_connection_close(&reason));
             }
         }
     });
@@ -478,84 +677,69 @@ async fn handle_control_message(
 ) {
     match message {
         ControlMessage::SessionState { participants } => {
-            let session_state =
-                apply_session_state(app, local_user_id, session_participants, &participants).await;
+            let update =
+                apply_session_state(local_user_id, session_participants, &participants).await;
             // Reconcile the local subscription set against the fresh snapshot:
             // any participant that dropped out must have their subscriptions torn
             // down so bandwidth is not spent on stale tracks.
-            for user_id in &session_state.departed {
+            for (user_id, _) in &update.departed {
                 handle_participant_departure(conn, stream_registry, *user_id).await;
             }
-            if session_state.membership_changed && !session_state.initial_sync {
-                let _ = match rotate_audio_sender_key(
-                    frame_encryptor,
-                    audio_sender_state,
-                    current_key_epoch,
-                    local_ssrc,
-                ) {
-                    Ok(state) => state,
-                    Err(err) => {
-                        tracing::warn!(error = %err, "failed to rotate native audio sender key on session snapshot change");
-                        current_audio_sender_state(audio_sender_state)
-                    }
-                };
-                let _ = rotate_track_sender_keys(
-                    stream_registry,
-                    track_sender_keys,
-                    frame_encryptor,
-                    frame_decryptor,
-                    current_key_epoch,
-                )
-                .await
-                .map_err(|err| {
-                    tracing::warn!(error = %err, "failed to rotate native track sender keys on session snapshot change");
-                });
+            // Keys rotate before anybody is told about the change, so every
+            // key the renderer announces afterwards is the new one.
+            let keys = KeyState {
+                stream_registry,
+                track_sender_keys,
+                frame_encryptor,
+                frame_decryptor,
+                audio_sender_state,
+                current_key_epoch,
+                local_ssrc,
+            };
+            keys.rotate(update.plan.rotation).await;
+            for (user_id, departed) in &update.departed {
+                emit_participant_leave(
+                    app,
+                    &user_id.to_string(),
+                    Some(&departed.session_id),
+                    departed.kind,
+                );
             }
+            for participant in &update.joined {
+                emit_participant_join_details(app, participant);
+                emit_participant_join(app, &participant.user_id.to_string(), participant.kind);
+            }
+            keys.announce(app, &update.plan.announcement).await;
         }
         ControlMessage::SessionParticipantJoin { participant } => {
             if participant.user_id != local_user_id {
-                let mut known = session_participants.lock().await;
-                let inserted = known.get(&participant.user_id).is_none_or(|existing| {
-                    existing.session_id != participant.session_id
-                        || existing.video_capabilities != participant.video_capabilities
-                        || existing.media_public_key != participant.media_public_key
-                });
-                known.insert(
-                    participant.user_id,
-                    super::session::RemoteSessionParticipant {
-                        session_id: participant.session_id.clone(),
-                        video_capabilities: participant.video_capabilities.clone(),
-                        media_public_key: participant.media_public_key.clone(),
-                    },
-                );
-                if inserted {
-                    emit_participant_join(app, &participant.user_id.to_string());
-                    emit_participant_join_details(app, &participant);
-                }
-                drop(known);
-                let _ = match rotate_audio_sender_key(
-                    frame_encryptor,
-                    audio_sender_state,
-                    current_key_epoch,
-                    local_ssrc,
-                ) {
-                    Ok(state) => state,
-                    Err(err) => {
-                        tracing::warn!(error = %err, "failed to rotate native audio sender key on join");
-                        current_audio_sender_state(audio_sender_state)
-                    }
+                let joined = super::session::RemoteSessionParticipant::from_wire(&participant);
+                let plan = {
+                    let mut known = session_participants.lock().await;
+                    let plan = plan_join(
+                        participant.user_id,
+                        known.get(&participant.user_id),
+                        &joined,
+                    );
+                    known.insert(participant.user_id, joined);
+                    plan
                 };
-                let _ = rotate_track_sender_keys(
+                if plan == KeyPlan::NOTHING {
+                    return;
+                }
+                let keys = KeyState {
                     stream_registry,
                     track_sender_keys,
                     frame_encryptor,
                     frame_decryptor,
+                    audio_sender_state,
                     current_key_epoch,
-                )
-                .await
-                .map_err(|err| {
-                    tracing::warn!(error = %err, "failed to rotate native track sender keys on join");
-                });
+                    local_ssrc,
+                };
+                keys.rotate(plan.rotation).await;
+                emit_participant_join_details(app, &participant);
+                emit_participant_join(app, &participant.user_id.to_string(), participant.kind);
+                keys.announce(app, &plan.announcement).await;
             }
         }
         ControlMessage::SessionParticipantLeave {
@@ -563,45 +747,42 @@ async fn handle_control_message(
             session_id,
         } => {
             if user_id != local_user_id {
-                let mut known = session_participants.lock().await;
-                if session_id.as_deref().is_some_and(|expected| {
-                    known
-                        .get(&user_id)
-                        .is_none_or(|participant| participant.session_id != expected)
-                }) {
+                let departed = {
+                    let mut known = session_participants.lock().await;
+                    if session_id.as_deref().is_some_and(|expected| {
+                        known
+                            .get(&user_id)
+                            .is_none_or(|participant| participant.session_id != expected)
+                    }) {
+                        return;
+                    }
+                    known.remove(&user_id)
+                };
+                let Some(departed) = departed else {
                     return;
-                }
-                if let Some(previous) = known.remove(&user_id) {
-                    emit_participant_leave(app, &user_id.to_string(), Some(&previous.session_id));
-                }
-                drop(known);
+                };
                 // Tear down subscriptions and native decoders for the departed
                 // participant so the relay stops forwarding their tracks and
                 // libvpx state is released promptly instead of lingering.
                 handle_participant_departure(conn, stream_registry, user_id).await;
-                let _ = match rotate_audio_sender_key(
-                    frame_encryptor,
-                    audio_sender_state,
-                    current_key_epoch,
-                    local_ssrc,
-                ) {
-                    Ok(state) => state,
-                    Err(err) => {
-                        tracing::warn!(error = %err, "failed to rotate native audio sender key on leave");
-                        current_audio_sender_state(audio_sender_state)
-                    }
-                };
-                let _ = rotate_track_sender_keys(
+                let plan = plan_leave(&departed);
+                let keys = KeyState {
                     stream_registry,
                     track_sender_keys,
                     frame_encryptor,
                     frame_decryptor,
+                    audio_sender_state,
                     current_key_epoch,
-                )
-                .await
-                .map_err(|err| {
-                    tracing::warn!(error = %err, "failed to rotate native track sender keys on leave");
-                });
+                    local_ssrc,
+                };
+                keys.rotate(plan.rotation).await;
+                emit_participant_leave(
+                    app,
+                    &user_id.to_string(),
+                    Some(&departed.session_id),
+                    departed.kind,
+                );
+                keys.announce(app, &plan.announcement).await;
             }
         }
         ControlMessage::TrackPublish { track } => {
@@ -902,13 +1083,14 @@ async fn handle_control_message(
 }
 
 struct SessionStateUpdate {
-    membership_changed: bool,
-    initial_sync: bool,
-    departed: Vec<i64>,
+    plan: KeyPlan,
+    /// Entries new or changed in this snapshot, to report to the renderer.
+    joined: Vec<SessionParticipant>,
+    /// Entries gone from this snapshot, as they were known.
+    departed: Vec<(i64, super::session::RemoteSessionParticipant)>,
 }
 
 async fn apply_session_state(
-    app: &super::CallEventSink,
     local_user_id: i64,
     session_participants: &std::sync::Arc<
         tokio::sync::Mutex<
@@ -923,65 +1105,116 @@ async fn apply_session_state(
         .map(|participant| {
             (
                 participant.user_id,
-                super::session::RemoteSessionParticipant {
-                    session_id: participant.session_id.clone(),
-                    video_capabilities: participant.video_capabilities.clone(),
-                    media_public_key: participant.media_public_key.clone(),
-                },
+                super::session::RemoteSessionParticipant::from_wire(participant),
             )
         })
         .collect::<std::collections::HashMap<_, _>>();
     let mut known = session_participants.lock().await;
-    let initial_sync = known.is_empty();
-    let membership_changed = known.len() != desired.len()
-        || desired.iter().any(|(user_id, participant)| {
-            known
-                .get(user_id)
-                .map(|existing| {
-                    existing.session_id != participant.session_id
-                        || existing.video_capabilities != participant.video_capabilities
-                        || existing.media_public_key != participant.media_public_key
-                })
-                .unwrap_or(true)
-        });
-
-    for participant in participants {
-        if participant.user_id == local_user_id {
-            continue;
-        }
-        let should_emit_join = known
-            .get(&participant.user_id)
-            .map(|existing| {
-                existing.session_id != participant.session_id
-                    || existing.video_capabilities != participant.video_capabilities
-                    || existing.media_public_key != participant.media_public_key
-            })
-            .unwrap_or(true);
-        if should_emit_join {
-            emit_participant_join(app, &participant.user_id.to_string());
-            emit_participant_join_details(app, participant);
-        }
-    }
-    let departed = known
-        .keys()
-        .filter(|user_id| !desired.contains_key(user_id))
-        .copied()
+    let plan = plan_session_state(&known, &desired);
+    let joined = participants
+        .iter()
+        .filter(|participant| participant.user_id != local_user_id)
+        .filter(|participant| known.get(&participant.user_id) != desired.get(&participant.user_id))
+        .cloned()
         .collect::<Vec<_>>();
-    for user_id in &departed {
-        emit_participant_leave(
-            app,
-            &user_id.to_string(),
-            known
-                .get(user_id)
-                .map(|participant| participant.session_id.as_str()),
-        );
-    }
+    let departed = known
+        .iter()
+        .filter(|(user_id, _)| !desired.contains_key(user_id))
+        .map(|(user_id, participant)| (*user_id, participant.clone()))
+        .collect::<Vec<_>>();
     *known = desired;
     SessionStateUpdate {
-        membership_changed,
-        initial_sync,
+        plan,
+        joined,
         departed,
     }
+}
+
+/// The sender-key state one roster change acts on.
+struct KeyState<'a> {
+    stream_registry: &'a std::sync::Arc<tokio::sync::Mutex<super::stream_registry::StreamRegistry>>,
+    track_sender_keys: &'a std::sync::Arc<
+        tokio::sync::Mutex<
+            std::collections::HashMap<(StreamId, TrackId), super::session::SenderKeyState>,
+        >,
+    >,
+    frame_encryptor: &'a std::sync::Arc<std::sync::Mutex<paracord_codec::crypto::FrameEncryptor>>,
+    frame_decryptor: &'a std::sync::Arc<std::sync::Mutex<FrameDecryptor>>,
+    audio_sender_state: &'a std::sync::Arc<std::sync::Mutex<super::session::SenderKeyState>>,
+    current_key_epoch: &'a std::sync::Arc<AtomicU8>,
+    local_ssrc: u32,
+}
+
+impl KeyState<'_> {
+    /// Rotate what `rotation` names. The voice key rotates only for a change
+    /// among call members; a viewer's departure rotates the viewable stream's
+    /// keys and nothing else.
+    async fn rotate(&self, rotation: KeyRotation) {
+        let viewable_only = match rotation {
+            KeyRotation::None => return,
+            KeyRotation::ViewableTracks => true,
+            KeyRotation::All => {
+                if let Err(err) = rotate_audio_sender_key(
+                    self.frame_encryptor,
+                    self.audio_sender_state,
+                    self.current_key_epoch,
+                    self.local_ssrc,
+                ) {
+                    tracing::warn!(error = %err, "failed to rotate native audio sender key on a roster change");
+                }
+                false
+            }
+        };
+        if let Err(err) = rotate_track_sender_keys(
+            self.stream_registry,
+            self.track_sender_keys,
+            self.frame_encryptor,
+            self.frame_decryptor,
+            viewable_only,
+        )
+        .await
+        {
+            tracing::warn!(error = %err, "failed to rotate native track sender keys on a roster change");
+        }
+    }
+
+    /// Ask the renderer to announce what `announcement` names.
+    async fn announce(&self, app: &super::CallEventSink, announcement: &KeyAnnouncement) {
+        let (voice, viewable_only, recipients) = match announcement {
+            KeyAnnouncement::None => return,
+            KeyAnnouncement::All => (true, false, None),
+            KeyAnnouncement::Viewable => (false, true, None),
+            KeyAnnouncement::ViewableTo(recipients) => (false, true, Some(recipients.as_slice())),
+        };
+        let tracks =
+            local_keyed_tracks(self.stream_registry, self.track_sender_keys, viewable_only).await;
+        emit_announce_sender_keys(app, voice, &tracks, recipients);
+    }
+}
+
+/// This client's published tracks that have a sender key (only the viewable
+/// stream's when `viewable_only`), in a stable order.
+async fn local_keyed_tracks(
+    stream_registry: &std::sync::Arc<tokio::sync::Mutex<super::stream_registry::StreamRegistry>>,
+    track_sender_keys: &std::sync::Arc<
+        tokio::sync::Mutex<
+            std::collections::HashMap<(StreamId, TrackId), super::session::SenderKeyState>,
+        >,
+    >,
+    viewable_only: bool,
+) -> Vec<(StreamId, TrackId)> {
+    let keyed = {
+        let sender_keys = track_sender_keys.lock().await;
+        sender_keys.keys().cloned().collect::<Vec<_>>()
+    };
+    let registry = stream_registry.lock().await;
+    let mut tracks = keyed
+        .into_iter()
+        .filter(|(stream_id, _)| !viewable_only || is_viewable_stream(stream_id))
+        .filter(|(stream_id, track_id)| registry.get_published_track(stream_id, track_id).is_some())
+        .collect::<Vec<_>>();
+    tracks.sort_by(|a, b| (&a.0 .0, &a.1 .0).cmp(&(&b.0 .0, &b.1 .0)));
+    tracks
 }
 
 /// Build the `UnsubscribeStream` messages the client should send when `user_id`
@@ -1118,18 +1351,12 @@ fn rotate_audio_sender_key(
     })
 }
 
-fn current_audio_sender_state(
-    audio_sender_state: &std::sync::Arc<std::sync::Mutex<super::session::SenderKeyState>>,
-) -> super::session::SenderKeyState {
-    audio_sender_state
-        .lock()
-        .map(|state| *state)
-        .unwrap_or(super::session::SenderKeyState {
-            epoch: 1,
-            key: [0u8; KEY_SIZE],
-        })
-}
-
+/// Give each published track (only the viewable stream's when
+/// `viewable_only`) a new key under the next epoch of its own.
+///
+/// Each track counts its own epochs: a track can rotate without the voice
+/// (a viewer left), and the receiver files keys by `(ssrc, epoch)`, so a new
+/// key must never reuse the epoch its previous key was sent under.
 async fn rotate_track_sender_keys(
     stream_registry: &std::sync::Arc<tokio::sync::Mutex<super::stream_registry::StreamRegistry>>,
     track_sender_keys: &std::sync::Arc<
@@ -1139,14 +1366,17 @@ async fn rotate_track_sender_keys(
     >,
     frame_encryptor: &std::sync::Arc<std::sync::Mutex<paracord_codec::crypto::FrameEncryptor>>,
     frame_decryptor: &std::sync::Arc<std::sync::Mutex<FrameDecryptor>>,
-    current_key_epoch: &std::sync::Arc<AtomicU8>,
+    viewable_only: bool,
 ) -> Result<(), String> {
     use rand::random;
 
-    let epoch = current_key_epoch.load(Ordering::SeqCst);
     let track_keys = {
         let sender_keys = track_sender_keys.lock().await;
-        sender_keys.keys().cloned().collect::<Vec<_>>()
+        sender_keys
+            .keys()
+            .filter(|(stream_id, _)| !viewable_only || is_viewable_stream(stream_id))
+            .cloned()
+            .collect::<Vec<_>>()
     };
     if track_keys.is_empty() {
         return Ok(());
@@ -1175,6 +1405,10 @@ async fn rotate_track_sender_keys(
         let Some(track) = tracks.get(&track_key) else {
             continue;
         };
+        let Some(current) = sender_keys.get(&track_key).copied() else {
+            continue;
+        };
+        let epoch = next_key_epoch(current.epoch);
         let next_key = random::<[u8; KEY_SIZE]>();
         sender_keys.insert(
             track_key.clone(),
@@ -1192,6 +1426,14 @@ async fn rotate_track_sender_keys(
     }
 
     Ok(())
+}
+
+/// The epoch after `epoch`: 1..=255, skipping 0 (the wire's "no key").
+fn next_key_epoch(epoch: u8) -> u8 {
+    match epoch.wrapping_add(1) {
+        0 => 1,
+        next => next,
+    }
 }
 
 async fn apply_delivered_track_key(
@@ -1297,6 +1539,223 @@ mod tests {
         // Published but never subscribed: leaving must not emit an unsubscribe.
         registry.publish_track(video_track(42, "stream-a", "screen"));
         assert!(unsubscribe_messages_for_participant(&registry, 42).is_empty());
+    }
+
+    // ── G6b: viewers never rotate the voice key ────────────────────────────
+
+    fn remote(
+        session: &str,
+        kind: SessionParticipantKind,
+    ) -> super::super::session::RemoteSessionParticipant {
+        super::super::session::RemoteSessionParticipant {
+            session_id: session.into(),
+            video_capabilities: Vec::new(),
+            media_public_key: Some("ab".repeat(32)),
+            kind,
+        }
+    }
+
+    const MEMBER: SessionParticipantKind = SessionParticipantKind::Member;
+    const VIEWER: SessionParticipantKind = SessionParticipantKind::Viewer;
+
+    #[test]
+    fn a_viewer_joining_rotates_nothing_and_is_sent_only_the_viewable_keys() {
+        let plan = plan_join(9, None, &remote("view-9", VIEWER));
+        assert_eq!(plan.rotation, KeyRotation::None);
+        assert_eq!(plan.announcement, KeyAnnouncement::ViewableTo(vec![9]));
+    }
+
+    #[test]
+    fn a_viewer_leaving_rotates_the_stream_keys_but_never_the_voice() {
+        let plan = plan_leave(&remote("view-9", VIEWER));
+        assert_eq!(plan.rotation, KeyRotation::ViewableTracks);
+        assert_eq!(plan.announcement, KeyAnnouncement::Viewable);
+    }
+
+    #[test]
+    fn a_member_joining_or_leaving_still_rotates_every_key() {
+        assert_eq!(
+            plan_join(2, None, &remote("s2", MEMBER)).rotation,
+            KeyRotation::All
+        );
+        assert_eq!(plan_leave(&remote("s2", MEMBER)).rotation, KeyRotation::All);
+        // A member that left the call and now only watches has left the call.
+        assert_eq!(
+            plan_join(2, Some(&remote("s2", MEMBER)), &remote("view-2", VIEWER)).rotation,
+            KeyRotation::All
+        );
+        // A viewer's view session replaced by the same account's newer one
+        // rotates nothing; the new session is sent the current screen keys.
+        assert_eq!(
+            plan_join(
+                9,
+                Some(&remote("view-9", VIEWER)),
+                &remote("view-9b", VIEWER)
+            ),
+            KeyPlan {
+                rotation: KeyRotation::None,
+                announcement: KeyAnnouncement::ViewableTo(vec![9])
+            }
+        );
+        // The same entry again changes nothing.
+        assert_eq!(
+            plan_join(2, Some(&remote("s2", MEMBER)), &remote("s2", MEMBER)),
+            KeyPlan::NOTHING
+        );
+    }
+
+    #[test]
+    fn a_roster_snapshot_rotates_the_voice_only_for_members() {
+        let roster = |entries: &[(i64, &str, SessionParticipantKind)]| {
+            entries
+                .iter()
+                .map(|(uid, session, kind)| (*uid, remote(session, *kind)))
+                .collect::<HashMap<_, _>>()
+        };
+        let before = roster(&[(2, "s2", MEMBER), (9, "view-9", VIEWER)]);
+        // First snapshot: nothing rotates, everything is announced.
+        assert_eq!(
+            plan_session_state(&HashMap::new(), &before),
+            KeyPlan {
+                rotation: KeyRotation::None,
+                announcement: KeyAnnouncement::All
+            }
+        );
+        // A viewer arrives: nothing rotates.
+        let viewer_arrived = roster(&[
+            (2, "s2", MEMBER),
+            (9, "view-9", VIEWER),
+            (8, "view-8", VIEWER),
+        ]);
+        assert_eq!(
+            plan_session_state(&before, &viewer_arrived),
+            KeyPlan {
+                rotation: KeyRotation::None,
+                announcement: KeyAnnouncement::ViewableTo(vec![8])
+            }
+        );
+        // A viewer leaves: the viewable keys rotate, the voice does not.
+        let viewer_left = roster(&[(2, "s2", MEMBER)]);
+        assert_eq!(
+            plan_session_state(&before, &viewer_left).rotation,
+            KeyRotation::ViewableTracks
+        );
+        // A member leaves: everything rotates.
+        let member_left = roster(&[(9, "view-9", VIEWER)]);
+        assert_eq!(
+            plan_session_state(&before, &member_left).rotation,
+            KeyRotation::All
+        );
+        assert_eq!(plan_session_state(&before, &before), KeyPlan::NOTHING);
+    }
+
+    fn published(stream: &str, track: &str, ssrc: u32) -> PublishedTrack {
+        let mut track = video_track(1, stream, track);
+        track.layers[0].ssrc = ssrc;
+        track
+    }
+
+    /// The rotation itself: a viewer's departure gives the screen and its
+    /// audio new keys under new epochs of their own, and leaves the voice key
+    /// and the camera key exactly as they were. A member's departure changes
+    /// all of them.
+    #[tokio::test]
+    async fn rotating_for_a_viewer_leaves_the_voice_and_camera_keys_alone() {
+        use super::super::session::SenderKeyState;
+        use std::sync::Arc;
+
+        let mut registry = super::super::stream_registry::StreamRegistry::default();
+        let tracks = [
+            published("stream:1:screen", "screen", 10),
+            published("stream:1:screen", "screen-audio", 11),
+            published("stream:1:camera", "camera", 12),
+        ];
+        let mut keys = HashMap::new();
+        for (index, track) in tracks.iter().enumerate() {
+            registry.publish_track(track.clone());
+            keys.insert(
+                (track.stream_id.clone(), track.track_id.clone()),
+                SenderKeyState {
+                    epoch: 3,
+                    key: [index as u8; KEY_SIZE],
+                },
+            );
+        }
+        let registry = Arc::new(tokio::sync::Mutex::new(registry));
+        let track_keys = Arc::new(tokio::sync::Mutex::new(keys));
+        let encryptor = Arc::new(std::sync::Mutex::new(
+            paracord_codec::crypto::FrameEncryptor::new(),
+        ));
+        let decryptor = Arc::new(std::sync::Mutex::new(FrameDecryptor::new()));
+        let voice = Arc::new(std::sync::Mutex::new(SenderKeyState {
+            epoch: 5,
+            key: [9; KEY_SIZE],
+        }));
+        let voice_epoch = Arc::new(AtomicU8::new(5));
+        let state = KeyState {
+            stream_registry: &registry,
+            track_sender_keys: &track_keys,
+            frame_encryptor: &encryptor,
+            frame_decryptor: &decryptor,
+            audio_sender_state: &voice,
+            current_key_epoch: &voice_epoch,
+            local_ssrc: 99,
+        };
+        let key_of = |track: &PublishedTrack| {
+            let keys = track_keys.try_lock().unwrap();
+            keys[&(track.stream_id.clone(), track.track_id.clone())]
+        };
+
+        state
+            .rotate(plan_leave(&remote("view-9", VIEWER)).rotation)
+            .await;
+        let voice_after = *voice.lock().unwrap();
+        assert_eq!(
+            (voice_after.epoch, voice_after.key),
+            (5, [9; KEY_SIZE]),
+            "voice untouched"
+        );
+        assert_eq!(voice_epoch.load(Ordering::SeqCst), 5);
+        for track in &tracks[..2] {
+            let rotated = key_of(track);
+            assert_eq!(
+                rotated.epoch, 4,
+                "{:?} moved to its next epoch",
+                track.track_id
+            );
+        }
+        let camera = key_of(&tracks[2]);
+        assert_eq!(
+            (camera.epoch, camera.key),
+            (3, [2; KEY_SIZE]),
+            "camera untouched"
+        );
+
+        state
+            .rotate(plan_leave(&remote("s2", MEMBER)).rotation)
+            .await;
+        let voice_after = *voice.lock().unwrap();
+        assert_eq!(voice_after.epoch, 6, "a member leaving rotates the voice");
+        assert_ne!(voice_after.key, [9; KEY_SIZE]);
+        assert_eq!(key_of(&tracks[0]).epoch, 5);
+        assert_eq!(key_of(&tracks[2]).epoch, 4, "and the camera");
+    }
+
+    #[test]
+    fn a_relay_close_is_reported_in_the_relays_words() {
+        use paracord_transport::control::MediaCloseReason;
+        for reason in MediaCloseReason::ALL {
+            let closed = quinn::ConnectionError::ApplicationClosed(quinn::ApplicationClose {
+                error_code: quinn::VarInt::from_u32(reason.code()),
+                reason: bytes::Bytes::from_static(reason.reason().as_bytes()),
+            });
+            assert_eq!(
+                describe_connection_close(&closed),
+                format!("Closed by the relay: {}", reason.reason())
+            );
+        }
+        let lost = describe_connection_close(&quinn::ConnectionError::TimedOut);
+        assert!(lost.starts_with("Native voice connection lost"), "{lost}");
     }
 
     #[test]

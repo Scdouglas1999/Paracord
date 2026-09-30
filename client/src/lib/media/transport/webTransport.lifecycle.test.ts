@@ -4,6 +4,7 @@ import {
   REFRESHED_PIN_REFUSED,
   WebTransportManager,
 } from './webTransport';
+import { isTerminalViewCloseReason, parseRelayCloseReason } from '../engineShared';
 
 // The server's media certificate is short-lived on purpose: a browser accepts a
 // WebTransport `serverCertificateHashes` pin only for a certificate valid at
@@ -64,8 +65,8 @@ class FakeWebTransport {
   }
 
   /** The server closes the session with its own reason. */
-  closeFromServer(reason: string): void {
-    this.closeConnection({ closeCode: 1, reason });
+  closeFromServer(reason: string, closeCode = 1): void {
+    this.closeConnection({ closeCode, reason });
   }
 
   createBidirectionalStream() {
@@ -337,6 +338,30 @@ describe('a view session closed for good', () => {
     expect(interrupted).not.toHaveBeenCalled();
     await new Promise((resolve) => setTimeout(resolve, 400));
     expect(FakeWebTransport.attempts).toHaveLength(1);
+  });
+
+  it('reads the relay\'s close capsule: its code alone is enough to say superseded, ended or revoked', async () => {
+    for (const [code, words] of [
+      [4001, 'superseded by a newer media connection'],
+      [4002, 'view session ended'],
+      [4003, 'media access revoked'],
+    ] as const) {
+      FakeWebTransport.attempts = [];
+      const transport = manager();
+      transport.setTerminalCloseReasons(isTerminalViewCloseReason);
+      await transport.connect('https://media.test/media', 'token', encodePin('pin-one'));
+      const closed = vi.fn();
+      transport.onClose(closed);
+      FakeWebTransport.latest!.closeFromServer('', code);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(closed).toHaveBeenCalledWith(words);
+      expect(parseRelayCloseReason(closed.mock.calls[0][0] as string)).toBe(
+        code === 4001 ? 'superseded' : code === 4002 ? 'ended' : 'revoked',
+      );
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(FakeWebTransport.attempts).toHaveLength(1);
+      await transport.disconnect();
+    }
   });
 
   it('still dials back after any other close', async () => {

@@ -321,15 +321,100 @@ export function parseViewKindFromToken(token: string): 'watch' | 'ambient' | nul
 }
 
 /**
+ * Why the relay closed a media connection
+ * (`paracord_transport::control::MediaCloseReason`). A raw QUIC client reads it
+ * from the connection close; a browser from the `CLOSE_WEBTRANSPORT_SESSION`
+ * capsule (`WebTransport.closed` resolves with its code and words).
+ */
+export type RelayCloseReason = 'superseded' | 'ended' | 'revoked';
+
+/** The relay's close codes, as `MediaCloseReason::code` writes them. */
+const RELAY_CLOSE_CODES: Record<number, RelayCloseReason> = {
+  4001: 'superseded',
+  4002: 'ended',
+  4003: 'revoked',
+};
+
+/** The relay's close words, as `MediaCloseReason::reason` writes them. */
+const RELAY_CLOSE_WORDS: Array<[string, RelayCloseReason]> = [
+  ['superseded by a newer media connection', 'superseded'],
+  ['view session ended', 'ended'],
+  ['media access revoked', 'revoked'],
+];
+
+/** The relay's own words for one of its close reasons. */
+export function relayCloseText(reason: RelayCloseReason): string {
+  return RELAY_CLOSE_WORDS.find(([, parsed]) => parsed === reason)![0];
+}
+
+/**
+ * Which of the relay's close reasons a close names, from its code when there
+ * is one and otherwise from its words; null for any other close (a network
+ * drop, the client's own disconnect). Never inferred from anything else.
+ */
+export function parseRelayCloseReason(reason: string, closeCode?: number | null): RelayCloseReason | null {
+  if (typeof closeCode === 'number' && RELAY_CLOSE_CODES[closeCode]) return RELAY_CLOSE_CODES[closeCode];
+  const text = reason.toLowerCase();
+  for (const [words, parsed] of RELAY_CLOSE_WORDS) {
+    if (text.includes(words)) return parsed;
+  }
+  return null;
+}
+
+/**
  * Whether the relay closed a view session's connection for good: a newer view
- * of the same account replaced it, or the view ended (stopped, retired after
- * its connect deadline, or carried over into a call). Neither may be dialed
- * back: the first would take the slot back from the view that replaced it,
- * the second is refused at admission. See docs/design/glass-g5-checkpoint.md.
+ * of the same account replaced it, the view ended (stopped, retired after its
+ * connect deadline, or carried over into a call), or its viewer may no longer
+ * see the channel. None may be dialed back: the first would take the slot back
+ * from the view that replaced it, the others are refused at admission. See
+ * docs/design/glass-g5-checkpoint.md and glass-g6b-checkpoint.md.
  */
 export function isTerminalViewCloseReason(reason: string): boolean {
-  const text = reason.toLowerCase();
-  return text.includes('superseded by a newer media connection') || text.includes('view session ended');
+  return parseRelayCloseReason(reason) !== null;
+}
+
+/**
+ * What a relay roster entry is (`paracord_transport::control::SessionParticipantKind`):
+ * somebody in the call, or a view session watching one stream without joining.
+ */
+export type RosterKind = 'member' | 'viewer';
+
+/**
+ * Read a roster entry's `kind`. A relay without view sessions sends none, and
+ * every entry it sends is a member. Anything else is not a kind this client
+ * knows, and null tells the caller to refuse the entry rather than guess: a
+ * member is owed the voice key, so an unknown entry must never be taken for one.
+ */
+export function readRosterKind(raw: unknown): RosterKind | null {
+  if (raw === undefined || raw === null) return 'member';
+  return raw === 'member' || raw === 'viewer' ? raw : null;
+}
+
+/**
+ * Whether a published track belongs to a stream a view session may receive: a
+ * screen share (`stream:<publisher>:screen`), whose video and own audio a watch
+ * gets. Mirrors the relay's `ViewTarget::allows`. A camera, and the voice,
+ * never reach a viewer.
+ */
+export function isViewableStream(streamId: string): boolean {
+  return streamId.endsWith(':screen');
+}
+
+/**
+ * Who one of this publisher's keys may be wrapped to.
+ *
+ * - The voice key: call members only. A viewer never holds it.
+ * - A track key: call members, plus the viewers when the track is on a
+ *   viewable stream (the relay also refuses to deliver any other key to a
+ *   viewer; the publisher does not rely on that).
+ */
+export function keyRecipients(
+  key: { kind: 'voice' } | { kind: 'track'; streamId: string },
+  recipientUserIds: Iterable<string>,
+  isViewer: (userId: string) => boolean,
+): string[] {
+  const viewersAllowed = key.kind === 'track' && isViewableStream(key.streamId);
+  return Array.from(recipientUserIds).filter((userId) => viewersAllowed || !isViewer(userId));
 }
 
 /**
@@ -359,4 +444,15 @@ export async function wrapSenderKeyForRecipients(
   );
   account.assertCurrent();
   return wrappedEntries;
+}
+
+/** Whether two publishes of a track describe the same codec and layers. */
+export function samePublishedTrack(a: PublishedTrackDescriptor, b: PublishedTrackDescriptor): boolean {
+  if ((a.codec ?? null) !== (b.codec ?? null) || a.layers.length !== b.layers.length) return false;
+  return a.layers.every((layer, index) => {
+    const other = b.layers[index];
+    return layer.layerId === other.layerId && layer.ssrc === other.ssrc && layer.active === other.active
+      && (layer.width ?? null) === (other.width ?? null) && (layer.height ?? null) === (other.height ?? null)
+      && (layer.maxBitrateKbps ?? null) === (other.maxBitrateKbps ?? null);
+  });
 }

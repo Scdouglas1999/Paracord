@@ -137,10 +137,9 @@ export interface MediaStreamDiagnostics {
 export type MediaSessionRole = 'call' | 'listen' | 'view';
 
 /**
- * Who a peer in this connection's relay roster is. The relay roster carries no
- * marker for a view session (G5), so the voice store answers from voice
- * states: a call member always has a voice state in the channel, a viewer
- * never does.
+ * Who a peer in this connection's relay roster is. The relay marks every
+ * roster entry (`kind: member | viewer`, G6b), and both engines read the mark:
+ * nothing is inferred from voice states.
  */
 export type PeerRole = 'member' | 'viewer';
 
@@ -209,6 +208,12 @@ export interface MediaEngine {
    *  browser's native "Stop sharing" UI (track ended externally). */
   onScreenShareEnded(cb: () => void): void;
   onSpeakingChange(cb: (speakers: Map<string, number>) => void): void;
+  /**
+   * A call member's media session joined or left this call. View sessions in
+   * the relay roster (people watching this client's stream without joining,
+   * marked `viewer` by the relay) are not call members and are never reported
+   * here; their arrival and departure never rotate the voice key.
+   */
   onParticipantJoin(cb: (userId: string) => void): void;
   onParticipantLeave(cb: (userId: string) => void): void;
   /** Fired when the transport is permanently lost after reconnect exhaustion. */
@@ -272,14 +277,6 @@ export interface MediaEngine {
    * engine opens the default microphone, as its joins always have.
    */
   startMicrophone(options?: { inputDeviceId?: string | null }): Promise<void>;
-  /**
-   * How to tell a call member from a view session in this connection's relay
-   * roster. Viewers are never reported through `onParticipantJoin`/`Leave`
-   * (they are not in the call) and their joining or leaving does not rotate
-   * the voice key (the relay never gives them the voice key). Without a
-   * resolver every peer is a member.
-   */
-  setPeerRoleResolver(resolver: (userId: string) => PeerRole): void;
   /**
    * Decoded frames of one remote track, for sampling: room light, the stage's
    * glow, clips. Each frame belongs to the callback, which must `close()` it.

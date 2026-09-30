@@ -19,7 +19,8 @@
  *   (the relay moves it to the membership); leaving it moves the watch back
  *   onto a session of its own. Watching never joins the call and stopping
  *   never leaves it.
- * - **No automatic retry.** A view the relay superseded or ended, one that did
+ * - **No automatic retry.** A view the relay superseded, ended or revoked (its
+ *   viewer may no longer see the channel), one that did
  *   not connect within {@link VIEW_CONNECT_DEADLINE_MS}, or one refused by the
  *   server stays down with its reason until someone asks again.
  * - **Ambient is closed when the window is hidden or its server is not the
@@ -32,7 +33,7 @@
 import { createCallVoiceApi, type VoiceViewKind, type VoiceViewSession } from '../../api/voice';
 import { voiceErrorMessage } from './errors';
 import type { MediaEngine } from '../../lib/media/mediaEngine';
-import { isTerminalViewCloseReason } from '../../lib/media/engineShared';
+import { parseRelayCloseReason } from '../../lib/media/engineShared';
 import type { OperationContext } from '../../lib/operationContext';
 import type { AccountScope } from '../../lib/serverScope';
 import type { CallSession } from './callSession';
@@ -72,12 +73,18 @@ export type MediaViewRoute = 'session' | 'call' | 'watch';
  * - `paused`: (ambient) closed because the window is hidden or its server is
  *   not current; reopens by itself when that changes back.
  * - `blocked`: (ambient) the account's one view is a watch of another stream.
- * - `ended`: the relay superseded or ended it. Not retried.
+ * - `ended`: the relay superseded, ended or revoked it (`endReason` says
+ *   which). Not retried.
  * - `failed`: refused, broken, or past its connect deadline. Not retried.
  */
 export type MediaViewPhase = 'starting' | 'connecting' | 'live' | 'paused' | 'blocked' | 'ended' | 'failed';
 
-export type MediaViewEndReason = 'superseded' | 'ended' | 'deadline' | 'failed';
+/**
+ * Why a view stopped: the relay's own reason (`superseded` by a newer view of
+ * this account, `ended`, or `revoked` because the viewer may no longer see the
+ * channel), the connect deadline, or a failure.
+ */
+export type MediaViewEndReason = 'superseded' | 'ended' | 'revoked' | 'deadline' | 'failed';
 export type MediaViewPauseReason = 'hidden' | 'server-not-current';
 
 export interface MediaViewState {
@@ -483,15 +490,16 @@ function onViewLost(owner: ViewOwner, engine: MediaEngine, reason: string): void
     if (h.connectedCallMedia(call)) owner.promise = attemptWatch(owner).catch(() => {});
     return;
   }
-  const terminal = isTerminalViewCloseReason(reason);
+  // The relay says why it closed a view (its close code and words reach both
+  // transports); anything else is a failure.
+  const relayReason = parseRelayCloseReason(reason);
   releaseAudio(owner);
   releaseOwnEngine(owner);
   owner.finished = true;
-  const superseded = /superseded/i.test(reason);
   publish(owner, {
-    phase: terminal ? 'ended' : 'failed',
-    endReason: terminal ? (superseded ? 'superseded' : 'ended') : 'failed',
-    error: terminal ? null : reason,
+    phase: relayReason ? 'ended' : 'failed',
+    endReason: relayReason ?? 'failed',
+    error: relayReason ? null : reason,
     engine: null,
   });
   if (owner.kind === 'ambient') reconcileAmbient();

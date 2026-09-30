@@ -1982,6 +1982,7 @@ fn ensure_view_housekeeping(state: &AppState) {
                 _ = signal.notified() => tokio::time::sleep(WATCHERS_COALESCE).await,
                 _ = sweep.tick() => {
                     native.relay_forwarder.sweep_views(VIEW_CONNECT_GRACE);
+                    revoke_views_without_access(&state).await;
                 }
             }
             for (guild_id, channel_id) in native.rooms.drain_watch_dirty() {
@@ -2009,6 +2010,91 @@ fn ensure_view_housekeeping(state: &AppState) {
             }
         }
     });
+}
+
+/// End every view whose viewer may no longer have it, and close its media
+/// connection as revoked.
+///
+/// A view is authorized once, when it starts (VIEW_CHANNEL, plus CONNECT for a
+/// watch). Losing either afterwards (a channel overwrite, a role change, the
+/// channel deleted, the account removed from the server) must end it, or the
+/// viewer would keep receiving a stream it may no longer see. Every change
+/// that can take the permission away invalidates the permission cache, so the
+/// sweep re-reads it cheaply; the delay is at most one sweep
+/// ([`VIEW_SWEEP_INTERVAL`]). A database error leaves that view for the next
+/// sweep rather than ending views on a transient fault. Returns how many views
+/// it ended.
+pub async fn revoke_views_without_access(state: &AppState) -> usize {
+    let Some(native) = state.native_media.as_ref() else {
+        return 0;
+    };
+    let mut revoked = 0;
+    for (user_id, view) in native.rooms.views_snapshot() {
+        let allowed = match view_still_allowed(state, user_id, &view).await {
+            Ok(allowed) => allowed,
+            Err(error) => {
+                tracing::warn!(
+                    user_id,
+                    channel_id = view.channel_id,
+                    %error,
+                    "voice: could not re-check a viewer's access; checking again next sweep"
+                );
+                continue;
+            }
+        };
+        if allowed {
+            continue;
+        }
+        if native
+            .rooms
+            .end_view_if_session(user_id, Some(&view.session_id))
+            .is_some()
+        {
+            native
+                .relay_forwarder
+                .revoke_view_connection(user_id, &view.session_id);
+            tracing::info!(
+                user_id,
+                channel_id = view.channel_id,
+                "voice: ended a view its viewer may no longer see"
+            );
+            revoked += 1;
+        }
+    }
+    revoked
+}
+
+/// Whether `user_id` may still hold `view`: the channel exists in the view's
+/// server, and the viewer has VIEW_CHANNEL there (and CONNECT, for a watch).
+async fn view_still_allowed(
+    state: &AppState,
+    user_id: i64,
+    view: &paracord_relay::room::ViewRecord,
+) -> anyhow::Result<bool> {
+    let Some(channel) = paracord_db::channels::get_channel(&state.db, view.channel_id).await?
+    else {
+        return Ok(false);
+    };
+    if channel.guild_id() != Some(view.guild_id) {
+        return Ok(false);
+    }
+    let Some(guild) = paracord_db::guilds::get_guild(&state.db, view.guild_id).await? else {
+        return Ok(false);
+    };
+    let perms = paracord_core::permissions::compute_channel_permissions_cached(
+        &state.permission_cache,
+        &state.db,
+        view.guild_id,
+        view.channel_id,
+        guild.owner_id,
+        user_id,
+    )
+    .await?;
+    let needed = match view.target.kind {
+        ViewKind::Watch => Permissions::VIEW_CHANNEL | Permissions::CONNECT,
+        ViewKind::Ambient => Permissions::VIEW_CHANNEL,
+    };
+    Ok(perms.contains(needed))
 }
 
 /// The channel, guild and permissions a view route acts under.
@@ -2144,9 +2230,11 @@ pub async fn start_voice_view(
             other => ApiError::Internal(other.into()),
         })?;
     if let Some(previous) = replaced {
+        // One view per account: the view this one replaces (another device's,
+        // or this client's own earlier one) is told it was superseded.
         native
             .relay_forwarder
-            .close_view_connection(auth.user_id, &previous.session_id);
+            .supersede_view_connection(auth.user_id, &previous.session_id);
     }
 
     let (media_endpoint, media_endpoint_candidates) =

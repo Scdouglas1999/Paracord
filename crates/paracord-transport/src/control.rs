@@ -56,6 +56,86 @@ pub struct SessionParticipant {
     /// callers report as a refusal rather than falling back to plaintext.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub media_public_key: Option<String>,
+    /// Whether this roster entry is a call member or a view session.
+    ///
+    /// Stated by the relay, which admitted the connection and knows which it
+    /// is; a client never has to infer it from voice states. A publisher wraps
+    /// its voice key only to members and its stream keys to the viewers of that
+    /// stream, and only a member's arrival or departure rotates the voice key.
+    /// Absent on the wire from a relay that has no view sessions, where every
+    /// entry is a member.
+    #[serde(default)]
+    pub kind: SessionParticipantKind,
+}
+
+/// What a roster entry is: somebody in the call, or somebody watching one
+/// stream of it without joining (a G5 view session).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SessionParticipantKind {
+    /// In the call (joined or listening in): hears the voices.
+    #[default]
+    Member,
+    /// A view session: receives one stream's video (and, for a watch, its own
+    /// audio) and nothing else. Never holds a voice key.
+    Viewer,
+}
+
+impl SessionParticipantKind {
+    pub fn is_viewer(self) -> bool {
+        matches!(self, Self::Viewer)
+    }
+}
+
+/// Why the relay closed a media connection, sent as the QUIC application close
+/// code and reason on a raw QUIC connection, and as the
+/// `CLOSE_WEBTRANSPORT_SESSION` capsule's code and reason on a WebTransport
+/// session, so either kind of client can tell the three apart.
+///
+/// The reason strings are part of the wire: clients match them. None of the
+/// three may be dialed back automatically.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MediaCloseReason {
+    /// A newer connection of the same account took this connection's slot
+    /// (a second device's view, or a reconnect that won the race).
+    Superseded,
+    /// The view session this connection served ended: stopped, retired after
+    /// its connect deadline, or carried over into a call.
+    Ended,
+    /// The account lost its right to this media: removed or banned from the
+    /// server, or no longer allowed to view the channel.
+    Revoked,
+}
+
+impl MediaCloseReason {
+    /// Every reason, for exhaustive tests and parsers.
+    pub const ALL: [Self; 3] = [Self::Superseded, Self::Ended, Self::Revoked];
+
+    /// Application error code (QUIC `CONNECTION_CLOSE` and the WebTransport
+    /// capsule both carry a 32-bit-safe code).
+    pub const fn code(self) -> u32 {
+        match self {
+            Self::Superseded => 4001,
+            Self::Ended => 4002,
+            Self::Revoked => 4003,
+        }
+    }
+
+    /// The human-readable reason, stable on the wire.
+    pub const fn reason(self) -> &'static str {
+        match self {
+            Self::Superseded => "superseded by a newer media connection",
+            Self::Ended => "view session ended",
+            Self::Revoked => "media access revoked",
+        }
+    }
+
+    /// The reason a close code names, if it is one of the relay's.
+    pub fn from_code(code: u64) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|reason| u64::from(reason.code()) == code)
+    }
 }
 
 /// Length of a hex-encoded X25519 media call key.
@@ -678,6 +758,7 @@ mod tests {
                 session_id: "receipt".into(),
                 video_capabilities: Vec::new(),
                 media_public_key: None,
+                kind: SessionParticipantKind::Member,
             }],
         };
         let json = serde_json::to_string(&state).unwrap();
@@ -741,6 +822,7 @@ mod tests {
                     session_id: "r".into(),
                     video_capabilities: Vec::new(),
                     media_public_key: None,
+                    kind: SessionParticipantKind::Member,
                 }],
             }
         );
@@ -812,12 +894,14 @@ mod tests {
                     session_id: "native-42".to_string(),
                     video_capabilities: vec![],
                     media_public_key: None,
+                    kind: SessionParticipantKind::Member,
                 },
                 SessionParticipant {
                     user_id: 99,
                     session_id: "browser-99".to_string(),
                     video_capabilities: vec![],
                     media_public_key: None,
+                    kind: SessionParticipantKind::Member,
                 },
             ],
         };
@@ -834,6 +918,7 @@ mod tests {
                 session_id: "native-77".to_string(),
                 video_capabilities: vec![],
                 media_public_key: None,
+                kind: SessionParticipantKind::Member,
             },
         };
         let encoded = msg.encode().unwrap();
@@ -874,6 +959,7 @@ mod tests {
                     decode_hardware: true,
                 }],
                 media_public_key: None,
+                kind: SessionParticipantKind::Member,
             }],
         };
         let encoded = msg.encode().unwrap();
@@ -1293,5 +1379,66 @@ mod tests {
         assert!(StreamFrame::decode(&[FRAME_TYPE_CONTROL, 0x00, 0x00])
             .unwrap()
             .is_none());
+    }
+
+    /// The relay marks each roster entry as a member or a viewer, so a client
+    /// never infers it from voice states. A relay without view sessions sends
+    /// no marker, and every entry it sends is a member.
+    #[test]
+    fn roster_entries_carry_member_or_viewer() {
+        let viewer = SessionParticipant {
+            user_id: 9,
+            session_id: "view-9".into(),
+            video_capabilities: Vec::new(),
+            media_public_key: None,
+            kind: SessionParticipantKind::Viewer,
+        };
+        let json = serde_json::to_string(&viewer).unwrap();
+        assert!(json.contains("\"kind\":\"viewer\""), "{json}");
+        assert_eq!(
+            serde_json::from_str::<SessionParticipant>(&json).unwrap(),
+            viewer
+        );
+
+        let member = SessionParticipant {
+            kind: SessionParticipantKind::Member,
+            ..viewer.clone()
+        };
+        let json = serde_json::to_string(&member).unwrap();
+        assert!(json.contains("\"kind\":\"member\""), "{json}");
+
+        let unmarked = r#"{"userId":"9","sessionId":"s9","videoCapabilities":[]}"#;
+        assert_eq!(
+            serde_json::from_str::<SessionParticipant>(unmarked)
+                .unwrap()
+                .kind,
+            SessionParticipantKind::Member
+        );
+        assert!(
+            serde_json::from_str::<SessionParticipant>(
+                r#"{"userId":"9","sessionId":"s9","kind":"lurker"}"#
+            )
+            .is_err(),
+            "an unknown kind is refused, never read as a member"
+        );
+    }
+
+    /// Each close reason has its own code and its own words, and the code
+    /// reads back to the reason.
+    #[test]
+    fn media_close_reasons_are_distinct_and_round_trip() {
+        let mut codes = std::collections::HashSet::new();
+        let mut reasons = std::collections::HashSet::new();
+        for reason in MediaCloseReason::ALL {
+            assert!(codes.insert(reason.code()));
+            assert!(reasons.insert(reason.reason()));
+            assert_eq!(
+                MediaCloseReason::from_code(u64::from(reason.code())),
+                Some(reason)
+            );
+            assert!(reason.reason().len() < 1024, "fits a WebTransport reason");
+        }
+        assert_eq!(MediaCloseReason::from_code(0), None);
+        assert_eq!(MediaCloseReason::from_code(1), None);
     }
 }

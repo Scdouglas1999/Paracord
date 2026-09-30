@@ -3,7 +3,6 @@ import type {
   MediaEngine,
   MediaSessionContext,
   MediaSessionRole,
-  PeerRole,
   VideoFrameTap,
   VideoTapRoute,
   MediaStreamCapabilities,
@@ -58,14 +57,19 @@ import {
   codecLabelFromHeader,
   deriveTrackSsrc,
   isTerminalViewCloseReason,
+  isViewableStream,
+  keyRecipients,
   parseRoomIdFromToken,
   parseUserIdFromToken,
   parseViewKindFromToken,
+  readRosterKind,
   reassembleVideoPayload,
+  samePublishedTrack,
   selectPublishedLayer,
   VideoDecodeGate,
   wrapSenderKeyForRecipients,
   type ReassembledVideoFrame,
+  type RosterKind,
   type VideoReassemblyState,
 } from './engineShared';
 
@@ -311,11 +315,15 @@ interface SessionParticipantWire {
   sessionId?: string;
   videoCapabilities?: SessionParticipantCapabilities['videoCapabilities'];
   mediaPublicKey?: string;
+  /** `member` or `viewer`, stated by the relay; absent means member. */
+  kind?: unknown;
 }
 
 interface SessionParticipantCapabilities {
   userId: string;
   sessionId: string;
+  /** Call member or view session, as the relay marked this roster entry. */
+  kind: RosterKind;
   /** The call key this peer published; see `./mediaKeyring`. */
   mediaPublicKey?: string;
   videoCapabilities: Array<{
@@ -335,7 +343,9 @@ interface SessionParticipantCapabilities {
  * camelCase with the snowflake quoted. Reading it as snake_case yielded an
  * empty id for every participant, so no remote participant state was ever
  * created and no remote audio was ever decoded — a call that connected and
- * stayed silent. Returns `null` for a participant with no usable id.
+ * stayed silent. Returns `null` for a participant with no usable id, and for
+ * one whose `kind` is not `member` or `viewer` (such an entry is refused, never
+ * taken for a member: a member is owed the voice key).
  */
 export function readSessionParticipantWire(
   raw: unknown,
@@ -343,9 +353,15 @@ export function readSessionParticipantWire(
   const participant = (raw ?? undefined) as SessionParticipantWire | undefined;
   const userId = String(participant?.userId ?? '');
   if (!userId) return null;
+  const kind = readRosterKind(participant?.kind);
+  if (!kind) {
+    console.warn('[BrowserMediaEngine] Refusing a roster entry of an unknown kind:', participant?.kind);
+    return null;
+  }
   return {
     userId,
     sessionId: String(participant?.sessionId ?? ''),
+    kind,
     mediaPublicKey: isMediaCallKey(participant?.mediaPublicKey)
       ? participant.mediaPublicKey
       : undefined,
@@ -453,6 +469,9 @@ async function detectBrowserStreamCapabilities(): Promise<MediaStreamCapabilitie
  * Browser media engine using WebTransport + WebCodecs.
  * Always connects via server relay (browsers can't do P2P QUIC).
  */
+/** The tracks this engine publishes, each under its own sender key. */
+type LocalTrackId = 'camera' | 'screen' | 'screen-audio';
+
 /** One encoded frame waiting for the transport, with the sequence it was given. */
 interface QueuedVideoFrame {
   data: EncodedVideoChunkWithMeta;
@@ -465,11 +484,21 @@ export class BrowserMediaEngine implements MediaEngine {
   private role: MediaSessionRole = 'call';
   /** For a view session, what it was issued for (the token's `view` claim). */
   private viewKind: 'watch' | 'ambient' | null = null;
-  /** Tells a call member from a view session in the relay roster. */
-  private peerRoleResolver: ((userId: string) => PeerRole) | null = null;
-  /** Roster peers taken for view sessions when they joined. */
+  /** Roster peers the relay marked `viewer`: watching our stream, not in the call. */
   private viewerPeers = new Set<string>();
+  /**
+   * The voice key (the microphone's frames), and the decrypt side for every
+   * peer key. Viewers never receive this key: it is wrapped to call members
+   * only.
+   */
   private senderKeys = new SenderKeyManager();
+  /**
+   * One sender key per published track (`streamId:trackId`): the camera, the
+   * screen, and the screen's own audio each encrypt under their own key, so a
+   * viewer that is handed the screen's keys holds nothing that opens the voice
+   * or the camera. The epoch counter of each lives as long as the connection.
+   */
+  private trackSenders = new Map<string, SenderKeyManager>();
   /** Call keys for this media session. Minted on connect, destroyed on leave. */
   private keyring = MediaKeyring.create();
 
@@ -655,7 +684,7 @@ export class BrowserMediaEngine implements MediaEngine {
       ]);
     }
 
-    // Generate E2EE sender key
+    // The voice sender key. Each track gets its own when it starts.
     await this.senderKeys.generateKey();
     this.assertOpen();
     await this.syncLocalSenderKeyToDecryptor();
@@ -749,26 +778,6 @@ export class BrowserMediaEngine implements MediaEngine {
     this.setMute(this.muted);
   }
 
-  setPeerRoleResolver(resolver: (userId: string) => PeerRole): void {
-    this.peerRoleResolver = resolver;
-  }
-
-  /** A roster peer's role now; without a resolver everybody is a member. */
-  private peerRole(userId: string): PeerRole {
-    return this.peerRoleResolver?.(userId) ?? 'member';
-  }
-
-  /**
-   * Whether a departing peer was a view session: taken for one when it joined
-   * and still not known as a member. "Member" wins, because a member's leave
-   * must rotate the voice key and a viewer's must not; a member whose voice
-   * state arrived after its media join is a member.
-   */
-  private departedAsViewer(userId: string): boolean {
-    const wasViewer = this.viewerPeers.delete(userId);
-    return wasViewer && this.peerRole(userId) === 'viewer';
-  }
-
   disconnect(): Promise<void> {
     if (this.disposePromise) return this.disposePromise;
     this.disposed = true;
@@ -799,7 +808,7 @@ export class BrowserMediaEngine implements MediaEngine {
     this.sessionParticipantIds.clear();
     this.sessionParticipantCapabilities.clear();
     this.viewerPeers.clear();
-    this.peerRoleResolver = null;
+    this.trackSenders.clear();
     // The call keys die with the call: they protect this conversation and
     // nothing else, so there is nothing to keep.
     this.keyring.dispose();
@@ -888,6 +897,15 @@ export class BrowserMediaEngine implements MediaEngine {
       throw new DOMException('Screen sharing was canceled.', 'AbortError');
     }
     this.screenStream = acquired;
+    // A new share encrypts under new keys, its video and its own audio each
+    // under one of its own.
+    await this.freshLocalTrackKey('screen');
+    await this.freshLocalTrackKey('screen-audio');
+    if (generation !== this.screenGeneration) {
+      acquired.getTracks().forEach(track => track.stop());
+      this.screenStream = null;
+      throw new DOMException('Screen sharing was canceled.', 'AbortError');
+    }
 
     const videoTracks = this.screenStream.getVideoTracks();
     if (videoTracks.length === 0) {
@@ -1809,6 +1827,13 @@ export class BrowserMediaEngine implements MediaEngine {
       throw new DOMException('Camera capture was canceled.', 'AbortError');
     }
     this.videoStream = acquired;
+    // The camera encrypts under a key of its own, new each time it turns on.
+    await this.freshLocalTrackKey('camera');
+    if (generation !== this.cameraGeneration) {
+      acquired.getTracks().forEach(track => track.stop());
+      this.videoStream = null;
+      throw new DOMException('Camera capture was canceled.', 'AbortError');
+    }
     const videoTracks = this.videoStream.getVideoTracks();
     if (videoTracks.length === 0) {
       acquired.getTracks().forEach(track => track.stop());
@@ -2119,6 +2144,8 @@ export class BrowserMediaEngine implements MediaEngine {
     const senderSsrc = _isScreenShare
       ? this.localScreenLayerSsrcs.get(layerIndex) ?? this.localScreenSsrc
       : this.localVideoLayerSsrcs.get(layerIndex) ?? this.localVideoSsrc;
+    // Each track has its own key: the screen's is never the camera's or the voice's.
+    const trackSender = this.localTrackSender(_isScreenShare ? 'screen' : 'camera');
 
     // Keyframes and any frame too large to survive datagram fragmentation ride a
     // reliable unidirectional stream instead (§5), mirroring the native
@@ -2131,6 +2158,7 @@ export class BrowserMediaEngine implements MediaEngine {
         layerIndex,
         senderSsrc,
         metadataBase,
+        trackSender,
       });
       this.assertOpen();
       return;
@@ -2153,7 +2181,7 @@ export class BrowserMediaEngine implements MediaEngine {
         timestamp,
         ssrc: senderSsrc,
         audioLevel: 127,
-        keyEpoch: this.senderKeys.currentEpoch,
+        keyEpoch: trackSender.currentEpoch,
         payloadLength: 0,
         codec: metadataBase.codec,
       };
@@ -2162,10 +2190,10 @@ export class BrowserMediaEngine implements MediaEngine {
       fragmentPayload.set(fragment, metadataBytes.byteLength);
 
       const headerAAD = headerAad(createPacket(header, new Uint8Array(0)));
-      const encrypted = await this.senderKeys.encrypt(
+      const encrypted = await trackSender.encrypt(
         headerAAD,
         fragmentPayload,
-        this.senderKeys.currentEpoch,
+        header.keyEpoch,
         header.sequence,
         senderSsrc,
       );
@@ -2193,10 +2221,11 @@ export class BrowserMediaEngine implements MediaEngine {
       layerIndex: number;
       senderSsrc: number;
       metadataBase: Omit<VideoFrameMetadata, 'fragmentIndex' | 'fragmentCount'>;
+      trackSender: SenderKeyManager;
     },
   ): Promise<void> {
     if (!this.transport) return;
-    const { seq, timestamp, layerIndex, senderSsrc, metadataBase } = opts;
+    const { seq, timestamp, layerIndex, senderSsrc, metadataBase, trackSender } = opts;
 
     const header: MediaHeader = {
       version: PROTOCOL_VERSION,
@@ -2206,7 +2235,7 @@ export class BrowserMediaEngine implements MediaEngine {
       timestamp,
       ssrc: senderSsrc,
       audioLevel: 127,
-      keyEpoch: this.senderKeys.currentEpoch,
+      keyEpoch: trackSender.currentEpoch,
       payloadLength: 0,
       codec: metadataBase.codec,
     };
@@ -2214,10 +2243,10 @@ export class BrowserMediaEngine implements MediaEngine {
     // The AAD is the exact 16 wire header bytes (payloadLength 0), so it is
     // byte-identical to what the receiver reads off the stream and rebinds.
     const headerAAD = headerAad(createPacket(header, new Uint8Array(0)));
-    const ciphertext = await this.senderKeys.encrypt(
+    const ciphertext = await trackSender.encrypt(
       headerAAD,
       encodedData,
-      this.senderKeys.currentEpoch,
+      header.keyEpoch,
       header.sequence,
       senderSsrc,
     );
@@ -2502,60 +2531,72 @@ export class BrowserMediaEngine implements MediaEngine {
       case 'session_state': {
         const participants = Array.isArray(msg.participants) ? msg.participants : [];
         const knownBefore = new Set(this.sessionParticipantIds);
-        const membersBefore = new Set(Array.from(knownBefore).filter((id) => !this.viewerPeers.has(id)));
+        const viewersBefore = new Set(this.viewerPeers);
+        const membersBefore = new Set(Array.from(knownBefore).filter((id) => !viewersBefore.has(id)));
         const desired = new Set<string>();
+        const desiredViewers = new Set<string>();
         const desiredCapabilities = new Map<string, SessionParticipantCapabilities>();
-        const recipientUserIds: string[] = [];
         for (const rawParticipant of participants) {
           const participant = readSessionParticipantWire(rawParticipant);
           if (!participant || participant.userId === String(this.localUserId ?? '')) {
             continue;
           }
-          const userId = participant.userId;
-          desired.add(userId);
-          desiredCapabilities.set(userId, participant);
-          this.keyring.setPeerKey(userId, participant.mediaPublicKey);
-          if (!this.sessionParticipantIds.has(userId) && this.role !== 'view') {
-            // A view session in our roster is somebody watching OUR stream
-            // (the relay shows a member only the viewers of its own stream).
-            // It is not in the call: it has no voice, and the store is not
-            // told about it. (A view session's own roster is its publisher,
-            // whose voice it never receives.)
-            if (this.peerRole(userId) === 'viewer') {
-              this.viewerPeers.add(userId);
-            } else {
-              this.ensureRemoteParticipantState(userId);
-              this.participantJoinCb?.(userId);
-            }
-          }
-          recipientUserIds.push(userId);
+          desired.add(participant.userId);
+          desiredCapabilities.set(participant.userId, participant);
+          // The relay marks a view session watching OUR stream (a member is
+          // shown only the viewers of its own stream). It is not in the call:
+          // it has no voice, and the store is not told about it. (A view
+          // session's own roster is its publisher, whose voice it never
+          // receives.)
+          if (participant.kind === 'viewer') desiredViewers.add(participant.userId);
         }
-        for (const userId of Array.from(this.sessionParticipantIds)) {
-          if (desired.has(userId)) {
-            continue;
-          }
-          const viewer = this.departedAsViewer(userId);
+        const membersNow = Array.from(desired).filter((id) => !desiredViewers.has(id));
+        // Somebody who left, or who stopped being a member (left the call and
+        // now only watches), is gone from the call.
+        for (const userId of membersBefore) {
+          if (membersNow.includes(userId)) continue;
           this.removeRemoteParticipantState(userId);
-          if (!viewer) this.participantLeaveCb?.(userId);
+          if (this.role !== 'view') this.participantLeaveCb?.(userId);
+        }
+        for (const userId of viewersBefore) {
+          if (!desired.has(userId)) this.removeRemoteParticipantState(userId);
+        }
+        for (const [userId, participant] of desiredCapabilities) {
+          this.keyring.setPeerKey(userId, participant.mediaPublicKey);
+        }
+        if (this.role !== 'view') {
+          for (const userId of membersNow) {
+            if (membersBefore.has(userId)) continue;
+            this.ensureRemoteParticipantState(userId);
+            this.participantJoinCb?.(userId);
+          }
         }
         this.sessionParticipantIds = desired;
         this.sessionParticipantCapabilities = desiredCapabilities;
-        this.senderKeys.syncParticipants(this.sessionParticipantIds);
+        this.viewerPeers = desiredViewers;
+        this.senderKeys.syncParticipants(membersNow);
         // A view session sends nothing: it has no key to announce and nothing
         // to rotate. Its roster is its one publisher, whose stream key it
         // waits for.
         if (this.role === 'view') break;
         void this.reconcileActivePublishCodecs().catch(() => {});
-        const initialSync = knownBefore.size === 0;
-        const membersNow = Array.from(desired).filter((id) => !this.viewerPeers.has(id));
-        // Only call members count: a viewer arriving or leaving does not
-        // rotate the voice key (the relay never gives a viewer the voice key).
-        const membershipChanged =
-          membersBefore.size !== membersNow.length ||
-          membersNow.some((userId) => !membersBefore.has(userId));
-        if (membershipChanged && !initialSync) {
-          void this.rotateAndAnnounceLocalSenderKeys(recipientUserIds).catch(error => this.failKeyExchange(error));
-          break;
+        const recipientUserIds = Array.from(desired);
+        if (knownBefore.size > 0) {
+          // A member arriving or leaving rotates every key (the voice and every
+          // track). A viewer leaving rotates only the keys it could open: the
+          // viewable stream's. A viewer arriving rotates nothing.
+          const membershipChanged =
+            membersBefore.size !== membersNow.length ||
+            membersNow.some((userId) => !membersBefore.has(userId));
+          if (membershipChanged) {
+            void this.rotateAndAnnounceLocalSenderKeys(recipientUserIds).catch(error => this.failKeyExchange(error));
+            break;
+          }
+          const viewerDeparted = Array.from(viewersBefore).some((userId) => !desiredViewers.has(userId));
+          if (viewerDeparted) {
+            void this.rotateAndAnnounceViewableTrackKeys(recipientUserIds).catch(error => this.failKeyExchange(error));
+            break;
+          }
         }
         void this.announceAudioSenderKey(recipientUserIds).catch(error => this.failKeyExchange(error));
         void this.announcePublishedTrackKeysForRecipients(recipientUserIds).catch(error => this.failKeyExchange(error));
@@ -2569,36 +2610,38 @@ export class BrowserMediaEngine implements MediaEngine {
         const userId = participant.userId;
         this.keyring.setPeerKey(userId, participant.mediaPublicKey);
         const receipt = participant.sessionId;
-        if (this.sessionParticipantCapabilities.get(userId)?.sessionId === receipt && this.sessionParticipantIds.has(userId)) break;
+        const previous = this.sessionParticipantCapabilities.get(userId);
+        if (previous?.sessionId === receipt && previous.kind === participant.kind && this.sessionParticipantIds.has(userId)) break;
+        const wasMember = this.sessionParticipantIds.has(userId) && !this.viewerPeers.has(userId);
         this.sessionParticipantIds.add(userId);
         this.sessionParticipantCapabilities.set(userId, participant);
+        if (participant.kind === 'viewer') this.viewerPeers.add(userId);
+        else this.viewerPeers.delete(userId);
         if (this.role === 'view') break;
         void this.reconcileActivePublishCodecs().catch(() => {});
-        if (this.peerRole(userId) === 'viewer') {
-          // Somebody started watching our stream. It gets the current stream
-          // key (and the voice key, which the relay withholds from viewers,
-          // so that a member whose voice state is still in flight is not left
-          // unable to hear us); nothing rotates and nobody joined the call.
-          this.viewerPeers.add(userId);
-          void this.announceAudioSenderKey([userId]).catch(error => this.failKeyExchange(error));
+        if (participant.kind === 'viewer') {
+          if (wasMember) {
+            // A member left the call and now only watches our stream: its
+            // departure from the call rotates everything it could open.
+            this.removeRemoteParticipantState(userId);
+            this.keyring.setPeerKey(userId, participant.mediaPublicKey);
+            this.participantLeaveCb?.(userId);
+            this.senderKeys.syncParticipants(this.callMemberIds());
+            void this.rotateAndAnnounceLocalSenderKeys(Array.from(this.sessionParticipantIds))
+              .catch(error => this.failKeyExchange(error));
+            break;
+          }
+          // Somebody started watching our stream. It is owed the viewable
+          // stream's current keys and nothing else: never the voice key,
+          // never the camera's. Nothing rotates and nobody joined the call.
           void this.announcePublishedTrackKeysForRecipients([userId]).catch(error => this.failKeyExchange(error));
           break;
         }
-        this.viewerPeers.delete(userId);
         this.ensureRemoteParticipantState(userId);
         this.participantJoinCb?.(userId);
-        void this.senderKeys
-          .handleParticipantJoin(userId)
-          .catch(() => {})
-          .then(() => {
-            const recipientUserIds = Array.from(this.sessionParticipantIds);
-            return this.syncLocalSenderKeyToDecryptor()
-              .catch(() => {})
-              .then(() => {
-                void this.announceAudioSenderKey(recipientUserIds).catch(error => this.failKeyExchange(error));
-                void this.announcePublishedTrackKeysForRecipients(recipientUserIds).catch(error => this.failKeyExchange(error));
-              });
-          });
+        this.senderKeys.syncParticipants(this.callMemberIds());
+        void this.rotateAndAnnounceLocalSenderKeys(Array.from(this.sessionParticipantIds))
+          .catch(error => this.failKeyExchange(error));
         break;
       }
       case 'session_participant_leave': {
@@ -2613,24 +2656,20 @@ export class BrowserMediaEngine implements MediaEngine {
           break;
         }
         this.sessionParticipantCapabilities.delete(userId);
-        const viewer = this.departedAsViewer(userId);
+        const wasViewer = this.viewerPeers.delete(userId);
         this.removeRemoteParticipantState(userId);
         if (this.role === 'view') break;
         void this.reconcileActivePublishCodecs().catch(() => {});
-        if (viewer) break;
+        const remainingUserIds = Array.from(this.sessionParticipantIds);
+        if (wasViewer) {
+          // A viewer stopped watching: the stream keys it held rotate so it
+          // cannot open what follows. The voice key never reached it.
+          void this.rotateAndAnnounceViewableTrackKeys(remainingUserIds).catch(error => this.failKeyExchange(error));
+          break;
+        }
         this.participantLeaveCb?.(userId);
-        void this.senderKeys
-          .handleParticipantLeave(userId)
-          .catch(() => {})
-          .then(() => {
-            const remainingUserIds = Array.from(this.sessionParticipantIds);
-            return this.syncLocalSenderKeyToDecryptor()
-              .catch(() => {})
-              .then(() => {
-                void this.announceAudioSenderKey(remainingUserIds).catch(error => this.failKeyExchange(error));
-                void this.announcePublishedTrackKeysForRecipients(remainingUserIds).catch(error => this.failKeyExchange(error));
-              });
-          });
+        this.senderKeys.syncParticipants(this.callMemberIds());
+        void this.rotateAndAnnounceLocalSenderKeys(remainingUserIds).catch(error => this.failKeyExchange(error));
         break;
       }
       case 'track_publish': {
@@ -2638,11 +2677,25 @@ export class BrowserMediaEngine implements MediaEngine {
         if (track?.streamId && track.trackId) {
           const key = this.trackKey(track.streamId, track.trackId);
           const publisherUserId = String(track.publisherUserId);
+          const previous = this.publishedTracks.get(key);
           this.publishedTracks.set(key, track);
           for (const layer of track.layers) {
             this.ssrcToUserId.set(layer.ssrc, publisherUserId);
           }
           const existingSub = this.videoSubscriptionFor(publisherUserId, track.trackId);
+          // The relay repeats a track's publish after each key announce for it
+          // (a new viewer, a rotation). Nothing about the track changed, so the
+          // subscription stays exactly as it is: re-subscribing made the relay
+          // replay the stored key, and resetting the decoder froze every
+          // watcher's picture until the next keyframe.
+          if (
+            previous && existingSub
+            && existingSub.streamId === track.streamId && existingSub.trackId === track.trackId
+            && samePublishedTrack(previous, track)
+          ) {
+            void this.applyDeliveredTrackKeys(track);
+            break;
+          }
           const viewport = existingSub ? this.subscriptionViewport(existingSub) ?? null : null;
           // A subscription with sinks but no surface is frame taps only: they
           // sample, so they take the smallest layer.
@@ -2787,6 +2840,8 @@ export class BrowserMediaEngine implements MediaEngine {
         if (!this.keyring.hasPeer(String(recipientUserId))) {
           break;
         }
+        // announceTrackSenderKey wraps only to those this key may reach: a
+        // viewer asking for anything but the viewable stream's key gets nothing.
         void this.announceTrackSenderKey(track, [String(recipientUserId)]).catch(error => this.failKeyExchange(error));
         break;
       }
@@ -3040,29 +3095,74 @@ export class BrowserMediaEngine implements MediaEngine {
     return `stream:${this.localUserId ?? 'browser'}:camera`;
   }
 
-  private localMediaSsrcs(): number[] {
-    return Array.from(
-      new Set([
-        this.localAudioSsrc,
-        this.localVideoSsrc,
-        this.localScreenSsrc,
-        this.localScreenAudioSsrc,
-        ...this.localVideoLayerSsrcs.values(),
-        ...this.localScreenLayerSsrcs.values(),
-      ].filter((ssrc) => Number.isFinite(ssrc) && ssrc > 0)),
-    );
-  }
-
-  private async syncLocalSenderKeyToDecryptor(
-    epoch: number = this.senderKeys.currentEpoch,
-    rawKey?: Uint8Array,
-  ): Promise<void> {
-    const keyMaterial = rawKey ?? await this.senderKeys.exportKey();
-    this.assertOpen();
-    for (const ssrc of this.localMediaSsrcs()) {
-      await this.senderKeys.importPeerKey(ssrc, epoch, keyMaterial);
+  /**
+   * Our own voice key, as a peer key for our own voice SSRC (anything looped
+   * back to us is opened with it). Track keys are synced per track
+   * (`syncLocalTrackKeyToDecryptor`).
+   */
+  private async syncLocalSenderKeyToDecryptor(): Promise<void> {
+    const { rawKey, epoch } = this.senderKeys.currentKey();
+    if (this.localAudioSsrc > 0) {
+      await this.senderKeys.importPeerKey(this.localAudioSsrc, epoch, rawKey);
       this.assertOpen();
     }
+  }
+
+  /** The SSRCs one of our local tracks sends on (every simulcast layer). */
+  private localTrackSsrcs(trackId: LocalTrackId): number[] {
+    const ssrcs = trackId === 'camera'
+      ? [this.localVideoSsrc, ...this.localVideoLayerSsrcs.values()]
+      : trackId === 'screen'
+        ? [this.localScreenSsrc, ...this.localScreenLayerSsrcs.values()]
+        : [this.localScreenAudioSsrc];
+    return Array.from(new Set(ssrcs.filter((ssrc) => Number.isFinite(ssrc) && ssrc > 0)));
+  }
+
+  private localTrackStreamId(trackId: LocalTrackId): string {
+    return trackId === 'camera' ? this.localCameraStreamId() : this.localScreenStreamId();
+  }
+
+  /**
+   * The sender key one of our tracks encrypts under. It exists from the moment
+   * the track starts capturing (`freshLocalTrackKey`); a frame for a track
+   * without one is refused, never sent under another track's key.
+   */
+  private localTrackSender(trackId: LocalTrackId): SenderKeyManager {
+    const sender = this.trackSenders.get(this.trackKey(this.localTrackStreamId(trackId), trackId));
+    if (!sender?.hasLocalKey) {
+      throw new Error(`No sender key for the local ${trackId} track`);
+    }
+    return sender;
+  }
+
+  /**
+   * A new key for one of our tracks as it starts capturing: a new share, or the
+   * camera turned on again, never reuses the previous one's key.
+   */
+  private async freshLocalTrackKey(trackId: LocalTrackId): Promise<void> {
+    const key = this.trackKey(this.localTrackStreamId(trackId), trackId);
+    let sender = this.trackSenders.get(key);
+    if (!sender) {
+      sender = new SenderKeyManager();
+      this.trackSenders.set(key, sender);
+    }
+    await sender.generateKey();
+    this.assertOpen();
+    await this.syncLocalTrackKeyToDecryptor(trackId, sender);
+  }
+
+  /** Our own track key, as a peer key for that track's own SSRCs (self-view). */
+  private async syncLocalTrackKeyToDecryptor(trackId: LocalTrackId, sender: SenderKeyManager): Promise<void> {
+    const { rawKey, epoch } = sender.currentKey();
+    for (const ssrc of this.localTrackSsrcs(trackId)) {
+      await this.senderKeys.importPeerKey(ssrc, epoch, rawKey);
+      this.assertOpen();
+    }
+  }
+
+  /** The roster peers in the call (everyone but the view sessions). */
+  private callMemberIds(): string[] {
+    return Array.from(this.sessionParticipantIds).filter((userId) => !this.viewerPeers.has(userId));
   }
 
   private trackKey(streamId: string, trackId: string): string {
@@ -3318,6 +3418,9 @@ export class BrowserMediaEngine implements MediaEngine {
     if (!this.transport) return;
     const encodedData = new Uint8Array(chunk.byteLength);
     chunk.copyTo(encodedData);
+    // The screen's own audio has its own key: a watcher hears it, and must not
+    // be able to open the voice with it.
+    const trackSender = this.localTrackSender('screen-audio');
     const header: MediaHeader = {
       version: PROTOCOL_VERSION,
       trackType: TrackType.Audio,
@@ -3326,15 +3429,15 @@ export class BrowserMediaEngine implements MediaEngine {
       timestamp: (chunk.timestamp / 1000) >>> 0,
       ssrc: this.localScreenAudioSsrc,
       audioLevel: 127,
-      keyEpoch: this.senderKeys.currentEpoch,
+      keyEpoch: trackSender.currentEpoch,
       payloadLength: 0,
       codec: 0,
     };
     const headerAAD = headerAad(createPacket(header, new Uint8Array(0)));
-    const encrypted = await this.senderKeys.encrypt(
+    const encrypted = await trackSender.encrypt(
       headerAAD,
       encodedData,
-      this.senderKeys.currentEpoch,
+      header.keyEpoch,
       this.screenAudioSequence & 0xffff,
       this.localScreenAudioSsrc,
     );
@@ -3555,16 +3658,23 @@ export class BrowserMediaEngine implements MediaEngine {
     track: PublishedTrackDescriptor,
     recipientUserIds: string[] = this.currentRemoteParticipantIds(),
   ): Promise<void> {
-    if (!this.transport || recipientUserIds.length === 0) {
+    // A track's key goes to call members, and to viewers only when the track
+    // is on the stream they may watch.
+    const recipients = keyRecipients(
+      { kind: 'track', streamId: track.streamId },
+      recipientUserIds,
+      (userId) => this.viewerPeers.has(userId),
+    );
+    if (!this.transport || recipients.length === 0) {
       return;
     }
-    const rawKey = await this.senderKeys.exportKey();
-    this.assertOpen();
+    const sender = this.localTrackSender(track.trackId as LocalTrackId);
+    const { rawKey, epoch } = sender.currentKey();
     const encryptedKeys = await this.buildEncryptedSenderKeyPayloads(
       this.trackKeyScope(track.streamId, track.trackId),
       rawKey,
-      this.senderKeys.currentEpoch,
-      recipientUserIds,
+      epoch,
+      recipients,
     );
     this.assertOpen();
     if (encryptedKeys.length === 0) {
@@ -3575,7 +3685,7 @@ export class BrowserMediaEngine implements MediaEngine {
       stream_id: track.streamId,
       track_id: track.trackId,
       codec: track.codec ?? null,
-      epoch: this.senderKeys.currentEpoch,
+      epoch,
       encrypted_keys: encryptedKeys,
     });
     this.assertOpen();
@@ -3616,27 +3726,25 @@ export class BrowserMediaEngine implements MediaEngine {
     if (recipientUserIds.length === 0) {
       return;
     }
-    const localUserId = String(this.localUserId ?? '');
-    const localTracks = Array.from(this.publishedTracks.values()).filter(
-      (track) => String(track.publisherUserId) === localUserId,
-    );
-    for (const track of localTracks) {
+    for (const track of this.localPublishedTracks()) {
       await this.announceTrackSenderKey(track, recipientUserIds);
       this.assertOpen();
     }
   }
 
   private async announceAudioSenderKey(recipientUserIds: string[]): Promise<void> {
-    if (!this.transport || recipientUserIds.length === 0) {
+    // The voice key goes to call members only: a viewer watches a stream and
+    // never hears the voices, so it is never given the key that opens them.
+    const recipients = keyRecipients({ kind: 'voice' }, recipientUserIds, (userId) => this.viewerPeers.has(userId));
+    if (!this.transport || recipients.length === 0) {
       return;
     }
-    const rawKey = await this.senderKeys.exportKey();
-    this.assertOpen();
+    const { rawKey, epoch } = this.senderKeys.currentKey();
     const encryptedKeys = await this.buildEncryptedSenderKeyPayloads(
       this.audioKeyScope(),
       rawKey,
-      this.senderKeys.currentEpoch,
-      recipientUserIds,
+      epoch,
+      recipients,
     );
     this.assertOpen();
     if (encryptedKeys.length === 0) {
@@ -3644,7 +3752,7 @@ export class BrowserMediaEngine implements MediaEngine {
     }
     await this.transport.sendStreamControl({
       type: 'key_announce',
-      epoch: this.senderKeys.currentEpoch,
+      epoch,
       encrypted_keys: encryptedKeys,
     });
     this.assertOpen();
@@ -3677,15 +3785,50 @@ export class BrowserMediaEngine implements MediaEngine {
     this.assertOpen();
   }
 
+  /**
+   * A call member arrived or left: every key rotates (the voice and each
+   * published track), and each goes to whoever may hold it.
+   */
   private async rotateAndAnnounceLocalSenderKeys(recipientUserIds: string[]): Promise<void> {
-    const rotated = await this.senderKeys.rotateKey();
+    await this.senderKeys.rotateKey();
     this.assertOpen();
-    await this.syncLocalSenderKeyToDecryptor(rotated.newEpoch, rotated.newKey);
-    this.assertOpen();
+    await this.syncLocalSenderKeyToDecryptor();
+    for (const track of this.localPublishedTracks()) {
+      await this.rotateLocalTrackKey(track);
+    }
     await this.announceAudioSenderKey(recipientUserIds);
     this.assertOpen();
     await this.announcePublishedTrackKeysForRecipients(recipientUserIds);
     this.assertOpen();
+  }
+
+  /**
+   * A viewer stopped watching: only the keys a viewer could hold rotate (the
+   * viewable stream's video and its own audio), so the departed viewer cannot
+   * open what follows. The voice and camera keys never reached it and stay.
+   */
+  private async rotateAndAnnounceViewableTrackKeys(recipientUserIds: string[]): Promise<void> {
+    for (const track of this.localPublishedTracks()) {
+      if (!isViewableStream(track.streamId)) continue;
+      await this.rotateLocalTrackKey(track);
+      await this.announceTrackSenderKey(track, recipientUserIds);
+    }
+  }
+
+  private async rotateLocalTrackKey(track: PublishedTrackDescriptor): Promise<void> {
+    const trackId = track.trackId as LocalTrackId;
+    const sender = this.localTrackSender(trackId);
+    await sender.rotateKey();
+    this.assertOpen();
+    await this.syncLocalTrackKeyToDecryptor(trackId, sender);
+  }
+
+  /** Tracks this client publishes right now. */
+  private localPublishedTracks(): PublishedTrackDescriptor[] {
+    const localUserId = String(this.localUserId ?? '');
+    return Array.from(this.publishedTracks.values()).filter(
+      (track) => String(track.publisherUserId) === localUserId,
+    );
   }
 
   // ---------- Playback loop ----------

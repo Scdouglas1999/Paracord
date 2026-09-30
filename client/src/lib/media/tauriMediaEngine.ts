@@ -3,7 +3,6 @@ import type {
   MediaEngine,
   MediaSessionContext,
   MediaSessionRole,
-  PeerRole,
   VideoFrameTap,
   VideoTapRoute,
   MediaStreamCapabilities,
@@ -30,6 +29,10 @@ import {
   parseViewKindFromToken,
   selectPublishedLayer,
   wrapSenderKeyForRecipients,
+  keyRecipients,
+  readRosterKind,
+  samePublishedTrack,
+  type RosterKind,
 } from './engineShared';
 
 import type { Channel as TauriChannel } from '@tauri-apps/api/core';
@@ -79,9 +82,49 @@ type ExportedSenderKey = {
   rawKey: number[];
 };
 
+/**
+ * A roster entry arriving (`media_participant_join`): `{ userId, kind }`, with
+ * the relay's `member` / `viewer` mark. Null for anything else, and for a kind
+ * this client does not know (never taken for a member).
+ */
+function readRosterEvent(payload: unknown): { userId: string; kind: RosterKind } | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const { userId, kind } = payload as { userId?: unknown; kind?: unknown };
+  if (typeof userId !== 'string' || !userId) return null;
+  const parsed = readRosterKind(kind);
+  return parsed ? { userId, kind: parsed } : null;
+}
+
+/** What the native session asks this side to wrap and announce. */
+interface AnnounceRequest {
+  /** The voice key (to call members only). */
+  voice: boolean;
+  /** Track keys (to members, and to viewers for the viewable stream). */
+  tracks: Array<{ streamId: string; trackId: string }>;
+  /** Exactly these peers; null means everybody in the roster owed each key. */
+  recipients: string[] | null;
+}
+
+function readAnnounceRequest(payload: unknown): AnnounceRequest | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const raw = payload as { voice?: unknown; tracks?: unknown; recipients?: unknown };
+  const tracks = Array.isArray(raw.tracks)
+    ? raw.tracks.filter(
+      (track): track is { streamId: string; trackId: string } =>
+        !!track && typeof track.streamId === 'string' && typeof track.trackId === 'string',
+    )
+    : [];
+  const recipients = Array.isArray(raw.recipients)
+    ? raw.recipients.filter((id): id is string => typeof id === 'string' && id.length > 0)
+    : null;
+  return { voice: raw.voice === true, tracks, recipients };
+}
+
 type SessionParticipantCapabilities = {
   userId: string;
   sessionId: string;
+  /** Call member or view session, as the relay marked this roster entry. */
+  kind?: RosterKind;
   /** The call key this peer published; see `./mediaKeyring`. */
   mediaPublicKey?: string;
   videoCapabilities: Array<{
@@ -537,10 +580,12 @@ export class TauriMediaEngine implements MediaEngine {
   private localRoomId: string | null = null;
   /** How this session takes part; see `MediaSessionRole`. */
   private role: MediaSessionRole = 'call';
-  /** Tells a call member from a view session in the relay roster. */
-  private peerRoleResolver: ((userId: string) => PeerRole) | null = null;
-  /** Roster peers taken for view sessions when they joined. */
+  /** Roster peers the relay marked `viewer`: watching our stream, not in the call. */
   private viewerPeers = new Set<string>();
+  /** Roster peers reported to the call as members (joined, not yet left). */
+  private rosterMembers = new Set<string>();
+  /** The call's leave listeners, also told when a member turns into a viewer. */
+  private participantLeaveListeners: Array<(userId: string) => void> = [];
   /** Frame taps per subscription key (`userId:trackId`). */
   private frameTaps = new Map<string, Set<(frame: VideoFrame) => void>>();
   /** The route each subscription key settled on, for taps that join it. */
@@ -690,6 +735,7 @@ export class TauriMediaEngine implements MediaEngine {
       for (const participant of participants) {
         this.sessionParticipantCapabilities.set(participant.userId, participant);
         this.keyring.setPeerKey(participant.userId, participant.mediaPublicKey);
+        if (participant.kind === 'viewer') this.viewerPeers.add(participant.userId);
       }
       // A view session sends nothing, so it has no key to announce.
       if (this.role !== 'view') await this.announceWrappedLocalSenderKeys();
@@ -719,7 +765,8 @@ export class TauriMediaEngine implements MediaEngine {
     this.publishedTracks.clear();
     this.sessionParticipantCapabilities.clear();
     this.viewerPeers.clear();
-    this.peerRoleResolver = null;
+    this.rosterMembers.clear();
+    this.participantLeaveListeners = [];
     this.frameTaps.clear();
     this.subscriptionRoutes.clear();
     for (const waiters of this.routeWaiters.values()) for (const settle of waiters) settle('no-track');
@@ -1045,14 +1092,21 @@ export class TauriMediaEngine implements MediaEngine {
   onParticipantJoin(cb: (userId: string) => void): void {
     const p = tauriReady.then(async () => {
       const unlisten = await this.listenOwned('media_participant_join', (event) => {
-        const userId = event.payload as string;
-        // A view session watching our stream is in the relay roster but not
-        // in the call; the store is not told about it.
-        if (this.role !== 'view' && this.peerRole(userId) === 'viewer') {
+        const entry = readRosterEvent(event.payload);
+        if (!entry) return;
+        const { userId, kind } = entry;
+        if (kind === 'viewer') {
+          // A view session watching our stream is in the relay roster but not
+          // in the call; the store is not told about it. A member that left
+          // the call and now only watches has left the call.
+          const wasMember = this.rosterMembers.has(userId);
+          this.rosterMembers.delete(userId);
           this.viewerPeers.add(userId);
+          if (wasMember && this.role !== 'view') this.participantLeaveListeners.forEach((leave) => leave(userId));
           return;
         }
         this.viewerPeers.delete(userId);
+        this.rosterMembers.add(userId);
         cb(userId);
       });
       this.unlisteners.push(unlisten);
@@ -1070,10 +1124,15 @@ export class TauriMediaEngine implements MediaEngine {
   }
 
   onParticipantLeave(cb: (userId: string) => void): void {
+    this.participantLeaveListeners.push(cb);
     const p = tauriReady.then(async () => {
       const unlisten = await this.listenOwned('media_participant_leave', (event) => {
         const departed = this.matchParticipantDeparture(event.payload);
-        if (departed && !this.departedAsViewer(departed)) cb(departed);
+        if (!departed) return;
+        this.viewerPeers.delete(departed);
+        // A viewer was never in the call, so its leaving is not reported.
+        if (!this.rosterMembers.delete(departed)) return;
+        cb(departed);
       });
       this.unlisteners.push(unlisten);
     });
@@ -1098,24 +1157,6 @@ export class TauriMediaEngine implements MediaEngine {
     this.role = 'call';
   }
 
-  setPeerRoleResolver(resolver: (userId: string) => PeerRole): void {
-    this.peerRoleResolver = resolver;
-  }
-
-  private peerRole(userId: string): PeerRole {
-    return this.peerRoleResolver?.(userId) ?? 'member';
-  }
-
-  /**
-   * Whether a departing peer was a view session: taken for one when it joined
-   * and still not known as a member ("member" wins; see the browser engine).
-   * The native side rotates its own keys on every roster change; only the
-   * store's view of the call is decided here.
-   */
-  private departedAsViewer(userId: string): boolean {
-    const wasViewer = this.viewerPeers.delete(userId);
-    return wasViewer && this.peerRole(userId) === 'viewer';
-  }
 
   // getVolume is retained for interface compatibility. Stream audio is decoded
   // and mixed natively (contract C4); volume is applied via setSourceVolume →
@@ -1494,6 +1535,7 @@ export class TauriMediaEngine implements MediaEngine {
     const publishUnlisten = await this.listenOwned('media_track_publish', (event) => {
       const track = event.payload as PublishedTrackDescriptor | null;
       if (!track?.streamId || !track.trackId) return;
+      const previous = this.publishedTracks.get(`${track.streamId}:${track.trackId}`);
       this.publishedTracks.set(`${track.streamId}:${track.trackId}`, track);
       this.notifyPublishedVideoTrackWaiters(track);
       if (String(track.publisherUserId) === String(this.localUserId ?? '')) {
@@ -1506,6 +1548,15 @@ export class TauriMediaEngine implements MediaEngine {
           ? this.videoSubscriptions.get(userId)
           : undefined);
       if (!existing) {
+        return;
+      }
+      // The relay repeats a remote track's publish after each key announce for
+      // it; an unchanged track keeps its subscription as it is (see the
+      // browser engine's `track_publish`).
+      if (
+        previous && existing.streamId === track.streamId && existing.trackId === track.trackId
+        && samePublishedTrack(previous, track)
+      ) {
         return;
       }
       // Don't overwrite a camera subscription with a screen publish (or vice versa)
@@ -1618,30 +1669,34 @@ export class TauriMediaEngine implements MediaEngine {
         )
         .catch(error => this.failKeyExchange(error));
     });
-    const participantJoinUnlisten = await this.listenOwned('media_participant_join', (event) => {
-      const userId = String(event.payload ?? '');
-      if (!userId || userId === String(this.localUserId ?? '') || this.role === 'view') {
-        return;
-      }
-      void this.announceWrappedLocalSenderKeys([userId]).catch(error => this.failKeyExchange(error));
+    // The native session decides, per roster change, which keys rotate and
+    // which must go out to whom (a member's arrival or departure: every key; a
+    // viewer's departure: the viewable stream's; a viewer's arrival: the
+    // viewable stream's current keys to it alone). It rotates first and then
+    // asks for the announcement; this side holds the call keys and wraps.
+    const announceUnlisten = await this.listenOwned('media_announce_sender_keys', (event) => {
+      if (this.role === 'view') return;
+      const request = readAnnounceRequest(event.payload);
+      if (!request) return;
+      void this.announceRequestedSenderKeys(request).catch(error => this.failKeyExchange(error));
     });
     const participantJoinDetailsUnlisten = await this.listenOwned('media_participant_join_details', (event) => {
       const payload = event.payload as SessionParticipantCapabilities | null;
       if (!payload?.userId || payload.userId === String(this.localUserId ?? '')) {
         return;
       }
-      this.sessionParticipantCapabilities.set(payload.userId, payload);
+      const kind = readRosterKind(payload.kind);
+      if (!kind) return;
+      this.sessionParticipantCapabilities.set(payload.userId, { ...payload, kind });
+      if (kind === 'viewer') this.viewerPeers.add(payload.userId);
+      else this.viewerPeers.delete(payload.userId);
       this.keyring.setPeerKey(payload.userId, payload.mediaPublicKey);
     });
     const participantLeaveUnlisten = await this.listenOwned('media_participant_leave', (event) => {
       const userId = this.matchParticipantDeparture(event.payload);
       if (!userId) return;
-      if (userId) {
-        this.sessionParticipantCapabilities.delete(userId);
-        this.keyring.removePeer(userId);
-      }
-      if (this.role === 'view') return;
-      void this.announceWrappedLocalSenderKeys().catch(error => this.failKeyExchange(error));
+      this.sessionParticipantCapabilities.delete(userId);
+      this.keyring.removePeer(userId);
     });
     const requestStreamKeyUnlisten = await this.listenOwned('media_request_stream_key', (event) => {
       const payload = event.payload as {
@@ -1662,7 +1717,7 @@ export class TauriMediaEngine implements MediaEngine {
     this.unlisteners.push(
       audioKeyUnlisten,
       streamKeyUnlisten,
-      participantJoinUnlisten,
+      announceUnlisten,
       participantJoinDetailsUnlisten,
       participantLeaveUnlisten,
       requestStreamKeyUnlisten,
@@ -2472,12 +2527,43 @@ export class TauriMediaEngine implements MediaEngine {
     return `stream:${streamId}:${trackId}`;
   }
 
+  /**
+   * The native roster now, by id. Each entry's kind (member or viewer) is
+   * recorded as it arrives, so the recipient filters below always know it.
+   */
   private async listSessionParticipants(): Promise<string[]> {
     await tauriReady;
-    const participants = await this.invokeOwned('media_list_session_participants');
-    return ((participants as string[] | null) ?? []).filter(
-      (userId) => userId && userId !== String(this.localUserId ?? ''),
-    );
+    const participants = (await this.invokeOwned('media_list_session_participant_capabilities')) as
+      | SessionParticipantCapabilities[]
+      | null;
+    const ids: string[] = [];
+    for (const participant of participants ?? []) {
+      if (!participant?.userId || participant.userId === String(this.localUserId ?? '')) continue;
+      const kind = readRosterKind(participant.kind);
+      // An entry of a kind this client does not know is never wrapped for.
+      if (!kind) continue;
+      if (kind === 'viewer') this.viewerPeers.add(participant.userId);
+      else this.viewerPeers.delete(participant.userId);
+      ids.push(participant.userId);
+    }
+    return ids;
+  }
+
+  private isViewerPeer(userId: string): boolean {
+    return this.viewerPeers.has(userId);
+  }
+
+  /** Announce what the native session asked for (see `media_announce_sender_keys`). */
+  private async announceRequestedSenderKeys(request: AnnounceRequest): Promise<void> {
+    const recipients = request.recipients ?? (await this.listSessionParticipants());
+    if (!recipients.length) return;
+    if (request.voice) await this.announceWrappedAudioSenderKey(recipients);
+    for (const { streamId, trackId } of request.tracks) {
+      const track = this.publishedTracks.get(`${streamId}:${trackId}`);
+      // Not published to this side yet: its publish event announces it.
+      if (!track || String(track.publisherUserId) !== String(this.localUserId ?? '')) continue;
+      await this.announceWrappedTrackKey(track, recipients);
+    }
   }
 
   private async buildWrappedRecipients(
@@ -2502,7 +2588,12 @@ export class TauriMediaEngine implements MediaEngine {
   private async announceWrappedAudioSenderKey(
     recipientUserIds?: string[],
   ): Promise<void> {
-    const recipients = recipientUserIds ?? (await this.listSessionParticipants());
+    // The voice key goes to call members only, never to a viewer.
+    const recipients = keyRecipients(
+      { kind: 'voice' },
+      recipientUserIds ?? (await this.listSessionParticipants()),
+      (userId) => this.isViewerPeer(userId),
+    );
     if (!recipients.length) {
       return;
     }
@@ -2525,7 +2616,13 @@ export class TauriMediaEngine implements MediaEngine {
     track: PublishedTrackDescriptor,
     recipientUserIds?: string[],
   ): Promise<void> {
-    const recipients = recipientUserIds ?? (await this.listSessionParticipants());
+    // A track key goes to call members, and to viewers only for the stream
+    // they may watch.
+    const recipients = keyRecipients(
+      { kind: 'track', streamId: track.streamId },
+      recipientUserIds ?? (await this.listSessionParticipants()),
+      (userId) => this.isViewerPeer(userId),
+    );
     if (!recipients.length) {
       return;
     }

@@ -1,5 +1,7 @@
 // WebTransport connection manager for browser clients.
 
+import { parseRelayCloseReason, relayCloseText } from '../engineShared';
+
 export interface ControlMessage {
   type: string;
   [key: string]: unknown;
@@ -225,12 +227,15 @@ export class WebTransportManager {
       void this.readIncomingStreamControls(generation);
       void this.readIncomingUniStreams(generation);
 
-      // Handle connection close. The relay's own words (a close reason) are
-      // kept: "superseded by a newer media connection" and "view session
-      // ended" decide whether this transport may dial back at all.
+      // Handle connection close. The relay closes a session with a
+      // CLOSE_WEBTRANSPORT_SESSION capsule whose code and words say why
+      // (superseded, ended, revoked), and `closed` resolves with them. They
+      // are kept: they decide whether this transport may dial back at all.
       transport.closed
         .then((info?: WebTransportCloseInfo) => {
-          const reason = typeof info?.reason === 'string' && info.reason ? info.reason : 'Connection closed gracefully';
+          const text = typeof info?.reason === 'string' ? info.reason : '';
+          const relayReason = parseRelayCloseReason(text, info?.closeCode);
+          const reason = text || (relayReason ? relayCloseText(relayReason) : 'Connection closed gracefully');
           this.handleClose(reason, generation);
         })
         .catch((err: Error) => {

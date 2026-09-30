@@ -438,6 +438,21 @@ export class SenderKeyManager {
     return this.localEpoch;
   }
 
+  /** Whether a local sender key has been generated. */
+  get hasLocalKey(): boolean {
+    return this.localKey !== null;
+  }
+
+  /**
+   * The local key's bytes and epoch, read together. Reading them apart across
+   * an `await` let a rotation land in between and label one epoch's key with
+   * the next epoch's number.
+   */
+  currentKey(): { rawKey: Uint8Array; epoch: number } {
+    if (!this.localRawKey) throw new Error('No local sender key generated');
+    return { rawKey: this.localRawKey.slice(), epoch: this.localEpoch };
+  }
+
   /**
    * Advance and return the send-side rollover counter for a stream.
    *

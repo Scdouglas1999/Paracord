@@ -68,6 +68,9 @@ pub struct SessionParticipantCapabilities {
     /// The call key this peer published, carried straight through to the
     /// renderer, which owns the wrapping.
     pub media_public_key: Option<String>,
+    /// `member` or `viewer`, as the relay marked the roster entry: the
+    /// renderer wraps the voice key to members only.
+    pub kind: paracord_transport::control::SessionParticipantKind,
 }
 
 #[derive(Debug, Serialize)]
@@ -1261,6 +1264,7 @@ pub async fn media_get_stream_diagnostics(
                 session_id: participant.session_id.clone(),
                 video_capabilities: participant.video_capabilities.clone(),
                 media_public_key: participant.media_public_key.clone(),
+                kind: participant.kind,
             })
             .collect::<Vec<_>>();
         return Ok(StreamDiagnostics {
@@ -1359,6 +1363,7 @@ pub async fn media_list_session_participant_capabilities(
             session_id: participant.session_id.clone(),
             video_capabilities: participant.video_capabilities.clone(),
             media_public_key: participant.media_public_key.clone(),
+            kind: participant.kind,
         })
         .collect();
     Ok(participants)

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { OperationContext } from '../lib/operationContext';
-import type { MediaEngine, PeerRole } from '../lib/media/mediaEngine';
+import type { MediaEngine } from '../lib/media/mediaEngine';
 
 // The Glass media contract of the voice store (docs/design/glass-g6-checkpoint.md):
 // listen, the in-place upgrade, watch (with and without the call), ambient,
@@ -53,7 +53,6 @@ function fakeEngine() {
     lost?: (reason: string) => void;
     join?: (id: string) => void;
     leave?: (id: string) => void;
-    resolver?: (id: string) => PeerRole;
   } = {};
   const releaseAudio = vi.fn();
   const mock = {
@@ -62,7 +61,6 @@ function fakeEngine() {
     onParticipantLeave: (cb: (id: string) => void) => { callbacks.leave = cb; },
     onSpeakingChange: vi.fn(),
     onTransportLost: (cb: (reason: string) => void) => { callbacks.lost = cb; },
-    setPeerRoleResolver: (resolver: (id: string) => PeerRole) => { callbacks.resolver = resolver; },
     startMicrophone: vi.fn(async () => {}),
     subscribeScreenShareAudio: vi.fn(() => releaseAudio),
     setSourceVolume: vi.fn(),
@@ -302,6 +300,17 @@ describe('watch', () => {
     expect(fixture.factory).toHaveBeenCalledTimes(1);
   });
 
+  it('stays ended, as revoked, when the viewer may no longer see the channel', async () => {
+    const [view] = queueEngines(1);
+    await useVoiceStore.getState().startWatch(WATCH);
+    // The relay's close reason, as either transport reports it.
+    view.callbacks.lost?.('Closed by the relay: media access revoked');
+    await flush();
+    expect(useVoiceStore.getState().watchView).toMatchObject({ phase: 'ended', endReason: 'revoked', error: null, engine: null });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(fixture.startView).toHaveBeenCalledTimes(1);
+  });
+
   it('stays ended when the view session ends, and fails without retry on any other drop', async () => {
     const [first] = queueEngines(1);
     await useVoiceStore.getState().startWatch(WATCH);
@@ -534,26 +543,14 @@ describe('the Glass voice-state fields', () => {
   });
 });
 
-describe('telling viewers from members in the relay roster', () => {
-  it('is a member with a voice state in the channel, a viewer without, and a member once seen', async () => {
+describe('viewers in the relay roster', () => {
+  it('are told apart by the engine from the relay\'s mark: the store only hears about members', async () => {
     const [call] = queueEngines(1);
-    useVoiceStore.getState().loadVoiceStates('guild', [{
-      user_id: '7', channel_id: 'lounge', guild_id: 'guild', session_id: 'r7',
-      self_stream: true, self_mute: false, self_deaf: false, self_video: false, mute: false, deaf: false, suppress: false,
-    }], SCOPE);
     await useVoiceStore.getState().joinChannel('lounge', 'guild');
-    const resolve = call.callbacks.resolver!;
-    expect(resolve('7')).toBe('member');
-    expect(resolve('400')).toBe('viewer');
-    useVoiceStore.getState().handleVoiceStateUpdate({
-      user_id: '500', channel_id: 'lounge', guild_id: 'guild', session_id: 'r5',
-      self_stream: false, self_mute: false, self_deaf: false, self_video: false, mute: false, deaf: false, suppress: false,
-    }, SCOPE);
-    useVoiceStore.getState().handleVoiceStateUpdate({
-      user_id: '500', channel_id: undefined, session_id: 'r5',
-      self_stream: false, self_mute: false, self_deaf: false, self_video: false, mute: false, deaf: false, suppress: false,
-    }, SCOPE);
-    // Its voice state is gone before its media leave arrives: still a member.
-    expect(resolve('500')).toBe('member');
+    // The engine reports members only (it reads `kind` off the roster); the
+    // store never infers who is watching from voice states any more.
+    expect('setPeerRoleResolver' in call.mock).toBe(false);
+    call.callbacks.join?.('300');
+    expect(useVoiceStore.getState().participants.get('300')?.channel_id).toBe('lounge');
   });
 });

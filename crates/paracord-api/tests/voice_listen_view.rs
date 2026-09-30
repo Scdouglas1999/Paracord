@@ -841,6 +841,59 @@ async fn removing_a_member_ends_their_view_of_the_server() -> anyhow::Result<()>
     Ok(())
 }
 
+/// A view is re-checked after it starts: a viewer who loses VIEW_CHANNEL
+/// (either kind), or CONNECT (a watch), has the view ended; a viewer who keeps
+/// what the view needs keeps the view.
+#[tokio::test]
+async fn losing_access_mid_view_ends_the_view() -> anyhow::Result<()> {
+    let ctx = Ctx::new().await?;
+    let streamer_session = ctx.joined(&ctx.owner_token, None).await?;
+    assert_eq!(
+        ctx.start_stream(&ctx.owner_token, &streamer_session)
+            .await?,
+        StatusCode::OK
+    );
+    let (hidden, hidden_id) = ctx.member("hidden-later").await?;
+    let (no_connect_watch, no_connect_watch_id) = ctx.member("watch-noconnect").await?;
+    let (no_connect_ambient, no_connect_ambient_id) = ctx.member("ambient-noconnect").await?;
+    let (kept, kept_id) = ctx.member("kept").await?;
+    for (token, kind) in [
+        (&hidden, "watch"),
+        (&no_connect_watch, "watch"),
+        (&no_connect_ambient, "ambient"),
+        (&kept, "watch"),
+    ] {
+        let (status, body) = ctx.view(token, kind, ctx.owner_id).await?;
+        assert_eq!(status, StatusCode::OK, "{kind}: {body}");
+    }
+    let revoke = paracord_api::routes::voice::revoke_views_without_access;
+    assert_eq!(revoke(&ctx.app.state).await, 0, "everybody may still view");
+
+    ctx.overwrite_member(ctx.voice_id, hidden_id, Permissions::VIEW_CHANNEL)
+        .await?;
+    ctx.overwrite_member(ctx.voice_id, no_connect_watch_id, Permissions::CONNECT)
+        .await?;
+    ctx.overwrite_member(ctx.voice_id, no_connect_ambient_id, Permissions::CONNECT)
+        .await?;
+    assert_eq!(revoke(&ctx.app.state).await, 2);
+    let rooms = &ctx.native().rooms;
+    assert!(
+        rooms.view_for_user(hidden_id).is_none(),
+        "lost VIEW_CHANNEL"
+    );
+    assert!(
+        rooms.view_for_user(no_connect_watch_id).is_none(),
+        "a watch needs CONNECT"
+    );
+    assert!(
+        rooms.view_for_user(no_connect_ambient_id).is_some(),
+        "ambient needs only VIEW_CHANNEL"
+    );
+    assert!(rooms.view_for_user(kept_id).is_some());
+    assert_eq!(revoke(&ctx.app.state).await, 0, "nothing left to end");
+    Ok(())
+}
+
 #[tokio::test]
 async fn view_sessions_need_native_media() -> anyhow::Result<()> {
     let ctx = Ctx::with_native_media(false).await?;

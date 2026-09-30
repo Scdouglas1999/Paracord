@@ -3,6 +3,11 @@ import type { PublishedLayerDescriptor, PublishedTrackDescriptor } from './media
 import { encodeVideoFrameMetadata } from './transport/protocol';
 import {
   deriveTrackSsrc,
+  isTerminalViewCloseReason,
+  isViewableStream,
+  keyRecipients,
+  parseRelayCloseReason,
+  readRosterKind,
   reassembleVideoPayload,
   selectPublishedLayer,
   VideoDecodeGate,
@@ -344,5 +349,40 @@ describe('VideoDecodeGate', () => {
     gate.admit(key('k0', 0, 0));
     gate.reset();
     expect(gate.admit(delta('d1', 0, 100)).needKeyframe).toBe(true);
+  });
+});
+
+describe('who a key may reach (G6b)', () => {
+  const isViewer = (id: string) => id === '400';
+  it('gives the voice key to members only', () => {
+    expect(keyRecipients({ kind: 'voice' }, ['300', '400'], isViewer)).toEqual(['300']);
+  });
+  it('gives the screen share\'s keys to its viewers too, and a camera\'s to members only', () => {
+    expect(keyRecipients({ kind: 'track', streamId: 'stream:100:screen' }, ['300', '400'], isViewer)).toEqual(['300', '400']);
+    expect(keyRecipients({ kind: 'track', streamId: 'stream:100:camera' }, ['300', '400'], isViewer)).toEqual(['300']);
+    expect(isViewableStream('stream:native-session:screen')).toBe(true);
+    expect(isViewableStream('stream:100:screen-backup')).toBe(false);
+  });
+  it('reads the roster mark, defaulting to member and refusing anything else', () => {
+    expect(readRosterKind(undefined)).toBe('member');
+    expect(readRosterKind('viewer')).toBe('viewer');
+    expect(readRosterKind('member')).toBe('member');
+    expect(readRosterKind('admin')).toBeNull();
+    expect(readRosterKind(1)).toBeNull();
+  });
+});
+
+describe('the relay\'s close reasons', () => {
+  it('reads each from its code or its words, and nothing else', () => {
+    expect(parseRelayCloseReason('', 4001)).toBe('superseded');
+    expect(parseRelayCloseReason('', 4002)).toBe('ended');
+    expect(parseRelayCloseReason('', 4003)).toBe('revoked');
+    expect(parseRelayCloseReason('superseded by a newer media connection')).toBe('superseded');
+    expect(parseRelayCloseReason('Closed by the relay: view session ended')).toBe('ended');
+    expect(parseRelayCloseReason('Closed by the relay: media access revoked')).toBe('revoked');
+    expect(parseRelayCloseReason('Connection lost.', 0)).toBeNull();
+    expect(parseRelayCloseReason('Native voice connection lost: timed out')).toBeNull();
+    expect(isTerminalViewCloseReason('media access revoked')).toBe(true);
+    expect(isTerminalViewCloseReason('Connection lost')).toBe(false);
   });
 });

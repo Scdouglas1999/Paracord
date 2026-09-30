@@ -132,11 +132,12 @@ describe('BrowserMediaEngine key exchange across joins and rejoins', () => {
       session_id: 'receipt-vincent-1',
     });
 
-    // This engine's audio key reaches the rejoiner under its *new* call key.
+    // This engine's audio key reaches the rejoiner under its *new* call key:
+    // the rejoin rotates the voice key and announces it to the new call key.
+    // (The roster's own announce was wrapped to the call key Vincent held in
+    // that roster, before the rejoin was known.)
     vincentAgain.setPeerKey(SELF, internals.keyring.publicKey);
-    await until(() =>
-      sent.some((message) => message.type === 'key_announce' && Array.isArray(message.encrypted_keys)),
-    );
+    await until(() => sent.filter((message) => message.type === 'key_announce').length >= 2);
     const announces = sent.filter((message) => message.type === 'key_announce');
     const last = announces[announces.length - 1] as { encrypted_keys: Array<[string, number[]]> | Record<string, number[]> };
     const entries = Array.isArray(last.encrypted_keys) ? last.encrypted_keys : Object.entries(last.encrypted_keys);
@@ -165,13 +166,17 @@ describe('BrowserMediaEngine key exchange across joins and rejoins', () => {
       session_id: 'receipt-vincent',
     });
 
-    await until(() => sent.some((message) => message.type === 'key_announce'));
+    await until(() => sent.filter((message) => message.type === 'key_announce').length >= 2);
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(lost).not.toHaveBeenCalled();
-    for (const announce of sent.filter((message) => message.type === 'key_announce')) {
-      const recipients = (announce.encrypted_keys as Array<[string, number[]]>).map(([recipient]) => recipient);
-      expect(recipients).toEqual([brendanId]);
-    }
+    // The roster's announce was wrapped for whoever was in the call when it
+    // started; Vincent's leave then rotated the voice key, and the new key
+    // went to Brendan alone.
+    const announces = sent.filter((message) => message.type === 'key_announce');
+    const last = announces[announces.length - 1];
+    const recipients = (last.encrypted_keys as Array<[string, number[]]>).map(([recipient]) => recipient);
+    expect(recipients).toEqual([brendanId]);
+    expect(last.epoch as number).toBeGreaterThan(announces[0].epoch as number);
     await engine.disconnect();
   });
 

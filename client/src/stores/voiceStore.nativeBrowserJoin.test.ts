@@ -45,7 +45,6 @@ function engine() {
   const transport = { connect: vi.fn(async () => {}), disconnect: vi.fn(async () => {}), setMute: vi.fn(), setDeaf: vi.fn(),
     onParticipantJoin: (cb: (id: string) => void) => { callbacks.join = cb; }, onParticipantLeave: vi.fn(),
     onSpeakingChange: vi.fn(), onTransportLost: (cb: (reason: string) => void) => { callbacks.lost = cb; },
-    setPeerRoleResolver: vi.fn(),
   };
   return { transport: transport as unknown as MediaEngine, connect: transport.connect, disconnect: transport.disconnect, callbacks };
 }
@@ -143,6 +142,29 @@ describe('voiceStore call ownership across deferred boundaries', () => {
       channel_id: 'one', session_id: 'receipt-7', username: 'vincent', self_stream: true, self_video: true, self_mute: true,
     });
     expect(useVoiceStore.getState().watchedStreamerId).toBe('7');
+  });
+
+  it('keeps everybody else\'s name and sharing through a leave and a cold join', async () => {
+    // Leaving drops the call's participants, while the channel's voice states
+    // (the server's) stay. The engine of the next join reports everybody
+    // already in the call before that call is committed; seating them from
+    // nothing wrote nameless placeholders over what the server said, so the
+    // pill read "Unknown user" and lost Watch.
+    const first = engine(); const second = engine();
+    fixture.factory.mockResolvedValueOnce(first.transport).mockResolvedValueOnce(second.transport);
+    useVoiceStore.getState().loadVoiceStates('guild', [{
+      user_id: '7', channel_id: 'one', guild_id: 'guild', session_id: 'receipt-7', username: 'vincent',
+      self_stream: true, self_video: false, self_mute: false, self_deaf: false, mute: false, deaf: false, suppress: false,
+    }], { serverId: 'A', userId: '1' });
+    await useVoiceStore.getState().joinChannel('one', 'guild');
+    await useVoiceStore.getState().leaveChannel(); await flush();
+    expect(useVoiceStore.getState().participants.has('7')).toBe(false);
+
+    second.connect.mockImplementation(async () => { second.callbacks.join?.('7'); });
+    await useVoiceStore.getState().joinChannel('one', 'guild'); await flush();
+    const expected = { channel_id: 'one', session_id: 'receipt-7', username: 'vincent', self_stream: true };
+    expect(useVoiceStore.getState().participants.get('7')).toMatchObject(expected);
+    expect(useVoiceStore.getState().channelParticipants.get('one')?.find((m) => m.user_id === '7')).toMatchObject(expected);
   });
 
   it('seats a member the gateway has not reported yet', async () => {

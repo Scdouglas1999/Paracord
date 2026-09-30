@@ -19,15 +19,6 @@ export class CallSession {
    * it `joined` (same receipt, same media connection).
    */
   mode: VoiceMode = 'joined';
-  /**
-   * Everyone the gateway has reported in this call's channel since the call
-   * began. The relay roster cannot tell a call member from a view session
-   * (someone watching this client's stream), and a member always has a voice
-   * state; so a roster peer seen here is a member, one never seen is a viewer.
-   * Only ever grows during a call: "member" wins, because a member's leave
-   * must rotate the voice key and a viewer's need not.
-   */
-  readonly seenMembers = new Set<string>();
   /** Settles once the server has released this membership (or it had none). */
   membershipReleased: Promise<void> | null = null;
   joinPromise: Promise<void> | null = null;

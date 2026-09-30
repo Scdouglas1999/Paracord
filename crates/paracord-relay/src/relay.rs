@@ -13,7 +13,8 @@ use tokio::time::MissedTickBehavior;
 use tracing::{debug, error, info, warn};
 
 use paracord_transport::control::{
-    is_valid_media_public_key, ControlMessage, SessionParticipant, TrackKind,
+    is_valid_media_public_key, ControlMessage, MediaCloseReason, SessionParticipant,
+    SessionParticipantKind, TrackKind,
 };
 use paracord_transport::protocol::{
     MediaHeader, TrackType, VideoFrameMetadata, HEADER_SIZE, MAX_STREAM_FRAME_SIZE,
@@ -545,6 +546,9 @@ pub struct ConnectionHandle {
     lease: Arc<ConnectionLease>,
     transport: MediaTransport,
     counters: Arc<MediaCounters>,
+    /// Why the relay closed this connection, once it has (the first reason
+    /// wins, as it does on the wire).
+    relay_close: Arc<std::sync::OnceLock<MediaCloseReason>>,
 }
 
 impl ConnectionHandle {
@@ -557,6 +561,7 @@ impl ConnectionHandle {
             lease: Arc::new(ConnectionLease::default()),
             transport: MediaTransport::Quic(conn),
             counters: Arc::new(MediaCounters::default()),
+            relay_close: Arc::new(std::sync::OnceLock::new()),
         }
     }
 
@@ -586,6 +591,7 @@ impl ConnectionHandle {
                 keyframe_streams: Arc::new(Mutex::new(BridgedKeyframeStreams::default())),
             },
             counters: Arc::new(MediaCounters::default()),
+            relay_close: Arc::new(std::sync::OnceLock::new()),
         }
     }
 
@@ -726,6 +732,34 @@ impl ConnectionHandle {
                 }
             }
         }
+    }
+
+    /// Close this connection because of something the relay decided, telling
+    /// the client which ([`MediaCloseReason`]).
+    ///
+    /// A raw QUIC client reads the code and words from the connection close. A
+    /// browser cannot (Chromium reports a QUIC application close as
+    /// "Connection lost."), so a WebTransport session is closed with a
+    /// `CLOSE_WEBTRANSPORT_SESSION` capsule carrying them, which
+    /// `WebTransport.closed` resolves with; the connection is closed once the
+    /// browser has it (see `WebTransportStreams::close_session`). The first
+    /// reason wins.
+    pub fn close_with(&self, reason: MediaCloseReason) {
+        let _ = self.relay_close.set(reason);
+        let code = quinn::VarInt::from_u32(reason.code());
+        match &self.transport {
+            MediaTransport::Quic(conn) => conn.close(code, reason.reason().as_bytes()),
+            MediaTransport::Bridged { control, .. } => {
+                if let Some(streams) = control {
+                    streams.close_session(reason.code(), reason.reason());
+                }
+            }
+        }
+    }
+
+    /// Why the relay closed this connection, if it did.
+    pub fn relay_close_reason(&self) -> Option<MediaCloseReason> {
+        self.relay_close.get().copied()
     }
 
     /// QUIC connection used for transport statistics (raw or bridged control path).
@@ -1130,7 +1164,7 @@ impl RelayForwarder {
                 room_id = %previous.room_id,
                 "relay: closing superseded media connection"
             );
-            previous.close("superseded by a newer media connection");
+            previous.close_with(MediaCloseReason::Superseded);
         }
         self.invalidate_connection_cache();
     }
@@ -1275,7 +1309,7 @@ impl RelayForwarder {
         for slot in [ConnectionSlot::Call, ConnectionSlot::View] {
             let key = (user_id, slot);
             if let Some((_, handle)) = self.connections.remove(&key) {
-                handle.close("evicted");
+                handle.close_with(MediaCloseReason::Revoked);
                 info!(user_id, ?slot, "relay: participant force-disconnected");
             }
             self.active_sessions.remove(&key);
@@ -1299,13 +1333,33 @@ impl RelayForwarder {
     /// Close `user_id`'s view connection when it carries `session_id` (the
     /// view it served has ended). The connection's own tasks then retire it.
     pub fn close_view_connection(&self, user_id: i64, session_id: &str) {
+        self.close_view_connection_with(user_id, session_id, MediaCloseReason::Ended);
+    }
+
+    /// Close `user_id`'s view connection for `session_id` because a newer
+    /// view of the same account replaced that view (one view per account: a
+    /// second device's watch takes the slot).
+    pub fn supersede_view_connection(&self, user_id: i64, session_id: &str) {
+        self.close_view_connection_with(user_id, session_id, MediaCloseReason::Superseded);
+    }
+
+    /// Close `user_id`'s view connection for `session_id` because its viewer
+    /// may no longer see the channel (the view has been ended).
+    pub fn revoke_view_connection(&self, user_id: i64, session_id: &str) {
+        self.close_view_connection_with(user_id, session_id, MediaCloseReason::Revoked);
+    }
+
+    /// [`Self::close_view_connection`], saying why: `Ended` for a view that
+    /// was stopped or carried over, `Revoked` for one its viewer may no longer
+    /// see.
+    fn close_view_connection_with(&self, user_id: i64, session_id: &str, reason: MediaCloseReason) {
         if let Some(handle) = self
             .connections
             .get(&(user_id, ConnectionSlot::View))
             .filter(|handle| handle.session_id == session_id)
             .map(|handle| handle.clone())
         {
-            handle.close("view session ended");
+            handle.close_with(reason);
         }
     }
 
@@ -1353,7 +1407,7 @@ impl RelayForwarder {
             .collect();
         for handle in view_connections {
             if !self.is_current_participant(&handle) {
-                handle.close("view session ended");
+                handle.close_with(MediaCloseReason::Ended);
             }
         }
         ended
@@ -1542,7 +1596,7 @@ impl RelayForwarder {
                     // than leave it open and silent. A call connection is
                     // closed by its client or superseded by its replacement.
                     if handle.slot() == ConnectionSlot::View && forwarder.owns_connection(&handle) {
-                        handle.close("view session ended");
+                        handle.close_with(MediaCloseReason::Ended);
                     }
                     break;
                 }
@@ -2263,6 +2317,7 @@ impl RelayForwarder {
                             session_id: active_session.session_id.clone(),
                             video_capabilities: active_session.video_capabilities.clone(),
                             media_public_key: active_session.media_public_key.clone(),
+                            kind: roster_kind(active_session.view),
                         })
                     })
                     .collect::<Vec<_>>();
@@ -2288,6 +2343,7 @@ impl RelayForwarder {
                             session_id,
                             video_capabilities,
                             media_public_key,
+                            kind: roster_kind(view),
                         },
                     },
                 )
@@ -3587,6 +3643,17 @@ fn roster_visible(
         (Some(_), Some(_)) => false,
         (None, Some(subject_view)) => subject_view.publisher_user_id == recipient_id,
         (None, None) => true,
+    }
+}
+
+/// The roster marker for a connection: a view session is a `viewer`, anything
+/// else (joined or listening in) a `member`. Every client reads this instead of
+/// guessing from voice states, and wraps its voice key to members only.
+fn roster_kind(view: Option<ViewTarget>) -> SessionParticipantKind {
+    if view.is_some() {
+        SessionParticipantKind::Viewer
+    } else {
+        SessionParticipantKind::Member
     }
 }
 
@@ -6542,5 +6609,188 @@ mod tests {
         assert!(mgr.view_for_user(8).is_none());
         assert!(mgr.view_for_user(9).is_some(), "a connected view stays");
         assert_eq!(mgr.watcher_counts(1, 100).get(&1), Some(&1));
+    }
+
+    // ── G6b: roster marker and close reasons ────────────────────────────────
+
+    /// The next control message the relay sent on this client connection.
+    async fn next_control(client: &quinn::Connection) -> ControlMessage {
+        let (_send, mut recv) = tokio::time::timeout(Duration::from_secs(5), client.accept_bi())
+            .await
+            .expect("a control stream within 5 s")
+            .expect("the connection is open");
+        let bytes = recv.read_to_end(256 * 1024).await.unwrap();
+        ControlMessage::decode(&bytes).unwrap().unwrap().0
+    }
+
+    /// The relay marks every roster entry it sends: view sessions watching a
+    /// member's stream arrive in that member's roster as `viewer`, call members
+    /// as `member`, both in the snapshot and in a later join.
+    #[tokio::test]
+    async fn the_roster_marks_viewers_and_members() {
+        let mgr = MediaRoomManager::new();
+        for (uid, session) in [(1, "s1"), (2, "s2")] {
+            mgr.join_room(
+                1,
+                100,
+                crate::participant::MediaParticipant::new(uid, session.into()),
+            )
+            .unwrap();
+        }
+        for (uid, session) in [(8, "view-8"), (9, "view-9")] {
+            mgr.join_view(
+                1,
+                100,
+                crate::participant::MediaParticipant::viewer(uid, session.into(), watch_target(1)),
+            )
+            .unwrap();
+        }
+        let room_id = mgr.get_or_create_room(1, 100);
+        let forwarder = Arc::new(RelayForwarder::new(
+            Arc::new(mgr),
+            Arc::new(SpeakerDetector::new()),
+        ));
+        let join = |session: &str| ControlMessage::SessionJoin {
+            room_id: room_id.clone(),
+            session_id: session.to_string(),
+            video_capabilities: Vec::new(),
+            media_public_key: None,
+        };
+        add_bridged_session(&forwarder, 2, &room_id, "s2");
+        add_bridged_session(&forwarder, 9, &room_id, "view-9");
+        add_bridged_session(&forwarder, 8, &room_id, "view-8");
+        for (uid, session) in [(2, "s2"), (9, "view-9")] {
+            let handle = forwarder
+                .connection_for_test(uid)
+                .or_else(|| forwarder.view_connection_for_test(uid))
+                .unwrap();
+            forwarder
+                .handle_control_message(&handle, join(session))
+                .await;
+        }
+
+        // The publisher connects on a real QUIC connection and reads its roster.
+        let (server, client) = quinn_pair().await;
+        let publisher = ConnectionHandle::new(1, room_id.clone(), "s1".into(), server);
+        forwarder.add_connection(publisher.clone());
+        forwarder
+            .handle_control_message(&publisher, join("s1"))
+            .await;
+        let ControlMessage::SessionState { participants } = next_control(&client).await else {
+            panic!("the first message is the roster");
+        };
+        let mut kinds: Vec<(i64, SessionParticipantKind)> = participants
+            .iter()
+            .map(|participant| (participant.user_id, participant.kind))
+            .collect();
+        kinds.sort_unstable_by_key(|(uid, _)| *uid);
+        assert_eq!(
+            kinds,
+            vec![
+                (1, SessionParticipantKind::Member),
+                (2, SessionParticipantKind::Member),
+                (9, SessionParticipantKind::Viewer),
+            ],
+            "the roster names the publisher itself, the member, and the viewer of its stream"
+        );
+
+        // A viewer that arrives later is announced as one.
+        let late = forwarder.view_connection_for_test(8).unwrap();
+        forwarder
+            .handle_control_message(&late, join("view-8"))
+            .await;
+        let announced = loop {
+            if let ControlMessage::SessionParticipantJoin { participant } =
+                next_control(&client).await
+            {
+                break participant;
+            }
+        };
+        assert_eq!(announced.user_id, 8);
+        assert_eq!(announced.kind, SessionParticipantKind::Viewer);
+    }
+
+    /// A replaced connection is closed as superseded, an ended view as ended,
+    /// and an evicted account as revoked, each with its own code and words on
+    /// the wire.
+    #[tokio::test]
+    async fn the_relay_says_why_it_closed_a_connection() {
+        let mgr = MediaRoomManager::new();
+        mgr.join_room(
+            1,
+            100,
+            crate::participant::MediaParticipant::new(1, "s1".into()),
+        )
+        .unwrap();
+        mgr.join_view(
+            1,
+            100,
+            crate::participant::MediaParticipant::viewer(9, "view-9".into(), watch_target(1)),
+        )
+        .unwrap();
+        let room_id = mgr.get_or_create_room(1, 100);
+        let forwarder = Arc::new(RelayForwarder::new(
+            Arc::new(mgr),
+            Arc::new(SpeakerDetector::new()),
+        ));
+        let close_of = |closed: quinn::ConnectionError| match closed {
+            quinn::ConnectionError::ApplicationClosed(close) => (
+                close.error_code.into_inner(),
+                String::from_utf8(close.reason.to_vec()).unwrap(),
+            ),
+            other => panic!("expected an application close, got {other:?}"),
+        };
+
+        // Superseded: the same view receipt connects again.
+        let (first_server, first_client) = quinn_pair().await;
+        let first = ConnectionHandle::new(9, room_id.clone(), "view-9".into(), first_server);
+        forwarder.add_connection(first.clone());
+        let (second_server, second_client) = quinn_pair().await;
+        let second = ConnectionHandle::new(9, room_id.clone(), "view-9".into(), second_server);
+        forwarder.add_connection(second.clone());
+        assert_eq!(
+            close_of(first_client.closed().await),
+            (4001, "superseded by a newer media connection".into())
+        );
+        assert_eq!(
+            first.relay_close_reason(),
+            Some(MediaCloseReason::Superseded)
+        );
+
+        // Superseded too: another device's view replaced this one at the API.
+        let (third_server, third_client) = quinn_pair().await;
+        let third = ConnectionHandle::new(9, room_id.clone(), "view-9".into(), third_server);
+        forwarder.add_connection(third.clone());
+        assert_eq!(
+            close_of(second_client.closed().await),
+            (4001, "superseded by a newer media connection".into())
+        );
+        forwarder.supersede_view_connection(9, "view-9");
+        assert_eq!(
+            close_of(third_client.closed().await),
+            (4001, "superseded by a newer media connection".into())
+        );
+        let (second_server, second_client) = quinn_pair().await;
+        let second = ConnectionHandle::new(9, room_id.clone(), "view-9".into(), second_server);
+        forwarder.add_connection(second.clone());
+
+        // Ended: the view is stopped.
+        forwarder.close_view_connection(9, "view-9");
+        assert_eq!(
+            close_of(second_client.closed().await),
+            (4002, "view session ended".into())
+        );
+        assert_eq!(second.relay_close_reason(), Some(MediaCloseReason::Ended));
+
+        // Revoked: the account is removed from the server.
+        let (call_server, call_client) = quinn_pair().await;
+        let call = ConnectionHandle::new(1, room_id.clone(), "s1".into(), call_server);
+        forwarder.add_connection(call.clone());
+        forwarder.disconnect_user(1);
+        assert_eq!(
+            close_of(call_client.closed().await),
+            (4003, "media access revoked".into())
+        );
+        assert_eq!(call.relay_close_reason(), Some(MediaCloseReason::Revoked));
     }
 }

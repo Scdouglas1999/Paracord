@@ -11,7 +11,9 @@ use std::sync::Arc;
 use paracord_transport::admission::{
     AdmissionRefusal, PreAuthAdmission, MAX_PENDING_CONNECTIONS, MAX_PENDING_CONNECTIONS_PER_IP,
 };
-use paracord_transport::control::{ControlMessage, SessionParticipant, TrackKind};
+use paracord_transport::control::{
+    ControlMessage, SessionParticipant, SessionParticipantKind, TrackKind,
+};
 use paracord_transport::protocol::MAX_IDENTIFIER_LEN;
 use paracord_transport::stream::{
     PublishedLayer, PublishedTrack, StreamId, TrackId, TrackSubscription, VideoCodec,
@@ -97,6 +99,7 @@ fn oversized_control_identifiers_are_rejected() {
                 session_id: huge.clone(),
                 video_capabilities: Vec::new(),
                 media_public_key: None,
+                kind: SessionParticipantKind::Member,
             }],
         },
         ControlMessage::SessionParticipantJoin {
@@ -105,6 +108,7 @@ fn oversized_control_identifiers_are_rejected() {
                 session_id: huge.clone(),
                 video_capabilities: Vec::new(),
                 media_public_key: None,
+                kind: SessionParticipantKind::Member,
             },
         },
     ];

@@ -811,12 +811,27 @@ struct MediaTokenClaims {
     #[serde(default)]
     view: Option<String>,
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RemoteSessionParticipant {
     pub session_id: String,
     pub video_capabilities: Vec<VideoCodecCapability>,
     /// The hex X25519 call key this peer published for this call.
     pub media_public_key: Option<String>,
+    /// A call member, or a view session watching this client's stream, as the
+    /// relay marked the roster entry. Decides which keys it is owed and what
+    /// its arrival and departure rotate.
+    pub kind: paracord_transport::control::SessionParticipantKind,
+}
+
+impl RemoteSessionParticipant {
+    pub fn from_wire(participant: &paracord_transport::control::SessionParticipant) -> Self {
+        Self {
+            session_id: participant.session_id.clone(),
+            video_capabilities: participant.video_capabilities.clone(),
+            media_public_key: participant.media_public_key.clone(),
+            kind: participant.kind,
+        }
+    }
 }
 
 /// The media-token half of the bridge contract.

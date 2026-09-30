@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   buildStreamFrameMessage,
   buildTrackSubscriptionWire,
@@ -123,10 +123,23 @@ describe('readSessionParticipantWire (media control plane)', () => {
     ).toEqual({
       userId: '357608638640033792',
       sessionId: 'receipt-1',
+      kind: 'member',
+      mediaPublicKey: undefined,
       videoCapabilities: [
         { codec: 'vp9', encode: true, decode: true, encodeHardware: false, decodeHardware: false },
       ],
     });
+  });
+
+  it('reads the relay\'s member/viewer mark, and refuses a kind it does not know', () => {
+    expect(readSessionParticipantWire({ userId: '9', sessionId: 'v', kind: 'viewer' })?.kind).toBe('viewer');
+    expect(readSessionParticipantWire({ userId: '2', sessionId: 's', kind: 'member' })?.kind).toBe('member');
+    // A relay without view sessions sends no mark: every entry is a member.
+    expect(readSessionParticipantWire({ userId: '2', sessionId: 's' })?.kind).toBe('member');
+    // Never taken for a member (a member is owed the voice key).
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(readSessionParticipantWire({ userId: '9', sessionId: 'v', kind: 'lurker' })).toBeNull();
+    warn.mockRestore();
   });
 
   it('keeps a quoted snowflake exact', () => {
