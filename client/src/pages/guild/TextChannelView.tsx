@@ -1,6 +1,6 @@
 import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
 import { entityScopeKey } from '../../lib/serverScope';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { MessageSquare } from 'lucide-react';
 import { useNavigate } from 'react-router';
 import { MessageList } from '../../components/message/MessageList';
@@ -9,6 +9,7 @@ import { useMemberStore } from '../../stores/memberStore';
 import type { Channel, Message } from '../../types';
 import { displayName } from '../../lib/displayName';
 import { ErrorBoundary } from '../../components/ErrorBoundary';
+import { ConversationPane, type ConversationSubject } from '../../components/glass/conversation';
 
 interface TextChannelViewProps {
   guildId: string | undefined;
@@ -16,15 +17,21 @@ interface TextChannelViewProps {
   channelName: string;
   channel: Channel | undefined;
   channels: Channel[];
+  /** What the conversation pane's header describes. */
+  subject: ConversationSubject;
+  /** Strips above the timeline from the page (a pinned score, the entry gates). */
+  notices?: ReactNode;
 }
 
 /**
- * ChatView body for a text/thread channel (layout-spec §1 — full-width single
- * pane). All message internals are reused untouched: `MessageList` + composer.
+ * A text or thread channel as a Glass conversation (docs/glass-spec.md §3.2):
+ * it renders into the `ConversationPane` slot — header, notices, the timeline
+ * (`MessageList`) and the message box (`MessageInput`) — and the shell floats
+ * that pane on the room. The message internals are reused untouched.
  *
- * The right-hand surfaces (search / pins / members / economy / threads) are no
- * longer docked here — they live in the shell-owned `ContextPanel`, driven by
- * `uiStore.contextPanelMode` and toggled from `TopBar`.
+ * The side surfaces (search / pins / threads / media / economy) are not docked
+ * here; the shell's sheets slot hosts them, driven by
+ * `uiStore.contextPanelMode` and toggled from the header.
  *
  * **A thread view is about the thread** (docs/lantern-stage-spec.md §7.4). It
  * used to be about the thread's *parent*: the body rendered the parent room's
@@ -46,6 +53,8 @@ function OwnedTextChannelView({
   channelName,
   channel,
   channels,
+  subject,
+  notices,
 }: TextChannelViewProps) {
   const navigate = useNavigate();
   const scope = useCurrentAccountScope();
@@ -73,56 +82,64 @@ function OwnedTextChannelView({
     return member ? displayName(member.user, member.nick) : null;
   }, [channel?.owner_id, isThread, members]);
 
+  // A single malformed message must degrade this panel, not the app.
   const timeline = (
-    <>
-      {/* A single malformed message must degrade this panel, not the app. */}
-      <ErrorBoundary variant="section" label="the message feed">
-        <MessageList
-          channelId={channelId}
-          onReply={(msg: Message) =>
-            setReplyingTo({
-              id: msg.id,
-              author: displayName(msg.author),
-              content: msg.content || '',
-            })
-          }
-        />
-      </ErrorBoundary>
-      <MessageInput
+    <ErrorBoundary variant="section" label="the message feed">
+      <MessageList
         channelId={channelId}
-        guildId={guildId}
-        channelName={channelName}
-        replyingTo={replyingTo}
-        onCancelReply={() => setReplyingTo(null)}
+        onReply={(msg: Message) =>
+          setReplyingTo({
+            id: msg.id,
+            author: displayName(msg.author),
+            content: msg.content || '',
+          })
+        }
       />
-    </>
+    </ErrorBoundary>
+  );
+
+  const threadOrigin = isThread && (
+    <div className="panel-divider flex shrink-0 flex-wrap items-center gap-x-1.5 gap-y-1 border-b border-border-subtle px-4 py-2.5">
+      <MessageSquare size={13} aria-hidden className="shrink-0 text-text-muted" />
+      <span className="text-meta text-text-muted">A thread in</span>
+      {parentChannel && guildId ? (
+        <button
+          type="button"
+          onClick={() => navigate(`/app/guilds/${guildId}/channels/${parentChannel.id}`)}
+          className="pc-focusable rounded-[var(--radius-control)] px-1 text-label text-text-secondary transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:text-text-primary"
+        >
+          #{parentChannel.name || 'unknown'}
+        </button>
+      ) : (
+        <span className="text-label text-text-secondary">a channel you can no longer see</span>
+      )}
+      {starterName && (
+        <span className="truncate text-meta text-text-muted">· started by {starterName}</span>
+      )}
+    </div>
   );
 
   return (
-    <div className="flex min-h-0 flex-1">
-      <div className="flex min-w-0 flex-1 flex-col">
-        {isThread && (
-          <div className="panel-divider flex shrink-0 flex-wrap items-center gap-x-1.5 gap-y-1 border-b border-border-subtle px-4 py-2.5">
-            <MessageSquare size={13} aria-hidden className="shrink-0 text-text-muted" />
-            <span className="text-meta text-text-muted">A thread in</span>
-            {parentChannel && guildId ? (
-              <button
-                type="button"
-                onClick={() => navigate(`/app/guilds/${guildId}/channels/${parentChannel.id}`)}
-                className="pc-focusable rounded-[var(--radius-control)] px-1 text-label text-text-secondary transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:text-text-primary"
-              >
-                #{parentChannel.name || 'unknown'}
-              </button>
-            ) : (
-              <span className="text-label text-text-secondary">a channel you can no longer see</span>
-            )}
-            {starterName && (
-              <span className="truncate text-meta text-text-muted">· started by {starterName}</span>
-            )}
-          </div>
-        )}
-        {timeline}
-      </div>
-    </div>
+    <ConversationPane
+      subject={subject}
+      notices={
+        notices != null || threadOrigin ? (
+          <>
+            {notices}
+            {threadOrigin}
+          </>
+        ) : undefined
+      }
+      timeline={timeline}
+      composer={
+        <MessageInput
+          channelId={channelId}
+          guildId={guildId}
+          channelName={channelName}
+          replyingTo={replyingTo}
+          onCancelReply={() => setReplyingTo(null)}
+        />
+      }
+    />
   );
 }

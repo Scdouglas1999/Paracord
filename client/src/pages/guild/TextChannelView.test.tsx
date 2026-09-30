@@ -29,6 +29,11 @@ vi.mock('../../components/message/MessageInput', () => ({
     <div data-testid="composer">{channelId}</div>
   ),
 }));
+// The conversation pane's header is the Lantern TopBar until WP-G11; this suite
+// is about the body, so the header is reduced to the title it was handed.
+vi.mock('../../components/layout/TopBar', () => ({
+  TopBar: ({ channelName }: { channelName?: string }) => <div data-testid="header">{channelName}</div>,
+}));
 
 const SCOPE = { serverId: '__local__', userId: 'user-1' };
 
@@ -63,6 +68,12 @@ function renderThread(channel: Channel = THREAD, channels: Channel[] = [PARENT, 
               channelName={channel.name ?? ''}
               channel={channel}
               channels={channels}
+              subject={{
+                kind: 'channel',
+                guildId: 'g1',
+                channelId: channel.id,
+                channelName: channel.name ?? '',
+              }}
             />
           }
         />
@@ -118,5 +129,14 @@ describe('a thread view', () => {
     renderThread(PARENT, [PARENT]);
     expect(screen.queryByText('A thread in')).not.toBeInTheDocument();
     expect(screen.getByTestId('timeline')).toHaveTextContent('2001');
+  });
+
+  it('renders into the conversation pane: header, timeline and message box in their regions', () => {
+    const { container } = renderThread(PARENT, [PARENT]);
+    const pane = container.querySelector('.glass-conversation');
+    expect(pane).not.toBeNull();
+    expect(pane!.querySelector('.glass-conversation__header')).toHaveTextContent('design-notes');
+    expect(pane!.querySelector('.glass-conversation__timeline')).toContainElement(screen.getByTestId('timeline'));
+    expect(pane!.querySelector('.glass-conversation__composer')).toContainElement(screen.getByTestId('composer'));
   });
 });

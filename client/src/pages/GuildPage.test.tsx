@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
@@ -23,8 +24,10 @@ vi.mock('./guild/VoiceStageChannel', () => ({
   VoiceStageChannel: () => <div data-testid="voice-stage" />,
 }));
 
+// The text view renders the page's notices (welcome, onboarding gate, pinned
+// score) into its conversation pane, so the stub keeps them.
 vi.mock('./guild/TextChannelView', () => ({
-  TextChannelView: () => <div data-testid="text-view" />,
+  TextChannelView: ({ notices }: { notices?: ReactNode }) => <div data-testid="text-view">{notices}</div>,
 }));
 
 vi.mock('../components/guild/GuildWelcomeScreen', () => ({

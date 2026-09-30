@@ -1,10 +1,11 @@
 import { act, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router';
+import { Link, MemoryRouter, Route, Routes } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppShell } from './AppShell';
 import { useUIStore } from '../stores/uiStore';
 import { useVoiceStore } from '../stores/voiceStore';
+import { useGlassStore } from '../stores/glassStore';
 import { useMobile } from '../hooks/useMobile';
 
 const fetchRelationshipsMock = vi.hoisted(() => vi.fn());
@@ -38,6 +39,12 @@ vi.mock('./SettingsPage', () => ({
 vi.mock('./GuildSettingsPage', () => ({
   GuildSettingsPage: () => <div data-testid="guild-settings-page" />,
 }));
+vi.mock('../components/voice/StreamViewer', () => ({
+  StreamViewer: ({ streamerId }: { streamerId: string }) => <div data-testid="stream-viewer">{streamerId}</div>,
+}));
+vi.mock('../components/onboarding/LayoutTour', () => ({ LayoutTour: () => null }));
+vi.mock('../components/motion/MotionDirector', () => ({ MotionDirector: () => null }));
+vi.mock('../components/voice/together/TogetherHost', () => ({ TogetherHost: () => null }));
 
 // Side-effectful hooks that touch window/DOM — no-op them so the frame renders.
 vi.mock('../hooks/useKeyboardNavigation', () => ({ useKeyboardNavigation: () => {} }));
@@ -56,6 +63,13 @@ vi.mock('../stores/relationshipStore', () => ({
 }));
 
 const mockedUseMobile = vi.mocked(useMobile);
+
+/** The compact frame: under the 860px places breakpoint, above a phone. */
+function useCompactWindow() {
+  mockedUseMobile.mockImplementation((maxWidth?: number) => maxWidth === 860);
+}
+
+const LOUNGE = { guildId: 'g1', channelId: 'lounge', streamerId: 'vincent' };
 
 function renderShell(initialPath = '/app') {
   return render(
@@ -85,17 +99,124 @@ beforeEach(() => {
     guildSettingsId: null,
   });
   useVoiceStore.setState({ connected: false, channelId: null });
+  useGlassStore.getState().reset();
 });
 
 describe('AppShell', () => {
-  it('renders the Unified Sidebar and the routed page body in the Outlet', () => {
-    renderShell();
-    expect(screen.getByTestId('unified-sidebar')).toBeInTheDocument();
+  it('floats the places pane and the conversation pane on the room, with the page in the conversation', () => {
+    const { container } = renderShell();
+    expect(container.querySelector('.glass-room-backdrop')).not.toBeNull();
+
+    const frame = container.querySelector('.glass-frame');
+    expect(frame).toHaveAttribute('data-layout', 'wide');
+    expect(frame).toHaveAttribute('data-stage', 'none');
+
+    const places = container.querySelector('.glass-frame__places');
+    expect(places).toHaveClass('glass-pane');
+    expect(places).toContainElement(screen.getByTestId('unified-sidebar'));
+
+    const main = screen.getByRole('main');
+    expect(main).toHaveAttribute('id', 'main-content');
+    expect(main).toHaveClass('glass-pane', 'glass-frame__conversation');
+    expect(main).toContainElement(screen.getByTestId('outlet-content'));
     expect(screen.getByTestId('outlet-content')).toHaveTextContent('home body');
+
     // Persistent chrome is always mounted.
+    expect(screen.getByRole('link', { name: 'Skip to content' })).toHaveAttribute('href', '#main-content');
     expect(screen.getByTestId('command-palette')).toBeInTheDocument();
     expect(screen.getByTestId('confirm-dialog')).toBeInTheDocument();
     expect(screen.getByTestId('interaction-modal-host')).toBeInTheDocument();
+    // The phone's bar and drawer are not part of the wide frame, and places
+    // is a pane there, so there is nothing to open it with.
+    expect(screen.queryByTestId('mobile-bottom-nav')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Show places' })).not.toBeInTheDocument();
+  });
+
+  it('keeps places out of the compact frame and opens it as an overlay that a route change closes', async () => {
+    useCompactWindow();
+    const { container } = render(
+      <MemoryRouter initialEntries={['/app/guilds/g1/channels/c1']}>
+        <Routes>
+          <Route path="/app" element={<AppShell />}>
+            <Route path="dms/:channelId" element={<div data-testid="outlet-content">dm body</div>} />
+            <Route
+              path="guilds/:guildId/channels/:channelId"
+              element={<Link to="/app/dms/d1">open a DM</Link>}
+            />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(container.querySelector('.glass-frame')).toHaveAttribute('data-layout', 'compact');
+    expect(container.querySelector('.glass-frame__places')).toBeNull();
+    expect(screen.queryByRole('dialog', { name: 'Places' })).not.toBeInTheDocument();
+
+    // A page without a conversation header still gets the places button.
+    act(() => screen.getByRole('button', { name: 'Show places' }).click());
+    expect(useGlassStore.getState().placesOverlayOpen).toBe(true);
+    const overlay = screen.getByRole('dialog', { name: 'Places' });
+    expect(overlay).toContainElement(screen.getByTestId('unified-sidebar'));
+
+    // Picking somewhere to go closes the overlay.
+    act(() => screen.getByRole('link', { name: 'open a DM' }).click());
+    expect(screen.getByTestId('outlet-content')).toHaveTextContent('dm body');
+    await waitFor(() => expect(useGlassStore.getState().placesOverlayOpen).toBe(false));
+  });
+
+  it('closes the places overlay when the window grows past the compact frame', async () => {
+    useCompactWindow();
+    const view = renderShell();
+    act(() => useGlassStore.getState().setPlacesOverlayOpen(true));
+    expect(useGlassStore.getState().placesOverlayOpen).toBe(true);
+
+    mockedUseMobile.mockImplementation(() => false);
+    view.rerender(
+      <MemoryRouter initialEntries={['/app']}>
+        <Routes>
+          <Route path="/app" element={<AppShell />}>
+            <Route index element={<div data-testid="outlet-content">home body</div>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(useGlassStore.getState().placesOverlayOpen).toBe(false));
+  });
+
+  it('puts the stage beside the conversation, and steps the conversation aside while browsing', () => {
+    const { container } = renderShell('/app/guilds/g1/channels/c1');
+    act(() => useGlassStore.getState().openStage(LOUNGE));
+
+    const frame = container.querySelector('.glass-frame');
+    expect(frame).toHaveAttribute('data-stage', 'side');
+    expect(screen.getByRole('region', { name: 'Stage' })).toContainElement(screen.getByTestId('stream-viewer'));
+    expect(screen.getByTestId('stream-viewer')).toHaveTextContent('vincent');
+    // Side by side: no places pane, the conversation stays and keeps working.
+    expect(container.querySelector('.glass-frame__places')).toBeNull();
+    expect(screen.getByRole('main')).not.toHaveAttribute('inert');
+
+    act(() => useGlassStore.getState().toggleBrowse());
+    expect(container.querySelector('.glass-frame__places')).toHaveAttribute('data-presentation', 'browse');
+    const main = container.querySelector('#main-content');
+    expect(main).toHaveAttribute('data-away', 'true');
+    expect(main).toHaveAttribute('inert');
+    // Still mounted: a draft or a scroll position survives browsing.
+    expect(screen.getByTestId('outlet-content')).toBeInTheDocument();
+
+    act(() => useGlassStore.getState().closeStage());
+    expect(screen.queryByRole('region', { name: 'Stage' })).not.toBeInTheDocument();
+    expect(container.querySelector('.glass-frame__places')).toHaveAttribute('data-presentation', 'pane');
+    expect(screen.getByRole('main')).not.toHaveAttribute('inert');
+  });
+
+  it('hides the conversation in theater only when the chat is hidden', () => {
+    const { container } = renderShell('/app/guilds/g1/channels/c1');
+    act(() => useGlassStore.getState().openStage(LOUNGE, 'theater'));
+    expect(container.querySelector('.glass-frame')).toHaveAttribute('data-stage', 'theater');
+    expect(screen.getByRole('main')).not.toHaveAttribute('inert');
+
+    act(() => useGlassStore.getState().toggleChatHidden());
+    expect(container.querySelector('#main-content')).toHaveAttribute('inert');
+    expect(container.querySelector('.glass-frame')).toHaveAttribute('data-chat-hidden', 'true');
   });
 
   it('renders the ContextPanel only when contextPanelMode is set', () => {

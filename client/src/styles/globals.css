@@ -48,9 +48,10 @@
 @import './glass.css' layer(components);
 @import './primitives.css' layer(components);
 @import './layout.css';
-/* The §1.8 looks' structure. After layout.css and unlayered: a look has to be
-   able to clear a `bg-bg-base` utility, and an unlayered rule outranks the
-   utility layer. Every rule in it is scoped to one look. */
+/* The Glass frame's geometry (WP-G7). Unlayered like layout.css: its
+   transitional adapters must beat the utilities on the Lantern components
+   they fit into the frame. */
+@import './glass-layout.css';
 @import './components.css' layer(components);
 @import './sports.css' layer(components);
 @import './daily-word.css' layer(components);

@@ -6,7 +6,6 @@ import { entityScopeKey as memberScopeKey } from '../lib/serverScope';
 import { useCurrentUser, useCurrentAccountScope } from '../hooks/useCurrentUser';
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
-import { TopBar } from '../components/layout/TopBar';
 import { ForumView } from '../components/channel/ForumView';
 import { useChannelStore } from '../stores/channelStore';
 import { useGuildStore } from '../stores/guildStore';
@@ -27,6 +26,7 @@ import { GuildLoadingScreen, ChannelNotFoundScreen, ChannelLoadErrorScreen } fro
 import { VoiceStageChannel } from './guild/VoiceStageChannel';
 import { TextChannelView } from './guild/TextChannelView';
 import { ChannelAmbient } from '../components/sports/ChannelPin';
+import { ConversationPane, type ConversationSubject } from '../components/glass/conversation';
 export function GuildPage() {
   const { guildId, channelId } = useParams();
   const navigate = useNavigate();
@@ -152,20 +152,6 @@ export function GuildPage() {
     return <ChannelNotFoundScreen guildId={guildId} />;
   }
 
-  /* The Stage carries its own header (spec §7.2: room name, building and
-     duration, the here-now strip, Invite / Layout / more), so the app's top bar
-     would be a second title for the same room. Every other channel type keeps
-     it. */
-  const header = !isVoiceLike && (
-    <TopBar
-      channelName={channelName}
-      channelTopic={channel?.topic}
-      isVoice={isVoiceLike}
-      isForum={isForum}
-      guildId={guildId}
-      guildName={currentGuild?.name}
-    />
-  );
   const entryChrome = (
     <>
       {showWelcome && currentGuild && (
@@ -179,36 +165,14 @@ export function GuildPage() {
     </>
   );
 
-  // A text room is a full-width PLATE on the street (spec §7.4): its header,
-  // timeline and composer are one surface sitting on the 12px gutter. The voice
-  // route is WP3's Stage plate and the forum keeps its own shell, so both stay
-  // on the plain column below.
-  if (!isVoiceLike && !isForum) {
+  /* The Stage carries its own header (spec §7.2: room name, building and
+     duration, the here-now strip, Invite / Layout / more), so it is not a
+     conversation and keeps its own page inside the conversation pane until
+     the Glass stage (WP-G14) takes the voice route over. */
+  if (isVoiceLike) {
     return (
-      <div className="flex h-full min-h-0 flex-col bg-bg-base p-[var(--gutter)]">
-        <div className="pc-plate flex min-h-0 flex-1 flex-col overflow-hidden">
-          {header}
-          {guildId && channelId && channel?.type === ChannelType.Text && (
-            <ChannelAmbient guildId={guildId} channelId={channelId} />
-          )}
-          {entryChrome}
-          <TextChannelView
-            guildId={guildId}
-            channelId={channelId!}
-            channelName={channelName}
-            channel={channel}
-            channels={channels}
-          />
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex h-full min-h-0 flex-col">
-      {header}
-      {entryChrome}
-      {isVoiceLike ? (
+      <div className="flex h-full min-h-0 flex-col">
+        {entryChrome}
         <VoiceStageChannel
           guildId={guildId}
           channelId={channelId}
@@ -218,9 +182,52 @@ export function GuildPage() {
           currentUserId={currentUserId}
           isPhoneLayout={isPhoneLayout}
         />
-      ) : (
-        <ForumView channelId={channelId!} channelName={channelName} />
-      )}
-    </div>
+      </div>
+    );
+  }
+
+  // Every route that gets here has both ids (`guilds/:guildId/channels/:channelId`).
+  if (!guildId || !channelId) return null;
+
+  const subject: ConversationSubject = {
+    kind: 'channel',
+    guildId,
+    guildName: currentGuild?.name,
+    channelId,
+    channelName,
+    topic: channel?.topic,
+    isForum,
+  };
+
+  // A forum keeps its own body (posts, not a timeline) under the shared header.
+  if (isForum) {
+    return (
+      <ConversationPane
+        subject={subject}
+        notices={entryChrome}
+        timeline={<ForumView channelId={channelId} channelName={channelName} />}
+      />
+    );
+  }
+
+  // A text channel or a thread: the conversation pane the shell floats on the
+  // room, with its header, its timeline in the 720px column and its message box.
+  return (
+    <TextChannelView
+      guildId={guildId}
+      channelId={channelId}
+      channelName={channelName}
+      channel={channel}
+      channels={channels}
+      subject={subject}
+      notices={
+        <>
+          {channel?.type === ChannelType.Text && (
+            <ChannelAmbient guildId={guildId} channelId={channelId} />
+          )}
+          {entryChrome}
+        </>
+      }
+    />
   );
 }

@@ -6,7 +6,7 @@ import { useCurrentUser, useCurrentAccountScope } from '../hooks/useCurrentUser'
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { MessagesSquare, PenSquare, Search, X } from 'lucide-react';
-import { TopBar } from '../components/layout/TopBar';
+import { ConversationPane } from '../components/glass/conversation';
 import { MessageList } from '../components/message/MessageList';
 import { MessageInput } from '../components/message/MessageInput';
 import { DmPickerModal } from '../components/message/DmPickerModal';
@@ -218,8 +218,9 @@ function OwnedDMPage() {
   // ---- Index view: the all-conversations destination -----------------------
   if (!channelId) {
     return (
-      <div className="flex h-full min-h-0 flex-col bg-bg-base p-[var(--gutter)]">
-        <div className="pc-plate flex min-h-0 flex-1 flex-col overflow-hidden">
+      // The conversation pane the shell floats on the room is this page's
+      // surface; the list sits directly in it.
+      <div className="flex h-full min-h-0 flex-col">
         <header className="shrink-0 border-b border-border-subtle px-4 py-4 sm:px-6">
           <div className="flex flex-wrap items-center gap-3">
             <div className="min-w-0 flex-1">
@@ -300,21 +301,21 @@ function OwnedDMPage() {
           </div>
         </div>
 
-        </div>
         <DmPickerModal open={pickerOpen} onClose={() => setPickerOpen(false)} />
       </div>
     );
   }
 
   // ---- Conversation view ---------------------------------------------------
-  // §7.6: a DM is a text room between two people, so it is the same plate — the
-  // header, the timeline and the composer on one surface, on the 12px gutter.
+  // A DM is a conversation between people, so it is the same Glass
+  // conversation pane as a channel: header, timeline in the column, message
+  // box. A DM call's stream and controls sit in it until the call pill and the
+  // stage (WP-G12, WP-G14) carry them.
   return (
-    <div className="flex h-full min-h-0 flex-col bg-bg-base p-[var(--gutter)]">
-      <div className="pc-plate flex min-h-0 flex-1 flex-col overflow-hidden">
-      <TopBar isDM recipientName={recipientName} dmChannelId={channelId} />
-      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-        {inThisDmCall && watchedStreamerId && (
+    <ConversationPane
+      subject={{ kind: 'dm', channelId, title: recipientName, isGroup: isGroupDM }}
+      notices={
+        inThisDmCall && watchedStreamerId ? (
           <div className="relative max-h-[40vh] min-h-[180px] shrink-0 border-b border-border-subtle bg-black">
             <ErrorBoundary variant="section" label="the stream">
             <StreamViewer
@@ -336,7 +337,9 @@ function OwnedDMPage() {
             />
             </ErrorBoundary>
           </div>
-        )}
+        ) : undefined
+      }
+      timeline={
         <ErrorBoundary variant="section" label="the message feed">
           <MessageList
             channelId={channelId}
@@ -349,6 +352,8 @@ function OwnedDMPage() {
             }
           />
         </ErrorBoundary>
+      }
+      composer={
         <MessageInput
           channelId={channelId}
           channelName={recipientName}
@@ -356,10 +361,9 @@ function OwnedDMPage() {
           replyingTo={replyingTo}
           onCancelReply={() => setReplyingTo(null)}
         />
-        {inThisDmCall && <VoiceControlBar />}
-      </div>
-      </div>
-    </div>
+      }
+      dock={inThisDmCall ? <VoiceControlBar /> : undefined}
+    />
   );
 }
 

@@ -1,0 +1,358 @@
+/* =============================================================================
+   Glass frame geometry (docs/glass-spec.md §3, §6, §9; WP-G7).
+
+   The shell (components/glass/shell) owns WHERE panes are; the recipes in
+   glass.css own what a pane surface looks like (radius, fill, shadow). Slots
+   own what is inside a pane. Nothing here paints content.
+
+   Unlayered on purpose, like layout.css: the transitional adapters at the
+   bottom must beat the Tailwind utilities on the Lantern components they fit
+   into the frame, and an unlayered rule outranks the whole utility layer.
+
+   Motion: only transform and opacity move (motion lint). Pane width changes
+   between stage modes are not animated here; the 650ms moves are WP-G15's.
+   Reduced motion needs nothing here: utilities.css zeroes every duration.
+   ============================================================================= */
+
+.glass-shell {
+  /* §3 layout. */
+  --glass-gutter: 16px;
+  --glass-places-w: 316px;
+  --glass-column-w: 720px;
+  --glass-column-pad: 28px;
+  --glass-header-h: 76px;
+  --glass-side-chat-w: 420px;
+  --glass-theater-chat-w: 380px;
+  /* The conversation column's inset from its pane's edges: a 720px column,
+     centered, fluid with 28px sides when the pane is too narrow for it (the
+     prototype's own formula). `100%` is left unresolved on purpose: it is read
+     where the variable is USED, so it only belongs in padding or insets of an
+     element whose containing block is the full pane width. */
+  --glass-column-inset: max(var(--glass-column-pad), calc((100% - var(--glass-column-w)) / 2));
+
+  position: relative;
+  /* Its own stacking context, so the room can sit at z-index -1: above the
+     shell's ground, below every in-flow child (the phone's bottom bar is one).
+     The frame itself makes no stacking context, so an overlay a page renders
+     in place still stacks against the app's other overlays as before. */
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100dvh;
+  overflow: hidden;
+  color: var(--ink-1);
+  background-color: var(--street);
+}
+
+/* ---- The room (stub; WP-G8 replaces it with one canvas) -------------------- */
+.glass-room-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(70% 65% at 88% 16%, rgba(var(--room-rgb), 0.16), transparent 72%),
+    radial-gradient(60% 55% at 6% 96%, rgba(var(--room-rgb), 0.1), transparent 70%),
+    var(--street);
+}
+
+/* ---- The frame ------------------------------------------------------------ */
+.glass-frame {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  gap: var(--glass-gutter);
+  padding: var(--glass-gutter);
+}
+
+.glass-frame__places,
+.glass-frame__stage,
+.glass-frame__conversation {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  /* glass-pane's room blend, plus the layout moves (transform/opacity only). */
+  transition:
+    background-color var(--glass-ms-room) ease,
+    transform var(--glass-ms-layout) var(--glass-spring),
+    opacity var(--glass-ms-layout) ease;
+}
+
+.glass-frame__places {
+  flex: 0 0 var(--glass-places-w);
+  /* The prototype's inner padding: the server row sits 16px down. */
+  padding: 16px 12px 12px;
+}
+
+.glass-frame__stage,
+.glass-frame__conversation {
+  flex: 1 1 0;
+}
+
+/* The transitional sheet pane (the sheets stub): after the conversation. */
+.glass-frame__sheet {
+  display: flex;
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
+/* The conversation stepped aside (browse) or hidden (theater, H). It stays
+   mounted and inert; it slides out past the window's right edge. */
+.glass-frame__conversation[data-away='true'] {
+  opacity: 0;
+  transform: translateX(calc(100% + var(--glass-gutter)));
+  pointer-events: none;
+}
+
+/* The compact frame's places row, for pages without a conversation header. */
+.glass-frame__pane-bar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  padding: 12px var(--glass-gutter) 0;
+}
+
+.glass-frame__conversation:has(.glass-conversation__header) > .glass-frame__pane-bar {
+  display: none;
+}
+
+/* ---- Stage modes (§6), wide and compact frames ------------------------------ */
+.glass-frame:not([data-layout='phone'])[data-stage='side'] .glass-frame__conversation {
+  flex: 0 0 var(--glass-side-chat-w);
+}
+
+/* Browse in side by side: places back on the left, the stage takes the rest,
+   the conversation leaves the flow at its 420px width and steps aside. */
+.glass-frame:not([data-layout='phone'])[data-stage='side'][data-browse='true'] .glass-frame__conversation {
+  position: absolute;
+  top: var(--glass-gutter);
+  right: var(--glass-gutter);
+  bottom: var(--glass-gutter);
+  width: var(--glass-side-chat-w);
+}
+
+/* Theater: the stream fills the window; the conversation floats on it. */
+.glass-frame:not([data-layout='phone'])[data-stage='theater'] .glass-frame__stage {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.glass-frame:not([data-layout='phone'])[data-stage='theater'] .glass-frame__conversation {
+  position: absolute;
+  top: var(--glass-gutter);
+  right: var(--glass-gutter);
+  bottom: var(--glass-gutter);
+  z-index: 2;
+  width: var(--glass-theater-chat-w);
+  background-color: var(--deep);
+}
+
+.glass-frame:not([data-layout='phone'])[data-stage='theater'] .glass-frame__places {
+  position: absolute;
+  top: var(--glass-gutter);
+  bottom: var(--glass-gutter);
+  left: var(--glass-gutter);
+  z-index: 3;
+  width: var(--glass-places-w);
+}
+
+/* ---- Phone (today's phone frame until WP-G20) ------------------------------- */
+/* One pane on the Lantern phone gutter, the bottom bar under the frame. A
+   stage, when one is open, stacks above the conversation (§8). */
+.glass-frame[data-layout='phone'] {
+  flex-direction: column;
+  gap: var(--gutter);
+  padding: var(--gutter);
+}
+
+.glass-frame[data-layout='phone'] .glass-pane {
+  border-radius: var(--radius-plate-phone);
+}
+
+.glass-frame[data-layout='phone'] .glass-frame__stage {
+  flex: 0 0 auto;
+  aspect-ratio: 16 / 9;
+  max-height: 40dvh;
+}
+
+/* ---- The places overlay (< 860px, and browse on a narrow window) ------------ */
+.glass-places-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  padding: var(--glass-gutter);
+  padding-top: calc(var(--glass-gutter) + var(--pc-banner-inset, 0px));
+  background: var(--overlay-backdrop);
+}
+
+.glass-places-overlay__pane {
+  display: flex;
+  flex-direction: column;
+  width: var(--glass-places-w);
+  max-width: calc(100vw - 2 * var(--glass-gutter));
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  padding: 16px 12px 12px;
+  outline: none;
+}
+
+@keyframes glass-overlay-fade-in {
+  from { opacity: 0; }
+}
+
+@keyframes glass-overlay-fade-out {
+  to { opacity: 0; }
+}
+
+@keyframes glass-places-in {
+  from { transform: translateX(calc(-100% - var(--glass-gutter))); }
+}
+
+@keyframes glass-places-out {
+  to { transform: translateX(calc(-100% - var(--glass-gutter))); }
+}
+
+.glass-places-overlay.is-entering {
+  animation: glass-overlay-fade-in var(--glass-ms-layout) ease backwards;
+}
+
+.glass-places-overlay.is-entering .glass-places-overlay__pane {
+  animation: glass-places-in var(--glass-ms-layout) var(--glass-spring) backwards;
+}
+
+/* The leave must finish inside usePresence's --duration-exit-slow. */
+.glass-places-overlay.is-leaving {
+  animation: glass-overlay-fade-out var(--duration-exit-slow) var(--ease-in) forwards;
+}
+
+.glass-places-overlay.is-leaving .glass-places-overlay__pane {
+  animation: glass-places-out var(--duration-exit-slow) var(--ease-in) forwards;
+}
+
+/* ---- Conversation regions (the ConversationPane contract) -------------------- */
+.glass-conversation {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+}
+
+.glass-conversation__header {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  min-height: var(--glass-header-h);
+}
+
+.glass-conversation__heading {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.glass-conversation__places-toggle {
+  margin-inline-start: var(--glass-gutter);
+}
+
+.glass-conversation__notices {
+  flex: 0 0 auto;
+}
+
+.glass-conversation__timeline {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.glass-conversation__composer {
+  flex: 0 0 auto;
+}
+
+/* =============================================================================
+   TRANSITIONAL ADAPTERS. Each fits a Lantern component into the Glass frame
+   and is keyed on the stub that renders it (`glass-stub-*`) or on the outlet
+   the Lantern pages render into, so it matches nothing once the owning
+   package replaces the stub. Delete each block with its stub.
+   ============================================================================= */
+
+/* The routed page (AppShell's outlet). A Lantern page still wraps itself in
+   "street + 12px gutter + plate"; inside a Glass pane the street goes clear
+   and the plate goes flat, so the pane is the only surface. Removed as pages
+   are rebuilt (G19, G21) and deleted in G22. */
+.glass-outlet {
+  --color-bg-base: transparent;
+  --shadow-plate: none;
+}
+
+/* PlacesPanel stub (delete with WP-G9): the Lantern sidebar fills the pane. */
+.glass-stub-places {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.glass-stub-places [data-shell-region='sidebar'] {
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  padding: 0;
+  background: transparent;
+}
+
+/* ConversationPane stub (delete with WP-G11): the Lantern TopBar's title at
+   the column's left edge, its actions 16px from the pane's right edge, 76px
+   tall, no rule under it; its sidebar-collapse button has no job on a frame
+   whose places panel does not collapse (the phone keeps it). The timeline's
+   and composer's own 32px gutters (TIMELINE_GUTTER, the composer surface) are
+   taken off the column inset so their content lands on the column's edges. */
+.glass-frame:not([data-layout='phone']) .glass-stub-conversation .chat-header {
+  border-bottom-color: transparent;
+}
+
+.glass-frame:not([data-layout='phone']) .glass-stub-conversation .chat-header > div:first-child {
+  min-height: var(--glass-header-h);
+  padding-inline-start: var(--glass-column-inset);
+  padding-inline-end: var(--glass-gutter);
+}
+
+.glass-frame:not([data-layout='phone']) .glass-stub-conversation .chat-header-navigation {
+  display: none;
+}
+
+.glass-frame:not([data-layout='phone']) .glass-stub-conversation [role='feed'],
+.glass-frame:not([data-layout='phone']) .glass-stub-conversation .glass-conversation__composer {
+  padding-inline: max(0px, calc(var(--glass-column-inset) - 2rem));
+}
+
+.glass-frame:not([data-layout='phone']) .glass-stub-conversation .glass-conversation__notices {
+  padding-inline: max(0px, calc(var(--glass-column-inset) - 1rem));
+}
+
+/* Sheets stub (delete with WP-G18): the ContextPanel's own 12px gutter goes
+   to zero so the frame's 16px gap is the only one, and it runs full height. */
+.glass-stub-sheet {
+  --gutter: 0px;
+}
+
+/* Stage stub (delete with WP-G14): the StreamViewer fills the stage. */
+.glass-stub-stage {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
