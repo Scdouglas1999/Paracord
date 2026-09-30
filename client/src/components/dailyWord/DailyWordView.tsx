@@ -188,11 +188,14 @@ export function DailyWordView({ guildId, serverName }: { guildId: string; server
         event.preventDefault();
         onKey('backspace');
       } else if (/^[a-z]$/.test(key)) {
+        // Claim the letter so app-wide shortcuts (the stage's S/T/H/C) leave it alone.
+        event.preventDefault();
         onKey(key);
       }
     };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
+    // Capture phase: the puzzle sees its letters before app-wide shortcuts do.
+    window.addEventListener('keydown', handler, true);
+    return () => window.removeEventListener('keydown', handler, true);
   }, [enabled, onKey]);
 
   const keyStates = useMemo(() => {
