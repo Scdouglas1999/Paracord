@@ -298,51 +298,6 @@
   --shadow-plate: none;
 }
 
-/* PlacesPanel stub (delete with WP-G9): the Lantern sidebar fills the pane. */
-.glass-stub-places {
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-  min-height: 0;
-}
-
-.glass-stub-places [data-shell-region='sidebar'] {
-  width: 100%;
-  max-width: none;
-  height: 100%;
-  padding: 0;
-  background: transparent;
-}
-
-/* ConversationPane stub (delete with WP-G11): the Lantern TopBar's title at
-   the column's left edge, its actions 16px from the pane's right edge, 76px
-   tall, no rule under it; its sidebar-collapse button has no job on a frame
-   whose places panel does not collapse (the phone keeps it). The timeline's
-   and composer's own 32px gutters (TIMELINE_GUTTER, the composer surface) are
-   taken off the column inset so their content lands on the column's edges. */
-.glass-frame:not([data-layout='phone']) .glass-stub-conversation .chat-header {
-  border-bottom-color: transparent;
-}
-
-.glass-frame:not([data-layout='phone']) .glass-stub-conversation .chat-header > div:first-child {
-  min-height: var(--glass-header-h);
-  padding-inline-start: var(--glass-column-inset);
-  padding-inline-end: var(--glass-gutter);
-}
-
-.glass-frame:not([data-layout='phone']) .glass-stub-conversation .chat-header-navigation {
-  display: none;
-}
-
-.glass-frame:not([data-layout='phone']) .glass-stub-conversation [role='feed'],
-.glass-frame:not([data-layout='phone']) .glass-stub-conversation .glass-conversation__composer {
-  padding-inline: max(0px, calc(var(--glass-column-inset) - 2rem));
-}
-
-.glass-frame:not([data-layout='phone']) .glass-stub-conversation .glass-conversation__notices {
-  padding-inline: max(0px, calc(var(--glass-column-inset) - 1rem));
-}
-
 /* Sheets stub (delete with WP-G18): the ContextPanel's own 12px gutter goes
    to zero so the frame's 16px gap is the only one, and it runs full height. */
 .glass-stub-sheet {

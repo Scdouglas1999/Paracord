@@ -12,6 +12,7 @@ const fetchRelationshipsMock = vi.hoisted(() => vi.fn());
 
 // Heavy children are stubbed — this suite asserts the frame wiring (which surfaces
 // mount, and under which conditions), not the internals of the sidebar/panels.
+vi.mock('../components/glass/places', () => ({ PlacesPanel: () => <div data-testid="places-panel" /> }));
 vi.mock('../components/layout/sidebar/UnifiedSidebar', () => ({
   UnifiedSidebar: () => <div data-testid="unified-sidebar" />,
 }));
@@ -113,7 +114,7 @@ describe('AppShell', () => {
 
     const places = container.querySelector('.glass-frame__places');
     expect(places).toHaveClass('glass-pane');
-    expect(places).toContainElement(screen.getByTestId('unified-sidebar'));
+    expect(places).toContainElement(screen.getByTestId('places-panel'));
 
     const main = screen.getByRole('main');
     expect(main).toHaveAttribute('id', 'main-content');
@@ -155,7 +156,7 @@ describe('AppShell', () => {
     act(() => screen.getByRole('button', { name: 'Show places' }).click());
     expect(useGlassStore.getState().placesOverlayOpen).toBe(true);
     const overlay = screen.getByRole('dialog', { name: 'Places' });
-    expect(overlay).toContainElement(screen.getByTestId('unified-sidebar'));
+    expect(overlay).toContainElement(screen.getByTestId('places-panel'));
 
     // Picking somewhere to go closes the overlay.
     act(() => screen.getByRole('link', { name: 'open a DM' }).click());

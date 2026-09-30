@@ -67,4 +67,35 @@ await draw('photo-ridge.png', 640, 400, `
   ctx.quadraticCurveTo(w * 0.5, h * 0.62, w, h * 0.9); ctx.lineTo(w, h); ctx.fill();
 `);
 
+// The three server icons of the places panel's server row (80px, shown at 40).
+await draw('icon-game-night.png', 80, 80, `
+  const g = ctx.createLinearGradient(0, 0, w, h);
+  g.addColorStop(0, '#3b3f46'); g.addColorStop(1, '#1c1e22');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+  ctx.strokeStyle = '#f1e9dc'; ctx.lineWidth = 4; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.roundRect(18, 28, 44, 26, 13); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(30, 35.6); ctx.lineTo(30, 46.4); ctx.moveTo(24.6, 41); ctx.lineTo(35.4, 41); ctx.stroke();
+  ctx.fillStyle = '#ffc27e'; ctx.beginPath(); ctx.arc(50, 38.4, 2.6, 0, 7); ctx.fill();
+  ctx.fillStyle = '#f1e9dc'; ctx.beginPath(); ctx.arc(54.8, 43.6, 2.6, 0, 7); ctx.fill();
+`);
+await draw('icon-basecamp.png', 80, 80, `
+  const g = ctx.createLinearGradient(0, 0, 0, h);
+  g.addColorStop(0, '#4a5a66'); g.addColorStop(1, '#27313a');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = 'rgba(233,228,216,0.85)'; ctx.beginPath(); ctx.arc(56, 22, 6, 0, 7); ctx.fill();
+  ctx.fillStyle = '#1b2228'; ctx.beginPath(); ctx.moveTo(0, 62); ctx.lineTo(22, 32); ctx.lineTo(34, 46);
+  ctx.lineTo(44, 34); ctx.lineTo(80, 62); ctx.lineTo(80, 80); ctx.lineTo(0, 80); ctx.fill();
+  ctx.fillStyle = 'rgba(223,230,234,0.8)'; ctx.beginPath(); ctx.moveTo(22, 32); ctx.lineTo(28, 39); ctx.lineTo(22, 38); ctx.lineTo(18, 41); ctx.fill();
+`);
+await draw('icon-sunday-league.png', 80, 80, `
+  const g = ctx.createLinearGradient(0, 0, 0, h);
+  g.addColorStop(0, '#3d4b41'); g.addColorStop(1, '#222b25');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+  ctx.strokeStyle = 'rgba(232,239,233,0.22)'; ctx.lineWidth = 2.4;
+  ctx.beginPath(); ctx.moveTo(0, 52); ctx.lineTo(80, 52); ctx.moveTo(40, 52); ctx.lineTo(40, 80); ctx.stroke();
+  ctx.fillStyle = '#eef1ec'; ctx.beginPath(); ctx.arc(40, 34, 14, 0, 7); ctx.fill();
+  ctx.fillStyle = '#27302a'; ctx.beginPath(); ctx.moveTo(40, 26.4); ctx.lineTo(46.6, 31.2);
+  ctx.lineTo(44, 39); ctx.lineTo(36, 39); ctx.lineTo(33.4, 31.2); ctx.fill();
+`);
+
 await browser.close();

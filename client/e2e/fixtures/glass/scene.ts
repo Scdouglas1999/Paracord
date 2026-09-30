@@ -88,6 +88,8 @@ export function userRecord(who: CastMember) {
 
 export const GAME_NIGHT_ID = '1001';
 export const BASECAMP_ID = '1002';
+/** The third circle in the server row of the reference: a live match, two mentions. */
+export const SUNDAY_LEAGUE_ID = '1003';
 
 export const CH = {
   general: '2001',
@@ -99,19 +101,27 @@ export const CH = {
   basecampGeneral: '2102',
   photos: '2103',
   gear: '2104',
+  matchDay: '2201',
+  pitch: '2202',
+  dmBrendan: '3001',
+  dmNick: '3002',
 } as const;
 
 export const CHANNEL_KEYS = Object.keys(CH) as Array<keyof typeof CH>;
 
 const TEXT = 0;
+const DM = 1;
 const VOICE = 2;
 
 interface ChannelSeed {
   id: string;
-  guild_id: string;
+  /** Null for a direct message. */
+  guild_id: string | null;
   name: string;
   type: number;
   position: number;
+  /** The other person in a direct message. */
+  recipient?: CastKey;
 }
 
 export const CHANNELS: ChannelSeed[] = [
@@ -124,6 +134,11 @@ export const CHANNELS: ChannelSeed[] = [
   { id: CH.basecampGeneral, guild_id: BASECAMP_ID, name: 'General', type: TEXT, position: 1 },
   { id: CH.photos, guild_id: BASECAMP_ID, name: 'Photos', type: TEXT, position: 2 },
   { id: CH.gear, guild_id: BASECAMP_ID, name: 'Gear', type: TEXT, position: 3 },
+  { id: CH.matchDay, guild_id: SUNDAY_LEAGUE_ID, name: 'Match day', type: TEXT, position: 0 },
+  { id: CH.pitch, guild_id: SUNDAY_LEAGUE_ID, name: 'Pitch', type: VOICE, position: 1 },
+  // Two unread conversations: the "2" on the tray in the server row.
+  { id: CH.dmBrendan, guild_id: null, name: '', type: DM, position: 0, recipient: 'brendan' },
+  { id: CH.dmNick, guild_id: null, name: '', type: DM, position: 0, recipient: 'nick' },
 ];
 
 export interface GuildSeed {
@@ -131,6 +146,8 @@ export interface GuildSeed {
   name: string;
   member_count: number;
   banner_hash: string | null;
+  /** A picture in this folder; `install.ts` serves it as the server's stored icon. */
+  icon: string | null;
   members: CastKey[];
 }
 
@@ -140,6 +157,7 @@ export const GUILDS: GuildSeed[] = [
     name: 'Game Night',
     member_count: 8,
     banner_hash: null,
+    icon: 'icon-game-night.png',
     members: ['sean', 'vincent', 'brendan', 'nick', 'jeremy', 'luke', 'eric'],
   },
   {
@@ -147,7 +165,16 @@ export const GUILDS: GuildSeed[] = [
     name: 'Basecamp',
     member_count: 5,
     banner_hash: `/api/v1/guilds/${BASECAMP_ID}/banner`,
+    icon: 'icon-basecamp.png',
     members: ['sean', 'eric', 'luke', 'jeremy', 'nick'],
+  },
+  {
+    id: SUNDAY_LEAGUE_ID,
+    name: 'Sunday League',
+    member_count: 12,
+    banner_hash: null,
+    icon: 'icon-sunday-league.png',
+    members: ['sean', 'luke', 'jeremy'],
   },
 ];
 
@@ -224,14 +251,24 @@ export const MESSAGES: MessageSeed[] = [
   }),
   msg(CH.lfg, 'luke', TODAY, '20:40', 'anyone up for a late one after?'),
 
-  // Game Night · Patch notes — quiet since Tuesday.
-  msg(CH.patchNotes, 'vincent', '2026-09-29', '16:30', '1.4.2 is live. the revive window is back to 4 seconds'),
+  // Game Night · Patch notes — quiet since Tuesday last week (nine days): a
+  // channel with nothing new for more than a week is the places panel's
+  // one-line row (WP-G9). The reference draws it as "Tue".
+  msg(CH.patchNotes, 'vincent', '2026-09-22', '16:30', '1.4.2 is live. the revive window is back to 4 seconds'),
 
   // Basecamp · Trips — four unread.
   msg(CH.trips, 'eric', TODAY, '19:40', 'permits came through for Saturday'),
   msg(CH.trips, 'eric', TODAY, '19:40', 'rim trail, north lot at 7'),
   msg(CH.trips, 'luke', TODAY, '19:44', "I'll drive. leaving at 6 sharp, coffee on me"),
   msg(CH.trips, 'eric', TODAY, '19:48', "bring layers, it's 28° at the trailhead in the morning"),
+
+  // Sunday League · Match day — two mentions of Sean, unread.
+  msg(CH.matchDay, 'luke', TODAY, '20:10', '<@42> kickoff is 10 sharp, bring the away shirts'),
+  msg(CH.matchDay, 'jeremy', TODAY, '20:31', '<@42> can you take the second half in goal?'),
+
+  // Direct messages, unread.
+  msg(CH.dmBrendan, 'brendan', TODAY, '20:55', 'you around for the haz run? we need a fourth'),
+  msg(CH.dmNick, 'nick', TODAY, '20:20', 'sent you the 41:07 clip'),
 
   // Basecamp · the quiet ones.
   msg(CH.basecampGeneral, 'luke', TODAY, '18:15', 'see you all Saturday'),
@@ -258,6 +295,8 @@ export interface ReadStateSeed {
  *   General   read up to 8:58 PM, one mention (Jeremy)  -> "6 new since 8:58", @
  *   Clips     read up to before the first clip           -> 3
  *   Trips     read up to before the first message        -> 4
+ *   Match day read up to before its first message, 2 mentions -> the white @2 on
+ *             Sunday League's circle
  *   the rest  read to their last message                 -> no badge
  */
 export function readStates(): ReadStateSeed[] {
@@ -275,6 +314,9 @@ export function readStates(): ReadStateSeed[] {
     { channel_id: CH.basecampGeneral, last_message_id: lastMessageIn(CH.basecampGeneral)!.id, mention_count: 0 },
     { channel_id: CH.photos, last_message_id: lastMessageIn(CH.photos)!.id, mention_count: 0 },
     { channel_id: CH.gear, last_message_id: lastMessageIn(CH.gear)!.id, mention_count: 0 },
+    { channel_id: CH.matchDay, last_message_id: before(CH.matchDay), mention_count: 2 },
+    { channel_id: CH.dmBrendan, last_message_id: before(CH.dmBrendan), mention_count: 0 },
+    { channel_id: CH.dmNick, last_message_id: before(CH.dmNick), mention_count: 0 },
   ];
 }
 
@@ -311,7 +353,7 @@ export const EVENTS: EventSeed[] = [
     creator: 'sean',
     name: 'Movie night',
     scheduled_start: at('2026-10-02', '21:00'),
-    location: "Sean's place",
+    location: null,
     user_count: 6,
     user_rsvp: true,
   },
@@ -335,6 +377,18 @@ export const LOUNGE = [
   { who: 'vincent', self_stream: true, self_video: false, self_mute: false, speaking: false },
   { who: 'brendan', self_stream: false, self_video: true, self_mute: false, speaking: true },
   { who: 'nick', self_stream: false, self_video: false, self_mute: true, speaking: false },
+] as const satisfies ReadonlyArray<{
+  who: CastKey;
+  self_stream: boolean;
+  self_video: boolean;
+  self_mute: boolean;
+  speaking: boolean;
+}>;
+
+/** Who is on the pitch in Sunday League: a live match, so the circle wears the amber ring. */
+export const PITCH = [
+  { who: 'luke', self_stream: true, self_video: false, self_mute: false, speaking: true },
+  { who: 'jeremy', self_stream: false, self_video: false, self_mute: true, speaking: false },
 ] as const satisfies ReadonlyArray<{
   who: CastKey;
   self_stream: boolean;

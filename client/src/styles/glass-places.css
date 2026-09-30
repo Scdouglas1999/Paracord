@@ -1,0 +1,662 @@
+/* =============================================================================
+   The places panel (docs/glass-spec.md §3.1; WP-G9). Reference: screens 01, 02, 06,
+   and `source/GlassV14.dc.html` for every number here.
+
+   No color is written in this file: surfaces, inks and edges are tokens from
+   tokens.css, mixed with `color-mix()` where the prototype used a translucent
+   value. Only `transform`, `opacity` and colors move (the motion lint); hover and
+   press are a wash over the row's own fill, one token step lighter or darker,
+   120ms, and nothing scales on press (§9).
+
+   Geometry, from the prototype's aside: the pane pads 16px 12px 12px (the frame
+   does that); the server row sits 2px down and 4px in; the title is 8px under it;
+   the list is 12px under the title; rows are 64px with a 44px lead, 12px apart
+   inside and 2px between rows; "Coming up" is 32px under the last row.
+   ============================================================================= */
+
+.glass-places {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* One wash for everything you can press: a pseudo-element over the element's own
+   fill and under its content, so a selected row and a resting one both step. */
+.glass-server--tray,
+.glass-server--add,
+.glass-server-title:not(.glass-server-title--static),
+.glass-place-row {
+  position: relative;
+  isolation: isolate;
+}
+
+.glass-server--tray::before,
+.glass-server--add::before,
+.glass-server-title:not(.glass-server-title--static)::before,
+.glass-place-row::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  background-color: transparent;
+  transition: background-color var(--glass-ms) var(--glass-ease);
+}
+
+.glass-server--tray:hover::before,
+.glass-server--add:hover::before,
+.glass-server-title:not(.glass-server-title--static):hover::before,
+.glass-place-row:hover::before {
+  background-color: var(--wash-hover);
+}
+
+.glass-server--tray:active::before,
+.glass-server--add:active::before,
+.glass-server-title:not(.glass-server-title--static):active::before,
+.glass-place-row:active::before {
+  background-color: var(--wash-press);
+}
+
+/* ---- The server row ----------------------------------------------------------- */
+.glass-places-servers {
+  position: relative;
+  flex: 0 0 auto;
+  margin-inline: -6px;
+}
+
+/* The scroller has to hold what pokes out of the circles (badges up and right, the
+   bar and the ring below), so it carries that room as padding and gives it back as
+   negative margin: the circles land where the prototype puts them. */
+.glass-places-servers__scroll {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: -10px;
+  margin-bottom: -6px;
+  padding: 12px 10px 16px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.glass-places-servers__scroll::-webkit-scrollbar {
+  display: none;
+}
+
+/* Edge fades, only on the side that has more. The mask reads alpha only. */
+.glass-places-servers[data-fade-end] .glass-places-servers__scroll {
+  mask-image: linear-gradient(90deg, var(--ink-1) calc(100% - 28px), transparent);
+}
+
+.glass-places-servers[data-fade-start] .glass-places-servers__scroll {
+  mask-image: linear-gradient(90deg, transparent, var(--ink-1) 28px);
+}
+
+.glass-places-servers[data-fade-start][data-fade-end] .glass-places-servers__scroll {
+  mask-image: linear-gradient(90deg, transparent, var(--ink-1) 28px, var(--ink-1) calc(100% - 28px), transparent);
+}
+
+.glass-places-servers__rule {
+  flex: 0 0 auto;
+  width: 1px;
+  height: 22px;
+  margin: 0 2px;
+  background: var(--glass-hair);
+}
+
+.glass-server {
+  position: relative;
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.72;
+  transition: opacity var(--glass-ms) var(--glass-ease);
+}
+
+.glass-server:hover,
+.glass-server[data-current],
+.glass-server[data-live],
+.glass-server--tray,
+.glass-server--add {
+  opacity: 1;
+}
+
+.glass-server__icon {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 50%;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--own-ink);
+}
+
+.glass-server__icon img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.glass-server--tray {
+  display: grid;
+  place-items: center;
+  background: var(--bub);
+  color: color-mix(in srgb, var(--ink-1) 85%, transparent);
+}
+
+.glass-server--add {
+  display: grid;
+  place-items: center;
+  color: var(--ink-2);
+  box-shadow: inset 0 0 0 1px var(--glass-hair);
+}
+
+/* Something live in another server: a 2px amber ring, with a 2px gap of the pane's
+   own color between it and the icon. The server you are in wears the bar instead. */
+.glass-server[data-live]:not([data-current]) {
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--solid) 60%, transparent),
+    0 0 0 4px var(--amber);
+}
+
+/* The current server: a 14 x 3 white bar, 11px under the circle. Not a ring. */
+.glass-server__bar {
+  position: absolute;
+  left: 13px;
+  bottom: -11px;
+  width: 14px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--ink-1);
+}
+
+.glass-server__badge {
+  position: absolute;
+  box-sizing: border-box;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  /* A ring of the pane's color, so the chip bites the circle it sits on. */
+  box-shadow: 0 0 0 2px var(--solid);
+}
+
+.glass-server__badge--count {
+  top: -5px;
+  right: -6px;
+}
+
+.glass-server__badge--mention {
+  top: -9px;
+  right: -11px;
+  min-width: 0;
+}
+
+/* ---- The title ----------------------------------------------------------------- */
+.glass-server-title {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+  margin-top: 8px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  color: inherit;
+  text-align: left;
+}
+
+button.glass-server-title {
+  cursor: pointer;
+}
+
+.glass-server-title__name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  line-height: 1.15;
+}
+
+.glass-server-title__name > svg {
+  opacity: 0.5;
+}
+
+.glass-server-title__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.glass-server-title__line {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  line-height: normal;
+  color: var(--ink-2);
+}
+
+/* ---- The list ------------------------------------------------------------------- */
+/* Scrolls under the fixed title. It reaches 6px past the pane's padding each side
+   and 4px above, so a focus ring (2px wide, 2px off) is never cut by the scroller. */
+.glass-places__scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-top: 8px;
+  margin-inline: -6px;
+  padding: 4px 6px 8px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-color: var(--glass-hair) transparent;
+}
+
+.glass-places__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.glass-places__empty {
+  margin: 16px 10px;
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--ink-3);
+}
+
+.glass-places__coming {
+  margin-top: 32px;
+}
+
+.glass-places__kicker {
+  margin: 0 10px 8px;
+  line-height: normal;
+}
+
+/* ---- A row: 64px --------------------------------------------------------------- */
+.glass-place-row {
+  --face-ring: var(--solid);
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 12px;
+  box-sizing: border-box;
+  width: 100%;
+  height: 64px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--r-row);
+  background-color: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color var(--glass-ms) var(--glass-ease);
+}
+
+.glass-place-row[data-selected] {
+  --face-ring: var(--sel);
+  background-color: var(--sel);
+}
+
+.glass-place-row__body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.glass-place-row__name {
+  /* The prototype leaves line-height at `normal`; the pair below it centers in
+     64px exactly as the reference does. */
+  line-height: normal;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.glass-place-row__line {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  line-height: normal;
+  color: var(--ink-2);
+}
+
+.glass-place-row__aside {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 5px;
+}
+
+.glass-place-row__time {
+  font-size: 13px;
+  line-height: normal;
+  white-space: nowrap;
+  color: var(--ink-3);
+}
+
+/* Unread with no count we can back: a dot, never a guess. */
+.glass-place-dot {
+  width: 8px;
+  height: 8px;
+  margin: 6px 6px 6px 0;
+  border-radius: 50%;
+  background: var(--ink-2);
+}
+
+/* ---- A quiet row: 44px --------------------------------------------------------- */
+.glass-place-row--quiet {
+  height: 44px;
+  border-radius: 12px;
+  color: var(--ink-3);
+}
+
+.glass-place-row__glyph {
+  display: grid;
+  flex: 0 0 44px;
+  place-items: center;
+}
+
+.glass-place-row__name--quiet {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 500;
+  line-height: normal;
+  color: var(--ink-3);
+}
+
+/* ---- The lead: 44px ------------------------------------------------------------ */
+.glass-lead {
+  position: relative;
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+}
+
+.glass-lead--tile,
+.glass-lead--media,
+.glass-lead--date {
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.glass-lead--tile {
+  display: grid;
+  place-items: center;
+  background: var(--bub);
+  color: color-mix(in srgb, var(--ink-1) 80%, transparent);
+}
+
+.glass-lead--media {
+  background: var(--bub);
+}
+
+.glass-lead--media img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* A dark picture on a dark pane needs its edge. */
+.glass-lead--media::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink-1) 10%, transparent);
+}
+
+.glass-lead--date {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: var(--bub);
+  line-height: 1;
+}
+
+.glass-lead__date-top {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+.glass-lead__date-bottom {
+  margin-top: 3px;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--ink-1);
+}
+
+.glass-lead--faces[data-count='1'] {
+  display: grid;
+  place-items: center;
+}
+
+/* The earlier speaker behind, top left; the latest in front, bottom right. */
+.glass-lead__behind {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+.glass-lead__front {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  box-shadow: 0 0 0 2.5px var(--face-ring);
+}
+
+/* A person who is here now: a light dot, not a color. */
+.glass-lead__presence {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--ink-1);
+  box-shadow: 0 0 0 2.5px var(--face-ring);
+}
+
+/* ---- Faces --------------------------------------------------------------------- */
+.glass-face {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 50%;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--own-ink);
+}
+
+.glass-face img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.glass-face-stack {
+  display: flex;
+  flex: 0 0 auto;
+}
+
+/* ---- The live row: 92px --------------------------------------------------------- */
+.glass-place-live {
+  --face-ring: var(--street);
+  position: relative;
+  display: block;
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  width: 100%;
+  height: 92px;
+  margin-block: 2px;
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--r-row);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  box-shadow: 0 10px 30px color-mix(in srgb, var(--amber) 16%, transparent);
+}
+
+.glass-place-live[data-selected] {
+  box-shadow:
+    0 0 0 2px var(--sel),
+    0 10px 30px color-mix(in srgb, var(--amber) 16%, transparent);
+}
+
+/* The room's own tint, until the stream's thumbnail arrives (§3.1). */
+.glass-place-live__scene {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(80% 140% at 72% 60%, color-mix(in srgb, rgb(var(--room-rgb)) 46%, transparent), transparent 72%),
+    var(--street);
+}
+
+/* Left to right, dark to clear: the words sit on the dark end. */
+.glass-place-live__shade {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--street) 92%, transparent) 30%,
+    color-mix(in srgb, var(--street) 35%, transparent)
+  );
+  transition: background-color var(--glass-ms) var(--glass-ease);
+}
+
+.glass-place-live:hover .glass-place-live__shade {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--street) 86%, transparent) 30%,
+    color-mix(in srgb, var(--street) 28%, transparent)
+  );
+}
+
+.glass-place-live__body {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  box-sizing: border-box;
+  height: 100%;
+  padding: 0 14px;
+}
+
+.glass-place-live__head,
+.glass-place-live__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.glass-place-live__kicker {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  color: var(--amber);
+}
+
+.glass-place-live__faces .glass-face {
+  box-shadow: 0 0 0 2px var(--face-ring);
+}
+
+.glass-place-live__more {
+  flex: 0 0 auto;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.glass-place-live__line {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--amber-ink);
+}
+
+/* ---- Add-ons: the game servers popover ------------------------------------------- */
+.glass-place-anchor {
+  display: block;
+}
+
+.glass-place-popover {
+  width: min(20rem, calc(100vw - 16px));
+  padding: 6px;
+}
+
+.glass-place-popover__title {
+  padding: 6px 10px 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.glass-place-popover__list {
+  display: flex;
+  flex-direction: column;
+}
+
+.glass-place-popover__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--r-ctl);
+}
+
+.glass-place-popover__text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.glass-place-popover__line {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--ink-2);
+}

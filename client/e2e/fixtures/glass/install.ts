@@ -28,8 +28,10 @@ import {
   LOUNGE,
   MESSAGES,
   ONLINE,
+  PITCH,
   SCENE_NOW_ISO,
   SCENE_TIMEZONE,
+  SUNDAY_LEAGUE_ID,
   TYPING,
   lastMessageIn,
   messagesIn,
@@ -64,8 +66,18 @@ function channelRecord(seed: (typeof CHANNELS)[number]) {
     nsfw: false,
     parent_id: null,
     required_role_ids: [],
-    last_message_id: seed.type === 0 ? (last?.id ?? null) : null,
+    last_message_id: seed.type === 0 || seed.type === 1 ? (last?.id ?? null) : null,
     created_at: SCENE_NOW_ISO,
+    ...(seed.recipient
+      ? {
+          recipient: {
+            id: CAST[seed.recipient].id,
+            username: CAST[seed.recipient].username,
+            discriminator: '0001',
+            avatar_hash: null,
+          },
+        }
+      : {}),
   };
 }
 
@@ -119,6 +131,42 @@ function messageRecord(seed: MessageSeed) {
   };
 }
 
+/**
+ * What `GET /guilds/{id}/channel-previews` answers: the newest message of every
+ * channel that has one (an empty channel has no entry), as the server describes
+ * it (docs/design/glass-g4-checkpoint.md): whitespace collapsed, at most 140
+ * characters, the first attachment as `media`.
+ */
+function previewRecord(channelId: string) {
+  const last = lastMessageIn(channelId);
+  if (!last) return null;
+  const first = last.attachments?.[0] ? ATTACHMENT[last.attachments[0].key] : null;
+  const text = last.content.replace(/\s+/g, ' ').trim();
+  return {
+    channel_id: channelId,
+    message_id: last.id,
+    message_type: last.poll ? 20 : 0,
+    author_id: CAST[last.author].id,
+    author_kind: 'user',
+    author_name: CAST[last.author].display_name,
+    content: last.poll ? last.poll.question : text || null,
+    truncated: false,
+    encrypted: false,
+    created_at: last.created_at,
+    media: first
+      ? {
+          attachment_id: first.id,
+          content_type: 'image/png',
+          filename: first.filename,
+          width: first.width,
+          height: first.height,
+        }
+      : null,
+    attachment_count: last.attachments?.length ?? 0,
+    has_sticker: false,
+  };
+}
+
 const memberRecord = (key: CastKey) => ({
   user: userRecord(CAST[key]),
   user_id: CAST[key].id,
@@ -147,11 +195,15 @@ const eventRecord = (seed: (typeof EVENTS)[number]) => ({
   created_at: SCENE_NOW_ISO,
 });
 
-function loungeVoiceStates() {
-  return LOUNGE.map(({ who, self_stream, self_video, self_mute, speaking }) => ({
+function voiceStatesIn(
+  channelId: string,
+  guildId: string,
+  people: ReadonlyArray<{ who: CastKey; self_stream: boolean; self_video: boolean; self_mute: boolean; speaking: boolean }>,
+) {
+  return people.map(({ who, self_stream, self_video, self_mute, speaking }) => ({
     user_id: CAST[who].id,
-    channel_id: CH.lounge,
-    guild_id: GAME_NIGHT_ID,
+    channel_id: channelId,
+    guild_id: guildId,
     session_id: `session-${CAST[who].id}`,
     username: CAST[who].username,
     display_name: CAST[who].display_name,
@@ -167,7 +219,10 @@ function loungeVoiceStates() {
   }));
 }
 
-function readyFrame(quiet: boolean) {
+const loungeVoiceStates = () => voiceStatesIn(CH.lounge, GAME_NIGHT_ID, LOUNGE);
+const pitchVoiceStates = () => voiceStatesIn(CH.pitch, SUNDAY_LEAGUE_ID, PITCH);
+
+function readyFrame(quiet: boolean, icons: ReadonlyMap<string, string>) {
   return {
     op: 0,
     s: 1,
@@ -180,11 +235,16 @@ function readyFrame(quiet: boolean) {
         id: guild.id,
         name: guild.name,
         owner_id: SELF.id,
-        icon_hash: null,
+        icon_hash: icons.get(guild.id) ?? null,
         member_count: guild.member_count,
         created_at: SCENE_NOW_ISO,
         channels: CHANNELS.filter((c) => c.guild_id === guild.id).map(channelRecord),
-        voice_states: guild.id === GAME_NIGHT_ID && !quiet ? loungeVoiceStates() : [],
+        voice_states:
+          guild.id === GAME_NIGHT_ID && !quiet
+            ? loungeVoiceStates()
+            : guild.id === SUNDAY_LEAGUE_ID
+              ? pitchVoiceStates()
+              : [],
         presences: guild.members
           .filter((key) => ONLINE.includes(key))
           .map((key) => ({ user_id: CAST[key].id, status: 'online', activities: [] })),
@@ -202,6 +262,14 @@ const typingFrame = () => ({
 /** Install the whole scene. Call before the first `page.goto`. */
 export async function installGlassScene(page: Page, options: GlassSceneOptions = {}): Promise<void> {
   const quiet = options.quiet ?? false;
+  // Each server's uploaded icon, as the stored data URL the client draws.
+  const icons = new Map<string, string>();
+  for (const guild of GUILDS) {
+    if (guild.icon) {
+      const bytes = await readFile(path.join(HERE, guild.icon));
+      icons.set(guild.id, `data:image/png;base64,${bytes.toString('base64')}`);
+    }
+  }
 
   // Pin Date (not timers) so "9:12 PM", "Today", "Fri" and "Tue" read the same
   // on every machine on every day. The timezone comes from the spec's `use`.
@@ -270,7 +338,7 @@ export async function installGlassScene(page: Page, options: GlassSceneOptions =
     (stream) => {
       (window as unknown as { __pcStream: unknown }).__pcStream = stream;
     },
-    { once: [readyFrame(quiet)], repeat: options.noTyping ? [] : [typingFrame()] },
+    { once: [readyFrame(quiet, icons)], repeat: options.noTyping ? [] : [typingFrame()] },
   );
 
   const png = async (file: string) => readFile(path.join(HERE, file));
@@ -315,7 +383,8 @@ export async function installGlassScene(page: Page, options: GlassSceneOptions =
       });
     if (pathname === '/api/v1/users/@me/notification-settings') return json({ spaces: [], channels: [] });
     if (pathname === '/api/v1/users/@me/read-states') return json(readStates());
-    if (pathname === '/api/v1/users/@me/dms') return json([]);
+    if (pathname === '/api/v1/users/@me/dms')
+      return json(CHANNELS.filter((c) => c.guild_id === null).map(channelRecord));
     if (pathname === '/api/v1/users/@me/guilds')
       return json(
         GUILDS.map((g) =>
@@ -326,6 +395,7 @@ export async function installGlassScene(page: Page, options: GlassSceneOptions =
             owner_id: SELF.id,
             member_count: g.member_count,
             banner_hash: g.banner_hash,
+            icon_hash: icons.get(g.id) ?? null,
             created_at: SCENE_NOW_ISO,
           }),
         ),
@@ -346,11 +416,19 @@ export async function installGlassScene(page: Page, options: GlassSceneOptions =
               owner_id: SELF.id,
               member_count: guild.member_count,
               banner_hash: guild.banner_hash,
+              icon_hash: icons.get(guild.id) ?? null,
               created_at: SCENE_NOW_ISO,
             }),
           );
         if (rest === 'channels') return json(channels.map(channelRecord));
         if (rest === 'channels/visible') return json({ channel_ids: channels.map((c) => c.id) });
+        if (rest === 'channel-previews')
+          return json(
+            channels
+              .filter((c) => c.type === 0 || c.type === 2)
+              .map((c) => previewRecord(c.id))
+              .filter((entry) => entry !== null),
+          );
         if (rest === 'members') return json(guild.members.map(memberRecord));
         if (rest === 'events') return json(EVENTS.filter((e) => e.guild_id === guild.id).map(eventRecord));
         if (rest === 'onboarding/me')
@@ -367,7 +445,13 @@ export async function installGlassScene(page: Page, options: GlassSceneOptions =
       const rest = channelMatch[2] ?? '';
       if (seed) {
         if (rest === '' && method === 'GET') return json(channelRecord(seed));
-        if (rest === 'messages' && method === 'GET') return json([...messagesIn(seed.id)].reverse().map(messageRecord));
+        if (rest === 'messages' && method === 'GET') {
+          // `after` is exclusive and `limit` keeps the newest, as the server answers.
+          const after = url.searchParams.get('after');
+          const limit = Number(url.searchParams.get('limit') ?? '50');
+          const newer = messagesIn(seed.id).filter((m) => (after ? BigInt(m.id) > BigInt(after) : true));
+          return json(newer.slice(-limit).reverse().map(messageRecord));
+        }
         if (rest === 'capabilities')
           return json({
             version: 1,

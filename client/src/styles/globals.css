@@ -54,6 +54,7 @@
 @import './glass-layout.css';
 /* The places panel (WP-G9). Unlayered, like the frame it fills. */
 /* The Glass timeline: bubbles in the column (WP-G10). */
+@import './glass-places.css';
 @import './glass-timeline.css' layer(components);
 /* The conversation's header and message box (WP-G11). Unlayered, after the
    frame: it refines the frame's region rules. */
