@@ -295,31 +295,52 @@ describe('MessageList keyboard accessibility and error state', () => {
 
     const row = await screen.findByRole('article', { name: /Alice/ });
     await waitFor(() => expect(mocks.scrollToIndex).toHaveBeenCalled());
-    await waitFor(() => {
-      expect(row.getAttribute('style')).toContain('--row-bg: var(--accent-tint-strong)');
-      expect(row.getAttribute('style')).toContain('border-left: 2px solid var(--accent-primary)');
-    });
+    // The jump target's bubble is ringed (glass-timeline.css reads `data-jump`).
+    await waitFor(() => expect(row).toHaveAttribute('data-jump', 'true'));
   });
 
-  it('reveals the per-message action toolbar when a message row receives keyboard focus', async () => {
+  it('reveals react, reply and more beside the name when a message row receives keyboard focus', async () => {
     mocks.permissionsState.permissions = 1n << 6n; // ADD_REACTIONS
     mocks.useMessagesReturn.messages = [makeMessage()];
 
     render(
       <MemoryRouter>
-        <MessageList channelId="ch1" />
+        <MessageList channelId="ch1" onReply={vi.fn()} />
       </MemoryRouter>,
     );
 
     const row = await screen.findByRole('article', { name: /Alice/ });
 
-    // Toolbar is hidden until the row is hovered or focused.
-    expect(screen.queryByRole('button', { name: 'Add reaction' })).toBeNull();
+    // The actions are hidden until the row is hovered or focused (§3.2:
+    // hover, and focus-within).
+    expect(screen.queryByRole('button', { name: 'React to Alice' })).toBeNull();
 
     fireEvent.focus(row);
 
-    expect(screen.getByRole('button', { name: 'Add reaction' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Reply' })).toBeInTheDocument();
+    const react = screen.getByRole('button', { name: 'React to Alice' });
+    expect(react).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Reply to Alice' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'More actions' })).toBeInTheDocument();
+    // The first message of a group carries them in its header, beside the time.
+    expect(react.closest('.glass-msg__head')).not.toBeNull();
+  });
+
+  it('keeps the actions for a focused control inside the row (focus-within)', async () => {
+    mocks.permissionsState.permissions = 1n << 6n; // ADD_REACTIONS
+    mocks.useMessagesReturn.messages = [makeMessage()];
+
+    render(
+      <MemoryRouter>
+        <MessageList channelId="ch1" onReply={vi.fn()} />
+      </MemoryRouter>,
+    );
+
+    // The face and the name both open the profile; the name is in the header.
+    const profileButtons = await screen.findAllByRole('button', { name: 'Open profile for Alice' });
+    const name = profileButtons.find((button) => button.closest('.glass-msg__head'));
+    expect(name).toBeDefined();
+    fireEvent.focus(name!);
+    expect(screen.getByRole('button', { name: 'React to Alice' })).toBeInTheDocument();
   });
 
   // Reading a room's overwrite list needs MANAGE_CHANNELS, so asking for it on

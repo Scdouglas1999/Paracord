@@ -1,32 +1,27 @@
 import * as React from 'react';
-import { CornerDownLeft } from 'lucide-react';
 
 import { Chip } from '../ui';
-import { AvatarStack } from '../light';
+import { AvatarStack, avatarInitials } from '../light';
 import { cn } from '../../lib/utils';
-import { wallClock } from '../../lib/formatters';
+import { getIdentityColor } from '../../lib/colors';
+import { resolveUserAvatarUrl } from '../../lib/userAvatar';
+import { useAuthenticatedImage } from '../../lib/authenticatedImage';
+import { useDownloadTicket } from '../../hooks/useDownloadTicket';
 import type { PersonLight } from '../../lib/attention/light';
 import { roomSharedName } from '../../lib/motion';
 import type { RoomLitEvent } from './messageLight';
 
 /**
- * The small shapes of a text-room timeline (docs/lantern-stage-spec.md §7.4).
+ * The small shapes of the Glass timeline (docs/glass-spec.md §3.2).
  *
- * Presentational only: tokens, `pc-*` recipes and the WP0/WP1 primitives. No
- * store reads and no product decisions — `MessageList` owns those and hands
+ * Presentational only: tokens and the recipes in `styles/glass-timeline.css`.
+ * No store reads and no product decisions — `MessageList` owns those and hands
  * these components what to draw.
- *
- * The one rule they all keep is §9: every light state also says its words. A
- * window dot never stands alone.
  */
-
-/** The 32px gutter the reference render puts on every timeline row. */
-export const TIMELINE_GUTTER = 'px-4 sm:px-8';
 
 /**
  * The chip's words: "Today" and "Yesterday" where they are true, the full date
- * everywhere else. The reference render says "Today", and a chip is too small
- * to carry "Monday, January 15, 2025" when one word will do.
+ * everywhere else.
  */
 export function dayDividerLabel(iso: string, nowMs = Date.now()): string {
   try {
@@ -43,75 +38,200 @@ export function dayDividerLabel(iso: string, nowMs = Date.now()): string {
   }
 }
 
+/** Is this instant on the same calendar day as `nowMs`? */
+export function isToday(iso: string, nowMs = Date.now()): boolean {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return false;
+  return date.toDateString() === new Date(nowMs).toDateString();
+}
+
 /**
- * A message's own clock face: just the time.
- *
- * The day is already stated by the divider above the message, so repeating
- * "Today at" on every row is noise. The full timestamp stays available as the
- * row's title.
+ * One formatter for every timeline clock. Building an `Intl.DateTimeFormat`
+ * per call was a quarter of the JavaScript time in a 500-message scroll
+ * profile (see `wallClock`), so it is made once.
+ */
+let timelineClock: Intl.DateTimeFormat | null = null;
+
+/**
+ * A message's own clock face: just the time, in the locale's own form
+ * ("9:02 PM"). The day is stated by the divider above the message; the full
+ * timestamp stays available as a title.
  */
 export function timelineTime(iso: string): string {
   try {
     const date = new Date(iso);
     if (Number.isNaN(date.getTime())) return iso;
-    return wallClock(date);
+    timelineClock ??= new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
+    return timelineClock.format(date);
   } catch {
     return iso;
   }
 }
 
-/**
- * A day divider: a chip on a hairline (§7.4). The rule is decoration, so it is
- * hidden from assistive tech and the chip carries the date.
- */
+/** A day divider: a centered kicker ("TODAY", "MONDAY, SEPTEMBER 28"). */
 export function DayDivider({ label }: { label: string }) {
   return (
-    <div className={cn('my-2.5 flex items-center gap-3', TIMELINE_GUTTER)}>
-      <span className="h-px flex-1 bg-border-subtle" aria-hidden />
-      <Chip size="sm" className="h-[22px] px-2.5 text-[11.5px] font-semibold">
+    <div className="glass-tl-day glass-tl-col" role="separator" aria-label={label}>
+      <span className="glass-kicker" aria-hidden>
         {label}
-      </Chip>
-      <span className="h-px flex-1 bg-border-subtle" aria-hidden />
+      </span>
     </div>
   );
 }
 
 /**
- * A message's meta line: "in Shop floor · 9:12 AM" when the author is in a
- * voice room right now, otherwise just the time (§7.4).
- *
- * The white dot is the room's light and it is never the only cue — "in Shop
- * floor" is the words that go with it.
+ * A face in the timeline (§3.2): 32px, the uploaded photo or the author's
+ * initials on their identity color. Plain on purpose — the reference draws no
+ * presence ring on timeline faces; what is live shows in the places panel and
+ * the call pill.
  */
-export function AuthorMeta({
-  person,
-  timestamp,
-  title,
+export function TimelineAvatar({
+  userId,
+  name,
+  avatar,
+  size = 32,
+  className,
 }: {
-  person: PersonLight | null;
-  timestamp: string;
-  title?: string;
+  userId: string;
+  name: string;
+  avatar?: string | null;
+  size?: number;
+  className?: string;
 }) {
-  const roomName = person?.live ? person.roomName : null;
+  // The avatar URL carries the download ticket, minted after the first paint.
+  useDownloadTicket();
+  const src = useAuthenticatedImage(resolveUserAvatarUrl(avatar ?? null));
   return (
-    <span className="inline-flex min-w-0 items-center gap-1.5 text-meta text-text-faint" title={title}>
-      {roomName ? (
-        <>
-          <span className="pc-window is-talking h-1.5 w-1.5 rounded-full" aria-hidden />
-          <span className="truncate">in {roomName}</span>
-          <span aria-hidden>·</span>
-        </>
-      ) : (
-        // §9: the rim on the author's avatar is a light state, so it says its
-        // words somewhere a screen reader can reach even when it has no room.
-        person && <span className="sr-only">{person.label}</span>
-      )}
-      <span className="pc-mono shrink-0">{timestamp}</span>
+    <span
+      className={cn('glass-tl-avatar', className)}
+      style={{
+        width: size,
+        height: size,
+        fontSize: Math.max(9, Math.round(size * 0.38)),
+        background: src ? undefined : getIdentityColor(userId),
+      }}
+      aria-hidden
+    >
+      {src ? <img src={src} alt="" draggable={false} /> : avatarInitials(name)}
     </span>
   );
 }
 
-/** The chip above a reply, naming who is being answered (§7.4). */
+/* ---- Glyphs for the hover actions (the prototype's own, 15px, 1.7 stroke) -- */
+
+function ActionGlyph({ children }: { children: React.ReactNode }) {
+  return (
+    <svg
+      width="15"
+      height="15"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      {children}
+    </svg>
+  );
+}
+
+const ReactGlyph = () => (
+  <ActionGlyph>
+    <path d="M20 12.5A8.5 8.5 0 1 1 11.5 4" />
+    <path d="M8.5 14a4.5 4.5 0 0 0 7 0M9 10h.01M14.5 10h.01M18 3v5M15.5 5.5h5" />
+  </ActionGlyph>
+);
+
+const ReplyGlyph = () => (
+  <ActionGlyph>
+    <path d="M9 14 4 9l5-5M4 9h10a6 6 0 0 1 6 6v3" />
+  </ActionGlyph>
+);
+
+const MoreGlyph = () => (
+  <ActionGlyph>
+    <path d="M6 12h.01M12 12h.01M18 12h.01" strokeWidth="2.6" />
+  </ActionGlyph>
+);
+
+/**
+ * React / reply / more, as 26×22 text buttons (§3.2). They sit beside the
+ * name and time of a group, or beside the bubble of a message that has no
+ * header (a continuation, or your own).
+ */
+export function MessageActions({
+  authorName,
+  time,
+  onReact,
+  onReply,
+  onMore,
+  moreExpanded,
+}: {
+  authorName: string;
+  /** Shown before the buttons where the row has no header to carry its time. */
+  time?: React.ReactNode;
+  onReact?: (event: React.MouseEvent<HTMLButtonElement>) => void;
+  onReply?: () => void;
+  onMore: () => void;
+  moreExpanded: boolean;
+}) {
+  return (
+    <span className="glass-tl-acts">
+      {time}
+      {onReact && (
+        <button type="button" className="glass-tl-act" aria-label={`React to ${authorName}`} title="React" onClick={onReact}>
+          <ReactGlyph />
+        </button>
+      )}
+      {onReply && (
+        <button type="button" className="glass-tl-act" aria-label={`Reply to ${authorName}`} title="Reply" onClick={onReply}>
+          <ReplyGlyph />
+        </button>
+      )}
+      <button
+        type="button"
+        className="glass-tl-act"
+        aria-label="More actions"
+        aria-haspopup="menu"
+        aria-expanded={moreExpanded}
+        title="More"
+        onClick={onMore}
+      >
+        <MoreGlyph />
+      </button>
+    </span>
+  );
+}
+
+/** Three dots in a bubble, beside the typist's face (§3.2). */
+export function TypingBubble() {
+  return (
+    <span className="glass-tl-typing" aria-hidden>
+      <span />
+      <span />
+      <span />
+    </span>
+  );
+}
+
+/**
+ * The sentence the typing bubbles stand for, for assistive tech: "Eric is
+ * typing", "Eric and Nick are typing", "4 people are typing".
+ */
+export function typingSentence(names: readonly string[]): string {
+  if (names.length === 0) return '';
+  if (names.length === 1) return `${names[0]} is typing`;
+  if (names.length === 2) return `${names[0]} and ${names[1]} are typing`;
+  if (names.length === 3) return `${names[0]}, ${names[1]}, and ${names[2]} are typing`;
+  return `${names.length} people are typing`;
+}
+
+/**
+ * The reply context at the top of a bubble: who is being answered and what
+ * they said. Pressing it jumps to that message.
+ */
 export function ReplyChip({
   author,
   preview,
@@ -127,27 +247,22 @@ export function ReplyChip({
       onClick={onJump}
       aria-label={`Jump to the message from ${author}`}
       title="Jump to replied message"
-      className={cn(
-        'pc-focusable mb-1 inline-flex h-6 max-w-[min(100%,460px)] items-center gap-1.5',
-        'rounded-[var(--radius-chip)] bg-bg-raised px-2 shadow-[var(--shadow-chip)]',
-        'text-meta text-text-muted transition-colors duration-[var(--duration-fast)]',
-        'ease-[var(--ease-out)] hover:text-text-primary',
-      )}
+      className="glass-tl-reply"
     >
-      <CornerDownLeft size={13} aria-hidden className="shrink-0" />
-      <span className="shrink-0 font-semibold text-text-body">{author}</span>
-      <span className="min-w-0 truncate">{preview}</span>
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden className="shrink-0">
+        <path d="M9 14 4 9l5-5M4 9h10a6 6 0 0 1 6 6v3" />
+      </svg>
+      <span className="glass-tl-reply__author">{author}</span>
+      <span className="glass-tl-reply__preview">{preview}</span>
     </button>
   );
 }
 
 /**
- * A room that lit up while you were reading — the light metaphor carried into
- * the timeline (§7.4).
- *
- * It is a client-side observation of WP1's room light, not a server message:
- * the row exists only while people are actually in there, so the Join it offers
- * always leads somewhere with people in it.
+ * A voice channel that went live while you were reading. A client-side
+ * observation, never a server message: the row exists only while people are
+ * in there, so the Join it offers always leads somewhere with people in it.
+ * Amber, because amber means live (§1.3).
  */
 export function RoomLitEventRow({
   event,
@@ -163,13 +278,9 @@ export function RoomLitEventRow({
       // Last in the arrival's path: it fades in behind the face that caused it.
       data-motion-event={event.channelId}
       data-motion-shared={roomSharedName(event.channelId)}
-      className={cn(
-        'flex flex-wrap items-center gap-x-2.5 gap-y-1 pt-2 text-meta text-text-faint',
-        TIMELINE_GUTTER,
-        'sm:pl-[82px]',
-      )}
+      className="glass-tl-event glass-tl-col"
     >
-      <span className="pc-window is-talking h-2 w-2 shrink-0" aria-hidden />
+      <span className="glass-tl-event__dot" aria-hidden />
       <span className="min-w-0">
         {event.headline} <span aria-hidden>·</span> {event.detail}
       </span>
@@ -178,7 +289,7 @@ export function RoomLitEventRow({
         onClick={(clicked) =>
           onJoin(event, clicked.currentTarget.closest('[data-motion-shared]'))
         }
-        className="pc-focusable rounded-[var(--radius-chip)] px-1 font-semibold text-accent-primary hover:underline"
+        className="glass-tl-event__join"
       >
         Join
       </button>
@@ -186,7 +297,7 @@ export function RoomLitEventRow({
   );
 }
 
-/** A thread hanging off a message: faces, name, reply count, one action (§7.4). */
+/** A thread hanging off a message: faces, name, reply count, one action. */
 export function ThreadRow({
   name,
   meta,
@@ -201,54 +312,39 @@ export function ThreadRow({
   onOpen: () => void;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onOpen}
-      className={cn(
-        'pc-focusable mt-2 inline-flex max-w-full flex-wrap items-center gap-x-3 gap-y-1',
-        'rounded-[var(--radius-well)] bg-bg-raised px-3 py-2 text-left',
-        'shadow-[var(--shadow-chip)] transition-colors duration-[var(--duration-fast)]',
-        'ease-[var(--ease-out)] hover:bg-bg-mod-strong',
-      )}
-    >
+    <button type="button" onClick={onOpen} className="glass-tl-thread">
       {people.length > 0 && <AvatarStack people={people} size={20} max={3} context={`in ${name}`} />}
-      <span className="pc-display min-w-0 truncate text-name text-text-primary">{name}</span>
-      <span className="text-meta text-text-faint">{meta}</span>
+      <span className="glass-tl-thread__name">{name}</span>
+      <span className="glass-tl-thread__meta">{meta}</span>
       {archived && (
         <Chip size="sm" className="text-text-faint">
           Archived
         </Chip>
       )}
-      <span className="text-meta font-semibold text-accent-primary">Open thread</span>
+      <span className="glass-tl-thread__open">Open thread</span>
     </button>
   );
 }
 
 /**
- * The frame an attachment sits in: a well with the file's own line beneath it
- * (§7.4). Used by the image, encrypted and generic attachment shapes so they
- * cannot drift apart.
+ * The frame an attachment sits in, shaped like a bubble: radius 20 with the
+ * group's joined corner on the author's side (`glass-timeline.css` reads the
+ * row's side and `data-join-top`). Media restyling proper is WP-G13; this only
+ * gives the frame its place in a group.
  */
 export const AttachmentFrame = React.forwardRef<
   HTMLDivElement,
-  React.HTMLAttributes<HTMLDivElement> & { footer?: React.ReactNode }
->(function AttachmentFrame({ footer, className, children, ...props }, ref) {
+  React.HTMLAttributes<HTMLDivElement> & { footer?: React.ReactNode; joinTop?: boolean }
+>(function AttachmentFrame({ footer, joinTop, className, children, ...props }, ref) {
   return (
     <div
       ref={ref}
-      className={cn(
-        'mt-2 max-w-[min(100%,400px)] overflow-hidden rounded-[var(--radius-well)]',
-        'bg-bg-well shadow-[var(--shadow-chip)]',
-        className,
-      )}
+      data-join-top={joinTop || undefined}
+      className={cn('glass-tl-media', className)}
       {...props}
     >
       {children}
-      {footer && (
-        <div className="flex flex-wrap items-center gap-2 px-3 py-2 text-meta text-text-muted">
-          {footer}
-        </div>
-      )}
+      {footer && <div className="glass-tl-media__footer">{footer}</div>}
     </div>
   );
 });

@@ -3,7 +3,7 @@ import { MemoryRouter, Route, Routes } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { TopBar } from '../layout/TopBar';
-import { AuthorMeta, DayDivider, ReplyChip, RoomLitEventRow, ThreadRow, dayDividerLabel } from './TimelineParts';
+import { DayDivider, MessageActions, ReplyChip, RoomLitEventRow, ThreadRow, TimelineAvatar, dayDividerLabel, isToday, timelineTime, typingSentence } from './TimelineParts';
 import { composerPlaceholder } from './MessageInput';
 import { personLight } from '../../lib/attention/light';
 
@@ -15,8 +15,7 @@ import { personLight } from '../../lib/attention/light';
  *
  *   1. the header strip says "5 here · 19 online" and there is no member
  *      list anywhere near it (§6.5, §7.4);
- *   2. a message's meta says "in Shop floor · 9:12 AM" when its author is in a
- *      room right now, and only then (§7.4);
+ *   2. a message's face and its hover actions (docs/glass-spec.md §3.2);
  *   3. a room that lights up while you are reading appears in the timeline as
  *      an event, and disappears again when it empties (§7.4);
  *   4. the composer says where the message goes: "Message #general"
@@ -169,41 +168,54 @@ describe('the text room header (§7.4)', () => {
 });
 
 /* ---------------------------------------------------------------------------
- * 2. "in Shop floor · 9:12 AM"
+ * 2. A message's face and actions (docs/glass-spec.md §3.2)
  * ------------------------------------------------------------------------- */
 
-describe('a message author, as light (§7.4)', () => {
-  it('says which room the author is in when they are in one right now', () => {
-    const person = personLight({
-      userId: 'u1',
-      name: 'Mara Okonkwo',
-      status: 'online',
-      inRoom: true,
-      roomName: 'Shop floor',
-    });
-    render(<AuthorMeta person={person} timestamp="9:12 AM" />);
-    expect(screen.getByText('in Shop floor')).toBeVisible();
-    expect(screen.getByText('9:12 AM')).toBeVisible();
+describe('a message author in the Glass timeline', () => {
+  it('draws a plain 32px face with the author\'s initials when there is no photo', () => {
+    const { container } = render(<TimelineAvatar userId="u1" name="Mara Okonkwo" />);
+    const face = container.querySelector('.glass-tl-avatar') as HTMLElement;
+    expect(face).toHaveTextContent('MO');
+    expect(face.style.width).toBe('32px');
+    // The reference draws no presence ring on a timeline face.
+    expect(face.className).not.toMatch(/pc-lit|pc-speaking|pc-dim/);
   });
 
-  it('says only the time when the author is in no room', () => {
-    const person = personLight({ userId: 'u1', name: 'Mara Okonkwo', status: 'online' });
-    render(<AuthorMeta person={person} timestamp="9:12 AM" />);
-    expect(screen.queryByText(/^in /)).not.toBeInTheDocument();
-    expect(screen.getByText('9:12 AM')).toBeVisible();
-    // §9: the rim is a light state, so it still says its words somewhere.
-    expect(screen.getByText('Online')).toBeInTheDocument();
+  it('offers react, reply and more as named buttons, and says when more is open', () => {
+    const onReact = vi.fn();
+    const onReply = vi.fn();
+    const onMore = vi.fn();
+    render(<MessageActions authorName="Brendan" onReact={onReact} onReply={onReply} onMore={onMore} moreExpanded />);
+    screen.getByRole('button', { name: 'React to Brendan' }).click();
+    screen.getByRole('button', { name: 'Reply to Brendan' }).click();
+    const more = screen.getByRole('button', { name: 'More actions' });
+    more.click();
+    expect(more).toHaveAttribute('aria-expanded', 'true');
+    expect(onReact).toHaveBeenCalledTimes(1);
+    expect(onReply).toHaveBeenCalledTimes(1);
+    expect(onMore).toHaveBeenCalledTimes(1);
   });
 
-  it('never claims a room for somebody whose lights are off', () => {
-    const person = personLight({
-      userId: 'u1',
-      name: 'Mara Okonkwo',
-      status: 'offline',
-      roomName: 'Shop floor',
-    });
-    render(<AuthorMeta person={person} timestamp="9:12 AM" />);
-    expect(screen.queryByText('in Shop floor')).not.toBeInTheDocument();
+  it('leaves out the actions the reader may not take', () => {
+    render(<MessageActions authorName="Brendan" onMore={vi.fn()} moreExpanded={false} />);
+    expect(screen.queryByRole('button', { name: /React to/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Reply to/ })).toBeNull();
+    expect(screen.getByRole('button', { name: 'More actions' })).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('says who is typing in words', () => {
+    expect(typingSentence(['Eric'])).toBe('Eric is typing');
+    expect(typingSentence(['Eric', 'Nick'])).toBe('Eric and Nick are typing');
+    expect(typingSentence(['Eric', 'Nick', 'Luke'])).toBe('Eric, Nick, and Luke are typing');
+    expect(typingSentence(['a', 'b', 'c', 'd'])).toBe('4 people are typing');
+    expect(typingSentence([])).toBe('');
+  });
+
+  it('writes the time in the locale\'s own form', () => {
+    const iso = '2026-10-01T21:02:00';
+    const expected = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(new Date(iso));
+    expect(timelineTime(iso)).toBe(expected);
+    expect(timelineTime('not a date')).toBe('not a date');
   });
 });
 
@@ -241,13 +253,13 @@ describe('a room lighting up, in the timeline (§7.4)', () => {
 
 describe('the composer says where the message goes (plain words)', () => {
   it('names the channel, the group or the person', () => {
-    expect(composerPlaceholder('general')).toBe('Message #general');
+    expect(composerPlaceholder('general')).toBe('Message general');
     expect(composerPlaceholder('Ade, Jonas', 'group')).toBe('Message Ade, Jonas');
     expect(composerPlaceholder('Mara', 'person')).toBe('Message Mara');
   });
 
   it('has a phone form that drops a name too long to fit', () => {
-    expect(composerPlaceholder('build-log', 'channel', true)).toBe('Message #build-log');
+    expect(composerPlaceholder('build-log', 'channel', true)).toBe('Message build-log');
     // A channel name can be any length, so past what fits the name is dropped.
     expect(composerPlaceholder('a-very-long-channel-name-indeed', 'channel', true)).toBe('Write a message');
     for (const name of ['general', 'build-log', 'a-very-long-channel-name-indeed']) {
@@ -275,9 +287,17 @@ describe('the timeline’s small shapes (§7.4)', () => {
     expect(dayDividerLabel('2026-01-02T09:00:00.000Z', now)).toMatch(/January/);
   });
 
-  it('renders the divider chip', () => {
+  it('knows today from any other day', () => {
+    const now = new Date('2026-05-17T12:00:00').getTime();
+    expect(isToday('2026-05-17T00:30:00', now)).toBe(true);
+    expect(isToday('2026-05-16T23:30:00', now)).toBe(false);
+    expect(isToday('garbage', now)).toBe(false);
+  });
+
+  it('renders the day as a centered kicker that names itself', () => {
     render(<DayDivider label="Today" />);
     expect(screen.getByText('Today')).toBeVisible();
+    expect(screen.getByRole('separator', { name: 'Today' })).toBeInTheDocument();
   });
 
   it('names who is being answered on a reply chip', () => {
