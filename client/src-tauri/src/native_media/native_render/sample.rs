@@ -329,7 +329,11 @@ impl SampledSurface {
 }
 
 impl VideoSurface for SampledSurface {
-    fn new(_app: &tauri::AppHandle, _surface_id: SurfaceId) -> Result<Self, String> {
+    fn new(
+        _app: &tauri::AppHandle,
+        _surface_id: SurfaceId,
+        _fit: super::SurfaceFit,
+    ) -> Result<Self, String> {
         Err("a sampled surface is made with SampledSurface::wrap".to_string())
     }
 

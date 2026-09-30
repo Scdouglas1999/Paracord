@@ -8,7 +8,7 @@
  * that box to a native platform surface the decode worker renders into.
  *
  * Lifecycle:
- * - `attach()` invokes `native_render_attach { streamId, trackId } -> { surfaceId }`,
+ * - `attach()` invokes `native_render_attach { streamId, trackId, fit } -> { surfaceId }`,
  *   creating the surface (hidden, at a zero rect) and flipping the subscription's
  *   route bookkeeping on the native side.
  * - A single rAF-throttled reporter — fed by a ResizeObserver, an
@@ -66,6 +66,12 @@ export interface NativeVideoTileOptions {
    *   fullscreen modal) hides the surface.
    */
   occlusion?: boolean | 'underlay';
+  /**
+   * How the frame sits in the surface, as the canvas route's `CanvasRenderer`
+   * `fit`: `contain` (the default) letterboxes, `cover` fills and crops. Fixed
+   * at attach.
+   */
+  fit?: 'contain' | 'cover';
   /** Injectable window for tests; defaults to the element's own view. */
   window?: Window;
 }
@@ -234,6 +240,7 @@ export class NativeVideoTile {
   private readonly onVisibilityChange?: (visible: boolean) => void;
   private readonly onAttached?: (surfaceId: number) => void;
   private readonly occlusion: boolean | 'underlay';
+  private readonly fit: 'contain' | 'cover';
   private readonly view: Window | null;
   /** The occlusion boundary: the nearest ancestor marked
    * `data-native-surface-boundary` (the stream-tile root wrapping the canvas
@@ -269,6 +276,7 @@ export class NativeVideoTile {
     this.onVisibilityChange = options.onVisibilityChange;
     this.onAttached = options.onAttached;
     this.occlusion = options.occlusion ?? true;
+    this.fit = options.fit ?? 'contain';
     this.view =
       options.window ?? this.element.ownerDocument?.defaultView ?? (typeof window !== 'undefined' ? window : null);
     this.boundary =
@@ -287,6 +295,7 @@ export class NativeVideoTile {
     const result = (await this.invoke('native_render_attach', {
       streamId: this.streamId,
       trackId: this.trackId,
+      fit: this.fit,
     })) as { surfaceId?: number } | null;
     const surfaceId = Number(result?.surfaceId);
     if (!Number.isFinite(surfaceId)) {

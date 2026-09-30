@@ -4877,6 +4877,7 @@ mod tests {
         fn new(
             _app: &tauri::AppHandle,
             _id: super::super::native_render::SurfaceId,
+            _fit: super::super::native_render::SurfaceFit,
         ) -> Result<Self, String> {
             unreachable!("mock is constructed directly in tests")
         }

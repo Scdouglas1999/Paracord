@@ -38,7 +38,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use paracord_codec::video::DecodedFrameHandle;
 use tauri::Manager;
 
-use super::{SurfaceGeometry, SurfaceId, VideoSurface};
+use super::{SurfaceFit, SurfaceGeometry, SurfaceId, VideoSurface};
 
 // ── Objective-C runtime + CoreGraphics scalar types ──────────────────────────
 
@@ -193,6 +193,10 @@ extern "C" {
         create_if_necessary: Bool,
     ) -> CFArrayRef;
     static kCMSampleAttachmentKey_DisplayImmediately: CFStringRef;
+    /// `AVLayerVideoGravity` (an `NSString *`) that fills the layer and crops
+    /// the overflow: the layer's `cover`. Its default, `ResizeAspect`, is
+    /// `contain`.
+    static AVLayerVideoGravityResizeAspectFill: Id;
 }
 
 // ── Objective-C message-send helpers (transmuted `objc_msgSend`) ──────────────
@@ -382,7 +386,7 @@ thread_local! {
 
 /// Build one `NSView` + `AVSampleBufferDisplayLayer` on the main thread and add
 /// it above the webview (spec §3.5). Created hidden at a zero rect (spec §3.1).
-fn create_surface_on_main(app: &tauri::AppHandle, id: u64) -> Result<(), String> {
+fn create_surface_on_main(app: &tauri::AppHandle, id: u64, fit: SurfaceFit) -> Result<(), String> {
     let window = app
         .get_webview_window("main")
         .ok_or("main webview window not found")?;
@@ -422,6 +426,15 @@ fn create_surface_on_main(app: &tauri::AppHandle, id: u64) -> Result<(), String>
         send_void_bool(view, sel(c"setWantsLayer:"), YES);
         send_void_bool(view, sel(c"setHidden:"), YES);
         send_void_bool(layer, sel(c"setMasksToBounds:"), YES);
+        // The layer letterboxes by default (`ResizeAspect`); cover fills it,
+        // and `masksToBounds` crops what overflows.
+        if fit == SurfaceFit::Cover {
+            send_void_id(
+                layer,
+                sel(c"setVideoGravity:"),
+                AVLayerVideoGravityResizeAspectFill,
+            );
+        }
 
         // Add above the WKWebView sibling.
         send_add_subview(
@@ -644,7 +657,7 @@ pub struct MacosVideoSurface {
 }
 
 impl VideoSurface for MacosVideoSurface {
-    fn new(app: &tauri::AppHandle, surface_id: SurfaceId) -> Result<Self, String> {
+    fn new(app: &tauri::AppHandle, surface_id: SurfaceId, fit: SurfaceFit) -> Result<Self, String> {
         let id = surface_id.0;
         let create_app = app.clone();
 
@@ -652,7 +665,7 @@ impl VideoSurface for MacosVideoSurface {
         // runs inside `spawn_blocking`, so blocking is fine — matches Linux).
         let (tx, rx) = std::sync::mpsc::channel();
         app.run_on_main_thread(move || {
-            let _ = tx.send(create_surface_on_main(&create_app, id));
+            let _ = tx.send(create_surface_on_main(&create_app, id, fit));
         })
         .map_err(|e| format!("run_on_main_thread (surface create) failed: {e}"))?;
         rx.recv()

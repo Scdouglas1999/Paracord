@@ -12,6 +12,7 @@ import type {
   ScreenShareSource,
   ScreenShareThumbnail,
   TrackSubscriptionRequest,
+  SubscribeVideoOptions,
 } from './mediaEngine';
 import { MediaVideoDecoder, isWebCodecsDecodeSupported } from './video/videoDecoder';
 import { CanvasRenderer } from './video/canvasRenderer';
@@ -658,6 +659,8 @@ export class TauriMediaEngine implements MediaEngine {
   // the native cpal mixer (contract C4); the webview only drives the relay
   // track subscription, so we track subscribers to unregister on teardown.
   private screenShareAudioSubscribers = new Set<string>();
+  /** The relay subscription each stream-audio subscriber holds, once its track is known. */
+  private screenAudioRegistrations = new Map<string, { streamId: string; trackId: string }>();
   private audioSubscriptionReleases = new Map<string, () => void>();
   private videoSubscriptionReleases = new Map<string, () => void>();
 
@@ -1165,7 +1168,6 @@ export class TauriMediaEngine implements MediaEngine {
     if (this.disposed) return () => {};
     this.audioSubscriptionReleases.get(userId)?.();
     let stopped = false;
-    let registered: { streamId: string; trackId: string } | null = null;
     this.screenShareAudioSubscribers.add(userId);
     // Apply the caller's current volume immediately and keep it in sync.
     this.setSourceVolume(userId, getVolume());
@@ -1185,14 +1187,9 @@ export class TauriMediaEngine implements MediaEngine {
           track.trackId === 'screen-audio' &&
           track.kind === 'audio',
       );
-      if (audioTrack && !stopped && !this.disposed && this.screenShareAudioSubscribers.has(userId)) {
-        registered = { streamId: audioTrack.streamId, trackId: audioTrack.trackId };
-        await this.registerTrackSubscription({
-          streamId: audioTrack.streamId,
-          trackId: audioTrack.trackId,
-          requestedLayer: 0,
-        }).catch(() => {});
-      }
+      // Not published yet (a watch goes live before the relay describes the
+      // sharer's tracks): `media_track_publish` subscribes when it arrives.
+      if (audioTrack && !stopped) this.registerScreenAudioTrack(userId, audioTrack, false);
     });
 
     const release = () => {
@@ -1201,13 +1198,35 @@ export class TauriMediaEngine implements MediaEngine {
       this.audioSubscriptionReleases.delete(userId);
       clearInterval(volumeTimer);
       this.screenShareAudioSubscribers.delete(userId);
+      const registered = this.screenAudioRegistrations.get(userId);
+      this.screenAudioRegistrations.delete(userId);
       if (registered) {
         void this.unregisterTrackSubscription(registered.streamId, registered.trackId).catch(() => {});
-        registered = null;
       }
     };
     this.audioSubscriptionReleases.set(userId, release);
     return release;
+  }
+
+  /**
+   * Subscribe a stream-audio listener to its published track at the relay.
+   * The relay forwards a track to a session only on a matching subscription,
+   * so a watch that went live before the track was published is subscribed
+   * here when it is. The decoded audio plays in the native mixer. `renew`
+   * re-sends a subscription the listener already holds (the track changed);
+   * without it an existing one is left alone, because the relay repeats a
+   * track's publish after every key announce.
+   */
+  private registerScreenAudioTrack(userId: string, track: PublishedTrackDescriptor, renew: boolean): void {
+    if (this.disposed || !this.screenShareAudioSubscribers.has(userId)) return;
+    const current = this.screenAudioRegistrations.get(userId);
+    if (!renew && current?.streamId === track.streamId && current.trackId === track.trackId) return;
+    this.screenAudioRegistrations.set(userId, { streamId: track.streamId, trackId: track.trackId });
+    void this.registerTrackSubscription({
+      streamId: track.streamId,
+      trackId: track.trackId,
+      requestedLayer: 0,
+    }).catch(() => {});
   }
 
   setSourceVolume(userId: string, gain: number): void {
@@ -1224,6 +1243,7 @@ export class TauriMediaEngine implements MediaEngine {
     for (const release of this.audioSubscriptionReleases.values()) release();
     this.audioSubscriptionReleases.clear();
     this.screenShareAudioSubscribers.clear();
+    this.screenAudioRegistrations.clear();
   }
 
   private async initializeTransportListeners(): Promise<void> {
@@ -1542,6 +1562,10 @@ export class TauriMediaEngine implements MediaEngine {
         void this.announceWrappedTrackKey(track).catch(error => this.failKeyExchange(error));
       }
       const userId = String(track.publisherUserId);
+      if (track.trackId === 'screen-audio' && track.kind === 'audio') {
+        this.registerScreenAudioTrack(userId, track, !previous || !samePublishedTrack(previous, track));
+        return;
+      }
       const existing =
         this.videoSubscriptions.get(`${userId}:${track.trackId}`) ??
         (track.trackId === 'screen' || track.trackId === 'camera'
@@ -1834,7 +1858,7 @@ export class TauriMediaEngine implements MediaEngine {
     userId: string,
     canvas: HTMLCanvasElement,
     onFrame?: () => void,
-    options?: { preferredTrackId?: 'camera' | 'screen'; headless?: boolean },
+    options?: SubscribeVideoOptions & { headless?: boolean },
   ): () => void {
     if (this.disposed) return () => {};
     let disposed = false;
@@ -1844,6 +1868,7 @@ export class TauriMediaEngine implements MediaEngine {
     let ownedSubscription: NativeVideoSubscription | null = null;
     const preferredTrackId = options?.preferredTrackId;
     const headless = options?.headless === true;
+    const fit = options?.fit;
     // Camera and screen can be subscribed concurrently for the same publisher;
     // key the map so they don't tear each other down.
     const subscriptionKey = preferredTrackId ? `${userId}:${preferredTrackId}` : userId;
@@ -1916,7 +1941,7 @@ export class TauriMediaEngine implements MediaEngine {
           userId,
           preferredTrackId: preferredTrackId ?? null,
         });
-        const renderer = new CanvasRenderer(canvas);
+        const renderer = new CanvasRenderer(canvas, { fit });
         own(() => renderer.destroy());
         // A headless tap paints nothing: its frames go to the taps only.
         if (headless) renderer.setRenderingEnabled(false);
@@ -2137,6 +2162,9 @@ export class TauriMediaEngine implements MediaEngine {
               element: canvas,
               streamId,
               trackId,
+              // The surface places the picture as the canvas would (cover for
+              // camera tiles).
+              fit,
               invoke: async (command, args) => {
                 if (command === 'native_render_attach') {
                   this.assertOpen();

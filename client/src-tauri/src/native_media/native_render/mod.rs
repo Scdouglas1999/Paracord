@@ -86,6 +86,53 @@ impl SurfaceGeometry {
     }
 }
 
+/// How a frame sits in its surface, fixed when the surface is attached (the
+/// canvas route's `CanvasRenderer` `fit`, glass-polish-1 item 7).
+/// `Contain` shows the whole frame and letterboxes the rest; `Cover` fills the
+/// surface and crops the overflow evenly on the long axis (camera tiles).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SurfaceFit {
+    #[default]
+    Contain,
+    Cover,
+}
+
+impl SurfaceFit {
+    /// Read the renderer's `fit` (`contain`, the default, or `cover`). Anything
+    /// else is refused rather than read as the default.
+    pub fn parse(value: Option<&str>) -> Result<Self, String> {
+        match value {
+            None | Some("contain") => Ok(Self::Contain),
+            Some("cover") => Ok(Self::Cover),
+            Some(other) => Err(format!("unknown native surface fit: {other}")),
+        }
+    }
+
+    /// The scale the fragment shader applies to texture coordinates about the
+    /// center: `sample = (uv - 0.5) * scale + 0.5`, where `uv` spans the tile.
+    /// A component above 1 reaches outside the frame (the letterbox bars,
+    /// painted empty); below 1 it crops. `Contain` never crops and `Cover`
+    /// never leaves a bar. Degenerate sizes read as square.
+    pub fn uv_scale(self, tile_w: f32, tile_h: f32, source_w: f32, source_h: f32) -> [f32; 2] {
+        let aspect = |w: f32, h: f32| {
+            if w > 0.0 && h > 0.0 && w.is_finite() && h.is_finite() {
+                w / h
+            } else {
+                1.0
+            }
+        };
+        let tile = aspect(tile_w, tile_h);
+        let source = aspect(source_w, source_h);
+        let tile_wider = tile > source;
+        match (self, tile_wider) {
+            (Self::Contain, true) => [tile / source, 1.0],
+            (Self::Contain, false) => [1.0, source / tile],
+            (Self::Cover, true) => [1.0, source / tile],
+            (Self::Cover, false) => [tile / source, 1.0],
+        }
+    }
+}
+
 /// A platform surface that renders one native-decoded video track (spec §3.1).
 ///
 /// Implementations are `Send` (moved to the render thread as an owned handle);
@@ -100,8 +147,9 @@ impl SurfaceGeometry {
 /// `run_on_main_thread` (the marshaling primitive) and reaches the reparented
 /// webview host; a bare `Window` would only be used to fetch the same handle.
 pub trait VideoSurface: Send {
-    /// Attach to the app window; created hidden at a zero rect.
-    fn new(app: &tauri::AppHandle, surface_id: SurfaceId) -> Result<Self, String>
+    /// Attach to the app window; created hidden at a zero rect, drawing frames
+    /// with `fit`.
+    fn new(app: &tauri::AppHandle, surface_id: SurfaceId, fit: SurfaceFit) -> Result<Self, String>
     where
         Self: Sized;
     /// Update geometry / corner radius / visibility (physical px + dpr).
@@ -218,18 +266,22 @@ pub struct NativeRenderState;
 /// GTK GLArea zero-copy backend; macOS → `AVSampleBufferDisplayLayer`; every
 /// other target has no native-surface backend and returns a loud error (Windows
 /// is passthrough-only, so `native_render_attach` must never be reached there).
-fn create_surface(app: &tauri::AppHandle, id: SurfaceId) -> Result<Box<dyn VideoSurface>, String> {
+fn create_surface(
+    app: &tauri::AppHandle,
+    id: SurfaceId,
+    fit: SurfaceFit,
+) -> Result<Box<dyn VideoSurface>, String> {
     #[cfg(target_os = "linux")]
     {
-        Ok(Box::new(linux::LinuxVideoSurface::new(app, id)?))
+        Ok(Box::new(linux::LinuxVideoSurface::new(app, id, fit)?))
     }
     #[cfg(target_os = "macos")]
     {
-        Ok(Box::new(macos::MacosVideoSurface::new(app, id)?))
+        Ok(Box::new(macos::MacosVideoSurface::new(app, id, fit)?))
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
-        let _ = (app, id);
+        let _ = (app, id, fit);
         Err(
             "no native-surface backend on this platform (passthrough is the only \
              route here)"
@@ -249,11 +301,12 @@ pub struct AttachResponse {
 /// onto the `native-surface` route (spec §3.6 contract S1). Called **instead of**
 /// the frame-channel registration when the route is native-surface. The keyframe
 /// request / visibility / stats plumbing is shared with the existing
-/// subscription bookkeeping.
+/// subscription bookkeeping. `fit` is `contain` (the default) or `cover`.
 #[tauri::command]
 pub async fn native_render_attach(
     stream_id: String,
     track_id: String,
+    fit: Option<String>,
     app: tauri::AppHandle,
     owner_id: String,
     state: tauri::State<'_, super::MediaState>,
@@ -262,13 +315,14 @@ pub async fn native_render_attach(
     let slot = state.slot_for(&owner_id)?;
     let _transition = slot.owners.transition.lock().await;
     slot.owners.check(&owner_id)?;
+    let fit = SurfaceFit::parse(fit.as_deref())?;
     let app = super::CallEventSink::new(app, owner_id.clone());
     let id = registry().allocate_id();
 
     // Surface creation marshals to the GTK/AppKit main thread and blocks for the
     // result; keep it off the async worker.
     let create_app = app.clone();
-    let surface = tokio::task::spawn_blocking(move || create_surface(&create_app, id))
+    let surface = tokio::task::spawn_blocking(move || create_surface(&create_app, id, fit))
         .await
         .map_err(|err| format!("native surface create task failed: {err}"))?;
 
@@ -472,6 +526,89 @@ mod tests {
         );
         // Negative radius floors to zero.
         assert_eq!(geo(0, 0, 400, 300, 1.0, -5.0).physical_corner_radius(), 0.0);
+    }
+
+    /// Where the shader samples the tile's edge and center under a scale.
+    fn sample_at(scale: [f32; 2], uv: [f32; 2]) -> [f32; 2] {
+        [
+            (uv[0] - 0.5) * scale[0] + 0.5,
+            (uv[1] - 0.5) * scale[1] + 0.5,
+        ]
+    }
+
+    fn close(a: [f32; 2], b: [f32; 2]) -> bool {
+        (a[0] - b[0]).abs() < 1e-5 && (a[1] - b[1]).abs() < 1e-5
+    }
+
+    #[test]
+    fn the_fit_is_read_strictly() {
+        assert_eq!(SurfaceFit::parse(None).unwrap(), SurfaceFit::Contain);
+        assert_eq!(
+            SurfaceFit::parse(Some("contain")).unwrap(),
+            SurfaceFit::Contain
+        );
+        assert_eq!(SurfaceFit::parse(Some("cover")).unwrap(), SurfaceFit::Cover);
+        assert!(SurfaceFit::parse(Some("fill")).is_err());
+        assert!(SurfaceFit::parse(Some("")).is_err());
+    }
+
+    #[test]
+    fn contain_letterboxes_and_matches_the_old_shader() {
+        // 16:9 in a square: bars above and below, the full width shown.
+        let scale = SurfaceFit::Contain.uv_scale(400.0, 400.0, 1280.0, 720.0);
+        assert!(close(scale, [1.0, 16.0 / 9.0]));
+        // The old shader: contentHeight = tile/source, y0 = (1 - h) / 2, and
+        // sampleUv.y = (uv.y - y0) / h. The same sample at every row.
+        let content_height = 1.0 / (16.0 / 9.0);
+        let y0 = (1.0 - content_height) / 2.0;
+        for uv_y in [0.0f32, 0.1, 0.25, 0.5, 0.9, 1.0] {
+            let old = (uv_y - y0) / content_height;
+            assert!((sample_at(scale, [0.5, uv_y])[1] - old).abs() < 1e-5);
+        }
+        // A 4:3 frame in a 2:1 tile: pillarboxed, the full height shown.
+        let wide = SurfaceFit::Contain.uv_scale(200.0, 100.0, 640.0, 480.0);
+        assert!(close(wide, [2.0 / (4.0 / 3.0), 1.0]));
+    }
+
+    #[test]
+    fn cover_fills_and_crops_evenly() {
+        // 16:9 in a square: the full height, the sides cropped evenly.
+        let scale = SurfaceFit::Cover.uv_scale(400.0, 400.0, 1280.0, 720.0);
+        assert!(close(scale, [9.0 / 16.0, 1.0]));
+        let left = sample_at(scale, [0.0, 0.0]);
+        let right = sample_at(scale, [1.0, 1.0]);
+        assert!((left[0] - (1.0 - 9.0 / 16.0) / 2.0).abs() < 1e-5);
+        assert!((left[0] + right[0] - 1.0).abs() < 1e-5, "cropped evenly");
+        // A 4:3 frame in a 2:1 tile: the full width, top and bottom cropped.
+        let wide = SurfaceFit::Cover.uv_scale(200.0, 100.0, 640.0, 480.0);
+        assert!(close(wide, [1.0, (4.0 / 3.0) / 2.0]));
+    }
+
+    #[test]
+    fn no_fit_leaves_a_bar_under_cover_or_crops_under_contain() {
+        let sizes = [
+            (320.0, 180.0),
+            (180.0, 320.0),
+            (400.0, 400.0),
+            (1920.0, 1080.0),
+            (640.0, 480.0),
+            (1.0, 1.0),
+        ];
+        for (tile_w, tile_h) in sizes {
+            for (source_w, source_h) in sizes {
+                let cover = SurfaceFit::Cover.uv_scale(tile_w, tile_h, source_w, source_h);
+                let contain = SurfaceFit::Contain.uv_scale(tile_w, tile_h, source_w, source_h);
+                // Cover samples inside the frame everywhere (no bar); contain
+                // reaches every edge of it (nothing cropped).
+                assert!(cover[0] <= 1.0 + 1e-6 && cover[1] <= 1.0 + 1e-6);
+                assert!(contain[0] >= 1.0 - 1e-6 && contain[1] >= 1.0 - 1e-6);
+                // One axis is exact under both: the one that sets the scale.
+                assert!((cover[0] - 1.0).abs() < 1e-6 || (cover[1] - 1.0).abs() < 1e-6);
+                assert!((contain[0] - 1.0).abs() < 1e-6 || (contain[1] - 1.0).abs() < 1e-6);
+            }
+        }
+        // A frame of no size yet reads as square rather than dividing by zero.
+        assert_eq!(SurfaceFit::Cover.uv_scale(0.0, 0.0, 0.0, 0.0), [1.0, 1.0]);
     }
 
     #[test]

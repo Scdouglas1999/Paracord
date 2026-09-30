@@ -47,7 +47,7 @@ use std::time::{Duration, Instant};
 use gtk::prelude::*;
 use paracord_codec::video::{ColorSpace, DecodedFrameHandle, PixelFormat};
 
-use super::{SurfaceGeometry, SurfaceId, VideoSurface};
+use super::{SurfaceFit, SurfaceGeometry, SurfaceId, VideoSurface};
 
 // ── GL scalar + entry-point types ────────────────────────────────────────────
 
@@ -320,7 +320,9 @@ void main() {
 
 // I420 → RGB with the frame's signaled matrix (contract C1), plus a rounded-rect
 // SDF mask and premultiplied-alpha output so the corners composite cleanly over
-// the webview (spec §3.3).
+// the webview (spec §3.3). `uUvScale` places the frame in the tile
+// (`SurfaceFit::uv_scale`): contain letterboxes (samples outside the frame are
+// empty), cover crops the overflow evenly.
 const FRAGMENT_SHADER: &str = r#"#version 150 core
 in vec2 v_uv;
 out vec4 frag;
@@ -329,24 +331,12 @@ uniform sampler2D texU;
 uniform sampler2D texV;
 uniform mat3 yuv2rgb;
 uniform vec2 uSize;
-uniform vec2 uSourceSize;
+uniform vec2 uUvScale;
 uniform float uRadius;
 void main() {
-    vec2 sampleUv = v_uv;
-    bool insideFrame = true;
-    float tileAspect = uSize.x / max(uSize.y, 1.0);
-    float sourceAspect = uSourceSize.x / max(uSourceSize.y, 1.0);
-    if (tileAspect > sourceAspect) {
-        float contentWidth = sourceAspect / tileAspect;
-        float x0 = (1.0 - contentWidth) * 0.5;
-        insideFrame = v_uv.x >= x0 && v_uv.x <= (x0 + contentWidth);
-        sampleUv.x = (v_uv.x - x0) / contentWidth;
-    } else {
-        float contentHeight = tileAspect / sourceAspect;
-        float y0 = (1.0 - contentHeight) * 0.5;
-        insideFrame = v_uv.y >= y0 && v_uv.y <= (y0 + contentHeight);
-        sampleUv.y = (v_uv.y - y0) / contentHeight;
-    }
+    vec2 sampleUv = (v_uv - 0.5) * uUvScale + 0.5;
+    bool insideFrame = all(greaterThanEqual(sampleUv, vec2(0.0)))
+        && all(lessThanEqual(sampleUv, vec2(1.0)));
     vec3 rgb = vec3(0.0);
     if (insideFrame) {
         float y = texture(texY, sampleUv).r * 255.0;
@@ -418,7 +408,7 @@ struct GlRenderer {
     u_tex_v: GLint,
     u_mat: GLint,
     u_size: GLint,
-    u_source_size: GLint,
+    u_uv_scale: GLint,
     u_radius: GLint,
 }
 
@@ -488,7 +478,7 @@ impl GlRenderer {
             let u_tex_v = (gl.glGetUniformLocation)(program, c"texV".as_ptr());
             let u_mat = (gl.glGetUniformLocation)(program, c"yuv2rgb".as_ptr());
             let u_size = (gl.glGetUniformLocation)(program, c"uSize".as_ptr());
-            let u_source_size = (gl.glGetUniformLocation)(program, c"uSourceSize".as_ptr());
+            let u_uv_scale = (gl.glGetUniformLocation)(program, c"uUvScale".as_ptr());
             let u_radius = (gl.glGetUniformLocation)(program, c"uRadius".as_ptr());
 
             Ok(GlRenderer {
@@ -506,7 +496,7 @@ impl GlRenderer {
                 u_tex_v,
                 u_mat,
                 u_size,
-                u_source_size,
+                u_uv_scale,
                 u_radius,
             })
         }
@@ -586,6 +576,7 @@ impl GlRenderer {
         phys_w: u32,
         phys_h: u32,
         radius: f32,
+        fit: SurfaceFit,
         handle: Option<DecodedFrameHandle>,
     ) -> Result<(), String> {
         unsafe {
@@ -634,7 +625,13 @@ impl GlRenderer {
             let matrix = yuv_to_rgb_matrix(self.colorspace);
             (gl.glUniformMatrix3fv)(self.u_mat, 1, GL_FALSE, matrix.as_ptr());
             (gl.glUniform2f)(self.u_size, phys_w as f32, phys_h as f32);
-            (gl.glUniform2f)(self.u_source_size, self.tex_w as f32, self.tex_h as f32);
+            let [scale_x, scale_y] = fit.uv_scale(
+                phys_w as f32,
+                phys_h as f32,
+                self.tex_w as f32,
+                self.tex_h as f32,
+            );
+            (gl.glUniform2f)(self.u_uv_scale, scale_x, scale_y);
             (gl.glUniform1f)(self.u_radius, radius);
 
             (gl.glBindVertexArray)(self.vao);
@@ -1033,6 +1030,7 @@ fn create_surface_on_main(
     id: u64,
     slot: Arc<Mutex<Option<DecodedFrameHandle>>>,
     error_slot: Arc<Mutex<Option<String>>>,
+    fit: SurfaceFit,
 ) -> Result<(), String> {
     RENDER_HOST.with(|host| {
         let host = host.borrow();
@@ -1066,7 +1064,7 @@ fn create_surface_on_main(
         let renderer_cb = renderer.clone();
         let error_cb = error_slot.clone();
         glarea.connect_render(move |area, _ctx| {
-            render_callback(area, &slot_cb, &geometry_cb, &renderer_cb, &error_cb);
+            render_callback(area, &slot_cb, &geometry_cb, &renderer_cb, &error_cb, fit);
             glib::Propagation::Stop
         });
         // The GL objects die with the context; drop the renderer handle when the
@@ -1104,6 +1102,7 @@ fn render_callback(
     geometry: &Rc<RefCell<SurfaceGeometry>>,
     renderer: &Rc<RefCell<Option<GlRenderer>>>,
     error_slot: &Arc<Mutex<Option<String>>>,
+    fit: SurfaceFit,
 ) {
     // Record a fatal GL-thread failure (first one wins) so `present()` can route
     // it to the §3.7 teardown path instead of the surface silently going blank.
@@ -1143,7 +1142,7 @@ fn render_callback(
 
     let mut slot_renderer = renderer.borrow_mut();
     if let Some(renderer) = slot_renderer.as_mut() {
-        if let Err(err) = renderer.render(gl, phys_w, phys_h, radius, handle) {
+        if let Err(err) = renderer.render(gl, phys_w, phys_h, radius, fit, handle) {
             fail(format!("native surface render failed: {err}"));
         }
     }
@@ -1229,7 +1228,7 @@ pub struct LinuxVideoSurface {
 }
 
 impl VideoSurface for LinuxVideoSurface {
-    fn new(app: &tauri::AppHandle, surface_id: SurfaceId) -> Result<Self, String> {
+    fn new(app: &tauri::AppHandle, surface_id: SurfaceId, fit: SurfaceFit) -> Result<Self, String> {
         let slot: Arc<Mutex<Option<DecodedFrameHandle>>> = Arc::new(Mutex::new(None));
         let slot_main = slot.clone();
         let error_slot: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
@@ -1240,7 +1239,7 @@ impl VideoSurface for LinuxVideoSurface {
         // runs inside `spawn_blocking`, so blocking is fine).
         let (tx, rx) = std::sync::mpsc::channel();
         app.run_on_main_thread(move || {
-            let _ = tx.send(create_surface_on_main(id, slot_main, error_slot_main));
+            let _ = tx.send(create_surface_on_main(id, slot_main, error_slot_main, fit));
         })
         .map_err(|e| format!("run_on_main_thread (surface create) failed: {e}"))?;
         rx.recv()

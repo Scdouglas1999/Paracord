@@ -292,6 +292,20 @@ describe('NativeVideoTile', () => {
     expect(invoke).toHaveBeenCalledWith('native_render_detach', { surfaceId: 7 });
   });
 
+  it('asks the native side for the fit the tile wants (contain unless told)', async () => {
+    const contained = makeTile();
+    document.elementFromPoint = vi.fn(() => contained.element) as typeof document.elementFromPoint;
+    await contained.tile.attach();
+    expect(contained.invoke).toHaveBeenCalledWith('native_render_attach', { streamId: 's1', trackId: 'screen', fit: 'contain' });
+    contained.tile.destroy();
+
+    const covered = makeTile({ trackId: 'camera', fit: 'cover' });
+    document.elementFromPoint = vi.fn(() => covered.element) as typeof document.elementFromPoint;
+    await covered.tile.attach();
+    expect(covered.invoke).toHaveBeenCalledWith('native_render_attach', { streamId: 's1', trackId: 'camera', fit: 'cover' });
+    covered.tile.destroy();
+  });
+
   it('skips a no-op geometry report', async () => {
     const { tile, element, invoke } = makeTile();
     document.elementFromPoint = vi.fn(() => element) as typeof document.elementFromPoint;

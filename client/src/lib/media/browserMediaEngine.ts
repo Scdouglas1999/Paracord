@@ -14,6 +14,7 @@ import type {
   ScreenShareThumbnail,
   TrackSubscriptionDescriptor,
   TrackSubscriptionRequest,
+  SubscribeVideoOptions,
 } from './mediaEngine';
 // The AudioWorklet processor must reach the browser as a real, transpiled
 // JavaScript module URL. `new URL('./audio/audioProcessor.ts', import.meta.url)`
@@ -1139,11 +1140,11 @@ export class BrowserMediaEngine implements MediaEngine {
     void deriveTrackSsrc(userId, 'screen:audio').then((derived) => {
       const sub = this.screenAudioSubscriptions.get(userId);
       if (sub !== subscription) return;
-      // Keep a published layer SSRC when present; otherwise pin the derived value
-      // so findScreenAudioUserIdForSsrc can match packets before track_publish.
-      if (sub.ssrc === 0 || !publishedTrack) {
-        sub.ssrc = publishedTrack?.layers[0]?.ssrc ?? derived;
-      }
+      // Keep a published layer SSRC when present (it may have been published
+      // while this was deriving); otherwise pin the derived value so
+      // findScreenAudioUserIdForSsrc can match packets before track_publish.
+      const published = this.findPublishedScreenAudioTrack(userId)?.layers[0]?.ssrc;
+      sub.ssrc = published ?? (sub.ssrc === 0 ? derived : sub.ssrc);
     });
 
     if (publishedTrack) {
@@ -1444,13 +1445,16 @@ export class BrowserMediaEngine implements MediaEngine {
     userId: string,
     canvas: HTMLCanvasElement,
     onFrame?: () => void,
-    options?: { preferredTrackId?: 'camera' | 'screen' },
+    options?: SubscribeVideoOptions,
   ): () => void {
     if (this.disposed) return () => {};
     const preferredTrackId = options?.preferredTrackId;
     const subscriptionKey = this.videoSubscriptionKey(userId, preferredTrackId);
 
-    const renderer = new CanvasRenderer(canvas);
+    // Each surface has its own renderer, so the fit is per surface even when
+    // several share one subscription (a covered camera tile and a contained
+    // thumbnail of the same camera).
+    const renderer = new CanvasRenderer(canvas, { fit: options?.fit });
     const sink: VideoSink = { canvas, renderer, onFrame };
 
     const joined = this.videoSubscriptions.get(subscriptionKey);
@@ -2285,6 +2289,11 @@ export class BrowserMediaEngine implements MediaEngine {
         return;
       }
 
+      // A view session holds no voices (plan §8: Watch is the stream and its
+      // own audio). The relay never forwards them and no voice key reaches a
+      // viewer; anything else that arrives here is dropped, not materialized.
+      if (this.role === 'view') return;
+
       // Audio handling
       const participant = this.participants.get(header.ssrc);
       if (!participant) {
@@ -2683,6 +2692,13 @@ export class BrowserMediaEngine implements MediaEngine {
           this.publishedTracks.set(key, track);
           for (const layer of track.layers) {
             this.ssrcToUserId.set(layer.ssrc, publisherUserId);
+          }
+          // A stream's own audio is never a video subscription's business (a
+          // bare per-person video subscription would otherwise be matched
+          // below and switched onto the audio SSRC).
+          if (track.trackId === 'screen-audio' && track.kind === 'audio') {
+            this.onScreenAudioTrackPublished(publisherUserId, previous, track);
+            break;
           }
           const existingSub = this.videoSubscriptionFor(publisherUserId, track.trackId);
           // The relay repeats a track's publish after each key announce for it
@@ -3356,6 +3372,34 @@ export class BrowserMediaEngine implements MediaEngine {
         active: true,
       }],
     };
+  }
+
+  /**
+   * A `screen-audio` track was published (or re-published). Somebody already
+   * listening for this person's stream audio (a watch that went live before
+   * the relay described the track) is subscribed now: the relay forwards a
+   * track to a session only on a matching subscription, so without this a
+   * view session never hears the stream it watches. An unchanged repeat (the
+   * relay re-sends a publish after every key announce) is already subscribed,
+   * and re-subscribing would only make the relay replay the stored key.
+   */
+  private onScreenAudioTrackPublished(
+    userId: string,
+    previous: PublishedTrackDescriptor | undefined,
+    track: PublishedTrackDescriptor,
+  ): void {
+    const subscription = this.screenAudioSubscriptions.get(userId);
+    if (subscription) {
+      subscription.ssrc = track.layers[0]?.ssrc ?? subscription.ssrc;
+      if (!previous || !samePublishedTrack(previous, track)) {
+        void this.registerTrackSubscription({
+          streamId: track.streamId,
+          trackId: track.trackId,
+          requestedLayer: 0,
+        }).catch(() => {});
+      }
+    }
+    void this.applyDeliveredTrackKeys(track);
   }
 
   private findPublishedScreenAudioTrack(userId: string): PublishedTrackDescriptor | undefined {

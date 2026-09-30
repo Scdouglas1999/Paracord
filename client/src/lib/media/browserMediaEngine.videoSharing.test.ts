@@ -41,7 +41,7 @@ class MockRenderer {
   destroyed = false;
   cleared = 0;
   rendered: unknown[] = [];
-  constructor(public canvas: HTMLCanvasElement) {
+  constructor(public canvas: HTMLCanvasElement, public options?: { fit?: 'contain' | 'cover' }) {
     renderers.push(this);
   }
   get canvasElement() {
@@ -110,6 +110,21 @@ describe('BrowserMediaEngine video subscription sharing', () => {
     expect(renderers).toHaveLength(2);
     expect(renderers.every((renderer) => !renderer.destroyed)).toBe(true);
 
+    releaseTile();
+    releaseThumbnail();
+  });
+
+  it('gives each surface the fit it asked for, on one shared decoder', () => {
+    const engine = new BrowserMediaEngine();
+    const releaseTile = engine.subscribeVideo('7', canvas(), undefined, {
+      preferredTrackId: 'camera',
+      fit: 'cover',
+    });
+    const releaseThumbnail = engine.subscribeVideo('7', canvas(64, 36), undefined, {
+      preferredTrackId: 'camera',
+    });
+    expect(decoders).toHaveLength(1);
+    expect(renderers.map((renderer) => renderer.options?.fit)).toEqual(['cover', undefined]);
     releaseTile();
     releaseThumbnail();
   });

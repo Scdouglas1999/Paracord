@@ -54,6 +54,7 @@ const mocks = vi.hoisted(() => ({
     remove: vi.fn().mockResolvedValue(undefined),
   },
   avatarRenders: new Map<string, number>(),
+  lowBandwidthMode: false,
   /** What `useGuildEvent` answers: the plan card and the event chip read it. */
   eventResult: {
     status: 'ready' as 'loading' | 'ready' | 'missing' | 'error',
@@ -169,7 +170,7 @@ vi.mock('../../stores/typingStore', () => ({
     selector({ typingByChannel: mocks.typingByChannel }),
 }));
 vi.mock('../../stores/uiStore', () => ({
-  useUIStore: (selector: (s: { lowBandwidthMode: boolean }) => unknown) => selector({ lowBandwidthMode: false }),
+  useUIStore: (selector: (s: { lowBandwidthMode: boolean }) => unknown) => selector({ lowBandwidthMode: mocks.lowBandwidthMode }),
 }));
 vi.mock('../../stores/toastStore', () => ({
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn(), warning: vi.fn() },
@@ -673,6 +674,72 @@ describe('media (§3.2)', () => {
     const { container } = renderList();
     await screen.findByRole('button', { name: 'Open image preview: mission.png' });
     expect(container.querySelector('.glass-media')).toHaveAttribute('data-join-top', 'true');
+  });
+});
+
+describe('a posted clip (§6.4)', () => {
+  const clip = {
+    id: 'c1',
+    filename: "Clip 0m30s from Vincent's screen.webm",
+    size: 1_280_000,
+    content_type: 'video/webm',
+    url: '/attachments/c1',
+  };
+  const like = { emoji: '\u{1F44D}', count: 1, me: false };
+
+  it('is a 16:9 media bubble with a play button and its label, not a file row', async () => {
+    mocks.useMessagesReturn.messages = [message('eric', todayAt(0), { content: '', attachments: [clip] })];
+    const { container } = renderList();
+    const play = await screen.findByRole('button', { name: "Play clip, 0:30 from Vincent's screen" });
+    const media = container.querySelector('.glass-media') as HTMLElement;
+    expect(media).toContainElement(play);
+    expect(media.querySelector('.glass-media__frame')).toHaveStyle({ aspectRatio: '16 / 9' });
+    expect(within(media).getByText("0:30 from Vincent's screen")).toBeInTheDocument();
+    expect(media.querySelector('video')).not.toBeNull();
+    expect(container.querySelector('.glass-file')).toBeNull();
+    // A picture's tools: download for anyone, delete only for your own.
+    expect(within(media).getByRole('button', { name: `Download ${clip.filename}` })).toBeInTheDocument();
+    expect(within(media).queryByRole('button', { name: `Delete ${clip.filename}` })).toBeNull();
+  });
+
+  it('offers delete on your own clip and joins the corner under your words', async () => {
+    mocks.useMessagesReturn.messages = [message('viewer', todayAt(0), { content: 'that was close', attachments: [clip] })];
+    const { container } = renderList();
+    expect(await screen.findByRole('button', { name: `Delete ${clip.filename}` })).toBeInTheDocument();
+    expect(container.querySelector('.glass-media')).toHaveAttribute('data-join-top', 'true');
+  });
+
+  it('takes the reactions chip on its corner, like a picture', async () => {
+    mocks.useMessagesReturn.messages = [message('eric', todayAt(0), { content: '', attachments: [clip], reactions: [like] })];
+    const { container } = renderList();
+    await screen.findByRole('button', { name: "Play clip, 0:30 from Vincent's screen" });
+    const media = container.querySelector('.glass-media') as HTMLElement;
+    const chip = within(media).getByRole('group', { name: 'Reactions' });
+    expect(chip.parentElement).toBe(media);
+  });
+
+  it('leaves any other video a file row, and a clip too while previews are off', async () => {
+    const other = { ...clip, id: 'v2', filename: 'holiday.webm' };
+    mocks.useMessagesReturn.messages = [message('eric', todayAt(0), { content: '', attachments: [other] })];
+    const first = renderList();
+    expect(await screen.findByRole('button', { name: 'holiday.webm' })).toBeInTheDocument();
+    expect(first.container.querySelector('.glass-media')).toBeNull();
+    first.unmount();
+
+    mocks.lowBandwidthMode = true;
+    try {
+      mocks.useMessagesReturn.messages = [message('eric', todayAt(0), { content: '', attachments: [clip] })];
+      const { container } = renderList();
+      const row = await waitFor(() => {
+        const found = container.querySelector('.glass-file');
+        expect(found).not.toBeNull();
+        return found as HTMLElement;
+      });
+      expect(within(row).getByText('Preview off')).toBeInTheDocument();
+      expect(container.querySelector('.glass-media')).toBeNull();
+    } finally {
+      mocks.lowBandwidthMode = false;
+    }
   });
 });
 

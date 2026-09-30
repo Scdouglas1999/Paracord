@@ -111,7 +111,9 @@ export function CameraTile({
         sawFrame = true;
         setHasPicture(true);
       },
-      { preferredTrackId: 'camera' },
+      // A camera fills its tile (cropped evenly), never letterboxed. Theater
+      // reuses this tile, so its cameras fill too.
+      { preferredTrackId: 'camera', fit: 'cover' },
     );
     return () => {
       unsubscribe();

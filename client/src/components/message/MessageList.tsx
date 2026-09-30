@@ -22,6 +22,7 @@ import { channelApi } from '../../api/channels';
 import { MessageEditHistoryDialog } from './MessageEditHistoryDialog';
 import { fileApi } from '../../api/files';
 import { EncryptedAttachment } from '../file/EncryptedAttachment';
+import { ClipAttachment, isClipAttachment } from '../../lib/media/clips/ClipAttachment';
 import { hasEncryptedAttachments } from '../../lib/messages/attachments/messageBodyProjection';
 import { extractApiError } from '../../api/client';
 import { ChannelType, MessageType, Permissions, hasPermission, type Channel, type ChannelOverwrite, type Member, type Message, type Role } from '../../types';
@@ -2889,7 +2890,9 @@ function OwnedMessageList({
     // The picture must be one the frame below actually draws.
     const biteMedia = !feedEmbed && !msg.e2ee && !lowBandwidthMode
       ? (msg.attachments ?? []).find((att) =>
-        !inForwardCard(msg, att) && isImageAttachment(att) && Boolean(resolveFederatedAttachmentUrl(att, msg.channel_id)))
+        !inForwardCard(msg, att)
+        && (isImageAttachment(att) || isClipAttachment(att.filename))
+        && Boolean(resolveFederatedAttachmentUrl(att, msg.channel_id)))
       : undefined;
     const biteCard = scoreCard ? 'score' : feedCard ? 'feed' : msg.poll ? 'poll' : eventCards.length > 0 ? 'event' : null;
     const biteHost: 'media' | 'bubble' | 'card' | 'inline' = biteMedia
@@ -3446,11 +3449,43 @@ function OwnedMessageList({
                     </GlassMedia>
                   );
                 }
+                if (src && isClipAttachment(att.filename) && !lowBandwidthMode) {
+                  return (
+                    // A clip cut from a stream (§6.4): a 16:9 media bubble with
+                    // its first picture, a play button and "0:30 from
+                    // Vincent's screen", playing inline. The same frame and
+                    // tools as a picture, so its corners join the same way.
+                    // With previews off it stays a file row, like a picture.
+                    <GlassMedia
+                      key={att.id}
+                      joinTop={joinTop}
+                      width={16}
+                      height={9}
+                      badge={federatedNote}
+                      bite={att.id === biteMedia?.id ? bite : undefined}
+                      tools={
+                        <>
+                          <MediaTool label={`Download ${att.filename}`} busy={busyLabel} disabled={busy} onClick={download}>
+                            <DownloadMark />
+                          </MediaTool>
+                          {isOwnMessage && !isFederated && (
+                            <MediaTool label={`Delete ${att.filename}`} disabled={busy} onClick={remove}>
+                              <TrashMark />
+                            </MediaTool>
+                          )}
+                        </>
+                      }
+                    >
+                      <ClipAttachment url={src} filename={att.filename} />
+                    </GlassMedia>
+                  );
+                }
                 return (
                   <GlassFile
                     key={att.id}
                     name={att.filename}
                     size={att.size != null ? formatFileSize(att.size) : null}
+                    note={src && isClipAttachment(att.filename) ? 'Preview off' : undefined}
                     badge={federatedNote}
                     joinTop={joinTop}
                     onOpen={download}

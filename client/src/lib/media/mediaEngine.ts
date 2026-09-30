@@ -1,4 +1,12 @@
 import type { OperationContext } from '../operationContext';
+
+/** Options for `MediaEngine.subscribeVideo`. */
+export interface SubscribeVideoOptions {
+  preferredTrackId?: 'camera' | 'screen';
+  /** How the picture sits in this surface. Default `contain`. */
+  fit?: 'contain' | 'cover';
+}
+
 export interface ScreenShareConfig {
   audio: boolean;
   maxFrameRate?: number;
@@ -262,11 +270,17 @@ export interface MediaEngine {
   listPublishedTracks(): Promise<PublishedTrackDescriptor[]>;
   registerTrackSubscription(request: TrackSubscriptionRequest): Promise<void>;
   unregisterTrackSubscription(streamId: string, trackId: string): Promise<void>;
+  /**
+   * `fit` places the picture in this surface: `contain` (the default)
+   * letterboxes, `cover` fills and crops (camera tiles). It is per surface,
+   * fixed for the life of the subscription, and holds on every route (the
+   * canvas and the desktop's native surface).
+   */
   subscribeVideo(
     userId: string,
     canvas: HTMLCanvasElement,
     onFrame?: () => void,
-    options?: { preferredTrackId?: 'camera' | 'screen' },
+    options?: SubscribeVideoOptions,
   ): () => void;
   subscribeLocalPublishedScreen(canvas: HTMLCanvasElement, onFrame?: () => void): () => void;
   /**
