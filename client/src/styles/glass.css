@@ -1,0 +1,344 @@
+/* =============================================================================
+   Glass recipes (docs/glass-spec.md §1, §2.3, §2.4, §9).
+
+   No color is written here: every surface, ink and edge is a token from
+   `tokens.css` (the literal-color lint enforces it). In `@layer components`, so
+   a utility at the call site still wins.
+
+   Only `transform` and `opacity` animate (the motion lint). Hover and press are
+   background-color and color changes over 120ms ease-out; nothing scales on
+   press. Reduced motion is the `data-motion` switch, never a media query.
+   ============================================================================= */
+
+/* ---- Type roles (§2.3) --------------------------------------------------- */
+.glass-title-server {
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.1;
+  font-stretch: 92%;
+  letter-spacing: -0.025em;
+}
+
+.glass-title-channel {
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+
+.glass-title-section {
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.glass-body {
+  font-size: 15px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+.glass-name {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.glass-secondary {
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.35;
+  color: var(--ink-2);
+}
+
+/* The instrument cut: timestamps, durations, dates, counts, "LIVE 42 MIN". The
+   narrow face (wdth 82) is only ever used at 12px and up: below that it is not
+   legible, so the size is floored here rather than trusted to every call site. */
+.glass-instrument {
+  font-stretch: 82%;
+  letter-spacing: 0.01em;
+  font-size: max(12px, 1em);
+}
+
+.glass-kicker {
+  font-stretch: 82%;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/* Badges are the regular cut, never the narrow one. */
+.glass-badge-text {
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  font-stretch: 100%;
+}
+
+.glass-ink-1 {
+  color: var(--ink-1);
+}
+
+.glass-ink-2 {
+  color: var(--ink-2);
+}
+
+.glass-ink-3 {
+  color: var(--ink-3);
+}
+
+/* ---- Focus (§9): 2px, offset 2, on every control ------------------------- */
+.glass-focusable:focus-visible {
+  outline: var(--glass-focus-width) solid var(--glass-focus-color);
+  outline-offset: var(--glass-focus-offset);
+}
+
+/* ---- Pane: the floating panel surface ------------------------------------ */
+.glass-pane {
+  position: relative;
+  border-radius: var(--r-pane);
+  background-color: var(--pane);
+  box-shadow: var(--sh-pane);
+  color: var(--ink-1);
+  /* The room eases over 1-2s; a pane blends between the writes. */
+  transition: background-color var(--glass-ms-room) ease;
+}
+
+.glass-pane--deep {
+  background-color: var(--deep);
+}
+
+.glass-pane--solid {
+  background-color: var(--solid);
+}
+
+/* A faint radial of the room in the pane's far corner. */
+.glass-pane--glow::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  pointer-events: none;
+  background: radial-gradient(420px 340px at 100% 40%, var(--glow), transparent 70%);
+}
+
+/* Reduced transparency: panes become fully opaque. The switch is written by the
+   appearance setting (WP-G1); until then it never matches. */
+:root[data-reduced-transparency='true'] .glass-pane,
+:root[data-reduced-transparency='true'] .glass-pane--deep {
+  background-color: var(--solid);
+}
+
+/* ---- Buttons (§1.4, §1.5, §9) -------------------------------------------- */
+.glass-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex-shrink: 0;
+  height: 36px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: var(--r-capsule);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  color: var(--ink-1);
+  background-color: transparent;
+  transition:
+    background-color var(--glass-ms) var(--glass-ease),
+    color var(--glass-ms) var(--glass-ease);
+}
+
+.glass-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.glass-btn--md {
+  height: 44px;
+  padding: 0 20px;
+  font-size: 15px;
+}
+
+/* Primary: Join. The one filled button on a screen. */
+.glass-btn--primary {
+  background-color: var(--join);
+  color: var(--join-ink);
+}
+
+.glass-btn--primary:hover:not(:disabled) {
+  background-color: var(--join-hover);
+}
+
+.glass-btn--primary:active:not(:disabled) {
+  background-color: var(--join-press);
+}
+
+/* Glass: a control you press over content. */
+.glass-btn--glass,
+.glass-btn--icon {
+  background-color: var(--glass-fill);
+  box-shadow: var(--glass-edge);
+}
+
+.glass-btn--glass {
+  padding: 0 12px 0 10px;
+}
+
+.glass-btn--glass:hover:not(:disabled),
+.glass-btn--icon:hover:not(:disabled) {
+  background-color: var(--glass-fill-hover);
+}
+
+.glass-btn--glass:active:not(:disabled),
+.glass-btn--icon:active:not(:disabled) {
+  background-color: var(--glass-fill-press);
+}
+
+.glass-btn--glass[aria-pressed='true'],
+.glass-btn--icon[aria-pressed='true'] {
+  background-color: var(--glass-fill-on);
+  color: var(--ink-1);
+}
+
+/* On, in amber: Listen while listening. */
+.glass-btn--glass[data-tone='amber'][aria-pressed='true'] {
+  background-color: var(--amber-on);
+  color: var(--amber-ink);
+}
+
+/* Text: a decision (Watch, Leave, Stop watching, Mark read). */
+.glass-btn--text {
+  padding: 0 10px;
+  border-radius: 10px;
+}
+
+.glass-btn--text:hover:not(:disabled) {
+  background-color: var(--wash-hover);
+}
+
+.glass-btn--text:active:not(:disabled) {
+  background-color: var(--wash-press);
+}
+
+/* Icon: a circle, 36 or 44. */
+.glass-btn--icon {
+  width: 36px;
+  padding: 0;
+}
+
+.glass-btn--icon.glass-btn--md {
+  width: 44px;
+}
+
+/* ---- Chips (solid, no outline: content is solid) -------------------------- */
+.glass-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: var(--r-chip);
+  background-color: var(--chip-count);
+  color: var(--ink-1);
+}
+
+.glass-chip--count {
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  justify-content: center;
+  border-radius: 10px;
+}
+
+.glass-chip--mention {
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  justify-content: center;
+  border-radius: 10px;
+  background-color: var(--mention-chip);
+  color: var(--mention-ink);
+}
+
+.glass-chip--live,
+.glass-chip--event {
+  height: 24px;
+  padding: 0 8px;
+  font-size: 15px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.glass-chip--live {
+  background-color: var(--amber-tint);
+  color: var(--amber-ink);
+}
+
+.glass-chip--event {
+  background-color: var(--chip-event);
+}
+
+.glass-chip--reaction {
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 600;
+  background-color: var(--chip-react);
+  /* A ring in the opaque pane color, so the chip bites the media it sits on. */
+  box-shadow: 0 0 0 3px var(--solid), var(--sh-content);
+}
+
+.glass-chip__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: currentColor;
+}
+
+/* ---- Waveform (§2.5): five amber bars, scaleY .35 <-> 1 ------------------- */
+.glass-wave {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--wave-gap);
+  height: 14px;
+  flex-shrink: 0;
+  color: var(--amber);
+}
+
+.glass-wave > span {
+  display: block;
+  width: var(--wave-bar);
+  border-radius: 1.5px;
+  background-color: currentColor;
+  transform-origin: center;
+  animation: glass-eq 1s ease-in-out infinite;
+}
+
+/* Real voice: the level is written as a scale, so the bar follows the voice
+   instead of the loop (one transform, no layout). */
+.glass-wave[data-live-level] > span {
+  animation: none;
+  transform: scaleY(var(--wave-scale, 0.35));
+  transition: transform 90ms linear;
+}
+
+@keyframes glass-eq {
+  0%,
+  100% {
+    transform: scaleY(0.35);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+/* Reduced motion: the bars stop, at rest at mid height. */
+:root[data-motion='reduced'] .glass-wave > span {
+  animation: none;
+  transform: scaleY(0.7);
+  transition: none;
+}

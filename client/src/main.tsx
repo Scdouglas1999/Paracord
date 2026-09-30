@@ -2,6 +2,10 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router';
 import App from './App';
+// Glass type (docs/glass-spec.md §2.3): Instrument Sans, self-hosted, with the
+// width axis (75-100) and weights 400-700. Before globals.css so its
+// @font-face rules are declared before anything uses the family.
+import '@fontsource-variable/instrument-sans/wdth.css';
 import './styles/globals.css';
 import { AppProviders } from './lib/AppProviders';
 import { ErrorBoundary } from './components/ErrorBoundary';

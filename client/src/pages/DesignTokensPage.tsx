@@ -100,6 +100,7 @@ import { AccountPlate } from '../components/layout/sidebar/AccountPlate';
 import { BuildingsColumn } from '../components/layout/sidebar/BuildingsColumn';
 import { useMobile } from '../hooks/useMobile';
 import { useUIStore } from '../stores/uiStore';
+import { GlassShowcase } from '../components/glass/primitives/GlassShowcase';
 
 /**
  * `/design-tokens` — the Lantern Stage reference page. **Dev builds only**
@@ -1601,6 +1602,14 @@ export default function DesignTokensPage() {
             here, the component is wrong.
           </p>
         </header>
+
+        <Section
+          id="glass"
+          title="Glass"
+          blurb="The interface docs/glass-spec.md describes, and what the default theme resolves to. Content is solid, controls are glass; what is live behind the panes supplies a ~5% tint to every surface (one channel triplet, mixed into neutral steps). Both reference tints are shown side by side."
+        >
+          <GlassShowcase />
+        </Section>
 
         <Section
           id="mark"

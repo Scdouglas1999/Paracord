@@ -14,6 +14,16 @@
  * fails on a token that lands outside sRGB, because a browser would gamut-map
  * it and the measured color would no longer be the one written down.
  *
+ * GLASS (docs/glass-spec.md §2, §9). The default theme's surfaces are not a
+ * fixed ramp: they are `color-mix()` of one channel triplet, `--room-rgb`, into
+ * neutral steps, and the room controller (WP-G8) writes that triplet from the
+ * live stream. So the Glass section below resolves the real tokens and sweeps
+ * the room over the two reference tints (spec §2.1), a dim warm and a bright
+ * cool tint, and a hue x saturation x brightness grid that covers the clamp box
+ * WP-G8 will enforce (plus the two extremes, white and black), and requires
+ * 4.5:1 for every text pair on every Glass surface. Panes are translucent, so
+ * they are measured over the brightest backdrop the room can draw.
+ *
  * Run: `npm run test:contrast`
  */
 import fs from 'node:fs';
@@ -160,8 +170,52 @@ function oklabToLinearSrgb(L, a, b) {
 
 const GAMUT_SLACK = 0.002;
 
+/** A trailing `NN%` on a color-mix() argument: `<color> [<percentage>]`. */
+function splitMixArg(arg) {
+  const m = arg.trim().match(/^([\s\S]*?)\s+(\d+(?:\.\d+)?)%$/);
+  return m ? { color: m[1].trim(), weight: Number(m[2]) / 100 } : { color: arg.trim(), weight: null };
+}
+
+/**
+ * `color-mix(in srgb, A [p%], B [q%])` — the only shape tokens.css derives the
+ * Glass surfaces with. Premultiplied, as the specification has it: mixing with
+ * `transparent` keeps the color and takes the alpha.
+ */
+function mixColors(inner, label) {
+  const [space, first, second, ...extra] = splitTop(inner, ',').map((part) => part.trim());
+  if (space !== 'in srgb' || first == null || second == null || extra.length > 0) {
+    throw new Error(`${label}: unsupported color-mix() "${inner}"`);
+  }
+  const a = splitMixArg(first);
+  const b = splitMixArg(second);
+  let wa = a.weight;
+  let wb = b.weight;
+  if (wa == null && wb == null) {
+    wa = 0.5;
+    wb = 0.5;
+  } else if (wa == null) wa = 1 - wb;
+  else if (wb == null) wb = 1 - wa;
+  const total = wa + wb;
+  const scale = total < 1 ? total : 1; // a sum under 100% leaves the rest transparent
+  wa /= total;
+  wb /= total;
+  const ca = parseColor(a.color, label);
+  const cb = parseColor(b.color, label);
+  if (!ca || !cb) return null;
+  const alpha = (ca.a * wa + cb.a * wb) * scale;
+  if (alpha === 0) return { r: 0, g: 0, b: 0, a: 0 };
+  const channel = (k) => (ca[k] * ca.a * wa + cb[k] * cb.a * wb) / (ca.a * wa + cb.a * wb);
+  return { r: channel('r'), g: channel('g'), b: channel('b'), a: alpha };
+}
+
 function parseColor(value, label) {
   const normalized = value.trim().toLowerCase();
+
+  if (normalized === 'transparent') return { r: 0, g: 0, b: 0, a: 0 };
+  if (normalized === 'white') return { r: 255, g: 255, b: 255, a: 1 };
+  if (normalized.startsWith('color-mix(') && normalized.endsWith(')')) {
+    return mixColors(normalized.slice('color-mix('.length, -1), label);
+  }
 
   if (normalized.startsWith('#')) {
     let hex = normalized.slice(1);
@@ -238,7 +292,10 @@ function contrastRatio(foreground, background) {
 /* ---- The checks ------------------------------------------------------------ */
 
 const themeBase = extractBlocks('@theme');
-const rootBase = extractBlocks(':root');
+// The Glass surfaces are derived per subtree (`:root, .glass-room`), which the
+// `:root {` pattern does not see; read that block by its second selector.
+const glassRoom = extractBlocks('.glass-room');
+const rootBase = { ...extractBlocks(':root'), ...glassRoom };
 const daylight = extractBlocks("[data-theme='light']");
 const themeBlocks = {
   night: {},
@@ -453,6 +510,177 @@ for (const [themeName, overrides] of Object.entries(themeBlocks)) {
   }
 }
 
+
+/* ---- Glass (docs/glass-spec.md §2, §9) ------------------------------------- */
+
+const parseTriplet = (value) => {
+  const [r, g, b] = value.split(',').map((part) => Number(part.trim()));
+  return { r, g, b };
+};
+
+const hsvToRgb = (h, sat, v) => {
+  const c = v * sat;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = v - c;
+  const [r, g, b] = [[c, x, 0], [x, c, 0], [0, c, x], [0, x, c], [x, 0, c], [c, 0, x]][Math.floor(h / 60) % 6];
+  return [r + m, g + m, b + m].map((channel) => Math.round(channel * 255)).join(', ');
+};
+
+const namedTints = {
+  'warm (spec §2.1)': extractBlocks('.glass-tint-warm')['--room-rgb'],
+  'cool (spec §2.1)': extractBlocks('.glass-tint-cool')['--room-rgb'],
+  'dim warm': '150, 96, 52',
+  'bright cool': '150, 200, 255',
+  'white (extreme)': '255, 255, 255',
+  'black (extreme)': '0, 0, 0',
+};
+const tints = { ...namedTints };
+// The clamp box: every hue at three saturations and three brightnesses.
+for (let hue = 0; hue < 360; hue += 30) {
+  for (const sat of [0.3, 0.65, 1]) {
+    for (const v of [0.35, 0.7, 1]) tints[`hue ${hue} s${sat} v${v}`] = hsvToRgb(hue, sat, v);
+  }
+}
+
+// Panes are translucent over the room. The backdrop is drawn at brightness .6
+// (spec §4), so the brightest thing a pane can be over is 60% white.
+const WORST_BACKDROP = { r: 153, g: 153, b: 153, a: 1 };
+const SURFACES = ['--pane', '--bub', '--raise', '--sel', '--deep', '--solid', '--street', '--well'];
+const INKS = [
+  ['--ink-1', 7],
+  ['--ink-2', 4.5],
+  ['--ink-3', 4.5],
+  ['--amber', 4.5],
+  ['--amber-ink', 4.5],
+];
+
+/** A surface as it is seen: translucent ones over the worst backdrop, and the
+    far-corner glow over the pane it lights. */
+function glassSurface(name, vars, setting) {
+  const value = resolveVar(name, vars);
+  const color = value ? parseColor(value, `${setting}: ${name}`) : null;
+  if (!color) throw new Error(`${setting}: unable to resolve ${name}`);
+  return color.a < 1 ? blend(color, WORST_BACKDROP) : color;
+}
+
+let glassComparisons = 0;
+const glassVars = (room) => ({ ...themeBase, ...rootBase, '--room-rgb': room });
+for (const [tintName, room] of Object.entries(tints)) {
+  const setting = `glass ${tintName} (${room})`;
+  const vars = glassVars(room);
+  try {
+    const check = (fgName, bgColor, bgName, min, fgColor) => {
+      const fg = fgColor ?? parseColor(resolveVar(fgName, vars), `${setting}: ${fgName}`);
+      const ratio = contrastRatio(fg, bgColor);
+      glassComparisons += 1;
+      const headroom = ratio / min;
+      if (headroom < worst.ratio / (worst.min ?? 1)) worst = { ratio, min, setting, fg: fgName, bg: bgName };
+      if (ratio < min) {
+        failures += 1;
+        console.error(`[contrast] ${setting}: ${fgName} on ${bgName} ratio ${ratio.toFixed(2)} < ${min.toFixed(2)}`);
+      }
+    };
+    const surfaces = Object.fromEntries(SURFACES.map((name) => [name, glassSurface(name, vars, setting)]));
+    // The glow washes the pane's far corner: measure the ink on pane + glow.
+    const glow = parseColor(resolveVar('--glow', vars), `${setting}: --glow`);
+    surfaces['--pane + --glow'] = blend(glow, surfaces['--pane']);
+    // The token itself must stay inside the cap: a surface never drifts from
+    // its neutral by more than 6% of the room.
+    for (const [name, bg] of Object.entries(surfaces)) {
+      for (const [ink, min] of INKS) check(ink, bg, name, min);
+    }
+    // Ink over the glass controls, which sit on every one of those surfaces.
+    for (const base of ['--pane', '--bub', '--solid', '--deep']) {
+      for (const [fill, ink] of [
+        ['--glass-fill', '--ink-1'],
+        ['--glass-fill-hover', '--ink-1'],
+        ['--glass-fill-on', '--ink-1'],
+        ['--amber-on', '--amber-ink'],
+      ]) {
+        const over = blend(parseColor(resolveVar(fill, vars), fill), surfaces[base]);
+        check(ink, over, `${fill} over ${base}`, 4.5);
+      }
+    }
+    // Text on the near-black pill, and over the surfaces it floats above.
+    const pill = blend(parseColor(resolveVar('--pill', vars), '--pill'), surfaces['--pane']);
+    for (const [ink] of INKS) check(ink, pill, '--pill', 4.5);
+    // Chips are solid tonal fills.
+    check('--ink-1', parseColor(resolveVar('--chip-count', vars), '--chip-count'), '--chip-count', 4.5);
+    check('--ink-1', parseColor(resolveVar('--chip-event', vars), '--chip-event'), '--chip-event', 4.5);
+    check('--ink-1', parseColor(resolveVar('--chip-react', vars), '--chip-react'), '--chip-react', 4.5);
+    for (const base of ['--pane', '--bub', '--raise', '--solid']) {
+      const chip = blend(parseColor(resolveVar('--amber-tint', vars), '--amber-tint'), surfaces[base]);
+      check('--amber-ink', chip, `--amber-tint over ${base}`, 4.5);
+    }
+    // Fixed pairs (they do not move with the room, but they are part of the set).
+    for (const [fg, bg] of [
+      ['--own-ink', '--own-bub'],
+      ['--mention-ink', '--mention-chip'],
+      ['--join-ink', '--join'],
+      ['--join-ink', '--join-hover'],
+      ['--join-ink', '--join-press'],
+    ]) {
+      check(fg, parseColor(resolveVar(bg, vars), bg), bg, 7);
+    }
+  } catch (error) {
+    failures += 1;
+    console.error(`[contrast] ${setting}: ${error.message}`);
+  }
+}
+
+/* ---- Glass reference tints (spec §2.1) --------------------------------------
+   The derivation has to reproduce the two reference tints, not merely look
+   like them. CIE76 delta-E in Lab (D65) on the resolved sRGB, under 2; alpha
+   within .005; the glow, which is 7% opaque, is compared as it lands on its
+   own pane. Set PARACORD_AUDIT_VERBOSE=1 for the table. */
+const REFERENCE = {
+  'warm (spec §2.1)': {
+    '--pane': [28, 25, 23, 0.94], '--bub': [45, 41, 38], '--raise': [56, 51, 47], '--sel': [54, 49, 45],
+    '--deep': [20, 18, 16, 0.96], '--solid': [28, 25, 23], '--glow': [255, 168, 88, 0.07],
+  },
+  'cool (spec §2.1)': {
+    '--pane': [23, 27, 31, 0.94], '--bub': [39, 45, 52], '--raise': [49, 56, 64], '--sel': [47, 54, 63],
+    '--deep': [16, 18, 21, 0.96], '--solid': [24, 28, 32], '--glow': [150, 190, 230, 0.07],
+  },
+};
+const toLab = ({ r, g, b }) => {
+  const [R, G, B] = [r, g, b].map((c) => linearFromSrgb(c / 255));
+  const f = (t) => (t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116);
+  const x = f((0.4124 * R + 0.3576 * G + 0.1805 * B) / 0.95047);
+  const y = f(0.2126 * R + 0.7152 * G + 0.0722 * B);
+  const z = f((0.0193 * R + 0.1192 * G + 0.9505 * B) / 1.08883);
+  return [116 * y - 16, 500 * (x - y), 200 * (y - z)];
+};
+const deltaE = (p, q) => Math.hypot(...toLab(p).map((v, i) => v - toLab(q)[i]));
+let worstDelta = 0;
+for (const [tintName, expected] of Object.entries(REFERENCE)) {
+  const vars = glassVars(namedTints[tintName]);
+  const solid = parseColor(resolveVar('--solid', vars), '--solid');
+  for (const [name, [r, g, b, a = 1]] of Object.entries(expected)) {
+    const setting = `glass ${tintName}: ${name}`;
+    try {
+      const got = parseColor(resolveVar(name, vars), setting);
+      // Browsers round each channel to 8 bits when they paint.
+      const rounded = { r: Math.round(got.r), g: Math.round(got.g), b: Math.round(got.b) };
+      const target = { r, g, b };
+      const seenGot = name === '--glow' ? blend({ ...rounded, a: got.a }, solid) : rounded;
+      const seenWant = name === '--glow' ? blend({ ...target, a }, solid) : target;
+      const delta = deltaE(seenGot, seenWant);
+      worstDelta = Math.max(worstDelta, delta);
+      if (process.env.PARACORD_AUDIT_VERBOSE) {
+        console.log(`[glass] ${tintName.padEnd(17)} ${name.padEnd(8)} got ${rounded.r},${rounded.g},${rounded.b} a=${got.a.toFixed(2)}  want ${r},${g},${b} a=${a}  dE ${delta.toFixed(2)}`);
+      }
+      if (delta >= 2 || Math.abs(got.a - a) > 0.005) {
+        failures += 1;
+        console.error(`[contrast] ${setting} misses the reference: dE ${delta.toFixed(2)}, alpha ${got.a.toFixed(3)} vs ${a}`);
+      }
+    } catch (error) {
+      failures += 1;
+      console.error(`[contrast] ${setting}: ${error.message}`);
+    }
+  }
+}
+
 if (failures > 0) {
   console.error(`\n[contrast] ${failures} failing pair(s).`);
   process.exit(1);
@@ -463,6 +691,11 @@ console.log(
     + `${HUES.length} hues x ${TINTS.length} tints `
     + '(docs/lantern-stage-spec.md §9).',
 );
+console.log(
+  `[contrast] glass: ${glassComparisons} comparisons passed over ${Object.keys(tints).length} room tints `
+    + `(${Object.keys(namedTints).join(', ')}, and a hue x saturation x brightness grid).`,
+);
+console.log(`[contrast] glass reference tints reproduced: worst delta-E ${worstDelta.toFixed(2)} (limit 2).`);
 console.log(
   `[contrast] tightest margin: ${worst.fg} on ${worst.bg} at ${worst.setting} — `
     + `${worst.ratio.toFixed(2)} against a floor of ${worst.min}.`,

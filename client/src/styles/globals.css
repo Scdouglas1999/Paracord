@@ -45,6 +45,7 @@
    inside a layer beats an unlayered important — so layering that file would
    change which escape hatch wins, not just which utility does. */
 @import './tokens.css';
+@import './glass.css' layer(components);
 @import './primitives.css' layer(components);
 @import './layout.css';
 /* The §1.8 looks' structure. After layout.css and unlayered: a look has to be

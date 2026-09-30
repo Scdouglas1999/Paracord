@@ -140,9 +140,11 @@
 
   /* ---- §2 Type faces ------------------------------------------------------ */
   /* Display / names — room and building names, page titles, author names. */
-  --font-display: 'Gabarito', 'Helvetica Neue', Arial, sans-serif;
+  /* Glass (docs/glass-spec.md §2.3): one family, Instrument Sans, with the width axis.
+     Onest and Gabarito stay as the fallback until the looks are retired. */
+  --font-display: 'Instrument Sans Variable', 'Instrument Sans', 'Gabarito', 'Helvetica Neue', Arial, sans-serif;
   /* UI / body — everything else. */
-  --font-primary: 'Onest Variable', 'Onest', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  --font-primary: 'Instrument Sans Variable', 'Instrument Sans', 'Onest Variable', 'Onest', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
   /* Meta — timestamps, durations, counts, latency, keys, filenames. */
   --font-code: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
 
@@ -150,23 +152,23 @@
   /* Lobby and Home titles. */
   --text-display: 1.75rem; /* 28px */
   --text-display--line-height: 1.05;
-  --text-display--letter-spacing: -0.015em;
-  --text-display--font-weight: 700;
+  --text-display--letter-spacing: -0.025em;
+  --text-display--font-weight: 600;
 
   /* Stage room name, text-room header. */
-  --text-title: 1.375rem; /* 22px */
-  --text-title--line-height: 1.1;
+  --text-title: 1.25rem; /* 20px */
+  --text-title--line-height: 1.15;
   --text-title--letter-spacing: -0.01em;
-  --text-title--font-weight: 700;
+  --text-title--font-weight: 600;
 
   /* Building names, room card titles. */
-  --text-heading: 1.125rem; /* 18px */
+  --text-heading: 1.0625rem; /* 17px */
   --text-heading--line-height: 1.2;
-  --text-heading--letter-spacing: -0.005em;
-  --text-heading--font-weight: 700;
+  --text-heading--letter-spacing: 0;
+  --text-heading--font-weight: 600;
 
   /* Author names, list item titles. */
-  --text-name: 0.96875rem; /* 15.5px */
+  --text-name: 0.9375rem; /* 15px */
   --text-name--line-height: 1.2;
   --text-name--letter-spacing: 0;
   --text-name--font-weight: 600;
@@ -216,7 +218,7 @@
   --font-weight-medium: 500;
   --font-weight-semibold: 600;
   --font-weight-bold: 700;
-  --font-weight-display: 700;
+  --font-weight-display: 600;
 
   --line-height-tight: var(--leading-tight);
   --line-height-normal: var(--leading-normal);
@@ -237,22 +239,24 @@
   --space-12: 3rem;
 
   /* ---- §3 Radii ----------------------------------------------------------- */
-  --radius-plate: 14px;
-  --radius-card: 12px;
-  --radius-well: 10px;
-  --radius-control: 9px;
-  --radius-chip: 7px;
+  /* Glass shape (§2.4): panes 28, bubbles and cards 20, rows and tiles 16,
+     small controls and chips 8-12. */
+  --radius-plate: 28px;
+  --radius-card: 20px;
+  --radius-well: 16px;
+  --radius-control: 12px;
+  --radius-chip: 8px;
   --radius-window: 2px;
   /* A room thumbnail is its own step (§8 RoomThumbnail: "8px radius well") —
      tighter than a well so a 64px sidebar thumbnail does not read as a pill.
      Added in WP1; §3's radii list does not name it, §8 does. */
-  --radius-thumb: 8px;
+  --radius-thumb: 12px;
   /* Stage controls sit between a control and a card (§8 ControlBar). */
-  --radius-stage-control: 13px;
+  --radius-stage-control: 22px;
   --radius-stage-control-phone: 16px;
   --radius-full: calc(infinity * 1px);
   /* Phone: plates and controls round up. */
-  --radius-plate-phone: 16px;
+  --radius-plate-phone: 22px;
   --radius-control-phone: 16px;
 
   /* ---- §3 Control heights and rail widths --------------------------------- */
@@ -381,6 +385,158 @@
 }
 
 /* =============================================================================
+   GLASS (docs/glass-spec.md §2, §9). The default theme resolves to these.
+
+   The room lights the interface. One channel triplet, `--room-rgb`, is the only
+   thing the room controller (WP-G8) ever writes; every tinted surface is a
+   `color-mix()` of it into a neutral step at 4-6% (the owner rejected warmer
+   versions as "sepia": never above 6%).
+
+   REFERENCE SAMPLES. The two tints in spec §2.1 are reproduced, to a CIE76
+   delta-E of at most 1.5 (mean about 0.9), from these two room samples:
+       warm  (a live stream, amber-ish)   222, 109, 35    -> .glass-tint-warm
+       cool  (a banner, nothing live)      80, 158, 255   -> .glass-tint-cool
+   `docs/design/glass-g0-checkpoint.md` tabulates every token against the
+   reference. The neutrals below were fitted to those two samples; they are the
+   only numbers here that are not from the spec.
+
+   A custom property is substituted where it is DECLARED, so the derived tokens
+   are declared for `:root` AND for `.glass-room`: a subtree that sets its own
+   `--room-rgb` (the /design-tokens page shows both tints side by side, and a
+   sheet could one day be lit by another room) re-derives its own surfaces.
+   `scripts/contrast-audit.mjs` reads this block, so keep the derivation in the
+   `color-mix()` shapes it understands (srgb, an rgb() of `--room-rgb`, a hex or
+   `transparent`).
+   ============================================================================= */
+:root {
+  --room-rgb: 222, 109, 35;
+}
+
+.glass-tint-warm {
+  --room-rgb: 222, 109, 35;
+}
+
+.glass-tint-cool {
+  --room-rgb: 80, 158, 255;
+}
+
+:root,
+.glass-room {
+  /* Neutral steps the room is mixed into. */
+  --glass-n-pane: #151616;
+  --glass-n-solid: #141515;
+  --glass-n-deep: #0c0d0d;
+  --glass-n-bub: #232426;
+  --glass-n-raise: #2e3032;
+  --glass-n-sel: #2c2e30;
+  --glass-n-street: #08090a;
+  --glass-n-well: #0e0f0f;
+  /* How much of the room each step takes. Panes and the stage: 4%. Steps that
+     sit on top of a pane carry a little more so they stay tinted at their
+     lighter value. 6% is the ceiling. */
+  --glass-tint-base: 4%;
+  --glass-tint-lift: 6%;
+  /* The share of a translucent surface that is see-through: a pane is .94
+     opaque, the stage column .96. */
+  --glass-clear-pane: 6%;
+  --glass-clear-deep: 4%;
+  --glass-clear-glow: 93%;
+
+  --pane: color-mix(in srgb, color-mix(in srgb, rgb(var(--room-rgb)) var(--glass-tint-base), var(--glass-n-pane)), transparent var(--glass-clear-pane));
+  --bub: color-mix(in srgb, rgb(var(--room-rgb)) var(--glass-tint-lift), var(--glass-n-bub));
+  --raise: color-mix(in srgb, rgb(var(--room-rgb)) var(--glass-tint-lift), var(--glass-n-raise));
+  --sel: color-mix(in srgb, rgb(var(--room-rgb)) var(--glass-tint-lift), var(--glass-n-sel));
+  --deep: color-mix(in srgb, color-mix(in srgb, rgb(var(--room-rgb)) var(--glass-tint-base), var(--glass-n-deep)), transparent var(--glass-clear-deep));
+  --solid: color-mix(in srgb, rgb(var(--room-rgb)) var(--glass-tint-base), var(--glass-n-solid));
+  /* A faint radial in each pane's far corner: the room, lifted toward white. */
+  --glow: color-mix(in srgb, color-mix(in srgb, rgb(var(--room-rgb)) 70%, white), transparent var(--glass-clear-glow));
+  /* Not in the spec table, needed by the legacy remap below: the ground behind
+     the panes when no backdrop canvas is drawn, and a recessed well. */
+  --street: color-mix(in srgb, rgb(var(--room-rgb)) 3%, var(--glass-n-street));
+  --well: color-mix(in srgb, rgb(var(--room-rgb)) var(--glass-tint-base), var(--glass-n-well));
+}
+
+:root {
+  /* ---- §2.2 Ink ------------------------------------------------------------ */
+  --ink-1: #f3f5f5;
+  --ink-2: rgba(240, 243, 243, 0.76);
+  /* Never lower: the floor is #A3A3A3 on a dark surface. */
+  --ink-3: rgba(240, 243, 243, 0.64);
+  /* Placeholder text in a glass field (the prototype's value; 4.5:1 does not
+     apply to placeholders, and it is not used for anything a person must read). */
+  --ink-placeholder: rgba(240, 243, 243, 0.52);
+
+  /* ---- §2.1 Fixed colors ---------------------------------------------------- */
+  --own-bub: #ecebe6;
+  --own-ink: #141516;
+  --mention-chip: #f3f5f5;
+  --mention-ink: #111214;
+  /* Amber means live. */
+  --amber: #ffc27e;
+  --amber-ink: #ffd6a8;
+  --amber-tint: rgba(255, 170, 80, 0.2);
+  /* Listen when on: amber on glass. */
+  --amber-on: rgba(255, 194, 126, 0.28);
+  /* White means it's for you. Join is the one filled button. */
+  --join: #f4f6f6;
+  --join-ink: #101314;
+  --join-hover: #ffffff;
+  --join-press: #e8e3d8;
+  /* Chips: plain unread count, inline event, reactions biting media. */
+  --chip-count: #3a3b40;
+  --chip-event: #45464b;
+  --chip-react: #34353a;
+  /* The call pill (§5) and the surfaces that float over content. */
+  --pill: rgba(6, 6, 7, 0.97);
+  --popover: rgba(6, 6, 7, 0.97);
+
+  /* ---- Glass controls (§1.1, §9): the things you press ---------------------- */
+  --glass-fill: rgba(255, 255, 255, 0.12);
+  --glass-fill-hover: rgba(255, 255, 255, 0.16);
+  --glass-fill-press: rgba(255, 255, 255, 0.07);
+  --glass-fill-on: rgba(255, 255, 255, 0.26);
+  --glass-fill-quiet: rgba(255, 255, 255, 0.08);
+  --glass-edge: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  --glass-hair: rgba(255, 255, 255, 0.14);
+  /* Text and row hover/press: one token step lighter, one darker. */
+  --wash-hover: rgba(255, 255, 255, 0.04);
+  --wash-press: rgba(0, 0, 0, 0.18);
+
+  /* ---- §2.4 Shape ----------------------------------------------------------- */
+  --r-pane: 28px;
+  --r-bubble: 20px;
+  --r-row: 16px;
+  --r-tile: 16px;
+  --r-ctl: 12px;
+  --r-chip: 8px;
+  /* The joined corner of a grouped bubble. */
+  --r-join: 6px;
+  --r-capsule: 999px;
+
+  --sh-content: 0 1px 2px rgba(0, 0, 0, 0.28);
+  --sh-raised: 0 1px 2px rgba(0, 0, 0, 0.28), 0 10px 28px rgba(0, 0, 0, 0.2);
+  --sh-pane: 0 40px 90px rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.045);
+
+  /* ---- §9 Focus and motion -------------------------------------------------- */
+  --glass-focus-color: rgba(255, 255, 255, 0.85);
+  --glass-focus-width: 2px;
+  --glass-focus-offset: 2px;
+  /* Hover and press, 120ms ease-out; nothing scales on press. */
+  --glass-ms: 120ms;
+  --glass-ease: ease-out;
+  /* Layout changes (pill -> stage, side by side <-> theater): a 650ms spring on
+     transform, size and radius. The room eases over 1.2s. Reduced motion turns
+     both into a 150ms crossfade. */
+  --glass-ms-layout: 650ms;
+  --glass-ms-room: 1200ms;
+  --glass-ms-reduced: 150ms;
+  --glass-spring: cubic-bezier(0.2, 0.8, 0.2, 1);
+  /* §2.5: the talking waveform. Five bars, 3px wide, 2px apart. */
+  --wave-bar: 3px;
+  --wave-gap: 2px;
+}
+
+/* =============================================================================
    Night — the default theme. Effect recipes (§1.1, §1.2) live here as tokens so
    a component never re-derives a shadow. Every theme below redefines this same
    set; no theme adds or removes a name.
@@ -434,23 +590,23 @@
 
   /* ---- §1.1 Surfaces — Night's ramp, in the base hue ----------------------- */
   /* The street: app base behind everything. */
-  --bg-base: oklch(17.5% calc(0.04 * var(--ui-chroma)) var(--ui-hue-street));
+  --bg-base: var(--street);
   /* Plates: the Stage, the Lobby, a text channel, the chat ribbon, content cards. */
-  --bg-plate: oklch(22% calc(0.022 * var(--ui-chroma)) var(--ui-hue));
+  --bg-plate: var(--solid);
   /* Raised inside a plate: chips, composer, hover cards, popovers. */
-  --bg-raised: oklch(26.5% calc(0.028 * var(--ui-chroma)) var(--ui-hue));
+  --bg-raised: var(--bub);
   /* Recessed inside a plate: search, tile grounds, "here now" strip, event cards. */
-  --bg-well: oklch(16.5% calc(0.016 * var(--ui-chroma)) var(--ui-hue));
+  --bg-well: var(--well);
   /* Menus and tooltips over content. */
-  --bg-floating: oklch(22% calc(0.022 * var(--ui-chroma)) var(--ui-hue) / 0.97);
+  --bg-floating: color-mix(in srgb, var(--raise), transparent 3%);
   /* Hover and press washes. Warm rather than gray: the same hue as the ground,
      carried at a light L so it lifts the surface instead of graying it. */
-  --bg-mod-subtle: oklch(76% calc(0.11 * var(--ui-chroma)) var(--ui-hue) / 0.07);
-  --bg-mod-strong: oklch(76% calc(0.11 * var(--ui-chroma)) var(--ui-hue) / 0.15);
+  --bg-mod-subtle: rgba(255, 255, 255, 0.04);
+  --bg-mod-strong: rgba(255, 255, 255, 0.09);
   /* The row you are on. A wash in the base hue, not a gray step — and a row
      inside a server's group takes that server's color instead, which is what
      `--row-selected` is for (BuildingSection writes it per group). */
-  --bg-selected: oklch(76% calc(0.115 * var(--ui-chroma)) var(--ui-hue) / 0.17);
+  --bg-selected: var(--sel);
   --row-selected: var(--bg-selected);
   /* An unlit window. As a gray step lighter than the plate it read as two
      avatar skeletons that never resolved; as a step darker it read as a black
@@ -459,8 +615,8 @@
      black hole. A dark server is still a building under a sky — the color of
      an unlit pane is what keeps "nobody in" from reading as "nothing here".
      The hue is what separates it from a skeleton now, not the lightness. */
-  --window-dark: oklch(27% calc(0.05 * var(--ui-chroma)) var(--ui-hue-street));
-  --overlay-backdrop: oklch(14% calc(0.035 * var(--ui-chroma)) var(--ui-hue-street) / 0.74);
+  --window-dark: var(--bub);
+  --overlay-backdrop: rgba(6, 6, 7, 0.72);
   /* A spoiler is a well you have not opened yet; revealed, it is a hover wash. */
   --spoiler-bg: var(--bg-well);
   --spoiler-bg-revealed: var(--bg-mod-strong);
@@ -469,34 +625,34 @@
 
   /* ---- §1.2 Light — three lights, three meanings --------------------------- */
   /* Talking / live: people in a voice or video room. */
-  --light-white: #f3ead8;
+  --light-white: var(--join);
   /* Reading: people present in a text room. */
-  --light-amber: #f0b967;
+  --light-amber: var(--amber);
 
   /* ---- §1.4 Text ramp ------------------------------------------------------ */
-  --text-primary: oklch(95.5% calc(0.018 * var(--ui-chroma)) var(--ui-hue));
+  --text-primary: var(--ink-1);
   /* NOTE: `--text-body` is Tailwind's *body type step* (a font-size), so the
      body ink cannot share that name. Consume it as the `text-text-body`
      utility, or as `var(--text-body-ink)` in a raw style. */
-  --text-body-ink: oklch(87% calc(0.02 * var(--ui-chroma)) var(--ui-hue));
-  --text-secondary: oklch(78% calc(0.03 * var(--ui-chroma)) var(--ui-hue));
-  --text-muted: oklch(68% calc(0.03 * var(--ui-chroma)) var(--ui-hue));
+  --text-body-ink: var(--ink-1);
+  --text-secondary: var(--ink-2);
+  --text-muted: var(--ink-3);
   /* §9 floor: meta must clear 4.5:1. The reference render's #6C6E70 measures
      3.51:1 on --bg-plate, so the faint step sits at the L that clears 4.5:1 on
      all four Night grounds — at every hue. See docs/design/wp0-checkpoint.md. */
-  --text-faint: oklch(66% calc(0.028 * var(--ui-chroma)) var(--ui-hue));
+  --text-faint: var(--ink-3);
   /* Ink on white light, and on emerald. */
-  --text-on-light: oklch(16.5% calc(0.007 * var(--ui-chroma)) var(--ui-hue));
-  --text-on-accent: #06241a;
+  --text-on-light: var(--own-ink);
+  --text-on-accent: var(--join-ink);
   /* A danger control is a danger *well* carrying danger ink, never a red fill. */
   --text-on-danger: var(--accent-danger);
-  --text-link: var(--accent-primary);
+  --text-link: var(--ink-1);
 
   /* ---- §1.2 / §1.3 Action + semantic --------------------------------------- */
   /* Action you can take. NOT a light. */
-  --accent-primary: #2bd39a;
-  --accent-primary-hover: #5be0b4;
-  --accent-primary-active: #1fb587;
+  --accent-primary: var(--join);
+  --accent-primary-hover: var(--join-hover);
+  --accent-primary-active: var(--join-press);
   --accent: var(--accent-primary);
   /* Success is the emerald, and only in confirmation toasts. */
   --accent-success: var(--accent-primary);
@@ -508,53 +664,53 @@
   --danger-well: #2a1517;
   /* The same well, one step deeper — a danger control under the pointer. */
   --danger-well-hover: #3a1d20;
-  --accent-primary-rgb: 43, 211, 154;
+  --accent-primary-rgb: 244, 246, 246;
 
   /* ---- Tints: meaning-colored washes (badges, mention rows) --------------- */
-  --accent-tint: rgba(43, 211, 154, 0.12);
-  --accent-tint-strong: rgba(43, 211, 154, 0.18);
+  --accent-tint: rgba(255, 255, 255, 0.1);
+  --accent-tint-strong: rgba(255, 255, 255, 0.18);
   --teal-tint: rgba(143, 169, 217, 0.12);
-  --success-tint: rgba(43, 211, 154, 0.12);
+  --success-tint: rgba(255, 255, 255, 0.1);
   --warning-tint: rgba(232, 178, 58, 0.14);
   --danger-tint: rgba(240, 124, 124, 0.14);
   --info-tint: rgba(143, 169, 217, 0.14);
 
   /* ---- §1.6 Borders + interactive ------------------------------------------ */
-  --border-subtle: oklch(90% calc(0.05 * var(--ui-chroma)) var(--ui-hue) / 0.09);
-  --border-strong: oklch(90% calc(0.05 * var(--ui-chroma)) var(--ui-hue) / 0.17);
+  --border-subtle: rgba(255, 255, 255, 0.07);
+  --border-strong: rgba(255, 255, 255, 0.14);
   --channel-icon: var(--text-muted);
   --interactive-normal: var(--text-secondary);
   --interactive-hover: var(--text-primary);
   --interactive-active: var(--text-primary);
   --interactive-muted: var(--text-faint);
   --scrollbar-auto-track: transparent;
-  --scrollbar-auto-thumb: oklch(94% calc(0.022 * var(--ui-chroma)) var(--ui-hue) / 0.16);
-  --scrollbar-auto-thumb-hover: oklch(94% calc(0.022 * var(--ui-chroma)) var(--ui-hue) / 0.3);
+  --scrollbar-auto-thumb: rgba(255, 255, 255, 0.16);
+  --scrollbar-auto-thumb-hover: rgba(255, 255, 255, 0.3);
 
   /* ---- §1.1 Depth: a warm 1px top highlight + a deep shadow ---------------- */
-  --shadow-plate: 0 1px 0 rgba(243, 234, 216, 0.07) inset, 0 20px 44px rgba(0, 0, 0, 0.5);
-  --shadow-plate-phone: 0 1px 0 rgba(243, 234, 216, 0.07) inset, 0 16px 36px rgba(0, 0, 0, 0.5);
+  --shadow-plate: var(--sh-pane);
+  --shadow-plate-phone: var(--sh-pane);
   --shadow-well: 0 1px 2px rgba(0, 0, 0, 0.6) inset;
-  --shadow-raised: 0 1px 0 rgba(243, 234, 216, 0.08) inset;
-  --shadow-lifted: 0 1px 0 rgba(243, 234, 216, 0.08) inset, 0 6px 16px rgba(0, 0, 0, 0.35);
-  --shadow-composer: 0 1px 0 rgba(243, 234, 216, 0.1) inset, 0 8px 20px rgba(0, 0, 0, 0.35);
-  --shadow-chip: 0 1px 0 rgba(243, 234, 216, 0.06) inset;
-  --shadow-tile: 0 1px 0 rgba(243, 234, 216, 0.05) inset;
+  --shadow-raised: var(--sh-content);
+  --shadow-lifted: var(--sh-raised);
+  --shadow-composer: var(--glass-edge), 0 8px 20px rgba(0, 0, 0, 0.35);
+  --shadow-chip: var(--sh-content);
+  --shadow-tile: var(--sh-content);
   --shadow-floating: var(--shadow-plate);
 
   /* ---- §1.2 Light effects: fixed recipes, never free values ---------------- */
-  --glow-window-white: 0 0 6px rgba(243, 234, 216, 0.55);
-  --glow-window-amber: 0 0 6px rgba(240, 185, 103, 0.5);
+  --glow-window-white: 0 0 6px rgba(255, 194, 126, 0.55);
+  --glow-window-amber: 0 0 6px rgba(255, 194, 126, 0.5);
   /* The amber window's writing pulse peaks here — the speaking ring's breath
      at half its amplitude (§5.1), so typing is a murmur, not a shout. */
-  --glow-window-amber-breathe: 0 0 9px rgba(240, 185, 103, 0.63);
+  --glow-window-amber-breathe: 0 0 9px rgba(255, 194, 126, 0.63);
   /* The larger 12×16 windows on Home carry a proportionally larger glow. */
-  --glow-window-white-lg: 0 0 8px rgba(243, 234, 216, 0.55);
-  --glow-window-amber-lg: 0 0 8px rgba(240, 185, 103, 0.5);
-  --glow-live-dot: 0 0 6px rgba(243, 234, 216, 0.8);
+  --glow-window-white-lg: 0 0 8px rgba(255, 194, 126, 0.55);
+  --glow-window-amber-lg: 0 0 8px rgba(255, 194, 126, 0.5);
+  --glow-live-dot: 0 0 6px rgba(255, 194, 126, 0.8);
   /* A white-light fill (the Join button, the mic-on control). */
-  --glow-light-fill: 0 0 16px rgba(243, 234, 216, 0.25);
-  --glow-control-on: 0 0 18px rgba(243, 234, 216, 0.35);
+  --glow-light-fill: 0 0 16px rgba(255, 255, 255, 0.12);
+  --glow-control-on: 0 0 18px rgba(255, 255, 255, 0.16);
   /* §5.1 "speaking is a breath": where the media engine exposes a level, the
      speaking ring brightens with the voice (+15% of its own intensity at full
      voice, and never below where it rests). `lib/motion/voiceLevel.ts` writes
@@ -570,7 +726,7 @@
      on /design-tokens are unchanged and there is still exactly one place a
      color is written down (§1). */
   --voice-level: 0;
-  --light-ring-rgb: 243, 234, 216;
+  --light-ring-rgb: 255, 194, 126;
   --ring-edge: 1.5px;
   --ring-glow-lit: 12px;
   --ring-glow-speaking: 18px;
@@ -588,18 +744,18 @@
   --ring-speaking-peak: 0 0 0 var(--ring-edge) rgba(var(--light-ring-rgb), var(--ring-a-peak-edge)),
     0 0 var(--ring-glow-speaking) rgba(var(--light-ring-rgb), var(--ring-a-speaking-glow));
   /* A plate whose room is live — layered ON TOP of --shadow-plate. */
-  --ring-lit-plate: 0 0 0 1px rgba(243, 234, 216, 0.16), 0 0 34px rgba(243, 234, 216, 0.1);
+  --ring-lit-plate: 0 0 0 1px rgba(255, 194, 126, 0.16), 0 0 34px rgba(255, 194, 126, 0.1);
   /* The one permitted radial: one lamp per lit building/room card. */
-  --lamp-radial: radial-gradient(closest-side, rgba(243, 234, 216, 0.16), rgba(243, 234, 216, 0));
+  --lamp-radial: radial-gradient(closest-side, rgba(255, 194, 126, 0.14), rgba(255, 194, 126, 0));
   /* A lit room thumbnail. NOT the lamp: the reference renders paint the glow
      INTO the frame (`radial-gradient(70% 120% at 20% 0%)` over a tinted ground),
      so it hugs the top-left corner of the window instead of fogging it. */
-  --thumb-frame-lit: oklch(22.5% calc(0.03 * var(--ui-chroma)) var(--ui-hue));
-  --thumb-glow: radial-gradient(70% 120% at 20% 0%, rgba(243, 234, 216, 0.16), rgba(243, 234, 216, 0));
+  --thumb-frame-lit: var(--bub);
+  --thumb-glow: radial-gradient(70% 120% at 20% 0%, rgba(255, 194, 126, 0.14), rgba(255, 194, 126, 0));
   /* Away / offline. No rim. */
   --dim-filter: saturate(0.35) brightness(0.72);
   /* A name tag over a live tile. */
-  --tag-fill: oklch(16.5% calc(0.007 * var(--ui-chroma)) var(--ui-hue) / 0.78);
+  --tag-fill: color-mix(in srgb, var(--street), transparent 22%);
 
   /* ---- Identity as INK ----------------------------------------------------
      An author's name in the timeline is written in their own color. On a dark
@@ -620,7 +776,7 @@
   --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238B8D8E' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 
   /* ---- §9 Focus: 2px accent outside a 2px base gap ------------------------- */
-  --focus-ring-color: var(--accent-primary);
+  --focus-ring-color: var(--glass-focus-color);
   --focus-ring: 0 0 0 2px var(--bg-base), 0 0 0 4px var(--focus-ring-color);
   --focus-ring-input: 0 0 0 2px var(--bg-base), 0 0 0 4px var(--focus-ring-color);
 
@@ -1112,59 +1268,18 @@
   --window-dark: #0a0822;
 }
 
-/* ---- Slate: the default ---------------------------------------------------
-   Voices' look (author-colored bubbles, amber) on a cool, nearly neutral
-   charcoal. Chosen 2026-09-22 as what a fresh install looks like: the purple
-   ground read as AI-generated. The ground carries little color of its own on
-   purpose - the people, the banners and anything live bring it. */
+/* ---- Slate: was the default look; Glass is now ----------------------------
+   Slate is still the id a fresh install carries (`DEFAULT_THEME`, and the
+   server's default), so the Glass values had to be what it resolves to. Its
+   own palette (cool charcoal, gold accent, its ink ramp) is gone from this
+   block: every token it set is now declared once, for `:root` and for the dark
+   themes, in the Glass remap of the Night block above, and Slate inherits it.
+   What is left is the bubble mix, which `looks.css` still reads until the
+   message rebuild (WP-G10) replaces the author-colored bubbles. WP-G1 retires
+   the look and this block with it. */
 [data-theme='slate'] {
-  --bg-base: oklch(15% 0.013 240);
-  --bg-plate: oklch(19.5% 0.017 240);
-  --bg-raised: oklch(26% 0.021 240);
-  --bg-well: oklch(14.5% 0.013 240);
-  --bg-floating: oklch(22% 0.019 240 / 0.98);
-  --bg-mod-subtle: oklch(90% 0.023 240 / 0.06);
-  --bg-mod-strong: oklch(90% 0.023 240 / 0.13);
-  --bg-selected: oklch(90% 0.023 240 / 0.14);
-  --row-selected: var(--bg-selected);
-  --window-dark: oklch(28% 0.023 240);
-  --overlay-backdrop: oklch(12% 0.011 240 / 0.76);
-
-  --light-amber: #ffd166;
-  --glow-window-amber: 0 0 7px rgba(255, 209, 102, 0.6);
-  --glow-window-amber-breathe: 0 0 10px rgba(255, 209, 102, 0.72);
-  --glow-window-amber-lg: 0 0 9px rgba(255, 209, 102, 0.6);
-
-  --text-primary: oklch(97% 0.005 240);
-  --text-body-ink: oklch(93% 0.008 240);
-  --text-secondary: oklch(83% 0.015 240);
-  --text-muted: oklch(80% 0.017 240);
-  --text-faint: oklch(79% 0.017 240);
-  --text-on-light: oklch(15% 0.013 240);
-  --text-on-accent: #2a1d00;
-  --text-link: #ffdc8a;
-
-  --accent-primary: #ffd166;
-  --accent-primary-hover: #ffdc8a;
-  --accent-primary-active: #f2bd3f;
-  --accent: var(--accent-primary);
-  --accent-success: var(--accent-primary);
-  --accent-primary-rgb: 255, 209, 102;
-  --accent-tint: rgba(255, 209, 102, 0.14);
-  --accent-tint-strong: rgba(255, 209, 102, 0.24);
-  --success-tint: rgba(255, 209, 102, 0.14);
-  --focus-ring-color: var(--accent-primary);
-  --sidebar-active-indicator: var(--accent-primary);
-
-  --border-subtle: oklch(90% 0.023 240 / 0.1);
-  --border-strong: oklch(90% 0.023 240 / 0.2);
-  --scrollbar-auto-thumb: oklch(90% 0.023 240 / 0.18);
-  --scrollbar-auto-thumb-hover: oklch(90% 0.023 240 / 0.32);
-  --thumb-frame-lit: oklch(22% 0.021 240);
-  --tag-fill: oklch(15% 0.013 240 / 0.8);
-
-  --bubble-mix: 0.22;
-  --bubble-own-mix: 0.3;
+  --bubble-mix: 0.14;
+  --bubble-own-mix: 0.2;
 }
 
 /* ---- Aubergine (id 'voices'): the color comes from the people ---------------
