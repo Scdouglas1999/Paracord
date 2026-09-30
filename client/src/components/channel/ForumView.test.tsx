@@ -221,3 +221,89 @@ describe('ForumView tag accessibility', () => {
     expect(screen.getByText(/Markdown formatting is supported/i)).toBeInTheDocument();
   });
 });
+
+describe('ForumView as the pane draws it', () => {
+  const posts = [
+    {
+      id: 'post-1',
+      name: 'Best loadout for Hazard 5?',
+      owner_id: 'u1',
+      message_count: 8,
+      created_at: '2026-10-01T20:31:00.000Z',
+      applied_tags: ['tag-1'],
+      thread_metadata: { archived: false },
+    },
+    {
+      id: 'post-2',
+      name: 'Season one retrospective',
+      owner_id: 'u2',
+      message_count: 22,
+      created_at: '2026-09-12T15:20:00.000Z',
+      applied_tags: [],
+      thread_metadata: { archived: true },
+    },
+  ];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getForumPosts.mockResolvedValue({
+      data: { posts, tags: [{ id: 'tag-1', name: 'Loadouts', emoji: null }] },
+    });
+    mocks.getForumTags.mockResolvedValue({ data: [{ id: 'tag-1', name: 'Loadouts', emoji: null }] });
+  });
+
+  it('lists the posts as solid rows, with their tags and counts, and opens one as a conversation', async () => {
+    const user = userEvent.setup();
+    const { container } = render(<ForumView channelId="channel-1" channelName="Strategy" />);
+    const first = await screen.findByRole('button', { name: /Best loadout for Hazard 5\?/ });
+    expect(first).toHaveClass('glass-fpost');
+    expect(first).toHaveTextContent('Loadouts');
+    expect(first.querySelector('[aria-label="8 messages"]')).not.toBeNull();
+    // The default is rows, one to a line; the grid is one click away.
+    expect(container.querySelector('.glass-forum__list')).toHaveAttribute('data-layout', 'list');
+    await user.click(first);
+    expect(mocks.navigate).toHaveBeenCalledWith('/app/guilds/guild-1/channels/post-1');
+  });
+
+  it('steps an archived post back and says so', async () => {
+    render(<ForumView channelId="channel-1" channelName="Strategy" />);
+    const archived = await screen.findByRole('button', { name: /Season one retrospective/ });
+    expect(archived).toHaveAttribute('data-archived');
+    expect(archived).toHaveTextContent('Archived');
+  });
+
+  it('switches to a grid of the same rows and back', async () => {
+    const user = userEvent.setup();
+    const { container } = render(<ForumView channelId="channel-1" channelName="Strategy" />);
+    await screen.findByRole('button', { name: /Best loadout/ });
+    await user.click(screen.getByRole('button', { name: 'Grid view' }));
+    expect(container.querySelector('.glass-forum__list')).toHaveAttribute('data-layout', 'grid');
+    expect(screen.getByRole('button', { name: 'Grid view' })).toHaveAttribute('aria-pressed', 'true');
+    await user.click(screen.getByRole('button', { name: 'List view' }));
+    expect(container.querySelector('.glass-forum__list')).toHaveAttribute('data-layout', 'list');
+  });
+
+  it('filters by tag, and says so when nothing matches', async () => {
+    const user = userEvent.setup();
+    render(<ForumView channelId="channel-1" channelName="Strategy" />);
+    await screen.findByRole('button', { name: /Season one retrospective/ });
+    await user.click(screen.getByRole('button', { name: 'Loadouts' }));
+    expect(screen.getByRole('button', { name: 'Loadouts' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByRole('button', { name: /Season one retrospective/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Best loadout/ })).toBeInTheDocument();
+  });
+
+  it('makes New post the page’s one filled button', async () => {
+    const { container } = render(<ForumView channelId="channel-1" channelName="Strategy" />);
+    await screen.findByRole('button', { name: /Best loadout/ });
+    expect(screen.getByRole('button', { name: 'New post' })).toHaveClass('bg-accent-primary');
+    expect(container.querySelectorAll('.bg-accent-primary')).toHaveLength(1);
+  });
+
+  it('names an empty forum without a #', async () => {
+    mocks.getForumPosts.mockResolvedValue({ data: { posts: [], tags: [] } });
+    render(<ForumView channelId="channel-1" channelName="Strategy" />);
+    expect(await screen.findByText('Strategy is ready for its first thread')).toBeInTheDocument();
+    expect(screen.queryByText(/#/)).not.toBeInTheDocument();
+  });
+});

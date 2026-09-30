@@ -38,7 +38,7 @@ export function NewHereWidget({ members, viewerId, nowMs, onSayHi }: NewHereWidg
   const rest = fresh.length - shown.length;
   return (
     <WidgetCard title="New here">
-      <ul className="flex flex-col gap-2">
+      <ul className="glass-wlist">
         {shown.map((member) => {
           const user: FeedUser = {
             id: member.user.id,
@@ -48,12 +48,14 @@ export function NewHereWidget({ members, viewerId, nowMs, onSayHi }: NewHereWidg
           };
           const name = displayName(member.user, member.nick);
           return (
-            <li key={member.user.id} className="flex items-center gap-2.5">
-              <FeedAvatar user={user} size={28} />
-              <span className="min-w-0 flex-1 truncate text-label text-text-primary">{name}</span>
-              <span className="shrink-0 text-meta text-text-muted">{shortAgo(member.joined_at, nowMs)}</span>
+            <li key={member.user.id} className="glass-wrow">
+              <FeedAvatar user={user} size={32} />
+              <span className="glass-wrow__body">
+                <span className="glass-wrow__name">{name}</span>
+              </span>
+              <span className="glass-instrument glass-wrow__aside">{shortAgo(member.joined_at, nowMs)}</span>
               {member.user.id !== viewerId && (
-                <IconButton label={`Say hi to ${name}`} size="sm" onClick={() => onSayHi(user)}>
+                <IconButton label={`Say hi to ${name}`} tone="raised" size="sm" onClick={() => onSayHi(user)}>
                   <MessageCircle size={15} aria-hidden />
                 </IconButton>
               )}
@@ -61,7 +63,7 @@ export function NewHereWidget({ members, viewerId, nowMs, onSayHi }: NewHereWidg
           );
         })}
       </ul>
-      {rest > 0 && <p className="text-meta text-text-muted">and {rest} more this fortnight</p>}
+      {rest > 0 && <p className="glass-card__text">and {rest} more this fortnight</p>}
     </WidgetCard>
   );
 }

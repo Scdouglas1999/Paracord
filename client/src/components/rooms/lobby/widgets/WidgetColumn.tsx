@@ -41,6 +41,7 @@ export function HomeWidget({ id, context }: { id: HomeWidgetId; context: WidgetC
           error={context.eventsError}
           nowMs={context.nowMs}
           channelName={context.channelName}
+          members={context.members}
           onRsvp={context.onRsvp}
           onCalendar={context.onCalendar}
         />
@@ -82,7 +83,7 @@ export function HomeWidget({ id, context }: { id: HomeWidgetId; context: WidgetC
 export function WidgetStack({ ids, context }: { ids: readonly HomeWidgetId[]; context: WidgetContext }) {
   if (ids.length === 0) return null;
   return (
-    <div className="flex min-w-0 flex-col gap-3.5 empty:hidden">
+    <div className="glass-widgets">
       {ids.map((id) => (
         <HomeWidget key={id} id={id} context={context} />
       ))}

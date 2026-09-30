@@ -76,6 +76,13 @@ const mockChannelState = vi.hoisted(() => ({
   selectChannel: vi.fn(),
 }));
 
+// Who is in a call, for the amber line under a friend: covered where the light
+// models are (lib/attention); this suite is about the page.
+// A face draws its picture from an authenticated URL; the download ticket is not this suite's business.
+vi.mock('../hooks/useDownloadTicket', () => ({ useDownloadTicket: () => null }));
+const lightState = vi.hoisted(() => ({ buildings: [] as unknown[] }));
+vi.mock('../hooks/useLights', () => ({ useBuildingLights: () => lightState.buildings }));
+
 vi.mock('../api/dms', () => ({
   dmApi: {
     create: vi.fn(),
@@ -132,6 +139,7 @@ function renderFriendsPage() {
 describe('FriendsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    lightState.buildings = [];
     mockChannelState.createDm.mockImplementation(async (id, scope) => {
       const { data } = await dmApi.create(id);
       return { ...data, scope, key: JSON.stringify([scope.serverId, scope.userId, data.id]) };
@@ -155,7 +163,7 @@ describe('FriendsPage', () => {
 
     renderFriendsPage();
 
-    expect(screen.getByRole('textbox', { name: /search friends/i })).toBeInTheDocument();
+    expect(screen.getByRole('searchbox', { name: /search friends/i })).toBeInTheDocument();
 
     await user.click(await screen.findByRole('button', { name: /message grace/i }));
 
@@ -165,12 +173,12 @@ describe('FriendsPage', () => {
 
   it('calls the tab Online, the word the presence module uses', async () => {
     renderFriendsPage();
-    // The filter tab, the section heading and the row's own subtitle all come
+    // The filter tab, the section's kicker and the row's own line all come
     // from the one presence vocabulary in lib/presence.
-    expect(await screen.findByRole('button', { name: /^Online/ })).toBeInTheDocument();
-    expect(screen.getByText(/^Online — /)).toBeInTheDocument();
-    // The tab and the online friend's subtitle: the same word, from one place.
-    expect(screen.getAllByText('Online')).toHaveLength(2);
+    expect(await screen.findByRole('tab', { name: /^Online/ })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Online' })).toHaveTextContent(/Online\s*1/);
+    // The tab, the kicker and the online friend's line: the same word, from one place.
+    expect(screen.getAllByText('Online')).toHaveLength(3);
     expect(screen.queryByText(/lights (on|off)/i)).not.toBeInTheDocument();
   });
 
@@ -250,13 +258,13 @@ describe('FriendsPage', () => {
     renderFriendsPage();
 
     // The Requests pill carries the combined pending count.
-    const requestsTab = screen.getByRole('button', { name: /requests/i });
+    const requestsTab = screen.getByRole('tab', { name: /requests/i });
     expect(within(requestsTab).getByText('2')).toBeInTheDocument();
 
     await user.click(requestsTab);
 
-    expect(screen.getByText('Incoming — 1')).toBeInTheDocument();
-    expect(screen.getByText('Outgoing — 1')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Incoming' })).toHaveTextContent(/Incoming\s*1/);
+    expect(screen.getByRole('region', { name: 'Outgoing' })).toHaveTextContent(/Outgoing\s*1/);
 
     // Incoming requests get accept + decline; outgoing gets cancel.
     expect(screen.getByRole('button', { name: /accept friend request from ada/i })).toBeInTheDocument();
@@ -267,13 +275,112 @@ describe('FriendsPage', () => {
     expect(mockRelationshipState.acceptFriend).toHaveBeenCalledWith('ada-id');
   });
 
+  describe('who is here, drawn as the places panel draws people', () => {
+    const friendOf = (id: string, username: string) => ({
+      id: `rel-${id}`,
+      type: 1,
+      user: { ...testData.friend, id, username },
+    });
+
+    function seedPresence(byId: Record<string, { status: string; activities?: unknown[]; custom_status?: string }>) {
+      mockPresenceState.getPresence.mockImplementation(((id: string) =>
+        byId[id] ? { user_id: id, activities: [], ...byId[id] } : undefined) as never);
+    }
+
+    it('says where a friend is in amber, and puts people in a call first', async () => {
+      const user = userEvent.setup();
+      mockRelationshipState.relationships = [friendOf('a', 'Ada'), friendOf('b', 'Bea'), friendOf('c', 'Cy')];
+      seedPresence({ a: { status: 'online' }, b: { status: 'online' }, c: { status: 'idle' } });
+      lightState.buildings = [
+        { name: 'Game Night', rooms: [{ kind: 'voice', name: 'Lounge', occupants: [{ person: { userId: 'c' } }] }] },
+      ];
+      renderFriendsPage();
+      await user.click(screen.getByRole('tab', { name: /^All/ }));
+      const rows = screen.getAllByRole('button', { name: /^Open profile for/ });
+      // Cy is in a call, so leads even though Ada and Bea are more "online" and sort earlier by name.
+      expect(rows.map((row) => row.getAttribute('aria-label'))).toEqual([
+        'Open profile for Cy',
+        'Open profile for Ada',
+        'Open profile for Bea',
+      ]);
+      const cy = rows[0];
+      expect(cy).toHaveTextContent('Away');
+      expect(cy).toHaveTextContent('In Lounge, Game Night');
+      expect(cy.querySelector('.glass-prow__voice')).not.toBeNull();
+      expect(cy.querySelector('.glass-presence')).toHaveAttribute('data-live');
+    });
+
+    it('says what somebody is doing, in their words first', async () => {
+      const user = userEvent.setup();
+      mockRelationshipState.relationships = [friendOf('a', 'Ada'), friendOf('b', 'Bea')];
+      seedPresence({
+        a: { status: 'online', activities: [{ type: 0, name: 'Hazard 5' }] },
+        b: { status: 'online', custom_status: 'Back at nine' },
+      });
+      renderFriendsPage();
+      await user.click(screen.getByRole('tab', { name: /^All/ }));
+      expect(screen.getByRole('button', { name: 'Open profile for Ada' })).toHaveTextContent('Online · Playing Hazard 5');
+      expect(screen.getByRole('button', { name: 'Open profile for Bea' })).toHaveTextContent('Online · Back at nine');
+    });
+
+    it('draws presence as ink and steps an offline friend back', async () => {
+      const user = userEvent.setup();
+      mockRelationshipState.relationships = [friendOf('a', 'Ada'), friendOf('b', 'Bea'), friendOf('c', 'Cy'), friendOf('d', 'Dot')];
+      seedPresence({ a: { status: 'online' }, b: { status: 'idle' }, c: { status: 'dnd' } });
+      const { container } = render(
+        <MemoryRouter initialEntries={['/app/friends']}>
+          <Routes>
+            <Route path="/app/friends" element={<FriendsPage />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+      await user.click(screen.getByRole('tab', { name: /^All/ }));
+      const statuses = [...container.querySelectorAll('.glass-presence')].map((mark) => mark.getAttribute('data-status'));
+      expect(statuses).toEqual(['online', 'idle', 'dnd', 'offline']);
+      const offline = screen.getByRole('button', { name: 'Open profile for Dot' }).closest('li');
+      expect(offline).toHaveAttribute('data-offline');
+      expect(screen.getByRole('button', { name: 'Open profile for Dot' })).toHaveTextContent('Offline');
+    });
+
+    it('lets you take back a block as text, and never draws presence for a blocked person', async () => {
+      const user = userEvent.setup();
+      mockRelationshipState.relationships = [{ id: 'rel-x', type: 2, user: { ...testData.friend, id: 'x', username: 'Xan' } }];
+      const { container } = render(
+        <MemoryRouter initialEntries={['/app/friends']}>
+          <Routes>
+            <Route path="/app/friends" element={<FriendsPage />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+      await user.click(screen.getByRole('tab', { name: /^Blocked/ }));
+      expect(container.querySelector('.glass-presence')).toBeNull();
+      await user.click(screen.getByRole('button', { name: 'Unblock Xan' }));
+      expect(mockRelationshipState.removeFriend).toHaveBeenCalledWith('x');
+    });
+
+    it('keeps the add-friend submit as the page’s one filled button', async () => {
+      const user = userEvent.setup();
+      const { container } = render(
+        <MemoryRouter initialEntries={['/app/friends']}>
+          <Routes>
+            <Route path="/app/friends" element={<FriendsPage />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+      await user.click(screen.getByRole('button', { name: /^add friend$/i }));
+      expect(screen.getByRole('button', { name: /^add friend$/i })).toHaveClass('bg-[var(--glass-fill)]');
+      expect(container.querySelectorAll('.bg-accent-primary')).toHaveLength(1);
+      expect(screen.getByRole('button', { name: /send friend request/i })).toHaveClass('bg-accent-primary');
+    });
+  });
+
   it('renders a left-aligned empty state that points at the Add friend action', async () => {
     const user = userEvent.setup();
     mockRelationshipState.relationships = [];
 
     renderFriendsPage();
 
-    await user.click(screen.getByRole('button', { name: /^all$/i }));
+    await user.click(screen.getByRole('tab', { name: /^all$/i }));
     expect(screen.getByText('Your friends list is empty')).toBeInTheDocument();
 
     // The empty-state CTA opens the same add-friend input.
@@ -296,4 +403,8 @@ vi.mock('../hooks/useChannels', async () => {
 
 vi.mock('../lib/channelNavigation', () => ({ activateChannel: (channel: { id: string }) => mockChannelState.selectChannel(channel.id) }));
 
-vi.mock('../hooks/useCurrentUser', () => ({ useCurrentAccountScope: () => ({ serverId: '__local__', userId: 'me' }) }));
+vi.mock('../hooks/useCurrentUser', () => ({
+  useCurrentAccountScope: () => ({ serverId: '__local__', userId: 'me' }),
+  // Your face at the pane's edge (the page bar) reads you, not the friends.
+  useCurrentUser: () => null,
+}));

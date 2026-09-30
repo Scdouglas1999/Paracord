@@ -9,72 +9,11 @@
  * Pure strings. No React, no stores.
  */
 
-import {
-  darkRoomCaption,
-  litMembersCaption,
-  nameList,
-  quietTextCaption,
-  readingCaption,
-  type RoomLight,
-} from '../../lib/attention/light';
-
 /** "1 mention for you" / "3 mentions for you" (§7.5, a server's text channels). */
 export function mentionCaption(count: number): string {
   const n = Math.max(0, Math.trunc(count));
   return `${n} mention${n === 1 ? '' : 's'} for you`;
 }
-
-/**
- * What the people in a lit room are actually doing, for the line beside the
- * occupant stack on a building's live thumbnail.
- *
- * Ordered by what a passer-by would notice first: a screen, then a camera, then
- * voices, then simply that somebody is in there. Every branch names a person —
- * "somebody is here" is not a thing this app says.
- */
-export function roomActivityLine(room: RoomLight): string {
-  if (!room.lit || room.occupants.length === 0) return darkRoomCaption('card');
-  const share = room.screenSharer;
-  if (share) return `${share.person.name} is sharing a screen`;
-  const camera = room.cameraSharer;
-  if (camera) return `${camera.person.name} has their camera on`;
-  const speaking = room.occupants.filter((occupant) => occupant.speaking);
-  if (speaking.length > 0) {
-    const names = nameList(speaking.map((occupant) => occupant.person.name));
-    return `${names} ${speaking.length === 1 ? 'is' : 'are'} talking`;
-  }
-  const names = nameList(room.occupants.map((occupant) => occupant.person.name));
-  return `${names} ${room.occupants.length === 1 ? 'is' : 'are'} in here`;
-}
-
-/**
- * A server's meta on Home: "24 online · 4 in voice", "6 online · quiet".
- *
- * `building.caption` is WP1's canonical phrasing and is reused verbatim when
- * somebody is in a channel. The one phrase Home adds is the middle state —
- * people are online but in no channel — where "quiet" says so in one word.
- */
-export function buildingMetaCaption(building: {
-  lightsOn: number;
-  roomsLit: number;
-  readingCount: number;
-  caption: string;
-}): string {
-  if (building.lightsOn <= 0 && building.roomsLit <= 0 && building.readingCount <= 0) {
-    return building.caption;
-  }
-  const lit = building.roomsLit > 0 || building.readingCount > 0;
-  return `${litMembersCaption(building.lightsOn)} · ${lit ? building.caption : 'quiet'}`;
-}
-
-/** A text channel's line inside a server card: "5 here · 1 mention for you". */
-export function textRoomCaption(room: RoomLight, mentionCount = 0): string {
-  const reading = room.lit ? readingCaption(room.readingCount) : quietTextCaption();
-  return mentionCount > 0 ? `${reading} · ${mentionCaption(mentionCount)}` : reading;
-}
-
-/** The add-a-building row (§7.5). One sentence, both ways in. */
-export const ADD_BUILDING_LABEL = 'Add a server — join with an invite, or start your own';
 
 /**
  * For-you empty states distinguish a checked inbox from an unknown answer.

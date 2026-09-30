@@ -14,16 +14,16 @@ export function GameServersWidget({ guildId }: { guildId: string }) {
   return (
     <WidgetCard title="Game servers">
       {error && <WidgetError>{error}</WidgetError>}
-      <ul className="flex min-w-0 flex-col gap-3">
+      <ul className="glass-wlist">
         {servers.map((server) => {
           const names = server.status.state === 'up' ? server.status.player_names ?? [] : [];
           return (
             <li key={server.id} className="flex min-w-0 flex-col gap-2">
-              <div className="flex min-w-0 items-center gap-2.5">
+              <div className="glass-wrow">
                 <StatusDot state={server.status.state} />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-label font-semibold text-text-primary">{server.name}</p>
-                  <p className="truncate text-meta text-text-muted">{summaryLine(server.status)}</p>
+                <div className="glass-wrow__body">
+                  <p className="glass-wrow__name">{server.name}</p>
+                  <p className="glass-wrow__line">{summaryLine(server.status)}</p>
                 </div>
                 <CopyAddressButton address={server.address} name={server.name} />
               </div>

@@ -1,5 +1,5 @@
 /**
- * The small selections Home makes over WP1's models (docs/lantern-stage-spec.md §7.5).
+ * The small selections Home makes over WP1's models.
  *
  * Nothing here derives a light — every person and every room arrives already
  * lit or dark from `lib/attention` (WP1's §9 rule: a surface never re-derives
@@ -7,10 +7,7 @@
  * layout and the choices stay testable.
  */
 
-import type { BuildingLight, PersonLight, RoomLight } from '../../lib/attention/light';
-
-/** At most this many lit text rooms are listed under a building's window map. */
-export const BUILDING_TEXT_ROOMS = 3;
+import type { BuildingLight, PersonLight } from '../../lib/attention/light';
 
 /**
  * The faces for the Around-now well: everybody the buildings can currently see,
@@ -50,34 +47,4 @@ export function aroundNowPeople(buildings: readonly BuildingLight[]): PersonLigh
   return [...byId.values()].sort(
     (a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name),
   );
-}
-
-/** A building's lit text rooms, most readers first — the lines under its windows. */
-export function litTextRooms(
-  building: BuildingLight,
-  max = BUILDING_TEXT_ROOMS,
-): RoomLight[] {
-  return building.rooms
-    .filter((room) => room.kind === 'text' && room.lit)
-    .sort(
-      (a, b) => b.readingCount - a.readingCount || a.order - b.order || a.name.localeCompare(b.name),
-    )
-    .slice(0, max);
-}
-
-/**
- * A quiet building gets **one** line: the text room somebody is actually in.
- * With nobody reading anywhere it gets none — a dark building does not get a
- * row of rooms to pad it out.
- */
-export function activeTextRoom(building: BuildingLight): RoomLight | null {
-  return litTextRooms(building, 1)[0] ?? null;
-}
-
-/**
- * A server gets a live card when there is an occupied voice channel. Its
- * people supply the preview; a media frame is optional (§6.4: no fake video).
- */
-export function isLitBuilding(building: BuildingLight): boolean {
-  return building.brightestRoom !== null;
 }

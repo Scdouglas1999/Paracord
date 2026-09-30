@@ -26,8 +26,6 @@ export interface FeedItemMessageProps {
   mentionNames: Map<string, string>;
   onOpen: () => void;
   onToggleReaction: (reaction: Reaction) => void;
-  /** A phone: the author sits above the text, and the text takes the full width. */
-  compact?: boolean;
   /** Now, for the times beside a folded feed run. */
   nowMs?: number;
   /** Open one of the posts folded under a feed card. */
@@ -58,7 +56,6 @@ export const FeedItemMessage = memo(function FeedItemMessage({
   mentionNames,
   onOpen,
   onToggleReaction,
-  compact = false,
   nowMs,
   onOpenMessage,
 }: FeedItemMessageProps) {
@@ -86,51 +83,41 @@ export const FeedItemMessage = memo(function FeedItemMessage({
     feed ? <FeedSourceIcon kind={feed.kind} iconUrl={feed.icon_url} size={size} /> : <FeedAvatar user={author} size={size} />;
 
   return (
-    <article aria-label={`${authorName} in ${item.channel_name}`} className="pc-home-card flex flex-col gap-3 px-4 pb-4 pt-3">
-      <FeedCardHeader channelName={item.channel_name} when={when} onOpen={onOpen} aside={<ReasonTag reason={item.reason} />} />
-      <div className={cn('flex gap-3', compact && 'flex-col gap-2.5')}>
-        {compact ? (
-          <div className="flex items-center gap-2.5">
-            {avatar(28)}
-            <span className="pc-display min-w-0 truncate text-name text-text-primary">{authorName}</span>
-          </div>
-        ) : (
-          avatar(36)
+    <article aria-label={`${authorName} in ${item.channel_name}`} className="glass-post">
+      <FeedCardHeader
+        lead={avatar(32)}
+        name={authorName}
+        channelName={item.channel_name}
+        when={when}
+        onOpen={onOpen}
+        aside={<ReasonTag reason={item.reason} />}
+      />
+      <div className="glass-post__body">
+        {feedEmbed && <FeedPostCard embed={feedEmbed} className="mt-0 w-full" />}
+        {item.feed_group && item.feed_group.items.length > 0 && (
+          <FeedRun
+            group={item.feed_group}
+            name={feed?.name ?? item.feed_group.name ?? 'this feed'}
+            nowMs={nowMs ?? Date.now()}
+            onOpenMessage={onOpenMessage}
+          />
         )}
-        <div className="flex min-w-0 flex-1 flex-col gap-2.5">
-          {!compact && (
-            <span className="pc-display truncate pt-[7px] text-name leading-none text-text-primary">{authorName}</span>
-          )}
-          {feedEmbed && <FeedPostCard embed={feedEmbed} className="mt-0 w-full" />}
-          {item.feed_group && item.feed_group.items.length > 0 && (
-            <FeedRun
-              group={item.feed_group}
-              name={feed?.name ?? item.feed_group.name ?? 'this feed'}
-              nowMs={nowMs ?? Date.now()}
-              onOpenMessage={onOpenMessage}
-            />
-          )}
-          {message.forwarded_from && (
-            <ForwardedCard forward={message.forwarded_from} quote={forwardQuote(message)} scope={scope} />
-          )}
-          {!feedEmbed && nodes.length > 0 && <ClampedText>{nodes}</ClampedText>}
-          {!feedEmbed && <PhotoGrid images={images} />}
-          {!feedEmbed && <FileChips files={files} onOpen={onOpen} />}
-          {message.poll && (
-            <div className="pc-home-poll -mt-1 [&>div]:mt-0 [&>div]:max-w-none [&>div]:border-transparent [&>div]:bg-bg-well [&>div]:shadow-[var(--shadow-well)]">
-              <PollMessageCard channelId={message.channel_id} poll={message.poll} canVote />
-            </div>
-          )}
-          {reactions.length > 0 && (
-            <Reactions
-              reactions={reactions}
-              guildId={guildId}
-              channelId={message.channel_id}
-              messageId={message.id}
-              onToggle={onToggleReaction}
-            />
-          )}
-        </div>
+        {message.forwarded_from && (
+          <ForwardedCard forward={message.forwarded_from} quote={forwardQuote(message)} scope={scope} />
+        )}
+        {!feedEmbed && nodes.length > 0 && <ClampedText>{nodes}</ClampedText>}
+        {!feedEmbed && <PhotoGrid images={images} />}
+        {!feedEmbed && <FileChips files={files} onOpen={onOpen} />}
+        {message.poll && <PollMessageCard channelId={message.channel_id} poll={message.poll} canVote />}
+        {reactions.length > 0 && (
+          <Reactions
+            reactions={reactions}
+            guildId={guildId}
+            channelId={message.channel_id}
+            messageId={message.id}
+            onToggle={onToggleReaction}
+          />
+        )}
       </div>
     </article>
   );
@@ -158,17 +145,17 @@ function FeedRun({
   const hidden = Math.max(0, group.items.length - RUN_SHOWN);
   const shown = open ? group.items : group.items.slice(0, RUN_SHOWN);
   return (
-    <div className="pc-feed-run">
-      <ul aria-label={`More from ${name}`}>
+    <div>
+      <ul aria-label={`More from ${name}`} className="glass-run">
         {shown.map((post) => (
           <li key={post.message_id}>
             <button
               type="button"
-              className="pc-feed-run-row pc-focusable"
+              className="glass-run__row glass-focusable"
               onClick={() => onOpenMessage?.(post.channel_id, post.message_id)}
             >
-              <span className="min-w-0 flex-1 truncate">{post.title || 'Untitled'}</span>
-              <time dateTime={post.at} className="shrink-0 tabular-nums text-text-faint">
+              <span>{post.title || 'Untitled'}</span>
+              <time dateTime={post.at} className="glass-instrument shrink-0 text-[var(--ink-3)]">
                 {shortAgo(post.at, nowMs)}
               </time>
             </button>
@@ -178,7 +165,8 @@ function FeedRun({
       {hidden > 0 && (
         <button
           type="button"
-          className="pc-feed-run-more pc-focusable"
+          className="glass-post__more glass-focusable"
+          style={{ margin: '4px 8px 0' }}
           aria-expanded={open}
           onClick={() => setOpen((value) => !value)}
         >
@@ -203,17 +191,13 @@ function ClampedText({ children }: { children: React.ReactNode }) {
     <div className="flex flex-col items-start gap-1">
       <div
         ref={ref}
-        className={cn('w-full break-words text-body text-text-body', !open && 'pc-home-clamp')}
+        className={cn('glass-post__text w-full', !open && 'glass-clamp')}
         style={{ '--clamp-lines': CLAMP } as React.CSSProperties}
       >
         {children}
       </div>
       {(overflows || open) && (
-        <button
-          type="button"
-          onClick={() => setOpen((value) => !value)}
-          className="pc-focusable rounded-[var(--radius-chip)] text-label text-text-link hover:underline"
-        >
+        <button type="button" onClick={() => setOpen((value) => !value)} className="glass-post__more glass-focusable">
           {open ? 'Show less' : 'Show more'}
         </button>
       )}
@@ -237,7 +221,7 @@ function Reactions({
   // A custom emoji is an authenticated image; redraw when its ticket lands.
   useDownloadTicket();
   return (
-    <div className="flex flex-wrap gap-1">
+    <div className="glass-post__reactions">
       {reactions.map((reaction) => {
         const custom = parseCustomEmojiToken(reaction.emoji);
         return (

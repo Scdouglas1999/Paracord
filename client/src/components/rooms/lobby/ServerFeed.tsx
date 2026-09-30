@@ -1,6 +1,7 @@
-import { Fragment, memo, useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { Fragment, memo, useEffect, useRef, useState, type RefObject } from 'react';
 
-import { Button } from '../../ui';
+import { GlassButton } from '../../glass/primitives';
+import { Kicker } from '../../glass/primitives';
 import type { FeedItem, FeedUser } from '../../../api/serverFeed';
 import type { Reaction } from '../../../types';
 import { FeedItemForumPost } from './FeedItemForumPost';
@@ -17,16 +18,10 @@ export interface ServerFeedProps {
   mentionNames: Map<string, string>;
   viewerId: string | null;
   nowMs: number;
-  /** On a phone, the widgets that sit inside the feed after its fourth item. */
-  interleave?: ReactNode;
   onOpenMessage: (channelId: string, messageId: string) => void;
   onOpenChannel: (channelId: string) => void;
   onSayHi: (user: FeedUser) => void;
-  compact?: boolean;
 }
-
-/** Items before the phone's widget block. */
-const INTERLEAVE_AFTER = 4;
 
 /** One card's handlers, made once per item and kept for as long as it is shown. */
 interface ItemHandlers {
@@ -49,11 +44,9 @@ export const ServerFeed = memo(function ServerFeed({
   mentionNames,
   viewerId,
   nowMs,
-  interleave,
   onOpenMessage,
   onOpenChannel,
   onSayHi,
-  compact = false,
 }: ServerFeedProps) {
   const sentinel = useRef<HTMLDivElement>(null);
   const { items, loading, loadingMore, error, done, loadMore, retry } = feed;
@@ -116,7 +109,6 @@ export const ServerFeed = memo(function ServerFeed({
             mentionNames={mentionNames}
             onOpen={handlersFor(item.id).open}
             onToggleReaction={handlersFor(item.id).toggleReaction}
-            compact={compact}
             nowMs={item.feed_group ? nowMs : undefined}
             onOpenMessage={openMessage}
           />
@@ -127,7 +119,6 @@ export const ServerFeed = memo(function ServerFeed({
             item={item}
             when={when}
             nowMs={nowMs}
-            compact={compact}
             onOpen={handlersFor(item.id).open}
           />
         );
@@ -137,50 +128,52 @@ export const ServerFeed = memo(function ServerFeed({
   };
 
   return (
-    <section aria-labelledby={`latest-${guildId}`} aria-busy={loading || loadingMore} className="flex flex-col gap-3">
-      <h2 id={`latest-${guildId}`} className="pc-home-heading">
-        Latest
-      </h2>
+    <section aria-labelledby={`latest-${guildId}`} aria-busy={loading || loadingMore} className="glass-sec">
+      <div className="glass-sec__head">
+        <Kicker as="h2" id={`latest-${guildId}`} className="glass-sec__kicker">
+          Latest
+        </Kicker>
+      </div>
 
       {loading && items.length === 0 && (
-        <div role="status" aria-label="Loading the latest posts" className="flex flex-col gap-3">
+        <div role="status" aria-label="Loading the latest posts" className="glass-feed">
           {[0, 1].map((index) => (
-            <div key={index} className="pc-home-card pc-skeleton h-40" aria-hidden />
+            <div key={index} className="glass-post pc-skeleton h-40" aria-hidden />
           ))}
         </div>
       )}
 
       {!loading && items.length === 0 && !error && (
-        <p className="rounded-[var(--radius-card)] px-4 py-6 text-body text-text-muted shadow-[inset_0_0_0_1px_var(--border-subtle)]">
+        <p className="glass-sec__note">
           Pictures, polls, announcements and busy threads from every channel show up here. Nothing yet.
         </p>
       )}
 
-      {items.map((item, index) => (
-        <Fragment key={item.id}>
-          {render(item)}
-          {interleave && index === Math.min(INTERLEAVE_AFTER, items.length) - 1 && interleave}
-        </Fragment>
-      ))}
-      {interleave && items.length === 0 && !loading && interleave}
+      <div className="glass-feed">
+        {items.map((item) => (
+          <Fragment key={item.id}>{render(item)}</Fragment>
+        ))}
+      </div>
 
       {error && (
-        <div role="alert" className="flex flex-wrap items-center gap-3 rounded-[var(--radius-card)] bg-danger-well px-4 py-3">
-          <p className="min-w-0 flex-1 text-label text-accent-danger">Could not load the latest posts: {error}</p>
-          <Button variant="ghost" size="sm" onClick={retry}>
+        <div role="alert" className="glass-note" data-tone="danger" style={{ marginTop: 8 }}>
+          <span style={{ flex: '1 1 auto', minWidth: 0 }}>Could not load the latest posts: {error}</span>
+          <GlassButton variant="text" onClick={retry}>
             Try again
-          </Button>
+          </GlassButton>
         </div>
       )}
 
       {!done && !error && <div ref={sentinel} className="h-px" aria-hidden />}
       {loadingMore && (
-        <p role="status" className="py-2 text-center text-meta text-text-muted">
+        <p role="status" className="glass-sec__note" style={{ textAlign: 'center', margin: '12px 0 0' }}>
           Loading older posts…
         </p>
       )}
       {done && items.length > 0 && (
-        <p className="py-3 text-center text-meta text-text-faint">That’s everything.</p>
+        <p className="glass-sec__note" style={{ textAlign: 'center', margin: '12px 0 0' }}>
+          That’s everything.
+        </p>
       )}
     </section>
   );

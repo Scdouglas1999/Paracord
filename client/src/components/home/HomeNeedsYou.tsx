@@ -1,15 +1,16 @@
 import { useId, useMemo, useState, type ReactNode } from 'react';
 
 import { Button } from '../ui';
-import { LitAvatar } from '../light';
-import { cn } from '../../lib/utils';
-import { personLight, type PersonLight } from '../../lib/attention/light';
+import { GlyphTile } from '../glass/places/Lead';
+import { badgeFor, type FaceModel } from '../glass/places/model';
 import type { ConversationEntry } from '../../lib/attention/conversationModel';
 import { snowflakeToMs } from '../../lib/attention/conversationModel';
 import { hasDirectAttention, scoreEntry } from '../../lib/attention/scoreConversation';
 import { usePresenceStore } from '../../stores/presenceStore';
 import type { FriendRequestEntry } from '../../hooks/useUnifiedConversations';
 import { mentionCaption, NEEDS_YOU_QUIET } from './homeCaptions';
+import { PageNote, PageSection } from './GlassPage';
+import { PagePerson, PageRow, RowBadge, RowTime } from './PageRow';
 import { shortAgo } from './timeOfDay';
 import { useHomeMessagePreview } from './useHomeMessagePreview';
 import { useScopedAvatar } from '../../hooks/useScopedAvatar';
@@ -59,22 +60,22 @@ export function needsYouReason(entry: ConversationEntry, authorName: string | nu
   return `Activity in ${entry.title}`;
 }
 
-/** §1.5: presence is a rim of light, never a colored dot. */
-function usePersonLight(
+/**
+ * The face on a row and whether they are here. Presence is read PER ROW (its own
+ * store selector), and it is ink on the face, never a colored dot (§1.3).
+ */
+function usePerson(
   userId: string | null | undefined,
   name: string,
   serverId: string | undefined,
   avatar: string | null | undefined,
-): PersonLight | null {
+): { face: FaceModel; status: string } | null {
   const status = usePresenceStore((state) =>
     userId ? (state.getPresence(userId, serverId)?.status ?? 'offline') : 'offline',
   );
   return useMemo(
-    () =>
-      userId
-        ? personLight({ userId, name, status, avatar: avatar ?? null })
-        : null,
-    [userId, name, status, avatar],
+    () => (userId ? { face: { userId, name, avatar: avatar ?? null }, status } : null),
+    [userId, name, avatar, status],
   );
 }
 
@@ -83,12 +84,11 @@ interface RowShellProps {
   reason: string;
   time: string | null;
   context: ReactNode;
+  /** A decision beside the row, when the row itself is not the way in. */
   action?: ReactNode;
   onActivate?: () => void;
   actionLabel?: string;
-  /** A quiet highlight keeps the first direct reply easy to find. */
-  raised?: boolean;
-  trailing?: ReactNode;
+  badge?: ReturnType<typeof badgeFor>;
   dataKey?: string;
 }
 
@@ -96,92 +96,61 @@ interface RowShellProps {
  * One full-row conversation action. Request acceptance and retry are separate
  * controls, so no button contains another button.
  */
-function NeedsYouRow({
-  lead, reason, time, context, action, onActivate, actionLabel, raised, trailing, dataKey,
-}: RowShellProps) {
+function NeedsYouRow({ lead, reason, time, context, action, onActivate, actionLabel, badge, dataKey }: RowShellProps) {
   const reasonId = useId();
   const contextId = useId();
-  const content = (
-    <>
-      {lead}
-      <span className="min-w-0 flex-1">
-        <span className="flex items-baseline gap-2">
-          <span id={reasonId} className="pc-display min-w-0 line-clamp-2 break-words text-name font-semibold text-text-primary">
-            {reason}
-          </span>
-          {time && <span className="ml-auto shrink-0 text-meta text-text-faint">{time}</span>}
-        </span>
-        <span id={contextId} className="mt-1 block text-[13px] leading-relaxed text-text-secondary">
-          <span className="line-clamp-2 break-words">{context}</span>
-        </span>
-      </span>
-    </>
-  );
   return (
-    <li
-      data-conversation-key={dataKey}
-      className={cn(
-        'min-w-0 rounded-[var(--radius-control)]',
-        raised && 'bg-bg-mod-subtle',
-      )}
-    >
-      {onActivate ? (
-        <button
-          type="button"
-          onClick={onActivate}
-          aria-label={actionLabel}
-          aria-describedby={`${reasonId} ${contextId}`}
-          className="pc-focusable flex w-full min-w-0 items-start gap-3 rounded-[var(--radius-control)] px-3 py-3.5 text-left transition-colors hover:bg-bg-mod-subtle"
-        >
-          {content}
-        </button>
-      ) : (
-        <div className="flex min-w-0 items-center gap-3 px-3 py-3.5">
-          {content}
-          {action}
-        </div>
-      )}
-      {trailing}
-    </li>
+    <PageRow
+      dataKey={dataKey}
+      lead={lead}
+      title={reason}
+      titleId={reasonId}
+      line={context}
+      lineId={contextId}
+      wrap
+      aside={
+        time || badge ? (
+          <>
+            {time && <RowTime>{time}</RowTime>}
+            <RowBadge badge={badge ?? null} />
+          </>
+        ) : undefined
+      }
+      onOpen={onActivate}
+      label={actionLabel}
+      describedBy={`${reasonId} ${contextId}`}
+      actions={action}
+    />
   );
 }
 
 /**
- * The fallback lead for a row with no person attached — a window, not a face.
- *
- * It only carries light when the row itself proves somebody is in there (a live
- * room). An unread text room is dark here: nobody has told us anyone is reading
- * it, and a light with no source is the one thing this design never draws (§0).
+ * The lead for a row with no person attached: a tile with the channel's glyph.
+ * It never claims light: a room is live only when the row itself proves somebody
+ * is in a call there.
  */
-function RoomLead({ talking = false }: { talking?: boolean }) {
-  return (
-    <span className="flex h-10 w-10 shrink-0 items-center justify-center" aria-hidden>
-      <span className={cn('pc-window', talking && 'is-talking')} style={{ width: 10, height: 13 }} />
-    </span>
-  );
+function RoomLead({ voice = false }: { voice?: boolean }) {
+  return <GlyphTile glyph={voice ? 'voice' : 'chat'} />;
 }
 
 function RequestRow({
   request,
-  raised,
   onAccept,
 }: {
   request: FriendRequestEntry;
-  raised: boolean;
   onAccept: (userId: string) => void;
 }) {
-  const person = usePersonLight(request.userId, request.username, undefined, null);
+  const person = usePerson(request.userId, request.username, undefined, null);
   return (
     <NeedsYouRow
-      raised={raised}
-      lead={person ? <LitAvatar person={person} size={40} /> : <RoomLead />}
+      lead={person ? <PagePerson face={person.face} /> : <RoomLead />}
       reason={request.username}
       time={shortAgo(request.createdMs, Date.now())}
       context="wants to be friends"
       action={
         <Button
           size="sm"
-          variant="primary"
+          variant="glass"
           className="shrink-0"
           onClick={() => onAccept(request.userId)}
           aria-label={`Accept ${request.username}'s friend request`}
@@ -195,11 +164,9 @@ function RequestRow({
 
 function AttentionRow({
   entry,
-  raised,
   onOpen,
 }: {
   entry: ConversationEntry;
-  raised: boolean;
   onOpen: (entry: ConversationEntry, messageId?: string) => void;
 }) {
   const { preview: fresh, text, failed, historyUnavailable, retry } = useHomeMessagePreview(entry, 'attention');
@@ -229,35 +196,35 @@ function AttentionRow({
     entry.kind === 'dm' ? entry.title : (fresh?.author ?? entry.title);
   const leadAvatar = entry.kind === 'dm' ? (entry.avatar ?? null) : (fresh?.avatar ?? null);
   const avatar = useScopedAvatar(leadAvatar, entry.scope);
-  const person = usePersonLight(leadUserId, leadName, serverId, avatar);
+  const person = usePerson(leadUserId, leadName, serverId, avatar);
 
   return (
     <NeedsYouRow
       dataKey={entry.key}
-      raised={raised}
       lead={
         person ? (
-          <LitAvatar person={person} size={40} />
+          <PagePerson face={person.face} status={person.status} live={entry.hasVoiceActivity} />
         ) : (
-          <RoomLead talking={entry.hasVoiceActivity} />
+          <RoomLead voice={entry.hasVoiceActivity} />
         )
       }
       reason={`${reason}${entry.pinned ? ' · pinned' : ''}`}
       time={shortAgo(targetId ? snowflakeToMs(targetId) : entry.lastActivityId ? snowflakeToMs(entry.lastActivityId) : null, Date.now())}
       context={context}
+      badge={badgeFor({ muted: false, mentions: entry.mentionCount, unread: entry.isDMUnread || entry.unread, unreadCount: null })}
       onActivate={() => onOpen(entry, targetId)}
       actionLabel={`${action} ${entry.title}`}
-      trailing={
+      action={
         failed ? (
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={retry}
             aria-label={`${historyUnavailable ? 'Reconnect to load' : 'Retry'} preview for ${entry.title}`}
-            className="pc-focusable mb-2 ml-[61px] rounded-[var(--radius-control)] px-1.5 py-0.5 text-meta font-semibold text-accent-primary hover:bg-bg-mod-subtle"
           >
             {historyUnavailable ? 'Reconnect' : 'Retry'}
-          </button>
-        ) : null
+          </Button>
+        ) : undefined
       }
     />
   );
@@ -315,9 +282,11 @@ export function HomeNeedsYou({
   const visible = ordered.slice(0, Math.max(0, visibleCount - requests.length));
 
   return (
-    <section
-      aria-label="For you"
-      className="flex min-w-0 flex-col gap-2"
+    <PageSection
+      kicker="For you"
+      label="For you"
+      count={total > 0 ? total : null}
+      list={total > 0}
       onPointerEnter={(event) => {
         if (event.pointerType !== 'touch') {
           setHovered(true);
@@ -338,62 +307,44 @@ export function HomeNeedsYou({
           if (!hovered) release();
         }
       }}
+      footer={
+        total > VISIBLE_ROWS ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() =>
+              setVisibleCount((value) => (value >= total ? VISIBLE_ROWS : value + VISIBLE_ROWS))
+            }
+          >
+            {visibleCount >= total
+              ? 'Show fewer'
+              : `Show ${Math.min(VISIBLE_ROWS, total - visibleCount)} more`}
+          </Button>
+        ) : undefined
+      }
     >
-      <div className="flex items-baseline justify-between gap-2 pb-1">
-        <h2 className="pc-display text-[18px] font-semibold text-text-primary">For you</h2>
-        {total > 0 && <span className="text-meta text-text-muted">{total}</span>}
-      </div>
-
       {total === 0 ? (
-        <p className="text-[13px] text-text-muted">
+        <PageNote>
           {NEEDS_YOU_QUIET[status]}
           {status === 'error' && (
             <>
               {' '}
-              <button
-                type="button"
-                onClick={onRefresh}
-                className="pc-focusable rounded-[var(--radius-control)] font-semibold text-accent-primary underline-offset-4 hover:underline"
-              >
+              <button type="button" onClick={onRefresh} className="glass-focusable">
                 Refresh
               </button>
             </>
           )}
-        </p>
+        </PageNote>
       ) : (
-        <ul className="flex min-w-0 flex-col gap-1">
-          {requests.map((request, index) => (
-            <RequestRow
-              key={request.key}
-              request={request}
-              raised={index === 0}
-              onAccept={onAccept}
-            />
+        <>
+          {requests.map((request) => (
+            <RequestRow key={request.key} request={request} onAccept={onAccept} />
           ))}
-          {visible.map((entry, index) => (
-            <AttentionRow
-              key={entry.key}
-              entry={entry}
-              raised={requests.length === 0 && index === 0}
-              onOpen={onOpen}
-            />
+          {visible.map((entry) => (
+            <AttentionRow key={entry.key} entry={entry} onOpen={onOpen} />
           ))}
-        </ul>
+        </>
       )}
-
-      {total > VISIBLE_ROWS && (
-        <button
-          type="button"
-          onClick={() =>
-            setVisibleCount((value) => (value >= total ? VISIBLE_ROWS : value + VISIBLE_ROWS))
-          }
-          className="pc-focusable self-start rounded-[var(--radius-control)] px-1.5 py-1 text-label font-semibold text-accent-primary hover:bg-bg-mod-subtle"
-        >
-          {visibleCount >= total
-            ? 'Show fewer'
-            : `Show ${Math.min(VISIBLE_ROWS, total - visibleCount)} more`}
-        </button>
-      )}
-    </section>
+    </PageSection>
   );
 }

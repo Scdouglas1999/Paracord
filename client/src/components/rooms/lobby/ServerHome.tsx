@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { useNavigate } from 'react-router';
 
 import { extractApiError } from '../../../api/client';
@@ -30,7 +30,9 @@ import { ChannelType, type Channel } from '../../../types';
 import { BuildingNotFound } from '../../guild/BuildingNotFound';
 import { EventList } from '../../guild/EventList';
 import { InviteModal } from '../../guild/InviteModal';
-import { Modal, ModalBody, ModalHeader, ModalTitle, Plate } from '../../ui';
+import { Modal, ModalBody, ModalHeader, ModalTitle } from '../../ui';
+import { HeaderAvatar } from '../../glass/conversation/HeaderAvatar';
+import { useGlassLayout } from '../../glass/shell/useGlassLayout';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '../../ui/ContextMenu';
 import { LiveNow } from './LiveNow';
 import { liveNow } from './liveNowModel';
@@ -43,7 +45,7 @@ import { ServerHead } from './ServerHead';
 import { useServerFeed } from './useServerFeed';
 import { useUpcomingEvents } from './useUpcomingEvents';
 import { useSportsGames } from './widgets/GameWidget';
-import { HomeWidget, WidgetStack, type WidgetContext } from './widgets/WidgetColumn';
+import { WidgetStack, type WidgetContext } from './widgets/WidgetColumn';
 import { enabledWidgets } from './widgets/widgetConfig';
 
 export interface ServerHomeProps {
@@ -54,38 +56,8 @@ const EMPTY_CHANNELS: Channel[] = [];
 const NO_PEOPLE: PersonLight[] = [];
 const NO_ROOMS: RoomLight[] = [];
 
-/** Below this the plate is a phone: one column, widgets folded into the feed. */
-export const PHONE_MAX = 700;
-/** From here the widget column is the spec's full 340px. */
-export const WIDE_MIN = 1000;
-
-type Layout = 'phone' | 'medium' | 'wide';
-
-function layoutFor(width: number): Layout {
-  if (width < PHONE_MAX) return 'phone';
-  return width >= WIDE_MIN ? 'wide' : 'medium';
-}
-
 function channelType(channel: Channel): number | undefined {
   return channel.type ?? channel.channel_type;
-}
-
-/** The plate's own width, which is what the layout answers to (not the window's). */
-function usePlateLayout(ref: React.RefObject<HTMLElement | null>): Layout {
-  const [layout, setLayout] = useState<Layout>(() =>
-    typeof window !== 'undefined' ? layoutFor(window.innerWidth) : 'wide',
-  );
-  useLayoutEffect(() => {
-    const node = ref.current;
-    if (!node) return;
-    const measure = () => setLayout(layoutFor(node.getBoundingClientRect().width));
-    measure();
-    if (typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver(measure);
-    observer.observe(node);
-    return () => observer.disconnect();
-  });
-  return layout;
 }
 
 /** A minute is the finest thing this page says about time. */
@@ -142,9 +114,10 @@ export function ServerHome({ guildId }: ServerHomeProps) {
   const [showInvite, setShowInvite] = useState(false);
   const [showCalendar, setShowCalendar] = useState(false);
 
-  const plateRef = useRef<HTMLElement>(null);
-  const layout = usePlateLayout(plateRef);
-  const phone = layout === 'phone';
+  // The Overview is one column at every width, so the frame's layout only tells
+  // it how much to shrink the mark and the title (the phone).
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const phone = useGlassLayout() === 'phone';
 
   useEffect(() => {
     if (guildId && channels.length === 0) void fetchChannels(guildId);
@@ -217,10 +190,10 @@ export function ServerHome({ guildId }: ServerHomeProps) {
     return map;
   }, [togetherEntries, guildId]);
   const live = useMemo(
-    () => liveNow({ rooms, stageChannelIds, events, games: phone ? [] : sports.games, together }),
-    [rooms, stageChannelIds, events, sports.games, phone, together],
+    () => liveNow({ rooms, stageChannelIds, events, games: sports.games, together }),
+    [rooms, stageChannelIds, events, sports.games, together],
   );
-  const liveGameShown = !phone && sports.games.some((game) => game.state === 'in');
+  const liveGameShown = sports.games.some((game) => game.state === 'in');
 
   // ---- the banner ------------------------------------------------------------------
   // Subscribing to the ticket re-renders, and so re-resolves the URL, once it is minted.
@@ -302,20 +275,11 @@ export function ServerHome({ guildId }: ServerHomeProps) {
     [guildId, nowMs, viewerId, events, eventsError, members, announcementChannels, mentionNames,
       liveGameShown, channelName, rsvp, openCalendar, openMedia, openLeaderboard, openMessage, sayHiLater],
   );
-  const phoneRest = useMemo(
-    () => (phone ? widgetIds.filter((id) => id !== 'coming_up') : []),
-    [phone, widgetIds],
-  );
-  const interleave = useMemo(
-    () => (phone && phoneRest.length > 0 ? <WidgetStack ids={phoneRest} context={widgetContext} /> : undefined),
-    [phone, phoneRest, widgetContext],
-  );
-
   if (!guild && denied) return <BuildingNotFound onGoHome={() => navigate('/app')} />;
   if (!guild) {
     return (
-      <div role="status" aria-label="Opening the server" className="h-full bg-bg-base p-[var(--gutter)]">
-        <Plate as="section" className="h-full pc-skeleton" aria-hidden />
+      <div role="status" aria-label="Opening the server" className="glass-page">
+        <div className="glass-page__scroll pc-skeleton" aria-hidden />
         <span className="sr-only">Opening the server…</span>
       </div>
     );
@@ -326,19 +290,13 @@ export function ServerHome({ guildId }: ServerHomeProps) {
     || (guild.hub_settings?.description as string | undefined)?.trim()
     || null;
 
-  const phoneFirst = phone && widgetIds.includes('coming_up');
-
   return (
-    <div className="h-full overflow-hidden bg-bg-base p-[var(--gutter)]">
-      <Plate
-        ref={plateRef}
-        as="section"
-        aria-label={`${guild.name} home`}
-        bare
-        {...{ [RECEDE_MARK]: '' }}
-        className="relative h-full overflow-y-auto overflow-x-hidden scrollbar-thin"
-      >
-        <ServerCover guildId={guildId} bannerUrl={bannerUrl} iconSrc={iconSrc} height={phone ? 150 : 180} />
+    <section aria-label={`${guild.name} home`} className="glass-page glass-ov">
+      <div className="glass-page__tools glass-ov__tools">
+        <HeaderAvatar />
+      </div>
+      <div ref={scrollRef} className="glass-page__scroll" {...{ [RECEDE_MARK]: '' }}>
+        <ServerCover guildId={guildId} bannerUrl={bannerUrl} iconSrc={iconSrc} />
 
         <Enter index={0}>
           <ServerHead
@@ -371,58 +329,37 @@ export function ServerHome({ guildId }: ServerHomeProps) {
           />
         </Enter>
 
-        <div
-          className={cn(
-            'grid items-start',
-            phone ? 'grid-cols-1 gap-6 px-4 pb-8 pt-6' : 'gap-7 px-8 pb-12 pt-8',
-            layout === 'wide' && 'grid-cols-[minmax(0,1fr)_340px]',
-            layout === 'medium' && 'grid-cols-[minmax(0,1fr)_288px]',
-          )}
-        >
-          <main className="flex min-w-0 flex-col gap-7">
-            <Enter index={1}>
-              <LiveNow
-                guildId={guildId}
-                live={live}
-                voiceRooms={voiceRooms}
-                phone={phone}
-                channelName={channelName}
-                onJoinRoom={joinRoom}
-                onOpenChannel={openChannel}
-                onRsvp={(eventId) => void toggleRsvp(eventId)}
-              />
-            </Enter>
-            {phoneFirst && (
-              <Enter index={2}>
-                <HomeWidget id="coming_up" context={widgetContext} />
-              </Enter>
-            )}
-            <Enter index={phone ? 3 : 2}>
-              <ServerFeed
-                guildId={guildId}
-                feed={feed}
-                scrollRoot={plateRef}
-                mentionNames={mentionNames}
-                viewerId={viewerId}
-                nowMs={nowMs}
-                interleave={interleave}
-                onOpenMessage={openMessage}
-                onOpenChannel={openChannel}
-                onSayHi={sayHiLater}
-                compact={phone}
-              />
-            </Enter>
-          </main>
-
-          {!phone && (
-            <aside aria-label="Widgets" className="min-w-0">
-              <Enter index={3}>
-                <WidgetStack ids={widgetIds} context={widgetContext} />
-              </Enter>
-            </aside>
-          )}
+        <div className="glass-ov__body">
+          <Enter index={1}>
+            <LiveNow
+              guildId={guildId}
+              live={live}
+              voiceRooms={voiceRooms}
+              nowMs={nowMs}
+              channelName={channelName}
+              onJoinRoom={joinRoom}
+              onOpenChannel={openChannel}
+              onRsvp={(eventId) => void toggleRsvp(eventId)}
+            />
+          </Enter>
+          <Enter index={2}>
+            <WidgetStack ids={widgetIds} context={widgetContext} />
+          </Enter>
+          <Enter index={3}>
+            <ServerFeed
+              guildId={guildId}
+              feed={feed}
+              scrollRoot={scrollRef}
+              mentionNames={mentionNames}
+              viewerId={viewerId}
+              nowMs={nowMs}
+              onOpenMessage={openMessage}
+              onOpenChannel={openChannel}
+              onSayHi={sayHiLater}
+            />
+          </Enter>
         </div>
-      </Plate>
+      </div>
 
       <ContextMenu
         open={contextMenu.isOpen}
@@ -448,6 +385,6 @@ export function ServerHome({ guildId }: ServerHomeProps) {
           <EventList guildId={guildId} />
         </ModalBody>
       </Modal>
-    </div>
+    </section>
   );
 }

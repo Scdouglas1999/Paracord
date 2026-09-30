@@ -12,18 +12,22 @@ import {
   Search,
   SearchX,
   Tag,
-  X,
 } from 'lucide-react';
 import { extractApiError } from '../../api/client';
 import { channelApi } from '../../api/channels';
 import type { Channel, ForumTag, Member, Message } from '../../types';
-import { cn } from '../../lib/utils';
 import { displayName } from '../../lib/displayName';
 import { toast } from '../../stores/toastStore';
 import { useMemberStore } from '../../stores/memberStore';
 import { usePermissions } from '../../hooks/usePermissions';
 import { Permissions, hasPermission } from '../../types';
 import { EmptyState, ErrorBanner, LoadingSpinner } from '../ui/Feedback';
+import { Button } from '../ui/Button';
+import { IconButton } from '../ui/IconButton';
+import { Input, Textarea } from '../ui/Input';
+import { SearchWell } from '../ui/TextField';
+import { formatRowTime } from '../glass/places/model';
+import { Kicker } from '../glass/primitives';
 import {
   Modal,
   ModalBody,
@@ -80,12 +84,14 @@ export function ForumView({ channelId, channelName }: ForumViewProps) {
   const { permissions, isAdmin } = usePermissions(guildId || null);
   const canManageTags = isAdmin || hasPermission(permissions, Permissions.MANAGE_CHANNELS);
 
+  // Row times are read against the moment the page opened; the list is not a clock.
+  const [nowMs] = useState(() => Date.now());
   const [posts, setPosts] = useState<Channel[]>([]);
   const [tags, setTags] = useState<ForumTag[]>([]);
   const [sortOrder, setSortOrder] = useState(0);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [layout, setLayout] = useState<ViewLayout>('grid');
+  const [layout, setLayout] = useState<ViewLayout>('list');
   const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
   const [showNewPost, setShowNewPost] = useState(false);
   const [showTagManager, setShowTagManager] = useState(false);
@@ -210,203 +216,163 @@ export function ForumView({ channelId, channelName }: ForumViewProps) {
     navigate(`/app/guilds/${guildId}/channels/${msg.channel_id}?message=${msg.id}`);
   };
 
+  const empty = filteredPosts.length === 0;
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      {/* Toolbar */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-border-subtle px-4 py-3">
-        {/* Sort */}
-        <button
-          className="flex items-center gap-1.5 rounded-chip border border-border-subtle px-3 py-1.5 text-label font-medium text-text-secondary outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
-          onClick={() => void handleSortChange(sortOrder === 0 ? 1 : 0)}
-          title={sortOrder === 0 ? 'Sorted by latest activity' : 'Sorted by creation date'}
-        >
-          <ArrowDownUp size={14} />
-          {sortOrder === 0 ? 'Latest activity' : 'Newest first'}
-        </button>
-
-        {/* Layout toggle */}
-        <div className="flex items-center overflow-hidden rounded-chip border border-border-subtle">
-          <button
-            className={cn(
-              'flex items-center gap-1 px-2.5 py-1.5 text-label font-medium outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
-              layout === 'grid'
-                ? 'bg-bg-mod-strong text-text-primary'
-                : 'text-text-muted hover:bg-bg-mod-subtle hover:text-text-secondary',
-            )}
-            onClick={() => setLayout('grid')}
-            title="Grid view"
-            aria-pressed={layout === 'grid'}
+    <div className="glass-forum">
+      <div className="glass-page__scroll">
+        <div className="glass-forum__bar" role="toolbar" aria-label="Forum controls">
+          <Button
+            variant="glass"
+            size="sm"
+            onClick={() => void handleSortChange(sortOrder === 0 ? 1 : 0)}
+            title={sortOrder === 0 ? 'Sorted by latest activity' : 'Sorted by creation date'}
           >
-            <Grid3X3 size={14} />
-          </button>
-          <button
-            className={cn(
-              'flex items-center gap-1 px-2.5 py-1.5 text-label font-medium outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
-              layout === 'list'
-                ? 'bg-bg-mod-strong text-text-primary'
-                : 'text-text-muted hover:bg-bg-mod-subtle hover:text-text-secondary',
-            )}
-            onClick={() => setLayout('list')}
-            title="List view"
-            aria-pressed={layout === 'list'}
-          >
-            <LayoutList size={14} />
-          </button>
-        </div>
+            <ArrowDownUp size={14} aria-hidden />
+            {sortOrder === 0 ? 'Latest activity' : 'Newest first'}
+          </Button>
 
-        {/* Include archived */}
-        <label className="flex cursor-pointer select-none items-center gap-1.5 text-meta text-text-muted">
-          <input
-            type="checkbox"
-            checked={includeArchived}
-            onChange={(e) => setIncludeArchived(e.target.checked)}
-            className="accent-[var(--accent-primary)]"
-          />
-          Archived
-        </label>
-
-        {/* Search. The well lights for the field it wraps, not for the Clear
-            button inside it: §9 is one ring per control, and Clear draws its
-            own. */}
-        <div className="relative flex items-center rounded-chip border border-border-subtle bg-bg-well transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] has-[>input:focus-visible]:border-accent-primary has-[>input:focus-visible]:shadow-[var(--focus-ring-input)]">
-          <Search size={14} className="pointer-events-none absolute left-2.5 text-text-muted" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') void handleSearch(searchQuery);
-            }}
-            placeholder="Search posts…"
-            className="w-52 bg-transparent py-1.5 pl-8 pr-7 text-meta text-text-primary placeholder:text-text-muted outline-none"
-          />
-          {searchQuery && (
-            <button
-              onClick={clearSearch}
-              aria-label="Clear forum search"
-              className="pc-focusable absolute right-2 rounded-chip text-text-muted outline-none transition-colors hover:text-text-secondary focus-visible:text-text-primary"
+          <div className="glass-forum__layout" role="group" aria-label="Layout">
+            <IconButton
+              label="List view"
+              size="sm"
+              tone="ghost"
+              active={layout === 'list'}
+              onClick={() => setLayout('list')}
             >
-              <X size={12} />
-            </button>
+              <LayoutList size={14} aria-hidden />
+            </IconButton>
+            <IconButton
+              label="Grid view"
+              size="sm"
+              tone="ghost"
+              active={layout === 'grid'}
+              onClick={() => setLayout('grid')}
+            >
+              <Grid3X3 size={14} aria-hidden />
+            </IconButton>
+          </div>
+
+          <label className="glass-forum__archived">
+            <input
+              type="checkbox"
+              checked={includeArchived}
+              onChange={(e) => setIncludeArchived(e.target.checked)}
+              className="accent-[var(--accent-primary)]"
+            />
+            Archived
+          </label>
+
+          <span className="glass-forum__spacer" />
+
+          {canManageTags && (
+            <Button variant="ghost" size="sm" onClick={() => setShowTagManager(true)}>
+              <Tag size={14} aria-hidden />
+              Tags
+            </Button>
           )}
+
+          {/* The one filled button on the page: what this page is for. */}
+          <Button size="sm" onClick={() => setShowNewPost(true)}>
+            <Plus size={16} aria-hidden />
+            New post
+          </Button>
         </div>
 
-        <div className="flex-1" />
+        <SearchWell
+          type="text"
+          label="Search posts"
+          placeholder="Search posts…"
+          icon={<Search size={16} aria-hidden />}
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void handleSearch(searchQuery);
+          }}
+          className="glass-forum__search"
+          shortcut={
+            searchQuery ? (
+              <Button variant="ghost" size="sm" aria-label="Clear forum search" onClick={clearSearch}>
+                Clear
+              </Button>
+            ) : undefined
+          }
+        />
 
-        {canManageTags && (
-          <button
-            className="flex items-center gap-1.5 rounded-chip border border-border-subtle px-3 py-2 text-label font-semibold text-text-secondary outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
-            onClick={() => setShowTagManager(true)}
-          >
-            <Tag size={15} />
-            Tags
-          </button>
+        {tags.length > 0 && (
+          <div className="glass-forum__tags" role="toolbar" aria-label="Forum tag filters">
+            {tags.map((tag) => (
+              <button
+                key={tag.id}
+                type="button"
+                onClick={() => toggleTag(tag.id)}
+                onKeyDown={(event) => handleTagRovingFocus(event, 'filters')}
+                data-forum-tag-scope="filters"
+                className="glass-tagchip glass-focusable"
+                aria-pressed={selectedTags.has(tag.id)}
+              >
+                {selectedTags.has(tag.id) && <Check size={12} aria-hidden />}
+                {tag.emoji && <span>{tag.emoji}</span>}
+                {tag.name}
+              </button>
+            ))}
+            {selectedTags.size > 0 && (
+              <Button variant="ghost" size="sm" onClick={() => setSelectedTags(new Set())}>
+                Clear
+              </Button>
+            )}
+          </div>
         )}
 
-        {/* New post button — primary emerald */}
-        <button
-          className="flex items-center gap-1.5 rounded-chip bg-accent-primary px-3.5 py-2 text-label font-semibold text-text-on-accent shadow-[var(--shadow-chip)] outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-accent-primary-hover active:bg-accent-primary-active focus-visible:shadow-[var(--focus-ring)]"
-          onClick={() => setShowNewPost(true)}
-        >
-          <Plus size={16} />
-          New post
-        </button>
-      </div>
-
-      {/* Tag filters */}
-      {tags.length > 0 && (
-        <div
-          className="flex flex-wrap items-center gap-1.5 border-b border-border-subtle/50 px-4 py-2"
-          role="toolbar"
-          aria-label="Forum tag filters"
-        >
-          <Tag size={13} className="text-text-muted" />
-          {tags.map((tag) => (
-            <button
-              key={tag.id}
-              onClick={() => toggleTag(tag.id)}
-              onKeyDown={(event) => handleTagRovingFocus(event, 'filters')}
-              data-forum-tag-scope="filters"
-              className={cn(
-                'inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-meta font-medium outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
-                selectedTags.has(tag.id)
-                  ? 'border-transparent bg-accent-tint text-accent-primary'
-                  : 'border-border-subtle text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary',
-              )}
-              aria-pressed={selectedTags.has(tag.id)}
-            >
-              {selectedTags.has(tag.id) && <Check size={11} aria-hidden />}
-              {tag.emoji && <span className="mr-1">{tag.emoji}</span>}
-              {tag.name}
-            </button>
-          ))}
-          {selectedTags.size > 0 && (
-            <button
-              onClick={() => setSelectedTags(new Set())}
-              className="rounded-chip px-1.5 py-0.5 text-meta text-text-muted outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:text-text-secondary focus-visible:shadow-[var(--focus-ring)]"
-            >
-              Clear
-            </button>
-          )}
-        </div>
-      )}
-
-      {/* Search results */}
-      {searchResults !== null && (
-        <div className="flex-1 overflow-y-auto p-4 scrollbar-thin">
-          <div className="mb-3 flex items-center justify-between">
-            <span className="text-meta text-text-muted">
-              {searching
-                ? 'Searching…'
-                : `${searchResults.length} result${searchResults.length === 1 ? '' : 's'} found`}
-            </span>
-            <button
-              onClick={clearSearch}
-              className="rounded-chip px-1.5 py-0.5 text-meta text-text-muted outline-none transition-colors hover:text-text-secondary focus-visible:shadow-[var(--focus-ring)]"
-            >
-              Clear search
-            </button>
-          </div>
-          {searching ? (
-            <LoadingSpinner className="py-12" label="Searching…" />
-          ) : searchResults.length === 0 ? (
-            <EmptyState
-              icon={<SearchX size={20} />}
-              title="Nothing turned up"
-              description={`Nothing matches "${searchQuery.trim()}" in #${channelName} yet. Try fewer or different words.`}
-            />
-          ) : (
-            <div className="flex flex-col gap-2">
-              {searchResults.map((msg) => (
-                <button
-                  key={msg.id}
-                  type="button"
-                  onClick={() => handleSearchResultClick(msg)}
-                  className="rounded-well bg-bg-mod-subtle/50 px-4 py-3 text-left outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
-                >
-                  <div className="flex items-center gap-2 text-meta text-text-muted">
-                    <span className="font-medium text-text-secondary">
-                      {displayName(msg.author)}
-                    </span>
-                    {msg.created_at && (
-                      <span className="font-code tabular-nums">
-                        {new Date(msg.created_at).toLocaleString()}
-                      </span>
-                    )}
-                  </div>
-                  <p className="mt-1 line-clamp-3 text-body text-text-primary">
-                    {msg.content}
-                  </p>
+        {/* Search results */}
+        {searchResults !== null ? (
+          <section aria-label="Search results" className="glass-sec">
+            <div className="glass-sec__head">
+              <Kicker as="h2" className="glass-sec__kicker">
+                Results
+              </Kicker>
+              <span className="glass-instrument glass-sec__count">
+                {searching ? 'Searching…' : searchResults.length}
+              </span>
+              <span className="glass-sec__aside">
+                <button type="button" onClick={clearSearch} className="glass-linkbtn glass-focusable">
+                  Clear search
                 </button>
-              ))}
+              </span>
             </div>
-          )}
-        </div>
-      )}
-
-      {/* Posts */}
-      {searchResults === null && <div className="flex-1 overflow-y-auto p-4 scrollbar-thin">
-        {loading ? (
+            {searching ? (
+              <LoadingSpinner className="py-12" label="Searching…" />
+            ) : searchResults.length === 0 ? (
+              <EmptyState
+                icon={<SearchX size={20} />}
+                title="Nothing turned up"
+                description={`Nothing matches "${searchQuery.trim()}" in ${channelName} yet. Try fewer or different words.`}
+              />
+            ) : (
+              <div className="glass-forum__list">
+                {searchResults.map((msg) => (
+                  <button
+                    key={msg.id}
+                    type="button"
+                    onClick={() => handleSearchResultClick(msg)}
+                    className="glass-fpost glass-focusable"
+                  >
+                    <span className="glass-fpost__meta">
+                      <span className="glass-fpost__author">{displayName(msg.author)}</span>
+                      {msg.created_at && (
+                        <time dateTime={msg.created_at} className="glass-instrument">
+                          {new Date(msg.created_at).toLocaleString()}
+                        </time>
+                      )}
+                    </span>
+                    <span className="glass-fpost__snippet glass-clamp" style={{ '--clamp-lines': 3 } as React.CSSProperties}>
+                      {msg.content}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </section>
+        ) : loading ? (
           <LoadingSpinner className="py-12" label="Loading posts..." />
         ) : loadError ? (
           <ErrorBanner
@@ -414,13 +380,13 @@ export function ForumView({ channelId, channelName }: ForumViewProps) {
             message={`Failed to load forum posts: ${loadError}`}
             onRetry={() => void fetchPosts()}
           />
-        ) : filteredPosts.length === 0 ? (
+        ) : empty ? (
           <EmptyState
             icon={<MessageSquare size={20} />}
             title={
               selectedTags.size > 0
                 ? 'No posts match those tags'
-                : `#${channelName} is ready for its first thread`
+                : `${channelName} is ready for its first thread`
             }
             description={
               selectedTags.size > 0
@@ -428,41 +394,35 @@ export function ForumView({ channelId, channelName }: ForumViewProps) {
                 : 'Kick things off — ask a question, share an update, or open a topic the community can rally around.'
             }
             action={
-              <button
-                onClick={() => setShowNewPost(true)}
-                className="flex items-center gap-1.5 rounded-chip bg-accent-primary px-3.5 py-2 text-label font-semibold text-text-on-accent shadow-[var(--shadow-chip)] outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-accent-primary-hover active:bg-accent-primary-active focus-visible:shadow-[var(--focus-ring)]"
-              >
-                <Plus size={16} />
+              <Button onClick={() => setShowNewPost(true)}>
+                <Plus size={16} aria-hidden />
                 Start a discussion
-              </button>
+              </Button>
             }
           />
-        ) : layout === 'grid' ? (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {filteredPosts.map((post) => (
-              <PostCard
-                key={post.id}
-                post={post}
-                tags={tags}
-                authorName={post.owner_id ? memberNameById.get(post.owner_id) ?? null : null}
-                onClick={() => handlePostClick(post)}
-              />
-            ))}
-          </div>
         ) : (
-          <div className="space-y-2">
-            {filteredPosts.map((post) => (
-              <PostRow
-                key={post.id}
-                post={post}
-                tags={tags}
-                authorName={post.owner_id ? memberNameById.get(post.owner_id) ?? null : null}
-                onClick={() => handlePostClick(post)}
-              />
-            ))}
-          </div>
+          <section aria-label="Posts" className="glass-sec">
+            <div className="glass-sec__head">
+              <Kicker as="h2" className="glass-sec__kicker">
+                Posts
+              </Kicker>
+              <span className="glass-instrument glass-sec__count">{filteredPosts.length}</span>
+            </div>
+            <div className="glass-forum__list" data-layout={layout}>
+              {filteredPosts.map((post) => (
+                <PostRow
+                  key={post.id}
+                  post={post}
+                  tags={tags}
+                  authorName={post.owner_id ? memberNameById.get(post.owner_id) ?? null : null}
+                  nowMs={nowMs}
+                  onClick={() => handlePostClick(post)}
+                />
+              ))}
+            </div>
+          </section>
         )}
-      </div>}
+      </div>
 
       {/* New post Modal */}
       {showNewPost && (
@@ -493,125 +453,60 @@ export function ForumView({ channelId, channelName }: ForumViewProps) {
   );
 }
 
-function PostCard({
-  post,
-  tags,
-  authorName,
-  onClick,
-}: {
-  post: Channel;
-  tags: ForumTag[];
-  authorName: string | null;
-  onClick: () => void;
-}) {
-  const postTags: string[] = (post.applied_tags as string[] | null) ?? [];
-  const matchedTags = tags.filter((t) => postTags.includes(t.id));
-  const isArchived = post.thread_metadata?.archived === true;
-
-  return (
-    <button
-      onClick={onClick}
-      className="group flex flex-col gap-2 rounded-well border border-border-subtle bg-bg-raised p-4 text-left shadow-[var(--shadow-chip)] outline-none pc-hover-lift focus-visible:shadow-[var(--focus-ring)]"
-    >
-      <div className="flex items-start gap-2">
-        <span className="flex-1 truncate text-heading text-text-primary transition-colors duration-[var(--duration-fast)] group-hover:text-accent-primary">
-          {post.name || 'Untitled'}
-        </span>
-        {isArchived && (
-          <span className="shrink-0 rounded-window bg-bg-mod-strong px-1.5 py-0.5 text-meta font-medium text-text-muted">
-            Archived
-          </span>
-        )}
-      </div>
-
-      {matchedTags.length > 0 && (
-        <div className="flex flex-wrap gap-1">
-          {matchedTags.map((tag) => (
-            <span
-              key={tag.id}
-              className="inline-flex items-center rounded-full border border-border-subtle px-2 py-0.5 text-meta font-medium text-text-muted"
-            >
-              {tag.emoji && <span className="mr-0.5">{tag.emoji}</span>}
-              {tag.name}
-            </span>
-          ))}
-        </div>
-      )}
-
-      <div className="mt-auto flex flex-wrap items-center gap-2 pt-1">
-        {post.owner_id && (
-          <span className="text-meta text-text-secondary">by {authorName || 'Unknown user'}</span>
-        )}
-        <span className="inline-flex items-center gap-1 rounded-window bg-bg-mod-strong px-1.5 py-0.5 text-meta text-text-secondary">
-          <MessageSquare size={12} />
-          <span className="tabular-nums">{post.message_count ?? 0}</span>
-        </span>
-        <span className="ml-auto inline-flex items-center rounded-window bg-bg-mod-strong px-1.5 py-0.5 font-code text-[11px] tabular-nums text-text-muted">
-          {new Date(post.created_at).toLocaleDateString()}
-        </span>
-      </div>
-    </button>
-  );
-}
-
+/**
+ * One post, as a solid row (docs/glass-spec.md §1.1, §2.4): the title (15/600),
+ * its tags as small chips, who started it, how many messages, and when. In the
+ * grid layout the same row stands on its own as a card, two to a line. The whole
+ * row opens the post, which is a conversation like any other.
+ */
 function PostRow({
   post,
   tags,
   authorName,
+  nowMs,
   onClick,
 }: {
   post: Channel;
   tags: ForumTag[];
   authorName: string | null;
+  nowMs: number;
   onClick: () => void;
 }) {
   const postTags: string[] = (post.applied_tags as string[] | null) ?? [];
   const matchedTags = tags.filter((t) => postTags.includes(t.id));
   const isArchived = post.thread_metadata?.archived === true;
+  const created = Date.parse(post.created_at);
+  const when = Number.isFinite(created) ? formatRowTime(created, nowMs) : null;
+  const count = post.message_count ?? 0;
 
   return (
-    <button
-      onClick={onClick}
-      className="group flex w-full items-center gap-3 rounded-well border border-border-subtle bg-bg-raised px-4 py-3 text-left shadow-[var(--shadow-chip)] outline-none pc-hover-lift focus-visible:shadow-[var(--focus-ring)]"
-    >
-      <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <div className="flex items-center gap-2">
-          <span className="truncate text-label font-semibold text-text-primary transition-colors duration-[var(--duration-fast)] group-hover:text-accent-primary">
-            {post.name || 'Untitled'}
-          </span>
-          {isArchived && (
-            <span className="shrink-0 rounded-window bg-bg-mod-strong px-1.5 py-0.5 text-meta font-medium text-text-muted">
-              Archived
+    <button type="button" onClick={onClick} className="glass-fpost glass-focusable" data-archived={isArchived ? '' : undefined}>
+      <span className="glass-fpost__top">
+        <span className="glass-name glass-fpost__title">{post.name || 'Untitled'}</span>
+        {isArchived && <span className="glass-fpost__flag">Archived</span>}
+      </span>
+      {matchedTags.length > 0 && (
+        <span className="glass-fpost__tags">
+          {matchedTags.map((tag) => (
+            <span key={tag.id} className="glass-fpost__tag">
+              {tag.emoji ? `${tag.emoji} ` : ''}
+              {tag.name}
             </span>
-          )}
-        </div>
-        {matchedTags.length > 0 && (
-          <div className="flex flex-wrap gap-1">
-            {matchedTags.map((tag) => (
-              <span
-                key={tag.id}
-                className="inline-flex items-center rounded-full border border-border-subtle px-2 py-0.5 text-meta font-medium text-text-muted"
-              >
-                {tag.emoji && <span className="mr-0.5">{tag.emoji}</span>}
-                {tag.name}
-              </span>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div className="flex shrink-0 items-center gap-2">
-        {post.owner_id && (
-          <span className="text-meta text-text-secondary">by {authorName || 'Unknown user'}</span>
-        )}
-        <span className="inline-flex items-center gap-1 rounded-window bg-bg-mod-strong px-1.5 py-0.5 text-meta text-text-secondary">
-          <MessageSquare size={12} />
-          <span className="tabular-nums">{post.message_count ?? 0}</span>
+          ))}
         </span>
-        <span className="inline-flex items-center rounded-window bg-bg-mod-strong px-1.5 py-0.5 font-code text-[11px] tabular-nums text-text-muted">
-          {new Date(post.created_at).toLocaleDateString()}
+      )}
+      <span className="glass-fpost__meta">
+        {post.owner_id && <span className="glass-fpost__author">{authorName || 'Unknown user'}</span>}
+        <span className="glass-fpost__count" aria-label={`${count} ${count === 1 ? 'message' : 'messages'}`}>
+          <MessageSquare size={13} aria-hidden />
+          <span className="glass-instrument">{count}</span>
         </span>
-      </div>
+        {when && (
+          <time dateTime={post.created_at} className="glass-instrument glass-fpost__when">
+            {when}
+          </time>
+        )}
+      </span>
     </button>
   );
 }
@@ -680,29 +575,25 @@ function TagManagerModal({
       </ModalHeader>
       <ModalBody className="space-y-4 pb-6">
           <div className="grid gap-2 sm:grid-cols-[1fr_8rem_auto]">
-            <input
+            <Input
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
               maxLength={30}
               placeholder="Tag name"
-              className="w-full rounded-chip border border-border-subtle bg-bg-well px-3 py-2.5 text-body text-text-primary placeholder:text-text-muted outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus:border-accent-primary focus:shadow-[var(--focus-ring-input)]"
+              aria-label="Tag name"
             />
-            <input
+            <Input
               type="text"
               value={emoji}
               onChange={(e) => setEmoji(e.target.value)}
               maxLength={16}
               placeholder="Emoji"
-              className="w-full rounded-chip border border-border-subtle bg-bg-well px-3 py-2.5 text-body text-text-primary placeholder:text-text-muted outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus:border-accent-primary focus:shadow-[var(--focus-ring-input)]"
+              aria-label="Emoji"
             />
-            <button
-              onClick={() => void createTag()}
-              disabled={creating || !name.trim()}
-              className="rounded-chip bg-accent-primary px-4 py-2 text-label font-semibold text-text-on-accent shadow-[var(--shadow-chip)] outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-accent-primary-hover active:bg-accent-primary-active focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50"
-            >
+            <Button size="lg" onClick={() => void createTag()} disabled={creating || !name.trim()}>
               {creating ? 'Creating…' : 'Create'}
-            </button>
+            </Button>
           </div>
 
           <div className="max-h-64 overflow-y-auto pr-1">
@@ -713,21 +604,19 @@ function TagManagerModal({
             ) : (
               <div className="flex flex-col">
                 {tags.map((tag) => (
-                  <div
-                    key={tag.id}
-                    className="flex items-center justify-between border-t border-border-subtle py-2.5 first:border-t-0"
-                  >
-                    <div className="text-body text-text-primary">
+                  <div key={tag.id} className="flex items-center justify-between py-1.5">
+                    <div className="glass-body text-text-primary">
                       {tag.emoji ? `${tag.emoji} ` : ''}
                       {tag.name}
                     </div>
-                    <button
+                    <Button
+                      variant="danger"
+                      size="sm"
                       onClick={() => void deleteTag(tag.id)}
                       disabled={deletingTagId === tag.id}
-                      className="rounded-chip px-2.5 py-1 text-meta font-semibold text-accent-danger outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-accent-danger hover:text-text-on-danger focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50"
                     >
                       {deletingTagId === tag.id ? 'Deleting…' : 'Delete'}
-                    </button>
+                    </Button>
                   </div>
                 ))}
               </div>
@@ -799,59 +688,54 @@ function NewPostModal({
       </ModalHeader>
       <ModalBody className="space-y-4">
           <div>
-            <label htmlFor="forum-post-title" className="mb-1.5 block text-section text-text-muted">
+            <label htmlFor="forum-post-title" className="glass-kicker mb-1.5 block text-[var(--ink-3)]">
               Title
             </label>
-            <input
+            <Input
               id="forum-post-title"
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               maxLength={100}
               placeholder="What's this discussion about?"
-              className="w-full rounded-chip border border-border-subtle bg-bg-well px-3 py-2.5 text-body text-text-primary placeholder:text-text-muted outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus:border-accent-primary focus:shadow-[var(--focus-ring-input)]"
               autoFocus
             />
           </div>
 
           <div>
             <div className="mb-1.5 flex items-center justify-between gap-3">
-              <label htmlFor="forum-post-content" className="text-section text-text-muted">
+              <label htmlFor="forum-post-content" className="glass-kicker text-[var(--ink-3)]">
                 Opening message (optional)
               </label>
-              <span className="text-meta tabular-nums text-text-muted">{content.length}/2000</span>
+              <span className="glass-instrument text-[13px] text-[var(--ink-3)]">{content.length}/2000</span>
             </div>
-            <div className="overflow-hidden rounded-chip border border-border-subtle bg-bg-well focus-within:border-accent-primary focus-within:shadow-[var(--focus-ring-input)]">
-              <div className="border-b border-border-subtle bg-bg-raised px-2 py-1">
-                <MarkdownToolbar textareaRef={contentRef} onContentChange={setContent} />
-              </div>
-              <textarea
-                id="forum-post-content"
-                ref={contentRef}
-                value={content}
-                onChange={(e) => setContent(e.target.value)}
-                onKeyDown={(event) => {
-                  const action = resolveMarkdownShortcut(event);
-                  if (!action || !contentRef.current) return;
-                  event.preventDefault();
-                  applyMarkdownToolbarAction(action, contentRef.current, setContent);
-                }}
-                maxLength={2000}
-                rows={5}
-                placeholder="Give people enough context to join the discussion…"
-                className="w-full resize-none bg-transparent px-3 py-2.5 text-body leading-relaxed text-text-primary placeholder:text-text-muted outline-none"
-              />
+            <div className="mb-2">
+              <MarkdownToolbar textareaRef={contentRef} onContentChange={setContent} />
             </div>
-            <p className="mt-1.5 text-meta text-text-muted">
+            <Textarea
+              id="forum-post-content"
+              ref={contentRef}
+              value={content}
+              onChange={(e) => setContent(e.target.value)}
+              onKeyDown={(event) => {
+                const action = resolveMarkdownShortcut(event);
+                if (!action || !contentRef.current) return;
+                event.preventDefault();
+                applyMarkdownToolbarAction(action, contentRef.current, setContent);
+              }}
+              maxLength={2000}
+              rows={5}
+              placeholder="Give people enough context to join the discussion…"
+              className="resize-none"
+            />
+            <p className="glass-secondary mt-1.5">
               This becomes the first message in the post. Markdown formatting is supported.
             </p>
           </div>
 
           {tags.length > 0 && (
             <div>
-              <div className="mb-1.5 block text-section text-text-muted">
-                Tags
-              </div>
+              <div className="glass-kicker mb-1.5 block text-[var(--ink-3)]">Tags</div>
               <div className="flex flex-wrap gap-1.5" role="toolbar" aria-label="Post tag selection">
                 {tags.map((tag) => (
                   <button
@@ -861,14 +745,10 @@ function NewPostModal({
                     onKeyDown={(event) => handleTagRovingFocus(event, 'composer')}
                     data-forum-tag-scope="composer"
                     aria-pressed={selectedTagIds.has(tag.id)}
-                    className={cn(
-                      'rounded-full border px-2.5 py-1 text-meta font-medium outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
-                      selectedTagIds.has(tag.id)
-                        ? 'border-transparent bg-accent-tint text-accent-primary'
-                        : 'border-border-subtle text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary',
-                    )}
+                    className="glass-tagchip glass-focusable"
                   >
-                    {tag.emoji && <span className="mr-1">{tag.emoji}</span>}
+                    {selectedTagIds.has(tag.id) && <Check size={12} aria-hidden />}
+                    {tag.emoji && <span>{tag.emoji}</span>}
                     {tag.name}
                   </button>
                 ))}
@@ -876,20 +756,13 @@ function NewPostModal({
             </div>
           )}
       </ModalBody>
-      <ModalFooter className="mt-2 border-t border-border-subtle">
-        <button
-          onClick={onClose}
-          className="rounded-chip border border-border-subtle px-4 py-2 text-label font-medium text-text-secondary outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
-        >
+      <ModalFooter className="mt-2">
+        <Button variant="ghost" onClick={onClose}>
           Cancel
-        </button>
-        <button
-          onClick={() => void handleSubmit()}
-          disabled={!title.trim() || submitting}
-          className="rounded-chip bg-accent-primary px-4 py-2 text-label font-semibold text-text-on-accent shadow-[var(--shadow-chip)] outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-accent-primary-hover active:bg-accent-primary-active focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50"
-        >
+        </Button>
+        <Button onClick={() => void handleSubmit()} disabled={!title.trim() || submitting}>
           {submitting ? 'Creating…' : 'Create post'}
-        </button>
+        </Button>
       </ModalFooter>
     </Modal>
   );

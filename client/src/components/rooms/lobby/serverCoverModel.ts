@@ -10,7 +10,7 @@
  *
  * The color is a hue and a chroma, never a literal: the lightness of each
  * layer comes from the theme (`--cover-*` in `tokens.css`), so the same server
- * reads as a dusk sky on Slate and a watercolour wash on Daylight.
+ * reads as a dusk sky in Glass and stays legible in High contrast.
  *
  * Pure: no DOM, no React. `useIconTone` does the pixel reading.
  */
@@ -158,8 +158,8 @@ export function coverRecipe(guildId: string, tone: CoverTone): CoverRecipe {
 }
 
 /**
- * The recipe as custom properties for the `.pc-home-cover-made` recipe in
- * `styles/server-home.css`. Numbers and percentages only; the colors are
+ * The recipe as custom properties for the `.glass-ov__cover-made` recipe in
+ * `styles/glass-pages.css`. Numbers and percentages only; the colors are
  * assembled there, out of theme tokens.
  */
 export function coverStyle(recipe: CoverRecipe): Record<string, string> {

@@ -1,0 +1,1732 @@
+/* =============================================================================
+   The pages that render inside the conversation pane (docs/glass-spec.md §1, §2,
+   §3, §9; WP-G19): App Home, Friends, the Messages index, a server's Overview, a
+   forum and the incoming-call notice. There is no reference render for any of
+   them; they are held to the language the renders establish and to the places
+   panel's row rhythm beside them:
+
+     content is solid tonal, with no outline; controls are glass
+     kickers for groups, the instrument cut for times and counts
+     amber means live; white means it is for you; one filled (cream) button
+     no `#`, no server rail, nothing docked
+
+   Everything sits in the 720px column: the scroller is the pane's full width and
+   pads itself by `--glass-column-inset` (styles/glass-layout.css), so the column
+   lands where the conversation's does (x 526 at 1440) and turns fluid, 28px a
+   side, when the pane is narrower.
+
+   No color is written here: surfaces, inks and edges are tokens (the literal
+   color lint covers this file). In `@layer components`, after the cards it
+   refines, so a utility at a call site still wins over it.
+   Only transform, opacity and colors move (the motion lint); hover is a wash one
+   step lighter and press one step darker, 120ms, and nothing scales (§9).
+   ============================================================================= */
+
+/* ---- The page: a bar, then a scroller ------------------------------------------ */
+.glass-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* The 76px bar, as the conversation header draws it: the title on the column's
+   left edge, what you can do on its right edge, your face at the pane's edge. */
+.glass-page__bar {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 16px;
+  min-height: var(--glass-header-h);
+  padding-inline-start: var(--glass-column-inset);
+  padding-inline-end: max(var(--glass-column-inset), 72px);
+}
+
+.glass-page__heading {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.glass-page__title {
+  margin: 0;
+  overflow: hidden;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-1);
+}
+
+.glass-page__sub {
+  margin: 0;
+  overflow: hidden;
+  font-size: 13px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-2);
+}
+
+.glass-page__actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.glass-page__tools {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 16px;
+  display: flex;
+  align-items: center;
+}
+
+.glass-page__scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  /* The prototype's 28px fade under the header; the padding keeps the first
+     section clear of it at rest. */
+  padding: 24px var(--glass-column-inset) 56px;
+  -webkit-mask-image: linear-gradient(to bottom, transparent, var(--ink-1) 24px);
+  mask-image: linear-gradient(to bottom, transparent, var(--ink-1) 24px);
+  scrollbar-color: var(--glass-hair) transparent;
+  scrollbar-width: thin;
+}
+
+/* ---- A section: a kicker, then rows ---------------------------------------------- */
+.glass-sec {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.glass-sec + .glass-sec,
+.glass-sec + .glass-page__gap {
+  margin-top: 36px;
+}
+
+.glass-sec__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  margin: 0 10px 8px;
+}
+
+.glass-sec__kicker {
+  margin: 0;
+  color: var(--ink-3);
+}
+
+.glass-sec__kicker[data-tone='amber'] {
+  color: var(--amber);
+}
+
+.glass-sec__count {
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+.glass-sec__aside {
+  display: flex;
+  align-items: center;
+  margin-inline-start: auto;
+}
+
+.glass-sec__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.glass-sec__footer {
+  display: flex;
+  margin: 8px 10px 0;
+}
+
+.glass-sec__note {
+  margin: 0 10px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--ink-3);
+}
+
+.glass-sec__note button,
+.glass-page__link {
+  display: inline;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  font: inherit;
+  font-weight: 600;
+  color: var(--ink-1);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+/* ---- A row: the places panel's rhythm (64px, a 44px lead, 12px apart) --------------- */
+.glass-prow {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  min-height: 64px;
+  border-radius: var(--r-row);
+}
+
+/* One wash for everything you can press, under the content: hover is one step
+   lighter, press one step darker, and a selected row keeps its own fill. */
+.glass-prow::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  background-color: transparent;
+  transition: background-color var(--glass-ms) var(--glass-ease);
+}
+
+.glass-prow[data-pressable]:hover::before {
+  background-color: var(--wash-hover);
+}
+
+.glass-prow[data-pressable]:has(.glass-prow__main:active)::before {
+  background-color: var(--wash-press);
+}
+
+.glass-prow[data-selected]::before {
+  background-color: var(--sel);
+}
+
+.glass-prow__main {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  align-self: stretch;
+  gap: 12px;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 10px;
+  border: 0;
+  border-radius: inherit;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  text-decoration: none;
+}
+
+button.glass-prow__main,
+a.glass-prow__main {
+  cursor: pointer;
+}
+
+.glass-prow__body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.glass-prow__name {
+  overflow: hidden;
+  line-height: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.glass-prow__line {
+  overflow: hidden;
+  font-size: 13px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-2);
+}
+
+.glass-prow__line[data-wrap] {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: normal;
+}
+
+.glass-prow[data-quiet] .glass-prow__name,
+.glass-prow[data-quiet] .glass-prow__line {
+  color: var(--ink-3);
+}
+
+.glass-prow__author {
+  font-weight: 500;
+  color: var(--ink-1);
+}
+
+.glass-prow__aside {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 5px;
+}
+
+.glass-prow__time {
+  font-size: 13px;
+  line-height: normal;
+  white-space: nowrap;
+  color: var(--ink-3);
+}
+
+.glass-prow__actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  padding-inline-end: 10px;
+}
+
+/* "group" beside a conversation's name: a note, not a badge. */
+.glass-prow__tag {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--ink-3);
+}
+
+/* A DM call's stream, in the column until the stage carries it (§6): content is
+   solid, so it is a surface, not a strip with rules. */
+.glass-dmstream {
+  position: relative;
+  box-sizing: border-box;
+  max-height: 40vh;
+  min-height: 180px;
+  margin: 0 var(--glass-column-inset) 12px;
+  overflow: hidden;
+  border-radius: var(--r-bubble);
+  background-color: var(--deep);
+  box-shadow: var(--sh-content);
+}
+
+/* Where somebody is, when it is a live room: amber (§1.3). */
+.glass-prow__voice {
+  color: var(--amber-ink);
+}
+
+/* A decision that would only be noise on every row at once: it appears when the
+   row is touched, and stays on a screen with no hover. */
+.glass-prow__reveal {
+  opacity: 0;
+}
+
+.glass-prow:hover .glass-prow__reveal,
+.glass-prow:focus-within .glass-prow__reveal,
+.glass-prow__reveal:focus-visible {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .glass-prow__reveal {
+    opacity: 1;
+  }
+}
+
+/* ---- A person: a face, and whether they are here ------------------------------------- */
+.glass-person {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+/* Presence is ink, not color (plan §1.3): here is a solid dot, away a ring,
+   do not disturb a dot with a bar, offline a faint ring. The ring around it is
+   the pane's own color, so the dot bites the face. */
+.glass-presence {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 12px;
+  height: 12px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  background-color: var(--ink-1);
+  box-shadow: 0 0 0 2.5px var(--face-ring, var(--solid));
+}
+
+.glass-presence[data-status='idle'] {
+  background-color: var(--solid);
+  box-shadow:
+    inset 0 0 0 2px var(--ink-1),
+    0 0 0 2.5px var(--face-ring, var(--solid));
+}
+
+.glass-presence[data-status='dnd'] {
+  background-color: var(--ink-3);
+}
+
+.glass-presence[data-status='dnd']::after {
+  content: '';
+  position: absolute;
+  top: 5px;
+  left: 3px;
+  width: 6px;
+  height: 2px;
+  border-radius: 1px;
+  background-color: var(--solid);
+}
+
+.glass-presence[data-status='offline'],
+.glass-presence[data-status='invisible'] {
+  background-color: var(--solid);
+  box-shadow:
+    inset 0 0 0 2px var(--ink-3),
+    0 0 0 2.5px var(--face-ring, var(--solid));
+}
+
+/* Live: amber, the only color a person's mark ever takes (§1.3). */
+.glass-presence[data-live] {
+  background-color: var(--amber);
+}
+
+.glass-prow[data-offline] .glass-face {
+  opacity: 0.55;
+}
+
+/* ---- A solid card: content one step above the pane, no outline ------------------------- */
+.glass-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 16px;
+  border-radius: var(--r-bubble);
+  background-color: var(--bub);
+  box-shadow: var(--sh-content);
+}
+
+.glass-card--raise {
+  background-color: var(--raise);
+  box-shadow: var(--sh-raised);
+}
+
+.glass-card__title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--ink-1);
+}
+
+.glass-card__text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--ink-2);
+}
+
+/* A message the page shows about itself: success is ink, an error is the danger
+   well (§1.3, plan §8.5). */
+.glass-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: var(--r-ctl);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.35;
+  color: var(--ink-1);
+  background-color: var(--glass-fill-quiet);
+}
+
+.glass-note[data-tone='danger'] {
+  color: var(--accent-danger);
+  background-color: var(--danger-well);
+}
+
+.glass-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 20px;
+}
+
+.glass-toolbar__grow {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+/* ---- Friends ---------------------------------------------------------------------------- */
+.glass-add {
+  margin-bottom: 20px;
+}
+
+.glass-add__form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.glass-add__form .glass-toolbar__grow {
+  flex: 1 1 240px;
+}
+
+/* ---- A live room: amber, faces, the room's own tint behind a dark end ------------------- */
+.glass-live {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 92px;
+  box-sizing: border-box;
+  margin-block: 2px;
+  padding: 0 14px;
+  overflow: hidden;
+  border-radius: var(--r-row);
+  box-shadow: 0 10px 30px color-mix(in srgb, var(--amber) 16%, transparent);
+}
+
+.glass-live__scene {
+  position: absolute;
+  inset: 0;
+  z-index: -2;
+  background:
+    radial-gradient(80% 140% at 72% 60%, color-mix(in srgb, rgb(var(--room-rgb)) 46%, transparent), transparent 72%),
+    var(--street);
+}
+
+.glass-live__shade {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--street) 92%, transparent) 30%,
+    color-mix(in srgb, var(--street) 35%, transparent)
+  );
+}
+
+.glass-live__main {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  align-self: stretch;
+  min-width: 0;
+  padding: 12px 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.glass-live__head,
+.glass-live__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.glass-live__where {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-2);
+}
+
+.glass-live__kicker {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  color: var(--amber);
+}
+
+.glass-live__faces .glass-face {
+  box-shadow: 0 0 0 2px var(--street);
+}
+
+.glass-live__cover {
+  display: block;
+  flex: 0 0 auto;
+  width: 44px;
+  height: 26px;
+  overflow: hidden;
+  border-radius: 6px;
+  background-color: var(--bub);
+}
+
+.glass-live__more {
+  flex: 0 0 auto;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.glass-live__line {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--amber-ink);
+}
+
+.glass-live__action {
+  flex: 0 0 auto;
+}
+
+.glass-live:hover .glass-live__shade {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--street) 86%, transparent) 30%,
+    color-mix(in srgb, var(--street) 28%, transparent)
+  );
+}
+
+/* ---- Around now: who is here, as faces ----------------------------------------------------- */
+.glass-around {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 0 10px;
+}
+
+.glass-around__faces {
+  display: flex;
+}
+
+/* A face bites the one behind it in the pane's own color; somebody in a voice
+   room wears the amber ring on top of that: live is the only color (§1.3). */
+.glass-around__face {
+  display: inline-flex;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2.5px var(--solid);
+}
+
+.glass-around__face[data-live] {
+  box-shadow:
+    0 0 0 2.5px var(--solid),
+    0 0 0 4.5px var(--amber);
+}
+
+.glass-around__more {
+  font-size: 13px;
+  color: var(--ink-3);
+}
+
+.glass-around__line {
+  flex: 1 1 100%;
+  min-width: 0;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--ink-2);
+}
+
+/* ---- Plan cards on a page: the card is a whole, so all four corners are round ------------ */
+.glass-plans {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.glass-plans .glass-plan {
+  max-width: none;
+  border-radius: var(--r-bubble);
+}
+
+/* A poll inside a post is a card inside a card: one step smaller. */
+.glass-post .glass-plan {
+  max-width: none;
+  border-radius: var(--r-row);
+}
+
+.glass-plan__where {
+  margin-inline-start: 6px;
+}
+
+/* =============================================================================
+   A server's Overview (docs/design/glass-plan.md §8.4: reached from the server
+   menu, not a row). The banner lights the top of the pane and fades into it; the
+   head sits over the fade; everything else is one column: what is live, what is
+   coming up, the owner's widgets, then what people made.
+   ============================================================================= */
+.glass-ov .glass-page__scroll {
+  padding: 0 0 64px;
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+
+/* In the compact frame the places button sits in a bar above the page; on an
+   Overview it floats over the banner instead, so the banner reaches the top. */
+.glass-frame__conversation:has(.glass-ov) > .glass-frame__pane-bar {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-start: 0;
+  z-index: 4;
+}
+
+.glass-ov__tools {
+  z-index: 3;
+  inset-block: 18px auto;
+  align-items: flex-start;
+}
+
+/* The banner, or the cover made from the icon's color. A mask, not a gradient of
+   the pane's color: the pane shows through, so nothing is painted over it. */
+.glass-ov__cover {
+  position: relative;
+  height: 224px;
+  overflow: hidden;
+  isolation: isolate;
+  -webkit-mask-image: linear-gradient(to bottom, var(--ink-1) 28%, transparent);
+  mask-image: linear-gradient(to bottom, var(--ink-1) 28%, transparent);
+}
+
+/* A scrim, so the title reads on any banner: a bright sky is dimmed toward the
+   street's dark before the fade takes it into the pane. */
+.glass-ov__cover::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--street) 28%, transparent),
+    color-mix(in srgb, var(--street) 58%, transparent)
+  );
+}
+
+.glass-ov__cover > img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* A server with no banner: three soft lights over a ground, all made of the
+   server's own hue. Positions, sizes and hue shifts are set inline by
+   `coverStyle()`; every color is assembled here from the `--cover-*` tokens. */
+.glass-ov__cover-made {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(
+      ellipse var(--cover-r1) 150% at var(--cover-x1) var(--cover-y1),
+      oklch(var(--cover-l-light) calc(var(--cover-chroma) * 1.35 * var(--cover-c-scale)) var(--cover-h1) / var(--cover-a-light)) 0%,
+      transparent 100%
+    ),
+    radial-gradient(
+      ellipse var(--cover-r2) 130% at var(--cover-x2) var(--cover-y2),
+      oklch(var(--cover-l-light) calc(var(--cover-chroma) * 1.2 * var(--cover-c-scale)) var(--cover-h2) / calc(var(--cover-a-light) * 0.8)) 0%,
+      transparent 100%
+    ),
+    radial-gradient(
+      ellipse var(--cover-r3) 120% at var(--cover-x3) var(--cover-y3),
+      oklch(var(--cover-l-mid) calc(var(--cover-chroma) * 1.2 * var(--cover-c-scale)) var(--cover-h3) / var(--cover-a-light)) 0%,
+      transparent 100%
+    ),
+    linear-gradient(
+      var(--cover-angle),
+      oklch(var(--cover-l-deep) calc(var(--cover-chroma) * 0.85 * var(--cover-c-scale)) var(--cover-hue)) 0%,
+      oklch(var(--cover-l-ground) calc(var(--cover-chroma) * 0.45 * var(--cover-c-scale)) calc(var(--cover-hue) + 18)) 100%
+    );
+}
+
+.glass-ov__cover-made::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: var(--cover-grain);
+  opacity: var(--cover-grain-opacity);
+  mix-blend-mode: soft-light;
+}
+
+/* The head: the mark, the name and who is online, what you can do. It overlaps
+   the cover's fade by 92px, so the banner's color sits behind the title. */
+.glass-ov__head {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 14px 16px;
+  margin-top: -92px;
+  padding-inline: var(--glass-column-inset);
+}
+
+.glass-ov__mark {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 20px;
+  font-weight: 700;
+  color: var(--own-ink);
+  box-shadow: 0 0 0 4px var(--solid), var(--sh-raised);
+}
+
+.glass-ov__mark img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.glass-ov__id {
+  display: flex;
+  flex: 1 1 220px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
+
+.glass-ov__name {
+  max-width: 100%;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-1);
+}
+
+.glass-ov__actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.glass-ov__about {
+  flex: 1 1 100%;
+  max-width: 64ch;
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.4;
+  color: var(--ink-2);
+}
+
+.glass-clamp {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: var(--clamp-lines, 3);
+  line-clamp: var(--clamp-lines, 3);
+  overflow: hidden;
+}
+
+.glass-ov__members {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 100%;
+  margin: 0 0 0 -8px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: var(--r-ctl);
+  background: none;
+  color: var(--ink-2);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+  transition: background-color var(--glass-ms) var(--glass-ease);
+}
+
+.glass-ov__members:hover {
+  background-color: var(--wash-hover);
+}
+
+.glass-ov__members:active {
+  background-color: var(--wash-press);
+}
+
+.glass-ov__members-line {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.glass-ov__pile {
+  display: inline-flex;
+}
+
+.glass-ov__pile-face {
+  display: inline-flex;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2.5px var(--solid);
+}
+
+.glass-ov__popover {
+  width: 18rem;
+  padding: 6px;
+}
+
+.glass-ov__popover-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 10px 8px;
+}
+
+.glass-ov__popover-count {
+  font-size: 13px;
+  color: var(--ink-3);
+}
+
+.glass-ov__popover-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 20rem;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+  scrollbar-color: var(--glass-hair) transparent;
+}
+
+.glass-ov__member {
+  --face-ring: transparent;
+  min-height: 48px;
+}
+
+.glass-ov__member .glass-prow__main {
+  padding: 8px 10px;
+}
+
+.glass-ov__body {
+  display: flex;
+  flex-direction: column;
+  gap: 36px;
+  margin-top: 32px;
+  padding-inline: var(--glass-column-inset);
+}
+
+.glass-ov__body > .glass-sec + .glass-sec {
+  margin-top: 0;
+}
+
+/* A stack whose widgets all had nothing to show leaves no gap behind it. */
+.glass-ov__body > :has(> .glass-widgets:empty) {
+  display: none;
+}
+
+/* Voice channels with nobody in them: the ways in, as glass buttons. */
+.glass-ov__voices {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 10px;
+}
+
+.glass-ov__more {
+  align-self: flex-start;
+  margin: 8px 10px 0;
+}
+
+/* A quiet text button for a group: "Calendar", "All media", "Leaderboard". */
+.glass-linkbtn {
+  padding: 3px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-2);
+  text-decoration: none;
+  cursor: pointer;
+  transition:
+    background-color var(--glass-ms) var(--glass-ease),
+    color var(--glass-ms) var(--glass-ease);
+}
+
+.glass-linkbtn:hover {
+  color: var(--ink-1);
+  background-color: var(--wash-hover);
+}
+
+.glass-linkbtn:active {
+  background-color: var(--wash-press);
+}
+
+/* ---- Widgets: a kicker, then one solid card ------------------------------------------------ */
+.glass-widgets {
+  display: flex;
+  flex-direction: column;
+  gap: 36px;
+  min-width: 0;
+}
+
+.glass-widgets > .glass-sec {
+  margin-top: 0;
+}
+
+.glass-widgets:empty {
+  display: none;
+}
+
+.glass-wlist {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.glass-wrow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.glass-wrow__body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.glass-wrow__name {
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-1);
+}
+
+.glass-wrow__line {
+  overflow: hidden;
+  font-size: 13px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-2);
+}
+
+.glass-wrow__aside {
+  flex: 0 0 auto;
+  font-size: 13px;
+  color: var(--ink-3);
+}
+
+.glass-wbar {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background-color: var(--glass-fill-quiet);
+}
+
+.glass-wbar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background-color: var(--ink-2);
+}
+
+.glass-mosaic {
+  display: grid;
+  grid-template-columns: repeat(var(--n, 6), minmax(0, 1fr));
+  gap: 6px;
+}
+
+/* ---- Pictures in a feed or a widget: solid, no outline, a soft shadow ------------------------ */
+.glass-photo {
+  position: relative;
+  display: block;
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 16px;
+  background-color: var(--raise);
+  box-shadow: var(--sh-content);
+  cursor: pointer;
+}
+
+.glass-photo img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.glass-photo__caption {
+  position: absolute;
+  inset: auto 0 0;
+  padding: 18px 10px 8px;
+  font-size: 13px;
+  text-align: start;
+  color: var(--ink-1);
+  background: linear-gradient(to top, color-mix(in srgb, var(--street) 78%, transparent), transparent);
+}
+
+.glass-photo__more {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--ink-1);
+  background-color: color-mix(in srgb, var(--street) 62%, transparent);
+}
+
+.glass-photogrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.glass-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.glass-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: var(--r-ctl);
+  font-size: 13px;
+  color: var(--ink-1);
+  background-color: var(--raise);
+  cursor: pointer;
+  transition: background-color var(--glass-ms) var(--glass-ease);
+}
+
+.glass-file:hover {
+  background-color: color-mix(in srgb, var(--raise) 92%, var(--ink-1));
+}
+
+/* ---- What people made: bubbles one step above the pane -------------------------------------- */
+.glass-feed {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.glass-post {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 14px 16px 16px;
+  border-radius: var(--r-bubble);
+  background-color: var(--bub);
+  box-shadow: var(--sh-content);
+}
+
+.glass-post__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.glass-post__who {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.glass-post__name {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-1);
+}
+
+.glass-post__where {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin: 0 0 0 -4px;
+  padding: 1px 4px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: background-color var(--glass-ms) var(--glass-ease);
+}
+
+.glass-post__where:hover {
+  background-color: var(--wash-hover);
+}
+
+.glass-post__where span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.glass-post__time {
+  flex: 0 0 auto;
+  font-size: 13px;
+  color: var(--ink-3);
+}
+
+.glass-post__tag {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: var(--r-chip);
+  font-size: 12px;
+  line-height: 1.3;
+  color: var(--ink-2);
+  background-color: var(--glass-fill-quiet);
+}
+
+.glass-post__body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.glass-post__text {
+  min-width: 0;
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  color: var(--ink-1);
+}
+
+.glass-post__more {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-2);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.glass-post__title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--ink-1);
+}
+
+.glass-post__excerpt {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+
+.glass-post__foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--ink-3);
+}
+
+.glass-post__hit {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: -4px;
+  padding: 4px;
+  border: 0;
+  border-radius: var(--r-ctl);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+  transition: background-color var(--glass-ms) var(--glass-ease);
+}
+
+.glass-post__hit:hover {
+  background-color: var(--wash-hover);
+}
+
+.glass-post__reactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+/* Something that happened, in one line: no card, just the words and a way to answer. */
+.glass-happened {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 6px 10px;
+  font-size: 13px;
+  color: var(--ink-3);
+}
+
+.glass-happened__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-2);
+}
+
+.glass-happened__text strong {
+  font-weight: 500;
+  color: var(--ink-1);
+}
+
+/* Posts folded under a feed card: title and time, each opening its message. */
+.glass-run {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.glass-run__row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  text-align: start;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: background-color var(--glass-ms) var(--glass-ease);
+}
+
+.glass-run__row:hover {
+  background-color: var(--wash-hover);
+}
+
+.glass-run__row > span:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- A game from the Sports add-on ---------------------------------------------------------- */
+.glass-game {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 14px 16px;
+  border-radius: var(--r-bubble);
+  background-color: var(--bub);
+  box-shadow: var(--sh-content);
+}
+
+.glass-game__link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  border-radius: var(--r-ctl);
+  color: inherit;
+  text-decoration: none;
+}
+
+.glass-game__teams {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.glass-game__score {
+  flex: 0 0 auto;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--ink-1);
+}
+
+/* =============================================================================
+   A forum, in the pane (docs/glass-spec.md §1.1): the post list is solid rows in
+   the column, and a post opens as a conversation like any other channel.
+   ============================================================================= */
+.glass-forum {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.glass-forum__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.glass-forum__spacer {
+  flex: 1 1 0;
+}
+
+/* The two layouts, as one glass control with the chosen one lit. */
+.glass-forum__layout {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--r-capsule);
+  background-color: var(--glass-fill-quiet);
+  box-shadow: var(--glass-edge);
+}
+
+.glass-forum__archived {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  font-size: 13px;
+  color: var(--ink-2);
+  cursor: pointer;
+  user-select: none;
+}
+
+.glass-forum__search {
+  margin-bottom: 12px;
+}
+
+.glass-forum__tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 24px;
+}
+
+/* A tag you can filter by: a solid chip; lit while it is on. */
+.glass-tagchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--r-capsule);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink-2);
+  background-color: var(--bub);
+  cursor: pointer;
+  transition:
+    background-color var(--glass-ms) var(--glass-ease),
+    color var(--glass-ms) var(--glass-ease);
+}
+
+.glass-tagchip:hover {
+  color: var(--ink-1);
+  background-color: var(--raise);
+}
+
+.glass-tagchip[aria-pressed='true'] {
+  color: var(--ink-1);
+  background-color: var(--glass-fill-on);
+}
+
+.glass-forum__list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.glass-forum__list[data-layout='grid'] {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: stretch;
+}
+
+/* One post: a solid row one step above the pane. Hover is a wash over it, not a
+   new color; press is the darker one. */
+.glass-fpost {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 14px 16px;
+  border: 0;
+  border-radius: var(--r-row);
+  background-color: var(--bub);
+  box-shadow: var(--sh-content);
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.glass-fpost::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  background-color: transparent;
+  transition: background-color var(--glass-ms) var(--glass-ease);
+}
+
+.glass-fpost:hover::before {
+  background-color: var(--wash-hover);
+}
+
+.glass-fpost:active::before {
+  background-color: var(--wash-press);
+}
+
+.glass-fpost[data-archived] {
+  background-color: color-mix(in srgb, var(--bub) 60%, transparent);
+}
+
+.glass-fpost__top {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.glass-fpost__title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.glass-fpost__flag {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: var(--r-chip);
+  font-size: 12px;
+  color: var(--ink-2);
+  background-color: var(--glass-fill-quiet);
+}
+
+.glass-fpost__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.glass-fpost__tag {
+  padding: 2px 8px;
+  border-radius: var(--r-chip);
+  font-size: 12px;
+  line-height: 1.3;
+  color: var(--ink-1);
+  background-color: var(--chip-count);
+}
+
+.glass-fpost__meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  margin-top: auto;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.glass-fpost__author {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.glass-fpost__count {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--ink-2);
+}
+
+.glass-fpost__when {
+  margin-inline-start: auto;
+  color: var(--ink-3);
+}
+
+.glass-fpost__snippet {
+  font-size: 15px;
+  line-height: 1.4;
+  color: var(--ink-1);
+}
+
+.glass-forum__list[data-layout='grid'] .glass-fpost__top {
+  align-items: flex-start;
+}
+
+.glass-forum__list[data-layout='grid'] .glass-fpost__title {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+/* ---- The call ringing in a direct message ------------------------------------------------- */
+/* The banner stack is transparent and reserves this element's height at the top
+   of the app, so the notice floats as a capsule with a little air around it. */
+.glass-callbanner {
+  display: flex;
+  justify-content: center;
+  box-sizing: border-box;
+  padding: 10px 16px 0;
+}
+
+.glass-callbanner__pill {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 100%;
+  min-height: 52px;
+  box-sizing: border-box;
+  padding: 6px 6px 6px 8px;
+  border-radius: var(--r-capsule);
+  background-color: var(--pill);
+  color: var(--ink-1);
+  /* The faint amber glow the call pill carries (§5): a call is live. */
+  box-shadow:
+    var(--sh-content),
+    0 10px 28px color-mix(in srgb, var(--amber) 16%, transparent),
+    inset 0 1px 0 var(--glass-hair);
+}
+
+.glass-callbanner__text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.glass-callbanner__kicker {
+  color: var(--amber);
+}
+
+.glass-callbanner__who {
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.glass-callbanner__actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  margin-inline-start: 8px;
+}
+
+/* ---- Phone (§8): one column, 16px sides, a shorter bar ------------------------------------ */
+.glass-frame[data-layout='phone'] .glass-page__bar {
+  min-height: 56px;
+  padding-inline: 16px;
+}
+
+.glass-frame[data-layout='phone'] .glass-page__title {
+  font-size: 17px;
+}
+
+.glass-frame[data-layout='phone'] .glass-page__tools {
+  display: none;
+}
+
+.glass-frame[data-layout='phone'] .glass-page__scroll {
+  padding-inline: 12px;
+}
+
+.glass-frame[data-layout='phone'] .glass-live {
+  gap: 8px;
+  padding-inline: 12px;
+}
+
+/* Narrow: the line may take two lines rather than lose its words to Join. */
+.glass-frame[data-layout='phone'] .glass-live__line {
+  white-space: normal;
+}
+
+/* Under a narrow pane the actions sit under the title instead of squeezing it. */
+@media (max-width: 520px) {
+  .glass-callbanner {
+    padding-inline: 8px;
+  }
+  .glass-callbanner__pill {
+    gap: 8px;
+  }
+}

@@ -56,10 +56,10 @@ export function MostActiveWidget({ guildId, onOpenLeaderboard }: MostActiveWidge
 
   return (
     <WidgetCard title="Most active" action={<WidgetLink onClick={onOpenLeaderboard}>Leaderboard</WidgetLink>}>
-      <p className="-mt-2 text-meta text-text-muted">This week, by XP</p>
-      <ol className="flex flex-col gap-3">
-        {top.map((entry, index) => (
-          <li key={entry.user.id} className="flex items-center gap-3">
+      <p className="glass-card__text">This week, by XP</p>
+      <ol className="glass-wlist">
+        {top.map((entry) => (
+          <li key={entry.user.id} className="glass-wrow">
             <FeedAvatar
               user={{
                 id: entry.user.id,
@@ -67,23 +67,15 @@ export function MostActiveWidget({ guildId, onOpenLeaderboard }: MostActiveWidge
                 display_name: entry.user.display_name ?? null,
                 avatar_hash: entry.user.avatar ?? null,
               }}
-              size={28}
+              size={32}
             />
-            <span className="flex min-w-0 flex-1 flex-col gap-1.5">
+            <span className="glass-wrow__body" style={{ gap: 6 }}>
               <span className="flex items-baseline gap-2">
-                <span className="min-w-0 flex-1 truncate text-label text-text-primary">{displayName(entry.user)}</span>
-                <span className="pc-mono shrink-0 text-meta text-text-muted">
-                  {entry.xp.toLocaleString()} XP
-                </span>
+                <span className="glass-wrow__name flex-1">{displayName(entry.user)}</span>
+                <span className="glass-instrument glass-wrow__aside">{entry.xp.toLocaleString()} XP</span>
               </span>
-              <span className="pc-home-bar" aria-hidden>
-                <span
-                  style={{
-                    width: `${Math.max(4, Math.round((entry.xp / most) * 100))}%`,
-                    animationDelay: `${200 + index * 60}ms`,
-                    opacity: 1 - index * 0.16,
-                  }}
-                />
+              <span className="glass-wbar" aria-hidden>
+                <span style={{ width: `${Math.max(4, Math.round((entry.xp / most) * 100))}%` }} />
               </span>
             </span>
           </li>

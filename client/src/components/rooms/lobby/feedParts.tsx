@@ -1,20 +1,16 @@
 import { useMemo, type ReactNode } from 'react';
-import { BarChart3, Hash, Megaphone, MessagesSquare, Paperclip, Pin, Rss } from 'lucide-react';
+import { BarChart3, Megaphone, MessagesSquare, Paperclip, Pin, Rss } from 'lucide-react';
 
-import { LitAvatar } from '../../light';
+import { Face } from '../../glass/places/Lead';
 import { ResourceImage } from '../../ui/ResourceImage';
 import { fileApi } from '../../../api/files';
 import type { FeedReason, FeedUser } from '../../../api/serverFeed';
-import { useCurrentAccountScope } from '../../../hooks/useCurrentUser';
 import { useDownloadTicket } from '../../../hooks/useDownloadTicket';
-import { personLight } from '../../../lib/attention/personLight';
-import type { PersonLight } from '../../../lib/attention/light';
 import { resolveResourceUrl } from '../../../lib/config/apiBaseUrl';
 import { displayName } from '../../../lib/displayName';
 import { isAllowedImageMimeType, safeClientResourceUrl } from '../../../lib/security';
 import { cn } from '../../../lib/utils';
 import { createDeferredLightboxImage, useLightboxStore } from '../../../stores/lightboxStore';
-import { usePresenceStore } from '../../../stores/presenceStore';
 import type { Attachment } from '../../../types';
 
 const IMAGE_EXTENSION = /\.(png|jpe?g|gif|webp)$/i;
@@ -26,25 +22,16 @@ export function isImageAttachment(attachment: Pick<Attachment, 'content_type' | 
   return IMAGE_EXTENSION.test(attachment.filename || '');
 }
 
-/** A person on a feed card, lit the way they are lit everywhere else. */
-export function useFeedPerson(user: FeedUser | { id: string; username?: string | null; display_name?: string | null; avatar_hash?: string | null } | null): PersonLight | null {
-  const scope = useCurrentAccountScope();
-  const status = usePresenceStore((state) =>
-    user ? state.getPresence(user.id, scope?.serverId)?.status ?? null : null,
-  );
-  return useMemo(
-    () =>
-      user
-        ? personLight({ userId: user.id, name: displayName(user), status, avatar: user.avatar_hash ?? null })
-        : null,
-    [user, status],
-  );
-}
-
+/** A person on a feed card: their face, or a plain disc while nobody is known. */
 export function FeedAvatar({ user, size = 36 }: { user: FeedUser | null; size?: number }) {
-  const person = useFeedPerson(user);
-  if (!person) return <span className="shrink-0 rounded-full bg-bg-mod-strong" style={{ width: size, height: size }} />;
-  return <LitAvatar person={person} size={size} hideLabel className="shrink-0" />;
+  if (!user) return <span className="shrink-0 rounded-full bg-[var(--glass-fill-quiet)]" style={{ width: size, height: size }} />;
+  return (
+    <Face
+      face={{ userId: user.id, name: displayName(user), avatar: user.avatar_hash ?? null }}
+      size={size}
+      className="shrink-0"
+    />
+  );
 }
 
 const REASON: Record<FeedReason, { label: string; icon: ReactNode } | null> = {
@@ -65,7 +52,7 @@ export function ReasonTag({ reason }: { reason: FeedReason }) {
   const entry = REASON[reason];
   if (!entry) return null;
   return (
-    <span className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-[var(--radius-chip)] bg-bg-mod-subtle px-1.5 py-0.5 text-meta text-text-muted">
+    <span className="glass-post__tag inline-flex shrink-0 items-center gap-1">
       {entry.icon}
       {entry.label}
     </span>
@@ -73,16 +60,20 @@ export function ReasonTag({ reason }: { reason: FeedReason }) {
 }
 
 /**
- * The line at the top of a card: where it was posted and when. It is the way
- * in — clicking it opens the channel at that message.
+ * The line at the top of a post: who, where it was posted and when. Where is the
+ * way in: pressing it opens the channel at that message. No `#`, ever.
  */
 export function FeedCardHeader({
+  lead,
+  name,
   channelName,
   forum = false,
   when,
   onOpen,
   aside,
 }: {
+  lead: ReactNode;
+  name: string;
   channelName: string;
   forum?: boolean;
   when: string;
@@ -90,25 +81,26 @@ export function FeedCardHeader({
   aside?: ReactNode;
 }) {
   return (
-    <div className="flex min-w-0 items-center gap-2">
-      <button
-        type="button"
-        onClick={onOpen}
-        className={cn(
-          'pc-focusable pc-home-card-hit -mx-1 inline-flex min-w-0 items-center gap-1 rounded-[var(--radius-chip)] px-1 py-0.5',
-          'text-meta text-text-muted transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:text-text-primary',
-        )}
-        aria-label={`Open in ${channelName}`}
-      >
-        {forum ? <MessagesSquare size={13} aria-hidden className="shrink-0" /> : <Hash size={13} aria-hidden className="shrink-0" />}
-        <span className="truncate font-medium">{channelName}</span>
-        {when && (
-          <>
-            <span aria-hidden className="text-text-faint">·</span>
-            <span className="shrink-0 tabular-nums">{when}</span>
-          </>
-        )}
-      </button>
+    <div className="glass-post__head">
+      {lead}
+      <div className="glass-post__who">
+        <span className="glass-post__name">{name}</span>
+        <button
+          type="button"
+          onClick={onOpen}
+          className="glass-post__where glass-focusable"
+          aria-label={`Open in ${channelName}`}
+        >
+          {forum ? <MessagesSquare size={13} aria-hidden className="shrink-0" /> : null}
+          <span>{channelName}</span>
+          {when && (
+            <>
+              <span aria-hidden>·</span>
+              <span className="glass-instrument shrink-0 text-[var(--ink-3)]">{when}</span>
+            </>
+          )}
+        </button>
+      </div>
       {aside}
     </div>
   );
@@ -148,12 +140,12 @@ export function Photo({
     <button
       type="button"
       onClick={onOpen}
-      className={cn('pc-home-photo pc-focusable-composed rounded-[var(--radius-thumb)]', className)}
+      className={cn('glass-photo glass-focusable', className)}
       aria-label={caption ? `${attachment.filename || 'Image'}, ${caption}` : attachment.filename || 'Image'}
     >
       {src && <ResourceImage src={src} alt="" draggable={false} loading="lazy" />}
       {overlay}
-      {caption && <span className="pc-home-photo-caption truncate text-left text-meta">{caption}</span>}
+      {caption && <span className="glass-photo__caption truncate">{caption}</span>}
     </button>
   );
 }
@@ -177,7 +169,7 @@ export function PhotoGrid({ images }: { images: readonly Attachment[] }) {
     );
   }
   return (
-    <div className="grid grid-cols-2 gap-1.5">
+    <div className="glass-photogrid">
       {shown.map((image, index) => (
         <Photo
           key={image.id}
@@ -186,9 +178,7 @@ export function PhotoGrid({ images }: { images: readonly Attachment[] }) {
           className={cn('aspect-[4/3] w-full', shown.length === 3 && index === 0 && 'col-span-2 aspect-[16/7]')}
           overlay={
             hidden > 0 && index === shown.length - 1 ? (
-              <span className="absolute inset-0 flex items-center justify-center bg-[var(--tag-fill)] text-heading text-text-primary">
-                +{hidden}
-              </span>
+              <span className="glass-photo__more glass-instrument">+{hidden}</span>
             ) : null
           }
         />
@@ -197,23 +187,20 @@ export function PhotoGrid({ images }: { images: readonly Attachment[] }) {
   );
 }
 
-/** Files that are not pictures: named, sized, and a way to the message. */
+/** Files that are not pictures: named, and a way to the message. */
 export function FileChips({ files, onOpen }: { files: readonly Attachment[]; onOpen: () => void }) {
   if (files.length === 0) return null;
   return (
-    <div className="flex flex-wrap gap-1.5">
+    <div className="glass-files">
       {files.map((file) => (
         <button
           key={file.id}
           type="button"
           onClick={onOpen}
           aria-label={`${file.filename}. Open the message`}
-          className={cn(
-            'pc-focusable inline-flex max-w-full items-center gap-2 rounded-[var(--radius-control)] bg-bg-well px-2.5 py-1.5',
-            'text-label text-text-body shadow-[var(--shadow-well)] transition-colors duration-[var(--duration-fast)] hover:text-text-primary',
-          )}
+          className="glass-file glass-focusable"
         >
-          <Paperclip size={14} aria-hidden className="shrink-0 text-text-muted" />
+          <Paperclip size={14} aria-hidden className="shrink-0" />
           <span className="truncate">{file.filename}</span>
         </button>
       ))}

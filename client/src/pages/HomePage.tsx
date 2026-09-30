@@ -1,12 +1,14 @@
 import { useFreshRelationships } from '../hooks/useFreshRelationships';
 import { useCallback, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
+import { Plus } from 'lucide-react';
 
-import { SectionLabel } from '../components/ui';
-import { HomeAddBuilding } from '../components/home/HomeAddBuilding';
+import { Button } from '../components/ui';
+import { EmptyState } from '../components/ui/Feedback';
+import { GlassPage, PageBar, PageScroll, PageSection } from '../components/home/GlassPage';
 import { HomeAroundNow } from '../components/home/HomeAroundNow';
-import { HomeBuildingCard } from '../components/home/HomeBuildingCard';
 import { HomeComingUp } from '../components/home/HomeComingUp';
+import { HomeLiveNow, liveRoomsOf } from '../components/home/HomeLiveNow';
 import { HomeNeedsYou, homeAttention, type NeedsYouStatus } from '../components/home/HomeNeedsYou';
 import { HomePickUp } from '../components/home/HomePickUp';
 import { aroundNowPeople } from '../components/home/homeModel';
@@ -30,11 +32,9 @@ import { useVoice } from '../hooks/useVoice';
 
 import { extractApiError } from '../api/client';
 import { activateChannel } from '../lib/channelNavigation';
-import { activateGuild } from '../lib/guildNavigation';
 import { activateConversation } from '../lib/attention/conversationNavigation';
 import { accountScopeKey } from '../lib/serverScope';
-import { cn } from '../lib/utils';
-import type { BuildingLight, RoomLight } from '../lib/attention/light';
+import { litMembersCaption, type BuildingLight, type RoomLight } from '../lib/attention/light';
 import { snowflakeToMs, type ConversationEntry } from '../lib/attention/conversationModel';
 import { useChannelStore } from '../stores/channelStore';
 import { useReadStateStore } from '../stores/readStateStore';
@@ -47,14 +47,20 @@ const PICK_UP_CAP = 6;
 const HOME_CLOCK_MS = 60_000;
 
 /**
- * Home puts people and their servers first, then conversations to return to.
- * Direct attention and upcoming events sit alongside those conversations.
+ * App Home: what needs you across every server, who is around, and what is
+ * coming up (docs/glass-spec.md §3; docs/design/glass-plan.md §1.3, §8.4 "App Home
+ * keeps DMs and friends"). The places panel beside it lists the conversations and
+ * Friends; this is the pane you see when none is open.
+ *
+ * A calm list in the 720px column, in the order things matter: what needs you
+ * (mentions, DMs waiting, friend requests), what is live (amber, with a way in),
+ * who is around, what is coming up, and where you left off.
  *
  * Every light on this page comes from `useBuildingLights()`; the ranking in
- * Needs-you comes from the unified list's own scorer. Home derives no presence,
+ * For you comes from the unified list's own scorer. Home derives no presence,
  * invents no count, and adds no endpoint: it is a different *view* of data the
- * sidebar and the Lobby already show, which is the only way the two can never
- * disagree.
+ * places panel and a server's Overview already show, which is the only way they
+ * can never disagree.
  */
 export function HomePage() {
   const navigate = useNavigate();
@@ -71,8 +77,8 @@ export function HomePage() {
   useFreshRelationships();
 
   // The light on Home is only honest once every building's rooms AND the people
-  // behind them are loaded. The sidebar needs exactly the same thing, so the
-  // loading lives in one hook that both surfaces mount and neither duplicates.
+  // behind them are loaded. The places panel needs exactly the same thing, so
+  // the loading lives in one hook that both surfaces mount and neither duplicates.
   useBuildingRosters();
 
   // ---- light ------------------------------------------------------------
@@ -80,13 +86,13 @@ export function HomePage() {
   const lightsOn = useLightsOnAcrossBuildings(buildings);
   const aroundNow = useAroundNow(buildings);
   const people = useMemo(() => aroundNowPeople(buildings), [buildings]);
-  const litRooms = useMemo(() => {
-    const keys = new Set<string>();
-    for (const building of buildings) {
-      for (const room of building.rooms) if (room.lit) keys.add(room.key);
-    }
-    return keys;
-  }, [buildings]);
+  const liveRooms = useMemo(() => liveRoomsOf(buildings), [buildings]);
+  /** Rooms with a call in them: the amber on a conversation you could pick up. */
+  const litRooms = useMemo(() => new Set(liveRooms.map(({ room }) => room.key)), [liveRooms]);
+  const inCall = useMemo(
+    () => new Set(liveRooms.flatMap(({ room }) => room.occupants.map((occupant) => occupant.person.userId))),
+    [liveRooms],
+  );
 
   // ---- attention --------------------------------------------------------
   const { mutedGuildKeys } = useMutedGuilds();
@@ -105,15 +111,6 @@ export function HomePage() {
       )
       .slice(0, PICK_UP_CAP);
   }, [needsYou, pinned, recent, attention]);
-
-  /** Mentions by room key, so a building's text rooms can say "1 mention for you". */
-  const mentions = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const entry of [...attention, ...recent]) {
-      if (entry.mentionCount > 0) map.set(entry.key, entry.mentionCount);
-    }
-    return map;
-  }, [attention, recent]);
 
   const readActivityStatus = useReadStateStore((state) => {
     const keys = availableScopes.map(accountScopeKey);
@@ -147,18 +144,6 @@ export function HomePage() {
 
   // ---- actions ----------------------------------------------------------
   const { joinChannel } = useVoice();
-
-  const openBuilding = useCallback(
-    (building: BuildingLight) => {
-      try {
-        activateGuild({ scope: building.scope, id: building.guildId });
-        navigate(`/app/guilds/${building.guildId}`);
-      } catch (error) {
-        toast.error(`Could not open ${building.name}: ${extractApiError(error)}`);
-      }
-    },
-    [navigate],
-  );
 
   const openRoom = useCallback(
     (building: BuildingLight, room: RoomLight) => {
@@ -219,60 +204,72 @@ export function HomePage() {
     ]);
   }, [guilds, fetchChannels]);
 
+  // The bar's line says the one thing worth knowing before you read on. It never
+  // claims "nothing" while the activity behind it is still being checked.
+  const waiting = attention.length + requests.length;
+  const line =
+    activityStatus === 'loading' && waiting === 0
+      ? 'Checking for new messages…'
+      : [
+          waiting > 0 ? `${waiting} for you` : 'Nothing needs you',
+          liveRooms.length > 0 ? `${liveRooms.length} live` : null,
+        ]
+          .filter(Boolean)
+          .join(', ');
+
+  const aroundShown = people.length > 0 || lightsOn > 0;
+
   return (
-    <div className="h-full overflow-y-auto scrollbar-thin">
-      <div className="mx-auto flex w-full max-w-[1120px] flex-col gap-7 px-4 py-6 sm:px-8 sm:py-8">
-        <header className="flex min-w-0 flex-col gap-3">
-          <h1 className="pc-display break-words text-display font-bold text-text-primary">
-            {homeGreeting(new Date(nowMs), user?.display_name || user?.username)}
-          </h1>
-          <HomeAroundNow
-            people={people}
-            sentence={aroundNow}
-            lightsOn={lightsOn}
-            showFaces={!buildings.some((building) => building.brightestRoom)}
+    <GlassPage label="Home">
+      <PageBar title={homeGreeting(new Date(nowMs), user?.display_name || user?.username)} line={line} />
+
+      <PageScroll>
+        {guilds.length === 0 && (
+          <EmptyState
+            title="You are not in a server yet"
+            description="Join one with an invite, or start your own. Direct messages and friends are already on the left."
+            action={
+              <Button onClick={() => setShowCreateModal(true)}>
+                <Plus size={16} aria-hidden />
+                Add a server
+              </Button>
+            }
           />
-        </header>
+        )}
 
-        <section aria-label="Your servers" className="flex min-w-0 flex-col gap-3">
-          <SectionLabel className="px-0 pb-0 pt-0">Your servers</SectionLabel>
-          {buildings.map((building) => (
-            <HomeBuildingCard
-              key={building.key}
-              building={building}
-              mentions={mentions}
-              onOpenBuilding={openBuilding}
-              onOpenRoom={openRoom}
-              onJoinRoom={joinRoom}
-            />
-          ))}
-          <HomeAddBuilding onClick={() => setShowCreateModal(true)} />
-        </section>
+        <HomeNeedsYou
+          entries={attention}
+          requests={requests}
+          status={activityStatus}
+          onOpen={openConversation}
+          onAccept={acceptRequest}
+          onRefresh={refreshActivity}
+        />
 
-        <div className={cn('grid min-w-0 grid-cols-1 gap-7 lg:gap-8', pickUp.length > 0 && 'lg:grid-cols-[minmax(0,1fr)_300px]')}>
-          <HomePickUp entries={pickUp} litRooms={litRooms} onOpen={openConversation} />
-          <div className={cn(
-            'flex min-w-0 flex-col gap-6',
-            pickUp.length > 0 && 'border-t border-border-subtle pt-6 lg:col-start-2 lg:border-l lg:border-t-0 lg:pl-7 lg:pt-0',
-          )}>
-            <HomeNeedsYou
-              entries={attention}
-              requests={requests}
-              status={activityStatus}
-              onOpen={openConversation}
-              onAccept={acceptRequest}
-              onRefresh={refreshActivity}
+        <HomeLiveNow rooms={liveRooms} nowMs={nowMs} onOpenRoom={openRoom} onJoinRoom={joinRoom} />
+
+        {aroundShown && (
+          <PageSection kicker="Around now" list={false}>
+            <HomeAroundNow
+              people={people}
+              // The rooms above already say where they are; the sentence would say it twice.
+              sentence={liveRooms.length > 0 ? litMembersCaption(lightsOn) : aroundNow}
+              lightsOn={lightsOn}
+              inCall={inCall}
             />
-            <HomeComingUp
-              events={events}
-              nowMs={nowMs}
-              onSetGoing={(event, going) => void setGoing(event, going)}
-            />
-          </div>
-        </div>
-      </div>
+          </PageSection>
+        )}
+
+        <HomeComingUp
+          events={events}
+          nowMs={nowMs}
+          onSetGoing={(event, going) => void setGoing(event, going)}
+        />
+
+        <HomePickUp entries={pickUp} litRooms={litRooms} onOpen={openConversation} />
+      </PageScroll>
 
       {showCreateModal && <CreateGuildModal onClose={() => setShowCreateModal(false)} />}
-    </div>
+    </GlassPage>
   );
 }

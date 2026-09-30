@@ -2,13 +2,9 @@ import { useEffect, useMemo } from 'react';
 import { Link } from 'react-router';
 
 import { useDailyWordSettings } from '../../../../hooks/useDailyWord';
-import { useCurrentAccountScope } from '../../../../hooks/useCurrentUser';
-import { usePresenceStore } from '../../../../stores/presenceStore';
-import type { PresenceStatus } from '../../../../lib/presence';
-import { personLight } from '../../../../lib/attention/personLight';
 import { useDailyWordStore } from '../../../../stores/dailyWordStore';
 import { dailyWordHref, boardName, resultPhrase, solvedCaption, timeUntil } from '../../../dailyWord/model';
-import { AvatarStack } from '../../../light';
+import { FaceStack } from '../../../glass/places/Lead';
 import { Chip } from '../../../ui';
 import { WidgetCard, WidgetError } from './WidgetCard';
 
@@ -31,20 +27,15 @@ export function DailyWordWidget({ guildId, nowMs }: { guildId: string; nowMs: nu
   }, [shown, guildId]);
 
   const board = boardEntry?.board ?? null;
-  const scope = useCurrentAccountScope();
-  // One string, so the widget re-renders only when a solver's presence changes.
-  const statuses = usePresenceStore((state) =>
-    (board?.solvers ?? []).map((user) => state.getPresence(user.id, scope?.serverId)?.status ?? '').join(','));
-  const solvers = useMemo(() => {
-    const status = statuses.split(',');
-    return (board?.solvers ?? []).map((user, index) =>
-      personLight({
+  const solvers = useMemo(
+    () =>
+      (board?.solvers ?? []).map((user) => ({
         userId: user.id,
         name: boardName(user),
-        status: (status[index] || null) as PresenceStatus | null,
-        avatar: user.avatar_hash,
-      }));
-  }, [board, statuses]);
+        avatar: user.avatar_hash ?? null,
+      })),
+    [board],
+  );
 
   if (!shown) return null;
   const href = dailyWordHref(guildId);
@@ -66,18 +57,18 @@ export function DailyWordWidget({ guildId, nowMs }: { guildId: string; nowMs: nu
       title="Daily word"
       action={
         today?.finished ? (
-          <Link to={href} className="pc-focusable -mr-1 rounded-[var(--radius-chip)] px-1 text-meta font-medium text-text-link hover:underline">
+          <Link to={href} className="glass-linkbtn glass-focusable">
             Results
           </Link>
         ) : undefined
       }
     >
       <div className="min-w-0">
-        <p className="text-label text-text-primary">
+        <p className="glass-wrow__name">
           Today's word
-          <span className="text-text-muted"> · {solvedCaption(board?.solved ?? 0)}</span>
+          <span className="glass-secondary"> · {solvedCaption(board?.solved ?? 0)}</span>
         </p>
-        {nextIn && <p className="mt-0.5 text-meta text-text-muted">Next word in {nextIn}</p>}
+        {nextIn && <p className="glass-secondary">Next word in {nextIn}</p>}
       </div>
       <div className="flex min-w-0 items-center justify-between gap-3">
         {today?.finished ? (
@@ -86,13 +77,15 @@ export function DailyWordWidget({ guildId, nowMs }: { guildId: string; nowMs: nu
           <Link
             to={href}
             aria-label={started ? `Keep playing, ${today?.guesses.length} of ${today?.max_guesses} guesses used` : undefined}
-            className="pc-focusable pc-pressable pc-pressable-accent inline-flex h-[var(--h-control)] shrink-0 items-center whitespace-nowrap rounded-[var(--radius-control)] bg-accent-primary px-3 text-label font-semibold text-text-on-accent hover:bg-accent-primary-hover"
+            className="glass-btn glass-btn--glass glass-focusable"
           >
             {started ? 'Keep playing' : 'Play'}
           </Link>
         )}
         {solvers.length > 0 && (
-          <AvatarStack people={solvers} size={24} max={5} context="solved today's word" />
+          <span role="img" aria-label={`Solved today's word: ${solvers.slice(0, 5).map((solver) => solver.name).join(', ')}`}>
+            <FaceStack faces={solvers.slice(0, 5)} size={26} overlap={7} />
+          </span>
         )}
       </div>
     </WidgetCard>

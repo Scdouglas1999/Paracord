@@ -114,9 +114,6 @@ vi.mock('../hooks/useLights', () => ({
   useAroundNow: () => lights.sentence,
   useLightClock: () => NOW,
 }));
-vi.mock('../hooks/useRoomThumbnail', () => ({
-  useRoomThumbnail: () => ({ state: { live: false, reason: 'no-engine', label: 'LIVE' }, frame: null }),
-}));
 vi.mock('../components/home/useComingUp', () => ({
   useComingUp: () => comingUp,
   COMING_UP_CAP: 3,
@@ -234,60 +231,103 @@ beforeEach(() => {
 
 /* -------------------------------------------------------------------------- */
 
-describe('Home, people and conversations', () => {
-  it('opens with a greeting and the current presence summary', () => {
+function twoLiveRooms(): BuildingLight {
+  const rooms: RoomLight[] = [
+    voiceRoomLight({
+      scope: SCOPE,
+      guildId: 'guild-1',
+      channelId: 'voice-1',
+      name: 'Shop floor',
+      occupants: [{ person: MARA, sharingScreen: true }, { person: PRIYA }],
+      nowMs: NOW,
+    }),
+    voiceRoomLight({
+      scope: SCOPE,
+      guildId: 'guild-1',
+      channelId: 'voice-3',
+      name: 'Pit lane',
+      occupants: [{ person: REN }],
+      nowMs: NOW,
+    }),
+  ];
+  return buildingLight({ scope: SCOPE, guildId: 'guild-1', name: 'Kestrel Robotics', rooms, members: [MARA, PRIYA, REN], memberCount: 61 });
+}
+
+describe('Home, what needs you, who is here and what is live', () => {
+  it('opens with a greeting and says whether anything needs you', () => {
     lights.buildings = [litBuilding(), quietBuilding()];
     lights.lightsOn = 30;
     renderHome();
-    expect(screen.getByRole('heading', { name: 'Evening' })).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: 'Around now' })).toHaveTextContent(lights.sentence);
+    expect(screen.getByRole('heading', { level: 1, name: 'Evening' })).toBeInTheDocument();
+    expect(screen.getByText('Nothing needs you, 1 live')).toBeInTheDocument();
   });
 
-  it('keeps the shared presence summary above the named voice cards', () => {
+  it('says where people are in Around now when nobody is in a call', () => {
+    lights.buildings = [quietBuilding()];
+    lights.lightsOn = 1;
+    lights.sentence = 'Ren is online';
+    renderHome();
+    const well = screen.getByRole('region', { name: 'Around now' });
+    expect(within(well).getByText('Ren is online')).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Live now' })).not.toBeInTheDocument();
+  });
+
+  it('lists a live call once, in Live now, instead of saying it twice', () => {
     lights.buildings = [litBuilding()];
     lights.lightsOn = 9;
     lights.sentence = 'Mara and Priya are in Shop floor';
     renderHome();
+    const live = screen.getByRole('region', { name: 'Live now' });
+    expect(within(live).getByRole('listitem', { name: 'Shop floor, live' })).toHaveTextContent('Kestrel Robotics');
+    expect(within(live).getByText('Mara is streaming')).toBeInTheDocument();
+    // The sentence would repeat the room above it; the count says what is left.
     const well = screen.getByRole('region', { name: 'Around now' });
-    expect(within(well).getByText('Mara and Priya are in Shop floor')).toBeInTheDocument();
-    expect(within(well).queryByText(/lights on/)).not.toBeInTheDocument();
+    expect(within(well).queryByText('Mara and Priya are in Shop floor')).not.toBeInTheDocument();
+    expect(within(well).getByText('9 online')).toBeInTheDocument();
   });
 
-  it('draws each server in the order the light hook gave them', () => {
-    lights.buildings = [litBuilding(), quietBuilding()];
+  it('gives Join in cream to the busiest call only', () => {
+    lights.buildings = [twoLiveRooms()];
     renderHome();
-    expect(screen.getByRole('article', { name: 'Kestrel Robotics' })).toBeInTheDocument();
-    expect(screen.getByRole('group', { name: 'Saltmarsh Sailing' })).toBeInTheDocument();
-    const servers = screen.getByRole('region', { name: 'Your servers' });
-    expect(within(servers).getByRole('article', { name: 'Kestrel Robotics' }).compareDocumentPosition(
-      within(servers).getByRole('group', { name: 'Saltmarsh Sailing' }),
-    ) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Join Shop floor' })).toHaveClass('glass-btn--primary');
+    expect(screen.getByRole('button', { name: 'Join Pit lane' })).toHaveClass('glass-btn--glass');
+    expect(document.querySelectorAll('.glass-btn--primary')).toHaveLength(1);
   });
 
-  it('joins a lit room in the room it is showing, not the server', async () => {
+  it('joins a live room in the room it is showing, not the server', async () => {
     lights.buildings = [litBuilding()];
     renderHome();
-    await userEvent.click(screen.getByRole('button', { name: 'Join voice' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Join Shop floor' }));
     expect(stores.activateChannel).toHaveBeenCalledWith({ scope: SCOPE, id: 'voice-1' });
     expect(stores.joinChannel).toHaveBeenCalledWith('voice-1', 'guild-1');
     expect(await screen.findByText('Room route')).toBeInTheDocument();
   });
 
-  it('opens a server from its name', async () => {
-    lights.buildings = [quietBuilding()];
+  it('opens a live room without joining it', async () => {
+    lights.buildings = [litBuilding()];
     renderHome();
-    await userEvent.click(screen.getByRole('button', { name: 'Saltmarsh Sailing' }));
-    expect(stores.activateGuild).toHaveBeenCalledWith({ scope: SCOPE, id: 'guild-2' });
-    expect(await screen.findByText('Server route')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Open Shop floor' }));
+    expect(stores.activateChannel).toHaveBeenCalledWith({ scope: SCOPE, id: 'voice-1' });
+    expect(stores.joinChannel).not.toHaveBeenCalled();
+    expect(await screen.findByText('Room route')).toBeInTheDocument();
   });
 
-  it('always offers a way in, and opens the join-or-create dialog', async () => {
+  it('draws no card for a server: the places panel already lists them', () => {
+    lights.buildings = [litBuilding(), quietBuilding()];
     renderHome();
-    const add = screen.getByRole('button', {
-      name: 'Add a server — join with an invite, or start your own',
-    });
-    await userEvent.click(add);
+    expect(screen.queryByRole('region', { name: 'Your servers' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('article', { name: 'Kestrel Robotics' })).not.toBeInTheDocument();
+  });
+
+  it('offers a way in only when you are in no server, and opens the join-or-create dialog', async () => {
+    const { unmount } = renderHome();
+    await userEvent.click(screen.getByRole('button', { name: 'Add a server' }));
     expect(screen.getByText('Add a server dialog')).toBeInTheDocument();
+    unmount();
+
+    stores.guilds = [{ id: 'guild-1', key: 'k1', scope: SCOPE }];
+    renderHome();
+    expect(screen.queryByRole('button', { name: 'Add a server' })).not.toBeInTheDocument();
   });
 
   it('loads the rooms and people of every server it has not got, once', () => {
@@ -326,15 +366,17 @@ describe('Coming up on Home', () => {
     rsvp: false,
   };
 
-  it('shows scheduled events from across the servers', () => {
+  it('shows scheduled events from across the servers as plan cards', async () => {
     lights.buildings = [litBuilding()];
     comingUp.events = [event];
     renderHome();
     const section = screen.getByRole('region', { name: 'Coming up' });
-    expect(within(section).getByText('Thermal test — driver v3')).toBeInTheDocument();
-    expect(
-      within(section).getByText('Kestrel Robotics · Shop floor · 6 going'),
-    ).toBeInTheDocument();
+    const card = within(section).getByRole('group', { name: 'Event: Thermal test — driver v3' });
+    expect(card).toHaveTextContent('in Shop floor');
+    expect(card).toHaveTextContent('Kestrel Robotics');
+    expect(card).toHaveTextContent('6 going');
+    await userEvent.click(within(card).getByRole('button', { name: 'Take the spot' }));
+    expect(comingUp.setGoing).toHaveBeenCalledWith(event, true);
   });
 
   it('omits the section entirely when nothing is scheduled', () => {
@@ -394,8 +436,7 @@ describe('For you and Pick up', () => {
     const pickUp = screen.getByRole('region', { name: 'Pick up the conversation' });
     expect(within(direct).queryByRole('button', { name: 'Open music' })).not.toBeInTheDocument();
     expect(within(pickUp).getAllByRole('button', { name: 'Open music' })).toHaveLength(1);
-    const servers = screen.getByRole('region', { name: 'Your servers' });
-    expect(servers.compareDocumentPosition(pickUp) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(pickUp.compareDocumentPosition(direct) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // What needs you comes first; where you left off comes last.
+    expect(direct.compareDocumentPosition(pickUp) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });

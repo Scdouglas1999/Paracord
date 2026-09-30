@@ -53,4 +53,12 @@ describe('Home page settings', () => {
       'Media',
     ]);
   });
+
+  it('previews one column, live above the widgets and posts below them, at every width', () => {
+    render(<HomePageSettings widgets={DEFAULT_HOME_WIDGETS} onChange={() => {}} />);
+    const preview = screen.getByRole('figure', { name: 'Preview' });
+    expect(preview).toHaveTextContent('one column');
+    // No side column: the widgets stack in the same flow as everything else.
+    expect(preview.querySelector('.grid')).toBeNull();
+  });
 });

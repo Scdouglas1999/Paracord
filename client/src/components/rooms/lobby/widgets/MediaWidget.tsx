@@ -3,7 +3,6 @@ import { useEffect, useState } from 'react';
 import { extractApiError } from '../../../../api/client';
 import { galleryApi, type GalleryAttachment } from '../../../../api/gallery';
 import { displayName } from '../../../../lib/displayName';
-import { cn } from '../../../../lib/utils';
 import type { Attachment } from '../../../../types';
 import { Photo } from '../feedParts';
 import { WidgetCard, WidgetError, WidgetLink } from './WidgetCard';
@@ -13,20 +12,8 @@ export interface MediaWidgetProps {
   onOpenMedia: () => void;
 }
 
-/** Six pictures, as a 3×2 mosaic. */
+/** Six pictures, in a row. */
 const COUNT = 6;
-
-/**
- * Where one picture sits in a six-column grid, so that fewer than six still
- * fill their rows: one is wide, two are halves, four are a 2×2, five are two
- * halves over three thirds.
- */
-function tile(count: number, index: number): string {
-  if (count === 1) return 'col-span-6 aspect-[16/9]';
-  if (count === 2 || count === 4) return 'col-span-3 aspect-[4/3]';
-  if (count === 5 && index < 2) return 'col-span-3 aspect-[4/3]';
-  return 'col-span-2 aspect-square';
-}
 
 function asAttachment(item: GalleryAttachment): Attachment {
   return {
@@ -75,15 +62,16 @@ export function MediaWidget({ guildId, onOpenMedia }: MediaWidgetProps) {
   if (!items || items.length === 0) return null;
 
   return (
-    <WidgetCard title="Media" action={<WidgetLink onClick={onOpenMedia}>All media</WidgetLink>}>
-      <div className="grid grid-cols-6 gap-1.5">
-        {items.slice(0, COUNT).map((item, index, shown) => (
+    <WidgetCard title="Media" bare action={<WidgetLink onClick={onOpenMedia}>All media</WidgetLink>}>
+      {/* One row of squares: the latest few, as wide as the column. */}
+      <div className="glass-mosaic" style={{ '--n': Math.min(items.length, COUNT) } as React.CSSProperties}>
+        {items.slice(0, COUNT).map((item) => (
           <Photo
             key={item.id}
             attachment={asAttachment(item)}
             caption={displayName(item.author)}
             onOpen={onOpenMedia}
-            className={cn('w-full rounded-[var(--radius-chip)]', tile(shown.length, index))}
+            className="aspect-square w-full"
           />
         ))}
       </div>

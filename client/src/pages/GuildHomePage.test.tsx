@@ -296,8 +296,10 @@ describe('live now', () => {
     });
     renderHome();
     expect(screen.getByRole('heading', { name: 'Live now' })).toBeInTheDocument();
-    const card = screen.getByRole('article', { name: 'Shop floor, live' });
-    expect(within(card).getByText(/2 people in voice/)).toBeInTheDocument();
+    const card = screen.getByRole('listitem', { name: 'Shop floor, live' });
+    expect(within(card).getByText('2 in here')).toBeInTheDocument();
+    // Join is the one cream button on the page.
+    expect(within(card).getByRole('button', { name: 'Join Shop floor' })).toHaveClass('glass-btn--primary');
     fireEvent.click(within(card).getByRole('button', { name: 'Join Shop floor' }));
     await waitFor(() => expect(gates.joinChannel).toHaveBeenCalledWith('v1', GUILD));
     expect(screen.getByTestId('pathname')).toHaveTextContent('/app/guilds/g1/channels/v1');
@@ -392,10 +394,12 @@ describe('the widget column', () => {
     api.events = [{ id: 'e1', name: 'Thermal test', scheduled_start: soon(), status: 1, user_count: 2 }];
     renderHome();
     const widget = await screen.findByRole('region', { name: 'Coming up' });
-    expect(within(widget).getByText('Thermal test')).toBeInTheDocument();
-    fireEvent.click(within(widget).getByRole('button', { name: "I'm going" }));
+    // A plan card: the title, when and where, and one decision as text.
+    const card = within(widget).getByRole('group', { name: 'Event: Thermal test' });
+    expect(card).toHaveTextContent('2 going');
+    fireEvent.click(within(card).getByRole('button', { name: 'Take the spot' }));
     await waitFor(() => expect(api.put).toHaveBeenCalledWith('/guilds/g1/events/e1/rsvp'));
-    expect(await within(widget).findByRole('button', { name: "You're going" })).toBeInTheDocument();
+    expect(await within(card).findByRole('button', { name: 'You’re in' })).toBeInTheDocument();
   });
 
   it('leaves out a widget with nothing to show', async () => {
@@ -414,18 +418,18 @@ describe('the widget column', () => {
     expect(screen.queryByRole('region', { name: 'Coming up' })).not.toBeInTheDocument();
   });
 
-  it('on a phone, puts Coming up above the feed and the rest after its fourth post', async () => {
+  it('is one column at every width: live, the widgets in the owner’s order, then the latest posts', async () => {
     plateWidth = 390;
     api.events = [{ id: 'e1', name: 'Thermal test', scheduled_start: soon(), status: 1 }];
     api.feed = ['1', '2', '3', '4', '5'].map((id) => feedMessage(id, { content: `post ${id}` }));
     renderHome();
     const comingUp = await screen.findByRole('region', { name: 'Coming up' });
-    const latest = screen.getByRole('heading', { name: 'Latest' });
-    expect(comingUp.compareDocumentPosition(latest) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     const newHere = await screen.findByRole('region', { name: 'New here' });
-    const fourth = screen.getByText('post 4');
-    const fifth = screen.getByText('post 5');
-    expect(fourth.compareDocumentPosition(newHere) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(newHere.compareDocumentPosition(fifth) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const latest = screen.getByRole('heading', { name: 'Latest' });
+    expect(comingUp.compareDocumentPosition(newHere) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(newHere.compareDocumentPosition(latest) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Nothing is folded into the feed: every post comes after the widgets.
+    expect(newHere.compareDocumentPosition(screen.getByText('post 1')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByRole('complementary', { name: 'Widgets' })).not.toBeInTheDocument();
   });
 });

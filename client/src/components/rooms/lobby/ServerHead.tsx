@@ -1,13 +1,15 @@
-import { useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
+import { useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react';
 import { Bell, BellOff, CheckCheck, Image as ImageIcon, Settings, UserPlus } from 'lucide-react';
 
-import { AvatarStack, LitAvatar } from '../../light';
-import { PersonFaceTooltip, PersonStatusLine } from '../../user/PresenceActivity';
+import { PageRow, PagePerson } from '../../home/PageRow';
+import { Face } from '../../glass/places/Lead';
+import { PersonFaceTooltip, usePresenceStatusLine, StatusLineText } from '../../user/PresenceActivity';
 import { Button, IconButton, Popover } from '../../ui';
 import type { ContextMenuItem } from '../../ui/ContextMenu';
 import { getIdentityColor } from '../../../lib/colors';
 import { guildInitials } from '../../../lib/guildIcon';
 import { useAuthenticatedImage } from '../../../lib/authenticatedImage';
+import { presenceLabel } from '../../../lib/presence';
 import type { PersonLight } from '../../../lib/attention/light';
 import { cn } from '../../../lib/utils';
 import { presenceLine } from './homeCaptions';
@@ -22,6 +24,7 @@ export interface ServerHeadProps {
   online: number;
   members: number;
   muted: boolean;
+  /** A phone: a smaller mark and title. */
   phone: boolean;
   /** Opens the notification menu at the bell. */
   onNotificationMenu: (event: ReactMouseEvent<HTMLElement>, items: ContextMenuItem[]) => void;
@@ -38,9 +41,14 @@ export interface ServerHeadProps {
 const PILE = 6;
 
 /**
- * The head of the server home page: the mark across the cover's edge, the
- * name, the server's own description, who is online, and the four things you
- * can do from here.
+ * The head of a server's Overview (docs/glass-spec.md §2.3, §3.1): the mark, the
+ * name at the server-title size (28/600, narrow), who is online, the server's own
+ * description, and what you can do from here. It sits over the banner's fade, so
+ * the banner is what lights it.
+ *
+ * Utilities are icon-only circles (notifications, media, settings); Invite keeps
+ * its label, because it is a verb. None of them is the cream button: that is Join,
+ * on a live room.
  */
 export function ServerHead({
   guildId,
@@ -61,7 +69,7 @@ export function ServerHead({
 }: ServerHeadProps) {
   const icon = useAuthenticatedImage(iconSrc);
   const onlinePeople = useMemo(() => people.filter((person) => person.level === 'on'), [people]);
-  const size = phone ? 64 : 76;
+  const size = phone ? 56 : 72;
 
   const bellItems: ContextMenuItem[] = [
     {
@@ -73,95 +81,58 @@ export function ServerHead({
     { label: 'Mark as read', icon: <CheckCheck size={16} />, action: onMarkRead },
   ];
 
-  const actions = (
-    <div className={cn('flex shrink-0 items-center gap-1.5', phone && 'w-full')}>
-      <IconButton
-        label={muted ? 'Notifications: muted' : 'Notifications'}
-        active={muted}
-        onClick={(event) => onNotificationMenu(event, bellItems)}
+  return (
+    <header className="glass-ov__head" data-compact={phone ? '' : undefined}>
+      <span
+        aria-hidden
+        className="glass-ov__mark"
+        style={
+          {
+            width: size,
+            height: size,
+            fontSize: size * 0.36,
+            background: icon ? 'var(--bub)' : getIdentityColor(guildId),
+          } as CSSProperties
+        }
       >
-        {muted ? <BellOff size={18} aria-hidden /> : <Bell size={18} aria-hidden />}
-      </IconButton>
-      <Button variant="ghost" onClick={onMedia}>
-        <ImageIcon size={16} aria-hidden />
-        Media
-      </Button>
-      {onSettings && phone && (
-        <IconButton label="Server settings" onClick={onSettings}>
-          <Settings size={18} aria-hidden />
-        </IconButton>
-      )}
-      {onInvite && (
-        <Button variant="primary" onClick={onInvite} className={cn(phone && 'ml-auto')}>
-          <UserPlus size={16} aria-hidden />
-          Invite
-        </Button>
-      )}
-      {onSettings && !phone && (
-        <IconButton label="Server settings" onClick={onSettings}>
-          <Settings size={18} aria-hidden />
-        </IconButton>
-      )}
-    </div>
-  );
+        {icon ? <img src={icon} alt="" draggable={false} /> : guildInitials(name)}
+      </span>
 
-  const mark = (
-    <span
-      aria-hidden
-      className={cn(
-        'pc-home-mark pc-display flex shrink-0 items-center justify-center overflow-hidden',
-        'rounded-[20px] font-bold text-text-on-light',
-      )}
-      style={{
-        width: size,
-        height: size,
-        fontSize: size * 0.36,
-        background: icon ? 'var(--bg-raised)' : getIdentityColor(guildId),
-      }}
-    >
-      {icon ? <img src={icon} alt="" className="h-full w-full object-cover" draggable={false} /> : guildInitials(name)}
-    </span>
-  );
+      <div className="glass-ov__id">
+        <h1 className="glass-title-server glass-ov__name">{name}</h1>
+        <MembersButton people={people} onlinePeople={onlinePeople} online={online} members={members} />
+      </div>
 
-  const about = (
-    <>
-      {description && (
-        <p
-          className="pc-home-clamp max-w-[64ch] text-body text-text-secondary"
-          style={{ '--clamp-lines': phone ? 3 : 2 } as React.CSSProperties}
+      <div className="glass-ov__actions">
+        <IconButton
+          label={muted ? 'Notifications: muted' : 'Notifications'}
+          tone="raised"
+          active={muted}
+          onClick={(event) => onNotificationMenu(event, bellItems)}
         >
+          {muted ? <BellOff size={18} aria-hidden /> : <Bell size={18} aria-hidden />}
+        </IconButton>
+        <IconButton label="Media" tone="raised" onClick={onMedia}>
+          <ImageIcon size={18} aria-hidden />
+        </IconButton>
+        {onSettings && (
+          <IconButton label="Server settings" tone="raised" onClick={onSettings}>
+            <Settings size={18} aria-hidden />
+          </IconButton>
+        )}
+        {onInvite && (
+          <Button variant="glass" onClick={onInvite}>
+            <UserPlus size={16} aria-hidden />
+            Invite
+          </Button>
+        )}
+      </div>
+
+      {description && (
+        <p className="glass-ov__about glass-clamp" style={{ '--clamp-lines': phone ? 3 : 2 } as CSSProperties}>
           {description}
         </p>
       )}
-      <MembersButton people={people} onlinePeople={onlinePeople} online={online} members={members} />
-    </>
-  );
-
-  if (phone) {
-    // One column: the mark across the cover, then the name, then the rest,
-    // and the actions on a row of their own.
-    return (
-      <header className="relative z-[2] flex flex-col gap-3 px-4" style={{ marginTop: -44 }}>
-        {mark}
-        <h1 className="pc-home-name break-words text-text-primary">{name}</h1>
-        <div className="flex flex-col gap-1.5">{about}</div>
-        {actions}
-      </header>
-    );
-  }
-
-  // The mark crosses the cover's edge; the name sits beside it on the same
-  // bottom line, just inside the fade; the actions share that line.
-  return (
-    <header className="relative z-[2] px-8">
-      <div className="flex items-end gap-5" style={{ marginTop: -58 }}>
-        {mark}
-        <h1 className="pc-home-name min-w-0 flex-1 truncate pb-0.5 text-text-primary">{name}</h1>
-        <div className="pb-0.5">{actions}</div>
-      </div>
-      <div className="mt-2 flex flex-col gap-1.5" style={{ paddingLeft: size + 20 }}>
-        {about}
-      </div>
     </header>
   );
 }
@@ -184,6 +155,7 @@ function MembersButton({
   const anchor = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const line = presenceLine(online, members);
+  const pile = onlinePeople.slice(0, PILE);
   return (
     <>
       <button
@@ -193,54 +165,61 @@ function MembersButton({
         aria-expanded={open}
         aria-haspopup="dialog"
         aria-label={`${line}. Show members`}
-        className={cn(
-          'pc-focusable -ml-1.5 mt-1 inline-flex max-w-full items-center gap-2.5 self-start',
-          'rounded-[var(--radius-control)] px-1.5 py-1 text-left',
-          'transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle',
-        )}
+        className="glass-ov__members glass-focusable"
       >
-        {onlinePeople.length > 0 && (
-          <AvatarStack
-            people={onlinePeople}
-            size={26}
-            max={PILE}
-            context="online"
-            renderFace={(person, face) => (
-              <PersonFaceTooltip userId={person.userId} name={person.name} fallback={person.label}>
-                {face}
-              </PersonFaceTooltip>
-            )}
-          />
-        )}
-        <span className="truncate text-label text-text-secondary">{line}</span>
-      </button>
-      <Popover anchor={anchor} open={open} onClose={() => setOpen(false)} label="Members" className="w-72 p-0">
-        <div className="flex items-baseline justify-between gap-3 border-b border-border-subtle px-3.5 py-2.5">
-          <span className="pc-display text-name text-text-primary">Members</span>
-          <span className="text-meta text-text-muted">{line}</span>
-        </div>
-        <ul className="flex max-h-80 flex-col gap-0.5 overflow-y-auto scrollbar-thin p-1.5">
-          {people.map((person) => (
-            <li key={person.userId} className="flex items-center gap-2.5 rounded-[var(--radius-chip)] px-2 py-1.5">
-              <LitAvatar person={person} size={26} />
-              <span className="min-w-0 flex-1">
-                <span
-                  className={cn(
-                    'block truncate text-label',
-                    person.level === 'on' ? 'text-text-primary' : 'text-text-muted',
-                  )}
-                >
-                  {person.name}
+        {pile.length > 0 && (
+          <span className="glass-ov__pile" aria-hidden>
+            {pile.map((person, index) => (
+              <PersonFaceTooltip key={person.userId} userId={person.userId} name={person.name} fallback={person.label}>
+                <span className="glass-ov__pile-face" style={index === 0 ? undefined : { marginInlineStart: -6 }}>
+                  <Face face={{ userId: person.userId, name: person.name, avatar: person.avatar }} size={26} />
                 </span>
-                <PersonStatusLine userId={person.userId} />
-              </span>
-              {person.roomName && (
-                <span className="max-w-[45%] shrink-0 truncate text-meta text-text-muted">{person.roomName}</span>
-              )}
-            </li>
+              </PersonFaceTooltip>
+            ))}
+          </span>
+        )}
+        <span className="glass-ov__members-line">{line}</span>
+      </button>
+      <Popover anchor={anchor} open={open} onClose={() => setOpen(false)} label="Members" className="glass-ov__popover">
+        <div className="glass-ov__popover-head">
+          <span className="glass-name">Members</span>
+          <span className="glass-instrument glass-ov__popover-count">{line}</span>
+        </div>
+        <ul className="glass-ov__popover-list">
+          {people.map((person) => (
+            <MemberRow key={person.userId} person={person} />
           ))}
         </ul>
       </Popover>
     </>
+  );
+}
+
+function MemberRow({ person }: { person: PersonLight }) {
+  const statusLine = usePresenceStatusLine(person.userId);
+  return (
+    <PageRow
+      className={cn('glass-ov__member')}
+      lead={
+        <PagePerson
+          face={{ userId: person.userId, name: person.name, avatar: person.avatar }}
+          size={32}
+          status={person.level === 'off' ? 'offline' : person.dnd ? 'dnd' : person.dim ? 'idle' : 'online'}
+          live={person.live}
+        />
+      }
+      title={person.name}
+      line={
+        statusLine ? (
+          <StatusLineText line={statusLine} />
+        ) : (
+          <>
+            {presenceLabel(person.level === 'off' ? 'offline' : person.dnd ? 'dnd' : person.dim ? 'idle' : 'online')}
+            {person.roomName ? ` · ${person.roomName}` : ''}
+          </>
+        )
+      }
+      offline={person.level === 'off'}
+    />
   );
 }

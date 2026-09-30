@@ -17,10 +17,10 @@ export interface HomePageSettingsProps {
 }
 
 /**
- * "Home page" in Server settings → Server hub: which widgets sit beside the
- * feed, and in what order. Drag a row by its handle, or focus the handle and
- * use the arrow keys. The preview beside the list is the widget column as it
- * will stack.
+ * "Overview" in Server settings → Server hub: which widgets sit between what is
+ * live and the latest posts on the server's Overview, and in what order. Drag a
+ * row by its handle, or focus the handle and use the arrow keys. The preview
+ * beside the list is the page as it will stack: one column at every width.
  */
 export function HomePageSettings({ widgets, onChange }: HomePageSettingsProps) {
   const [dragging, setDragging] = useState<number | null>(null);
@@ -70,10 +70,11 @@ export function HomePageSettings({ widgets, onChange }: HomePageSettingsProps) {
               onDragLeave={() => setOver((current) => (current === index ? null : current))}
               onDrop={(event) => onDrop(event, index)}
               className={cn(
-                'flex items-center gap-3 rounded-[var(--radius-control)] bg-bg-raised py-2.5 pl-1.5 pr-3',
-                'shadow-[var(--shadow-raised)] transition-opacity duration-[var(--duration-fast)] ease-[var(--ease-out)]',
+                'flex items-center gap-3 rounded-[var(--r-row)] bg-[var(--bub)] py-2.5 pl-1.5 pr-3',
+                'shadow-[var(--sh-content)] transition-opacity duration-[var(--duration-fast)] ease-[var(--ease-out)]',
                 dragging === index && 'opacity-50',
-                over === index && dragging !== null && dragging !== index && 'pc-home-drag-over',
+                // Where the row will land: a line above it, in ink (not a color).
+                over === index && dragging !== null && dragging !== index && 'shadow-[0_-2px_0_0_var(--ink-1)]',
               )}
             >
               <button
@@ -93,15 +94,15 @@ export function HomePageSettings({ widgets, onChange }: HomePageSettingsProps) {
                 }}
                 onKeyDown={(event) => onHandleKey(event, index)}
                 aria-label={`Move ${label}. Position ${index + 1} of ${widgets.length}. Use the up and down arrows.`}
-                className="pc-focusable flex h-8 w-7 shrink-0 cursor-grab items-center justify-center rounded-[var(--radius-chip)] text-text-faint hover:bg-bg-mod-subtle hover:text-text-secondary active:cursor-grabbing"
+                className="pc-focusable flex h-8 w-7 shrink-0 cursor-grab items-center justify-center rounded-[var(--r-chip)] text-[var(--ink-3)] hover:bg-[var(--wash-hover)] hover:text-[var(--ink-1)] active:cursor-grabbing"
               >
                 <GripVertical size={16} aria-hidden />
               </button>
               <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                <span id={`home-widget-${widget.id}`} className="text-label text-text-primary">
+                <span id={`home-widget-${widget.id}`} className="glass-name">
                   {label}
                 </span>
-                <span className="text-meta text-text-muted">{HOME_WIDGET_HINTS[widget.id]}</span>
+                <span className="glass-secondary">{HOME_WIDGET_HINTS[widget.id]}</span>
               </span>
               <Switch
                 checked={widget.enabled}
@@ -114,31 +115,25 @@ export function HomePageSettings({ widgets, onChange }: HomePageSettingsProps) {
       </ol>
 
       <figure aria-label="Preview" className="flex flex-col gap-2">
-        <figcaption className="text-section text-text-faint">Preview</figcaption>
-        <div aria-hidden className="overflow-hidden rounded-[var(--radius-card)] bg-bg-well shadow-[var(--shadow-well)]">
-          <div className="h-8 bg-bg-mod-strong" />
-          <div className="grid grid-cols-[minmax(0,1fr)_76px] gap-2 p-2.5">
-            <div className="flex flex-col gap-1.5">
-              <span className="h-2 w-10 rounded-full bg-bg-mod-strong" />
-              {[0, 1, 2].map((row) => (
-                <span key={row} className="h-12 rounded-[var(--radius-chip)] bg-bg-mod-subtle" />
-              ))}
-            </div>
-            <div className="flex flex-col gap-1.5">
-              {shown.length === 0 && <span className="pt-1 text-[10px] leading-tight text-text-faint">No widgets</span>}
-              {shown.map((widget) => (
-                <span
-                  key={widget.id}
-                  className="flex h-9 items-start rounded-[var(--radius-chip)] bg-bg-raised px-1.5 pt-1 text-[10px] font-medium leading-tight text-text-secondary shadow-[var(--shadow-raised)]"
-                >
-                  {HOME_WIDGET_LABELS[widget.id]}
-                </span>
-              ))}
-            </div>
-          </div>
+        <figcaption className="glass-kicker text-[var(--ink-3)]">Preview</figcaption>
+        <div aria-hidden className="flex flex-col gap-1.5 overflow-hidden rounded-[var(--r-bubble)] bg-[var(--solid)] p-2.5">
+          <div className="h-8 rounded-[var(--r-chip)] bg-[var(--glass-fill-quiet)]" />
+          <span className="h-6 rounded-[var(--r-chip)] bg-[var(--amber-tint)]" />
+          {shown.length === 0 && <span className="pt-1 text-[11px] leading-tight text-[var(--ink-3)]">No widgets</span>}
+          {shown.map((widget) => (
+            <span
+              key={widget.id}
+              className="flex h-9 items-start rounded-[var(--r-chip)] bg-[var(--bub)] px-2 pt-1.5 text-[11px] font-medium leading-tight text-[var(--ink-2)]"
+            >
+              {HOME_WIDGET_LABELS[widget.id]}
+            </span>
+          ))}
+          {[0, 1].map((row) => (
+            <span key={row} className="h-10 rounded-[var(--r-chip)] bg-[var(--glass-fill-quiet)]" />
+          ))}
         </div>
-        <p className="text-meta text-text-muted">
-          On a phone, Coming up sits above the feed and the rest follow its fourth post.
+        <p className="glass-secondary">
+          On every screen the widgets stack in one column, after what is live and before the latest posts.
         </p>
       </figure>
 

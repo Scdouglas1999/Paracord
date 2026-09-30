@@ -1,6 +1,7 @@
-import { format, isSameDay } from 'date-fns';
-
-import { Button } from '../ui';
+import { useCurrentUser } from '../../hooks/useCurrentUser';
+import { PlanAction, PlanCard, type PlanSlotModel } from '../glass/cards/PlanCard';
+import { planWhen } from '../glass/cards/eventTime';
+import { PageSection } from './GlassPage';
 import type { ComingUpEvent } from './useComingUp';
 
 export interface HomeComingUpProps {
@@ -9,31 +10,14 @@ export interface HomeComingUpProps {
   onSetGoing: (event: ComingUpEvent, going: boolean) => void;
 }
 
-/** "Today 1:00 pm", "Tomorrow 9:30 am", "Sat 13 Sep 1:00 pm". */
-export function eventWhen(startsAtMs: number, nowMs: number): string {
-  const start = new Date(startsAtMs);
-  const now = new Date(nowMs);
-  const tomorrow = new Date(nowMs + 24 * 60 * 60 * 1000);
-  const clock = format(start, 'h:mm a').toLowerCase();
-  if (isSameDay(start, now)) return `Today ${clock}`;
-  if (isSameDay(start, tomorrow)) return `Tomorrow ${clock}`;
-  return `${format(start, 'EEE d MMM')} ${clock}`;
-}
-
-/** "Today 1:00 pm · Kestrel Robotics · Shop floor · 6 going". */
-export function eventMeta(event: ComingUpEvent, nowMs: number): string {
-  const parts = [eventWhen(event.startsAtMs, nowMs), event.buildingName];
-  const where = event.roomName ?? event.location;
-  if (where) parts.push(where);
-  if (event.going > 0) parts.push(`${event.going} going`);
-  return parts.join(' · ');
-}
-
 /**
- * EventCard — one scheduled event (docs/lantern-stage-spec.md §8).
+ * One scheduled event, as the timeline draws it (docs/glass-spec.md §3.2): a
+ * plan card, one step above the pane, with the time and place, who is going and
+ * one decision as text, "Take the spot" and, once taken, "You're in".
  *
- * A quiet event row: date, name, context and one RSVP action. Real schedules
- * remain available without giving Home the weight of an agenda.
+ * The events feature has no capacity or slot list yet (owner decision, plan
+ * §8.6), so the slot is your own: an open circle until you take it, your face
+ * once you have.
  */
 function EventCard({
   event,
@@ -44,39 +28,37 @@ function EventCard({
   nowMs: number;
   onSetGoing: (event: ComingUpEvent, going: boolean) => void;
 }) {
+  const me = useCurrentUser();
+  const startsAt = new Date(event.startsAtMs);
+  const where = event.roomName ? ` in ${event.roomName}` : event.location ? `, ${event.location}` : '';
+  const slots: PlanSlotModel[] =
+    event.rsvp && me
+      ? [{ key: 'you', name: 'You', face: { userId: me.id, avatar: me.avatar_hash ?? null }, you: true }]
+      : [{ key: 'open', name: 'Your spot', open: true }];
+
   return (
-    <li className="flex min-w-0 flex-col items-start gap-1 py-2">
-      <time dateTime={new Date(event.startsAtMs).toISOString()} className="text-meta text-text-muted">
-        {eventWhen(event.startsAtMs, nowMs)}
-      </time>
-      <span className="flex min-w-0 max-w-full flex-col gap-1">
-        <span className="pc-display break-words text-name font-semibold text-text-primary">
-          {event.name}
-        </span>
-        <span className="break-words text-meta text-text-faint">
-          {[event.buildingName, event.roomName ?? event.location, event.going > 0 ? `${event.going} going` : null].filter(Boolean).join(' · ')}
-        </span>
-      </span>
-      <Button
-        size="sm"
-        variant="ghost"
-        onClick={() => onSetGoing(event, !event.rsvp)}
-        aria-pressed={event.rsvp}
-        aria-label={
-          event.rsvp
-            ? `You are going to ${event.name} — tap to change your mind`
-            : `Say you are going to ${event.name}`
+    <li>
+      <PlanCard
+        kind="Event"
+        title={event.name}
+        meta={
+          <>
+            {planWhen(startsAt, { nowMs })}
+            {where}
+            {' · '}
+            {event.buildingName}
+            {event.going > 0 && <span className="glass-plan__count"> · {event.going} going</span>}
+          </>
         }
-        className="-ml-2.5 mt-1 text-text-link"
-      >
-        {event.rsvp ? "You're going" : "I'm going"}
-      </Button>
+        action={<PlanAction taken={event.rsvp} onToggle={() => onSetGoing(event, !event.rsvp)} />}
+        slots={slots}
+      />
     </li>
   );
 }
 
 /**
- * Coming up — scheduled events across every building (§7.5).
+ * Coming up — scheduled events across every server (docs/glass-spec.md §3.1).
  *
  * **Omitted entirely when there is nothing scheduled.** An empty "Coming up"
  * heading over a blank space is the "No data" of section headers.
@@ -84,13 +66,12 @@ function EventCard({
 export function HomeComingUp({ events, nowMs, onSetGoing }: HomeComingUpProps) {
   if (events.length === 0) return null;
   return (
-    <section aria-label="Coming up" className="flex min-w-0 flex-col gap-2">
-      <h2 className="pc-display text-heading font-semibold text-text-primary">Coming up</h2>
-      <ul className="flex min-w-0 flex-col gap-3">
+    <PageSection kicker="Coming up" list={false}>
+      <ul className="glass-plans">
         {events.map((event) => (
           <EventCard key={event.key} event={event} nowMs={nowMs} onSetGoing={onSetGoing} />
         ))}
       </ul>
-    </section>
+    </PageSection>
   );
 }

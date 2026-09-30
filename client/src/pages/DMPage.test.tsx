@@ -8,8 +8,13 @@ import { usePresenceStore } from '../stores/presenceStore';
 import { useReadStateStore } from '../stores/readStateStore';
 import { useServerListStore } from '../stores/serverListStore';
 import { useUIStore } from '../stores/uiStore';
+import { useVoiceStore } from '../stores/voiceStore';
 import type { Channel } from '../types';
 import { DMPage } from './DMPage';
+
+// Your face at the page bar and a face's picture read the account and the download ticket.
+vi.mock('../components/glass/conversation/HeaderAvatar', () => ({ HeaderAvatar: () => <button type="button">Your profile</button> }));
+vi.mock('../hooks/useDownloadTicket', () => ({ useDownloadTicket: () => null }));
 
 // The conversation header (WP-G11) is covered in components/glass/conversation;
 // this suite is about the page, so it is reduced to what it was handed.
@@ -255,5 +260,60 @@ describe('DMPage — all-conversations index (/app/dms)', () => {
     expect(screen.getByText('No matching conversations')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Clear filter' }));
     expect(screen.getByText('Launch group')).toBeInTheDocument();
+  });
+
+  it('is the Messages page: one h1, the count, and New message as the one filled button', () => {
+    const nova = { ...directDm(), id: 'dm-nova', recipient: { ...bob, username: 'Nova' }, last_message_id: '1000000000000000' } as unknown as Channel;
+    seedDmList([nova]);
+    renderDmPage('/app/dms');
+    expect(screen.getByRole('heading', { level: 1, name: 'Messages' })).toBeInTheDocument();
+    expect(screen.getByText('1 conversation, latest first')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /new message/i })).toHaveClass('bg-accent-primary');
+  });
+
+  it('draws a person with a presence mark in ink and a group as a glyph tile', () => {
+    usePresenceStore.setState({
+      presences: new Map([['__local__:bob', { user_id: 'bob', status: 'idle', activities: [] }]]),
+      presenceOrder: new Map(),
+    });
+    const person = { ...directDm(), id: 'dm-bob', recipient: bob, last_message_id: '2000000000000000' } as unknown as Channel;
+    const group = { ...groupDm(), id: 'dm-group', last_message_id: '1000000000000000' } as unknown as Channel;
+    seedDmList([person, group]);
+    const { container } = renderDmPage('/app/dms');
+    const rows = container.querySelectorAll('li.glass-prow');
+    expect(rows).toHaveLength(2);
+    // Bob is away: a ring, not a color; the group has no presence at all.
+    expect(rows[0].querySelector('.glass-presence')).toHaveAttribute('data-status', 'idle');
+    expect(rows[1].querySelector('.glass-presence')).toBeNull();
+    expect(rows[1].querySelector('.glass-lead--tile')).not.toBeNull();
+    expect(rows[1]).toHaveTextContent('group');
+  });
+
+  it('says a mention with the white chip and its words, not a colored badge', () => {
+    const nova = { ...directDm(), id: 'dm-nova', recipient: { ...bob, username: 'Nova' }, last_message_id: '5000000000000000' } as unknown as Channel;
+    seedDmList([nova]);
+    useReadStateStore.setState({
+      byAccount: { [JSON.stringify(['__local__', 'me'])]: { 'dm-nova': { channel_id: 'dm-nova', last_message_id: '1', mention_count: 2 } } },
+    });
+    const { container } = renderDmPage('/app/dms');
+    expect(screen.getByTestId('mention-badge')).toHaveClass('glass-chip--mention');
+    expect(screen.getByTestId('mention-badge')).toHaveTextContent('2');
+    expect(container.querySelector('.glass-place-dot')).toBeNull();
+  });
+
+  it('gives a DM call’s stream a solid surface in the column, not a strip with rules', () => {
+    // The stream itself is WP-G14's; the surface it sits on is this page's.
+    seedChannel(directDm());
+    useVoiceStore.setState({ connected: true, channelId: 'dm-2', guildId: 'dm', watchedStreamerId: 'bob' });
+    try {
+      const { container } = renderDmPage('/app/dms/dm-2');
+      const surface = container.querySelector('.glass-dmstream');
+      expect(surface).not.toBeNull();
+      expect(surface).toContainElement(screen.getByTestId('stream-viewer'));
+      expect(surface?.className).not.toMatch(/border|bg-black/);
+      expect(screen.getByTestId('voice-control-bar')).toBeInTheDocument();
+    } finally {
+      useVoiceStore.setState({ connected: false, channelId: null, guildId: null, watchedStreamerId: null });
+    }
   });
 });

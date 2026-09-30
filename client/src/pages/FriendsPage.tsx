@@ -1,8 +1,9 @@
 import { useFreshRelationships } from '../hooks/useFreshRelationships';
 import { useCurrentAccountScope } from '../hooks/useCurrentUser';
-import { useMemo, useRef, useState, type ReactNode } from 'react';
+import { useBuildingLights } from '../hooks/useLights';
+import { useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Users, MessageSquare, X, Search, Check, UserPlus, UserRoundPlus, Inbox, Ban, ArrowUpRight } from 'lucide-react';
+import { MessageSquare, X, Search, Check, UserPlus, UserRoundPlus, Inbox, Ban, ArrowUpRight } from 'lucide-react';
 import { useNavigate } from 'react-router';
 import { useRelationshipStore } from '../stores/relationshipStore';
 import { usePresenceStore } from '../stores/presenceStore';
@@ -13,12 +14,17 @@ import { extractApiError } from '../api/client';
 import { useChannelStore } from '../stores/channelStore';
 import { EmptyState } from '../components/ui/Feedback';
 import { Button } from '../components/ui/Button';
+import { IconButton } from '../components/ui/IconButton';
 import { Input } from '../components/ui/Input';
-import { cn } from '../lib/utils';
+import { SearchWell } from '../components/ui/TextField';
+import { Tabs } from '../components/ui/Tabs';
 import { displayName } from '../lib/displayName';
-import { getIdentityColor } from '../lib/colors';
-import { presenceLabel, presenceLight } from '../lib/presence';
+import { statusLine } from '../lib/activityDisplay';
+import { presenceLabel } from '../lib/presence';
+import type { Presence } from '../types';
 import { UserProfilePopup } from '../components/user/UserProfile';
+import { GlassPage, PageBar, PageScroll, PageSection } from '../components/home/GlassPage';
+import { PagePerson, PageRow } from '../components/home/PageRow';
 
 type FriendsTab = 'online' | 'all' | 'requests' | 'blocked';
 
@@ -28,94 +34,42 @@ type FriendsTab = 'online' | 'all' | 'requests' | 'blocked';
  * them drifts from the account plate two hundred pixels away.
  */
 
-// Icon action button (lantern-stage-spec §8). Revealed on row hover AND
-// keyboard focus so hover-only actions stay reachable (§8).
-function ActionButton({
-  label,
-  onClick,
-  disabled,
-  alwaysVisible = false,
-  tone = 'neutral',
-  children,
-}: {
-  label: string;
-  onClick: () => void;
-  disabled?: boolean;
-  alwaysVisible?: boolean;
-  tone?: 'neutral' | 'success' | 'danger';
-  children: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      title={label}
-      aria-label={label}
-      className={cn(
-        'flex h-9 w-9 shrink-0 items-center justify-center rounded-chip bg-bg-mod-subtle text-text-secondary outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-strong focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50',
-        !alwaysVisible && 'opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 sm:focus-visible:opacity-100',
-        tone === 'success' && 'text-accent-success hover:text-accent-success',
-        tone === 'danger' && 'hover:text-accent-danger',
-        tone === 'neutral' && 'hover:text-text-primary',
-      )}
-    >
-      {children}
-    </button>
-  );
+/** Live first, then here, away, do not disturb, offline: the order a row is worth a glance. */
+const STATUS_RANK: Record<string, number> = { streaming: 0, online: 1, idle: 2, dnd: 3 };
+const rankOf = (status: string) => STATUS_RANK[status] ?? 4;
+
+interface VoicePlace {
+  room: string;
+  place: string | null;
 }
 
-// A single person row (lantern-stage-spec §8): avatar + optional presence dot,
-// name + subtitle, then row actions supplied by the caller.
-function PersonRow({
-  userId,
-  name,
-  subtitle,
-  status,
-  showPresence,
-  onOpenProfile,
-  actions,
-}: {
-  userId: string;
-  name: string;
-  subtitle: string;
-  status?: string;
-  showPresence?: boolean;
-  onOpenProfile?: (anchor: HTMLButtonElement) => void;
-  actions: ReactNode;
-}) {
+/** What somebody who is not a stranger is doing: the words they typed, else the app. */
+function detailOf(presence: Presence | undefined): string | null {
+  const line = statusLine(presence);
+  if (!line) return null;
+  if (line.type === 'custom') return line.text;
+  // A row's line already says "Playing X" or "Watching X"; a track only says what it is.
+  return line.activity.kind === 'listening' ? `Listening to ${line.activity.line}` : line.activity.line;
+}
+
+/**
+ * The line under a friend's name: the word for their presence, then where they
+ * are (amber: live) or what they are doing. Presence on the face is ink, never a
+ * colored dot (docs/design/glass-plan.md §1.3).
+ */
+function FriendLine({ status, voice, detail }: { status: string; voice: VoicePlace | undefined; detail: string | null }) {
   return (
-    <div className="group flex items-center gap-1.5 px-2 py-1.5 transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle">
-      <button
-        type="button"
-        aria-label={`Open profile for ${name}`}
-        onClick={(event) => onOpenProfile?.(event.currentTarget)}
-        disabled={!onOpenProfile}
-        className="flex min-w-0 flex-1 items-center gap-3 rounded-chip px-2 py-1 text-left outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-default"
-      >
-        <div className="relative shrink-0">
-          {/* §1.5: presence is a rim of light on the avatar, never a colored
-              dot. The status word itself is already in the row subtitle. */}
-          <div
-            className={cn(
-              'flex h-10 w-10 items-center justify-center rounded-full text-label font-semibold text-text-on-light',
-              showPresence && presenceLight(status).avatarClass,
-              showPresence && presenceLight(status).dnd && 'pc-dnd',
-            )}
-            // A person wears their own color, the same one the timeline and
-            // the header strip give them. The emerald is an action, not a person.
-            style={{ background: getIdentityColor(userId) }}
-          >
-            {name.charAt(0).toUpperCase()}
-          </div>
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-label font-semibold text-text-primary">{name}</div>
-          <div className="truncate text-meta text-text-muted">{subtitle}</div>
-        </div>
-      </button>
-      <div className="flex items-center gap-1.5">{actions}</div>
-    </div>
+    <>
+      {presenceLabel(status)}
+      {voice ? (
+        <span className="glass-prow__voice">
+          {' · '}In {voice.room}
+          {voice.place ? `, ${voice.place}` : ''}
+        </span>
+      ) : detail ? (
+        ` · ${detail}`
+      ) : null}
+    </>
   );
 }
 
@@ -136,6 +90,7 @@ export function FriendsPage() {
   const getPresence = usePresenceStore((s) => s.getPresence);
   const activeServerId = useServerListStore((s) => s.activeServerId);
   const scope = activeServerId ?? undefined;
+  const buildings = useBuildingLights();
 
   useFreshRelationships();
 
@@ -156,6 +111,20 @@ export function FriendsPage() {
     [friends, presences, getPresence, scope]
   );
 
+  // Who is in a voice room right now, and which: the amber on a friend's row.
+  const inVoice = useMemo(() => {
+    const map = new Map<string, VoicePlace>();
+    for (const building of buildings) {
+      for (const room of building.rooms) {
+        if (room.kind !== 'voice') continue;
+        for (const occupant of room.occupants) {
+          if (!map.has(occupant.person.userId)) map.set(occupant.person.userId, { room: room.name, place: building.name });
+        }
+      }
+    }
+    return map;
+  }, [buildings]);
+
   const isActionPending = (actionKey: string) => pendingActions.has(actionKey);
   const startAction = (actionKey: string) => {
     setPendingActions((current) => new Set(current).add(actionKey));
@@ -174,7 +143,7 @@ export function FriendsPage() {
     requestAnimationFrame(() => addInputRef.current?.focus());
   };
 
-  const openProfile = (user: Relationship['user'], anchor: HTMLButtonElement) => {
+  const openProfile = (user: Relationship['user'], anchor: HTMLElement) => {
     const rect = anchor.getBoundingClientRect();
     setProfile({ user, position: { x: rect.right, y: rect.top } });
   };
@@ -269,13 +238,6 @@ export function FriendsPage() {
     }
   };
 
-  const filterTabs: { id: FriendsTab; label: string; count: number }[] = [
-    { id: 'online', label: 'Online', count: onlineCount },
-    { id: 'all', label: 'All', count: friends.length },
-    { id: 'requests', label: 'Requests', count: requestCount },
-    { id: 'blocked', label: 'Blocked', count: blocked.length },
-  ];
-
   const friendListSource =
     activeTab === 'all'
       ? friends
@@ -285,12 +247,22 @@ export function FriendsPage() {
 
   const searchable = activeTab === 'online' || activeTab === 'all' || activeTab === 'blocked';
   const filteredList = useMemo(() => {
-    if (!searchQuery.trim()) return friendListSource;
-    const q = searchQuery.toLowerCase();
-    return friendListSource.filter((r) =>
-      r.user.username.toLowerCase().includes(q) || displayName(r.user).toLowerCase().includes(q)
+    const q = searchQuery.trim().toLowerCase();
+    const matches = q
+      ? friendListSource.filter((r) =>
+          r.user.username.toLowerCase().includes(q) || displayName(r.user).toLowerCase().includes(q),
+        )
+      : friendListSource;
+    if (activeTab === 'blocked') return matches;
+    // The people worth a glance first: in a voice room, here, away, then the rest.
+    const rank = (r: Relationship) =>
+      inVoice.has(r.user.id) ? -1 : rankOf(getPresence(r.user.id, scope)?.status || 'offline');
+    return [...matches].sort(
+      (a, b) => rank(a) - rank(b) || displayName(a.user).localeCompare(displayName(b.user)),
     );
-  }, [friendListSource, searchQuery]);
+    // `presences` is what `getPresence` reads (see `onlineCount`).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [friendListSource, searchQuery, activeTab, inVoice, presences, getPresence, scope]);
 
   const sectionLabel = activeTab === 'all' ? 'All' : activeTab === 'blocked' ? 'Blocked' : 'Online';
   const searchPlaceholder =
@@ -300,36 +272,104 @@ export function FriendsPage() {
         ? 'Search blocked people'
         : 'Search who is online';
 
+  const line =
+    friends.length === 0
+      ? 'People you can message and see around'
+      : [
+          `${onlineCount} of ${friends.length} online`,
+          pendingIncoming.length > 0
+            ? `${pendingIncoming.length} ${pendingIncoming.length === 1 ? 'request' : 'requests'} waiting`
+            : null,
+        ]
+          .filter(Boolean)
+          .join(', ');
+
+  const tabs = [
+    { value: 'online' as const, label: 'Online', meta: onlineCount > 0 ? onlineCount : undefined },
+    { value: 'all' as const, label: 'All', meta: friends.length > 0 ? friends.length : undefined },
+    { value: 'requests' as const, label: 'Requests', meta: requestCount > 0 ? requestCount : undefined },
+    { value: 'blocked' as const, label: 'Blocked', meta: blocked.length > 0 ? blocked.length : undefined },
+  ];
+
+  /** One person's row: the body opens their card; message and remove sit beside it. */
+  const personRow = (
+    rel: Relationship,
+    actions: React.ReactNode,
+    options: { blocked?: boolean; subtitle?: string } = {},
+  ) => {
+    const name = displayName(rel.user);
+    const face = { userId: rel.user.id, name, avatar: rel.user.avatar_hash ?? null };
+    // A request has no presence to show yet: just who and why.
+    if (options.subtitle !== undefined) {
+      return (
+        <PageRow
+          key={rel.id}
+          lead={<PagePerson face={face} />}
+          title={name}
+          line={options.subtitle}
+          label={`Open profile for ${name}`}
+          onOpen={(anchor) => openProfile(rel.user, anchor)}
+          actions={actions}
+        />
+      );
+    }
+    const presence = getPresence(rel.user.id, scope);
+    const status = presence?.status || 'offline';
+    const voice = inVoice.get(rel.user.id);
+    return (
+      <PageRow
+        key={rel.id}
+        offline={!options.blocked && status === 'offline'}
+        lead={<PagePerson face={face} status={options.blocked ? null : status} live={Boolean(voice)} />}
+        title={name}
+        line={
+          options.blocked ? 'Blocked' : <FriendLine status={status} voice={voice} detail={detailOf(presence)} />
+        }
+        label={`Open profile for ${name}`}
+        onOpen={(anchor) => openProfile(rel.user, anchor)}
+        actions={actions}
+      />
+    );
+  };
+
   return (
-    <div className="flex h-full min-h-0 flex-col bg-bg-plate">
-      {/* Solid header — title + primary Add-friend action (no gradient hero, §6.1). */}
-      <header className="shrink-0 border-b border-border-subtle bg-bg-raised px-4 py-4 sm:px-6">
-        <div className="flex items-center gap-3">
-          <span className="flex h-10 w-10 items-center justify-center rounded-well bg-accent-tint text-accent-primary">
-            <Users size={19} />
-          </span>
-          <div className="min-w-0 flex-1">
-            <h1 className="font-display text-heading text-text-primary">Friends</h1>
-            <p className="text-meta text-text-muted">People you can DM, share servers with, and see around.</p>
-          </div>
+    <GlassPage label="Friends">
+      <PageBar
+        title="Friends"
+        line={line}
+        actions={
           <Button
+            variant="glass"
             onClick={() => (showAddFriend ? setShowAddFriend(false) : openAddFriend())}
             aria-expanded={showAddFriend}
-            className="shrink-0"
           >
-            <UserPlus size={16} className="mr-1.5" />
+            <UserPlus size={16} aria-hidden />
             Add friend
           </Button>
+        }
+      />
+
+      <PageScroll>
+        <div className="glass-toolbar">
+          <Tabs
+            label="Show"
+            items={tabs}
+            value={activeTab}
+            onChange={(next) => {
+              setActiveTab(next);
+              setSearchQuery('');
+            }}
+            size="sm"
+          />
         </div>
 
-        {/* Inline add-friend input — the primary action, not a hidden tab (§ task 1). */}
         {showAddFriend && (
-          <div className="mt-4 rounded-well border border-border-subtle bg-bg-plate p-4">
-            <div className="text-section text-text-muted">Add a friend</div>
-            <p className="mt-1 text-meta text-text-secondary">
+          <section aria-label="Add a friend" className="glass-card glass-add">
+            <h2 className="glass-card__title">Add a friend</h2>
+            <p className="glass-card__text">
               Send a request with someone's exact username, or their numeric user ID if you have it.
             </p>
-            <div className="mt-3 flex flex-col gap-2.5 sm:flex-row sm:items-center">
+            <div className="glass-add__form">
               <label htmlFor="friend-identifier" className="sr-only">
                 Username or user ID
               </label>
@@ -341,12 +381,11 @@ export function FriendsPage() {
                 onChange={(e) => setAddFriendInput(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') void handleAddFriend(); }}
                 placeholder="Username or user ID"
-                className="flex-1"
+                className="glass-toolbar__grow"
               />
               <Button
                 onClick={() => void handleAddFriend()}
                 disabled={!addFriendInput.trim() || isActionPending('add')}
-                className="sm:w-auto"
               >
                 {isActionPending('add') ? 'Sending...' : 'Send friend request'}
               </Button>
@@ -354,151 +393,103 @@ export function FriendsPage() {
             {addFriendStatus && (
               <div
                 role={addFriendStatus.type === 'error' ? 'alert' : 'status'}
-                className={cn(
-                  'mt-3 flex items-center gap-2 rounded-chip border px-3.5 py-2.5 text-label font-medium',
-                  addFriendStatus.type === 'success'
-                    ? 'border-accent-success/35 bg-success-tint text-accent-success'
-                    : 'border-accent-danger/35 bg-danger-tint text-accent-danger',
-                )}
+                className="glass-note"
+                data-tone={addFriendStatus.type === 'error' ? 'danger' : undefined}
               >
-                {addFriendStatus.type === 'success' ? <Check size={16} /> : <X size={16} />}
+                {addFriendStatus.type === 'success' ? <Check size={16} aria-hidden /> : <X size={16} aria-hidden />}
                 <span>{addFriendStatus.message}</span>
               </div>
             )}
+          </section>
+        )}
+
+        {relationshipError && (
+          <div role="alert" className="glass-note glass-toolbar" data-tone="danger">
+            <X size={16} aria-hidden />
+            <span>{relationshipError}</span>
           </div>
         )}
 
-        <div className="mt-4 flex flex-wrap items-center gap-2">
-          {filterTabs.map((tab) => {
-            const active = activeTab === tab.id;
-            return (
-              <button
-                type="button"
-                key={tab.id}
-                onClick={() => { setActiveTab(tab.id); setSearchQuery(''); }}
-                aria-pressed={active}
-                className={cn(
-                  // pc-touch (§9): the chip stays 32px so the filter row is not
-                  // a row of buttons; the hit area is 44px on a coarse pointer.
-                  'pc-touch inline-flex h-8 items-center gap-2 rounded-full px-3.5 text-label font-medium outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
-                  active
-                    ? 'bg-accent-tint text-accent-primary'
-                    : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary',
-                )}
-              >
-                {tab.label}
-                {tab.count > 0 && (
-                  <span
-                    className={cn(
-                      'rounded-full px-1.5 text-meta font-semibold tabular-nums',
-                      active ? 'bg-accent-primary/20 text-accent-primary' : 'bg-bg-mod-strong text-text-secondary',
-                    )}
-                  >
-                    {tab.count}
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </div>
-      </header>
-
-      <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
-        <div className="px-4 py-4 sm:px-6">
-          {relationshipError && (
-            <div role="alert" className="mb-4 flex items-center gap-2 rounded-well border border-accent-danger/35 bg-danger-tint px-3.5 py-2.5 text-label font-medium text-accent-danger">
-              <X size={16} />
-              <span>{relationshipError}</span>
-            </div>
-          )}
-
-          {activeTab === 'requests' ? (
-            <RequestsView
-              incoming={pendingIncoming}
-              outgoing={pendingOutgoing}
-              onAccept={(id) => void handleAcceptFriend(id)}
-              onDecline={(id) => void handleRemoveFriend(id)}
-              onAdd={openAddFriend}
-              isPending={isActionPending}
-              onOpenProfile={openProfile}
-            />
-          ) : (
-            <>
-              {searchable && (
-                <div className="relative mb-5">
-                  <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
-                  <label htmlFor="friends-search" className="sr-only">
-                    Search friends
-                  </label>
-                  <Input
-                    id="friends-search"
-                    type="text"
-                    placeholder={searchPlaceholder}
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="pl-9"
-                  />
-                </div>
-              )}
-
-              {filteredList.length === 0 ? (
-                <FriendsEmptyState
-                  tab={activeTab}
-                  searching={searchQuery.trim().length > 0}
-                  onAdd={openAddFriend}
-                  onClearSearch={() => setSearchQuery('')}
+        {activeTab === 'requests' ? (
+          <RequestsView
+            incoming={pendingIncoming}
+            outgoing={pendingOutgoing}
+            onAccept={(id) => void handleAcceptFriend(id)}
+            onDecline={(id) => void handleRemoveFriend(id)}
+            onAdd={openAddFriend}
+            isPending={isActionPending}
+            row={personRow}
+          />
+        ) : (
+          <>
+            {searchable && (
+              <div className="glass-toolbar">
+                <SearchWell
+                  id="friends-search"
+                  label="Search friends"
+                  placeholder={searchPlaceholder}
+                  icon={<Search size={16} aria-hidden />}
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="glass-toolbar__grow"
                 />
-              ) : (
-                <>
-                  <div className="mb-2 px-1 text-section text-text-muted">
-                    {sectionLabel} — {filteredList.length}
-                  </div>
-                  <div className="divide-y divide-border-subtle overflow-hidden rounded-well border border-border-subtle bg-bg-raised shadow-[var(--shadow-chip)]">
-                    {filteredList.map((rel) => {
-                      const status = getPresence(rel.user.id, scope)?.status || 'offline';
-                      const isFriend = rel.type === 1;
-                      const subtitle = rel.type === 2 ? 'Blocked' : presenceLabel(status);
-                      return (
-                        <PersonRow
-                          key={rel.id}
-                          userId={rel.user.id}
-                          name={displayName(rel.user)}
-                          subtitle={subtitle}
-                          status={status}
-                          showPresence={isFriend}
-                          onOpenProfile={(anchor) => openProfile(rel.user, anchor)}
-                          actions={
-                            <>
-                              {isFriend && (
-                                <ActionButton
-                                  label={`Message ${displayName(rel.user)}`}
-                                  onClick={() => void handleMessageFriend(rel.user.id)}
-                                  disabled={isActionPending(`message:${rel.user.id}`)}
-                                  alwaysVisible
-                                >
-                                  <MessageSquare size={16} />
-                                </ActionButton>
-                              )}
-                              <ActionButton
-                                label={`${rel.type === 2 ? 'Unblock' : 'Remove'} ${displayName(rel.user)}`}
-                                tone="danger"
-                                onClick={() => void handleRemoveFriend(rel.user.id)}
-                                disabled={isActionPending(`remove:${rel.user.id}`)}
-                              >
-                                <X size={16} />
-                              </ActionButton>
-                            </>
-                          }
-                        />
-                      );
-                    })}
-                  </div>
-                </>
-              )}
-            </>
-          )}
-        </div>
-      </div>
+              </div>
+            )}
+
+            {filteredList.length === 0 ? (
+              <FriendsEmptyState
+                tab={activeTab}
+                searching={searchQuery.trim().length > 0}
+                onAdd={openAddFriend}
+                onClearSearch={() => setSearchQuery('')}
+              />
+            ) : (
+              <PageSection kicker={sectionLabel} count={filteredList.length}>
+                {filteredList.map((rel) => {
+                  const isFriend = rel.type === 1;
+                  const name = displayName(rel.user);
+                  return personRow(
+                    rel,
+                    <>
+                      {isFriend && (
+                        <IconButton
+                          label={`Message ${name}`}
+                          tone="raised"
+                          onClick={() => void handleMessageFriend(rel.user.id)}
+                          disabled={isActionPending(`message:${rel.user.id}`)}
+                        >
+                          <MessageSquare size={16} aria-hidden />
+                        </IconButton>
+                      )}
+                      {rel.type === 2 ? (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          aria-label={`Unblock ${name}`}
+                          onClick={() => void handleRemoveFriend(rel.user.id)}
+                          disabled={isActionPending(`remove:${rel.user.id}`)}
+                        >
+                          Unblock
+                        </Button>
+                      ) : (
+                        <IconButton
+                          label={`Remove ${name}`}
+                          className="glass-prow__reveal"
+                          onClick={() => void handleRemoveFriend(rel.user.id)}
+                          disabled={isActionPending(`remove:${rel.user.id}`)}
+                        >
+                          <X size={16} aria-hidden />
+                        </IconButton>
+                      )}
+                    </>,
+                    { blocked: rel.type === 2 },
+                  );
+                })}
+              </PageSection>
+            )}
+          </>
+        )}
+      </PageScroll>
       {createPortal(
         <UserProfilePopup
           user={profile?.user ?? null}
@@ -507,7 +498,7 @@ export function FriendsPage() {
         />,
         document.body,
       )}
-    </div>
+    </GlassPage>
   );
 }
 
@@ -520,7 +511,7 @@ function RequestsView({
   onDecline,
   onAdd,
   isPending,
-  onOpenProfile,
+  row,
 }: {
   incoming: Relationship[];
   outgoing: Relationship[];
@@ -528,7 +519,7 @@ function RequestsView({
   onDecline: (userId: string) => void;
   onAdd: () => void;
   isPending: (key: string) => boolean;
-  onOpenProfile: (user: Relationship['user'], anchor: HTMLButtonElement) => void;
+  row: (rel: Relationship, actions: React.ReactNode, options?: { blocked?: boolean; subtitle?: string }) => React.ReactNode;
 }) {
   if (incoming.length === 0 && outgoing.length === 0) {
     return (
@@ -537,7 +528,7 @@ function RequestsView({
         title="No pending requests"
         description="Friend requests you've sent or received collect here. Send one and we'll let you know the moment it's accepted."
         action={
-          <Button variant="secondary" size="sm" onClick={onAdd}>
+          <Button variant="glass" size="sm" onClick={onAdd}>
             Send a request
           </Button>
         }
@@ -546,71 +537,58 @@ function RequestsView({
   }
 
   return (
-    <div className="flex flex-col gap-6">
+    <>
       {incoming.length > 0 && (
-        <section>
-          <div className="mb-2 px-1 text-section text-text-muted">Incoming — {incoming.length}</div>
-          <div className="divide-y divide-border-subtle overflow-hidden rounded-well border border-border-subtle bg-bg-raised shadow-[var(--shadow-chip)]">
-            {incoming.map((rel) => (
-              <PersonRow
-                key={rel.id}
-                userId={rel.user.id}
-                name={displayName(rel.user)}
-                subtitle="Wants to be your friend"
-                onOpenProfile={(anchor) => onOpenProfile(rel.user, anchor)}
-                actions={
-                  <>
-                    <ActionButton
-                      label={`Accept friend request from ${displayName(rel.user)}`}
-                      tone="success"
-                      onClick={() => onAccept(rel.user.id)}
-                      disabled={isPending(`accept:${rel.user.id}`)}
-                    >
-                      <Check size={16} />
-                    </ActionButton>
-                    <ActionButton
-                      label={`Decline friend request from ${displayName(rel.user)}`}
-                      tone="danger"
-                      onClick={() => onDecline(rel.user.id)}
-                      disabled={isPending(`remove:${rel.user.id}`)}
-                    >
-                      <X size={16} />
-                    </ActionButton>
-                  </>
-                }
-              />
-            ))}
-          </div>
-        </section>
+        <PageSection kicker="Incoming" count={incoming.length}>
+          {incoming.map((rel) =>
+            row(
+              rel,
+              <>
+                <Button
+                  variant="glass"
+                  size="sm"
+                  aria-label={`Accept friend request from ${displayName(rel.user)}`}
+                  onClick={() => onAccept(rel.user.id)}
+                  disabled={isPending(`accept:${rel.user.id}`)}
+                >
+                  Accept
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  aria-label={`Decline friend request from ${displayName(rel.user)}`}
+                  onClick={() => onDecline(rel.user.id)}
+                  disabled={isPending(`remove:${rel.user.id}`)}
+                >
+                  Decline
+                </Button>
+              </>,
+              { subtitle: 'Wants to be your friend' },
+            ),
+          )}
+        </PageSection>
       )}
 
       {outgoing.length > 0 && (
-        <section>
-          <div className="mb-2 px-1 text-section text-text-muted">Outgoing — {outgoing.length}</div>
-          <div className="divide-y divide-border-subtle overflow-hidden rounded-well border border-border-subtle bg-bg-raised shadow-[var(--shadow-chip)]">
-            {outgoing.map((rel) => (
-              <PersonRow
-                key={rel.id}
-                userId={rel.user.id}
-                name={displayName(rel.user)}
-                subtitle="Request sent — waiting to hear back"
-                onOpenProfile={(anchor) => onOpenProfile(rel.user, anchor)}
-                actions={
-                  <ActionButton
-                    label={`Cancel friend request to ${displayName(rel.user)}`}
-                    tone="danger"
-                    onClick={() => onDecline(rel.user.id)}
-                    disabled={isPending(`remove:${rel.user.id}`)}
-                  >
-                    <X size={16} />
-                  </ActionButton>
-                }
-              />
-            ))}
-          </div>
-        </section>
+        <PageSection kicker="Outgoing" count={outgoing.length}>
+          {outgoing.map((rel) =>
+            row(
+              rel,
+              <Button
+                variant="ghost"
+                size="sm"
+                aria-label={`Cancel friend request to ${displayName(rel.user)}`}
+                onClick={() => onDecline(rel.user.id)}
+                disabled={isPending(`remove:${rel.user.id}`)}
+              >
+                Cancel
+              </Button>,
+              { subtitle: 'Request sent, waiting to hear back' },
+            ),
+          )}
+        </PageSection>
       )}
-    </div>
+    </>
   );
 }
 
@@ -632,7 +610,7 @@ function FriendsEmptyState({
         title="No matches"
         description="No one in this list matches your search. Check the spelling, or clear the filter to see everyone again."
         action={
-          <Button variant="secondary" size="sm" onClick={onClearSearch}>
+          <Button variant="glass" size="sm" onClick={onClearSearch}>
             Clear search
           </Button>
         }

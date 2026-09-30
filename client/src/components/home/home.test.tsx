@@ -2,13 +2,12 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
-import { HomeAddBuilding } from './HomeAddBuilding';
 import { HomeAroundNow } from './HomeAroundNow';
-import { HomeBuildingCard } from './HomeBuildingCard';
-import { HomeComingUp, eventMeta, eventWhen } from './HomeComingUp';
-import { HomePickUp, pickUpContext } from './HomePickUp';
-import { buildingMetaCaption, roomActivityLine, textRoomCaption } from './homeCaptions';
-import { activeTextRoom, aroundNowPeople, isLitBuilding, litTextRooms } from './homeModel';
+import { HomeComingUp } from './HomeComingUp';
+import { HomeLiveNow, liveRoomsOf } from './HomeLiveNow';
+import { HomePickUp } from './HomePickUp';
+import { mentionCaption } from './homeCaptions';
+import { aroundNowPeople } from './homeModel';
 import type { ComingUpEvent } from './useComingUp';
 import {
   buildingLight,
@@ -83,56 +82,12 @@ function litBuilding(): BuildingLight {
   return building([room, reading]);
 }
 
-/** A quiet building: nobody talking, one person reading. */
-function quietBuilding(): BuildingLight {
-  return building([voice({ occupants: [] }), text({ typingUserIds: ['3'] })], {
-    name: 'Saltmarsh Sailing',
-    guildId: 'g2',
-    members: [REN],
-    memberCount: 20,
-  });
-}
-
-const handlers = () => ({
-  onOpenBuilding: vi.fn(),
-  onOpenRoom: vi.fn(),
-  onJoinRoom: vi.fn(),
-});
-
 /* -------------------------------------------------------------------------- */
 
 describe('the words Home adds', () => {
-  it('names who is doing the loudest thing in a lit room', () => {
-    expect(roomActivityLine(voice({ occupants: [{ person: MARA, sharingScreen: true }] }))).toBe(
-      'Mara is sharing a screen',
-    );
-    expect(roomActivityLine(voice({ occupants: [{ person: MARA, sharingCamera: true }] }))).toBe(
-      'Mara has their camera on',
-    );
-    expect(
-      roomActivityLine(voice({ occupants: [{ person: MARA, speaking: true }, { person: PRIYA }] })),
-    ).toBe('Mara is talking');
-    expect(roomActivityLine(voice({ occupants: [{ person: MARA }, { person: PRIYA }] }))).toBe(
-      'Mara and Priya are in here',
-    );
-    expect(roomActivityLine(voice({ occupants: [] }))).toBe('Nobody in voice');
-  });
-
-  it('never contradicts itself about a server with people but no lit room', () => {
-    expect(buildingMetaCaption(litBuilding())).toMatch(/^3 online · \d+ in voice/);
-    expect(buildingMetaCaption({ lightsOn: 6, roomsLit: 0, readingCount: 0, caption: 'x' })).toBe(
-      '6 online · quiet',
-    );
-    expect(
-      buildingMetaCaption({ lightsOn: 0, roomsLit: 0, readingCount: 0, caption: 'Nobody in voice' }),
-    ).toBe('Nobody in voice');
-  });
-
-  it('adds the mentions that are for you to a text room line', () => {
-    const reading = text({ typingUserIds: ['2', '3'] });
-    expect(textRoomCaption(reading, 0)).toBe('2 here');
-    expect(textRoomCaption(reading, 1)).toBe('2 here · 1 mention for you');
-    expect(textRoomCaption(reading, 3)).toBe('2 here · 3 mentions for you');
+  it('counts mentions the way the rest of the app does', () => {
+    expect(mentionCaption(1)).toBe('1 mention for you');
+    expect(mentionCaption(3)).toBe('3 mentions for you');
   });
 });
 
@@ -170,89 +125,59 @@ describe('what Home picks out of the light models', () => {
     const people = aroundNowPeople([building([room, reading], { members: [MARA] })]);
     expect(people).toHaveLength(1);
   });
-
-  it('treats only a lit voice room as a lit server', () => {
-    expect(isLitBuilding(litBuilding())).toBe(true);
-    expect(isLitBuilding(quietBuilding())).toBe(false);
-    expect(litTextRooms(litBuilding()).map((room) => room.name)).toEqual(['build-log']);
-    expect(activeTextRoom(quietBuilding())?.name).toBe('build-log');
-    expect(activeTextRoom(building([voice({ occupants: [] }), text()]))).toBeNull();
-  });
 });
 
-describe('a lit server card', () => {
-  it('shows the room, who is in it, what they are doing, and Join in white light', async () => {
-    const on = handlers();
-    render(<HomeBuildingCard building={litBuilding()} mentions={new Map()} {...on} />);
-    const card = screen.getByRole('article', { name: 'Kestrel Robotics' });
-    expect(within(card).getByRole('button', { name: 'Shop floor' })).toBeInTheDocument();
-    expect(within(card).getByText('Mara is sharing a screen')).toBeInTheDocument();
-    expect(within(card).getByRole('list', { name: 'In Shop floor' })).toHaveTextContent('Mara');
-    const join = within(card).getByRole('button', { name: 'Join voice' });
-    expect(join.className).toContain('bg-light-white');
+describe('Live now', () => {
+  it('lists only the voice rooms somebody is in, the busiest first', () => {
+    const quiet = building([voice({ channelId: 'v0', name: 'Empty room', occupants: [] })], { guildId: 'g2', name: 'Saltmarsh Sailing' });
+    const two = building(
+      [
+        voice({ channelId: 'v1', name: 'Shop floor', occupants: [{ person: MARA }] }),
+        voice({ channelId: 'v2', name: 'Pit lane', occupants: [{ person: PRIYA }, { person: REN }] }),
+        text({ channelId: 't1' }),
+      ],
+    );
+    expect(liveRoomsOf([quiet, two]).map(({ room }) => room.name)).toEqual(['Pit lane', 'Shop floor']);
+  });
+
+  it('names the server, the people and what they are doing, and puts Join in cream on the first', async () => {
+    const on = { onOpenRoom: vi.fn(), onJoinRoom: vi.fn() };
+    const lit = litBuilding();
+    render(<HomeLiveNow rooms={liveRoomsOf([lit])} nowMs={NOW} {...on} />);
+    const section = screen.getByRole('region', { name: 'Live now' });
+    const row = within(section).getByRole('listitem', { name: 'Shop floor, live' });
+    expect(row).toHaveTextContent('Kestrel Robotics');
+    expect(within(row).getByText('Mara is streaming')).toBeInTheDocument();
+    expect(within(row).getByText(/In the room: Mara, Priya, Ren/)).toBeInTheDocument();
+    const join = within(row).getByRole('button', { name: 'Join Shop floor' });
+    expect(join).toHaveClass('glass-btn--primary');
     await userEvent.click(join);
     expect(on.onJoinRoom).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'Kestrel Robotics' }),
       expect.objectContaining({ name: 'Shop floor' }),
     );
+    await userEvent.click(within(row).getByRole('button', { name: 'Open Shop floor' }));
+    expect(on.onOpenRoom).toHaveBeenCalled();
   });
 
-  it('lists its lit text rooms with the mentions waiting for you, and opens one', async () => {
-    const on = handlers();
+  it('writes how long a stream has run only when the wire says when it began', () => {
     const lit = litBuilding();
-    const reading = lit.rooms.find((room) => room.kind === 'text')!;
-    render(
-      <HomeBuildingCard building={lit} mentions={new Map([[reading.key, 1]])} {...on} />,
-    );
-    expect(screen.getByText('2 here · 1 mention for you')).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: /build-log/ }));
-    expect(on.onOpenRoom).toHaveBeenCalledWith(
-      expect.objectContaining({ name: 'Kestrel Robotics' }),
-      expect.objectContaining({ name: 'build-log' }),
-    );
+    const { rerender } = render(<HomeLiveNow rooms={liveRoomsOf([lit])} nowMs={NOW} onOpenRoom={vi.fn()} onJoinRoom={vi.fn()} />);
+    // No start time on the wire: this client's own observation is never presented as the stream's age.
+    expect(screen.getByText('LIVE')).toBeInTheDocument();
+    rerender(<HomeLiveNow rooms={liveRoomsOf([lit])} nowMs={NOW} onOpenRoom={vi.fn()} onJoinRoom={vi.fn()} />);
+    expect(screen.queryByText(/LIVE \d+ MIN/)).not.toBeInTheDocument();
   });
 
-  it('draws exactly one window per room and says so for a screen reader', () => {
-    const { container } = render(
-      <HomeBuildingCard building={litBuilding()} mentions={new Map()} {...handlers()} />,
-    );
-    // Two rooms in the map, plus the 8px dot on the text-room line.
-    expect(container.querySelectorAll('.pc-window.is-large')).toHaveLength(2);
-    expect(screen.getByText(/2 of 2 channels active/)).toBeInTheDocument();
+  it('is absent when nobody is in a call', () => {
+    const { container } = render(<HomeLiveNow rooms={[]} nowMs={NOW} onOpenRoom={vi.fn()} onJoinRoom={vi.fn()} />);
+    expect(container).toBeEmptyDOMElement();
   });
 
-});
-
-describe('a quiet server row', () => {
-  it('is a compact row with its counts, its windows and its one active text room', () => {
-    const handle = handlers();
-    render(<HomeBuildingCard building={quietBuilding()} mentions={new Map()} {...handle} />);
-    const row = screen.getByRole('group', { name: 'Saltmarsh Sailing' });
-    expect(within(row).getByText('1 here')).toBeInTheDocument();
-    expect(within(row).getByText('build-log')).toBeInTheDocument();
-    expect(within(row).queryByText(/LIVE/)).not.toBeInTheDocument();
-    expect(within(row).queryByRole('button', { name: 'Join voice' })).not.toBeInTheDocument();
-  });
-
-  it('opens the server from its name', async () => {
-    const handle = handlers();
-    render(<HomeBuildingCard building={quietBuilding()} mentions={new Map()} {...handle} />);
-    await userEvent.click(screen.getByRole('button', { name: 'Saltmarsh Sailing' }));
-    expect(handle.onOpenBuilding).toHaveBeenCalledWith(
-      expect.objectContaining({ name: 'Saltmarsh Sailing' }),
-    );
-  });
-
-  it('says nothing about a text room when nobody is in one', () => {
-    const dark = building([voice({ occupants: [] }), text({ candidates: [] })], {
-      name: 'Empty Hall',
-      members: [],
-      memberCount: 12,
-    });
-    render(<HomeBuildingCard building={dark} mentions={new Map()} {...handlers()} />);
-    const row = screen.getByRole('group', { name: 'Empty Hall' });
-    expect(within(row).getByText('Nobody online')).toBeInTheDocument();
-    expect(within(row).queryByText('build-log')).not.toBeInTheDocument();
+  it('says Return, not Join, for a call you are already in', () => {
+    const inCall = building([{ ...voice({ occupants: [{ person: MARA }] }), youAreHere: true }]);
+    render(<HomeLiveNow rooms={liveRoomsOf([inCall])} nowMs={NOW} onOpenRoom={vi.fn()} onJoinRoom={vi.fn()} />);
+    expect(screen.getByRole('button', { name: 'Return Shop floor' })).toBeInTheDocument();
   });
 });
 
@@ -273,6 +198,23 @@ describe('Around now', () => {
     render(<HomeAroundNow people={[MARA, DEVON]} sentence="Devon is away" lightsOn={1} />);
     expect(screen.queryByText(/online/)).not.toBeInTheDocument();
   });
+
+  it('puts people in a call first, and rings only them in amber', () => {
+    const { container } = render(
+      <HomeAroundNow
+        people={[MARA, PRIYA, REN]}
+        sentence=""
+        lightsOn={3}
+        inCall={new Set(['3'])}
+      />,
+    );
+    const faces = [...container.querySelectorAll('.glass-around__face')];
+    expect(faces).toHaveLength(3);
+    expect(faces[0]).toHaveAttribute('data-live');
+    expect(container.querySelectorAll('[data-live]')).toHaveLength(1);
+    // No sentence means no empty paragraph.
+    expect(container.querySelector('.glass-around__line')).toBeNull();
+  });
 });
 
 describe('Coming up', () => {
@@ -284,33 +226,31 @@ describe('Coming up', () => {
     buildingName: 'Kestrel Robotics',
     id: 'e1',
     name: 'Thermal test — driver v3',
-    startsAtMs: new Date(2026, 8, 12, 13, 0, 0, 0).getTime(),
+    startsAtMs: new Date(2026, 8, 12, 21, 30, 0, 0).getTime(),
     roomName: 'Shop floor',
     location: null,
     going: 6,
     rsvp: false,
   };
 
-  it('says when, where and how many, in one line', () => {
-    expect(eventWhen(event.startsAtMs, NOW)).toBe('Today 1:00 pm');
-    expect(eventWhen(new Date(2026, 8, 13, 9, 30).getTime(), NOW)).toBe('Tomorrow 9:30 am');
-    expect(eventWhen(new Date(2026, 8, 20, 9, 30).getTime(), NOW)).toBe('Sun 20 Sep 9:30 am');
-    expect(eventMeta(event, NOW)).toBe(
-      'Today 1:00 pm · Kestrel Robotics · Shop floor · 6 going',
-    );
+  it('is a plan card that says when, where, who and how many', () => {
+    render(<HomeComingUp events={[event]} nowMs={NOW} onSetGoing={vi.fn()} />);
+    const card = screen.getByRole('group', { name: 'Event: Thermal test — driver v3' });
+    expect(card).toHaveTextContent('Tonight at 9:30 PM in Shop floor · Kestrel Robotics · 6 going');
   });
 
-  it('offers exactly one action, and reflects the answer you already gave', async () => {
+  it('offers exactly one decision, and reflects the answer you already gave', async () => {
     const onSetGoing = vi.fn();
     const { rerender } = render(
       <HomeComingUp events={[event]} nowMs={NOW} onSetGoing={onSetGoing} />,
     );
-    await userEvent.click(screen.getByRole('button', { name: /Say you are going/ }));
+    await userEvent.click(screen.getByRole('button', { name: 'Take the spot' }));
     expect(onSetGoing).toHaveBeenCalledWith(event, true);
     rerender(
       <HomeComingUp events={[{ ...event, rsvp: true }]} nowMs={NOW} onSetGoing={onSetGoing} />,
     );
-    expect(screen.getByText("You're going")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'You’re in' }));
+    expect(onSetGoing).toHaveBeenLastCalledWith({ ...event, rsvp: true }, false);
   });
 
   it('is absent entirely when nothing is scheduled', () => {
@@ -341,16 +281,6 @@ describe('Pick up the conversation', () => {
     };
   }
 
-  it('says where you were and when it last moved', () => {
-    const now = Date.now();
-    expect(pickUpContext({ ...entry(), lastActivityId: null }, now)).toBe(
-      'Saltmarsh Sailing · nothing new since you left',
-    );
-    expect(pickUpContext(entry({ kind: 'dm', contextLabel: null }), now)).toMatch(
-      /^direct · last message \d+d ago$/,
-    );
-  });
-
   it('is absent when there is nothing to return to', () => {
     const { container } = render(
       <HomePickUp entries={[]} litRooms={new Set()} onOpen={vi.fn()} />,
@@ -358,14 +288,14 @@ describe('Pick up the conversation', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it('lights a row only when the server says that channel is lit', () => {
-    const row = entry();
+  it('marks a person amber only when a call is live in that conversation', () => {
+    const row = entry({ kind: 'dm', title: 'Ada', userId: 'ada', contextLabel: null });
     const { container, rerender } = render(
       <HomePickUp entries={[row]} litRooms={new Set()} onOpen={vi.fn()} />,
     );
-    expect(container.querySelector('.pc-window.is-reading')).toBeNull();
+    expect(container.querySelector('.glass-presence[data-live]')).toBeNull();
     rerender(<HomePickUp entries={[row]} litRooms={new Set([row.key])} onOpen={vi.fn()} />);
-    expect(container.querySelector('.pc-window.is-reading')).not.toBeNull();
+    expect(container.querySelector('.glass-presence[data-live]')).not.toBeNull();
   });
 
   it('opens the row it was asked to open', async () => {
@@ -377,17 +307,6 @@ describe('Pick up the conversation', () => {
   });
 });
 
-describe('Add a server', () => {
-  it('is one row that says both ways in', async () => {
-    const onClick = vi.fn();
-    render(<HomeAddBuilding onClick={onClick} />);
-    await userEvent.click(
-      screen.getByRole('button', { name: 'Add a server — join with an invite, or start your own' }),
-    );
-    expect(onClick).toHaveBeenCalled();
-  });
-});
-
 /* The rule WP0 set and WP1 kept: a surface styles itself from tokens, never
    from a literal value, or a theme cannot remap it (§1.7). */
 describe('tokens only', () => {
@@ -395,9 +314,7 @@ describe('tokens only', () => {
     const { container } = render(
       <div>
         <HomeAroundNow people={[MARA, DEVON]} sentence="Mara is in Shop floor" lightsOn={9} />
-        <HomeBuildingCard building={litBuilding()} mentions={new Map()} {...handlers()} />
-        <HomeBuildingCard building={quietBuilding()} mentions={new Map()} {...handlers()} />
-        <HomeAddBuilding onClick={vi.fn()} />
+        <HomeLiveNow rooms={liveRoomsOf([litBuilding()])} nowMs={NOW} onOpenRoom={vi.fn()} onJoinRoom={vi.fn()} />
       </div>,
     );
     const offenders: string[] = [];

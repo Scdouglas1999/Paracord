@@ -82,7 +82,7 @@ export function PinnedWidget({ guildId, announcementChannels, mentionNames, onOp
       title="Pinned"
       action={<WidgetLink onClick={() => onOpenMessage(message.channel_id, message.id)}>Open</WidgetLink>}
     >
-      <div className="flex items-center gap-2.5">
+      <div className="glass-wrow">
         <FeedAvatar
           user={{
             id: message.author.id,
@@ -90,15 +90,18 @@ export function PinnedWidget({ guildId, announcementChannels, mentionNames, onOp
             display_name: message.author.display_name ?? null,
             avatar_hash: message.author.avatar_hash ?? null,
           }}
-          size={24}
+          size={28}
         />
-        <span className="min-w-0 flex-1 truncate text-label text-text-primary">{displayName(message.author)}</span>
-        <span className="inline-flex shrink-0 items-center gap-1 text-meta text-text-muted">
-          <Pin size={12} aria-hidden />#{pin.channelName}
+        <span className="glass-wrow__body">
+          <span className="glass-wrow__name">{displayName(message.author)}</span>
+          <span className="glass-wrow__line inline-flex items-center gap-1">
+            <Pin size={12} aria-hidden className="shrink-0" />
+            {pin.channelName}
+          </span>
         </span>
       </div>
       {nodes.length > 0 && (
-        <div className="pc-home-clamp break-words text-ribbon text-text-body" style={{ '--clamp-lines': 5 } as React.CSSProperties}>
+        <div className="glass-post__text glass-clamp" style={{ '--clamp-lines': 5 } as React.CSSProperties}>
           {nodes}
         </div>
       )}

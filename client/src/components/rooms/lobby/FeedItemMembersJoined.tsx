@@ -1,10 +1,8 @@
 import { memo, useMemo } from 'react';
-import { MessageCircle } from 'lucide-react';
 
-import { AvatarStack } from '../../light';
-import { Button } from '../../ui';
+import { GlassButton } from '../../glass/primitives';
+import { FaceStack } from '../../glass/places/Lead';
 import type { FeedMembersJoinedItem, FeedUser } from '../../../api/serverFeed';
-import { personLight } from '../../../lib/attention/personLight';
 import { displayName } from '../../../lib/displayName';
 import { joinedLine } from './homeCaptions';
 
@@ -17,35 +15,30 @@ export interface FeedItemMembersJoinedProps {
 }
 
 /**
- * The people who joined on one day, as one line. "Say hi" opens a direct
- * message with the first person it names.
+ * The people who joined on one day, as one line, not a card: it is something that
+ * happened, not something somebody made. "Say hi" opens a direct message with the
+ * first person it names.
  */
 export const FeedItemMembersJoined = memo(function FeedItemMembersJoined({ item, when, onSayHi, viewerId }: FeedItemMembersJoinedProps) {
-  const people = useMemo(
-    () =>
-      item.users.map((user) =>
-        personLight({ userId: user.id, name: displayName(user), status: null, avatar: user.avatar_hash }),
-      ),
+  const faces = useMemo(
+    () => item.users.map((user) => ({ userId: user.id, name: displayName(user), avatar: user.avatar_hash ?? null })),
     [item.users],
   );
   const names = item.users.map((user) => displayName(user));
   const greet = item.users.find((user) => user.id !== viewerId) ?? null;
+  const line = joinedLine(names, item.total);
 
   return (
-    <article
-      aria-label={joinedLine(names, item.total)}
-      className="flex min-w-0 items-center gap-3 rounded-[var(--radius-card)] px-4 py-3 shadow-[inset_0_0_0_1px_var(--border-subtle)]"
-    >
-      <AvatarStack people={people} size={28} max={4} context="joined" />
-      <p className="min-w-0 flex-1 truncate text-label text-text-secondary">
-        <span className="text-text-primary">{joinedLine(names, item.total)}</span>
-        {when && <span className="text-text-muted"> · {when}</span>}
+    <article aria-label={line} className="glass-happened">
+      <FaceStack faces={faces.slice(0, 4)} size={28} overlap={8} />
+      <p className="glass-happened__text">
+        <strong>{line}</strong>
+        {when && <span className="glass-instrument text-[var(--ink-3)]"> · {when}</span>}
       </p>
       {greet && onSayHi && (
-        <Button variant="ghost" size="sm" onClick={() => onSayHi(greet)} className="shrink-0" aria-label={`Say hi to ${displayName(greet)}`}>
-          <MessageCircle size={14} aria-hidden />
+        <GlassButton variant="text" onClick={() => onSayHi(greet)} aria-label={`Say hi to ${displayName(greet)}`}>
           Say hi
-        </Button>
+        </GlassButton>
       )}
     </article>
   );

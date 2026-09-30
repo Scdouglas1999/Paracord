@@ -5,8 +5,13 @@ import { useCurrentChannelStore, useAvailableChannels } from '../hooks/useChanne
 import { useCurrentUser, useCurrentAccountScope } from '../hooks/useCurrentUser';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
-import { MessagesSquare, PenSquare, Search, X } from 'lucide-react';
+import { MessagesSquare, PenSquare, Search } from 'lucide-react';
 import { ConversationPane } from '../components/glass/conversation';
+import { GlassChip } from '../components/glass/primitives';
+import { GlyphTile } from '../components/glass/places/Lead';
+import { GlassPage, PageBar, PageScroll, PageSection } from '../components/home/GlassPage';
+import { PagePerson, PageRow } from '../components/home/PageRow';
+import { formatRowTime } from '../components/glass/places/model';
 import { MessageList } from '../components/message/MessageList';
 import { MessageInput } from '../components/message/MessageInput';
 import { DmPickerModal } from '../components/message/DmPickerModal';
@@ -15,7 +20,6 @@ import { StreamViewer } from '../components/voice/StreamViewer';
 import { useChannelStore } from '../stores/channelStore';
 import { useReadStateStore } from '../stores/readStateStore';
 import { usePresenceStore } from '../stores/presenceStore';
-import { PersonStatusLine } from '../components/user/PresenceActivity';
 import { useAccountMessageStore } from '../hooks/useMessageStore';
 import { useServerListStore } from '../stores/serverListStore';
 import { useUIStore } from '../stores/uiStore';
@@ -23,18 +27,13 @@ import { useVoiceStore } from '../stores/voiceStore';
 import { LOCAL_SERVER_ID } from '../lib/connectionManager';
 import { computeGuildUnread } from '../hooks/useUnreadCounts';
 import { snowflakeToMs } from '../lib/attention/conversationModel';
-import { safeStoredImageDataUrl } from '../lib/security';
 import { EmptyState } from '../components/ui/Feedback';
 import { Button } from '../components/ui/Button';
-import { Input } from '../components/ui/Input';
-import { cn } from '../lib/utils';
+import { SearchWell } from '../components/ui/TextField';
 import { ChannelType, type Channel, type Message, type ReadState } from '../types';
 import { displayName } from '../lib/displayName';
-import { presenceLabel, presenceLight } from '../lib/presence';
+import { presenceLabel } from '../lib/presence';
 import { dmTitleFor } from '../lib/dmTitle';
-import { wallClock } from '../lib/formatters';
-import { avatarInitials } from '../components/light';
-import { getIdentityColor } from '../lib/colors';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 
 const EMPTY_CHANNELS: Channel[] = [];
@@ -59,25 +58,13 @@ function activityMs(id: string | null): number {
 
 function formatDmActivity(id: string | null): { short: string; full: string } | null {
   if (!id) return null;
-  try {
-    const date = new Date(activityMs(id));
-    if (Number.isNaN(date.getTime())) return null;
-    const now = new Date();
-    const full = date.toLocaleString();
-    if (date.toDateString() === now.toDateString()) {
-      return { short: wallClock(date), full };
-    }
-    const daysAgo = (now.getTime() - date.getTime()) / 86_400_000;
-    if (daysAgo >= 0 && daysAgo < 7) {
-      return { short: date.toLocaleDateString([], { weekday: 'short' }), full };
-    }
-    if (date.getFullYear() === now.getFullYear()) {
-      return { short: date.toLocaleDateString([], { month: 'short', day: 'numeric' }), full };
-    }
-    return { short: date.toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' }), full };
-  } catch {
-    return null;
-  }
+  const ms = activityMs(id);
+  const date = new Date(ms);
+  if (Number.isNaN(date.getTime())) return null;
+  // The places panel's own words: a clock time today, a weekday within the week,
+  // a date beyond it.
+  const short = formatRowTime(ms, Date.now());
+  return short ? { short, full: date.toLocaleString() } : null;
 }
 
 /**
@@ -218,91 +205,80 @@ function OwnedDMPage() {
   // ---- Index view: the all-conversations destination -----------------------
   if (!channelId) {
     return (
-      // The conversation pane the shell floats on the room is this page's
-      // surface; the list sits directly in it.
-      <div className="flex h-full min-h-0 flex-col">
-        <header className="shrink-0 border-b border-border-subtle px-4 py-4 sm:px-6">
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="min-w-0 flex-1">
-              <h1 className="pc-display text-display text-text-primary">Messages</h1>
-              <p className="mt-1 text-meta text-text-faint">Every conversation you are part of, brightest first.</p>
-            </div>
-            <Button onClick={() => setPickerOpen(true)} className="shrink-0">
-              <PenSquare size={16} className="mr-1.5" />
+      <GlassPage label="Messages">
+        <PageBar
+          title="Messages"
+          line={
+            rows.length === 0
+              ? 'Every conversation you are part of lands here'
+              : `${rows.length} ${rows.length === 1 ? 'conversation' : 'conversations'}, latest first`
+          }
+          actions={
+            <Button onClick={() => setPickerOpen(true)}>
+              <PenSquare size={16} aria-hidden />
               New message
             </Button>
-          </div>
-        </header>
+          }
+        />
 
-        <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
-          <div className="px-4 py-4 sm:px-6">
-            {rows.length === 0 ? (
-              <EmptyState
-                icon={<MessagesSquare size={20} />}
-                title="Nobody has said anything to you yet"
-                description="Find a friend and say hi — pick up a conversation and every DM you start lands right here, across every server you're on."
-                action={
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Button size="sm" onClick={() => navigate('/app/friends')}>
-                      Find friends
-                    </Button>
-                    <Button variant="secondary" size="sm" onClick={() => setPickerOpen(true)}>
-                      New message
-                    </Button>
-                  </div>
-                }
-              />
-            ) : (
-              <>
-                <div className="relative mb-4 max-w-xl">
-                  <Search size={16} aria-hidden className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
-                  <Input
-                    type="search"
-                    aria-label="Filter conversations"
-                    placeholder="Filter conversations"
-                    className="pl-9 pr-10"
-                    value={conversationQuery}
-                    onChange={(event) => setConversationQuery(event.target.value)}
-                  />
-                  {conversationQuery && (
-                    <button
-                      type="button"
-                      aria-label="Clear conversation filter"
-                      onClick={() => setConversationQuery('')}
-                      className="absolute right-1.5 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-chip text-text-muted outline-none hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
-                    >
-                      <X size={14} />
-                    </button>
-                  )}
+        <PageScroll>
+          {rows.length === 0 ? (
+            <EmptyState
+              icon={<MessagesSquare size={20} />}
+              title="Nobody has said anything to you yet"
+              description="Find a friend and say hi — pick up a conversation and every DM you start lands right here, across every server you're on."
+              action={
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button size="sm" onClick={() => navigate('/app/friends')}>
+                    Find friends
+                  </Button>
+                  <Button variant="glass" size="sm" onClick={() => setPickerOpen(true)}>
+                    New message
+                  </Button>
                 </div>
-                <div className="mb-2 flex items-center justify-between gap-3 px-1 text-section text-text-secondary">
-                  <span>Conversations</span>
-                  <span className="pc-mono text-meta text-text-faint">
-                    {conversationQuery ? `${filteredRows.length} of ${rows.length}` : rows.length}
-                  </span>
-                </div>
-                {filteredRows.length === 0 ? (
-                  <EmptyState
-                    className="bg-bg-well shadow-[var(--shadow-well)]"
-                    icon={<Search size={20} />}
-                    title="No matching conversations"
-                    description={`No direct or group conversations match “${conversationQuery.trim()}”.`}
-                    action={<Button variant="secondary" size="sm" onClick={() => setConversationQuery('')}>Clear filter</Button>}
-                  />
-                ) : (
-                  <div className="flex flex-col gap-0.5">
-                    {filteredRows.map((row) => (
-                      <DmListRow key={row.key} row={row} onOpen={openConversation} />
-                    ))}
-                  </div>
+              }
+            />
+          ) : (
+            <>
+              <div className="glass-toolbar">
+                <SearchWell
+                  type="search"
+                  label="Filter conversations"
+                  placeholder="Filter conversations"
+                  icon={<Search size={16} aria-hidden />}
+                  className="glass-toolbar__grow"
+                  value={conversationQuery}
+                  onChange={(event) => setConversationQuery(event.target.value)}
+                />
+                {conversationQuery && (
+                  <Button variant="ghost" size="sm" aria-label="Clear conversation filter" onClick={() => setConversationQuery('')}>
+                    Clear
+                  </Button>
                 )}
-              </>
-            )}
-          </div>
-        </div>
+              </div>
+              {filteredRows.length === 0 ? (
+                <EmptyState
+                  icon={<Search size={20} />}
+                  title="No matching conversations"
+                  description={`No direct or group conversations match “${conversationQuery.trim()}”.`}
+                  action={<Button variant="glass" size="sm" onClick={() => setConversationQuery('')}>Clear filter</Button>}
+                />
+              ) : (
+                <PageSection
+                  kicker="Conversations"
+                  count={conversationQuery ? `${filteredRows.length} of ${rows.length}` : rows.length}
+                >
+                  {filteredRows.map((row) => (
+                    <DmListRow key={row.key} row={row} onOpen={openConversation} />
+                  ))}
+                </PageSection>
+              )}
+            </>
+          )}
+        </PageScroll>
 
         <DmPickerModal open={pickerOpen} onClose={() => setPickerOpen(false)} />
-      </div>
+      </GlassPage>
     );
   }
 
@@ -316,7 +292,7 @@ function OwnedDMPage() {
       subject={{ kind: 'dm', channelId, title: recipientName, isGroup: isGroupDM }}
       notices={
         inThisDmCall && watchedStreamerId ? (
-          <div className="relative max-h-[40vh] min-h-[180px] shrink-0 border-b border-border-subtle bg-black">
+          <div className="glass-dmstream">
             <ErrorBoundary variant="section" label="the stream">
             <StreamViewer
               streamerId={watchedStreamerId}
@@ -368,10 +344,10 @@ function OwnedDMPage() {
 }
 
 /**
- * One conversation row. Presence and the last-message preview are read PER ROW
- * (own store selectors) so a presence tick or a new message re-renders only the
- * affected row — never the whole merged list (the same rule the Buildings
- * column's rows keep).
+ * One conversation row: the places panel's row at page width (docs/glass-spec.md
+ * §3.1). Presence and the last-message preview are read PER ROW (own store
+ * selectors) so a presence tick or a new message re-renders only the affected
+ * row, never the whole merged list.
  */
 function DmListRow({ row, onOpen }: { row: DmRow; onOpen: (row: DmRow) => void }) {
   const status = usePresenceStore((s) =>
@@ -392,83 +368,53 @@ function DmListRow({ row, onOpen }: { row: DmRow; onOpen: (row: DmRow) => void }
         : 'Direct message';
 
   const statusWord = row.isGroup ? null : presenceLabel(status);
-  const light = presenceLight(status);
-  const src = safeStoredImageDataUrl(row.avatar);
   const showMention = row.mentionCount > 0;
   const showUnreadDot = row.unread && !showMention;
   const activity = formatDmActivity(row.lastActivityId);
 
   return (
-    // §8 TextRoomRow: a window dot / lit face, the name with its last line, and
-    // one attention mark on the right. A conversation is a room, so it is a row.
-    <button
-      type="button"
-      onClick={() => onOpen(row)}
-      className="pc-focusable group grid w-full grid-cols-[36px_minmax(0,1fr)_auto] items-center gap-3 rounded-[var(--radius-control)] px-3 py-2 text-left transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle"
-    >
-      <div className="relative shrink-0">
-        {/* §1.5: presence is a rim of light on the avatar, never a colored dot. */}
-        <div
-          data-testid={row.isGroup ? undefined : 'presence-light'}
-          data-status={row.isGroup ? undefined : status}
-          className={cn(
-            'pc-display flex h-9 w-9 items-center justify-center overflow-hidden rounded-full text-label font-bold text-text-on-light',
-            !row.isGroup && light.avatarClass,
-            !row.isGroup && light.dnd && 'pc-dnd',
+    <PageRow
+      onOpen={() => onOpen(row)}
+      lead={
+        row.isGroup ? (
+          <GlyphTile glyph="people" />
+        ) : (
+          <PagePerson face={{ userId: row.recipientId ?? row.channelId, name: row.title, avatar: row.avatar }} status={status} />
+        )
+      }
+      title={
+        <>
+          {row.title}
+          {row.isGroup && <span className="glass-prow__tag"> group</span>}
+        </>
+      }
+      line={
+        <>
+          {subtitle}
+          {statusWord && statusWord !== subtitle && <span className="sr-only">, {statusWord}</span>}
+        </>
+      }
+      aside={
+        <>
+          {activity && (
+            <time
+              data-testid="dm-last-activity"
+              dateTime={new Date(activityMs(row.lastActivityId)).toISOString()}
+              title={activity.full}
+              className="glass-instrument glass-prow__time"
+            >
+              {activity.short}
+            </time>
           )}
-          style={{ background: src ? undefined : getIdentityColor(row.recipientId ?? row.channelId) }}
-        >
-          {src ? (
-            <img src={src} alt="" className="h-full w-full object-cover" />
-          ) : row.isGroup ? (
-            <MessagesSquare size={17} aria-hidden className="text-text-on-light" />
-          ) : (
-            avatarInitials(row.title)
+          {showMention && (
+            <GlassChip tone="mention" data-testid="mention-badge">
+              {row.mentionCount > 99 ? '99+' : row.mentionCount}
+            </GlassChip>
           )}
-        </div>
-        {statusWord && statusWord !== subtitle && (
-          <span className="sr-only">{statusWord}</span>
-        )}
-      </div>
-
-      <div className="min-w-0">
-        <div className="flex min-w-0 items-center gap-1.5">
-          <span className={cn('pc-display max-w-full shrink-0 truncate text-name', row.unread ? 'text-text-primary' : 'text-text-primary')}>
-            {row.title}
-          </span>
-          {row.isGroup && <span className="text-meta text-text-faint">group</span>}
-          {/* What they are listening to / playing, or their custom status —
-              beside the name, so the last message keeps its line. */}
-          {!row.isGroup && row.recipientId && status !== 'offline' && (
-            <PersonStatusLine userId={row.recipientId} scope={row.serverId} className="min-w-0 flex-1" />
-          )}
-        </div>
-        <div className={cn('truncate text-meta', row.unread ? 'text-text-secondary' : 'text-text-faint')}>{subtitle}</div>
-      </div>
-
-      <div className="flex shrink-0 items-center gap-1.5">
-        {activity && (
-          <time
-            data-testid="dm-last-activity"
-            dateTime={new Date(activityMs(row.lastActivityId)).toISOString()}
-            title={activity.full}
-            className={cn('pc-mono mr-1 text-meta', row.unread ? 'text-text-secondary' : 'text-text-faint')}
-          >
-            {activity.short}
-          </time>
-        )}
-        {showMention && (
-          <span
-            data-testid="mention-badge"
-            className="pc-mono flex h-5 min-w-5 items-center justify-center rounded-[var(--radius-chip)] bg-accent-primary px-1.5 text-meta font-semibold text-text-on-accent"
-          >
-            {row.mentionCount > 99 ? '99+' : row.mentionCount}
-          </span>
-        )}
-        {showUnreadDot && (
-          <span data-testid="unread-dot" aria-label="Unread" className="h-2 w-2 rounded-full bg-accent-primary" />
-        )}
-      </div>
-    </button>
+          {showUnreadDot && <span data-testid="unread-dot" role="img" aria-label="Unread" className="glass-place-dot" />}
+        </>
+      }
+      offline={!row.isGroup && status === 'offline'}
+    />
   );
 }

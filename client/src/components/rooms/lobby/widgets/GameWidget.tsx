@@ -65,7 +65,7 @@ export function GameWidget({ guildId, liveShownElsewhere }: GameWidgetProps) {
     <WidgetCard
       title={live ? 'Game · live' : 'Next game'}
       action={
-        <Link to={sportsHref(guildId)} className="pc-focusable rounded-[var(--radius-chip)] px-1 text-meta font-medium text-text-link hover:underline">
+        <Link to={sportsHref(guildId)} className="glass-linkbtn glass-focusable">
           All games
         </Link>
       }
@@ -73,18 +73,17 @@ export function GameWidget({ guildId, liveShownElsewhere }: GameWidgetProps) {
       <Link
         to={sportsHref(guildId)}
         aria-label={stripAriaLabel(game)}
-        className="pc-focusable flex flex-col gap-2 rounded-[var(--radius-control)]"
+        className="glass-focusable flex flex-col gap-2 rounded-[var(--r-ctl)]"
         style={{ '--pc-away': away.fill, '--pc-home': home.fill } as CSSProperties}
       >
         {[game.away, game.home].map((team) => (
-          <span key={team.id} className="flex items-center gap-2.5">
+          <span key={team.id} className="glass-wrow">
             <TeamMark team={team} />
-            <span className="min-w-0 flex-1 truncate text-label text-text-primary">{team.short_name || team.name}</span>
-            {showScore && <span className="pc-mono shrink-0 text-heading text-text-primary">{team.score ?? 0}</span>}
+            <span className="glass-wrow__name flex-1">{team.short_name || team.name}</span>
+            {showScore && <span className="glass-instrument glass-game__score">{team.score ?? 0}</span>}
           </span>
         ))}
-        <span className="flex items-center gap-2 text-meta text-text-muted">
-          {live && <span className="pc-home-live-dot" aria-hidden />}
+        <span className="glass-secondary" style={{ color: live ? 'var(--amber-ink)' : undefined }}>
           {statusLine(game)}
         </span>
       </Link>
