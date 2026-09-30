@@ -4278,13 +4278,9 @@ async fn handle_raw_quic_connection(
     );
     relay.add_connection(handle.clone());
     relay.spawn_forwarding_task(handle.clone());
-    relay.spawn_control_task(handle.clone());
-    {
-        let relay = relay.clone();
-        tokio::spawn(async move {
-            relay.send_initial_track_state(&handle).await;
-        });
-    }
+    // No track state is pushed here. The relay sends it once this connection's
+    // `SessionJoin` has published its call key; see `WebTransport` below.
+    relay.spawn_control_task(handle);
     tracing::info!(user_id, room_id = %room_id, "QUIC: relay forwarding started");
 }
 
@@ -4805,13 +4801,13 @@ async fn handle_webtransport_connection(
     relay.add_connection(handle.clone());
     relay.spawn_forwarding_task(handle.clone());
     relay.spawn_control_task(handle.clone());
-    {
-        let relay = relay.clone();
-        let handle = handle.clone();
-        tokio::spawn(async move {
-            relay.send_initial_track_state(&handle).await;
-        });
-    }
+    // No track state is pushed on connect. The relay sends the published tracks
+    // and their stored keys only after this connection's `SessionJoin`, once it
+    // has dropped every key sealed to the call key the participant held before.
+    // A connection has not published its call key yet at this point, so any
+    // stored key addressed to its account was sealed to an earlier call key: a
+    // rejoiner handed one before its roster could only fail the key exchange
+    // (every rejoin into a call that was still running was refused that way).
     tracing::info!(
         user_id,
         room_id = %room_id,

@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { isMediaCallKey, MediaKeyring } from './mediaKeyring';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { isMediaCallKey, MediaKeyring, PEER_INTRODUCTION_TIMEOUT_MS } from './mediaKeyring';
 import { wrapSenderKeyForRecipients } from './engineShared';
 import type { OperationContext } from '../operationContext';
 
@@ -36,8 +36,8 @@ describe('MediaKeyring', () => {
     const { alice, bob } = pair();
     const wrapped = await alice.wrapSenderKey('room:10:audio', senderKey(7), 3, BOB);
     const opened = await bob.unwrapSenderKey('room:10:audio', ALICE, wrapped);
-    expect(opened.epoch).toBe(3);
-    expect(Array.from(opened.rawKey)).toEqual(Array.from(senderKey(7)));
+    expect(opened?.epoch).toBe(3);
+    expect(Array.from(opened!.rawKey)).toEqual(Array.from(senderKey(7)));
   });
 
   it('binds a wrapped key to its scope, so a room key cannot open a screen share', async () => {
@@ -71,7 +71,7 @@ describe('MediaKeyring', () => {
     stale.setPeerKey(ALICE, alice.publicKey);
 
     const wrapped = await alice.wrapSenderKey('room:10:audio', senderKey(9), 2, BOB);
-    expect(Array.from((await current.unwrapSenderKey('room:10:audio', ALICE, wrapped)).rawKey)).toEqual(
+    expect(Array.from((await current.unwrapSenderKey('room:10:audio', ALICE, wrapped))!.rawKey)).toEqual(
       Array.from(senderKey(9)),
     );
     await expect(stale.unwrapSenderKey('room:10:audio', ALICE, wrapped)).rejects.toThrow();
@@ -89,6 +89,131 @@ describe('MediaKeyring', () => {
     const { alice } = pair();
     alice.dispose();
     await expect(alice.wrapSenderKey('room:10:audio', senderKey(), 1, BOB)).rejects.toThrow();
+  });
+
+  it('cannot open a key sealed to the call key it held before it rejoined', async () => {
+    // What a relay replaying a stored envelope hands a rejoiner. The new call
+    // key is fresh, so the old envelope does not authenticate, and the key is
+    // refused rather than accepted: the fix for rejoining is that nothing ever
+    // replays such an envelope (see docs/design/glass-fix-rejoin.md).
+    const alice = MediaKeyring.create();
+    const bobBefore = MediaKeyring.create();
+    alice.setPeerKey(BOB, bobBefore.publicKey);
+    const sealedToOldCall = await alice.wrapSenderKey('stream:s:screen', senderKey(5), 3, BOB);
+
+    const bobAfterRejoin = MediaKeyring.create();
+    bobAfterRejoin.setPeerKey(ALICE, alice.publicKey);
+    await expect(bobAfterRejoin.unwrapSenderKey('stream:s:screen', ALICE, sealedToOldCall)).rejects.toThrow(
+      'could not be opened',
+    );
+  });
+});
+
+describe('MediaKeyring keys that overtake their sender’s introduction', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Let pending microtasks and WebCrypto work run. */
+  const settle = () => new Promise<void>((resolve) => queueMicrotask(resolve));
+
+  it('opens a key that arrived before the roster introduced its sender', async () => {
+    const alice = MediaKeyring.create();
+    const bob = MediaKeyring.create();
+    alice.setPeerKey(BOB, bob.publicKey);
+    const wrapped = await alice.wrapSenderKey('room:10:audio', senderKey(6), 4, BOB);
+
+    // Bob reads Alice's key_deliver before her session_participant_join.
+    const opening = bob.unwrapSenderKey('room:10:audio', ALICE, wrapped);
+    await settle();
+    bob.setPeerKey(ALICE, alice.publicKey);
+
+    const opened = await opening;
+    expect(opened?.epoch).toBe(4);
+    expect(Array.from(opened!.rawKey)).toEqual(Array.from(senderKey(6)));
+  });
+
+  it('opens a rejoining peer’s new key that overtook the news of its departure', async () => {
+    // Bob knew Alice's first call. She left and joined again; her new call's
+    // key reaches Bob between her leave and her new join.
+    const bob = MediaKeyring.create();
+    const aliceBefore = MediaKeyring.create();
+    bob.setPeerKey(ALICE, aliceBefore.publicKey);
+    bob.removePeer(ALICE);
+
+    const aliceAgain = MediaKeyring.create();
+    aliceAgain.setPeerKey(BOB, bob.publicKey);
+    const wrapped = await aliceAgain.wrapSenderKey('room:10:audio', senderKey(8), 1, BOB);
+    const opening = bob.unwrapSenderKey('room:10:audio', ALICE, wrapped);
+    await settle();
+    bob.setPeerKey(ALICE, aliceAgain.publicKey);
+
+    expect(Array.from((await opening)!.rawKey)).toEqual(Array.from(senderKey(8)));
+  });
+
+  it('refuses a key from someone the roster never introduces', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const alice = MediaKeyring.create();
+    const bob = MediaKeyring.create();
+    alice.setPeerKey(BOB, bob.publicKey);
+    const wrapped = await alice.wrapSenderKey('room:10:audio', senderKey(), 1, BOB);
+
+    const opening = bob.unwrapSenderKey('room:10:audio', ALICE, wrapped);
+    const outcome = expect(opening).rejects.toThrow('never introduced');
+    await vi.advanceTimersByTimeAsync(PEER_INTRODUCTION_TIMEOUT_MS);
+    await outcome;
+  });
+
+  it('drops a key from someone who left and did not come back', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const { alice, bob } = pair();
+    const wrapped = await alice.wrapSenderKey('room:10:audio', senderKey(), 1, BOB);
+    bob.removePeer(ALICE);
+
+    const opening = bob.unwrapSenderKey('room:10:audio', ALICE, wrapped);
+    await vi.advanceTimersByTimeAsync(PEER_INTRODUCTION_TIMEOUT_MS);
+    await expect(opening).resolves.toBeNull();
+  });
+
+  it('refuses at once when the sender is introduced without a key', async () => {
+    const alice = MediaKeyring.create();
+    const bob = MediaKeyring.create();
+    alice.setPeerKey(BOB, bob.publicKey);
+    const wrapped = await alice.wrapSenderKey('room:10:audio', senderKey(), 1, BOB);
+
+    const opening = bob.unwrapSenderKey('room:10:audio', ALICE, wrapped);
+    const outcome = expect(opening).rejects.toThrow('has not published a media key');
+    await settle();
+    bob.setPeerKey(ALICE, undefined);
+    await outcome;
+  });
+
+  it('never opens a waiting key with a call key that is not the sender’s', async () => {
+    // Waiting changes when a key is opened, not what it is checked against:
+    // an introduction naming some other call key fails authentication.
+    const alice = MediaKeyring.create();
+    const bob = MediaKeyring.create();
+    alice.setPeerKey(BOB, bob.publicKey);
+    const wrapped = await alice.wrapSenderKey('room:10:audio', senderKey(), 1, BOB);
+
+    const opening = bob.unwrapSenderKey('room:10:audio', ALICE, wrapped);
+    const outcome = expect(opening).rejects.toThrow('could not be opened');
+    await settle();
+    bob.setPeerKey(ALICE, MediaKeyring.create().publicKey);
+    await outcome;
+  });
+
+  it('abandons waiting keys when the call ends', async () => {
+    const alice = MediaKeyring.create();
+    const bob = MediaKeyring.create();
+    alice.setPeerKey(BOB, bob.publicKey);
+    const wrapped = await alice.wrapSenderKey('room:10:audio', senderKey(), 1, BOB);
+
+    const opening = bob.unwrapSenderKey('room:10:audio', ALICE, wrapped);
+    const outcome = expect(opening).rejects.toThrow('destroyed');
+    await settle();
+    bob.dispose();
+    await outcome;
   });
 });
 
@@ -109,11 +234,11 @@ describe('wrapSenderKeyForRecipients', () => {
       account(),
     );
     expect(wrapped.map((entry) => entry.recipientUserId)).toEqual([BOB, carolId]);
-    expect(Array.from((await bob.unwrapSenderKey('room:10:audio', ALICE, wrapped[0].wrapped)).rawKey)).toEqual(
+    expect(Array.from((await bob.unwrapSenderKey('room:10:audio', ALICE, wrapped[0].wrapped))!.rawKey)).toEqual(
       Array.from(senderKey(4)),
     );
     expect(
-      Array.from((await carol.unwrapSenderKey('room:10:audio', ALICE, wrapped[1].wrapped)).rawKey),
+      Array.from((await carol.unwrapSenderKey('room:10:audio', ALICE, wrapped[1].wrapped))!.rawKey),
     ).toEqual(Array.from(senderKey(4)));
   });
 

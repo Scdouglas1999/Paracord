@@ -2612,7 +2612,8 @@ export class BrowserMediaEngine implements MediaEngine {
             Uint8Array.from(ciphertext),
           )
           .then((decrypted) => {
-        if (this.disposed) return;
+            // Null: the publisher left the call before its key could be opened.
+            if (this.disposed || !decrypted) return;
             this.rememberDeliveredTrackKey(
               streamId,
               trackId,
@@ -3328,11 +3329,17 @@ export class BrowserMediaEngine implements MediaEngine {
     epoch: number,
     recipientUserIds: string[],
   ): Promise<Array<[string, number[]]>> {
+    // The list was taken before this announce's first await. Somebody who
+    // left since is no longer owed a key and no longer has a call key to wrap
+    // to; wrapping for them anyway failed the whole call whenever a leave
+    // landed mid-announce. Everybody still in the call is wrapped for, and one
+    // of them without a call key still fails loudly.
+    const stillInCall = recipientUserIds.filter((userId) => this.sessionParticipantIds.has(userId));
     const wrapped = await wrapSenderKeyForRecipients(
       scope,
       rawKey,
       epoch,
-      recipientUserIds,
+      stillInCall,
       this.keyring,
       this.account,
     );
@@ -3450,8 +3457,18 @@ export class BrowserMediaEngine implements MediaEngine {
     epoch: number,
     payload: Uint8Array,
   ): Promise<void> {
-    const decrypted = await this.keyring.unwrapSenderKey(this.audioKeyScope(), senderUserId, payload);
+    let decrypted;
+    try {
+      decrypted = await this.keyring.unwrapSenderKey(this.audioKeyScope(), senderUserId, payload);
+    } catch (error) {
+      // A voice key that cannot be verified ends the call, as a stream key
+      // does: dropping it would leave that person silent with no error.
+      this.failKeyExchange(error);
+      return;
+    }
     this.assertOpen();
+    // Null: the sender left the call before its key could be opened.
+    if (!decrypted) return;
     const rawKey = decrypted.rawKey;
     const resolvedEpoch = decrypted.epoch || epoch;
     const ssrc = await deriveTrackSsrc(senderUserId, 'audio');

@@ -124,6 +124,33 @@ describe('voiceStore call ownership across deferred boundaries', () => {
     expect(useVoiceStore.getState().connected).toBe(false);
   });
 
+  it('keeps what the gateway said about a member when the engine reports them joining', async () => {
+    // Joining a call "joins" everybody already in it at the media layer. Their
+    // screen share, camera and mute come from the gateway and must survive
+    // that, or the stage drops a share it was just asked to watch.
+    const media = engine(); fixture.factory.mockResolvedValue(media.transport);
+    useVoiceStore.getState().loadVoiceStates('guild', [{
+      user_id: '7', channel_id: 'one', guild_id: 'guild', session_id: 'receipt-7', username: 'vincent',
+      self_stream: true, self_video: true, self_mute: true, self_deaf: false, mute: false, deaf: false, suppress: false,
+    }], { serverId: 'A', userId: '1' });
+    await useVoiceStore.getState().joinChannel('one', 'guild');
+    useVoiceStore.getState().setWatchedStreamer('7');
+
+    media.callbacks.join?.('7');
+
+    expect(useVoiceStore.getState().participants.get('7')).toMatchObject({
+      channel_id: 'one', session_id: 'receipt-7', username: 'vincent', self_stream: true, self_video: true, self_mute: true,
+    });
+    expect(useVoiceStore.getState().watchedStreamerId).toBe('7');
+  });
+
+  it('seats a member the gateway has not reported yet', async () => {
+    const media = engine(); fixture.factory.mockResolvedValue(media.transport);
+    await useVoiceStore.getState().joinChannel('one', 'guild');
+    media.callbacks.join?.('8');
+    expect(useVoiceStore.getState().participants.get('8')).toMatchObject({ channel_id: 'one', self_stream: false });
+  });
+
   it('account reset cancels pending connect and cannot clear a replacement login', async () => {
     const pending = deferred<void>(); const first = engine(); const second = engine();
     first.connect.mockImplementation(() => pending.promise);

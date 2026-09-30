@@ -3162,11 +3162,20 @@ function ownLivekitRoom(owner: CallSession, room: Room): () => Promise<void> {
 function bindEngine(owner: CallSession, engine: MediaEngine): void {
   const { channelId, guildId, scope } = owner.target;
   engine.onParticipantJoin(owner.guard(userId => {
-    useVoiceStore.getState().handleVoiceStateUpdate({
-      user_id: userId, channel_id: channelId, guild_id: guildId === 'dm' ? undefined : guildId ?? undefined,
-      session_id: '', self_mute: false, self_deaf: false, self_stream: false, self_video: false,
-      mute: false, deaf: false, suppress: false,
-    }, scope);
+    // The engine knows only that this person's media session is in the call.
+    // Their voice state (sharing, camera, mute, name) comes from the gateway,
+    // and every member already in the call is "joined" again when this client
+    // joins. Writing blanks over it said that nobody was sharing a screen, so
+    // a share opened through the lobby's Watch was closed a second later.
+    const known = useVoiceStore.getState().participants.get(userId);
+    const guild = guildId === 'dm' ? undefined : guildId ?? undefined;
+    useVoiceStore.getState().handleVoiceStateUpdate(known
+      ? { ...known, channel_id: channelId, guild_id: known.guild_id ?? guild }
+      : {
+        user_id: userId, channel_id: channelId, guild_id: guild,
+        session_id: '', self_mute: false, self_deaf: false, self_stream: false, self_video: false,
+        mute: false, deaf: false, suppress: false,
+      }, scope);
   }));
   engine.onParticipantLeave(owner.guard(userId => {
     useVoiceStore.getState().handleVoiceStateUpdate({

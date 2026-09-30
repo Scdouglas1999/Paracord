@@ -49,6 +49,44 @@ const CALL_KEY_CONTEXT_PREFIX = 'paracord:media-call-key:v1:';
 const CALL_KEY_NONCE_BYTES = 12;
 const CALL_KEY_HEX_LENGTH = 64;
 
+/**
+ * How long a sender key from someone the roster has not introduced yet waits
+ * for that introduction.
+ *
+ * Every media control message travels on its own QUIC stream, so two that
+ * the relay sent in order can be read in the other order: a newcomer's
+ * `key_deliver` can overtake the `session_participant_join` that carries its
+ * call key, and a rejoiner's `session_participant_join` can overtake the
+ * `session_participant_leave` of its previous call. The introduction is
+ * normally milliseconds behind. Ten seconds is far past any reordering and
+ * short enough that a key from someone who never joins fails the call
+ * promptly.
+ */
+export const PEER_INTRODUCTION_TIMEOUT_MS = 10_000;
+
+/**
+ * Bound on keys waiting for an introduction at once. A room holds a few
+ * hundred participants at most, each of whom delivers a handful of keys, so
+ * more than this is not reordering.
+ */
+const MAX_PENDING_INTRODUCTIONS = 256;
+
+/** A sender key opened from a peer's envelope. */
+export interface UnwrappedSenderKey {
+  epoch: number;
+  rawKey: Uint8Array;
+}
+
+interface IntroductionWaiter {
+  resolve: (publicKey: string | null) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+function missingKeyError(action: string): Error {
+  return new Error(`Someone in this call has not published a media key, so ${action}.`);
+}
+
 interface WrappedSenderKeyEnvelope {
   v: 1;
   nonce: string;
@@ -75,6 +113,15 @@ function decodeEnvelope(data: Uint8Array): WrappedSenderKeyEnvelope {
 export class MediaKeyring {
   private secret: Uint8Array | null;
   private readonly peers = new Map<string, string>();
+  /**
+   * Peers this call has seen leave and has not seen come back. A key they
+   * delivered that is still waiting when the wait runs out belongs to a call
+   * they are no longer in, and is dropped rather than failing this one.
+   */
+  private readonly departed = new Set<string>();
+  /** Unwraps waiting for the roster to introduce their sender, by sender. */
+  private readonly introductions = new Map<string, Set<IntroductionWaiter>>();
+  private pendingIntroductions = 0;
   /** This device's call key, as it goes on the wire. */
   readonly publicKey: string;
 
@@ -97,15 +144,27 @@ export class MediaKeyring {
    */
   setPeerKey(userId: string, publicKey: unknown): void {
     if (!userId) return;
+    this.departed.delete(userId);
     if (!isMediaCallKey(publicKey)) {
       this.peers.delete(userId);
+      // Introduced without a key: whatever they sent cannot be opened, and
+      // waiting longer will not change that.
+      this.settleIntroductions(userId, (waiter) =>
+        waiter.reject(missingKeyError('the media key they sent cannot be opened')),
+      );
       return;
     }
     this.peers.set(userId, publicKey);
+    this.settleIntroductions(userId, (waiter) => waiter.resolve(publicKey));
   }
 
+  /**
+   * Forget a peer that left. A key of theirs that is still in flight waits
+   * like any other, because the same account may be rejoining: its new call
+   * is introduced right behind the old one's departure, in either order.
+   */
   removePeer(userId: string): void {
-    this.peers.delete(userId);
+    if (this.peers.delete(userId)) this.departed.add(userId);
   }
 
   hasPeer(userId: string): boolean {
@@ -119,12 +178,68 @@ export class MediaKeyring {
 
   private requirePeer(userId: string): string {
     const key = this.peers.get(userId);
-    if (!key) {
-      throw new Error(
-        'Someone in this call has not published a media key, so their audio cannot be encrypted.',
+    if (!key) throw missingKeyError('their audio cannot be encrypted');
+    return key;
+  }
+
+  private settleIntroductions(userId: string, settle: (waiter: IntroductionWaiter) => void): void {
+    const waiters = this.introductions.get(userId);
+    if (!waiters) return;
+    this.introductions.delete(userId);
+    for (const waiter of waiters) {
+      clearTimeout(waiter.timer);
+      this.pendingIntroductions--;
+      settle(waiter);
+    }
+  }
+
+  /**
+   * The call key of the peer a sender key came from, once the roster has
+   * introduced them.
+   *
+   * Resolves `null` only for a peer this call saw leave and who did not come
+   * back within {@link PEER_INTRODUCTION_TIMEOUT_MS}: their key has nothing
+   * left to decrypt. A sender the roster never introduced is refused, because
+   * the relay forwards keys only between members of the call, so a key from a
+   * stranger means the roster and the relay disagree.
+   */
+  private awaitPeerKey(userId: string): Promise<string | null> {
+    const known = this.peers.get(userId);
+    if (known) return Promise.resolve(known);
+    this.requireSecret();
+    if (this.pendingIntroductions >= MAX_PENDING_INTRODUCTIONS) {
+      return Promise.reject(
+        new Error('Too many media keys arrived from people this call has not introduced.'),
       );
     }
-    return key;
+    return new Promise<string | null>((resolve, reject) => {
+      const waiter: IntroductionWaiter = {
+        resolve,
+        reject,
+        timer: setTimeout(() => {
+          const waiters = this.introductions.get(userId);
+          if (!waiters?.delete(waiter)) return;
+          if (waiters.size === 0) this.introductions.delete(userId);
+          this.pendingIntroductions--;
+          if (this.departed.has(userId)) {
+            resolve(null);
+            return;
+          }
+          reject(
+            new Error(
+              'A media key arrived from someone this call never introduced, so it cannot be verified.',
+            ),
+          );
+        }, PEER_INTRODUCTION_TIMEOUT_MS),
+      };
+      let waiters = this.introductions.get(userId);
+      if (!waiters) {
+        waiters = new Set();
+        this.introductions.set(userId, waiters);
+      }
+      waiters.add(waiter);
+      this.pendingIntroductions++;
+    });
   }
 
   /**
@@ -183,28 +298,47 @@ export class MediaKeyring {
     }
   }
 
-  /** Unwrap a sender key a peer in this call addressed to us. */
+  /**
+   * Unwrap a sender key a peer in this call addressed to us.
+   *
+   * A key can arrive before the roster message that introduces its sender
+   * (see {@link PEER_INTRODUCTION_TIMEOUT_MS}); it waits for that
+   * introduction and is then opened with the call key it names. Resolves
+   * `null` when the sender left the call and did not return, so there is
+   * nothing to apply. Nothing is ever accepted without the envelope
+   * authenticating under this device's call key and the sender's.
+   */
   async unwrapSenderKey(
     scope: string,
     senderUserId: string,
     payload: Uint8Array,
-  ): Promise<{ epoch: number; rawKey: Uint8Array }> {
+  ): Promise<UnwrappedSenderKey | null> {
     if (!scope) throw new Error('A media scope is required.');
     const envelope = decodeEnvelope(payload);
     const nonce = fromBase64(envelope.nonce);
     if (nonce.byteLength !== CALL_KEY_NONCE_BYTES) {
       throw new Error('The wrapped media key has an invalid nonce.');
     }
-    const material = this.deriveWrappingMaterial(scope, this.requirePeer(senderUserId));
+    const senderKey = await this.awaitPeerKey(senderUserId);
+    if (senderKey === null) return null;
+    const material = this.deriveWrappingMaterial(scope, senderKey);
     try {
       const key = await this.importWrappingKey(material);
-      const plaintext = new Uint8Array(
-        await crypto.subtle.decrypt(
+      let opened: ArrayBuffer;
+      try {
+        opened = await crypto.subtle.decrypt(
           { name: 'AES-GCM', iv: toArrayBuffer(nonce) },
           key,
           toArrayBuffer(fromBase64(envelope.ciphertext)),
-        ),
-      );
+        );
+      } catch {
+        // Authentication failed: the envelope was not sealed between this
+        // device's call key and the one the sender published for this call.
+        throw new Error(
+          'A media key sent to this device could not be opened: it was not sealed to this call’s keys.',
+        );
+      }
+      const plaintext = new Uint8Array(opened);
       try {
         const parsed = JSON.parse(new TextDecoder().decode(plaintext)) as {
           sender_key?: string;
@@ -236,5 +370,11 @@ export class MediaKeyring {
     this.secret?.fill(0);
     this.secret = null;
     this.peers.clear();
+    this.departed.clear();
+    for (const userId of Array.from(this.introductions.keys())) {
+      this.settleIntroductions(userId, (waiter) =>
+        waiter.reject(new Error('This call’s media keys have already been destroyed.')),
+      );
+    }
   }
 }

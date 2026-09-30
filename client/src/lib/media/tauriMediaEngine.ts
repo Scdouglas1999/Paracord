@@ -1467,6 +1467,8 @@ export class TauriMediaEngine implements MediaEngine {
           Uint8Array.from(payload.ciphertext),
         )
         .then((decrypted) =>
+          // Null: the sender left the call before its key could be opened.
+          decrypted &&
           this.invokeOwned('media_apply_audio_sender_key', {
             senderUserId: payload.senderUserId,
             epoch: decrypted.epoch || payload.epoch,
@@ -1500,6 +1502,8 @@ export class TauriMediaEngine implements MediaEngine {
           Uint8Array.from(payload.ciphertext),
         )
         .then((decrypted) =>
+          // Null: the publisher left the call before its key could be opened.
+          decrypted &&
           this.invokeOwned('media_apply_track_sender_key', {
             streamId: payload.streamId,
             trackId: payload.trackId,
