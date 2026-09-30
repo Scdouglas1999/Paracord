@@ -8,16 +8,13 @@ import { registerAppNavigate } from '../lib/appNavigate';
 // engine's data-motion switch is the only reduced-motion source of truth.
 import { useContentSwap, usePresence } from '../lib/motion';
 import { cn } from '../lib/utils';
-import { UnifiedSidebar } from '../components/layout/sidebar/UnifiedSidebar';
 import { CommandPalette } from '../components/layout/CommandPalette';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
-import { OnAirDock } from '../components/voice/OnAirDock';
 import { TogetherHost } from '../components/voice/together/TogetherHost';
 import { MotionDirector } from '../components/motion/MotionDirector';
-import { MobileBottomNav } from '../components/layout/MobileBottomNav';
-import { GlassFrame, useGlassLayout } from '../components/glass/shell';
+import { GlassFrame, useGlassLayout, usePhoneNavigation, usePhoneNavStore } from '../components/glass/shell';
+import { useGlassStore } from '../stores/glassStore';
 import { useUIStore } from '../stores/uiStore';
-import { useVoiceStore } from '../stores/voiceStore';
 import { useKeyboardNavigation } from '../hooks/useKeyboardNavigation';
 import { useSwipeGesture } from '../hooks/useSwipeGesture';
 import { SettingsPage } from './SettingsPage';
@@ -43,8 +40,12 @@ import { ErrorBoundary } from '../components/ErrorBoundary';
  * This component keeps the app-level concerns the frame does not own: route
  * navigation for non-React callers, keyboard shortcuts, the settings dialogs,
  * the command palette, the confirm and interaction hosts, the skip link, and
- * the phone path (navigation drawer, bottom bar, on-air dock), which stays as
- * it was until WP-G20 rebuilds it.
+ * the phone's navigation: on a phone the frame is two screens (places, then the
+ * conversation) and this decides the first one, takes the edge swipe back and
+ * turns the old drawer requests into the places screen (`usePhoneNavigation`).
+ * There is no bottom bar: Home and messages are the server row's first circle,
+ * search and members are the conversation header's, Friends is a row in Home,
+ * and settings are the account menu behind your face on the places screen.
  *
  * Overlay motion is the shared §5.1 set: drawers ease in from their edge on
  * ease-out and leave on ease-in, dialogs rise on pc-enter, backdrops fade — all
@@ -58,11 +59,7 @@ export function AppShell() {
     return () => registerAppNavigate(null);
   }, [navigate]);
 
-  const sidebarCollapsed = useUIStore((s) => s.sidebarCollapsed);
   const setSidebarCollapsed = useUIStore((s) => s.setSidebarCollapsed);
-  const setContextPanelMode = useUIStore((s) => s.setContextPanelMode);
-  const voiceConnected = useVoiceStore((s) => s.connected);
-  const voiceChannelId = useVoiceStore((s) => s.channelId);
   const location = useLocation();
   const { guildId, channelId } = useParams();
 
@@ -72,10 +69,8 @@ export function AppShell() {
   const setGuildSettingsId = useUIStore((s) => s.setGuildSettingsId);
   const userSettingsDialogRef = useRef<HTMLDivElement>(null);
   const guildSettingsDialogRef = useRef<HTMLDivElement>(null);
-  const sidebarOverlayRef = useRef<HTMLDivElement>(null);
   const closeUserSettings = useCallback(() => setUserSettingsOpen(false), [setUserSettingsOpen]);
   const closeGuildSettings = useCallback(() => setGuildSettingsId(null), [setGuildSettingsId]);
-  const closeSidebarOverlay = useCallback(() => setSidebarCollapsed(true), [setSidebarCollapsed]);
 
   useFocusTrap(userSettingsDialogRef, userSettingsOpen, closeUserSettings);
   useFocusTrap(guildSettingsDialogRef, Boolean(guildSettingsId), closeGuildSettings);
@@ -83,25 +78,16 @@ export function AppShell() {
   const layout = useGlassLayout();
   const isMobile = layout === 'phone';
 
-  // PHONE PATH (unchanged until WP-G20). On mount / breakpoint change, collapse
-  // the navigation drawer on a phone so it starts hidden rather than eating the
-  // viewport. This has to land BEFORE the first paint: `sidebarCollapsed`
-  // persists as `false`, so as a passive effect a phone opening the app painted
-  // the drawer for ~120ms and tore it down again. `sidebarMobileSynced` is a
-  // ref, not state, because it must be false on the very first render and true
-  // from the layout effect onward without a render of its own; `usePresence`
-  // would otherwise hand a first-render "open" drawer a full slide-out. The
-  // wide and compact frames never read `sidebarCollapsed`: their places panel
-  // does not collapse.
-  const sidebarMobileSynced = useRef(false);
+  // PHONE. The navigation drawer is gone: places is a screen of its own. The
+  // old drawer flag (`sidebarCollapsed`) is kept collapsed on a phone, because
+  // the conversation header's button and Ctrl+B still ask for the navigation by
+  // opening it, and `usePhoneNavigation` takes that request and shows places.
+  // It has to land before the first paint (a layout effect), or a phone that last
+  // ran with it open would start on a stale drawer.
   useLayoutEffect(() => {
     setSidebarCollapsed(isMobile);
-    sidebarMobileSynced.current = true;
   }, [isMobile, setSidebarCollapsed]);
-
-  useEffect(() => {
-    if (isMobile) setSidebarCollapsed(true);
-  }, [isMobile, location.pathname, setSidebarCollapsed]);
+  usePhoneNavigation(isMobile);
 
   // Open User settings from deep links like /app?settings=identity (import flow).
   useEffect(() => {
@@ -123,17 +109,15 @@ export function AppShell() {
   // (gateway RELATIONSHIP_* events keep them live afterwards).
   useFreshRelationships();
 
-  // Phone: a swipe right from the left edge opens the navigation drawer, and
-  // closes any details overlay first (two z-[80] surfaces never stack).
-  useSwipeGesture(
-    {
-      onSwipeRight: () => {
-        setContextPanelMode(null);
-        setSidebarCollapsed(false);
-      },
-    },
-    isMobile,
-  );
+  // Phone: a swipe right from the left edge goes back from a conversation to
+  // places, as a platform's back gesture does. Whatever owns the edge keeps it:
+  // a dialog, a sheet, full screen, or places itself.
+  const phoneScreen = usePhoneNavStore((s) => s.screen);
+  const sheetOpen = useGlassStore((s) => s.sheet !== null);
+  const fullScreen = useGlassStore((s) => s.stage.mode === 'theater');
+  const swipeBackEnabled =
+    isMobile && phoneScreen === 'conversation' && !sheetOpen && !fullScreen && !userSettingsOpen && !guildSettingsId;
+  useSwipeGesture({ onSwipeRight: () => usePhoneNavStore.getState().showPlaces() }, swipeBackEnabled);
 
   // Settings full-page routes (`/app/admin`, guild settings) keep their
   // internal padding inside the conversation pane.
@@ -144,25 +128,6 @@ export function AppShell() {
 
   const routeContentRef = useContentSwap<HTMLDivElement>(location.pathname);
 
-  // Phone persistent call surface: the call dock at the foot of the navigation
-  // drawer is out of reach while the drawer is closed, so the bottom dock stays
-  // mounted whenever connected and not already on the voice channel's page.
-  // The wide and compact frames show the places panel (and its call dock)
-  // permanently or one tap away, so they never mount it.
-  const isOnVoiceChannel = voiceChannelId
-    ? location.pathname.includes(`/channels/${voiceChannelId}`)
-    : false;
-  const showOnAirDock = isMobile && voiceConnected && !isOnVoiceChannel;
-
-  const showSidebarOverlay = isMobile && sidebarMobileSynced.current && !sidebarCollapsed;
-
-  // The phone drawer is modal (it covers a dimmed but present pane), so it
-  // traps focus, moves focus inside on open, restores it on close, and honors
-  // Escape — mirroring the settings dialogs (WCAG 2.4.3 / 2.1.2).
-  useFocusTrap(sidebarOverlayRef, showSidebarOverlay, closeSidebarOverlay);
-
-  const onAirDockPresence = usePresence(showOnAirDock);
-  const sidebarPresence = usePresence(showSidebarOverlay);
   const userSettingsPresence = usePresence(userSettingsOpen);
   const guildSettingsPresence = usePresence(Boolean(guildSettingsId));
 
@@ -192,9 +157,16 @@ export function AppShell() {
           <TogetherHost />
         </ErrorBoundary>
 
-        {/* Skip-to-content for keyboard/screen-reader users */}
+        {/* Skip-to-content for keyboard/screen-reader users. On a phone's places
+            screen the content is the conversation behind it, so it brings the
+            conversation in (the frame then focuses it). */}
         <a
           href="#main-content"
+          onClick={(event) => {
+            if (!isMobile || usePhoneNavStore.getState().screen !== 'places') return;
+            event.preventDefault();
+            usePhoneNavStore.getState().showConversation();
+          }}
           className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded-[var(--radius-control)] focus:bg-accent-primary focus:px-4 focus:py-2 focus:text-label focus:font-semibold focus:text-text-on-accent focus:outline-none focus:[box-shadow:var(--focus-ring)]"
         >
           Skip to content
@@ -209,51 +181,7 @@ export function AppShell() {
           >
             <Outlet />
           </div>
-          {onAirDockPresence.mounted && (
-            <div
-              className={cn(
-                'shrink-0 overflow-hidden px-3 py-2',
-                onAirDockPresence.exiting ? 'pc-sheet-out' : 'pc-sheet-in',
-              )}
-              {...onAirDockPresence.scenery}
-            >
-              <OnAirDock />
-            </div>
-          )}
         </GlassFrame>
-
-        {/* Phone: the navigation drawer (the full column, never the 64px
-            rail). The backdrop fades while the drawer slides in from its edge
-            on the ease-out and leaves on ease-in. */}
-        {sidebarPresence.mounted && (
-          <div
-            className={cn(
-              'fixed inset-0 z-[80] flex md:hidden modal-backdrop',
-              sidebarPresence.exiting ? 'pc-fade-out' : 'pc-fade-in',
-            )}
-            onClick={() => setSidebarCollapsed(true)}
-          >
-            <div
-              ref={sidebarOverlayRef}
-              role="dialog"
-              aria-modal="true"
-              aria-label="Navigation"
-              tabIndex={-1}
-              className={cn(
-                'h-full max-w-[88vw] overflow-hidden shadow-[var(--shadow-plate)] outline-none',
-                sidebarPresence.exiting ? 'pc-drawer-out-left' : 'pc-drawer-in-left',
-              )}
-              onClick={(e) => e.stopPropagation()}
-              {...sidebarPresence.scenery}
-            >
-              <ErrorBoundary variant="section" label="the sidebar">
-                <UnifiedSidebar alwaysExpanded />
-              </ErrorBoundary>
-            </div>
-          </div>
-        )}
-
-        {isMobile && <MobileBottomNav />}
 
         <CommandPalette />
         <ConfirmDialog />

@@ -6,6 +6,7 @@ import { Stage } from '../stage';
 import { MORPH_OVER_CLASS, MORPH_UNDER_CLASS, useStageTransitions } from '../stage/stageTransition';
 import { Sheets } from '../sheets';
 import { useGlassStore, type OpenStageMode } from '../../../stores/glassStore';
+import { PhoneFrame } from './PhoneFrame';
 import { PlacesOverlay } from './PlacesOverlay';
 import { PlacesToggle } from './PlacesToggle';
 import type { GlassLayout } from './useGlassLayout';
@@ -43,9 +44,9 @@ export interface GlassFrameProps {
  * flush while the conversation floats: siblings share geometry (§1.6).
  *
  * Below 860px (`compact`) the conversation is alone and places opens as an
- * overlay from the header. The phone frame (< 768px) is the existing phone
- * layout (its navigation drawer, bottom bar and call dock live in AppShell)
- * until WP-G20.
+ * overlay from the header. Below 768px (`phone`) the frame is `PhoneFrame`
+ * (WP-G20): places and the conversation are two screens, the stream is a card
+ * above the conversation and full screen is its theater.
  *
  * The conversation pane is the one `<main>`; it stays mounted across every
  * layout change (a hidden conversation is `inert`, not unmounted) so a draft,
@@ -103,6 +104,15 @@ export function GlassFrame({ layout, guildId, channelId, children }: GlassFrameP
   }, [setPlacesOverlayOpen, setBrowseOpen]);
   const closeBrowse = useCallback(() => setBrowseOpen(false), [setBrowseOpen]);
 
+  // The phone has its own frame: two screens, not two panes (glass-phone.css, phoneNav.ts).
+  if (layout === 'phone') {
+    return (
+      <PhoneFrame guildId={guildId} channelId={channelId} stageTarget={stageTarget} stageMode={stageMode}>
+        {children}
+      </PhoneFrame>
+    );
+  }
+
   const showPlacesPane = layout === 'wide' && (!stageOpen || browseOpen);
   // On the compact frame there is no room for a places pane beside a stage;
   // browse opens the same overlay the header does.
@@ -110,7 +120,7 @@ export function GlassFrame({ layout, guildId, channelId, children }: GlassFrameP
   // Theater browsing floats places over the stream's left edge and puts the chat
   // out of the way (the prototype's layout), so the stream is what is left.
   const conversationAway =
-    (stageMode === 'side' && browseOpen && layout !== 'phone')
+    (stageMode === 'side' && browseOpen)
     || (stageMode === 'theater' && (chatHidden || (browseOpen && layout === 'wide')));
 
   return (

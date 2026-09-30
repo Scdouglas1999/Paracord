@@ -63,6 +63,10 @@
 /* The stage's theater and browse layouts and its moves (WP-G15). Unlayered, after
    the side-by-side stage it refines. */
 @import './glass-stage-modes.css';
+/* The phone: places and the conversation as two screens, the stream card, full
+   screen and the phone variants of the header, pill and message box (WP-G20).
+   Unlayered, after the stage it refines. */
+@import './glass-phone.css';
 /* The places panel (WP-G9). Unlayered, like the frame it fills. */
 /* The Glass timeline: bubbles in the column (WP-G10). */
 @import './glass-places.css';

@@ -6,15 +6,22 @@ import { AppShell } from './AppShell';
 import { useUIStore } from '../stores/uiStore';
 import { useVoiceStore } from '../stores/voiceStore';
 import { useGlassStore } from '../stores/glassStore';
+import { usePhoneNavStore } from '../components/glass/shell';
 import { useMobile } from '../hooks/useMobile';
+import { useSwipeGesture } from '../hooks/useSwipeGesture';
 
 const fetchRelationshipsMock = vi.hoisted(() => vi.fn());
 
 // Heavy children are stubbed — this suite asserts the frame wiring (which surfaces
 // mount, and under which conditions), not the internals of the sidebar/panels.
 vi.mock('../components/glass/places', () => ({ PlacesPanel: () => <div data-testid="places-panel" /> }));
-vi.mock('../components/layout/sidebar/UnifiedSidebar', () => ({
-  UnifiedSidebar: () => <div data-testid="unified-sidebar" />,
+// The phone's places screen holds your face (the account menu) above the panel.
+vi.mock('../components/glass/conversation/HeaderAvatar', () => ({
+  HeaderAvatar: () => <button type="button">Your profile</button>,
+}));
+// What the phone draws over the stream has its own suite.
+vi.mock('../components/glass/shell/PhoneStageChrome', () => ({
+  PhoneStageChrome: () => <div data-testid="phone-stage-chrome" />,
 }));
 // The sheets slot renders through a portal into the conversation pane; what the
 // shell owes it is a mount after the pane and the route's ids (its own suite
@@ -23,12 +30,6 @@ vi.mock('../components/glass/sheets', () => ({
   Sheets: ({ guildId, channelId, layout }: { guildId: string | null; channelId: string | null; layout: string }) => (
     <div data-testid="sheets-slot" data-guild={guildId ?? ''} data-channel={channelId ?? ''} data-layout={layout} />
   ),
-}));
-vi.mock('../components/voice/OnAirDock', () => ({
-  OnAirDock: () => <div data-testid="on-air-dock" />,
-}));
-vi.mock('../components/layout/MobileBottomNav', () => ({
-  MobileBottomNav: () => <div data-testid="mobile-bottom-nav" />,
 }));
 vi.mock('../components/layout/CommandPalette', () => ({
   CommandPalette: () => <div data-testid="command-palette" />,
@@ -57,7 +58,7 @@ vi.mock('../components/voice/together/TogetherHost', () => ({ TogetherHost: () =
 
 // Side-effectful hooks that touch window/DOM — no-op them so the frame renders.
 vi.mock('../hooks/useKeyboardNavigation', () => ({ useKeyboardNavigation: () => {} }));
-vi.mock('../hooks/useSwipeGesture', () => ({ useSwipeGesture: () => {} }));
+vi.mock('../hooks/useSwipeGesture', () => ({ useSwipeGesture: vi.fn() }));
 vi.mock('../hooks/useFocusTrap', () => ({ useFocusTrap: () => {} }));
 vi.mock('../hooks/useMobile', () => ({
   useMobile: vi.fn(() => false),
@@ -72,11 +73,21 @@ vi.mock('../stores/relationshipStore', () => ({
 }));
 
 const mockedUseMobile = vi.mocked(useMobile);
+const mockedSwipe = vi.mocked(useSwipeGesture);
+
+/** A phone: under the 768px breakpoint. */
+function usePhoneWindow() {
+  mockedUseMobile.mockReturnValue(true);
+}
 
 /** The compact frame: under the 860px places breakpoint, above a phone. */
 function useCompactWindow() {
   mockedUseMobile.mockImplementation((maxWidth?: number) => maxWidth === 860);
 }
+
+/** Which screen the phone frame says is in front. */
+const frameScreen = (container: HTMLElement) =>
+  container.querySelector('.glass-frame')?.getAttribute('data-screen');
 
 const LOUNGE = { serverId: 'local', guildId: 'g1', channelId: 'lounge', streamerId: 'vincent' };
 
@@ -87,6 +98,7 @@ function renderShell(initialPath = '/app') {
         <Route path="/app" element={<AppShell />}>
           <Route index element={<div data-testid="outlet-content">home body</div>} />
           <Route path="dms/:channelId" element={<div data-testid="outlet-content">dm body</div>} />
+          <Route path="friends" element={<div data-testid="outlet-content">friends body</div>} />
           <Route
             path="guilds/:guildId/channels/:channelId"
             element={<div data-testid="outlet-content">chat body</div>}
@@ -107,8 +119,10 @@ beforeEach(() => {
     userSettingsOpen: false,
     guildSettingsId: null,
   });
-  useVoiceStore.setState({ connected: false, channelId: null });
+  useVoiceStore.setState({ connected: false, channelId: null, callId: null, callPhase: 'idle' });
   useGlassStore.getState().reset();
+  usePhoneNavStore.getState().setScreen(null);
+  mockedSwipe.mockClear();
 });
 
 describe('AppShell', () => {
@@ -135,10 +149,11 @@ describe('AppShell', () => {
     expect(screen.getByTestId('command-palette')).toBeInTheDocument();
     expect(screen.getByTestId('confirm-dialog')).toBeInTheDocument();
     expect(screen.getByTestId('interaction-modal-host')).toBeInTheDocument();
-    // The phone's bar and drawer are not part of the wide frame, and places
-    // is a pane there, so there is nothing to open it with.
-    expect(screen.queryByTestId('mobile-bottom-nav')).not.toBeInTheDocument();
+    // The phone's screens are not part of the wide frame, and places is a pane
+    // there, so there is nothing to open it with.
+    expect(container.querySelector('.glass-phone__screen')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Show places' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Back to places' })).not.toBeInTheDocument();
   });
 
   it('keeps places out of the compact frame and opens it as an overlay that a route change closes', async () => {
@@ -280,49 +295,121 @@ describe('AppShell', () => {
     );
   });
 
-  it('collapses the mobile sidebar overlay after route entry', async () => {
-    mockedUseMobile.mockReturnValue(true);
-    useUIStore.setState({ sidebarCollapsed: false });
+  describe('on a phone', () => {
+    beforeEach(usePhoneWindow);
 
-    renderShell('/app/guilds/g1/channels/c1');
+    it('is two screens on the room, not two panes, with no bottom bar and no drawer', () => {
+      const { container } = renderShell('/app/guilds/g1/channels/c1');
+      const frame = container.querySelector('.glass-frame');
+      expect(frame).toHaveAttribute('data-layout', 'phone');
+      expect(container.querySelector('.glass-room-backdrop')).not.toBeNull();
+      expect(container.querySelector('.glass-phone__screen--places')).toContainElement(screen.getByTestId('places-panel'));
+      expect(container.querySelector('.glass-phone__screen--conversation')).toContainElement(screen.getByRole('main'));
+      expect(screen.getByRole('main')).toContainElement(screen.getByTestId('outlet-content'));
+      // The morph layers are the desktop's: a phone has no moves.
+      expect(container.querySelectorAll('.glass-morph')).toHaveLength(0);
+      expect(screen.queryByRole('navigation', { name: 'Main navigation' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('dialog', { name: 'Navigation' })).not.toBeInTheDocument();
+      expect(container.querySelector('.glass-frame__places')).toBeInTheDocument();
+    });
 
-    await waitFor(() => {
+    it('opens a deep link on its conversation, with places behind it', () => {
+      const { container } = renderShell('/app/guilds/g1/channels/c1');
+      expect(frameScreen(container)).toBe('conversation');
+      expect(container.querySelector('.glass-phone__screen--places')).toHaveAttribute('inert');
+    });
+
+    it('opens Home on places, which is the list of your messages', () => {
+      const { container } = renderShell('/app');
+      expect(frameScreen(container)).toBe('places');
+      expect(container.querySelector('.glass-phone__screen--conversation')).toHaveAttribute('inert');
+    });
+
+    it('keeps the old drawer flag collapsed, and turns a request to open it into the places screen', () => {
+      useUIStore.setState({ sidebarCollapsed: false });
+      const { container } = renderShell('/app/guilds/g1/channels/c1');
       expect(useUIStore.getState().sidebarCollapsed).toBe(true);
+      expect(frameScreen(container)).toBe('conversation');
+
+      // The conversation header's button and Ctrl+B.
+      act(() => useUIStore.getState().setSidebarCollapsed(false));
+      expect(frameScreen(container)).toBe('places');
+      expect(useUIStore.getState().sidebarCollapsed).toBe(true);
+    });
+
+    it('gives a page with no conversation header the way back', () => {
+      renderShell('/app/friends');
+      act(() => usePhoneNavStore.getState().showConversation());
+      act(() => screen.getByRole('button', { name: 'Back to places' }).click());
+      expect(usePhoneNavStore.getState().screen).toBe('places');
+    });
+
+    it('turns the edge swipe on for a conversation, and off for everything that owns the edge', () => {
+      renderShell('/app/guilds/g1/channels/c1');
+      const enabled = () => mockedSwipe.mock.calls.at(-1)?.[1];
+      expect(enabled()).toBe(true);
+
+      act(() => usePhoneNavStore.getState().showPlaces());
+      expect(enabled()).toBe(false);
+      act(() => usePhoneNavStore.getState().showConversation());
+      expect(enabled()).toBe(true);
+
+      act(() => useGlassStore.getState().openSheet('search'));
+      expect(enabled()).toBe(false);
+      act(() => useGlassStore.getState().closeSheet());
+      expect(enabled()).toBe(true);
+
+      act(() => useGlassStore.getState().openStage(LOUNGE, 'theater'));
+      expect(enabled()).toBe(false);
+      act(() => useGlassStore.getState().setStageMode('side'));
+      expect(enabled()).toBe(true);
+
+      act(() => useUIStore.setState({ userSettingsOpen: true }));
+      expect(enabled()).toBe(false);
+    });
+
+    it('the swipe goes back to places', () => {
+      const { container } = renderShell('/app/guilds/g1/channels/c1');
+      const handlers = mockedSwipe.mock.calls.at(-1)?.[0];
+      act(() => handlers?.onSwipeRight?.());
+      expect(frameScreen(container)).toBe('places');
+    });
+
+    it('stacks the stream above the conversation; full screen puts the conversation out of reach', () => {
+      const { container } = renderShell('/app/guilds/g1/channels/c1');
+      act(() => useGlassStore.getState().openStage(LOUNGE));
+      const stage = screen.getByRole('region', { name: 'Stage' });
+      expect(stage).toContainElement(screen.getByTestId('stage-slot'));
+      expect(stage).toContainElement(screen.getByTestId('phone-stage-chrome'));
+      expect(container.querySelector('.glass-phone__screen--conversation')).toContainElement(stage);
+      expect(screen.getByRole('main')).not.toHaveAttribute('inert');
+
+      act(() => useGlassStore.getState().setStageMode('theater'));
+      expect(screen.getByRole('main')).toHaveAttribute('inert');
+    });
+
+    it('shows a call on the places screen, where the old on-air dock was out of reach of the drawer', () => {
+      useVoiceStore.setState({ callId: 'call-1', callPhase: 'connected', channelId: 'lounge' });
+      const { container } = renderShell('/app');
+      expect(container.querySelector('.glass-phone__call')).not.toBeNull();
+    });
+
+    it('the skip link brings the conversation in when places is in front', () => {
+      renderShell('/app');
+      expect(usePhoneNavStore.getState().screen).toBe('places');
+      act(() => screen.getByRole('link', { name: 'Skip to content' }).click());
+      expect(usePhoneNavStore.getState().screen).toBe('conversation');
     });
   });
 
-  it('mounts the mobile on-air dock when mobile + connected off the voice channel page', () => {
-    mockedUseMobile.mockReturnValue(true);
-    useUIStore.setState({ sidebarCollapsed: true });
-    useVoiceStore.setState({ connected: true, channelId: '999' });
-
-    renderShell('/app');
-
-    expect(screen.getByTestId('on-air-dock')).toBeInTheDocument();
-    expect(screen.getByTestId('mobile-bottom-nav')).toBeInTheDocument();
-  });
-
-  it('never mounts the AppShell on-air dock on desktop (the sidebar CallDock is the sole persistent call surface)', () => {
-    // CHAT-4 invariant: on desktop the persistent call dock lives in the
-    // UnifiedSidebar footer (CallDock). The AppShell-level on-air dock is a
-    // MOBILE-only dock, so it must stay unmounted on desktop even while
-    // connected — otherwise two persistent on-air pills would show at once.
+  it('never draws the phone\'s call surface on desktop: the places pane and the conversation header carry the call', () => {
     mockedUseMobile.mockReturnValue(false);
-    useVoiceStore.setState({ connected: true, channelId: '999' });
+    useVoiceStore.setState({ connected: true, channelId: '999', callId: 'call-1', callPhase: 'connected' });
 
-    renderShell('/app');
+    const { container } = renderShell('/app');
 
-    expect(screen.queryByTestId('on-air-dock')).not.toBeInTheDocument();
-  });
-
-  it('does not mount the mobile on-air dock while viewing the active voice channel page', () => {
-    mockedUseMobile.mockReturnValue(true);
-    useUIStore.setState({ sidebarCollapsed: true });
-    useVoiceStore.setState({ connected: true, channelId: 'c1' });
-
-    renderShell('/app/guilds/g1/channels/c1');
-
-    expect(screen.queryByTestId('on-air-dock')).not.toBeInTheDocument();
+    expect(container.querySelector('.glass-phone__call')).toBeNull();
+    expect(container.querySelector('.glass-phone__screen')).toBeNull();
   });
 
   it('opens the user and guild settings overlays from uiStore flags', () => {

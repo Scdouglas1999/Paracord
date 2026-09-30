@@ -1,0 +1,543 @@
+/* =============================================================================
+   The phone (docs/glass-spec.md §8, reference `screens/07-phone.png` and
+   `source/GlassV14Phone.dc.html`; WP-G20).
+
+   Below 768px the frame is not two panes: places is a screen of its own, and the
+   conversation is a screen in front of it (components/glass/shell/PhoneFrame.tsx,
+   phoneNav.ts). There is no server rail and no bottom bar, and nothing pretends
+   to be the status bar: the frame draws to the window's edges and pads itself
+   with the device's safe areas (`--safe-top`, `--safe-bottom`, `--safe-left`,
+   `--safe-right`, from tokens.css).
+
+   The conversation screen is the prototype's stack, with the numbers it uses:
+
+     stream card     12px in, 16:9, radius 22, while you are watching
+     call pill       12px in (so 366px at 390), two rows, 10px under the card
+     header          General / Game Night, "6 NEW" on the right
+     messages        straight on the room, a fade under the header
+     message box     12px in, above the home indicator
+
+   Nothing in it is a pane: the room shows through, darkened by `.glass-phone__scrim`
+   (the prototype's own gradient). A page that is not a conversation (Home,
+   Friends, a server's overview) keeps a pane under it, because it was drawn for one.
+
+   This file refines the phone variants that the components ship (pill, header,
+   message box, stage) only through their class names and never edits their
+   files; each such block says which component owns the thing it adjusts.
+
+   Tokens only (the literal-color lint); only transform and opacity animate (the
+   motion lint): the screens' own slide is Web Animations (phoneMotion.ts).
+   Unlayered, after glass-stage-modes.css: it refines the frame, stage and header
+   rules above it.
+   ============================================================================= */
+
+/* ---- The room, darkened ---------------------------------------------------------
+   The prototype lays a dark gradient over its blurred room on the phone: heavy at
+   the top (behind the stream), light by the middle, a little under the message
+   box. The room itself is already graded down by its canvas (§4: brightness .6,
+   where the prototype's blur is .7), so this is the prototype's gradient at
+   about four fifths of its strength. `data-native-underlay-clear` lets a native video surface show through. */
+.glass-phone__scrim {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--pill) 45%, transparent),
+    color-mix(in srgb, var(--pill) 8%, transparent) 30%,
+    color-mix(in srgb, var(--pill) 22%, transparent)
+  );
+}
+
+/* ---- The frame: two screens in the same place ------------------------------------- */
+.glass-shell .glass-frame[data-layout='phone'] {
+  display: block;
+  padding: 0;
+  gap: 0;
+}
+
+.glass-phone__screen {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding-inline: var(--safe-left, 0px) var(--safe-right, 0px);
+}
+
+/* The screen behind: the conversation waits off to the right, places steps back and
+   fades. Both are inert (PhoneFrame), so neither can be reached. */
+.glass-phone__screen--conversation:not([data-active]) {
+  transform: translateX(100%);
+  pointer-events: none;
+}
+
+.glass-phone__screen--places:not([data-active]) {
+  transform: translateX(-22%);
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* ---- Places: its own screen ------------------------------------------------------ */
+.glass-phone__screen--places {
+  gap: 10px;
+  padding-top: calc(var(--safe-top, 0px) + 12px);
+  padding-bottom: max(12px, var(--safe-bottom, 0px));
+  padding-inline: max(12px, var(--safe-left, 0px)) max(12px, var(--safe-right, 0px));
+}
+
+.glass-phone__call {
+  flex: 0 0 auto;
+}
+
+.glass-frame[data-layout='phone'] .glass-phone__screen .glass-phone__places {
+  flex: 1 1 0;
+  width: auto;
+  border-radius: var(--radius-plate-phone);
+  padding-top: 6px;
+}
+
+/* Your face, at the top right: the account menu (status, reminders, settings,
+   sign out) is the phone's way to settings now that the bottom bar is gone. */
+.glass-phone__places-bar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  margin: 0 -6px 4px 0;
+}
+
+/* ---- Conversation: the stack -------------------------------------------------------- */
+.glass-phone__screen--conversation {
+  padding-top: calc(var(--safe-top, 0px) + 12px);
+}
+
+.glass-frame[data-layout='phone'] .glass-phone__screen--conversation > .glass-frame__conversation {
+  flex: 1 1 0;
+  min-height: 0;
+  margin: 0;
+}
+
+/* A conversation sits straight on the room (screens/07 has no pane behind it): the
+   pane loses its fill, shadow, glow and radius, and keeps what it does for the
+   layout (it clips and it sizes). `inert` and focus are the frame's. */
+.glass-frame[data-layout='phone'] .glass-frame__conversation:has(.glass-conversation) {
+  border-radius: 0;
+  background-color: transparent;
+  box-shadow: none;
+  outline: none;
+}
+
+.glass-frame[data-layout='phone'] .glass-frame__conversation:has(.glass-conversation)::after {
+  display: none;
+}
+
+/* Any other page keeps a pane, 12px in, as the phone frame always drew it. */
+.glass-frame[data-layout='phone'] .glass-phone__screen--conversation > .glass-frame__conversation:not(:has(.glass-conversation)) {
+  margin: 0 12px max(12px, var(--safe-bottom, 0px));
+  border-radius: var(--radius-plate-phone);
+}
+
+.glass-frame[data-layout='phone'] .glass-phone__screen--conversation > .glass-frame__conversation:focus {
+  outline: none;
+}
+
+/* The way back, on a page with no conversation header (the header carries its own).
+   The call pill rides under it while you are in a call. */
+.glass-frame[data-layout='phone'] .glass-frame__pane-bar {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  padding: 6px 6px 0;
+}
+
+.glass-frame[data-layout='phone'] .glass-frame__pane-bar > .glass-btn {
+  align-self: flex-start;
+}
+
+.glass-frame[data-layout='phone'] .glass-frame__pane-bar:has(.glass-pill) {
+  padding-bottom: 10px;
+}
+
+/* ---- The stream card (screens/07: 12px in, 16:9, radius 22) -------------------------- */
+.glass-frame[data-layout='phone'] .glass-phone__screen--conversation > .glass-frame__stage {
+  position: relative;
+  flex: 0 0 auto;
+  align-self: center;
+  /* 12px in, and never taller than half the window (a phone on its side). */
+  width: min(calc(100% - 24px), calc(50dvh * 16 / 9));
+  max-height: none;
+  margin-bottom: 10px;
+  aspect-ratio: 16 / 9;
+  border-radius: 22px;
+  overflow: hidden;
+  /* The prototype's spill: teal to the left, amber to the right, sampled from
+     the stream (stage/useStageGlow.ts writes the two colors). */
+  box-shadow:
+    -30px 10px 80px color-mix(in srgb, rgb(var(--stage-glow-l, var(--room-rgb))) 12%, transparent),
+    30px 0 80px color-mix(in srgb, rgb(var(--stage-glow-r, var(--room-rgb))) 20%, transparent);
+}
+
+/* The stage (components/glass/stage) draws the stream and its notices, the clip
+   toast and the reactions. Its own phone overlay (title and a stop button) is
+   replaced by `.glass-phone-stage` below, which is the one the reference shows. */
+.glass-stage[data-layout='phone'] .glass-stage__overlay,
+.glass-stage[data-layout='phone'] .glass-stage__scrim {
+  display: none;
+}
+
+/* What the phone draws over the stream: back, clip "30s", full screen, the name
+   and the count. */
+.glass-phone-stage {
+  --stage-ctl-h: 64px;
+  --stage-over: color-mix(in srgb, var(--pill) 50%, transparent);
+  --stage-over-hover: color-mix(in srgb, var(--ink-1) 12%, color-mix(in srgb, var(--pill) 58%, transparent));
+  --stage-over-press: color-mix(in srgb, var(--pill) 72%, transparent);
+  --stage-text-shadow: 0 1px 8px color-mix(in srgb, var(--pill) 50%, transparent);
+
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  color: var(--ink-1);
+  pointer-events: none;
+  text-shadow: var(--stage-text-shadow);
+}
+
+.glass-phone-stage__shade {
+  position: absolute;
+  right: 0;
+  left: 0;
+}
+
+.glass-phone-stage__shade--top {
+  top: 0;
+  height: 70px;
+  background-image: linear-gradient(color-mix(in srgb, var(--pill) 52%, transparent), transparent);
+}
+
+.glass-phone-stage__shade--bottom {
+  bottom: 0;
+  height: 64px;
+  background-image: linear-gradient(transparent, color-mix(in srgb, var(--pill) 57%, transparent));
+}
+
+.glass-phone-stage .glass-phone-stage__btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 18px;
+  pointer-events: auto;
+}
+
+.glass-phone-stage__back {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+}
+
+.glass-phone-stage__tools {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: flex;
+  gap: 8px;
+}
+
+.glass-phone-stage .glass-phone-stage__clip {
+  width: auto;
+  gap: 5px;
+  padding: 0 11px 0 9px;
+}
+
+.glass-phone-stage__clip .glass-instrument {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.glass-phone-stage__clip[aria-disabled='true'] {
+  cursor: default;
+}
+
+.glass-phone-stage__who,
+.glass-phone-stage__count {
+  position: absolute;
+  bottom: 10px;
+  display: flex;
+  align-items: center;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.glass-phone-stage__who {
+  left: 14px;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.glass-phone-stage__dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background-color: var(--amber);
+}
+
+.glass-phone-stage__count {
+  right: 14px;
+  gap: 5px;
+  color: color-mix(in srgb, var(--ink-1) 85%, transparent);
+}
+
+/* ---- Full screen: the phone's theater (§6.2) ------------------------------------------ */
+.glass-frame[data-layout='phone'][data-stage='theater'] .glass-phone__screen--conversation > .glass-frame__stage {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  /* Not `center`: an absolutely positioned box with a non-stretch alignment
+     sizes itself to its content instead of to its insets. */
+  align-self: stretch;
+  width: auto;
+  margin: 0;
+  aspect-ratio: auto;
+  border-radius: 0;
+  box-shadow: none;
+  /* Opaque, so nothing of the conversation under it shows through. */
+  background-color: var(--street);
+}
+
+/* The stream keeps its 16:9 in the middle of the window; the room above and below
+   is the stage's own dark. */
+.glass-frame[data-layout='phone'][data-stage='theater'] .glass-stage[data-layout='phone'] {
+  justify-content: center;
+}
+
+.glass-frame[data-layout='phone'][data-stage='theater'] .glass-stage[data-layout='phone'] .glass-stage__stream {
+  flex: 0 0 auto;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+}
+
+.glass-phone-stage[data-mode='fullscreen'] .glass-phone-stage__shade--top {
+  height: calc(var(--safe-top, 0px) + 70px);
+}
+
+.glass-phone-stage[data-mode='fullscreen'] .glass-phone-stage__back,
+.glass-phone-stage[data-mode='fullscreen'] .glass-phone-stage__tools {
+  top: calc(var(--safe-top, 0px) + 10px);
+}
+
+.glass-phone-stage[data-mode='fullscreen'] .glass-phone-stage__back {
+  left: calc(var(--safe-left, 0px) + 10px);
+}
+
+.glass-phone-stage[data-mode='fullscreen'] .glass-phone-stage__tools {
+  right: calc(var(--safe-right, 0px) + 10px);
+}
+
+/* The name and the count move up beside the buttons, clear of the capsule. */
+.glass-phone-stage[data-mode='fullscreen'] .glass-phone-stage__who,
+.glass-phone-stage[data-mode='fullscreen'] .glass-phone-stage__count {
+  top: calc(var(--safe-top, 0px) + 10px);
+  bottom: auto;
+  height: 36px;
+}
+
+.glass-phone-stage[data-mode='fullscreen'] .glass-phone-stage__who {
+  left: calc(var(--safe-left, 0px) + 54px);
+}
+
+.glass-phone-stage[data-mode='fullscreen'] .glass-phone-stage__count {
+  right: calc(var(--safe-right, 0px) + 54px);
+}
+
+.glass-phone-stage[data-mode='fullscreen'] .glass-phone-stage__shade--bottom {
+  height: calc(var(--safe-bottom, 0px) + 120px);
+}
+
+/* The controls: the same ones the side-by-side stage has, as a glass capsule over
+   the bottom of the stream (the theater's own: glass-stage-modes.css). */
+.glass-phone-stage__controls {
+  position: absolute;
+  bottom: calc(max(var(--safe-bottom, 0px), 12px) + 12px);
+  left: 50%;
+  max-width: calc(100% - 16px);
+  translate: -50% 0;
+  pointer-events: auto;
+  text-shadow: none;
+}
+
+.glass-phone-stage__controls .glass-stage__controls {
+  flex: none;
+  width: auto;
+  height: var(--stage-ctl-h);
+  padding: 0 8px;
+  gap: 6px;
+  border-radius: var(--r-capsule);
+  background-color: color-mix(in srgb, var(--solid) 55%, transparent);
+  box-shadow:
+    var(--glass-edge),
+    inset 0 0 0 1px var(--glass-fill-quiet),
+    var(--sh-raised);
+  backdrop-filter: blur(30px) saturate(1.6);
+  -webkit-backdrop-filter: blur(30px) saturate(1.6);
+}
+
+.glass-phone-stage__controls .glass-stage__divider {
+  margin: 0 2px;
+}
+
+.glass-phone-stage__controls .glass-stage__leave {
+  padding: 0 14px;
+}
+
+/* The smallest phones: 44px buttons do not fit a joined row in 304px, so the
+   capsule tightens (38px buttons, 4px gaps) rather than spill off the window. */
+@media (max-width: 370px) {
+  .glass-phone-stage__controls .glass-stage__controls {
+    gap: 4px;
+    padding: 0 6px;
+  }
+
+  .glass-phone-stage__controls .glass-stage__controls .glass-btn--icon,
+  .glass-phone-stage__controls .glass-stage__controls .glass-stage__clip {
+    width: 38px;
+    height: 38px;
+    padding: 0;
+  }
+
+  .glass-phone-stage__controls .glass-stage__divider {
+    margin: 0;
+  }
+
+  .glass-phone-stage__controls .glass-stage__leave {
+    padding: 0 10px;
+  }
+}
+
+/* ---- Reactions rise about 90px, not 270 -------------------------------------------------
+   The card is about 206px tall: the stage's 270px rise (stage/StreamReactionsLayer.css)
+   would leave through its top edge and be clipped by its corners. The disc is a little
+   smaller and sits 24px in and 40px up, as in the prototype. */
+.glass-stage[data-layout='phone'] .glass-reactions {
+  --stream-reactions-right: 24px;
+  --stream-reactions-bottom: 40px;
+
+  width: 48px;
+  height: 130px;
+}
+
+.glass-stage[data-layout='phone'] .glass-reactions__bubble:not([data-still]) {
+  animation-name: glass-phone-reaction-rise;
+}
+
+.glass-stage[data-layout='phone'] .glass-reactions__bubble[data-own]:not([data-still]) {
+  animation-name: glass-phone-reaction-burst;
+}
+
+.glass-stage[data-layout='phone'] .glass-reactions__disc {
+  width: 36px;
+  height: 36px;
+  border-radius: 18px;
+}
+
+.glass-stage[data-layout='phone'] .glass-reactions__bubble[data-own] .glass-reactions__disc {
+  width: 40px;
+  height: 40px;
+  border-radius: 20px;
+}
+
+@keyframes glass-phone-reaction-rise {
+  0% {
+    opacity: 0;
+    transform: translateY(0) scale(0.6);
+  }
+  16% {
+    opacity: 1;
+    transform: translateY(-8px) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-90px) scale(0.95);
+  }
+}
+
+@keyframes glass-phone-reaction-burst {
+  0% {
+    opacity: 0;
+    transform: translateY(0) scale(0.5);
+  }
+  14% {
+    opacity: 1;
+    transform: translateY(-14px) scale(1.12);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-100px) scale(1);
+  }
+}
+
+/* In full screen the reactions rise from the stream's corner, above the capsule. */
+.glass-frame[data-layout='phone'][data-stage='theater'] .glass-stage[data-layout='phone'] .glass-reactions {
+  --stream-reactions-right: 20px;
+}
+
+/* ---- Call pill: edge to edge (pill/CallPill owns it; the header pads it 8px) ------------ */
+.glass-conversation[data-layout='phone'] .glass-conversation__phone-pill {
+  padding: 0 12px;
+}
+
+.glass-conversation[data-layout='phone'] .glass-conversation__phone-pill:not(:empty) {
+  margin-bottom: 9px;
+}
+
+.glass-phone__call .glass-pill,
+.glass-frame[data-layout='phone'] .glass-frame__pane-bar .glass-pill {
+  width: 100%;
+}
+
+/* ---- Header (conversation/ConversationHeader owns it) ---------------------------------- */
+/* 44px, the prototype's: the title block is 38px and the buttons are 40. */
+.glass-header[data-layout='phone'] {
+  min-height: 44px;
+  padding-block: 0;
+}
+
+.glass-conversation[data-layout='phone'] .glass-conversation__timeline {
+  margin-top: 6px;
+}
+
+/* The header's own drawer button (`sidebarCollapsed`) now opens the places screen
+   (phoneNav.ts turns the request into it), so it is the way back. It draws the
+   chevron of a back button. Delete this block when the header swaps the button
+   for `PlacesToggle` (docs/design/glass-g20-checkpoint.md). */
+.glass-header[data-layout='phone'] .glass-header__nav[aria-label$='sidebar'] > svg {
+  display: none;
+}
+
+.glass-header[data-layout='phone'] .glass-header__nav[aria-label$='sidebar']::before {
+  content: '';
+  width: 22px;
+  height: 22px;
+  background-color: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m15 18-6-6 6-6'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m15 18-6-6 6-6'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+/* ---- Message box: 12px in, above the home indicator (screens/07: 34px up) ---------------- */
+.glass-conversation[data-layout='phone'] .glass-conversation__composer {
+  padding: 0 12px max(10px, var(--safe-bottom, 0px));
+}
+
+/* ---- Reduced transparency, and the native video route ----------------------------------- */
+:root[data-reduced-transparency='true'] .glass-phone-stage__controls .glass-stage__controls {
+  background-color: var(--solid);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* Nothing in the page can blur a native surface below it: near-solid fills. */
+html[data-native-underlay] .glass-phone-stage__controls .glass-stage__controls {
+  background-color: color-mix(in srgb, var(--solid) 94%, transparent);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
