@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { AxiosError, AxiosHeaders } from 'axios';
 import { MemoryRouter } from 'react-router';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { dailyWordApi, type DailyWordToday } from '../../api/dailyWord';
 import { useDailyWordStore } from '../../stores/dailyWordStore';
 import { toast } from '../../stores/toastStore';
@@ -57,8 +57,16 @@ function type(word: string) {
   for (const letter of word) fireEvent.keyDown(window, { key: letter });
 }
 
+// The fixture puzzle ends at 2026-09-25T00:00Z. The view compares that with the
+// wall clock, so a test that reads the real one goes stale the moment the calendar
+// passes it: the view thinks a new puzzle is due and refetches, and every refetch
+// returns the same past fixture. Pin the date (only the date: the timers stay real
+// because the tests wait on promises).
+const NOW = new Date('2026-09-24T12:00:00Z');
+
 describe('DailyWordView', () => {
   beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'], now: NOW });
     vi.clearAllMocks();
     useDailyWordStore.getState().reset();
     vi.mocked(dailyWordApi.getSettings).mockImplementation(() =>
@@ -66,6 +74,10 @@ describe('DailyWordView', () => {
     vi.mocked(dailyWordApi.getToday).mockImplementation(() => ok(today()));
     vi.mocked(dailyWordApi.getBoard).mockImplementation(() =>
       ok({ guild_id: 'g1', puzzle: 267, played: 0, finished: 0, solved: 0, solvers: [], visible: false, entries: [] }));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   async function renderView() {
@@ -105,6 +117,46 @@ describe('DailyWordView', () => {
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'E, in place' })).toHaveAttribute('data-state', 'correct'));
     expect(screen.getByRole('button', { name: 'R, in the word' })).toHaveAttribute('data-state', 'present');
+  });
+
+  it('asks the server for a new puzzle at most once per tick when its own clock is past the puzzle end', async () => {
+    // The device clock is ahead of the server's: the puzzle it is showing "ended" five
+    // minutes ago by this clock, and the server keeps answering with the same one. The
+    // view used to refetch on every answer, without end. Each mock answer takes a
+    // macrotask, so a regression fails the count instead of starving the test runner.
+    vi.setSystemTime(new Date('2026-09-25T00:05:00Z'));
+    vi.mocked(dailyWordApi.getToday).mockImplementation(
+      () => new Promise((resolve) => setTimeout(() => resolve({ data: today() } as never), 0)),
+    );
+    await renderView();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    });
+    // One read on mount, one because the puzzle is already past its end.
+    expect(vi.mocked(dailyWordApi.getToday).mock.calls.length).toBeLessThanOrEqual(2);
+  });
+
+  it('starts a fresh game when midnight passes, without the letters typed for the old word', async () => {
+    // The page's clock is the only thing that notices midnight, so it has to be driven.
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'], now: NOW });
+    render(
+      <MemoryRouter>
+        <DailyWordView guildId="g1" serverName="Lantern Works" />
+      </MemoryRouter>,
+    );
+    await act(async () => {});
+    expect(screen.getByText(/No\. 267/)).toBeInTheDocument();
+    type('cra');
+    expect(screen.getByRole('group', { name: 'Typing CRA' })).toBeInTheDocument();
+
+    vi.mocked(dailyWordApi.getToday).mockImplementation(() =>
+      ok(today({ puzzle: 268, date: '2026-09-25', next_puzzle_at: '2026-09-26T00:00:00Z' })));
+    await act(async () => {
+      vi.setSystemTime(new Date('2026-09-25T00:00:10Z'));
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(screen.getByText(/No\. 268/)).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Next guess, empty' })).toBeInTheDocument();
   });
 
   it('asks for five letters before sending', async () => {

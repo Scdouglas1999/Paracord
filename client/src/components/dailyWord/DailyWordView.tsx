@@ -90,15 +90,28 @@ export function DailyWordView({ guildId, serverName }: { guildId: string; server
     const timer = window.setInterval(() => setNowMs(Date.now()), 30_000);
     return () => window.clearInterval(timer);
   }, []);
+  // Keyed on the puzzle's end and not on `today` itself: every answer from the
+  // server is a new object. If this device's clock is ahead of the server's the
+  // puzzle it just fetched is already "over", and depending on `today` made each
+  // answer trigger the next fetch, without end. Now a stale puzzle is asked
+  // about again on the next tick of the clock, no faster.
+  const nextPuzzleAt = today?.next_puzzle_at ?? null;
   useEffect(() => {
-    if (!today) return;
-    const next = Date.parse(today.next_puzzle_at);
+    if (!nextPuzzleAt) return;
+    const next = Date.parse(nextPuzzleAt);
     if (Number.isFinite(next) && nowMs >= next) {
-      setInput('');
       void useDailyWordStore.getState().refreshToday();
       void useDailyWordStore.getState().refreshBoard(guildId);
     }
-  }, [nowMs, today, guildId]);
+  }, [nowMs, nextPuzzleAt, guildId]);
+
+  // A new word comes in: what you had typed was for the old one.
+  const puzzle = today?.puzzle ?? null;
+  const shownPuzzle = useRef(puzzle);
+  useEffect(() => {
+    if (shownPuzzle.current !== null && puzzle !== null && shownPuzzle.current !== puzzle) setInput('');
+    shownPuzzle.current = puzzle;
+  }, [puzzle]);
 
   const later = useCallback((fn: () => void, ms: number) => {
     timers.current.push(window.setTimeout(fn, ms));
