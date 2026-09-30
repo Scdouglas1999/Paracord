@@ -1,0 +1,564 @@
+/* =============================================================================
+   The call pill (docs/glass-spec.md §5, §7, §8, §9; WP-G12). Component:
+   components/glass/pill.
+
+   A black capsule at the top of the conversation, right-aligned to the column.
+   Compact it is 52px tall; expanded it grows to the column's width (a spring on
+   transform: the surface is scaled, the faces slide) and shows the stream and
+   the roster.
+
+   Tokens only: the literal-color lint covers this file. Unlayered, after the
+   conversation's header rules, because it refines the header's pill slot
+   (.glass-header__pill, glass-conversation.css).
+
+   Only transform and opacity animate (the motion lint), with one named
+   exception: the surface's border-radius rides the same spring so that a
+   scaled capsule keeps round ends (§9: "position, size and radius animate
+   together"). Hover and press are color changes over --glass-ms.
+   ============================================================================= */
+
+.glass-pill {
+  --pill-ring: var(--pill);
+  /* A faint amber glow beneath the capsule (§5), and a hairline round it. */
+  --pill-glow: color-mix(in srgb, var(--amber-tint) 80%, transparent);
+  --pill-edge: color-mix(in srgb, var(--glass-hair) 50%, transparent);
+  --pill-drop: color-mix(in srgb, var(--pill) 45%, transparent);
+  --pill-radius: 26px;
+  --pill-spring: cubic-bezier(0.3, 1.25, 0.5, 1);
+
+  position: relative;
+  display: block;
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  width: max-content;
+  height: 52px;
+  color: var(--ink-1);
+  font-size: 15px;
+  line-height: 1.25;
+}
+
+/* ---- Where it sits: the header's slot (row) or above the header (stacked) ---- */
+
+/* Expanded, the pill leaves the slot's flow and grows leftward from the slot's
+   right edge (the column's right edge) to the column's left edge. The component
+   writes --pill-col-w from the header's own geometry; 720 is the column. */
+.glass-pill[data-layout='row']:is([data-phase='expanded'], [data-phase='closing']) {
+  --pill-radius: 32px;
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-end: 0;
+  width: var(--pill-col-w, var(--glass-column-w, 720px));
+  height: auto;
+  /* The reference's two heights: 222px, and 244px while listening in (the
+     sentence that says everyone can see it takes a line). More people grow it. */
+  min-height: 222px;
+}
+
+.glass-pill[data-layout='row'][data-note='true']:is([data-phase='expanded'], [data-phase='closing']) {
+  min-height: 244px;
+}
+
+.glass-pill[data-layout='stacked'] {
+  --pill-radius: 28px;
+  width: 100%;
+  height: auto;
+}
+
+/* ---- The capsule ------------------------------------------------------------- */
+.glass-pill__surface,
+.glass-pill__glow {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--pill-radius);
+  transform-origin: 100% 0;
+  pointer-events: none;
+}
+
+.glass-pill__surface {
+  background-color: var(--pill);
+  -webkit-backdrop-filter: blur(30px);
+  backdrop-filter: blur(30px);
+  box-shadow: inset 0 0 0 1px var(--pill-edge);
+}
+
+/* The soft shadow and the faint amber glow beneath (§5) are their own layer:
+   during the move it only scales, so a 50px blur is never repainted per frame. */
+.glass-pill__glow {
+  box-shadow:
+    0 18px 50px var(--pill-drop),
+    0 12px 44px var(--pill-glow);
+}
+
+/* The phone's pill is a little more see-through, over the stream (screens/07). */
+.glass-pill[data-layout='stacked'] .glass-pill__surface {
+  background-color: color-mix(in srgb, var(--pill), transparent 3%);
+}
+
+/* Reduced transparency (§4): opaque, and no blur anywhere. The setting is
+   written by the appearance settings; until then it never matches. */
+:root[data-reduced-transparency='true'] .glass-pill__surface {
+  background-color: var(--street);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* ---- The 52px row ------------------------------------------------------------- */
+.glass-pill__bar {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 52px;
+  padding: 0 8px 0 10px;
+}
+
+/* Faces, name, waveform: one button that opens and closes the roster. */
+.glass-pill__who {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  height: 52px;
+  margin: 0;
+  padding: 0 13px 0 0;
+  border: 0;
+  border-radius: 14px;
+  font: inherit;
+  text-align: start;
+  color: inherit;
+  background: none;
+  cursor: pointer;
+}
+
+.glass-pill__who {
+  transition: background-color var(--glass-ms) var(--glass-ease);
+}
+
+.glass-pill__who:hover {
+  background-color: var(--wash-hover);
+}
+
+.glass-pill__faces {
+  display: flex;
+  flex: 0 0 auto;
+}
+
+.glass-pill__faces .glass-face {
+  box-shadow: 0 0 0 2px var(--pill-ring);
+}
+
+.glass-pill__more {
+  flex: 0 0 auto;
+  margin-inline-start: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.glass-pill__name {
+  flex: 0 1 auto;
+  /* A very long channel name is cut, not allowed to push the controls away. */
+  max-width: 260px;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The waveform's place is kept while nobody talks, so the pill does not change
+   width every time somebody draws a breath. */
+.glass-pill__wave-slot {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  width: calc(5 * var(--wave-bar) + 4 * var(--wave-gap));
+  height: 14px;
+}
+
+/* Real voice: the engine writes --voice-level (0 to 1) on the element marked
+   data-motion-speaking, and each bar reads it (lib/motion/voiceLevel.ts). The
+   loop is only for a channel nobody here can hear. */
+.glass-pill__wave[data-real] > span {
+  animation: none;
+  transform: scaleY(calc(0.35 + 0.65 * min(1, var(--voice-level, 0) * var(--wave-gain, 1))));
+  transition: transform 90ms linear;
+}
+
+.glass-pill__wave[data-real] > span:nth-child(1) {
+  --wave-gain: 0.85;
+}
+
+.glass-pill__wave[data-real] > span:nth-child(3) {
+  --wave-gain: 0.9;
+}
+
+.glass-pill__wave[data-real] > span:nth-child(4) {
+  --wave-gain: 0.95;
+}
+
+.glass-pill__wave[data-real] > span:nth-child(5) {
+  --wave-gain: 0.75;
+}
+
+/* On the row the line appears with the roster, after the faces have slid into
+   place, so it never crosses the buttons on the way. */
+.glass-pill[data-layout='row'] .glass-pill__sub {
+  animation: glass-pill-fade 200ms 140ms ease-out both;
+}
+
+.glass-pill__sub {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-2);
+}
+
+/* ---- Controls ----------------------------------------------------------------- */
+.glass-pill__controls {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Leave is a decision, so it is text; it keeps the capsule's roundness. */
+.glass-pill__leave {
+  padding: 0 16px;
+  border-radius: 18px;
+}
+
+/* A listener's button: the label says what it does now. */
+.glass-pill__listen {
+  padding: 0 12px 0 10px;
+}
+
+.glass-pill [aria-disabled='true'] {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.glass-pill__watch-icon {
+  display: none;
+}
+
+/* ---- Giving up space (§5) ------------------------------------------------------
+   0 everything; 1 no talking name; 2 icons without labels; 3 faces and Join.   */
+.glass-pill:is([data-collapse='1'], [data-collapse='2'], [data-collapse='3']) .glass-pill__sub {
+  display: none;
+}
+
+.glass-pill:is([data-collapse='2'], [data-collapse='3']) .glass-pill__label {
+  display: none;
+}
+
+.glass-pill:is([data-collapse='2'], [data-collapse='3']) .glass-pill__watch-icon {
+  display: block;
+}
+
+.glass-pill:is([data-collapse='2'], [data-collapse='3']) :is(.glass-pill__listen, .glass-pill__watch) {
+  width: 36px;
+  padding: 0;
+}
+
+.glass-pill[data-collapse='3'] :is(
+    .glass-pill__name,
+    .glass-pill__wave-slot,
+    .glass-pill__listen,
+    .glass-pill__watch,
+    .glass-pill__mute,
+    .glass-pill__mic
+  ) {
+  display: none;
+}
+
+.glass-pill[data-collapse='3'] .glass-pill__who {
+  padding-inline-end: 0;
+}
+
+/* The row's smallest form keeps two faces (§5: faces and Join). */
+.glass-pill[data-collapse='3'] .glass-pill__faces .glass-face:nth-child(n + 3),
+.glass-pill[data-collapse='3'] .glass-pill__more {
+  display: none;
+}
+
+/* ---- Expanded: the stream and the roster --------------------------------------- */
+.glass-pill__body {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  gap: 16px;
+  padding: 6px 16px 20px;
+  animation: glass-pill-rise 350ms 120ms ease-out both;
+}
+
+/* Closing: the words fade first, then the capsule shrinks. */
+.glass-pill[data-phase='closing'] .glass-pill__body {
+  animation: none;
+  opacity: 0;
+  transition: opacity var(--pill-fade, 120ms) ease-out;
+}
+
+@keyframes glass-pill-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes glass-pill-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+:root[data-motion='reduced'] .glass-pill__body {
+  animation: glass-pill-fade var(--glass-ms-reduced) ease-out both;
+}
+
+.glass-pill__preview {
+  position: relative;
+  flex: 0 0 256px;
+  width: 256px;
+  height: 144px;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 16px;
+  color: var(--ink-1);
+  /* Until a frame arrives: the room's tint. */
+  background-color: var(--bub);
+  background-image: radial-gradient(70% 90% at 62% 60%, var(--glow), transparent 75%);
+  box-shadow: 0 0 0 1px var(--pill-edge);
+  cursor: pointer;
+}
+
+.glass-pill__preview canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.glass-pill__preview-shade {
+  position: absolute;
+  inset: auto 0 0;
+  height: 56px;
+  background-image: linear-gradient(transparent, color-mix(in srgb, var(--pill) 62%, transparent));
+}
+
+.glass-pill__preview-label {
+  position: absolute;
+  inset-inline-start: 12px;
+  inset-block-end: 9px;
+  font-size: 13px;
+  font-weight: 600;
+  text-shadow: 0 1px 6px color-mix(in srgb, var(--pill) 55%, transparent);
+}
+
+.glass-pill__preview-expand {
+  position: absolute;
+  inset-inline-end: 10px;
+  inset-block-end: 9px;
+  color: var(--ink-1);
+  opacity: 0.85;
+}
+
+.glass-pill__roster-wrap {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+/* Centered while it fits; scrolls from the top when it does not. */
+.glass-pill__roster-inner {
+  margin-block: auto;
+}
+
+.glass-pill__roster {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.glass-pill__person {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 34px;
+}
+
+/* Talking and sharing wear the amber ring (§1.3: amber means live). */
+.glass-pill__person[data-lit='true'] .glass-face {
+  box-shadow:
+    0 0 0 2px var(--pill-ring),
+    0 0 0 3.5px var(--amber);
+}
+
+.glass-pill__person-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.glass-pill__person-state {
+  flex: 0 0 auto;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.glass-pill__person-state[data-tone='amber'] {
+  color: var(--amber-ink);
+}
+
+.glass-pill__person-state[data-tone='ink'] {
+  color: var(--ink-1);
+}
+
+.glass-pill__note {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+/* ---- Phone: two rows (§8, screens/07) ------------------------------------------ */
+.glass-pill[data-layout='stacked'] {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  /* The phone can be 320 wide. Its width does not depend on its content, so it
+     can answer to its own width: Watch, then Listen, give up their labels. */
+  container-type: inline-size;
+}
+
+@container (max-width: 305px) {
+  .glass-pill__actions .glass-pill__watch .glass-pill__label {
+    display: none;
+  }
+
+  .glass-pill__actions .glass-pill__watch .glass-pill__watch-icon {
+    display: block;
+  }
+
+  .glass-pill__actions .glass-pill__watch {
+    width: 44px;
+    padding: 0;
+  }
+}
+
+@container (max-width: 282px) {
+  .glass-pill__actions .glass-pill__listen .glass-pill__label {
+    display: none;
+  }
+
+  .glass-pill__actions .glass-pill__listen {
+    width: 44px;
+    padding: 0;
+  }
+}
+
+.glass-pill__top {
+  position: relative;
+  z-index: 1;
+}
+
+.glass-pill__top .glass-pill__who {
+  gap: 10px;
+  width: 100%;
+  height: auto;
+  min-height: 34px;
+  padding: 0 4px;
+}
+
+.glass-pill__lines {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.glass-pill__title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.glass-pill__title .glass-pill__name {
+  max-width: none;
+}
+
+.glass-pill__actions {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  gap: 8px;
+}
+
+.glass-pill__actions .glass-btn {
+  height: 44px;
+  font-size: 15px;
+}
+
+/* The phone can be 320 wide: Join takes what the others leave. */
+.glass-pill__actions .glass-btn--primary,
+.glass-pill__actions .glass-pill__leave {
+  min-width: 64px;
+}
+
+.glass-pill__actions .glass-pill__listen {
+  gap: 7px;
+  padding: 0 14px 0 12px;
+}
+
+.glass-pill__actions .glass-btn--icon {
+  width: 44px;
+  padding: 0;
+}
+
+.glass-pill__actions .glass-btn--primary,
+.glass-pill__actions .glass-pill__leave {
+  flex: 1 1 auto;
+}
+
+.glass-pill[data-layout='stacked'] .glass-pill__body {
+  flex-direction: column;
+  gap: 12px;
+  padding: 0;
+}
+
+.glass-pill[data-layout='stacked'] .glass-pill__preview {
+  flex: 0 0 auto;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+}
+
+.glass-pill[data-layout='stacked'] .glass-pill__roster-wrap {
+  max-height: none;
+}
