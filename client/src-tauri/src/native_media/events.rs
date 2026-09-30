@@ -78,6 +78,7 @@ pub fn spawn_speaking_detector(session: &mut NativeMediaSession, app: super::Cal
     let local_mic_level = session.local_mic_level.clone();
     let local_mic_frames = session.local_mic_frames.clone();
     let muted = session.muted.clone();
+    let mic_capture_generation = session.mic_capture_generation.clone();
 
     let handle = tokio::spawn(async move {
         let mut tick = interval(Duration::from_millis(100));
@@ -87,8 +88,12 @@ pub fn spawn_speaking_detector(session: &mut NativeMediaSession, app: super::Cal
         // A microphone that opened and then delivered nothing is the failure
         // that took a day to find, because it looks exactly like a quiet room.
         // Give it a deadline and then say so, once.
-        let started = Instant::now();
+        let mut started = Instant::now();
         let mut silence_reported = false;
+        // Listening in never opens the microphone; the deadline starts when a
+        // capture does, and again for every new capture (device switch).
+        let mut capture_generation = mic_capture_generation.load(Ordering::SeqCst);
+        let mut frames_at_capture_start = local_mic_frames.load(Ordering::Relaxed);
         // Last emitted speaker set (SSRC ids only). Levels still ride along in
         // the payload, but we only emit when membership changes so a steady
         // talker does not spam the webview at 10 Hz.
@@ -148,8 +153,16 @@ pub fn spawn_speaking_detector(session: &mut NativeMediaSession, app: super::Cal
                         );
                     }
 
-                    if !silence_reported
-                        && frames == 0
+                    let generation = mic_capture_generation.load(Ordering::SeqCst);
+                    if generation != capture_generation {
+                        capture_generation = generation;
+                        started = Instant::now();
+                        silence_reported = false;
+                        frames_at_capture_start = frames;
+                    }
+                    if generation != 0
+                        && !silence_reported
+                        && frames == frames_at_capture_start
                         && started.elapsed() >= MIC_SILENCE_DEADLINE
                     {
                         silence_reported = true;
@@ -373,6 +386,7 @@ pub fn spawn_control_recv_task(session: &mut NativeMediaSession, app: super::Cal
     let video_force_keyframe = session.video_force_keyframe.clone();
     let screen_force_keyframe = session.screen_force_keyframe.clone();
     let screen_bitrate_feedback_kbps = session.screen_bitrate_feedback_kbps.clone();
+    let video_track_keys = session.video_track_keys.clone();
 
     let handle = tokio::spawn(async move {
         loop {
@@ -424,6 +438,7 @@ pub fn spawn_control_recv_task(session: &mut NativeMediaSession, app: super::Cal
                         &video_force_keyframe,
                         &screen_force_keyframe,
                         &screen_bitrate_feedback_kbps,
+                        &video_track_keys,
                         &app,
                     )
                     .await;
@@ -458,6 +473,7 @@ async fn handle_control_message(
     video_force_keyframe: &std::sync::Arc<std::sync::atomic::AtomicBool>,
     screen_force_keyframe: &std::sync::Arc<std::sync::atomic::AtomicBool>,
     screen_bitrate_feedback_kbps: &std::sync::Arc<std::sync::atomic::AtomicU32>,
+    video_track_keys: &std::sync::Mutex<std::collections::HashSet<(String, String)>>,
     app: &super::CallEventSink,
 ) {
     match message {
@@ -602,6 +618,11 @@ async fn handle_control_message(
                 let mut registry = stream_registry.lock().await;
                 registry.publish_track(track.clone());
             }
+            super::session::NativeMediaSession::remember_video_track(
+                video_track_keys,
+                &track.stream_id.0,
+                &track.track_id.0,
+            );
             // Record the relay-announced SSRC→track binding. This is the only
             // authorized statement of which SSRC belongs to which track, and it
             // is what the video pipeline cross-checks incoming frame metadata

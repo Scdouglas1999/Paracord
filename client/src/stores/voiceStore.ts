@@ -1,11 +1,34 @@
 import { create } from 'zustand';
-import type { VoiceState } from '../types';
-import { createCallVoiceApi, type VoiceJoinResponse } from '../api/voice';
-import { captureOperationContext } from '../lib/operationContext';
-import { accountScopeKey, type AccountScope } from '../lib/serverScope';
+import type { VoiceMode, VoiceState } from '../types';
+import { createCallVoiceApi, type VoiceJoinResponse, type VoiceWatchers } from '../api/voice';
+import { LISTEN_IN_DISABLED, voiceErrorCode, voiceErrorMessage } from './voice/errors';
+import { captureOperationContext, type OperationContext } from '../lib/operationContext';
+import { accountScopeKey, entityKeyBelongsToScope, LOCAL_SERVER_ID, type AccountScope } from '../lib/serverScope';
+import { useServerListStore } from './serverListStore';
+import { useGuildStore } from './guildStore';
+import {
+  applyWatchersSnapshot,
+  dropScopeWatchers,
+  watcherCount,
+  type WatcherIndex,
+} from './voice/watchers';
+import {
+  closeViewsForServer,
+  initViewSessions,
+  onCallClosed,
+  onCallCommitted,
+  reconcileAmbient,
+  resetViewSessions,
+  startAmbient as startAmbientView,
+  startWatch as startWatchView,
+  stopAmbient as stopAmbientView,
+  stopWatch as stopWatchView,
+  type MediaViewState,
+  type MediaViewTarget,
+} from './voice/viewSessions';
 import { subscribeServerDisconnect } from '../lib/serverDisconnect';
 import { gateway } from '../gateway/manager';
-import { CallSession, type CallPhase } from './voice/callSession';
+import { CallSession, type CallPhase, type CallTarget } from './voice/callSession';
 // Types only: the library itself is loaded on the one path that builds a
 // LiveKit room (see `voice/livekitRuntime.ts`), not with this store at startup.
 import type {
@@ -35,7 +58,12 @@ import {
 } from './voice/livekitController';
 import { computeConnectRetryDelayMs, isTransientVoiceConnectError } from './voice/reconnect';
 import { computeSpeaking, isStallWarningInterval, smoothVolume } from './voice/timers';
-import { switchNativeOutputDevice, switchNativeInputDevice } from './voice/nativeMediaController';
+import {
+  listNativeInputDevices,
+  resolveNativeDeviceId,
+  switchNativeOutputDevice,
+  switchNativeInputDevice,
+} from './voice/nativeMediaController';
 import { useToastStore } from './toastStore';
 import { logVoiceDiagnostic } from '../lib/desktopDiagnostics';
 import type { MediaEngine } from '../lib/media/mediaEngine';
@@ -1292,10 +1320,12 @@ function buildLocalVoiceState(
   selfVideo: boolean,
   suppress = false,
   requestToSpeakAt: string | null = null,
+  mode: VoiceMode = 'joined',
 ): VoiceState | null {
   const authUser = currentCallUser();
   if (!authUser) return null;
   return {
+    mode,
     user_id: authUser.id,
     channel_id: channelId,
     guild_id: guildId ?? undefined,
@@ -1896,10 +1926,51 @@ function registerRoomListeners(
   };
 }
 
-interface VoiceStoreState {
+/** Error codes the voice store reports beside `connectionError`. */
+export type VoiceErrorCode = typeof LISTEN_IN_DISABLED;
+
+export type { MediaViewKind, MediaViewState, MediaViewTarget } from './voice/viewSessions';
+export type {
+  MediaViewEndReason,
+  MediaViewPauseReason,
+  MediaViewPhase,
+  MediaViewRoute,
+} from './voice/viewSessions';
+export { VIEW_CONNECT_DEADLINE_MS } from './voice/viewSessions';
+
+export interface VoiceStoreState {
   callId: string | null;
   callScope: AccountScope | null;
   callPhase: CallPhase | 'idle';
+  /**
+   * How this client takes part in its call: `listen` (hears the voices, never
+   * sends; everyone sees "Listening in") or `joined`. Null without a call.
+   */
+  callMode: VoiceMode | null;
+  /** True while `joinFromListen` switches the call to joined in place. */
+  modeSwitching: boolean;
+  /**
+   * Why the last switch between listening and joined failed; the call stays
+   * as it was. Cleared by the next switch.
+   */
+  modeError: string | null;
+  /**
+   * A machine-readable reason beside `connectionError`, when the server gave
+   * one the interface acts on: `LISTEN_IN_DISABLED` (this channel does not
+   * admit listeners; the person may join instead, the client never does it
+   * for them).
+   */
+  connectionErrorCode: VoiceErrorCode | null;
+  /** Watching a stream (with or without the call). Null when not watching. */
+  watchView: MediaViewState | null;
+  /** The room light's ambient view. Null when the room asked for none. */
+  ambientView: MediaViewState | null;
+  /**
+   * Watcher counts per voice channel (keyed by `watcherKey(scope, channelId)`),
+   * from `VOICE_WATCHERS_UPDATE` and `fetchWatchers`. Read with
+   * `selectWatcherCount`.
+   */
+  watchers: WatcherIndex;
   publishVoiceState: () => void;
   connected: boolean;
   joining: boolean;
@@ -1982,6 +2053,44 @@ interface VoiceStoreState {
   setPreviewStreamer: (userId: string | null) => void;
   setPttEngaged: (engaged: boolean) => void;
 
+  // ── Glass media contract (docs/design/glass-g6-checkpoint.md) ──────────
+  /**
+   * Listen in: join a server voice channel receive-only. Never opens the
+   * microphone and never sends; everyone who can see the channel sees
+   * "Listening in". Rejects (and sets `connectionErrorCode`) with
+   * `LISTEN_IN_DISABLED` when the channel does not admit listeners.
+   */
+  listen: (channelId: string, guildId: string) => Promise<void>;
+  /**
+   * Join the call this client is listening to, in place: the same receipt and
+   * the same media connection (no reconnect gap); the microphone opens now.
+   * `joinChannel` on the channel being listened to does the same.
+   */
+  joinFromListen: () => Promise<void>;
+  /**
+   * Watch `target.streamerId`'s stream: its video and its own audio, never the
+   * voices; counted for everyone ("2 watching"). Without the call it is a
+   * separate lightweight session beside any call; in the call it rides the
+   * call. Resolves when live; the state is `watchView`.
+   */
+  startWatch: (target: MediaViewTarget) => Promise<void>;
+  /** Stop watching. Never leaves the call. */
+  stopWatch: () => Promise<void>;
+  /**
+   * Light the room with `target`'s stream (lowest layer, at most one frame a
+   * second, no audio, never counted). One per client: a new target replaces
+   * the old; the same target again is a no-op. Closed while the window is
+   * hidden or its server is not the current one. The state is `ambientView`.
+   */
+  startAmbient: (target: MediaViewTarget) => void;
+  stopAmbient: () => void;
+  /** Playback gain (0..2) of the watched stream's own audio. */
+  setWatchVolume: (gain: number) => void;
+  /** Load a channel's watcher counts now (open a stage with it). */
+  fetchWatchers: (target: { serverId?: string; channelId: string }) => Promise<void>;
+  /** `VOICE_WATCHERS_UPDATE` from the gateway. */
+  handleWatchersUpdate: (payload: VoiceWatchers, scope: AccountScope) => void;
+
   // Gateway event handlers
   handleVoiceStateUpdate: (state: VoiceState, scope?: AccountScope) => void;
   // Load initial voice states from READY payload
@@ -1998,6 +2107,8 @@ interface VoiceStoreState {
 
 export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
   callId: null, callScope: null, callPhase: 'idle',
+  callMode: null, modeSwitching: false, modeError: null, connectionErrorCode: null,
+  watchView: null, ambientView: null, watchers: new Map(),
   publishVoiceState: () => {
     const owner = currentCall;
     if (!owner?.current || owner.phase !== 'connected') return;
@@ -2044,23 +2155,63 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
   joinChannel: (channelId, guildId) => {
     const context = captureOperationContext();
     const target = { scope: context.scope, channelId, guildId: guildId ?? null };
-    if (currentCall?.current && accountScopeKey(currentCall.target.scope) === context.key
-        && currentCall.target.channelId === channelId && currentCall.target.guildId === target.guildId) {
+    if (isSameCall(currentCall, context.key, target)) {
       context.dispose();
-      return currentCall.joinPromise ?? Promise.resolve();
+      // Joining the call this client listens to is the in-place upgrade.
+      if (currentCall!.mode === 'listen') return get().joinFromListen();
+      return currentCall!.joinPromise ?? Promise.resolve();
     }
-    const previousMute = get().selfMute;
-    const previousDeaf = get().selfDeaf;
-    const priorRelease = currentCall ? closeCall(currentCall) : Promise.resolve();
-    const owner: CallSession = new CallSession(context, target, () => currentCall === owner, () => { void closeCall(owner); },
-      { ...((useAuthStore.getState().settings?.notifications ?? {}) as Record<string, unknown>) });
-    currentCall = owner;
-    set({ callId: owner.id, callScope: context.scope, callPhase: 'joining', joining: true,
-      joiningChannelId: channelId, channelId, guildId: target.guildId, connected: false,
-      connectionError: null, connectionErrorChannelId: null, selfMute: previousMute, selfDeaf: previousDeaf });
-    owner.joinPromise = priorRelease.then(() => performCallJoin(owner, previousMute, previousDeaf));
-    return owner.joinPromise;
+    return startCall(context, target, 'joined');
   },
+
+  listen: (channelId, guildId) => {
+    if (!guildId || guildId === 'dm') {
+      return Promise.reject(new Error('Listening in is only for server voice channels.'));
+    }
+    const context = captureOperationContext();
+    const target = { scope: context.scope, channelId, guildId };
+    if (isSameCall(currentCall, context.key, target)) {
+      context.dispose();
+      if (currentCall!.mode === 'listen') return currentCall!.joinPromise ?? Promise.resolve();
+      return Promise.reject(new Error('You are already in this call.'));
+    }
+    return startCall(context, target, 'listen');
+  },
+
+  joinFromListen: () => {
+    const owner = currentCall;
+    if (!owner?.current) return Promise.reject(new Error('You are not listening in to a call.'));
+    if (owner.mode === 'joined') return owner.joinPromise ?? Promise.resolve();
+    return upgradeFromListen(owner);
+  },
+
+  startWatch: (target) => startWatchView(target),
+  stopWatch: () => stopWatchView(),
+  startAmbient: (target) => { watchAmbientEnvironment(); startAmbientView(target); },
+  stopAmbient: () => stopAmbientView(),
+
+  setWatchVolume: (gain) => {
+    const view = get().watchView;
+    if (!view?.engine) return;
+    view.engine.setSourceVolume(view.streamerId, Math.min(2, Math.max(0, gain)));
+  },
+
+  fetchWatchers: async ({ serverId, channelId }) => {
+    const context = captureOperationContext(serverId);
+    try {
+      const { data } = await createCallVoiceApi(context).watchers(channelId);
+      context.assertCurrent();
+      get().handleWatchersUpdate(data, context.scope);
+    } finally {
+      context.dispose();
+    }
+  },
+
+  handleWatchersUpdate: (payload, scope) =>
+    set((state) => {
+      const watchers = applyWatchersSnapshot(state.watchers, scope, payload);
+      return watchers === state.watchers ? state : { watchers };
+    }),
 
   leaveChannel: () => currentCall ? closeCall(currentCall) : Promise.resolve(),
 
@@ -2068,8 +2219,10 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
     const owner = currentCall;
     // Clear synchronously. A pending release can never erase the next login's call.
     const release = owner ? closeCall(owner) : Promise.resolve();
+    resetViewSessions();
     set({ channelParticipants: new Map(), participants: new Map(), speakingUsers: new Set(),
-      showSystemAudioPrivacyWarning: false, pttEngaged: false });
+      showSystemAudioPrivacyWarning: false, pttEngaged: false, watchers: new Map(),
+      watchView: null, ambientView: null, modeError: null, connectionErrorCode: null });
     return release;
   },
 
@@ -2158,6 +2311,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
   startStream: async (qualityPreset = '1080p60', sourceId?: string) => {
     const owner = currentCall;
     if (!owner?.current) throw new Error('Voice connection is not ready');
+    if (owner.mode === 'listen') throw new Error('Join the call to share your screen. Listening in never sends.');
     const action = owner.operation('screen');
     const api = callApi(owner);
     const { channelId, room, mediaEngine } = get();
@@ -2586,6 +2740,10 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
 
   toggleVideo: async () => {
     const owner = currentCall;
+    if (owner?.current && owner.mode === 'listen') {
+      useToastStore.getState().addToast('error', 'Join the call to turn on your camera. Listening in never sends.');
+      return;
+    }
     const action = owner?.operation('camera');
     const state = get();
     const nextSelfVideo = !state.selfVideo;
@@ -2695,6 +2853,9 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
     if (owner?.current) owner.preferences['audioInputDeviceId'] = deviceId;
     const state = get();
     const normalizedDeviceId = normalizeDeviceId(deviceId);
+    // Listening never opens a microphone: the choice is kept and used when the
+    // listener joins (`joinFromListen`).
+    if (owner?.current && owner.mode === 'listen') return true;
     if (isTauri() && state.mediaEngine != null) {
       if (!owner?.current || !action) return false;
       try {
@@ -2819,6 +2980,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
       if (voiceState.session_id !== owner.membershipSessionId) return;
       if (!voiceState.channel_id) { void closeCall(owner); return; }
     }
+    if (owner?.current && voiceState.channel_id === owner.target.channelId) owner.seenMembers.add(voiceState.user_id);
     // Determine join/leave sounds BEFORE mutating state so we can compare
     // the previous channel of the updating user against our current channel.
     const currentState = get();
@@ -3010,8 +3172,181 @@ if (typeof window !== 'undefined') {
 }
 subscribeServerDisconnect(serverId => {
   if (currentCall?.target.scope.serverId === serverId) void closeCall(currentCall);
+  closeViewsForServer(serverId);
+  useVoiceStore.setState((state) => {
+    const watchers = dropScopeWatchers(state.watchers, (key) => {
+      try { return (JSON.parse(key) as unknown[])[0] === serverId; } catch { return false; }
+    });
+    return watchers === state.watchers ? state : { watchers };
+  });
 });
 registerSessionReset('voice', () => useVoiceStore.getState().reset());
+
+// ── Glass media contract: helpers ────────────────────────────────────────────
+
+function isSameCall(call: CallSession | null, scopeKey: string, target: CallTarget): boolean {
+  return !!call?.current && accountScopeKey(call.target.scope) === scopeKey
+    && call.target.channelId === target.channelId && call.target.guildId === target.guildId;
+}
+
+function pushToTalkEnabled(): boolean {
+  return getNotificationSettings()['voiceInputMode'] === 'push_to_talk';
+}
+
+/** Begin a call in `mode`, replacing any other call this client holds. */
+function startCall(context: OperationContext, target: CallTarget, mode: VoiceMode): Promise<void> {
+  const previousMute = useVoiceStore.getState().selfMute;
+  const previousDeaf = useVoiceStore.getState().selfDeaf;
+  const priorRelease = currentCall ? closeCall(currentCall) : Promise.resolve();
+  const owner: CallSession = new CallSession(context, target, () => currentCall === owner, () => { void closeCall(owner); },
+    { ...((useAuthStore.getState().settings?.notifications ?? {}) as Record<string, unknown>) });
+  owner.mode = mode;
+  currentCall = owner;
+  useVoiceStore.setState({ callId: owner.id, callScope: context.scope, callPhase: 'joining', joining: true,
+    joiningChannelId: target.channelId, channelId: target.channelId, guildId: target.guildId, connected: false,
+    callMode: mode, modeSwitching: false, modeError: null,
+    connectionError: null, connectionErrorChannelId: null, connectionErrorCode: null,
+    selfMute: previousMute, selfDeaf: previousDeaf });
+  owner.joinPromise = priorRelease.then(() => performCallJoin(owner, previousMute, previousDeaf));
+  return owner.joinPromise;
+}
+
+let upgradeInFlight: { owner: CallSession; promise: Promise<void> } | null = null;
+
+/**
+ * Listening -> joined, in place. The server flips this member to a publisher
+ * on the same receipt (`POST /mode`), then the engine opens the microphone on
+ * the same connection. If the microphone cannot open, the server is put back
+ * to listening, so nobody sees a joined member who cannot be heard.
+ */
+function upgradeFromListen(owner: CallSession): Promise<void> {
+  if (upgradeInFlight?.owner === owner) return upgradeInFlight.promise;
+  const promise = (async () => {
+    await (owner.joinPromise ?? Promise.resolve());
+    owner.assertCurrent();
+    if (owner.mode === 'joined') return;
+    if (owner.phase !== 'connected' && owner.phase !== 'reconnecting') {
+      throw new Error('The call is not connected yet.');
+    }
+    const sessionId = owner.membershipSessionId;
+    if (!sessionId) throw new Error('Voice membership is not confirmed. Rejoin before joining the call.');
+    const engine = useVoiceStore.getState().mediaEngine;
+    if (!engine) throw new Error('Listening in needs the native media connection.');
+    const action = owner.operation('mode');
+    const api = createCallVoiceApi(owner.context);
+    const { channelId } = owner.target;
+    useVoiceStore.setState({ modeSwitching: true, modeError: null });
+    let switched = false;
+    try {
+      const { data } = await api.setMode(channelId, 'joined', sessionId);
+      action.assertCurrent();
+      switched = true;
+      const inputDeviceId = isTauri()
+        ? resolveNativeDeviceId(await listNativeInputDevices(), getSavedInputDeviceId())
+        : null;
+      action.assertCurrent();
+      await engine.startMicrophone({ inputDeviceId });
+      action.assertCurrent();
+      owner.mode = 'joined';
+      const state = useVoiceStore.getState();
+      const muted = state.selfMute || state.selfDeaf || pushToTalkEnabled() || !data.can_publish;
+      engine.setMute(muted);
+      const localUserId = owner.context.user.id;
+      useVoiceStore.setState((prev) => {
+        const participants = new Map(prev.participants);
+        const channelParticipants = new Map(prev.channelParticipants);
+        const local = participants.get(localUserId);
+        if (local) participants.set(localUserId, { ...local, mode: 'joined', self_mute: muted });
+        const members = channelParticipants.get(channelId);
+        if (members) {
+          channelParticipants.set(channelId, members.map((member) =>
+            member.user_id === localUserId ? { ...member, mode: 'joined' as const, self_mute: muted } : member));
+        }
+        return { callMode: 'joined', modeSwitching: false, modeError: null, selfMute: muted, participants, channelParticipants };
+      });
+      useVoiceStore.getState().publishVoiceState();
+    } catch (error) {
+      if (!action.current()) throw error;
+      if (switched) await api.setMode(channelId, 'listen', sessionId).catch(() => {});
+      const message = voiceErrorMessage(error, 'Could not join the call.');
+      useVoiceStore.setState({ modeSwitching: false, modeError: switched
+        ? `Your microphone could not start, so you are still listening in. ${message}`
+        : message });
+      throw error;
+    }
+  })();
+  upgradeInFlight = { owner, promise };
+  void promise.catch(() => {}).finally(() => {
+    if (upgradeInFlight?.promise === promise) upgradeInFlight = null;
+  });
+  return promise;
+}
+
+function connectedCallMedia(call: CallSession): { engine: MediaEngine; sessionId: string } | null {
+  if (call !== currentCall || !call.current) return null;
+  if (call.phase !== 'connected' && call.phase !== 'reconnecting') return null;
+  const engine = useVoiceStore.getState().mediaEngine;
+  if (!engine || !call.membershipSessionId) return null;
+  return { engine, sessionId: call.membershipSessionId };
+}
+
+initViewSessions({
+  publish: (kind, state) => useVoiceStore.setState(kind === 'watch' ? { watchView: state } : { ambientView: state }),
+  callIn: (scope, channelId) => {
+    const call = currentCall;
+    if (!call?.current || call.context.key !== accountScopeKey(scope) || call.target.channelId !== channelId) return null;
+    return call;
+  },
+  callMedia: async (call) => {
+    await (call.joinPromise ?? Promise.resolve()).catch(() => {});
+    return connectedCallMedia(call);
+  },
+  connectedCallMedia,
+  callReleased: (call) => call.membershipReleased ?? Promise.resolve(),
+  createEngine: () => createMediaEngine(),
+  captureContext: (serverId) => captureOperationContext(serverId),
+  windowVisible: () => typeof document === 'undefined' || document.visibilityState !== 'hidden',
+  serverCurrent: (scope, guildId) => {
+    const active = useServerListStore.getState().activeServerId ?? LOCAL_SERVER_ID;
+    if (active !== scope.serverId) return false;
+    const selected = useGuildStore.getState().selectedGuild;
+    return !!selected && selected.id === guildId && accountScopeKey(selected.scope) === accountScopeKey(scope);
+  },
+  streamVolume: () => 1,
+});
+
+// The ambient view follows the window and the server on screen. Subscribed
+// on first use: `guildStore` imports reach back into this module through the
+// gateway, so it may not be initialized while this module evaluates.
+let ambientEnvironmentWatched = false;
+function watchAmbientEnvironment(): void {
+  if (ambientEnvironmentWatched) return;
+  ambientEnvironmentWatched = true;
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', () => reconcileAmbient());
+  }
+  useServerListStore.subscribe((next, previous) => {
+    if (next.activeServerId !== previous.activeServerId) reconcileAmbient();
+  });
+  useGuildStore.subscribe((next, previous) => {
+    if (next.selectedGuild !== previous.selectedGuild) reconcileAmbient();
+  });
+}
+
+/** How many people watch `streamerId` in `channelId` ("2 watching"). */
+export function selectWatcherCount(
+  state: Pick<VoiceStoreState, 'watchers'>,
+  scope: AccountScope | null,
+  channelId: string,
+  streamerId: string,
+): number {
+  return watcherCount(state.watchers, scope, channelId, streamerId);
+}
+
+/** The watcher counts of one account, for tests and diagnostics. */
+export function watcherKeysForScope(state: Pick<VoiceStoreState, 'watchers'>, scope: AccountScope): string[] {
+  return [...state.watchers.keys()].filter((key) => entityKeyBelongsToScope(key, scope));
+}
 
 function createLivekitRoom(): Room {
   return new (livekit().Room)({
@@ -3070,12 +3405,14 @@ function createLivekitRoom(): Room {
 }
 
 /** Only the owner being closed may clear the current projection or shared DOM. */
-function closeCall(owner: CallSession, error?: string): Promise<void> {
+function closeCall(owner: CallSession, error?: string, errorCode: VoiceErrorCode | null = null): Promise<void> {
   const existing = callReleasePromises.get(owner);
   if (existing) return existing;
   const closingCurrent = currentCall === owner;
   const release = owner.close();
   callReleasePromises.set(owner, release);
+  let membershipReleased!: () => void;
+  owner.membershipReleased = new Promise<void>((resolve) => { membershipReleased = resolve; });
   if (closingCurrent) {
     clearActiveRoomListeners();
     // Nobody is talking to us any more, so no ring may claim to know how loud
@@ -3098,8 +3435,10 @@ function closeCall(owner: CallSession, error?: string): Promise<void> {
       else channelParticipants.delete(owner.target.channelId);
       return {
         callId: null, callScope: null, callPhase: error ? 'failed' : 'idle',
+        callMode: null, modeSwitching: false, modeError: null,
         connected: false, joining: false, joiningChannelId: null, channelId: null, guildId: null,
         connectionError: error ?? null, connectionErrorChannelId: error ? owner.target.channelId : null,
+        connectionErrorCode: error ? errorCode : null,
         room: null, mediaEngine: null, livekitToken: null, livekitUrl: null, roomName: null, voiceSessionId: null,
         selfMute: false, selfDeaf: false, selfVideo: false, selfStream: false,
         participants: new Map(), channelParticipants, speakingUsers: new Set(),
@@ -3120,8 +3459,12 @@ function closeCall(owner: CallSession, error?: string): Promise<void> {
       console.warn('[voice] Conditional membership cleanup pending:', failure);
     } finally {
       owner.context.dispose();
+      membershipReleased();
     }
   });
+  // A watch or ambient view that rode this call moves once the membership is
+  // released (Leave never stops a watch).
+  onCallClosed(owner);
   return release;
 }
 
@@ -3161,6 +3504,19 @@ function ownLivekitRoom(owner: CallSession, room: Room): () => Promise<void> {
 
 function bindEngine(owner: CallSession, engine: MediaEngine): void {
   const { channelId, guildId, scope } = owner.target;
+  // Someone watching this client's stream without joining is in its relay
+  // roster too. A call member always has a voice state in the channel; a view
+  // session never does (G5). "Member" wins: see CallSession.seenMembers. A DM
+  // call has no view sessions.
+  engine.setPeerRoleResolver((userId) => {
+    if (guildId === 'dm') return 'member';
+    if (owner.seenMembers.has(userId)) return 'member';
+    if (useVoiceStore.getState().participants.get(userId)?.channel_id === channelId) {
+      owner.seenMembers.add(userId);
+      return 'member';
+    }
+    return 'viewer';
+  });
   engine.onParticipantJoin(owner.guard(userId => {
     // The engine knows only that this person's media session is in the call.
     // Their voice state (sharing, camera, mute, name) comes from the gateway,
@@ -3231,11 +3587,14 @@ function bindEngine(owner: CallSession, engine: MediaEngine): void {
 function commitCall(owner: CallSession, data: VoiceJoinResponse, media: { room: Room } | { mediaEngine: MediaEngine }, muted: boolean, deafened: boolean): void {
   owner.assertCurrent();
   owner.phase = 'connected';
-  const local = buildLocalVoiceState(owner.target.channelId, owner.target.guildId, data.session_id ?? '', muted, deafened, false, false, data.suppress === true);
+  const local = buildLocalVoiceState(owner.target.channelId, owner.target.guildId, data.session_id ?? '', muted, deafened, false, false, data.suppress === true, null, owner.mode);
   useVoiceStore.setState(state => {
     const channelParticipants = new Map(state.channelParticipants);
     const participants = new Map<string, VoiceState>();
-    for (const member of channelParticipants.get(owner.target.channelId) ?? []) participants.set(member.user_id, member);
+    for (const member of channelParticipants.get(owner.target.channelId) ?? []) {
+      participants.set(member.user_id, member);
+      owner.seenMembers.add(member.user_id);
+    }
     if (local) {
       participants.set(local.user_id, local);
       channelParticipants.set(owner.target.channelId, [...participants.values()]);
@@ -3243,6 +3602,7 @@ function commitCall(owner: CallSession, data: VoiceJoinResponse, media: { room: 
     return {
       ...media, room: 'room' in media ? media.room : null, mediaEngine: 'mediaEngine' in media ? media.mediaEngine : null,
       callPhase: 'connected', connected: true, joining: false, joiningChannelId: null,
+      callMode: owner.mode,
       channelId: owner.target.channelId, guildId: owner.target.guildId,
       livekitToken: data.token, livekitUrl: data.url, roomName: data.room_name,
       voiceSessionId: data.session_id ?? null, selfMute: muted, selfDeaf: deafened,
@@ -3250,6 +3610,9 @@ function commitCall(owner: CallSession, data: VoiceJoinResponse, media: { room: 
     };
   });
   if ('room' in media) syncLivekitRoomPresence(media.room);
+  // A watch of this channel's stream moves onto the call; the ambient view
+  // rides it too.
+  onCallCommitted(owner);
   playVoiceJoinSound();
   // Preload the guild's soundboard so the first play is instant. The lazy
   // import keeps the audio engine out of this module's import graph.
@@ -3274,11 +3637,14 @@ async function performCallJoin(owner: CallSession, previousMute: boolean, previo
   const { channelId, guildId } = owner.target;
   const isDm = guildId === 'dm';
   const ptt = getNotificationSettings()['voiceInputMode'] === 'push_to_talk';
-  const shouldMute = previousMute || previousDeaf || ptt;
+  // A listener sends nothing, whatever the mute preference says: it applies
+  // when the listener joins.
+  const listening = owner.mode === 'listen';
+  const shouldMute = previousMute || previousDeaf || ptt || listening;
   const receiveJoin = async (fallback?: 'livekit') => {
     owner.assertCurrent();
     owner.membershipUncertain = true;
-    const { data } = await api.join(channelId, isDm, fallback);
+    const { data } = await api.join(channelId, isDm, fallback, owner.mode);
     owner.membershipSessionId = data.session_id ?? null;
     owner.membershipUncertain = !data.session_id;
     owner.assertCurrent();
@@ -3301,6 +3667,8 @@ async function performCallJoin(owner: CallSession, previousMute: boolean, previo
             bindEngine(owner, engine);
             await engine.connect(endpoint, token, data.cert_hash, {
               id: owner.id,
+              // A listener's engine never opens the microphone.
+              role: listening ? 'listen' : 'call',
               signal: owner.signal,
               account: owner.context,
               // The join response's pin is correct now; a reconnect minutes or
@@ -3312,7 +3680,9 @@ async function performCallJoin(owner: CallSession, previousMute: boolean, previo
             const muted = shouldMute || data.suppress === true;
             engine.setMute(muted);
             engine.setDeaf(previousDeaf);
-            commitCall(owner, data, { mediaEngine: engine }, muted, previousDeaf);
+            // While listening, `selfMute` is the preference the upgrade will
+            // apply (the pill's mute circle); the engine is silent regardless.
+            commitCall(owner, data, { mediaEngine: engine }, listening ? previousMute || previousDeaf : muted, previousDeaf);
             return;
           } catch (error) {
             nativeError = error;
@@ -3322,6 +3692,9 @@ async function performCallJoin(owner: CallSession, previousMute: boolean, previo
         }
       }
       if (data.native_media || (candidates.length && token)) {
+        // Listening in exists only on the native relay (receive-only members,
+        // the in-place upgrade). It is never carried over to LiveKit.
+        if (listening) throw nativeError;
         if (!allowNativeToLivekitFallback() || !(data.livekit_available || (data.url && data.token))) throw nativeError;
         if (owner.membershipSessionId) await api.leave(channelId, isDm, owner.membershipSessionId);
         owner.membershipSessionId = null;
@@ -3329,6 +3702,7 @@ async function performCallJoin(owner: CallSession, previousMute: boolean, previo
       }
     }
     owner.assertCurrent();
+    if (listening) throw new Error('Listening in needs the native media connection, which this server did not offer.');
     // Only now is this call a LiveKit call, so only now is the library loaded.
     await loadLivekit();
     owner.assertCurrent();
@@ -3376,7 +3750,13 @@ async function performCallJoin(owner: CallSession, previousMute: boolean, previo
     throw lastError;
   } catch (error) {
     if (!owner.current) { await closeCall(owner); return; }
-    const message = error instanceof Error ? error.message : 'Unable to connect to voice';
+    // A channel that does not admit listeners says so; the client shows it
+    // and never turns the listen into a join.
+    if (voiceErrorCode(error) === LISTEN_IN_DISABLED) {
+      await closeCall(owner, voiceErrorMessage(error, 'Listening in is turned off in this channel.'), LISTEN_IN_DISABLED);
+      return;
+    }
+    const message = voiceErrorMessage(error, 'Unable to connect to voice');
     await closeCall(owner, owner.membershipUncertain ? `${message}. Server membership has not been confirmed.` : message);
   }
 }

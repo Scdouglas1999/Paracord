@@ -2,6 +2,10 @@ import type { OperationContext } from '../operationContext';
 import type {
   MediaEngine,
   MediaSessionContext,
+  MediaSessionRole,
+  PeerRole,
+  VideoFrameTap,
+  VideoTapRoute,
   MediaStreamCapabilities,
   MediaStreamDiagnostics,
   PublishedTrackDescriptor,
@@ -53,8 +57,10 @@ import { isMediaCallKey, MediaKeyring } from './mediaKeyring';
 import {
   codecLabelFromHeader,
   deriveTrackSsrc,
+  isTerminalViewCloseReason,
   parseRoomIdFromToken,
   parseUserIdFromToken,
+  parseViewKindFromToken,
   reassembleVideoPayload,
   selectPublishedLayer,
   VideoDecodeGate,
@@ -243,17 +249,26 @@ interface ParticipantState {
 }
 
 /**
- * One surface watching a subscribed track: its canvas, the renderer painting
- * into it, and the caller's "a frame landed" signal.
+ * One consumer of a subscribed track: a surface (its canvas, the renderer
+ * painting into it, and the caller's "a frame landed" signal), or a frame tap
+ * (`onVideoFrame`, no canvas) that samples decoded frames for room light, the
+ * stage's glow or clips.
  *
  * A single track can have several at once — the Stage tile, the share viewer
- * and the sidebar's 2 fps room thumbnail all want the same person's camera or
- * screen — and they all read from ONE decoder.
+ * and a tap all want the same person's camera or screen — and they all read
+ * from ONE decoder. Only surfaces decide the layer; a tap never does.
  */
 interface VideoSink {
-  canvas: HTMLCanvasElement;
-  renderer: CanvasRenderer;
+  canvas?: HTMLCanvasElement;
+  renderer?: CanvasRenderer;
   onFrame?: () => void;
+  /** A frame tap: receives its own clone of every decoded frame and closes it. */
+  onVideoFrame?: (frame: VideoFrame) => void;
+}
+
+/** The smallest layer a publisher offers: what a tap with no surface asks for. */
+function lowestLayer(track: PublishedTrackDescriptor): PublishedLayerDescriptor | undefined {
+  return [...track.layers].sort((a, b) => a.layerId - b.layerId)[0];
 }
 
 /** A whole encoded frame on its way through a subscription's decode gate. */
@@ -446,6 +461,14 @@ interface QueuedVideoFrame {
 
 export class BrowserMediaEngine implements MediaEngine {
   private transport: WebTransportManager | null = null;
+  /** How this connection takes part; see `MediaSessionRole`. */
+  private role: MediaSessionRole = 'call';
+  /** For a view session, what it was issued for (the token's `view` claim). */
+  private viewKind: 'watch' | 'ambient' | null = null;
+  /** Tells a call member from a view session in the relay roster. */
+  private peerRoleResolver: ((userId: string) => PeerRole) | null = null;
+  /** Roster peers taken for view sessions when they joined. */
+  private viewerPeers = new Set<string>();
   private senderKeys = new SenderKeyManager();
   /** Call keys for this media session. Minted on connect, destroyed on leave. */
   private keyring = MediaKeyring.create();
@@ -517,7 +540,8 @@ export class BrowserMediaEngine implements MediaEngine {
   private sequence = 0;
   private muted = false;
   private deafened = false;
-  private localAudioLevel = 0;
+  /** RTP convention: 127 is silence. Nothing is captured until the mic opens. */
+  private localAudioLevel = 127;
 
   // Participants
   private participants = new Map<number, ParticipantState>(); // ssrc -> state
@@ -575,6 +599,16 @@ export class BrowserMediaEngine implements MediaEngine {
 
   async connect(endpoint: string, token: string, certHash?: string, session?: MediaSessionContext): Promise<void> {
     this.assertOpen();
+    // The role is fixed for the life of this connection except for the one
+    // in-place change `startMicrophone` makes (listen -> call). A view token
+    // is admitted only as a view session, so the two must agree.
+    this.role = session?.role ?? 'call';
+    this.viewKind = parseViewKindFromToken(token);
+    if ((this.role === 'view') !== (this.viewKind !== null)) {
+      throw new Error(this.role === 'view'
+        ? 'A view session needs a view-session media token.'
+        : 'A view-session media token cannot join a call.');
+    }
     if (session) {
       this.account = session.account;
       const abort = () => { void this.disconnect(); };
@@ -629,6 +663,13 @@ export class BrowserMediaEngine implements MediaEngine {
 
     // Set up WebTransport
     this.transport = new WebTransportManager();
+    if (this.role === 'view') {
+      // A replaced or ended view stays closed: see isTerminalViewCloseReason.
+      this.transport.setTerminalCloseReasons(
+        isTerminalViewCloseReason,
+        'view session ended: the relay no longer admits this view',
+      );
+    }
 
     this.transport.onStreamControl((msg) => { if (!this.disposed) this.handleStreamControlMessage(msg); });
     this.transport.onDatagram((data) => { if (!this.disposed) this.handleDatagram(data); });
@@ -671,13 +712,61 @@ export class BrowserMediaEngine implements MediaEngine {
     });
     this.assertOpen();
 
-    // Set up audio capture pipeline
-    await this.setupAudioCapture();
-    this.assertOpen();
+    if (this.role === 'view') {
+      // A view session holds no voices and sends nothing. Watch plays the
+      // stream's own audio through `subscribeScreenShareAudio`, which brings
+      // its own output; ambient plays nothing at all.
+      this.startPlaybackLoop();
+      return;
+    }
+
+    // Voices play for both a joined member and a listener. Only a joined
+    // member opens the microphone: listening never asks for it.
+    this.setupPlayback();
+    if (this.role === 'call') {
+      await this.setupAudioCapture();
+      this.assertOpen();
+    }
 
     // Start playback loop
     this.startPlaybackLoop();
     this.startSpeakingLoop();
+  }
+
+  /**
+   * The in-place upgrade from listening to joined: open the microphone on this
+   * same connection and start sending. The relay already flipped this member
+   * to a publisher (`POST /mode`); the voice key was announced when the roster
+   * arrived, so everyone can decrypt the first packet.
+   */
+  async startMicrophone(): Promise<void> {
+    this.assertOpen();
+    if (this.role === 'call') return;
+    if (this.role !== 'listen') throw new Error('Only a call that is listening in can start its microphone.');
+    await this.setupAudioCapture();
+    this.assertOpen();
+    this.role = 'call';
+    this.setMute(this.muted);
+  }
+
+  setPeerRoleResolver(resolver: (userId: string) => PeerRole): void {
+    this.peerRoleResolver = resolver;
+  }
+
+  /** A roster peer's role now; without a resolver everybody is a member. */
+  private peerRole(userId: string): PeerRole {
+    return this.peerRoleResolver?.(userId) ?? 'member';
+  }
+
+  /**
+   * Whether a departing peer was a view session: taken for one when it joined
+   * and still not known as a member. "Member" wins, because a member's leave
+   * must rotate the voice key and a viewer's must not; a member whose voice
+   * state arrived after its media join is a member.
+   */
+  private departedAsViewer(userId: string): boolean {
+    const wasViewer = this.viewerPeers.delete(userId);
+    return wasViewer && this.peerRole(userId) === 'viewer';
   }
 
   disconnect(): Promise<void> {
@@ -709,6 +798,8 @@ export class BrowserMediaEngine implements MediaEngine {
     this.pendingTrackKeys.clear();
     this.sessionParticipantIds.clear();
     this.sessionParticipantCapabilities.clear();
+    this.viewerPeers.clear();
+    this.peerRoleResolver = null;
     // The call keys die with the call: they protect this conversation and
     // nothing else, so there is nothing to keep.
     this.keyring.dispose();
@@ -1419,10 +1510,10 @@ export class BrowserMediaEngine implements MediaEngine {
         return;
       }
       const nextViewport = this.subscriptionViewport(current);
-      if (!nextViewport) {
-        return;
-      }
-      const nextLayer = selectPublishedLayer(track, nextViewport.width, nextViewport.height);
+      // No surface left, only taps: they sample, so the smallest layer does.
+      const nextLayer = nextViewport
+        ? selectPublishedLayer(track, nextViewport.width, nextViewport.height)
+        : lowestLayer(track);
       const nextLayerId = nextLayer?.layerId;
       if (current.activeLayer === nextLayerId && current.ssrc === (nextLayer?.ssrc ?? current.ssrc)) {
         return;
@@ -1536,6 +1627,70 @@ export class BrowserMediaEngine implements MediaEngine {
     return this.subscribeVideo(localUserId, canvas, onFrame);
   }
 
+  /**
+   * Decoded frames of one remote track, without a canvas. The browser decodes
+   * every track in JavaScript (WebCodecs), so the route is always `frames`.
+   * A tap joins the track's running decoder when a surface shows it; alone, it
+   * runs one on the track's lowest layer and never asks for a bigger one.
+   */
+  tapVideoFrames(
+    userId: string,
+    trackId: 'camera' | 'screen',
+    onFrame: (frame: VideoFrame) => void,
+  ): VideoFrameTap {
+    if (this.disposed) return { route: Promise.resolve<VideoTapRoute>('no-track'), release: () => {} };
+    const subscriptionKey = this.videoSubscriptionKey(userId, trackId);
+    const sink: VideoSink = { onVideoFrame: onFrame };
+    let subscription = this.videoSubscriptions.get(subscriptionKey);
+    if (subscription) {
+      subscription.sinks.push(sink);
+    } else {
+      const publishedTrack = this.findPreferredPublishedVideoTrack(userId, trackId);
+      const layer = publishedTrack ? lowestLayer(publishedTrack) : undefined;
+      const codec = this.decoderCodecForTrack(publishedTrack);
+      const created: VideoSubscription = {
+        userId,
+        ssrc: layer?.ssrc ?? 0,
+        codec,
+        decoder: new MediaVideoDecoder({ codec }),
+        gate: new VideoDecodeGate<GatedVideoFrame>(),
+        lastKeyframeRequestAt: 0,
+        sinks: [sink],
+        streamId: publishedTrack?.streamId,
+        trackId: publishedTrack?.trackId,
+        activeLayer: layer?.layerId,
+      };
+      this.wireSubscriptionDecoder(created, () => this.videoSubscriptions.get(subscriptionKey) === created);
+      created.stop = () => this.teardownVideoSubscription(subscriptionKey, created);
+      this.videoSubscriptions.set(subscriptionKey, created);
+      subscription = created;
+      // Not published yet (a view session that has just connected): the
+      // `track_publish` handler registers this subscription when it arrives.
+      if (publishedTrack && layer) {
+        void this.registerTrackSubscription({
+          streamId: publishedTrack.streamId,
+          trackId: publishedTrack.trackId,
+          requestedLayer: layer.layerId,
+        }).catch(() => {});
+        this.requestSubscriptionKeyframe(created);
+      }
+    }
+    const active = subscription;
+    let released = false;
+    return {
+      route: Promise.resolve<VideoTapRoute>('frames'),
+      release: () => {
+        if (released) return;
+        released = true;
+        const current = this.videoSubscriptions.get(subscriptionKey);
+        if (current !== active) return;
+        const index = current.sinks.indexOf(sink);
+        if (index >= 0) current.sinks.splice(index, 1);
+        if (current.sinks.length === 0) this.teardownVideoSubscription(subscriptionKey, current);
+      },
+    };
+  }
+
   // ---------- Audio capture pipeline (unchanged) ----------
 
   private async setupAudioCapture(): Promise<void> {
@@ -1586,8 +1741,11 @@ export class BrowserMediaEngine implements MediaEngine {
     this.encoder.onEncoded((chunk) => {
       this.sendEncodedAudio(chunk);
     });
+  }
 
-    // Set up playback context
+  /** The shared output voices play through (a joined member and a listener). */
+  private setupPlayback(): void {
+    if (this.playbackContext) return;
     this.playbackContext = new AudioContext({ sampleRate: SAMPLE_RATE });
   }
 
@@ -2344,6 +2502,7 @@ export class BrowserMediaEngine implements MediaEngine {
       case 'session_state': {
         const participants = Array.isArray(msg.participants) ? msg.participants : [];
         const knownBefore = new Set(this.sessionParticipantIds);
+        const membersBefore = new Set(Array.from(knownBefore).filter((id) => !this.viewerPeers.has(id)));
         const desired = new Set<string>();
         const desiredCapabilities = new Map<string, SessionParticipantCapabilities>();
         const recipientUserIds: string[] = [];
@@ -2356,9 +2515,18 @@ export class BrowserMediaEngine implements MediaEngine {
           desired.add(userId);
           desiredCapabilities.set(userId, participant);
           this.keyring.setPeerKey(userId, participant.mediaPublicKey);
-          if (!this.sessionParticipantIds.has(userId)) {
-            this.ensureRemoteParticipantState(userId);
-            this.participantJoinCb?.(userId);
+          if (!this.sessionParticipantIds.has(userId) && this.role !== 'view') {
+            // A view session in our roster is somebody watching OUR stream
+            // (the relay shows a member only the viewers of its own stream).
+            // It is not in the call: it has no voice, and the store is not
+            // told about it. (A view session's own roster is its publisher,
+            // whose voice it never receives.)
+            if (this.peerRole(userId) === 'viewer') {
+              this.viewerPeers.add(userId);
+            } else {
+              this.ensureRemoteParticipantState(userId);
+              this.participantJoinCb?.(userId);
+            }
           }
           recipientUserIds.push(userId);
         }
@@ -2366,17 +2534,25 @@ export class BrowserMediaEngine implements MediaEngine {
           if (desired.has(userId)) {
             continue;
           }
+          const viewer = this.departedAsViewer(userId);
           this.removeRemoteParticipantState(userId);
-          this.participantLeaveCb?.(userId);
+          if (!viewer) this.participantLeaveCb?.(userId);
         }
         this.sessionParticipantIds = desired;
         this.sessionParticipantCapabilities = desiredCapabilities;
         this.senderKeys.syncParticipants(this.sessionParticipantIds);
+        // A view session sends nothing: it has no key to announce and nothing
+        // to rotate. Its roster is its one publisher, whose stream key it
+        // waits for.
+        if (this.role === 'view') break;
         void this.reconcileActivePublishCodecs().catch(() => {});
         const initialSync = knownBefore.size === 0;
+        const membersNow = Array.from(desired).filter((id) => !this.viewerPeers.has(id));
+        // Only call members count: a viewer arriving or leaving does not
+        // rotate the voice key (the relay never gives a viewer the voice key).
         const membershipChanged =
-          knownBefore.size !== desired.size ||
-          Array.from(knownBefore).some((userId) => !desired.has(userId));
+          membersBefore.size !== membersNow.length ||
+          membersNow.some((userId) => !membersBefore.has(userId));
         if (membershipChanged && !initialSync) {
           void this.rotateAndAnnounceLocalSenderKeys(recipientUserIds).catch(error => this.failKeyExchange(error));
           break;
@@ -2396,7 +2572,19 @@ export class BrowserMediaEngine implements MediaEngine {
         if (this.sessionParticipantCapabilities.get(userId)?.sessionId === receipt && this.sessionParticipantIds.has(userId)) break;
         this.sessionParticipantIds.add(userId);
         this.sessionParticipantCapabilities.set(userId, participant);
+        if (this.role === 'view') break;
         void this.reconcileActivePublishCodecs().catch(() => {});
+        if (this.peerRole(userId) === 'viewer') {
+          // Somebody started watching our stream. It gets the current stream
+          // key (and the voice key, which the relay withholds from viewers,
+          // so that a member whose voice state is still in flight is not left
+          // unable to hear us); nothing rotates and nobody joined the call.
+          this.viewerPeers.add(userId);
+          void this.announceAudioSenderKey([userId]).catch(error => this.failKeyExchange(error));
+          void this.announcePublishedTrackKeysForRecipients([userId]).catch(error => this.failKeyExchange(error));
+          break;
+        }
+        this.viewerPeers.delete(userId);
         this.ensureRemoteParticipantState(userId);
         this.participantJoinCb?.(userId);
         void this.senderKeys
@@ -2425,8 +2613,11 @@ export class BrowserMediaEngine implements MediaEngine {
           break;
         }
         this.sessionParticipantCapabilities.delete(userId);
-        void this.reconcileActivePublishCodecs().catch(() => {});
+        const viewer = this.departedAsViewer(userId);
         this.removeRemoteParticipantState(userId);
+        if (this.role === 'view') break;
+        void this.reconcileActivePublishCodecs().catch(() => {});
+        if (viewer) break;
         this.participantLeaveCb?.(userId);
         void this.senderKeys
           .handleParticipantLeave(userId)
@@ -2453,10 +2644,13 @@ export class BrowserMediaEngine implements MediaEngine {
           }
           const existingSub = this.videoSubscriptionFor(publisherUserId, track.trackId);
           const viewport = existingSub ? this.subscriptionViewport(existingSub) ?? null : null;
+          // A subscription with sinks but no surface is frame taps only: they
+          // sample, so they take the smallest layer.
+          const tapsOnly = !!existingSub && !viewport && existingSub.sinks.length > 0;
           const primaryLayer =
             (viewport
               ? selectPublishedLayer(track, viewport.width, viewport.height)
-              : null) ??
+              : tapsOnly ? lowestLayer(track) : null) ??
             track.layers.find((layer) => layer.active) ??
             track.layers[0];
           if (primaryLayer) {
@@ -2465,12 +2659,12 @@ export class BrowserMediaEngine implements MediaEngine {
               existingSub.streamId = track.streamId;
               existingSub.trackId = track.trackId;
               existingSub.activeLayer = primaryLayer.layerId;
-              if (viewport) {
+              if (viewport || tapsOnly) {
                 void this.registerTrackSubscription({
                   streamId: track.streamId,
                   trackId: track.trackId,
                   requestedLayer: primaryLayer.layerId,
-                  viewport,
+                  viewport: viewport ?? undefined,
                 }).catch(() => {});
               }
               const decoderCodec = this.decoderCodecForTrack(track);
@@ -2916,18 +3110,22 @@ export class BrowserMediaEngine implements MediaEngine {
       frame.close();
       return;
     }
-    for (let index = 0; index < sinks.length - 1; index += 1) {
-      const sink = sinks[index];
+    const deliver = (sink: VideoSink, copy: VideoFrame) => {
       try {
-        sink.renderer.renderFrame(frame.clone());
+        if (sink.renderer) sink.renderer.renderFrame(copy);
+        else if (sink.onVideoFrame) sink.onVideoFrame(copy);
+        else copy.close();
       } catch {
-        // A renderer torn down between the fan-out and here; the survivors still get the frame.
+        // A renderer torn down between the fan-out and here, or a tap that
+        // threw; the survivors still get the frame.
+        copy.close();
       }
       sink.onFrame?.();
+    };
+    for (let index = 0; index < sinks.length - 1; index += 1) {
+      deliver(sinks[index], frame.clone());
     }
-    const last = sinks[sinks.length - 1];
-    last.renderer.renderFrame(frame);
-    last.onFrame?.();
+    deliver(sinks[sinks.length - 1], frame);
   }
 
   /**
@@ -2940,7 +3138,7 @@ export class BrowserMediaEngine implements MediaEngine {
   ): { width: number; height: number } | undefined {
     let best: { width: number; height: number } | undefined;
     for (const sink of subscription.sinks) {
-      const canvas = sink.renderer.canvasElement;
+      const canvas = sink.renderer?.canvasElement;
       if (!canvas) continue;
       const viewport = canvasViewport(canvas);
       if (!best || viewport.width * viewport.height > best.width * best.height) {
@@ -2970,7 +3168,7 @@ export class BrowserMediaEngine implements MediaEngine {
     }
     subscription.decoder.close();
     for (const sink of subscription.sinks) {
-      sink.renderer.destroy();
+      sink.renderer?.destroy();
     }
     subscription.sinks = [];
   }
@@ -3187,7 +3385,7 @@ export class BrowserMediaEngine implements MediaEngine {
       })),
     });
     this.assertOpen();
-    const recipientUserIds = this.currentRemoteParticipantIds();
+    const recipientUserIds = this.role === 'view' ? [] : this.currentRemoteParticipantIds();
     await this.announceAudioSenderKey(recipientUserIds);
     this.assertOpen();
     await this.announcePublishedTrackKeysForRecipients(recipientUserIds);
@@ -3550,13 +3748,17 @@ export class BrowserMediaEngine implements MediaEngine {
     // rendered via each decoder's onDecoded callback (wired in
     // materializeRemoteParticipant / subscribeScreenShareAudio).
     this.playbackInterval = setInterval(() => {
-      if (this.disposed || this.deafened || !this.playbackContext) return;
+      if (this.disposed || this.deafened) return;
 
-      for (const [, participant] of this.participants) {
-        const frame = participant.jitterBuffer.pull();
-        if (frame) {
-          const timestamp = performance.now() * 1000; // rough timestamp in us
-          participant.decoder.decode(frame, timestamp);
+      // Voices need the shared playback context; a view session has none and
+      // plays only the watched stream's own audio (below).
+      if (this.playbackContext) {
+        for (const [, participant] of this.participants) {
+          const frame = participant.jitterBuffer.pull();
+          if (frame) {
+            const timestamp = performance.now() * 1000; // rough timestamp in us
+            participant.decoder.decode(frame, timestamp);
+          }
         }
       }
 

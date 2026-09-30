@@ -80,6 +80,32 @@ export class WebTransportManager {
    * rather than an unbounded refetch loop against the control plane.
    */
   private certRefreshArmed = false;
+  /**
+   * Close reasons after which dialing back would be wrong, not merely futile.
+   * A view session the relay closed because a newer one replaced it, or
+   * because the view ended, must stay closed: reconnecting would either be
+   * refused or, worse, take the slot back from the view that replaced it.
+   */
+  private terminalClose: ((reason: string) => boolean) | null = null;
+
+  /**
+   * When set, a *reconnect* the server refuses at admission (the connection
+   * opens, the auth is never acknowledged) ends this transport with this
+   * reason instead of retrying for the whole window.
+   *
+   * For a view session that refusal is the answer: the relay admits a view
+   * token only while its view exists, so a view that was replaced or ended
+   * cannot come back. Chromium does not surface the relay's close reason for
+   * a QUIC connection close (it reports "Connection lost."), so without this
+   * a superseded view spent the reconnect window being refused once a second.
+   */
+  private terminalAuthRefusal: string | null = null;
+
+  /** Name the close reasons that end this transport for good (no reconnect). */
+  setTerminalCloseReasons(isTerminal: (reason: string) => boolean, authRefusalReason?: string): void {
+    this.terminalClose = isTerminal;
+    this.terminalAuthRefusal = authRefusalReason ?? null;
+  }
 
   get isConnected(): boolean {
     return this.transport !== null;
@@ -122,6 +148,7 @@ export class WebTransportManager {
 
   private async establishConnection(url: string, token: string, certHash?: string): Promise<void> {
     if (this.disposed || !this.shouldReconnect) return;
+    let authStarted = false;
     const generation = ++this.generation;
     const previous = this.transport;
     this.releaseDatagramWriter();
@@ -153,6 +180,7 @@ export class WebTransportManager {
       this.transport = transport;
       await transport.ready;
       assertCurrent();
+      authStarted = true;
       this.datagramWriter = transport.datagrams.writable.getWriter();
 
       // Send auth on first bidirectional stream
@@ -197,10 +225,13 @@ export class WebTransportManager {
       void this.readIncomingStreamControls(generation);
       void this.readIncomingUniStreams(generation);
 
-      // Handle connection close
+      // Handle connection close. The relay's own words (a close reason) are
+      // kept: "superseded by a newer media connection" and "view session
+      // ended" decide whether this transport may dial back at all.
       transport.closed
-        .then(() => {
-          this.handleClose('Connection closed gracefully', generation);
+        .then((info?: WebTransportCloseInfo) => {
+          const reason = typeof info?.reason === 'string' && info.reason ? info.reason : 'Connection closed gracefully';
+          this.handleClose(reason, generation);
         })
         .catch((err: Error) => {
           this.handleClose(err.message || 'Connection lost', generation);
@@ -235,6 +266,14 @@ export class WebTransportManager {
       }
 
       const msg = err instanceof Error ? err.message : 'Unknown connection error';
+      // Reachable, but no longer admitted: see `terminalAuthRefusal`.
+      if (authStarted && this.hasConnectedOnce && this.terminalAuthRefusal) {
+        this.shouldReconnect = false;
+        this.reconnectDeadline = null;
+        const reason = this.terminalAuthRefusal;
+        this.closeCallbacks.forEach((cb) => cb(reason));
+        throw err;
+      }
       if (this.canStillReconnect()) {
         this.scheduleReconnect(msg);
       } else {
@@ -493,6 +532,12 @@ export class WebTransportManager {
     this.releaseDatagramWriter();
     this.transport = null;
 
+    if (this.terminalClose?.(reason)) {
+      this.shouldReconnect = false;
+      this.reconnectDeadline = null;
+      for (const cb of this.closeCallbacks) cb(reason);
+      return;
+    }
     if (this.canStillReconnect()) {
       this.scheduleReconnect(reason);
     } else {

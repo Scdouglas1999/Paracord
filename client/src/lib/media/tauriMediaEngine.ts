@@ -2,6 +2,10 @@ import type { OperationContext } from '../operationContext';
 import type {
   MediaEngine,
   MediaSessionContext,
+  MediaSessionRole,
+  PeerRole,
+  VideoFrameTap,
+  VideoTapRoute,
   MediaStreamCapabilities,
   MediaStreamDiagnostics,
   PublishedTrackDescriptor,
@@ -23,6 +27,7 @@ import {
 import {
   parseRoomIdFromToken,
   parseUserIdFromToken,
+  parseViewKindFromToken,
   selectPublishedLayer,
   wrapSenderKeyForRecipients,
 } from './engineShared';
@@ -294,6 +299,7 @@ export function startPulledEncodedVideoSubscription(
   onDecodedFrame?: () => void,
   getRenderingEnabled?: () => boolean,
   requestKeyframe?: () => void,
+  tapFrame?: (frame: VideoFrame) => void,
 ): () => void {
   let stopped = false;
   let lastSequence: number | null = null;
@@ -348,6 +354,9 @@ export function startPulledEncodedVideoSubscription(
         });
         onDecodedFrame?.();
       }
+      // Frame taps (room light, stage glow, clips) get their own reference
+      // before the renderer takes ownership of this one.
+      tapFrame?.(frame);
       renderer.renderFrame(frame);
       onFrame?.();
     });
@@ -480,6 +489,29 @@ function attachStreamVisibilityControls(
 }
 
 /**
+ * Visibility for a headless subscription (a frame tap with no surface): only
+ * the document's visibility counts, since there is no element to intersect.
+ */
+function attachDocumentVisibilityControls(
+  reportVisibility: (visible: boolean) => void,
+): { cleanup: () => void; isRenderingEnabled: () => boolean } {
+  let visible = typeof document === 'undefined' || document.visibilityState !== 'hidden';
+  const onVisibilityChange = () => {
+    const next = document.visibilityState !== 'hidden';
+    if (next === visible) return;
+    visible = next;
+    reportVisibility(next);
+  };
+  if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisibilityChange);
+  return {
+    cleanup: () => {
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisibilityChange);
+    },
+    isRenderingEnabled: () => visible,
+  };
+}
+
+/**
  * Tauri desktop media engine.
  * Communicates with the Rust native media engine via Tauri IPC commands.
  * The native side handles QUIC transport, Opus encoding, and P2P connections.
@@ -503,6 +535,20 @@ export class TauriMediaEngine implements MediaEngine {
   }
   private localUserId: string | null = null;
   private localRoomId: string | null = null;
+  /** How this session takes part; see `MediaSessionRole`. */
+  private role: MediaSessionRole = 'call';
+  /** Tells a call member from a view session in the relay roster. */
+  private peerRoleResolver: ((userId: string) => PeerRole) | null = null;
+  /** Roster peers taken for view sessions when they joined. */
+  private viewerPeers = new Set<string>();
+  /** Frame taps per subscription key (`userId:trackId`). */
+  private frameTaps = new Map<string, Set<(frame: VideoFrame) => void>>();
+  /** The route each subscription key settled on, for taps that join it. */
+  private subscriptionRoutes = new Map<string, VideoTapRoute>();
+  /** Route waiters for taps whose subscription is still being established. */
+  private routeWaiters = new Map<string, Set<(route: VideoTapRoute) => void>>();
+  /** Set while `subscribeVideo` releases the subscription it replaces. */
+  private replacingKey: string | null = null;
   private sessionParticipantCapabilities = new Map<string, SessionParticipantCapabilities>();
   /** Call keys for this media session. Minted on connect, destroyed on leave. */
   private keyring = MediaKeyring.create();
@@ -590,6 +636,15 @@ export class TauriMediaEngine implements MediaEngine {
     if (!certHash) {
       throw new Error('native media server did not provide a TLS certificate pin');
     }
+    // The native side checks this against the token's `view` claim too; the
+    // renderer refuses the mismatch first so the error names the cause.
+    this.role = session?.role ?? 'call';
+    const viewKind = parseViewKindFromToken(token);
+    if ((this.role === 'view') !== (viewKind !== null)) {
+      throw new Error(this.role === 'view'
+        ? 'A view session needs a view-session media token.'
+        : 'A view-session media token cannot join a call.');
+    }
     this.localUserId = parseUserIdFromToken(token);
     this.localRoomId = parseRoomIdFromToken(token);
     // Wait for all pending listener registrations to complete before
@@ -613,6 +668,9 @@ export class TauriMediaEngine implements MediaEngine {
         // The key every other participant wraps its frame keys to for this
         // call. The native session publishes it in its `SessionJoin`.
         mediaPublicKey: this.keyring.publicKey,
+        // `call`, `listen` (no microphone until `startMicrophone`) or `view`
+        // (the view slot, beside the call). See `SessionRole` in Rust.
+        role: this.role,
       });
       this.assertOpen();
       await this.initializePublishedTrackListeners();
@@ -633,7 +691,8 @@ export class TauriMediaEngine implements MediaEngine {
         this.sessionParticipantCapabilities.set(participant.userId, participant);
         this.keyring.setPeerKey(participant.userId, participant.mediaPublicKey);
       }
-      await this.announceWrappedLocalSenderKeys();
+      // A view session sends nothing, so it has no key to announce.
+      if (this.role !== 'view') await this.announceWrappedLocalSenderKeys();
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       throw new Error(
@@ -659,6 +718,12 @@ export class TauriMediaEngine implements MediaEngine {
     this.screenEventUnlisten = this.cameraEventUnlisten = this.transportLostUnlisten = null;
     this.publishedTracks.clear();
     this.sessionParticipantCapabilities.clear();
+    this.viewerPeers.clear();
+    this.peerRoleResolver = null;
+    this.frameTaps.clear();
+    this.subscriptionRoutes.clear();
+    for (const waiters of this.routeWaiters.values()) for (const settle of waiters) settle('no-track');
+    this.routeWaiters.clear();
     // The call keys die with the call: they protect this conversation and
     // nothing else, so there is nothing to keep.
     this.keyring.dispose();
@@ -980,7 +1045,15 @@ export class TauriMediaEngine implements MediaEngine {
   onParticipantJoin(cb: (userId: string) => void): void {
     const p = tauriReady.then(async () => {
       const unlisten = await this.listenOwned('media_participant_join', (event) => {
-        cb(event.payload as string);
+        const userId = event.payload as string;
+        // A view session watching our stream is in the relay roster but not
+        // in the call; the store is not told about it.
+        if (this.role !== 'view' && this.peerRole(userId) === 'viewer') {
+          this.viewerPeers.add(userId);
+          return;
+        }
+        this.viewerPeers.delete(userId);
+        cb(userId);
       });
       this.unlisteners.push(unlisten);
     });
@@ -1000,8 +1073,7 @@ export class TauriMediaEngine implements MediaEngine {
     const p = tauriReady.then(async () => {
       const unlisten = await this.listenOwned('media_participant_leave', (event) => {
         const departed = this.matchParticipantDeparture(event.payload);
-        if (departed) cb(departed);
-
+        if (departed && !this.departedAsViewer(departed)) cb(departed);
       });
       this.unlisteners.push(unlisten);
     });
@@ -1010,6 +1082,39 @@ export class TauriMediaEngine implements MediaEngine {
 
   onTransportLost(cb: (reason: string) => void): void {
     this.transportLostCb = cb;
+  }
+
+  /**
+   * The in-place upgrade from listening in: the native session starts
+   * capturing on `inputDeviceId` (the stable native id; `@default` is the
+   * system default) on the same QUIC connection, and turns into a joined
+   * member. The relay already accepts this member's media (`POST /mode`).
+   */
+  async startMicrophone(options?: { inputDeviceId?: string | null }): Promise<void> {
+    this.assertOpen();
+    if (this.role === 'call') return;
+    if (this.role !== 'listen') throw new Error('Only a call that is listening in can start its microphone.');
+    await this.invokeOwned('voice_switch_input_device', { deviceId: options?.inputDeviceId || '@default' });
+    this.role = 'call';
+  }
+
+  setPeerRoleResolver(resolver: (userId: string) => PeerRole): void {
+    this.peerRoleResolver = resolver;
+  }
+
+  private peerRole(userId: string): PeerRole {
+    return this.peerRoleResolver?.(userId) ?? 'member';
+  }
+
+  /**
+   * Whether a departing peer was a view session: taken for one when it joined
+   * and still not known as a member ("member" wins; see the browser engine).
+   * The native side rotates its own keys on every roster change; only the
+   * store's view of the call is decided here.
+   */
+  private departedAsViewer(userId: string): boolean {
+    const wasViewer = this.viewerPeers.delete(userId);
+    return wasViewer && this.peerRole(userId) === 'viewer';
   }
 
   // getVolume is retained for interface compatibility. Stream audio is decoded
@@ -1515,7 +1620,7 @@ export class TauriMediaEngine implements MediaEngine {
     });
     const participantJoinUnlisten = await this.listenOwned('media_participant_join', (event) => {
       const userId = String(event.payload ?? '');
-      if (!userId || userId === String(this.localUserId ?? '')) {
+      if (!userId || userId === String(this.localUserId ?? '') || this.role === 'view') {
         return;
       }
       void this.announceWrappedLocalSenderKeys([userId]).catch(error => this.failKeyExchange(error));
@@ -1535,6 +1640,7 @@ export class TauriMediaEngine implements MediaEngine {
         this.sessionParticipantCapabilities.delete(userId);
         this.keyring.removePeer(userId);
       }
+      if (this.role === 'view') return;
       void this.announceWrappedLocalSenderKeys().catch(error => this.failKeyExchange(error));
     });
     const requestStreamKeyUnlisten = await this.listenOwned('media_request_stream_key', (event) => {
@@ -1595,11 +1701,85 @@ export class TauriMediaEngine implements MediaEngine {
       .catch(() => {});
   }
 
+  /**
+   * Decoded frames of one remote track (see `MediaEngine.tapVideoFrames`).
+   *
+   * One subscription per track exists on this engine (the native side keeps
+   * one push channel per track), so a tap rides whatever subscription shows
+   * the track, and when none does it runs a headless one: no surface, lowest
+   * layer, paused only while the window is hidden. The route is the track's
+   * own, chosen once when its subscription starts: `frames` on the WebCodecs
+   * passthrough route; `native-surface` when the native side decodes and
+   * presents it (no frame ever reaches JavaScript there).
+   */
+  tapVideoFrames(
+    userId: string,
+    trackId: 'camera' | 'screen',
+    onFrame: (frame: VideoFrame) => void,
+  ): VideoFrameTap {
+    if (this.disposed) return { route: Promise.resolve<VideoTapRoute>('no-track'), release: () => {} };
+    const key = `${userId}:${trackId}`;
+    let taps = this.frameTaps.get(key);
+    if (!taps) { taps = new Set(); this.frameTaps.set(key, taps); }
+    taps.add(onFrame);
+    const route = new Promise<VideoTapRoute>((resolve) => {
+      const known = this.subscriptionRoutes.get(key);
+      if (known) { resolve(known); return; }
+      let waiters = this.routeWaiters.get(key);
+      if (!waiters) { waiters = new Set(); this.routeWaiters.set(key, waiters); }
+      waiters.add(resolve);
+    });
+    if (!this.videoSubscriptionReleases.has(key)) this.startHeadlessSubscription(userId, trackId);
+    let released = false;
+    return {
+      route,
+      release: () => {
+        if (released) return;
+        released = true;
+        const current = this.frameTaps.get(key);
+        current?.delete(onFrame);
+        if (current && current.size > 0) return;
+        this.frameTaps.delete(key);
+        if (this.headlessKeys.has(key)) this.videoSubscriptionReleases.get(key)?.();
+      },
+    };
+  }
+
+  /** Subscription keys whose current subscription is a headless tap. */
+  private headlessKeys = new Set<string>();
+
+  private startHeadlessSubscription(userId: string, trackId: 'camera' | 'screen'): void {
+    if (this.disposed || typeof document === 'undefined') return;
+    const canvas = document.createElement('canvas');
+    canvas.width = 1;
+    canvas.height = 1;
+    this.headlessKeys.add(`${userId}:${trackId}`);
+    this.subscribeVideo(userId, canvas, undefined, { preferredTrackId: trackId, headless: true });
+  }
+
+  private settleRoute(key: string, route: VideoTapRoute): void {
+    this.subscriptionRoutes.set(key, route);
+    const waiters = this.routeWaiters.get(key);
+    if (!waiters) return;
+    this.routeWaiters.delete(key);
+    for (const settle of waiters) settle(route);
+  }
+
+  /** Hand every tap on `key` its own reference to a decoded frame. */
+  private dispatchTapFrame(key: string, frame: VideoFrame): void {
+    const taps = this.frameTaps.get(key);
+    if (!taps?.size) return;
+    for (const tap of taps) {
+      const copy = frame.clone();
+      try { tap(copy); } catch { copy.close(); }
+    }
+  }
+
   subscribeVideo(
     userId: string,
     canvas: HTMLCanvasElement,
     onFrame?: () => void,
-    options?: { preferredTrackId?: 'camera' | 'screen' },
+    options?: { preferredTrackId?: 'camera' | 'screen'; headless?: boolean },
   ): () => void {
     if (this.disposed) return () => {};
     let disposed = false;
@@ -1608,23 +1788,50 @@ export class TauriMediaEngine implements MediaEngine {
     const own = (cleanup: () => void) => { if (disposed) cleanup(); else teardowns.push(cleanup); };
     let ownedSubscription: NativeVideoSubscription | null = null;
     const preferredTrackId = options?.preferredTrackId;
+    const headless = options?.headless === true;
     // Camera and screen can be subscribed concurrently for the same publisher;
     // key the map so they don't tear each other down.
     const subscriptionKey = preferredTrackId ? `${userId}:${preferredTrackId}` : userId;
-    this.videoSubscriptionReleases.get(subscriptionKey)?.();
-    const existing = this.videoSubscriptions.get(subscriptionKey);
-    if (existing) {
-      existing.stop();
-      existing.renderer.destroy();
-      this.videoSubscriptions.delete(subscriptionKey);
+    // Replacing the subscription for this track (a surface taking over from a
+    // headless tap, or one surface from another) must not restart a headless
+    // one in between: see `release` below.
+    this.replacingKey = subscriptionKey;
+    try {
+      this.videoSubscriptionReleases.get(subscriptionKey)?.();
+      const existing = this.videoSubscriptions.get(subscriptionKey);
+      if (existing) {
+        existing.stop();
+        existing.renderer.destroy();
+        this.videoSubscriptions.delete(subscriptionKey);
+      }
+    } finally {
+      this.replacingKey = null;
     }
+    if (headless) this.headlessKeys.add(subscriptionKey);
+    else this.headlessKeys.delete(subscriptionKey);
+    this.subscriptionRoutes.delete(subscriptionKey);
 
     const release = () => {
       if (disposed) return;
       disposed = true;
       cancellation.abort();
       for (const teardown of teardowns.splice(0)) teardown();
-      if (this.videoSubscriptionReleases.get(subscriptionKey) === release) this.videoSubscriptionReleases.delete(subscriptionKey);
+      if (this.videoSubscriptionReleases.get(subscriptionKey) === release) {
+        this.videoSubscriptionReleases.delete(subscriptionKey);
+        this.subscriptionRoutes.delete(subscriptionKey);
+        if (headless) this.headlessKeys.delete(subscriptionKey);
+        // The last surface went away while taps still sample this track: keep
+        // their frames coming on a headless subscription of their own.
+        if (!headless && !this.disposed && this.replacingKey !== subscriptionKey
+            && preferredTrackId && this.frameTaps.get(subscriptionKey)?.size) {
+          queueMicrotask(() => {
+            if (!this.disposed && !this.videoSubscriptionReleases.has(subscriptionKey)
+                && this.frameTaps.get(subscriptionKey)?.size) {
+              this.startHeadlessSubscription(userId, preferredTrackId);
+            }
+          });
+        }
+      }
       const current = this.videoSubscriptions.get(subscriptionKey);
       if (current && current === ownedSubscription) {
         if (current.streamId && current.trackId) {
@@ -1656,6 +1863,8 @@ export class TauriMediaEngine implements MediaEngine {
         });
         const renderer = new CanvasRenderer(canvas);
         own(() => renderer.destroy());
+        // A headless tap paints nothing: its frames go to the taps only.
+        if (headless) renderer.setRenderingEnabled(false);
         // On becoming visible again, replay the latest stored frame by
         // re-registering (the native side re-pushes it), so a paused/off-screen
         // stream repaints immediately instead of waiting for the sender's next
@@ -1665,12 +1874,15 @@ export class TauriMediaEngine implements MediaEngine {
         // (contract C2). Set once streamId/trackId are known below; a no-op until
         // then (the native side hasn't started this track's decode yet).
         let notifyNativeVisibility = (_visible: boolean) => {};
-        const visibility = attachStreamVisibilityControls(canvas, renderer, (visible) => {
+        const onVisibility = (visible: boolean) => {
           notifyNativeVisibility(visible);
           if (visible) {
             resumeSubscription();
           }
-        });
+        };
+        const visibility = headless
+          ? attachDocumentVisibilityControls(onVisibility)
+          : attachStreamVisibilityControls(canvas, renderer, onVisibility);
         own(() => visibility.cleanup());
         const publishedTrack = await this.waitForPublishedVideoTrack(
           userId,
@@ -1735,6 +1947,7 @@ export class TauriMediaEngine implements MediaEngine {
               undefined,
               visibility.isRenderingEnabled,
               () => this.requestKeyframe(streamId, trackId),
+              (frame) => this.dispatchTapFrame(subscriptionKey, frame),
             );
           };
           const registerStreamOnChannel = async (
@@ -1772,6 +1985,7 @@ export class TauriMediaEngine implements MediaEngine {
             });
           });
           startDriverOnChannel(channel);
+          this.settleRoute(subscriptionKey, 'frames');
           subscription = {
             renderer,
             channel,
@@ -1835,6 +2049,12 @@ export class TauriMediaEngine implements MediaEngine {
             void registerStreamOnChannel(freshChannel, ssrc).catch(() => {});
           }, 1000);
           own(() => clearInterval(stallTimer));
+          } else if (nativeSurfaceAvailable && headless) {
+            // A tap cannot sample a track the native side presents on a
+            // surface: no frame ever reaches the webview on that route. The
+            // route is reported, not switched (WP-G8 samples it natively).
+            this.settleRoute(subscriptionKey, 'native-surface');
+            subscription = { renderer, stop: () => {} };
           } else if (nativeSurfaceAvailable) {
             // native-surface route (spec §2/§3.6): the functional WebCodecs
             // probe failed for this codec, so the native side decodes and
@@ -1997,6 +2217,7 @@ export class TauriMediaEngine implements MediaEngine {
                 nativeTile.destroy();
               },
             };
+            this.settleRoute(subscriptionKey, 'native-surface');
             // Create the surface now. A subscribe-time attach failure is loud and
             // leaves the DOM poster/backdrop showing (spec §3.7) — never raw IPC.
             try {
@@ -2032,6 +2253,7 @@ export class TauriMediaEngine implements MediaEngine {
               `[media] no render route for ${codec} video track: WebCodecs cannot decode it and native desktop rendering is unavailable`,
               { userId, streamId, trackId },
             );
+            this.settleRoute(subscriptionKey, 'no-route');
             subscription = {
               renderer,
               streamId,
@@ -2044,6 +2266,7 @@ export class TauriMediaEngine implements MediaEngine {
           logVoiceDiagnostic('[media] no published native track announced before subscription timeout', {
             userId,
           });
+          this.settleRoute(subscriptionKey, 'no-track');
           subscription = {
             renderer,
             stop: () => {},
@@ -2097,7 +2320,7 @@ export class TauriMediaEngine implements MediaEngine {
             )
             .catch(() => {});
         };
-        if (!disposed && typeof ResizeObserver !== 'undefined') {
+        if (!disposed && !headless && typeof ResizeObserver !== 'undefined') {
           resizeObserver = new ResizeObserver(() => {
             if (resizeTimer) {
               clearTimeout(resizeTimer);
@@ -2133,6 +2356,10 @@ export class TauriMediaEngine implements MediaEngine {
         this.videoSubscriptions.set(subscriptionKey, subscription);
       } catch (err) {
         release();
+        // A tap waiting on this track learns there is no route rather than
+        // waiting forever; the diagnostic below says why.
+        this.settleRoute(subscriptionKey, 'no-route');
+        this.subscriptionRoutes.delete(subscriptionKey);
         logVoiceDiagnostic('[media] failed to start native remote video subscription', {
           userId,
           preferredTrackId: preferredTrackId ?? null,

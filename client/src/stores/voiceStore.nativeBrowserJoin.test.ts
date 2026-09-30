@@ -45,6 +45,7 @@ function engine() {
   const transport = { connect: vi.fn(async () => {}), disconnect: vi.fn(async () => {}), setMute: vi.fn(), setDeaf: vi.fn(),
     onParticipantJoin: (cb: (id: string) => void) => { callbacks.join = cb; }, onParticipantLeave: vi.fn(),
     onSpeakingChange: vi.fn(), onTransportLost: (cb: (reason: string) => void) => { callbacks.lost = cb; },
+    setPeerRoleResolver: vi.fn(),
   };
   return { transport: transport as unknown as MediaEngine, connect: transport.connect, disconnect: transport.disconnect, callbacks };
 }

@@ -29,7 +29,7 @@ import { useGuildStore } from '../stores/guildStore';
 import { refreshGuildChannelVisibility, useChannelStore } from '../stores/channelStore';
 import { getMessageStore, type MessageState } from '../stores/messageStore';
 import { useAuthStore } from '../stores/authStore';
-import { useVoiceStore } from '../stores/voiceStore';
+import { selectWatcherCount, useVoiceStore } from '../stores/voiceStore';
 import { useRelationshipStore } from '../stores/relationshipStore';
 import { useInteractionStore } from '../stores/interactionStore';
 import { InteractionCallbackType, InteractionType } from '../types/interactions';
@@ -777,5 +777,45 @@ describe('membership event completeness', () => {
       expect(add).toHaveBeenCalledWith('g1', data, { serverId: SERVER, userId: 'viewer' });
       expect(fetch).not.toHaveBeenCalled();
     } finally { add.mockRestore(); fetch.mockRestore(); }
+  });
+});
+
+describe('voice: watcher counts and the Glass voice-state fields', () => {
+  it('files VOICE_WATCHERS_UPDATE under the account and channel', () => {
+    useAuthStore.setState({ user: { id: 'viewer' } as User });
+    const scope = getServerAccountScope(SERVER)!;
+    dispatchGatewayEvent(SERVER, GatewayEvents.VOICE_WATCHERS_UPDATE, {
+      guild_id: 'g1', channel_id: 'lounge', streams: [{ user_id: 'vincent', watchers: 2 }],
+    } as never);
+    expect(selectWatcherCount(useVoiceStore.getState(), scope, 'lounge', 'vincent')).toBe(2);
+    dispatchGatewayEvent(SERVER, GatewayEvents.VOICE_WATCHERS_UPDATE, { guild_id: 'g1', channel_id: 'lounge', streams: [] } as never);
+    expect(selectWatcherCount(useVoiceStore.getState(), scope, 'lounge', 'vincent')).toBe(0);
+  });
+
+  it('drops a malformed VOICE_WATCHERS_UPDATE', () => {
+    useAuthStore.setState({ user: { id: 'viewer' } as User });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const before = useVoiceStore.getState().watchers;
+    dispatchGatewayEvent(SERVER, GatewayEvents.VOICE_WATCHERS_UPDATE, { guild_id: 'g1', channel_id: 'lounge' } as never);
+    expect(useVoiceStore.getState().watchers).toBe(before);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('carries mode and self_stream_started_at on VOICE_STATE_UPDATE', () => {
+    useAuthStore.setState({ user: { id: 'viewer' } as User });
+    dispatchGatewayEvent(SERVER, GatewayEvents.VOICE_STATE_UPDATE, {
+      user_id: 'sean', guild_id: 'g1', channel_id: 'lounge', session_id: 'r1', mode: 'listen',
+      self_stream: false, self_stream_started_at: null, self_mute: true, self_deaf: false,
+      self_video: false, mute: false, deaf: false, suppress: false,
+    } as never);
+    dispatchGatewayEvent(SERVER, GatewayEvents.VOICE_STATE_UPDATE, {
+      user_id: 'vincent', guild_id: 'g1', channel_id: 'lounge', session_id: 'r2', mode: 'joined',
+      self_stream: true, self_stream_started_at: '2026-09-30T20:30:00Z', self_mute: false, self_deaf: false,
+      self_video: false, mute: false, deaf: false, suppress: false,
+    } as never);
+    const participants = useVoiceStore.getState().participants;
+    expect(participants.get('sean')?.mode).toBe('listen');
+    expect(participants.get('vincent')?.self_stream_started_at).toBe('2026-09-30T20:30:00Z');
   });
 });

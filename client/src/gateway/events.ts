@@ -59,6 +59,9 @@ export const GatewayEvents = {
   // Somebody started or stopped talking in a voice channel you can see.
   VOICE_SPEAKING: 'VOICE_SPEAKING',
   VOICE_SERVER_UPDATE: 'VOICE_SERVER_UPDATE',
+  // How many people watch each stream in a voice channel (a complete snapshot
+  // per channel; ambient viewers are never counted).
+  VOICE_WATCHERS_UPDATE: 'VOICE_WATCHERS_UPDATE',
 
   // Invite events
   INVITE_CREATE: 'INVITE_CREATE',

@@ -110,12 +110,19 @@ pub struct StreamSubscriptionRequest {
 
 // ── Voice session lifecycle ──────────────────────────────────────────────────
 
-/// Start a native call.
+/// Start a native media session: a call (joined or listening in) or a view
+/// session (watch or ambient).
 ///
 /// `media_public_key` is the hex X25519 call key the renderer minted for this
-/// call; every other participant wraps its frame keys to it. See
+/// session; every other participant wraps its frame keys to it. See
 /// `client/src/lib/media/mediaKeyring.ts`.
+///
+/// `role` is the renderer's `MediaSessionRole` (`call`, the default; `listen`;
+/// `view`), checked against the token's `view` claim (see
+/// [`super::session::SessionRole::resolve`]). A view session goes to the view
+/// slot and never touches the call or its capture.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn start_voice_session(
     owner_id: String,
     endpoint: String,
@@ -124,6 +131,7 @@ pub async fn start_voice_session(
     room_id: String,
     advertised_capabilities: Option<super::capabilities::MediaStreamCapabilities>,
     media_public_key: Option<String>,
+    role: Option<String>,
     state: State<'_, MediaState>,
     app: tauri::AppHandle,
 ) -> Result<VoiceSessionInfo, String> {
@@ -149,6 +157,22 @@ pub async fn start_voice_session(
         Some(key) if paracord_transport::control::is_valid_media_public_key(&key) => key,
         _ => return Err("a native call needs a media call key".into()),
     };
+    let role = super::session::SessionRole::resolve(role.as_deref(), &token)?;
+    if role.is_view() {
+        return start_view_session(
+            &owner_id,
+            &endpoint,
+            &token,
+            &cert_hash,
+            &room_id,
+            advertised_capabilities,
+            media_public_key,
+            role,
+            state.inner(),
+            app,
+        )
+        .await;
+    }
     state.calls.begin(&owner_id)?;
     let _transition = state.calls.transition.lock().await;
     let result = async {
@@ -166,6 +190,7 @@ pub async fn start_voice_session(
             &cert_hash,
             &room_id,
             advertised_capabilities,
+            role,
         )
         .await?;
         if let Err(error) = state.calls.check(&owner_id) {
@@ -223,11 +248,136 @@ pub async fn start_voice_session(
     result
 }
 
+/// Start a view session in the view slot: receive-only, one stream, its own
+/// connection and owner. Never touches the call, its capture or its devices.
+#[allow(clippy::too_many_arguments)]
+async fn start_view_session(
+    owner_id: &str,
+    endpoint: &str,
+    token: &str,
+    cert_hash: &str,
+    room_id: &str,
+    advertised_capabilities: Option<super::capabilities::MediaStreamCapabilities>,
+    media_public_key: String,
+    role: super::session::SessionRole,
+    state: &MediaState,
+    app: super::CallEventSink,
+) -> Result<VoiceSessionInfo, String> {
+    use super::session::NativeMediaSession;
+    use super::{audio_pipeline, events};
+
+    let slot = state.view_slot();
+    slot.owners.begin(owner_id)?;
+    let _transition = slot.owners.transition.lock().await;
+    let result = async {
+        slot.owners.check(owner_id)?;
+        // One view per client (and per account, on the relay): a new view
+        // replaces the old one here too.
+        if let Some(mut previous) = slot.session.lock().await.take() {
+            previous.disconnect().await;
+        }
+        slot.owners.check(owner_id)?;
+        let mut session = NativeMediaSession::connect(
+            endpoint,
+            token,
+            cert_hash,
+            room_id,
+            advertised_capabilities,
+            role,
+        )
+        .await?;
+        if let Err(error) = slot.owners.check(owner_id) {
+            session.disconnect().await;
+            return Err(error);
+        }
+        session.owner_id = owner_id.to_string();
+        let session_id = session.session_id.clone();
+
+        // Receive paths only: no microphone send, no stream-audio send, no
+        // speaking detector (a view holds no voices).
+        audio_pipeline::spawn_datagram_recv_task(&mut session, app.clone());
+        audio_pipeline::spawn_uni_stream_recv_task(&mut session, app.clone());
+        if role.plays_audio() {
+            // Watch plays the stream's own audio.
+            audio_pipeline::spawn_playout_task(&mut session);
+        }
+        events::spawn_control_recv_task(&mut session, app.clone());
+        events::spawn_connection_monitor(&mut session, app.clone());
+
+        // A view session sends `SessionJoin` like a call: its publisher wraps
+        // the stream key to the call key published here.
+        session
+            .send_control_message(&ControlMessage::SessionJoin {
+                room_id: session.room_id.clone(),
+                session_id: session.session_id.clone(),
+                video_capabilities: session
+                    .stream_capabilities
+                    .video
+                    .iter()
+                    .map(|capability| capability.to_transport())
+                    .collect(),
+                media_public_key: Some(media_public_key),
+            })
+            .await?;
+
+        slot.owners.check(owner_id)?;
+        let mut guard = slot.session.lock().await;
+        if let Some(mut previous) = guard.take() {
+            previous.disconnect().await;
+        }
+        *guard = Some(session);
+        Ok(VoiceSessionInfo {
+            session_id,
+            connected: true,
+        })
+    }
+    .await;
+    slot.owners.finish_start(owner_id);
+    result
+}
+
+/// Whether nothing is left in `cell` right now (a busy lock means something
+/// is: then only scoped cleanup is safe).
+fn slot_is_empty(cell: &super::SessionCell) -> bool {
+    cell.try_lock().is_ok_and(|guard| guard.is_none())
+}
+
 #[tauri::command]
 pub async fn stop_voice_session(
     owner_id: String,
     state: State<'_, MediaState>,
 ) -> Result<(), String> {
+    // A stop can overtake its own start, so an owner no slot knows yet is
+    // canceled in both: whichever slot it later tries to begin in refuses it.
+    let in_view = state.view.owners.knows(&owner_id);
+    let in_call = state.calls.knows(&owner_id);
+    if in_view || !in_call {
+        state.view.owners.cancel(&owner_id);
+        let _transition = state.view.owners.transition.lock().await;
+        let mut guard = state.view.session.lock().await;
+        if guard
+            .as_ref()
+            .is_some_and(|session| session.owner_id == owner_id)
+        {
+            if let Some(mut session) = guard.take() {
+                let _ = session
+                    .send_control_message(&ControlMessage::SessionLeave {
+                        room_id: session.room_id.clone(),
+                        session_id: session.session_id.clone(),
+                    })
+                    .await;
+                session.disconnect().await;
+            }
+            drop(guard);
+            if slot_is_empty(&state.session) {
+                super::video_pipeline::clear_all_stream_video_state();
+            }
+            return Ok(());
+        }
+    }
+    if !(in_call || !in_view) {
+        return Ok(());
+    }
     state.calls.cancel(&owner_id);
     let _transition = state.calls.transition.lock().await;
     if state
@@ -253,9 +403,13 @@ pub async fn stop_voice_session(
             .await;
         session.disconnect().await;
     }
+    drop(guard);
     // Belt-and-suspenders: drop any process-wide remote-video state even if no
-    // session was present (disconnect already clears it when one was).
-    super::video_pipeline::clear_all_stream_video_state();
+    // session was present (disconnect already cleared its own). Only when no
+    // view session is running, whose picture this would blank.
+    if slot_is_empty(&state.view.session) {
+        super::video_pipeline::clear_all_stream_video_state();
+    }
     Ok(())
 }
 
@@ -381,13 +535,15 @@ pub async fn voice_set_source_volume(
     owner_id: String,
     state: State<'_, MediaState>,
 ) -> Result<(), String> {
-    let _transition = state.calls.transition.lock().await;
-    state.calls.check(&owner_id)?;
+    // Either slot: the call and the view session both receive (see MediaState).
+    let slot = state.slot_for(&owner_id)?;
+    let _transition = slot.owners.transition.lock().await;
+    slot.owners.check(&owner_id)?;
 
     use super::session::NativeMediaSession;
 
     let gain = gain.clamp(0.0, 2.0);
-    let guard = state.session.lock().await;
+    let guard = slot.session.lock().await;
     let session = guard.as_ref().ok_or("no active session")?;
 
     if let Some(ssrc) = ssrc {
@@ -531,7 +687,18 @@ pub async fn voice_switch_input_device(
         rx,
         session.pcm_tx.clone(),
     ));
-    tracing::info!("microphone switched; capture forwarder re-aimed at the new device");
+    session
+        .mic_capture_generation
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    if session.role == super::session::SessionRole::Listen {
+        // The in-place upgrade from listening in: the relay already accepts
+        // this member's media (`POST /mode`); this is the first capture the
+        // call has ever had, on the same connection.
+        session.role = super::session::SessionRole::Call;
+        tracing::info!("listening in -> joined: microphone capture started on the same connection");
+    } else {
+        tracing::info!("microphone switched; capture forwarder re-aimed at the new device");
+    }
 
     Ok(())
 }
@@ -881,8 +1048,10 @@ pub async fn media_register_stream_video_subscription(
 ) -> Result<(), String> {
     let app = super::CallEventSink::new(app, owner_id.clone());
 
-    let _transition = state.calls.transition.lock().await;
-    state.calls.check(&owner_id)?;
+    // Either slot: the call and the view session both receive (see MediaState).
+    let slot = state.slot_for(&owner_id)?;
+    let _transition = slot.owners.transition.lock().await;
+    slot.owners.check(&owner_id)?;
 
     super::video_pipeline::native_diag(
         Some(&app),
@@ -930,8 +1099,10 @@ pub async fn media_unregister_stream_video_subscription(
     owner_id: String,
     state: State<'_, MediaState>,
 ) -> Result<(), String> {
-    let _transition = state.calls.transition.lock().await;
-    state.calls.check(&owner_id)?;
+    // Either slot: the call and the view session both receive (see MediaState).
+    let slot = state.slot_for(&owner_id)?;
+    let _transition = slot.owners.transition.lock().await;
+    slot.owners.check(&owner_id)?;
 
     #[cfg(feature = "vpx")]
     super::video_pipeline::unregister_stream_video_subscription(&stream_id, &track_id);
@@ -985,10 +1156,12 @@ pub async fn media_request_keyframe(
     owner_id: String,
     state: State<'_, MediaState>,
 ) -> Result<(), String> {
-    let _transition = state.calls.transition.lock().await;
-    state.calls.check(&owner_id)?;
+    // Either slot: the call and the view session both receive (see MediaState).
+    let slot = state.slot_for(&owner_id)?;
+    let _transition = slot.owners.transition.lock().await;
+    slot.owners.check(&owner_id)?;
 
-    let guard = state.session.lock().await;
+    let guard = slot.session.lock().await;
     let session = guard.as_ref().ok_or("no active session")?;
     route_keyframe_request(session, stream_id, track_id).await
 }
@@ -1001,8 +1174,10 @@ pub async fn media_set_stream_visibility(
     owner_id: String,
     state: State<'_, MediaState>,
 ) -> Result<(), String> {
-    let _transition = state.calls.transition.lock().await;
-    state.calls.check(&owner_id)?;
+    // Either slot: the call and the view session both receive (see MediaState).
+    let slot = state.slot_for(&owner_id)?;
+    let _transition = slot.owners.transition.lock().await;
+    slot.owners.check(&owner_id)?;
 
     // Toggle native visibility first (no session lock needed — it touches the
     // process-wide dispatch state), then request a keyframe if the resume found
@@ -1010,7 +1185,7 @@ pub async fn media_set_stream_visibility(
     let need_keyframe =
         super::video_pipeline::set_stream_video_visibility(&stream_id, &track_id, visible);
     if need_keyframe {
-        let guard = state.session.lock().await;
+        let guard = slot.session.lock().await;
         if let Some(session) = guard.as_ref() {
             route_keyframe_request(session, stream_id, track_id).await?;
         }
@@ -1023,12 +1198,14 @@ pub async fn media_get_stream_capabilities(
     owner_id: String,
     state: State<'_, MediaState>,
 ) -> Result<super::capabilities::MediaStreamCapabilities, String> {
-    let guard = state.session.lock().await;
-    if let Some(session) = guard
-        .as_ref()
-        .filter(|session| session.owner_id == owner_id)
-    {
-        return Ok(session.stream_capabilities.clone());
+    for cell in [&state.session, &state.view.session] {
+        let guard = cell.lock().await;
+        if let Some(session) = guard
+            .as_ref()
+            .filter(|session| session.owner_id == owner_id)
+        {
+            return Ok(session.stream_capabilities.clone());
+        }
     }
     Ok(super::capabilities::detect_media_stream_capabilities())
 }
@@ -1038,10 +1215,12 @@ pub async fn media_list_published_tracks(
     owner_id: String,
     state: State<'_, MediaState>,
 ) -> Result<Vec<PublishedTrack>, String> {
-    let _transition = state.calls.transition.lock().await;
-    state.calls.check(&owner_id)?;
+    // Either slot: the call and the view session both receive (see MediaState).
+    let slot = state.slot_for(&owner_id)?;
+    let _transition = slot.owners.transition.lock().await;
+    slot.owners.check(&owner_id)?;
 
-    let guard = state.session.lock().await;
+    let guard = slot.session.lock().await;
     let session = guard.as_ref().ok_or("no active session")?;
     let registry = session.stream_registry.lock().await;
     Ok(registry.published_tracks())
@@ -1052,10 +1231,12 @@ pub async fn media_get_stream_diagnostics(
     owner_id: String,
     state: State<'_, MediaState>,
 ) -> Result<StreamDiagnostics, String> {
-    let _transition = state.calls.transition.lock().await;
-    state.calls.check(&owner_id)?;
+    // Either slot: the call and the view session both receive (see MediaState).
+    let slot = state.slot_for(&owner_id)?;
+    let _transition = slot.owners.transition.lock().await;
+    slot.owners.check(&owner_id)?;
 
-    let guard = state.session.lock().await;
+    let guard = slot.session.lock().await;
     if let Some(session) = guard.as_ref() {
         let registry = session.stream_registry.lock().await;
         let subscriptions = registry
@@ -1139,10 +1320,12 @@ pub async fn media_list_session_participants(
     owner_id: String,
     state: State<'_, MediaState>,
 ) -> Result<Vec<String>, String> {
-    let _transition = state.calls.transition.lock().await;
-    state.calls.check(&owner_id)?;
+    // Either slot: the call and the view session both receive (see MediaState).
+    let slot = state.slot_for(&owner_id)?;
+    let _transition = slot.owners.transition.lock().await;
+    slot.owners.check(&owner_id)?;
 
-    let guard = state.session.lock().await;
+    let guard = slot.session.lock().await;
     let session = guard.as_ref().ok_or("no active session")?;
     let participants = session
         .session_participants
@@ -1159,10 +1342,12 @@ pub async fn media_list_session_participant_capabilities(
     owner_id: String,
     state: State<'_, MediaState>,
 ) -> Result<Vec<SessionParticipantCapabilities>, String> {
-    let _transition = state.calls.transition.lock().await;
-    state.calls.check(&owner_id)?;
+    // Either slot: the call and the view session both receive (see MediaState).
+    let slot = state.slot_for(&owner_id)?;
+    let _transition = slot.owners.transition.lock().await;
+    slot.owners.check(&owner_id)?;
 
-    let guard = state.session.lock().await;
+    let guard = slot.session.lock().await;
     let session = guard.as_ref().ok_or("no active session")?;
     let participants = session
         .session_participants
@@ -1296,10 +1481,12 @@ pub async fn media_register_track_subscription(
     owner_id: String,
     state: State<'_, MediaState>,
 ) -> Result<(), String> {
-    let _transition = state.calls.transition.lock().await;
-    state.calls.check(&owner_id)?;
+    // Either slot: the call and the view session both receive (see MediaState).
+    let slot = state.slot_for(&owner_id)?;
+    let _transition = slot.owners.transition.lock().await;
+    slot.owners.check(&owner_id)?;
 
-    let mut guard = state.session.lock().await;
+    let mut guard = slot.session.lock().await;
     let session = guard.as_mut().ok_or("no active session")?;
     let stream_id = StreamId::new(request.stream_id);
     let track_id = TrackId::new(request.track_id);
@@ -1370,10 +1557,12 @@ pub async fn media_unregister_track_subscription(
     owner_id: String,
     state: State<'_, MediaState>,
 ) -> Result<(), String> {
-    let _transition = state.calls.transition.lock().await;
-    state.calls.check(&owner_id)?;
+    // Either slot: the call and the view session both receive (see MediaState).
+    let slot = state.slot_for(&owner_id)?;
+    let _transition = slot.owners.transition.lock().await;
+    slot.owners.check(&owner_id)?;
 
-    let mut guard = state.session.lock().await;
+    let mut guard = slot.session.lock().await;
     let session = guard.as_mut().ok_or("no active session")?;
     let stream_id = StreamId::new(stream_id);
     let track_id = TrackId::new(track_id);
@@ -1397,13 +1586,15 @@ pub async fn media_subscribe_audio(
     owner_id: String,
     state: State<'_, MediaState>,
 ) -> Result<(), String> {
-    let _transition = state.calls.transition.lock().await;
-    state.calls.check(&owner_id)?;
+    // Either slot: the call and the view session both receive (see MediaState).
+    let slot = state.slot_for(&owner_id)?;
+    let _transition = slot.owners.transition.lock().await;
+    slot.owners.check(&owner_id)?;
 
     let user_id = user_id
         .parse::<i64>()
         .map_err(|_| "invalid user id".to_string())?;
-    let guard = state.session.lock().await;
+    let guard = slot.session.lock().await;
     let session = guard.as_ref().ok_or("no active session")?;
     session
         .send_control_message(&ControlMessage::Subscribe {
@@ -1419,13 +1610,15 @@ pub async fn media_unsubscribe_audio(
     owner_id: String,
     state: State<'_, MediaState>,
 ) -> Result<(), String> {
-    let _transition = state.calls.transition.lock().await;
-    state.calls.check(&owner_id)?;
+    // Either slot: the call and the view session both receive (see MediaState).
+    let slot = state.slot_for(&owner_id)?;
+    let _transition = slot.owners.transition.lock().await;
+    slot.owners.check(&owner_id)?;
 
     let user_id = user_id
         .parse::<i64>()
         .map_err(|_| "invalid user id".to_string())?;
-    let guard = state.session.lock().await;
+    let guard = slot.session.lock().await;
     let session = guard.as_ref().ok_or("no active session")?;
     session
         .send_control_message(&ControlMessage::Unsubscribe {
@@ -1443,8 +1636,10 @@ pub async fn media_apply_audio_sender_key(
     owner_id: String,
     state: State<'_, MediaState>,
 ) -> Result<(), String> {
-    let _transition = state.calls.transition.lock().await;
-    state.calls.check(&owner_id)?;
+    // Either slot: the call and the view session both receive (see MediaState).
+    let slot = state.slot_for(&owner_id)?;
+    let _transition = slot.owners.transition.lock().await;
+    slot.owners.check(&owner_id)?;
 
     use paracord_codec::crypto::KEY_SIZE;
 
@@ -1455,7 +1650,7 @@ pub async fn media_apply_audio_sender_key(
         .parse::<i64>()
         .map_err(|_| "invalid sender user id".to_string())?;
 
-    let guard = state.session.lock().await;
+    let guard = slot.session.lock().await;
     let session = guard.as_ref().ok_or("no active session")?;
     let sender_audio_ssrc =
         super::session::NativeMediaSession::derive_track_ssrc(sender_user_id, "audio");
@@ -1476,8 +1671,10 @@ pub async fn media_apply_track_sender_key(
     owner_id: String,
     state: State<'_, MediaState>,
 ) -> Result<(), String> {
-    let _transition = state.calls.transition.lock().await;
-    state.calls.check(&owner_id)?;
+    // Either slot: the call and the view session both receive (see MediaState).
+    let slot = state.slot_for(&owner_id)?;
+    let _transition = slot.owners.transition.lock().await;
+    slot.owners.check(&owner_id)?;
 
     use paracord_codec::crypto::KEY_SIZE;
 
@@ -1485,7 +1682,7 @@ pub async fn media_apply_track_sender_key(
         .try_into()
         .map_err(|_| "track sender key must be exactly 16 bytes".to_string())?;
 
-    let guard = state.session.lock().await;
+    let guard = slot.session.lock().await;
     let session = guard.as_ref().ok_or("no active session")?;
     let stream_id = StreamId::new(stream_id);
     let track_id = TrackId::new(track_id);

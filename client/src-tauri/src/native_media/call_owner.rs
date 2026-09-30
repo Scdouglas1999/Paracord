@@ -36,6 +36,16 @@ impl CallOwnership {
         Ok(())
     }
 
+    /// Whether `id` is this slot's owner or is starting in it. A stop for an
+    /// id that no slot knows must cancel it in every slot (a stop can overtake
+    /// its own start).
+    pub fn knows(&self, id: &str) -> bool {
+        self.inner
+            .lock()
+            .map(|state| state.requested.as_deref() == Some(id) || state.starting.contains(id))
+            .unwrap_or(false)
+    }
+
     pub fn finish_start(&self, id: &str) {
         if let Ok(mut state) = self.inner.lock() {
             state.starting.remove(id);
@@ -167,6 +177,25 @@ mod tests {
         assert!(capture.load(Ordering::SeqCst));
         ownership.action("new", "screen", 1).unwrap();
         assert!(ownership.action("old", "screen", 9).is_err());
+    }
+
+    #[test]
+    fn a_slot_knows_its_owner_and_its_pending_start_only() {
+        let call = CallOwnership::default();
+        let view = CallOwnership::default();
+        call.begin("call").unwrap();
+        view.begin("view").unwrap();
+        assert!(call.knows("call") && !call.knows("view"));
+        assert!(view.knows("view") && !view.knows("call"));
+        // A stop that overtook its start cancels in every slot, and neither
+        // slot then lets that owner begin.
+        call.cancel("early");
+        view.cancel("early");
+        assert!(call.begin("early").is_err());
+        assert!(view.begin("early").is_err());
+        // The two slots are independent: beginning a view does not revoke the call.
+        view.begin("view-2").unwrap();
+        call.check("call").unwrap();
     }
 
     #[test]

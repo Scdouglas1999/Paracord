@@ -121,8 +121,53 @@ export interface MediaStreamDiagnostics {
   capabilities: MediaStreamCapabilities;
 }
 
+/**
+ * How one media connection takes part in its room (docs/design/glass-plan.md
+ * §1.2, docs/design/glass-g5-checkpoint.md).
+ *
+ * - `call`: a joined member. Captures the microphone and sends.
+ * - `listen`: a call member that is listening in. It hears the voices, never
+ *   opens the microphone and never sends, until `startMicrophone` (the in-place
+ *   upgrade to joined). The relay refuses its media anyway; the client does not
+ *   rely on that.
+ * - `view`: a view session (watch or ambient). Receive-only, holds no voices,
+ *   and may subscribe only to the one stream it was issued for. Its kind is the
+ *   token's `view` claim.
+ */
+export type MediaSessionRole = 'call' | 'listen' | 'view';
+
+/**
+ * Who a peer in this connection's relay roster is. The relay roster carries no
+ * marker for a view session (G5), so the voice store answers from voice
+ * states: a call member always has a voice state in the channel, a viewer
+ * never does.
+ */
+export type PeerRole = 'member' | 'viewer';
+
+/**
+ * Where a frame tap's pixels come from, decided once per track when the tap
+ * starts (never switched mid-stream):
+ *
+ * - `frames`: decoded `VideoFrame`s reach JavaScript and are handed to the tap.
+ * - `native-surface`: the desktop app decodes and presents this track on a
+ *   platform surface (Linux GTK underlay, macOS layer); no frame reaches
+ *   JavaScript. Sampling needs the native sampler (WP-G8's command).
+ * - `no-route`: nothing in this client can decode the track's codec.
+ * - `no-track`: the publisher has no such track (yet, or any more).
+ */
+export type VideoTapRoute = 'frames' | 'native-surface' | 'no-route' | 'no-track';
+
+export interface VideoFrameTap {
+  /** Settles once the track's route is known. */
+  readonly route: Promise<VideoTapRoute>;
+  /** Stop receiving frames. Idempotent. */
+  release(): void;
+}
+
 export interface MediaSessionContext {
   readonly id: string;
+  /** Absent means `call`. */
+  readonly role?: MediaSessionRole;
   readonly signal: AbortSignal;
   readonly account?: OperationContext;
   /**
@@ -219,6 +264,34 @@ export interface MediaEngine {
     options?: { preferredTrackId?: 'camera' | 'screen' },
   ): () => void;
   subscribeLocalPublishedScreen(canvas: HTMLCanvasElement, onFrame?: () => void): () => void;
+  /**
+   * Begin capturing and sending the microphone on a connection that joined as
+   * `listen`: the in-place upgrade to joined, on the same connection, with no
+   * reconnect. Rejects on any other role, and when the microphone cannot open.
+   * `inputDeviceId` is the native device id to open (desktop); the browser
+   * engine opens the default microphone, as its joins always have.
+   */
+  startMicrophone(options?: { inputDeviceId?: string | null }): Promise<void>;
+  /**
+   * How to tell a call member from a view session in this connection's relay
+   * roster. Viewers are never reported through `onParticipantJoin`/`Leave`
+   * (they are not in the call) and their joining or leaving does not rotate
+   * the voice key (the relay never gives them the voice key). Without a
+   * resolver every peer is a member.
+   */
+  setPeerRoleResolver(resolver: (userId: string) => PeerRole): void;
+  /**
+   * Decoded frames of one remote track, for sampling: room light, the stage's
+   * glow, clips. Each frame belongs to the callback, which must `close()` it.
+   * The tap joins the track's existing decoder when a surface already shows
+   * it, and runs one of its own (lowest layer) when nothing does. It never
+   * changes the layer a surface asked for.
+   */
+  tapVideoFrames(
+    userId: string,
+    trackId: 'camera' | 'screen',
+    onFrame: (frame: VideoFrame) => void,
+  ): VideoFrameTap;
 }
 
 export async function createMediaEngine(): Promise<MediaEngine> {

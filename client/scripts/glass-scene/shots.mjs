@@ -60,24 +60,13 @@ export const STATES = {
   '04-side-by-side': {
     reference: '04-side-by-side.png',
     viewport: DESKTOP,
-    async run({ page, go, session, log, api, people, ids }) {
+    async run({ page, go, session, log }) {
       // The lobby offers Watch beside a sharer: it joins and opens the share.
-      // A join refused by media-key verification (a rejoin soon after a leave,
-      // see the G3 checkpoint) is reported, left, and tried again from a fresh
-      // page — the in-call retry comes back without the share.
-      for (let attempt = 1; ; attempt++) {
-        await go('gameNight', 'lounge');
-        await press(page, CONTROLS.watch, { timeoutMs: 45_000 });
-        try {
-          await awaitJoined(session, { attempts: 1, log });
-          break;
-        } catch (error) {
-          if (attempt >= 3) throw error;
-          await leaveCall(api, people.sean, ids.servers.gameNight.channels.lounge);
-          await page.goto('/app/friends');
-          await page.waitForTimeout(20_000);
-        }
-      }
+      // One attempt: a refused join (even a rejoin into a running call) is a
+      // product failure to report, not something to retry past.
+      await go('gameNight', 'lounge');
+      await press(page, CONTROLS.watch, { timeoutMs: 45_000 });
+      await awaitJoined(session, { log });
       // Sean has to *see* the share: its teal and amber on screen, not just a
       // stream canvas somewhere in the DOM. If the lobby's Watch did not bring
       // it up, take the Watch the call offers on Vincent's tile.
@@ -96,9 +85,9 @@ export const STATES = {
         seen = await sceneOnScreen(page);
       }
       log(`  ${' '.repeat(17)} Vincent's scene on screen: ${seen.teal}px teal, ${seen.amber}px amber${pressedTileWatch ? ' (via the tile\'s Watch)' : ''}`);
-      // The current (Lantern) stage shows the share for about a second after
-      // joining and then drops back to the tile grid (see the G3 checkpoint),
-      // so the frame that was verified is the one kept. Say whether it stayed.
+      // The watched share used to close itself about a second after joining
+      // (docs/design/glass-fix-rejoin.md, Bug 2). The frame that was verified
+      // is the one kept; say whether the share stayed, since it should.
       await page.waitForTimeout(3000);
       const later = await sceneOnScreen(page);
       if (!(later.teal > 300)) log(`  ${' '.repeat(17)} …and 3s later it is gone again (teal ${later.teal}px): the current stage dropped the share`);

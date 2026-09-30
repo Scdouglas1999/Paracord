@@ -123,36 +123,24 @@ export function channelPath(ids, serverKey, channelKey) {
 }
 
 /**
- * Wait until the call is connected, taking the app's own "Try joining again"
- * when a join fails. Every failure is reported with the reason the app gave —
- * a retried join is a finding, not a pass.
+ * Wait until the call is connected. A join the app refuses (its "Try joining
+ * again" appears) is a failure, reported with the reason the app gave: the
+ * driver does not retry. Rejoining a running call used to be refused
+ * (docs/design/glass-fix-rejoin.md), and this used to paper over it with
+ * retries and a 15s pause; that fix landed, so a refusal now is a finding.
  */
-export async function awaitJoined(session, { attempts = 5, pauseMs = 15_000, log = () => {} } = {}) {
+export async function awaitJoined(session, { timeoutMs = 60_000, log = () => {} } = {}) {
   const { page, person } = session;
-  const failures = [];
-  for (let attempt = 1; attempt <= attempts; attempt++) {
-    const deadline = Date.now() + 60_000;
-    let failed = null;
-    while (Date.now() < deadline) {
-      if (await findControl(page, CONTROLS.leave)) return failures;
-      const retry = await findControl(page, CONTROLS.retryJoin);
-      if (retry) {
-        failed = retry;
-        break;
-      }
-      await page.waitForTimeout(400);
-    }
-    const reason = (await page.locator('text=/could not|couldn.t|failed/i').allTextContents().catch(() => []))
-      .map(t => t.trim()).filter(Boolean).slice(0, 3).join(' / ') || 'no connected call within 60s';
-    failures.push(reason);
-    log(`  ${person.name}: join attempt ${attempt} failed: ${reason}`);
-    if (!failed || attempt === attempts) break;
-    // Rejoining straight after a leave is refused until the relay retires the
-    // previous connection (see the G3 checkpoint); give it a moment.
-    await page.waitForTimeout(pauseMs);
-    await failed.click().catch(() => {});
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await findControl(page, CONTROLS.leave)) return;
+    if (await findControl(page, CONTROLS.retryJoin)) break;
+    await page.waitForTimeout(400);
   }
-  throw new Error(`${person.name} could not join the call: ${failures.join(' | ')}`);
+  const reason = (await page.locator('text=/could not|couldn.t|failed/i').allTextContents().catch(() => []))
+    .map(t => t.trim()).filter(Boolean).slice(0, 3).join(' / ') || `no connected call within ${timeoutMs / 1000}s`;
+  log(`  ${person.name}: join failed: ${reason}`);
+  throw new Error(`${person.name} could not join the call: ${reason}`);
 }
 
 /** Join a voice channel through the UI and wait for the call to connect. */

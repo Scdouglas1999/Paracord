@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8};
 use std::sync::Arc;
@@ -65,6 +65,57 @@ pub struct NativeSimulcastState {
     pub ssrcs: Vec<(u8, u32)>,
 }
 
+/// How a native session takes part in its room (the renderer's
+/// `MediaSessionRole`, checked here against the media token).
+///
+/// - `Call`: a joined member; captures the microphone and may publish.
+/// - `Listen`: a call member listening in. Hears the voices, never opens the
+///   microphone, until `voice_switch_input_device` starts capture (the
+///   in-place upgrade to joined).
+/// - `Watch` / `Ambient`: a view session (the token's `view` claim). Receive
+///   only; lives in the view slot beside the call. Ambient plays nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionRole {
+    Call,
+    Listen,
+    Watch,
+    Ambient,
+}
+
+impl SessionRole {
+    /// Resolve the renderer's requested role against the token. A token with
+    /// a `view` claim is admitted by the relay only as a view session, so the
+    /// two must agree; anything else is refused rather than guessed.
+    pub fn resolve(requested: Option<&str>, token: &str) -> Result<Self, String> {
+        let claim = NativeMediaSession::token_view_kind(token)?;
+        match (requested.unwrap_or("call"), claim.as_deref()) {
+            ("view", Some("watch")) => Ok(Self::Watch),
+            ("view", Some("ambient")) => Ok(Self::Ambient),
+            ("view", Some(other)) => Err(format!("unknown view kind in media token: {other}")),
+            ("view", None) => Err("a view session needs a view-session media token".into()),
+            (_, Some(_)) => Err("a view-session media token cannot join a call".into()),
+            ("call", None) => Ok(Self::Call),
+            ("listen", None) => Ok(Self::Listen),
+            (other, None) => Err(format!("unknown media session role: {other}")),
+        }
+    }
+
+    pub fn is_view(self) -> bool {
+        matches!(self, Self::Watch | Self::Ambient)
+    }
+
+    /// Only a joined member opens the microphone at connect.
+    pub fn captures_at_connect(self) -> bool {
+        matches!(self, Self::Call)
+    }
+
+    /// Everything but ambient plays audio: voices (call, listen) or the
+    /// watched stream's own audio (watch).
+    pub fn plays_audio(self) -> bool {
+        !matches!(self, Self::Ambient)
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct SenderKeyState {
     pub epoch: u8,
@@ -91,6 +142,20 @@ pub struct RemoteAudioState {
 pub struct NativeMediaSession {
     /// Unique adapter-instance owner; independent of the relay membership session.
     pub owner_id: String,
+    /// How this session takes part (see [`SessionRole`]). `Listen` becomes
+    /// `Call` when the microphone starts.
+    pub role: SessionRole,
+    /// Bumped every time microphone capture (re)starts; 0 means it never has.
+    /// The speaking detector's "your microphone opened but sends nothing" check
+    /// runs only against a capture that exists, from the moment it started.
+    pub mic_capture_generation: Arc<AtomicU64>,
+    /// Every remote and local video track this session has known, so its
+    /// teardown clears exactly its own process-wide video state and never the
+    /// other slot's (see `video_pipeline::clear_stream_video_state_for_tracks`).
+    pub video_track_keys: Arc<std::sync::Mutex<HashSet<(String, String)>>>,
+    /// Set once `disconnect` has released this session's video state, so the
+    /// drop backstop does not run it again.
+    pub video_state_released: bool,
     // QUIC transport
     pub endpoint: MediaEndpoint,
     pub connection: MediaConnection,
@@ -352,6 +417,12 @@ impl NativeMediaSession {
         Err(format!("bad endpoint addr: {endpoint_addr}"))
     }
 
+    /// The `view` claim of a media token (`watch` / `ambient`), or `None` for a
+    /// call token.
+    pub fn token_view_kind(token: &str) -> Result<Option<String>, String> {
+        Ok(Self::parse_token_claims(token)?.view)
+    }
+
     /// Connect to a QUIC media relay and set up codec pipelines.
     pub async fn connect(
         endpoint_addr: &str,
@@ -359,6 +430,7 @@ impl NativeMediaSession {
         cert_hash: &str,
         room_id: &str,
         advertised_capabilities: Option<MediaStreamCapabilities>,
+        role: SessionRole,
     ) -> Result<Self, String> {
         use paracord_transport::connection::ConnectionMode;
 
@@ -417,27 +489,36 @@ impl NativeMediaSession {
 
         // The cpal streams are owned by a dedicated thread; create it, start
         // playback, then start capture (which hands back the PCM receiver).
+        // Ambient plays nothing, and only a joined member opens the microphone
+        // here: listening in never asks for it.
         let audio_actor = Arc::new(AudioActor::spawn());
-        timeout(AUDIO_DEVICE_TIMEOUT, audio_actor.start_playback(None))
-            .await
-            .map_err(|_| {
-                format!(
-                    "audio playback device init timed out after {}s",
-                    AUDIO_DEVICE_TIMEOUT.as_secs()
-                )
-            })??;
-        let pcm_rx = timeout(AUDIO_DEVICE_TIMEOUT, audio_actor.start_capture(None))
-            .await
-            .map_err(|_| {
-                format!(
-                    "audio capture device init timed out after {}s",
-                    AUDIO_DEVICE_TIMEOUT.as_secs()
-                )
-            })??;
+        if role.plays_audio() {
+            timeout(AUDIO_DEVICE_TIMEOUT, audio_actor.start_playback(None))
+                .await
+                .map_err(|_| {
+                    format!(
+                        "audio playback device init timed out after {}s",
+                        AUDIO_DEVICE_TIMEOUT.as_secs()
+                    )
+                })??;
+        }
         // Put the stable channel between the cpal capture stream and the send
         // task (see `pcm_rx`), and pump the first capture generation into it.
         let (stable_pcm_tx, stable_pcm_rx) = mpsc::channel::<Vec<f32>>(50);
-        let capture_forward_task = spawn_capture_forwarder(pcm_rx, stable_pcm_tx.clone());
+        let mut capture_forward_task = None;
+        let mic_capture_generation = Arc::new(AtomicU64::new(0));
+        if role.captures_at_connect() {
+            let pcm_rx = timeout(AUDIO_DEVICE_TIMEOUT, audio_actor.start_capture(None))
+                .await
+                .map_err(|_| {
+                    format!(
+                        "audio capture device init timed out after {}s",
+                        AUDIO_DEVICE_TIMEOUT.as_secs()
+                    )
+                })??;
+            capture_forward_task = Some(spawn_capture_forwarder(pcm_rx, stable_pcm_tx.clone()));
+            mic_capture_generation.store(1, std::sync::atomic::Ordering::SeqCst);
+        }
 
         let (screen_audio_tx, screen_audio_rx) = mpsc::channel::<Vec<f32>>(64);
 
@@ -457,11 +538,15 @@ impl NativeMediaSession {
 
         Ok(Self {
             owner_id: String::new(),
+            role,
+            mic_capture_generation,
+            video_track_keys: Arc::new(std::sync::Mutex::new(HashSet::new())),
+            video_state_released: false,
             endpoint,
             connection,
             pcm_rx: Some(stable_pcm_rx),
             pcm_tx: stable_pcm_tx,
-            capture_forward_task: Some(capture_forward_task),
+            capture_forward_task,
             local_mic_level: Arc::new(AtomicU8::new(AUDIO_LEVEL_SILENCE)),
             local_mic_frames: Arc::new(AtomicU64::new(0)),
             screen_audio_rx: Some(screen_audio_rx),
@@ -601,13 +686,56 @@ impl NativeMediaSession {
         self.audio_actor.stop_capture();
         self.audio_actor.stop_playback();
 
-        // Drop all process-wide remote-video state (decode workers, decoders,
-        // reassembly buffers, latest-frame store) so nothing replays into the
-        // next session under the deterministic track keys.
-        super::video_pipeline::clear_all_stream_video_state();
+        // Drop this session's process-wide remote-video state (decode workers,
+        // decoders, reassembly buffers, latest-frame store, surfaces) so
+        // nothing replays into the next session under the deterministic track
+        // keys, and nothing of the OTHER slot's session is touched.
+        self.release_video_state();
 
         // Close QUIC connection
         self.connection.close("session ended");
+    }
+
+    /// Every video track this session has known: those it recorded as they
+    /// were announced, those still in its registry, and its own local tracks.
+    pub fn known_video_tracks(&self) -> Vec<(String, String)> {
+        let mut tracks: HashSet<(String, String)> = self
+            .video_track_keys
+            .lock()
+            .map(|keys| keys.clone())
+            .unwrap_or_default();
+        if let Ok(registry) = self.stream_registry.try_lock() {
+            for track in registry.published_tracks() {
+                tracks.insert((track.stream_id.0.clone(), track.track_id.0.clone()));
+            }
+        }
+        for local in ["screen", "camera"] {
+            tracks.insert((
+                format!("stream:{}:{local}", self.session_id),
+                local.to_string(),
+            ));
+        }
+        tracks.into_iter().collect()
+    }
+
+    /// Release this session's video state once (see [`Self::known_video_tracks`]).
+    pub fn release_video_state(&mut self) {
+        if self.video_state_released {
+            return;
+        }
+        self.video_state_released = true;
+        super::video_pipeline::clear_stream_video_state_for_tracks(&self.known_video_tracks());
+    }
+
+    /// Record a track this session was told about, for its teardown.
+    pub fn remember_video_track(
+        keys: &std::sync::Mutex<HashSet<(String, String)>>,
+        stream_id: &str,
+        track_id: &str,
+    ) {
+        if let Ok(mut keys) = keys.lock() {
+            keys.insert((stream_id.to_string(), track_id.to_string()));
+        }
     }
 
     pub async fn send_control_message(&self, message: &ControlMessage) -> Result<(), String> {
@@ -658,7 +786,7 @@ impl Drop for NativeMediaSession {
         }
         self.audio_actor.stop_capture();
         self.audio_actor.stop_playback();
-        super::video_pipeline::clear_all_stream_video_state();
+        self.release_video_state();
         self.connection.close("session dropped");
     }
 }
@@ -679,6 +807,9 @@ struct MediaTokenClaims {
     iat: Option<usize>,
     sid: Option<String>,
     room: Option<String>,
+    /// `watch` / `ambient` on a view-session token (G5); absent on a call token.
+    #[serde(default)]
+    view: Option<String>,
 }
 #[derive(Debug, Clone)]
 pub struct RemoteSessionParticipant {
@@ -780,5 +911,68 @@ mod media_token_contract_tests {
                 .unwrap_or_else(|e| panic!("{name} does not parse: {e}"));
             assert_eq!(claims.sub, 357881425447358464_i64, "{name}");
         }
+    }
+}
+
+#[cfg(test)]
+mod session_role_tests {
+    use super::SessionRole;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
+
+    fn token(view: Option<&str>) -> String {
+        let mut claims =
+            serde_json::json!({ "sub": "357881425447358464", "sid": "r", "room": "1:2" });
+        if let Some(view) = view {
+            claims["view"] = serde_json::Value::String(view.to_string());
+        }
+        format!("h.{}.s", URL_SAFE_NO_PAD.encode(claims.to_string()))
+    }
+
+    /// The renderer's role and the token's `view` claim must agree: the relay
+    /// admits a view token only as a view session, and a call token never as
+    /// one. Nothing is guessed.
+    #[test]
+    fn roles_resolve_against_the_token() {
+        assert_eq!(
+            SessionRole::resolve(None, &token(None)).unwrap(),
+            SessionRole::Call
+        );
+        assert_eq!(
+            SessionRole::resolve(Some("call"), &token(None)).unwrap(),
+            SessionRole::Call
+        );
+        assert_eq!(
+            SessionRole::resolve(Some("listen"), &token(None)).unwrap(),
+            SessionRole::Listen
+        );
+        assert_eq!(
+            SessionRole::resolve(Some("view"), &token(Some("watch"))).unwrap(),
+            SessionRole::Watch
+        );
+        assert_eq!(
+            SessionRole::resolve(Some("view"), &token(Some("ambient"))).unwrap(),
+            SessionRole::Ambient
+        );
+        assert!(SessionRole::resolve(Some("view"), &token(None)).is_err());
+        assert!(SessionRole::resolve(None, &token(Some("watch"))).is_err());
+        assert!(SessionRole::resolve(Some("listen"), &token(Some("ambient"))).is_err());
+        assert!(SessionRole::resolve(Some("view"), &token(Some("stage"))).is_err());
+        assert!(SessionRole::resolve(Some("spectate"), &token(None)).is_err());
+    }
+
+    /// Only a joined member opens the microphone at connect; listening in and
+    /// both view kinds never do. Ambient plays nothing at all.
+    #[test]
+    fn capture_and_playback_follow_the_role() {
+        assert!(SessionRole::Call.captures_at_connect());
+        assert!(!SessionRole::Listen.captures_at_connect());
+        assert!(!SessionRole::Watch.captures_at_connect());
+        assert!(!SessionRole::Ambient.captures_at_connect());
+        assert!(SessionRole::Listen.plays_audio());
+        assert!(SessionRole::Watch.plays_audio());
+        assert!(!SessionRole::Ambient.plays_audio());
+        assert!(SessionRole::Watch.is_view() && SessionRole::Ambient.is_view());
+        assert!(!SessionRole::Call.is_view() && !SessionRole::Listen.is_view());
     }
 }

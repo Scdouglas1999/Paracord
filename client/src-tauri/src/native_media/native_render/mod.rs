@@ -256,8 +256,10 @@ pub async fn native_render_attach(
     owner_id: String,
     state: tauri::State<'_, super::MediaState>,
 ) -> Result<AttachResponse, String> {
-    let _transition = state.calls.transition.lock().await;
-    state.calls.check(&owner_id)?;
+    // A watched stream in the view slot renders on a surface like a call's.
+    let slot = state.slot_for(&owner_id)?;
+    let _transition = slot.owners.transition.lock().await;
+    slot.owners.check(&owner_id)?;
     let app = super::CallEventSink::new(app, owner_id.clone());
     let id = registry().allocate_id();
 
@@ -278,7 +280,7 @@ pub async fn native_render_attach(
         }
     };
 
-    state.calls.check(&owner_id)?;
+    slot.owners.check(&owner_id)?;
     let shared: SharedSurface = Arc::new(Mutex::new(surface));
     registry().insert(id, shared.clone());
     super::video_pipeline::attach_native_surface(&stream_id, &track_id, id, shared, app.clone());

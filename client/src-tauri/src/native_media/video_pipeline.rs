@@ -1172,6 +1172,37 @@ pub fn clear_all_stream_video_state() {
     super::native_render::registry().clear();
 }
 
+/// Drop the process-wide video state of the named tracks only: their push
+/// channels, stored frames, surfaces, decoders and decode workers, SSRC
+/// bindings and partial frames.
+///
+/// The call and the view session are separate sessions over one set of
+/// process-wide video tables, keyed by track. One session ending must not
+/// blank the other's picture, so a session tears down exactly the tracks it
+/// knew (see `NativeMediaSession::video_track_keys`), and
+/// [`clear_all_stream_video_state`] is reserved for "no session is left".
+#[cfg(feature = "vpx")]
+pub fn clear_stream_video_state_for_tracks(tracks: &[(String, String)]) {
+    for (stream_id, track_id) in tracks {
+        unregister_stream_video_subscription(stream_id, track_id);
+        unbind_remote_video_track(stream_id, track_id);
+        let key = make_track_key(stream_id, track_id);
+        if let Ok(mut state) = video_dispatch_state().lock() {
+            state.remote_track_viewports.remove(&key);
+            state.remote_track_hidden.remove(&key);
+            state.remote_track_stored_at.remove(&key);
+            state.remote_track_stream_high_water.remove(&key);
+        }
+        let prefix = format!("{key}:");
+        if let Ok(mut pool) = video_reassembly_pool().lock() {
+            pool.retain(|partial, _| !partial.starts_with(&prefix));
+        }
+    }
+}
+
+#[cfg(not(feature = "vpx"))]
+pub fn clear_stream_video_state_for_tracks(_tracks: &[(String, String)]) {}
+
 /// Reset the self-view decode chain for a local track whose encoder is being
 /// (re)started or stopped. A live decode worker/decoder was primed against the
 /// OLD bitstream — reference frames, hardware decode session, pts base — and a
@@ -4484,6 +4515,43 @@ pub async fn clear_track_sender_key(_session: &mut NativeMediaSession, _track: &
 
 #[cfg(all(test, feature = "vpx"))]
 mod tests {
+    /// The call and a view session share these process-wide tables. Ending one
+    /// session must clear its own tracks and leave the other's alone, or
+    /// stopping a watch would blank the call's camera tiles (and vice versa).
+    #[test]
+    fn scoped_teardown_leaves_the_other_sessions_tracks_alone() {
+        let layer = |ssrc: u32| paracord_transport::stream::PublishedLayer {
+            layer_id: 0,
+            ssrc,
+            width: Some(640),
+            height: Some(360),
+            max_bitrate_kbps: Some(800),
+            active: true,
+        };
+        bind_remote_video_track("stream:scoped-call:camera", "camera", &[layer(71_001)]);
+        bind_remote_video_track("stream:scoped-view:screen", "screen", &[layer(71_002)]);
+        assert!(
+            track_max_dimensions(&make_track_key("stream:scoped-call:camera", "camera")).is_some()
+        );
+
+        clear_stream_video_state_for_tracks(&[(
+            "stream:scoped-view:screen".to_string(),
+            "screen".to_string(),
+        )]);
+
+        assert!(
+            track_max_dimensions(&make_track_key("stream:scoped-view:screen", "screen")).is_none()
+        );
+        assert!(
+            track_max_dimensions(&make_track_key("stream:scoped-call:camera", "camera")).is_some(),
+            "the other session's track must survive a scoped teardown"
+        );
+        clear_stream_video_state_for_tracks(&[(
+            "stream:scoped-call:camera".to_string(),
+            "camera".to_string(),
+        )]);
+    }
+
     use super::*;
 
     #[test]

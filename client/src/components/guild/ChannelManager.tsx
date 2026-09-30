@@ -21,6 +21,7 @@ import { Check, GripVertical, Hash, Volume2, MessageSquare, Megaphone, Radio, Tr
 import type { Channel, Role } from '../../types';
 import { guildApi } from '../../api/guilds';
 import { channelApi, type ChannelFeatureSettings } from '../../api/channels';
+import { voiceApi } from '../../api/voice';
 import { extractApiError } from '../../api/client';
 import { buildChannelGroups, isVirtualGroup, type ChannelGroup } from '../../lib/features/channelGroups';
 import { cn } from '../../lib/utils';
@@ -1036,6 +1037,35 @@ function SortableChannelItem({
   const [draftBitrate, setDraftBitrate] = useState<number>(channel.bitrate ?? 64000);
   const [draftUserLimit, setDraftUserLimit] = useState<number>(channel.user_limit ?? 0);
 
+  // Listening in (docs/glass-spec.md §7): on unless turned off here. Read from
+  // the server, never assumed; the switch waits (disabled) until it answers.
+  // Filed under the channel it was read for, so a row reused for another
+  // channel shows nothing until that channel's own answer arrives.
+  const [listenInRead, setListenInRead] = useState<
+    { channelId: string; enabled: boolean | null; unknown: boolean } | null
+  >(null);
+  const listenIn = listenInRead?.channelId === channel.id ? listenInRead.enabled : null;
+  const listenInUnknown = listenInRead?.channelId === channel.id && listenInRead.unknown;
+  useEffect(() => {
+    if (!isVoice) return;
+    let canceled = false;
+    voiceApi.getListenIn(channel.id)
+      .then((enabled) => { if (!canceled) setListenInRead({ channelId: channel.id, enabled, unknown: false }); })
+      .catch(() => { if (!canceled) setListenInRead({ channelId: channel.id, enabled: null, unknown: true }); });
+    return () => { canceled = true; };
+  }, [isVoice, channel.id]);
+  const toggleListenIn = useCallback(async (next: boolean) => {
+    const previous = listenIn;
+    setListenInRead({ channelId: channel.id, enabled: next, unknown: false });
+    try {
+      const enabled = await voiceApi.setListenIn(channel.id, next);
+      setListenInRead({ channelId: channel.id, enabled, unknown: false });
+    } catch (err) {
+      setListenInRead({ channelId: channel.id, enabled: previous, unknown: false });
+      toast.error(channelManagerError('Failed to update listening in', err));
+    }
+  }, [channel.id, listenIn]);
+
   const refreshFollowers = useCallback(async () => {
     if (!isAnnouncement) return;
     setFollowersLoading(true);
@@ -1221,6 +1251,19 @@ function SortableChannelItem({
                 className="pc-mono h-[var(--h-control)] w-14 px-2 text-center text-meta"
               />
             </label>
+            <span className="flex items-center gap-1.5">
+              <span className="text-meta text-text-secondary">
+                {listenInUnknown ? 'Listening in (could not load)' : 'Listening in'}
+              </span>
+              <Switch
+                size="sm"
+                checked={listenIn ?? false}
+                disabled={listenIn === null}
+                onChange={(next) => void toggleListenIn(next)}
+                label={`Let people listen in to ${channel.name || 'this channel'} without joining`}
+                className="after:absolute after:-inset-[5px] after:content-['']"
+              />
+            </span>
           </div>
         )}
         {!isVoice && channel.type !== 4 && (

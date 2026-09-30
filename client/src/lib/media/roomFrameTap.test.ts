@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createRoomFrameTap, stillReasonFor, type JoinedRoomView } from './roomFrameTap';
+import {
+  AMBIENT_SAMPLE_MAX_FPS,
+  createRoomFrameTap,
+  stillReasonFor,
+  tapEngineFrames,
+  type JoinedRoomView,
+} from './roomFrameTap';
 import type { MediaEngine, MediaStreamCapabilities } from './mediaEngine';
 
 const ROOM = JSON.stringify(['a', 'viewer', 'v1']);
@@ -149,5 +155,69 @@ describe('room frame tap', () => {
     expect(() => (subscribe.mock.calls[0][2] as () => void)()).not.toThrow();
     await flush();
     stop();
+  });
+});
+
+describe('engine frame taps (Glass room light, stage glow)', () => {
+  function tapEngine() {
+    let deliver!: (frame: VideoFrame) => void;
+    const release = vi.fn();
+    const engine = {
+      tapVideoFrames: vi.fn((_user: string, _track: string, onFrame: (frame: VideoFrame) => void) => {
+        deliver = onFrame;
+        return { route: Promise.resolve('frames' as const), release };
+      }),
+    } as unknown as MediaEngine;
+    return { engine, release, deliver: (frame: VideoFrame) => deliver(frame) };
+  }
+  const videoFrame = () => ({ close: vi.fn(), displayWidth: 32, displayHeight: 18 }) as unknown as VideoFrame;
+
+  it('samples at no more than the asked rate, capped at 4 a second, closing every frame it skips', async () => {
+    const { engine, deliver } = tapEngine();
+    let clock = 0;
+    const toBitmap = vi.fn(async () => ({ width: 32, height: 18, close: vi.fn() }) as unknown as ImageBitmap);
+    const frames: unknown[] = [];
+    tapEngineFrames(engine, '7', 'screen', (f) => frames.push(f), 60, { now: () => clock, toBitmap });
+    const first = videoFrame();
+    deliver(first);
+    await flush();
+    clock = 100;
+    const skipped = videoFrame();
+    deliver(skipped); // inside the 250ms window of the 4 Hz cap
+    expect(skipped.close).toHaveBeenCalled();
+    clock = 300;
+    deliver(videoFrame());
+    await flush();
+    expect(toBitmap).toHaveBeenCalledTimes(2);
+    expect(frames).toHaveLength(2);
+    expect(first.close).toHaveBeenCalled();
+  });
+
+  it('holds ambient to one a second when asked', async () => {
+    const { engine, deliver } = tapEngine();
+    let clock = 0;
+    const toBitmap = vi.fn(async () => ({ width: 32, height: 18, close: vi.fn() }) as unknown as ImageBitmap);
+    tapEngineFrames(engine, '7', 'screen', () => {}, AMBIENT_SAMPLE_MAX_FPS, { now: () => clock, toBitmap });
+    deliver(videoFrame()); await flush();
+    clock = 900; deliver(videoFrame()); await flush();
+    clock = 1000; deliver(videoFrame()); await flush();
+    expect(toBitmap).toHaveBeenCalledTimes(2);
+  });
+
+  it('releases the engine tap and closes a bitmap that lands after release', async () => {
+    const { engine, release, deliver } = tapEngine();
+    const bitmap = { width: 1, height: 1, close: vi.fn() } as unknown as ImageBitmap;
+    let resolveBitmap!: (value: ImageBitmap) => void;
+    const toBitmap = vi.fn(() => new Promise<ImageBitmap>((resolve) => { resolveBitmap = resolve; }));
+    const onFrame = vi.fn();
+    const tap = tapEngineFrames(engine, '7', 'screen', onFrame, 4, { now: () => 0, toBitmap });
+    deliver(videoFrame());
+    tap.release();
+    resolveBitmap(bitmap);
+    await flush();
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(onFrame).not.toHaveBeenCalled();
+    expect(bitmap.close).toHaveBeenCalled();
+    await expect(tap.route).resolves.toBe('frames');
   });
 });

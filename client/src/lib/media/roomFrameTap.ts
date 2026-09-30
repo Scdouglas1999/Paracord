@@ -32,7 +32,7 @@
  * non-live state is named.
  */
 
-import type { MediaEngine, MediaStreamCapabilities } from './mediaEngine';
+import type { MediaEngine, MediaStreamCapabilities, VideoTapRoute } from './mediaEngine';
 import type { RoomThumbnailState, ThumbnailStillReason } from '../attention/lightModel';
 
 /** §5: real frames at **≤ 2 fps**. This is a ceiling, never a target. */
@@ -168,4 +168,92 @@ export async function captureCanvasFrame(canvas: HTMLCanvasElement): Promise<Roo
   if (typeof createImageBitmap !== 'function') return null;
   const bitmap = await createImageBitmap(canvas);
   return { bitmap, width: bitmap.width, height: bitmap.height, capturedAt: Date.now() };
+}
+
+// ---------------------------------------------------------------------------
+// Engine frame taps (Glass: room light, the stage's glow, clips)
+// ---------------------------------------------------------------------------
+
+/**
+ * The fastest any sampler may take frames from a stream: the room light eases
+ * over one to two seconds, so four a second is already more than it can show
+ * (docs/design/glass-plan.md §1.2, "≤ 4 Hz ImageBitmaps").
+ */
+export const MAX_VIEW_SAMPLE_FPS = 4;
+/** An ambient view delivers at most one frame a second; sampling faster finds nothing new. */
+export const AMBIENT_SAMPLE_MAX_FPS = 1;
+
+export interface EngineFrameTap {
+  /** Where the frames come from; `frames` is the only route that delivers any. */
+  readonly route: Promise<VideoTapRoute>;
+  release(): void;
+}
+
+export interface EngineFrameTapDeps {
+  now: () => number;
+  /** Decoded frame to bitmap. Injected so the tap is testable in jsdom. */
+  toBitmap: (frame: VideoFrame) => Promise<ImageBitmap>;
+}
+
+const defaultTapDeps: EngineFrameTapDeps = {
+  now: () => (typeof performance !== 'undefined' ? performance.now() : Date.now()),
+  toBitmap: (frame) => createImageBitmap(frame),
+};
+
+/**
+ * Sample one remote track's decoded frames at no more than `fps` (capped at
+ * {@link MAX_VIEW_SAMPLE_FPS}), as `ImageBitmap`s the subscriber owns and must
+ * `close()`. Rides `MediaEngine.tapVideoFrames`: no canvas, no second decoder
+ * when a surface already shows the track, and never a layer change for it.
+ *
+ * Frames arriving faster than the rate, or while a conversion is still in
+ * flight, are closed at once, so a 60 fps stream costs one `createImageBitmap`
+ * per sample and nothing else.
+ */
+export function tapEngineFrames(
+  engine: MediaEngine,
+  userId: string,
+  track: 'screen' | 'camera',
+  onFrame: (frame: RoomFrame) => void,
+  fps: number,
+  deps: EngineFrameTapDeps = defaultTapDeps,
+): EngineFrameTap {
+  const rate = Math.max(0.1, Math.min(fps, MAX_VIEW_SAMPLE_FPS));
+  const interval = 1000 / rate;
+  let stopped = false;
+  let converting = false;
+  let lastAt = -Infinity;
+  const tap = engine.tapVideoFrames(userId, track, (frame) => {
+    const at = deps.now();
+    if (stopped || converting || at - lastAt < interval) {
+      frame.close();
+      return;
+    }
+    lastAt = at;
+    converting = true;
+    void deps
+      .toBitmap(frame)
+      .then((bitmap) => {
+        if (stopped) {
+          bitmap.close();
+          return;
+        }
+        onFrame({ bitmap, width: bitmap.width, height: bitmap.height, capturedAt: Date.now() });
+      })
+      .catch(() => {
+        /* a dropped sample is a dropped sample */
+      })
+      .finally(() => {
+        frame.close();
+        converting = false;
+      });
+  });
+  return {
+    route: tap.route,
+    release: () => {
+      if (stopped) return;
+      stopped = true;
+      tap.release();
+    },
+  };
 }

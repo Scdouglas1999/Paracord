@@ -24,10 +24,14 @@ class FakeWebTransport {
   static acceptedPin: string | undefined = 'pin-one';
   /** Set to refuse every handshake regardless of pin (a blocked UDP path). */
   static refuseEverything = false;
+  /** The most recent connection, so a test can close it from the server side. */
+  static latest: FakeWebTransport | null = null;
+  /** Set to open the connection but never acknowledge the auth (admission refused). */
+  static refuseAuth = false;
 
   readonly ready: Promise<void>;
-  readonly closed: Promise<void>;
-  private closeConnection!: () => void;
+  readonly closed: Promise<WebTransportCloseInfo | undefined>;
+  private closeConnection!: (info?: WebTransportCloseInfo) => void;
   private readonly authAck = new Uint8Array([0, 0, 0, 1, 1]);
 
   readonly datagrams = {
@@ -53,9 +57,15 @@ class FakeWebTransport {
         // about certificates: that indistinguishability is the whole problem.
         Promise.reject(new Error('Opening handshake failed.'));
     this.ready.catch(() => {});
-    this.closed = new Promise<void>((resolve) => {
+    this.closed = new Promise<WebTransportCloseInfo | undefined>((resolve) => {
       this.closeConnection = resolve;
     });
+    FakeWebTransport.latest = this;
+  }
+
+  /** The server closes the session with its own reason. */
+  closeFromServer(reason: string): void {
+    this.closeConnection({ closeCode: 1, reason });
   }
 
   createBidirectionalStream() {
@@ -68,6 +78,7 @@ class FakeWebTransport {
           let served = false;
           return {
             read: async () => {
+              if (FakeWebTransport.refuseAuth) return { value: undefined, done: true };
               if (served) return new Promise<never>(() => {});
               served = true;
               return { value: this.authAck, done: false };
@@ -116,6 +127,7 @@ function manager(): WebTransportManager {
 beforeEach(() => {
   FakeWebTransport.attempts = [];
   FakeWebTransport.refuseEverything = false;
+  FakeWebTransport.refuseAuth = false;
   FakeWebTransport.acceptedPin = 'pin-one';
   vi.stubGlobal('WebTransport', FakeWebTransport);
 });
@@ -306,5 +318,70 @@ describe('a dropped media connection', () => {
     await vi.advanceTimersByTimeAsync(6_000);
     expect(closed).toHaveBeenCalledTimes(1);
     expect(Date.now() - started).toBeLessThan(MEDIA_RECONNECT_WINDOW_MS + 6_000);
+  });
+});
+
+describe('a view session closed for good', () => {
+  it('does not dial back after the relay superseded or ended it, and says why', async () => {
+    const transport = manager();
+    transport.setTerminalCloseReasons((reason) => /superseded|view session ended/.test(reason));
+    await transport.connect('https://media.test/media', 'token', encodePin('pin-one'));
+    const interrupted = vi.fn();
+    const closed = vi.fn();
+    transport.onInterrupt(interrupted);
+    transport.onClose(closed);
+
+    FakeWebTransport.latest!.closeFromServer('superseded by a newer media connection');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(closed).toHaveBeenCalledWith('superseded by a newer media connection');
+    expect(interrupted).not.toHaveBeenCalled();
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(FakeWebTransport.attempts).toHaveLength(1);
+  });
+
+  it('still dials back after any other close', async () => {
+    vi.useFakeTimers();
+    const transport = manager();
+    transport.setTerminalCloseReasons((reason) => /superseded|view session ended/.test(reason));
+    await transport.connect('https://media.test/media', 'token', encodePin('pin-one'));
+    const interrupted = vi.fn();
+    transport.onInterrupt(interrupted);
+    FakeWebTransport.latest!.closeFromServer('idle timeout');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(interrupted).toHaveBeenCalledWith('idle timeout');
+    await vi.advanceTimersByTimeAsync(300);
+    expect(FakeWebTransport.attempts.length).toBeGreaterThan(1);
+  });
+});
+
+describe('a view session the relay no longer admits', () => {
+  it('ends at the first refused readmission instead of retrying for the whole window', async () => {
+    vi.useFakeTimers();
+    const transport = manager();
+    transport.setTerminalCloseReasons(() => false, 'view session ended: the relay no longer admits this view');
+    await transport.connect('https://media.test/media', 'token', encodePin('pin-one'));
+    const closed = vi.fn();
+    transport.onClose(closed);
+    // Chromium reports the relay's close of a replaced view as a plain loss.
+    FakeWebTransport.refuseAuth = true;
+    FakeWebTransport.latest!.closeFromServer('Connection lost.');
+    await vi.advanceTimersByTimeAsync(300);
+    expect(closed).toHaveBeenCalledWith('view session ended: the relay no longer admits this view');
+    const attempts = FakeWebTransport.attempts.length;
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(FakeWebTransport.attempts).toHaveLength(attempts);
+  });
+
+  it('a call transport still retries a refused readmission within its window', async () => {
+    vi.useFakeTimers();
+    const transport = manager();
+    await transport.connect('https://media.test/media', 'token', encodePin('pin-one'));
+    const closed = vi.fn();
+    transport.onClose(closed);
+    FakeWebTransport.refuseAuth = true;
+    FakeWebTransport.latest!.closeFromServer('Connection lost.');
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(closed).not.toHaveBeenCalled();
+    expect(FakeWebTransport.attempts.length).toBeGreaterThan(2);
   });
 });

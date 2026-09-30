@@ -302,6 +302,37 @@ export function parseRoomIdFromToken(token: string): string | null {
 }
 
 /**
+ * Extract the `view` claim from a media JWT without verifying it: `watch` or
+ * `ambient` for a view-session token (G5), null for a call token. The relay
+ * admits a token with this claim only as a view session, so an engine that
+ * connects it must behave as one.
+ */
+export function parseViewKindFromToken(token: string): 'watch' | 'ambient' | null {
+  try {
+    const [, payload] = token.split('.');
+    if (!payload) return null;
+    const json = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/'))) as {
+      view?: unknown;
+    };
+    return json.view === 'watch' || json.view === 'ambient' ? json.view : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether the relay closed a view session's connection for good: a newer view
+ * of the same account replaced it, or the view ended (stopped, retired after
+ * its connect deadline, or carried over into a call). Neither may be dialed
+ * back: the first would take the slot back from the view that replaced it,
+ * the second is refused at admission. See docs/design/glass-g5-checkpoint.md.
+ */
+export function isTerminalViewCloseReason(reason: string): boolean {
+  const text = reason.toLowerCase();
+  return text.includes('superseded by a newer media connection') || text.includes('view session ended');
+}
+
+/**
  * Wrap a raw sender key once per recipient, using the call keys the media
  * control plane published (see `./mediaKeyring`).
  *

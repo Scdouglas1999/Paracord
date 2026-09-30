@@ -7,6 +7,7 @@ import { useMemberStore } from '../stores/memberStore';
 import { usePresenceStore } from '../stores/presenceStore';
 import { republishPresenceAfterReconnect } from '../lib/presenceActivities';
 import { useVoiceStore } from '../stores/voiceStore';
+import { isVoiceWatchersUpdate } from '../stores/voice/watchers';
 import { useTogetherStore } from '../stores/togetherStore';
 import { isVoiceSpeakingUpdate, useRemoteSpeakingStore } from '../stores/remoteSpeakingStore';
 import type { TogetherActivityUpdate, TogetherSessionUpdate } from '../lib/together/model';
@@ -588,6 +589,15 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
       if (memberScope) {
         useVoiceStore.getState().handleVoiceStateUpdate(data as VoiceState, memberScope);
         useRemoteSpeakingStore.getState().applyVoiceState(data as VoiceState);
+      }
+      break;
+
+    case GatewayEvents.VOICE_WATCHERS_UPDATE:
+      if (!memberScope) break;
+      if (isVoiceWatchersUpdate(data)) {
+        useVoiceStore.getState().handleWatchersUpdate(data, memberScope);
+      } else {
+        warnDispatchParseFailure(event, 'missing guild_id, channel_id or streams');
       }
       break;
 

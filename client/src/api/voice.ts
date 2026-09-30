@@ -1,5 +1,13 @@
 import { getApi } from './activeClient';
 import type { OperationContext } from '../lib/operationContext';
+import type { VoiceMode } from '../types/voice.types';
+import type { VoiceModeResponse } from './generated/VoiceModeResponse';
+import type { VoiceViewKind, VoiceViewSession } from './generated/VoiceViewSession';
+import type { VoiceWatchers } from './generated/VoiceWatchers';
+
+export type { VoiceModeResponse, VoiceViewKind, VoiceViewSession, VoiceWatchers };
+
+export { LISTEN_IN_DISABLED, voiceErrorCode, voiceErrorMessage } from '../stores/voice/errors';
 
 export interface VoiceJoinResponse {
   token: string;
@@ -23,6 +31,8 @@ export interface VoiceJoinResponse {
   livekit_available?: boolean;
   /** TLS certificate hash for QUIC certificate pinning. */
   cert_hash?: string;
+  /** The mode the server admitted this membership in (absent: `joined`). */
+  mode?: VoiceMode;
 }
 
 function resolveV2VoiceUrl(path: string): string {
@@ -60,6 +70,28 @@ export const voiceApi = {
     ),
   leaveDmChannel: async (channelId: string) =>
     getApi().post(`/api/v1/dms/${channelId}/voice/leave`, undefined, { timeout: 10_000 }),
+  /**
+   * Whether this voice channel admits listeners (its `listen_in_enabled`
+   * feature setting; on unless a moderator turned it off).
+   */
+  getListenIn: async (channelId: string): Promise<boolean> => {
+    const { data } = await getApi().get<{ listen_in_enabled?: boolean }>(`/channels/${channelId}/features`);
+    if (typeof data?.listen_in_enabled !== 'boolean') {
+      throw new Error('This server does not report whether listening in is allowed here.');
+    }
+    return data.listen_in_enabled;
+  },
+  /** Turn listening in on or off for a voice channel (Manage Channels). */
+  setListenIn: async (channelId: string, enabled: boolean): Promise<boolean> => {
+    const { data } = await getApi().patch<{ listen_in_enabled?: boolean }>(
+      `/channels/${channelId}/features`,
+      { listen_in_enabled: enabled },
+    );
+    if (typeof data?.listen_in_enabled !== 'boolean') {
+      throw new Error('This server did not confirm the listening-in setting.');
+    }
+    return data.listen_in_enabled;
+  },
   leaveChannel: async (
     channelId: string,
     options?: {
@@ -104,10 +136,56 @@ export function createCallVoiceApi(context: OperationContext, membership?: () =>
   const post = <T = unknown>(url: string, data?: unknown, timeout = 10_000) =>
     context.requestRoot<T>({ method: 'POST', url, data, timeout });
   return {
-    join: (channelId: string, dm: boolean, fallback?: 'livekit') => post<VoiceJoinResponse>(
-      `/api/${dm ? `v1/dms/${encodeURIComponent(channelId)}/voice` : `v2/voice/${encodeURIComponent(channelId)}`}/join${fallback ? '?fallback=livekit' : ''}`,
-      undefined, 30_000,
+    /**
+     * Join a call. Every guild join names its mode, `joined` included, so the
+     * server never has to guess (G5: absent means joined, but a client that
+     * relies on that cannot be read at a glance). A DM call has no listen mode.
+     */
+    join: (channelId: string, dm: boolean, fallback?: 'livekit', mode: VoiceMode = 'joined') => {
+      if (dm && mode !== 'joined') throw new Error('Listening in is only for server voice channels.');
+      const query = new URLSearchParams();
+      if (!dm) query.set('mode', mode);
+      if (fallback) query.set('fallback', fallback);
+      const qs = query.toString();
+      return post<VoiceJoinResponse>(
+        `/api/${dm ? `v1/dms/${encodeURIComponent(channelId)}/voice` : `v2/voice/${encodeURIComponent(channelId)}`}/join${qs ? `?${qs}` : ''}`,
+        undefined, 30_000,
+      );
+    },
+    /**
+     * Switch a running call between listening and joined, in place: same
+     * receipt, same media connection (`POST /api/v2/voice/{id}/mode`).
+     */
+    setMode: (channelId: string, mode: VoiceMode, sessionId: string) => post<VoiceModeResponse>(
+      `/api/v2/voice/${encodeURIComponent(channelId)}/mode`,
+      { mode, session_id: sessionId },
     ),
+    /**
+     * Watch a stream without joining (`watch`), or light the room with it
+     * (`ambient`). A caller in this channel's call gets `via_membership` and no
+     * media; anyone else gets a separate view session to connect.
+     */
+    startView: (channelId: string, kind: VoiceViewKind, streamerId: string) => post<VoiceViewSession>(
+      `/api/v2/voice/${encodeURIComponent(channelId)}/view`,
+      { kind, user_id: streamerId },
+      15_000,
+    ),
+    /**
+     * Stop viewing. Always scoped to one receipt: a view session's own, or the
+     * call's when the watch rides the call. Unscoped, the server would end a
+     * view session *and* a watch through the call at once.
+     */
+    stopView: (channelId: string, sessionId: string) => context.requestRoot({
+      method: 'DELETE',
+      url: `/api/v2/voice/${encodeURIComponent(channelId)}/view?session_id=${encodeURIComponent(sessionId)}`,
+      timeout: 10_000,
+    }),
+    /** The channel's watcher counts now (then follow `VOICE_WATCHERS_UPDATE`). */
+    watchers: (channelId: string) => context.requestRoot<VoiceWatchers>({
+      method: 'GET',
+      url: `/api/v2/voice/${encodeURIComponent(channelId)}/watchers`,
+      timeout: 10_000,
+    }),
     leave: (channelId: string, dm: boolean, sessionId: string) => post(
       `/api/${dm ? `v1/dms/${encodeURIComponent(channelId)}/voice` : `v2/voice/${encodeURIComponent(channelId)}`}/leave?session_id=${encodeURIComponent(sessionId)}`,
     ),

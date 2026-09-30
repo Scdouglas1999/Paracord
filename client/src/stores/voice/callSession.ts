@@ -1,5 +1,6 @@
 import type { OperationContext } from '../../lib/operationContext';
 import type { AccountScope } from '../../lib/serverScope';
+import type { VoiceMode } from '../../types/voice.types';
 
 export type CallPhase = 'joining' | 'connected' | 'reconnecting' | 'closing' | 'closed' | 'failed';
 export type CallTarget = { scope: AccountScope; channelId: string; guildId: string | null };
@@ -13,6 +14,22 @@ export class CallSession {
   phase: CallPhase = 'joining';
   membershipSessionId: string | null = null;
   membershipUncertain = false;
+  /**
+   * How this membership takes part: `listen` until an in-place upgrade makes
+   * it `joined` (same receipt, same media connection).
+   */
+  mode: VoiceMode = 'joined';
+  /**
+   * Everyone the gateway has reported in this call's channel since the call
+   * began. The relay roster cannot tell a call member from a view session
+   * (someone watching this client's stream), and a member always has a voice
+   * state; so a roster peer seen here is a member, one never seen is a viewer.
+   * Only ever grows during a call: "member" wins, because a member's leave
+   * must rotate the voice key and a viewer's need not.
+   */
+  readonly seenMembers = new Set<string>();
+  /** Settles once the server has released this membership (or it had none). */
+  membershipReleased: Promise<void> | null = null;
   joinPromise: Promise<void> | null = null;
   private releases = new Set<Release>();
   private closing: Promise<void> | null = null;
