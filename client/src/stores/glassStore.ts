@@ -26,6 +26,8 @@ export type OpenStageMode = Exclude<StageMode, 'none'>;
 
 /** What is being watched: one person's stream in one voice channel. */
 export interface StageTarget {
+  /** The instance (AccountScope.serverId) whose API and relay carry the stream. */
+  serverId: string;
   guildId: string;
   channelId: string;
   streamerId: string;
@@ -33,6 +35,7 @@ export interface StageTarget {
 
 export interface StageState {
   mode: StageMode;
+  serverId: string | null;
   guildId: string | null;
   channelId: string | null;
   streamerId: string | null;
@@ -73,7 +76,7 @@ export interface GlassState {
   reset: () => void;
 }
 
-const NO_STAGE: StageState = { mode: 'none', guildId: null, channelId: null, streamerId: null };
+const NO_STAGE: StageState = { mode: 'none', serverId: null, guildId: null, channelId: null, streamerId: null };
 
 type GlassData = Pick<
   GlassState,
@@ -101,6 +104,7 @@ export const useGlassStore = create<GlassState>()((set, get) => ({
     set({
       stage: {
         mode: nextMode,
+        serverId: target.serverId,
         guildId: target.guildId,
         channelId: target.channelId,
         streamerId: target.streamerId,

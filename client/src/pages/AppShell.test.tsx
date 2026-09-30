@@ -16,8 +16,13 @@ vi.mock('../components/glass/places', () => ({ PlacesPanel: () => <div data-test
 vi.mock('../components/layout/sidebar/UnifiedSidebar', () => ({
   UnifiedSidebar: () => <div data-testid="unified-sidebar" />,
 }));
-vi.mock('../components/layout/ContextPanel', () => ({
-  ContextPanel: () => <div data-testid="context-panel" />,
+// The sheets slot renders through a portal into the conversation pane; what the
+// shell owes it is a mount after the pane and the route's ids (its own suite
+// holds what it does with them).
+vi.mock('../components/glass/sheets', () => ({
+  Sheets: ({ guildId, channelId, layout }: { guildId: string | null; channelId: string | null; layout: string }) => (
+    <div data-testid="sheets-slot" data-guild={guildId ?? ''} data-channel={channelId ?? ''} data-layout={layout} />
+  ),
 }));
 vi.mock('../components/voice/OnAirDock', () => ({
   OnAirDock: () => <div data-testid="on-air-dock" />,
@@ -70,7 +75,7 @@ function useCompactWindow() {
   mockedUseMobile.mockImplementation((maxWidth?: number) => maxWidth === 860);
 }
 
-const LOUNGE = { guildId: 'g1', channelId: 'lounge', streamerId: 'vincent' };
+const LOUNGE = { serverId: 'local', guildId: 'g1', channelId: 'lounge', streamerId: 'vincent' };
 
 function renderShell(initialPath = '/app') {
   return render(
@@ -220,35 +225,18 @@ describe('AppShell', () => {
     expect(container.querySelector('.glass-frame')).toHaveAttribute('data-chat-hidden', 'true');
   });
 
-  it('renders the ContextPanel only when contextPanelMode is set', () => {
-    const { rerender } = renderShell('/app/guilds/g1/channels/c1');
-    expect(screen.queryByTestId('context-panel')).not.toBeInTheDocument();
+  it('mounts the sheets slot after the conversation pane, with the route it is over', () => {
+    const { container } = renderShell('/app/guilds/g1/channels/c1');
 
-    act(() => useUIStore.setState({ contextPanelMode: 'pins' }));
-    rerender(
-      <MemoryRouter initialEntries={['/app/guilds/g1/channels/c1']}>
-        <Routes>
-          <Route path="/app" element={<AppShell />}>
-            <Route
-              path="guilds/:guildId/channels/:channelId"
-              element={<div data-testid="outlet-content">chat body</div>}
-            />
-          </Route>
-        </Routes>
-      </MemoryRouter>,
+    const slot = screen.getByTestId('sheets-slot');
+    expect(slot).toHaveAttribute('data-guild', 'g1');
+    expect(slot).toHaveAttribute('data-channel', 'c1');
+    expect(slot).toHaveAttribute('data-layout', 'wide');
+    // A sibling after the pane, not inside it: the slot portals into the pane itself.
+    expect(container.querySelector('#main-content')).not.toContainElement(slot);
+    expect(container.querySelector('#main-content')?.compareDocumentPosition(slot)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
     );
-    expect(screen.getByTestId('context-panel')).toBeInTheDocument();
-  });
-
-  it('clears an incompatible context panel mode instead of showing an empty panel', async () => {
-    useUIStore.setState({ contextPanelMode: 'economy' });
-
-    renderShell('/app/dms/dm-1');
-
-    expect(screen.queryByTestId('context-panel')).not.toBeInTheDocument();
-    await waitFor(() => {
-      expect(useUIStore.getState().contextPanelMode).toBeNull();
-    });
   });
 
   it('collapses the mobile sidebar overlay after route entry', async () => {

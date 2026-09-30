@@ -9,7 +9,8 @@ import type { ConversationEntry } from '../../../lib/attention/conversationModel
 import type { BuildingLight } from '../../../lib/attention/light';
 import { activateConversation } from '../../../lib/attention/conversationNavigation';
 import { activateGuild, guildLandingPath } from '../../../lib/guildNavigation';
-import { accountScopeKey } from '../../../lib/serverScope';
+import { accountScopeKey, LOCAL_SERVER_ID } from '../../../lib/serverScope';
+import { useServerListStore } from '../../../stores/serverListStore';
 import { useGlassStore } from '../../../stores/glassStore';
 import { useGuildStore } from '../../../stores/guildStore';
 import { toast } from '../../../stores/toastStore';
@@ -327,7 +328,12 @@ function ServerBody({
   const openLive = useCallback(
     (row: Extract<ChannelRowModel, { kind: 'live' }>) => {
       if (row.streamerId) {
-        useGlassStore.getState().openStage({ guildId: current.guildId, channelId: row.channelId, streamerId: row.streamerId });
+        useGlassStore.getState().openStage({
+          serverId: useServerListStore.getState().activeServerId ?? LOCAL_SERVER_ID,
+          guildId: current.guildId,
+          channelId: row.channelId,
+          streamerId: row.streamerId,
+        });
         onClose?.();
         return;
       }

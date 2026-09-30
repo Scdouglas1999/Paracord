@@ -55,8 +55,8 @@ export function GlassFrame({ layout, guildId, channelId, children }: GlassFrameP
   const stageOpen = stage.mode !== 'none';
   const stageMode = stage.mode === 'none' ? null : (stage.mode as OpenStageMode);
   const stageTarget =
-    stageOpen && stage.guildId && stage.channelId && stage.streamerId
-      ? { guildId: stage.guildId, channelId: stage.channelId, streamerId: stage.streamerId }
+    stageOpen && stage.serverId && stage.guildId && stage.channelId && stage.streamerId
+      ? { serverId: stage.serverId, guildId: stage.guildId, channelId: stage.channelId, streamerId: stage.streamerId }
       : null;
 
   // Picking a channel or a server closes the places overlay and browse, and

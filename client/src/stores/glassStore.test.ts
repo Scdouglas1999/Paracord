@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { selectStageOpen, useGlassStore } from './glassStore';
 
-const LOUNGE = { guildId: 'g1', channelId: 'lounge', streamerId: 'vincent' };
+const LOUNGE = { serverId: 'local', guildId: 'g1', channelId: 'lounge', streamerId: 'vincent' };
 
 beforeEach(() => {
   useGlassStore.getState().reset();
@@ -10,7 +10,7 @@ beforeEach(() => {
 describe('glassStore', () => {
   it('starts in the conversation with nothing open', () => {
     const s = useGlassStore.getState();
-    expect(s.stage).toEqual({ mode: 'none', guildId: null, channelId: null, streamerId: null });
+    expect(s.stage).toEqual({ mode: 'none', serverId: null, guildId: null, channelId: null, streamerId: null });
     expect(selectStageOpen(s)).toBe(false);
     expect(s.browseOpen).toBe(false);
     expect(s.chatHidden).toBe(false);
