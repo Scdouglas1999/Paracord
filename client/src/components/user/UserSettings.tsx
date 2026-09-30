@@ -335,8 +335,9 @@ export function UserSettings({ onClose }: UserSettingsProps) {
         normalizeDetectedAppId
       );
 
-      // The server stores theme as an opaque string; collapse unknown values
-      // (lib/themes.ts owns the list, looks included).
+      // The server stores theme as an opaque string. A retired look becomes
+      // Glass (High contrast stays High contrast) and an unknown value the
+      // default; lib/themes.ts owns both rules.
       setTheme(asThemeId(settings.theme));
       setLocale(settings.locale || 'en-US');
       setMessageCompact(settings.message_display_compact || false);
@@ -1543,7 +1544,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
               <div>
                 <SettingsHeader
                   title="Appearance"
-                  description="Tune the look and density of Paracord to match how you read."
+                  description="Contrast, transparency and motion, plus how tightly messages sit and any styles of your own."
                 />
                 <section>
                   <ThemeSelector currentTheme={theme} onThemeChange={(t) => handleThemeChange(t)} />

@@ -34,7 +34,14 @@ const MAX_SETTINGS_THEME_LEN: usize = 32;
 /// default (`DEFAULT_THEME` in `client/src/lib/themes.ts`) must say the same
 /// thing: the client adopts this value on first sign-in, so a disagreement
 /// would flip a fresh install's look the moment it signed in.
-const DEFAULT_THEME: &str = "slate";
+///
+/// Glass is the only look; the client knows two ids, `glass` and
+/// `glass-contrast` (High contrast). The theme is stored as an opaque string
+/// and is never checked against that list, only against its length, so an
+/// account that last chose one of the retired looks (`slate`, `paper`, `dark`,
+/// `high-contrast`, …) keeps its stored value, is never refused a settings
+/// update, and is mapped to a current id by the client when it reads it.
+const DEFAULT_THEME: &str = "glass";
 const MAX_SETTINGS_LOCALE_LEN: usize = 10;
 const MAX_CUSTOM_STATUS_LEN: usize = 128;
 const MAX_AVATAR_IMAGE_SIZE: usize = 2 * 1024 * 1024;
@@ -1510,7 +1517,20 @@ pub async fn import_identity(
 
 #[cfg(test)]
 mod tests {
-    use super::{contains_dangerous_markup, decode_css_escapes, sanitize_custom_css};
+    use super::{
+        contains_dangerous_markup, decode_css_escapes, sanitize_custom_css, DEFAULT_THEME,
+        MAX_SETTINGS_THEME_LEN,
+    };
+
+    #[test]
+    fn default_theme_is_glass_and_fits_the_column() {
+        // The client's `DEFAULT_THEME` (client/src/lib/themes.ts) must say the
+        // same thing, and so must the ids it knows: both fit `VARCHAR(32)`.
+        assert_eq!(DEFAULT_THEME, "glass");
+        for id in [DEFAULT_THEME, "glass-contrast"] {
+            assert!(id.len() <= MAX_SETTINGS_THEME_LEN, "{id} is too long");
+        }
+    }
 
     #[test]
     fn markup_check_rejects_injection_primitives() {

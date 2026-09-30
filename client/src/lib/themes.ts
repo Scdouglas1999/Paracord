@@ -1,24 +1,48 @@
 /**
  * The themes, in one place.
  *
- * `data-theme` on <html> is the whole mechanism (docs/lantern-stage-spec.md
- * §1.7): every surface, ink, shadow, glow and ring for a theme is declared in
- * `src/styles/tokens.css` under `:root[data-theme=…]`, so a color is written
- * down exactly once. What this module owns is the *list* — which ids exist,
- * which of them are light, which are looks, and how a message row is shaped —
- * because that list used to be a hand-written union repeated in the store, the
- * hook, the settings screen, the picker and the smoke test, and adding a theme
- * meant finding all five.
+ * Glass (docs/glass-spec.md) is the only look. There is one layout and one
+ * palette: what is live in the current server tints every surface, and nothing
+ * else is a choice. Two ids remain, and only because one of them is an
+ * accessibility setting rather than a taste:
  *
- * A **look** is a complete palette rather than a theme plus the user's choices:
- * it brings its own accent and its own ground, so the accent presets and the
- * base-color control do not apply while one is active. `useTheme` removes the
- * inline properties for those two controls instead of writing them, which is
- * what lets the look's own `tokens.css` block win.
+ *   glass           the default
+ *   glass-contrast  High contrast: opaque panes, brighter ink, visible edges
+ *
+ * `data-theme` on <html> is the whole mechanism. Every surface, ink, shadow
+ * and ring for each is declared in `src/styles/tokens.css`, so a color is
+ * written down exactly once. What this module owns is the *list*, and the one
+ * place an id from an older build or from the server is turned into one of
+ * ours.
+ *
+ * Reduced transparency, Reduced motion and Custom CSS are settings, not
+ * themes: they sit beside the theme in `uiStore` and do not change which
+ * palette is in force.
  */
 
-/** Every value `data-theme` may take. The order is the order Settings shows. */
-export const THEME_IDS = [
+/** Every value `data-theme` may take. */
+export const THEME_IDS = ['glass', 'glass-contrast'] as const;
+
+export type ThemeId = (typeof THEME_IDS)[number];
+
+/**
+ * What a fresh install looks like, and what anything unrecognized collapses to.
+ * The server's `DEFAULT_THEME` (crates/paracord-api/src/routes/users.rs) must
+ * agree: the client adopts the server's value on first sign-in.
+ */
+export const DEFAULT_THEME: ThemeId = 'glass';
+
+/** The theme High contrast turns on. */
+export const HIGH_CONTRAST_THEME: ThemeId = 'glass-contrast';
+
+/**
+ * The ids earlier builds wrote, to `localStorage` and to the server. Night,
+ * Daylight, AMOLED, Dusk sky, Paper & ink, Slate and Aubergine are retired;
+ * they are kept here only so a stored one is recognized rather than treated as
+ * garbage. `high-contrast` was a choice about legibility, not taste, so it
+ * stays one.
+ */
+const LEGACY_THEME_IDS = [
   'dark',
   'light',
   'amoled',
@@ -29,54 +53,59 @@ export const THEME_IDS = [
   'voices',
 ] as const;
 
-export type ThemeId = (typeof THEME_IDS)[number];
-
-/**
- * What a fresh install looks like, and what anything unrecognized collapses to.
- * The server's `DEFAULT_THEME` (crates/paracord-api/src/routes/users.rs) must
- * agree: the client adopts the server's value on first sign-in.
- */
-export const DEFAULT_THEME: ThemeId = 'slate';
-
 /**
  * Is this one of ours? The server stores the theme as an opaque string and
  * `localStorage` can hold anything a previous build wrote, so every crossing
- * into typed code goes through here.
+ * into typed code goes through here or `migrateThemeId`.
  */
 export function isThemeId(value: unknown): value is ThemeId {
   return typeof value === 'string' && (THEME_IDS as readonly string[]).includes(value);
 }
 
-/** The same check, as a narrowing: an unknown theme becomes Night. */
+/**
+ * Turn a stored theme into one of ours.
+ *
+ *   glass, glass-contrast   themselves
+ *   high-contrast           glass-contrast
+ *   any other retired id    glass
+ *   anything else           null (not a theme at all; the caller decides)
+ *
+ * The retired ids are not errors, so nothing here throws and no request is
+ * refused: an account that chose Paper & ink in July simply opens Glass.
+ */
+export function migrateThemeId(value: unknown): ThemeId | null {
+  if (isThemeId(value)) return value;
+  if (typeof value !== 'string') return null;
+  if (value === 'high-contrast') return HIGH_CONTRAST_THEME;
+  return (LEGACY_THEME_IDS as readonly string[]).includes(value) ? DEFAULT_THEME : null;
+}
+
+/** The same, as a narrowing: an unrecognized value becomes the fallback. */
 export function asThemeId(value: unknown, fallback: ThemeId = DEFAULT_THEME): ThemeId {
-  return isThemeId(value) ? value : fallback;
+  return migrateThemeId(value) ?? fallback;
 }
 
 /**
- * The themes whose ground is lighter than their ink. They get
- * `color-scheme: light` (so the scrollbars, form controls and native widgets
- * the webview draws follow) and the deepened accent maths in `useTheme`, which
- * a link or an accent label needs to clear 4.5:1 on a pale ground.
- */
-export const LIGHT_THEMES: ReadonlySet<ThemeId> = new Set<ThemeId>(['light', 'paper']);
-
-/**
- * The looks. A look is a whole palette: it declares its own accent and its own
- * neutral ramp, so while one is active the accent presets and the base-color
- * hue/tint are not applied — `useTheme` removes those inline properties rather
- * than writing them, and Settings shows both controls disabled with the reason.
- */
-export const LOOK_THEMES: ReadonlySet<ThemeId> = new Set<ThemeId>(['dusk', 'paper', 'slate', 'voices']);
-
-export type MessageStyle = 'rows' | 'bubbles';
-
-/**
- * How a message is shaped, published as `data-message-style` on <html>.
+ * How much the panes may be see-through (docs/glass-spec.md §4).
  *
- * Rows everywhere but Slate and Aubergine (id 'voices'), which give every
- * message its author's color and need a bubble to carry it. This is a *shape*, not a density: the compact
- * setting is separate and stays server-synced (`data-density`).
+ *   system    follow the device's "reduce transparency" setting
+ *   standard  panes are near-solid, as designed
+ *   reduced   panes are fully opaque
+ *
+ * Per device, like Reduced motion. It is published as
+ * `data-reduced-transparency` on <html>, which `glass.css` reads.
  */
-export function messageStyleFor(theme: ThemeId): MessageStyle {
-  return theme === 'slate' || theme === 'voices' ? 'bubbles' : 'rows';
+export type TransparencyPreference = 'system' | 'standard' | 'reduced';
+
+export const TRANSPARENCY_PREFERENCES: readonly TransparencyPreference[] = [
+  'system',
+  'standard',
+  'reduced',
+];
+
+/** Narrow whatever was stored to a preference, `system` if it is not one. */
+export function asTransparencyPreference(value: unknown): TransparencyPreference {
+  return (TRANSPARENCY_PREFERENCES as readonly unknown[]).includes(value)
+    ? (value as TransparencyPreference)
+    : 'system';
 }

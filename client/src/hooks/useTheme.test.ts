@@ -8,24 +8,12 @@ vi.mock('../lib/nativeGround', () => ({
   reportGroundColor: vi.fn(() => Promise.resolve()),
 }));
 
-import { DEFAULT_THEME } from '../lib/themes';
+import { DEFAULT_THEME, type ThemeId } from '../lib/themes';
 import { useTheme } from './useTheme';
 import { reportGroundColor } from '../lib/nativeGround';
 import { useAuthStore } from '../stores/authStore';
-import { BASE_HUE_DEFAULT, BASE_TINT_DEFAULT, useUIStore } from '../stores/uiStore';
-import { LOOK_THEMES, type ThemeId } from '../lib/themes';
+import { useUIStore } from '../stores/uiStore';
 import type { UserSettings } from '../types/user.types';
-
-/** Every inline property a look must hand back to `tokens.css`. */
-const ACCENT_PROPERTIES = [
-  '--accent-primary',
-  '--accent-primary-hover',
-  '--accent-primary-active',
-  '--accent',
-  '--text-link',
-  '--accent-primary-rgb',
-  '--sidebar-active-indicator',
-] as const;
 
 const root = () => document.documentElement;
 const inline = (name: string) => root().style.getPropertyValue(name);
@@ -33,7 +21,7 @@ const inline = (name: string) => root().style.getPropertyValue(name);
 function settings(over: Partial<UserSettings> = {}): UserSettings {
   return {
     user_id: '1',
-    theme: 'dark',
+    theme: 'glass',
     locale: 'en-US',
     message_display_compact: false,
     status: 'online',
@@ -48,12 +36,45 @@ function setTheme(theme: ThemeId) {
   });
 }
 
+function setTransparency(value: 'system' | 'standard' | 'reduced') {
+  act(() => {
+    useUIStore.getState().setTransparency(value);
+  });
+}
+
+/** A `matchMedia` that answers for one query and lets a test flip the answer. */
+function stubSystemTransparency(initial: boolean) {
+  const listeners = new Set<(event: MediaQueryListEvent) => void>();
+  let matches = initial;
+  const original = window.matchMedia;
+  window.matchMedia = vi.fn((query: string) => ({
+    get matches() {
+      return query.includes('prefers-reduced-transparency') ? matches : false;
+    },
+    media: query,
+    addEventListener: (_: string, listener: (event: MediaQueryListEvent) => void) => listeners.add(listener),
+    removeEventListener: (_: string, listener: (event: MediaQueryListEvent) => void) => listeners.delete(listener),
+    addListener: () => undefined,
+    removeListener: () => undefined,
+    dispatchEvent: () => false,
+    onchange: null,
+  })) as unknown as typeof window.matchMedia;
+  return {
+    flip(next: boolean) {
+      matches = next;
+      for (const listener of [...listeners]) listener({ matches: next } as MediaQueryListEvent);
+    },
+    listeners,
+    restore() {
+      window.matchMedia = original;
+    },
+  };
+}
+
 beforeEach(() => {
   useUIStore.setState({
-    theme: 'dark',
-    accentPreset: 'emerald',
-    baseHue: BASE_HUE_DEFAULT,
-    baseTint: BASE_TINT_DEFAULT,
+    theme: 'glass',
+    transparency: 'system',
     customCss: '',
     lowBandwidthMode: false,
     motion: 'system',
@@ -61,7 +82,7 @@ beforeEach(() => {
   useAuthStore.setState({ settings: null });
   root().removeAttribute('style');
   root().removeAttribute('data-theme');
-  root().removeAttribute('data-message-style');
+  root().removeAttribute('data-reduced-transparency');
   vi.mocked(reportGroundColor).mockClear();
 });
 
@@ -70,13 +91,20 @@ afterEach(() => {
 });
 
 describe('useTheme', () => {
-  it('publishes the theme, the color scheme and the message shape', () => {
+  it('publishes the theme', () => {
     const { result } = renderHook(() => useTheme());
 
-    expect(result.current.theme).toBe('dark');
-    expect(root().getAttribute('data-theme')).toBe('dark');
-    expect(root().style.colorScheme).toBe('dark');
-    expect(root().getAttribute('data-message-style')).toBe('rows');
+    expect(result.current.theme).toBe('glass');
+    expect(root().getAttribute('data-theme')).toBe('glass');
+  });
+
+  it('writes no color and no message shape of its own', () => {
+    renderHook(() => useTheme());
+
+    // The accent, base color and message-style controls are gone: nothing is
+    // written inline, and nothing but the theme attribute carries a look.
+    expect(root().getAttribute('style') ?? '').toBe('');
+    expect(root().hasAttribute('data-message-style')).toBe(false);
   });
 
   it('narrows a stored theme it does not recognize to the default', () => {
@@ -88,98 +116,83 @@ describe('useTheme', () => {
     expect(root().getAttribute('data-theme')).toBe(DEFAULT_THEME);
   });
 
-  it('gives a light theme color-scheme light', () => {
-    renderHook(() => useTheme());
-    setTheme('light');
+  it.each(['dark', 'light', 'amoled', 'dusk', 'paper', 'slate', 'voices'])(
+    'shows Glass, not nothing, if a retired look %s is still in the store',
+    (retired) => {
+      useUIStore.setState({ theme: retired as ThemeId });
+      const { result } = renderHook(() => useTheme());
 
-    expect(root().style.colorScheme).toBe('light');
-    expect(root().getAttribute('data-theme')).toBe('light');
-  });
-
-  it('writes the accent preset and the base color for a theme that is not a look', () => {
-    renderHook(() => useTheme());
-
-    for (const name of ACCENT_PROPERTIES) expect(inline(name)).not.toBe('');
-    expect(inline('--ui-hue')).toBe(String(BASE_HUE_DEFAULT));
-    expect(inline('--ui-chroma')).toBe(String(BASE_TINT_DEFAULT));
-  });
-
-  it.each(['dusk', 'paper', 'slate', 'voices'] as ThemeId[])(
-    'removes the accent and base-color properties for the %s look',
-    (look) => {
-      renderHook(() => useTheme());
-      // Written first, so the assertion proves a removal rather than an absence.
-      for (const name of ACCENT_PROPERTIES) expect(inline(name)).not.toBe('');
-
-      setTheme(look);
-
-      expect(LOOK_THEMES.has(look)).toBe(true);
-      expect(root().getAttribute('data-theme')).toBe(look);
-      for (const name of ACCENT_PROPERTIES) expect(inline(name)).toBe('');
-      expect(inline('--ui-hue')).toBe('');
-      expect(inline('--ui-chroma')).toBe('');
+      expect(result.current.theme).toBe('glass');
+      expect(root().getAttribute('data-theme')).toBe('glass');
     },
   );
 
-  it('keeps a look out of the base-color control even when the hue is moved', () => {
-    renderHook(() => useTheme());
-    setTheme('dusk');
+  it('shows High contrast if the retired high-contrast id is still in the store', () => {
+    useUIStore.setState({ theme: 'high-contrast' as ThemeId });
+    const { result } = renderHook(() => useTheme());
 
-    act(() => {
-      useUIStore.getState().setBaseHue(200);
-      useUIStore.getState().setBaseTint(1);
-    });
-
-    expect(inline('--ui-hue')).toBe('');
-    expect(inline('--ui-chroma')).toBe('');
+    expect(result.current.theme).toBe('glass-contrast');
+    expect(root().getAttribute('data-theme')).toBe('glass-contrast');
   });
 
-  it('gives Voices bubbles and every other look rows', () => {
+  it('follows the theme when it is changed', () => {
     renderHook(() => useTheme());
 
-    setTheme('voices');
-    expect(root().getAttribute('data-message-style')).toBe('bubbles');
-    expect(root().style.colorScheme).toBe('dark');
+    setTheme('glass-contrast');
+    expect(root().getAttribute('data-theme')).toBe('glass-contrast');
 
-    setTheme('paper');
-    expect(root().getAttribute('data-message-style')).toBe('rows');
-    expect(root().style.colorScheme).toBe('light');
+    setTheme('glass');
+    expect(root().getAttribute('data-theme')).toBe('glass');
   });
 
-  it('writes the accent and base color again when a look is left', () => {
-    renderHook(() => useTheme());
-    setTheme('voices');
-    for (const name of ACCENT_PROPERTIES) expect(inline(name)).toBe('');
-
-    setTheme('dark');
-
-    for (const name of ACCENT_PROPERTIES) expect(inline(name)).not.toBe('');
-    expect(inline('--ui-hue')).toBe(String(BASE_HUE_DEFAULT));
-    expect(inline('--ui-chroma')).toBe(String(BASE_TINT_DEFAULT));
-    expect(root().getAttribute('data-message-style')).toBe('rows');
-  });
-
-  it('hydrates a look from the server settings', () => {
+  it('hydrates the theme from the server settings', () => {
     const { result } = renderHook(() => useTheme());
 
     act(() => {
-      useAuthStore.setState({ settings: settings({ theme: 'paper' }) });
+      useAuthStore.setState({ settings: settings({ theme: 'glass-contrast' }) });
     });
 
-    expect(useUIStore.getState().theme).toBe('paper');
-    expect(result.current.theme).toBe('paper');
-    expect(root().getAttribute('data-theme')).toBe('paper');
+    expect(useUIStore.getState().theme).toBe('glass-contrast');
+    expect(result.current.theme).toBe('glass-contrast');
+    expect(root().getAttribute('data-theme')).toBe('glass-contrast');
   });
 
-  it('leaves the local choice alone when the server holds a theme it does not know', () => {
+  it.each(['dark', 'slate', 'paper', 'voices', 'light', 'amoled', 'dusk'])(
+    'takes a server theme of %s, which an older build stored, as Glass',
+    (stored) => {
+      setTheme('glass-contrast');
+      const { result } = renderHook(() => useTheme());
+
+      act(() => {
+        useAuthStore.setState({ settings: settings({ theme: stored }) });
+      });
+
+      expect(useUIStore.getState().theme).toBe('glass');
+      expect(result.current.theme).toBe('glass');
+      expect(root().getAttribute('data-theme')).toBe('glass');
+    },
+  );
+
+  it('takes a server theme of high-contrast as High contrast', () => {
+    const { result } = renderHook(() => useTheme());
+
+    act(() => {
+      useAuthStore.setState({ settings: settings({ theme: 'high-contrast' }) });
+    });
+
+    expect(useUIStore.getState().theme).toBe('glass-contrast');
+    expect(result.current.theme).toBe('glass-contrast');
+  });
+
+  it('leaves the local choice alone when the server holds a value that is not a theme', () => {
     renderHook(() => useTheme());
-    setTheme('dusk');
+    setTheme('glass-contrast');
 
     act(() => {
       useAuthStore.setState({ settings: settings({ theme: 'chartreuse-mist' }) });
     });
 
-    expect(useUIStore.getState().theme).toBe('dusk');
+    expect(useUIStore.getState().theme).toBe('glass-contrast');
   });
 
   it('reports the ground to the desktop shell when the theme changes', () => {
@@ -187,8 +200,81 @@ describe('useTheme', () => {
     const before = vi.mocked(reportGroundColor).mock.calls.length;
     expect(before).toBeGreaterThan(0);
 
-    setTheme('dusk');
+    setTheme('glass-contrast');
 
     expect(vi.mocked(reportGroundColor).mock.calls.length).toBeGreaterThan(before);
+  });
+});
+
+describe('useTheme: reduced transparency', () => {
+  let system: ReturnType<typeof stubSystemTransparency> | null = null;
+
+  afterEach(() => {
+    system?.restore();
+    system = null;
+  });
+
+  it('is on when it is chosen, and off when it is not', () => {
+    system = stubSystemTransparency(false);
+    renderHook(() => useTheme());
+    expect(root().getAttribute('data-reduced-transparency')).toBe('false');
+
+    setTransparency('reduced');
+    expect(root().getAttribute('data-reduced-transparency')).toBe('true');
+
+    setTransparency('standard');
+    expect(root().getAttribute('data-reduced-transparency')).toBe('false');
+  });
+
+  it('follows the device when it is set to match the system, and keeps following', () => {
+    system = stubSystemTransparency(true);
+    renderHook(() => useTheme());
+    expect(root().getAttribute('data-reduced-transparency')).toBe('true');
+
+    act(() => system!.flip(false));
+    expect(root().getAttribute('data-reduced-transparency')).toBe('false');
+
+    act(() => system!.flip(true));
+    expect(root().getAttribute('data-reduced-transparency')).toBe('true');
+  });
+
+  it('ignores the device once a choice is made', () => {
+    system = stubSystemTransparency(true);
+    renderHook(() => useTheme());
+
+    setTransparency('standard');
+    expect(root().getAttribute('data-reduced-transparency')).toBe('false');
+    // The system listener is gone, so a device change cannot override the choice.
+    expect(system.listeners.size).toBe(0);
+    act(() => system!.flip(true));
+    expect(root().getAttribute('data-reduced-transparency')).toBe('false');
+  });
+
+  it('stops listening when the hook goes away', () => {
+    system = stubSystemTransparency(false);
+    const { unmount } = renderHook(() => useTheme());
+    expect(system.listeners.size).toBe(1);
+
+    unmount();
+
+    expect(system.listeners.size).toBe(0);
+  });
+
+  it('is off, not missing, on a device that cannot say', () => {
+    // jsdom has no `prefers-reduced-transparency`: the query never matches.
+    renderHook(() => useTheme());
+
+    expect(root().getAttribute('data-reduced-transparency')).toBe('false');
+  });
+
+  it('is independent of the theme', () => {
+    system = stubSystemTransparency(false);
+    renderHook(() => useTheme());
+    setTransparency('reduced');
+
+    setTheme('glass-contrast');
+
+    expect(root().getAttribute('data-reduced-transparency')).toBe('true');
+    expect(inline('--pane')).toBe('');
   });
 });

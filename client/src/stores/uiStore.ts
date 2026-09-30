@@ -2,52 +2,32 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
 import type { MotionPreference } from '../lib/motion/reducedMotion';
-import { DEFAULT_THEME, type ThemeId } from '../lib/themes';
+import {
+  DEFAULT_THEME,
+  asThemeId,
+  asTransparencyPreference,
+  type ThemeId,
+  type TransparencyPreference,
+} from '../lib/themes';
 
 /**
- * The theme, per device. The list of ids is `lib/themes.ts` — including the
- * looks, which are themes as far as this store is concerned: one string, stored
- * and synced exactly like the other four. Nothing is validated on the way in or
- * out; `useTheme` is the one narrowing point, so a value an older or newer
- * build wrote survives a round trip instead of being quietly rewritten here.
+ * The theme, per device: `glass` or `glass-contrast` (`lib/themes.ts`). It is
+ * one string, stored and synced like any other setting, and `useTheme` is the
+ * one place a value from the server is narrowed to it. What an OLDER build
+ * wrote is handled here, once, when the persisted blob is loaded (see
+ * `migrate` below), so nothing downstream ever sees a retired id.
  */
 type Theme = ThemeId;
-export type AccentPreset =
-  | 'red'
-  | 'blue'
-  | 'emerald'
-  | 'amber'
-  | 'rose'
-  | 'violet'
-  | 'cyan'
-  | 'lime'
-  | 'orange'
-  | 'slate';
 
 type ConnectionStatus = 'connected' | 'connecting' | 'reconnecting' | 'disconnected';
 
 /**
- * The base color of the whole neutral ramp, as an oklch hue in degrees plus
- * how much of it to take (tokens.css §1.0). Every ground, well, hairline, wash
- * and gray ink is written `oklch(L C var(--ui-hue))`, so this one number turns
- * the interface from warm brown to slate to green without moving a single
- * lightness — which is why `npm run test:contrast` can prove it safe at every
- * setting rather than at the five we happened to name.
- *
- * Per device, like the theme: it is about the screen you are looking at.
+ * Bumped when a persisted field is retired or reshaped. `migrate` below is the
+ * only code that reads an older blob.
+ *   0  eight themes (the looks), accent presets, base hue and tint
+ *   1  Glass: `glass` / `glass-contrast`, `transparency`; the rest is gone
  */
-export const BASE_HUE_DEFAULT = 65;
-export const BASE_TINT_DEFAULT = 1;
-
-const clampHue = (deg: number): number => {
-  if (!Number.isFinite(deg)) return BASE_HUE_DEFAULT;
-  return ((Math.round(deg) % 360) + 360) % 360;
-};
-
-const clampTint = (tint: number): number => {
-  if (!Number.isFinite(tint)) return BASE_TINT_DEFAULT;
-  return Math.min(1, Math.max(0, tint));
-};
+const UI_STORAGE_VERSION = 1;
 
 /**
  * The single source of truth for the toggleable right-hand context panel
@@ -73,11 +53,12 @@ const clampSidebarWidth = (px: number): number => {
 
 interface UIState {
   theme: Theme;
-  accentPreset: AccentPreset;
-  /** The base hue, 0–359 degrees (oklch). */
-  baseHue: number;
-  /** How much of it: 1 is the full tint, 0 is a true neutral charcoal. */
-  baseTint: number;
+  /**
+   * How much the panes may be see-through (docs/glass-spec.md §4). `system`
+   * follows the device; `standard` and `reduced` override it. `useTheme`
+   * publishes the answer as `data-reduced-transparency` on <html>.
+   */
+  transparency: TransparencyPreference;
   /**
    * How much this app is allowed to move (docs/lantern-stage-spec.md §5.3).
    * `system` follows `prefers-reduced-motion`; `full` and `reduced` override
@@ -101,9 +82,7 @@ interface UIState {
   guildSettingsChannelId: string | null;
 
   setTheme: (theme: Theme) => void;
-  setAccentPreset: (accentPreset: AccentPreset) => void;
-  setBaseHue: (deg: number) => void;
-  setBaseTint: (tint: number) => void;
+  setTransparency: (transparency: TransparencyPreference) => void;
   setMotion: (motion: MotionPreference) => void;
   setCustomCss: (css: string) => void;
   setServerRestarting: (v: boolean) => void;
@@ -122,13 +101,38 @@ interface UIState {
   openGuildSettings: (id: string, initialSection?: string | null, channelId?: string | null) => void;
 }
 
+/**
+ * Bring a persisted blob from an older build up to version 1.
+ *
+ * Version 0 carried the looks: a theme id from a list of eight, an accent
+ * preset, a base hue and tint. None of that survives. The theme becomes
+ * `glass`, or `glass-contrast` if it was `high-contrast` (a legibility choice,
+ * not a taste), and the three retired fields are dropped so `persist`'s shallow
+ * merge does not carry them into the live store. A field that is not there is
+ * left alone (the default stands), and everything it does not recognize is
+ * ignored: nothing here throws, because a stored value nobody understands is
+ * never a reason to fail to start.
+ *
+ * Used twice, on purpose. `migrate` runs when the stored version is older than
+ * this build's; `merge` runs on every load, which also covers a blob that
+ * carries no version number at all (`persist` does not migrate those).
+ */
+function migratePersistedUI(persisted: unknown): Partial<UIState> {
+  const stored: Record<string, unknown> =
+    persisted !== null && typeof persisted === 'object' ? { ...(persisted as Record<string, unknown>) } : {};
+  delete stored.accentPreset;
+  delete stored.baseHue;
+  delete stored.baseTint;
+  if ('theme' in stored) stored.theme = asThemeId(stored.theme);
+  if ('transparency' in stored) stored.transparency = asTransparencyPreference(stored.transparency);
+  return stored as Partial<UIState>;
+}
+
 export const useUIStore = create<UIState>()(
   persist(
     (set) => ({
       theme: DEFAULT_THEME,
-      accentPreset: 'emerald',
-      baseHue: BASE_HUE_DEFAULT,
-      baseTint: BASE_TINT_DEFAULT,
+      transparency: 'system' as TransparencyPreference,
       motion: 'system' as MotionPreference,
       customCss: '',
       serverRestarting: false,
@@ -146,9 +150,7 @@ export const useUIStore = create<UIState>()(
       guildSettingsChannelId: null,
 
       setTheme: (theme) => set({ theme }),
-      setAccentPreset: (accentPreset) => set({ accentPreset }),
-      setBaseHue: (deg) => set({ baseHue: clampHue(deg) }),
-      setBaseTint: (tint) => set({ baseTint: clampTint(tint) }),
+      setTransparency: (transparency) => set({ transparency }),
       setMotion: (motion) => set({ motion }),
       setCustomCss: (customCss) => set({ customCss }),
       setServerRestarting: (serverRestarting) => set({ serverRestarting }),
@@ -183,11 +185,12 @@ export const useUIStore = create<UIState>()(
     }),
     {
       name: 'ui-storage',
+      version: UI_STORAGE_VERSION,
+      migrate: migratePersistedUI,
+      merge: (persisted, current) => ({ ...current, ...migratePersistedUI(persisted) }),
       partialize: (state) => ({
         theme: state.theme,
-        accentPreset: state.accentPreset,
-        baseHue: state.baseHue,
-        baseTint: state.baseTint,
+        transparency: state.transparency,
         motion: state.motion,
         customCss: state.customCss,
         // Context panels are transient route context. Persisting one makes an

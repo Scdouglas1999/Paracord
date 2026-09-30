@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { guildDetailFixture, guildSummaryFixture } from '../src/test/guildContractFixtures';
-import { THEME_IDS, type ThemeId } from '../src/lib/themes';
+import { THEME_IDS } from '../src/lib/themes';
 import { isGuildDetail, isGuildSummaryList } from '../src/api/generated/validators';
 
 /**
@@ -28,7 +28,9 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
   const historyEpoch = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
   const served = new Map<string, Record<string, unknown>>();
   const pageErrors: string[] = [];
-  let serverTheme: ThemeId = 'dark';
+  // The server stores the theme as an opaque string, so an old build's id is
+  // as valid a value here as one of ours.
+  let serverTheme: string = 'glass';
   let adminStatsRequests = 0;
   let compositionRevoked = false;
   let headerAttention: 'read' | 'unread' | 'mentions' = 'read';
@@ -485,8 +487,8 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
   await page.goto(`/app/guilds/${guildId}/channels/${textChannelId}`);
   await expect(page).toHaveURL(new RegExp(`/app/guilds/${guildId}/channels/${textChannelId}`));
 
-  // Every id the client knows, looks included — `src/lib/themes.ts` is the
-  // list, so a theme added there is exercised here without editing this array.
+  // Every id the client knows — `src/lib/themes.ts` is the list, so a theme
+  // added there is exercised here without editing this array.
   const themes = THEME_IDS;
   for (const theme of themes) {
     serverTheme = theme;
@@ -504,9 +506,21 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
 
   // Inspect the refined header in the default visual theme after validating all
   // theme variants above.
-  serverTheme = 'dark';
+  serverTheme = 'glass';
   await page.goto(`/app/guilds/${guildId}/channels/${textChannelId}`);
-  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'glass');
+
+  // An account whose stored theme is one of the retired looks opens Glass, and
+  // nothing refuses it.
+  serverTheme = 'paper';
+  await page.goto(`/app/guilds/${guildId}/channels/${textChannelId}`);
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'glass');
+  serverTheme = 'high-contrast';
+  await page.goto(`/app/guilds/${guildId}/channels/${textChannelId}`);
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'glass-contrast');
+  serverTheme = 'glass';
+  await page.goto(`/app/guilds/${guildId}/channels/${textChannelId}`);
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'glass');
 
 
   await expect(page.getByRole('button', { name: /Switch channel, current:/ })).toBeVisible();

@@ -97,9 +97,9 @@ describe('small helpers', () => {
   });
 
   it('follows the high contrast theme unless the player chose', () => {
-    expect(effectivePalette(null, 'high-contrast')).toBe('contrast');
+    expect(effectivePalette(null, 'glass-contrast')).toBe('contrast');
     expect(effectivePalette(null, 'slate')).toBe('standard');
-    expect(effectivePalette('standard', 'high-contrast')).toBe('standard');
+    expect(effectivePalette('standard', 'glass-contrast')).toBe('standard');
     expect(effectivePalette('contrast', 'slate')).toBe('contrast');
   });
 

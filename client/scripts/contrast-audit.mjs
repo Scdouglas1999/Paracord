@@ -1,28 +1,30 @@
 /**
- * The contrast audit (docs/lantern-stage-spec.md §9).
+ * The contrast audit (docs/glass-spec.md §2, §9).
  *
- * Every ground, well, hairline, wash and gray ink in `tokens.css` is written
- * `oklch(L C var(--ui-hue))`: the ramp is L and C, and the user picks H in
- * Settings › Appearance. That is the whole safety argument for a configurable
- * base color — relative luminance is carried almost entirely by L at these
- * chromas, so holding L and C and moving only H leaves every pair where it was.
+ * Glass is the only look, and there are two themes: `glass` (the default) and
+ * `glass-contrast` (High contrast). Neither is a fixed ramp. Every surface is
+ * a `color-mix()` of one channel triplet, `--room-rgb`, into a neutral step,
+ * and the room controller (WP-G8) writes that triplet from whatever is live in
+ * the current server. So this script resolves the real tokens, for BOTH
+ * themes, and sweeps the room over the two reference tints (spec §2.1), a dim
+ * warm and a bright cool tint, the two extremes (white and black), and a hue x
+ * saturation x brightness grid that covers the clamp box WP-G8 will enforce.
+ * At every one of those it requires:
  *
- * "Almost entirely" is not "entirely", so this script does not take the
- * argument on trust: it resolves the tokens for real, sweeping the hue around
- * the whole circle every 30 degrees, at full tint and at none, against all four
- * themes, and fails if any pair drops below its floor at any setting. It also
- * fails on a token that lands outside sRGB, because a browser would gamut-map
- * it and the measured color would no longer be the one written down.
+ *   - the Glass ink set (spec §2.2) on every Glass surface: 7:1 for `--ink-1`,
+ *     4.5:1 for the rest, panes measured over the brightest backdrop the room
+ *     can draw;
+ *   - the Lantern-named tokens the screens nobody has rebuilt yet still read
+ *     (`--text-*` on `--bg-*`, the semantic accents, identity inks), because
+ *     they are mapped onto the Glass ones and must keep clearing 4.5:1 there;
+ *   - for High contrast, the higher floors it exists for: opaque panes, 12:1
+ *     for the first ink step and 7:1 for the other two, and 3:1 for every edge.
  *
- * GLASS (docs/glass-spec.md §2, §9). The default theme's surfaces are not a
- * fixed ramp: they are `color-mix()` of one channel triplet, `--room-rgb`, into
- * neutral steps, and the room controller (WP-G8) writes that triplet from the
- * live stream. So the Glass section below resolves the real tokens and sweeps
- * the room over the two reference tints (spec §2.1), a dim warm and a bright
- * cool tint, and a hue x saturation x brightness grid that covers the clamp box
- * WP-G8 will enforce (plus the two extremes, white and black), and requires
- * 4.5:1 for every text pair on every Glass surface. Panes are translucent, so
- * they are measured over the brightest backdrop the room can draw.
+ * It also fails on a token that lands outside sRGB (a browser would gamut-map
+ * it and the measured color would no longer be the one written down), on a
+ * second declaration of the danger ink (there is exactly one, and every other
+ * danger token is made from it), and, for the default theme, when the two
+ * reference tints in spec §2.1 stop being reproduced.
  *
  * Run: `npm run test:contrast`
  */
@@ -289,32 +291,23 @@ function contrastRatio(foreground, background) {
   return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
 }
 
+
 /* ---- The checks ------------------------------------------------------------ */
 
 const themeBase = extractBlocks('@theme');
-// The Glass surfaces are derived per subtree (`:root, .glass-room`), which the
-// `:root {` pattern does not see; read that block by its second selector.
+// The Glass surfaces are derived per subtree (`:root, [data-theme=…], .glass-room`),
+// which the `:root {` pattern does not see; read that block by its last selector.
 const glassRoom = extractBlocks('.glass-room');
 const rootBase = { ...extractBlocks(':root'), ...glassRoom };
-const daylight = extractBlocks("[data-theme='light']");
-const themeBlocks = {
-  night: {},
-  daylight,
-  amoled: extractBlocks("[data-theme='amoled']"),
-  'high-contrast': extractBlocks("[data-theme='high-contrast']"),
-  // The looks (§1.8). Dusk sky, Slate and Aubergine stand on Night's set, Paper & ink on
-  // Daylight's — the same inheritance the selectors in tokens.css give them.
-  'dusk sky': extractBlocks("[data-theme='dusk']"),
-  slate: extractBlocks("[data-theme='slate']"),
-  aubergine: extractBlocks("[data-theme='voices']"),
-  'paper & ink': { ...daylight, ...extractBlocks("[data-theme='paper']") },
-};
+// Glass is what `:root` declares. High contrast is its own block laid over that,
+// which is exactly the cascade the selectors in tokens.css give it.
+const highContrast = extractBlocks("[data-theme='glass-contrast']");
+const THEMES = { glass: {}, 'high contrast': highContrast };
+const isHighContrast = (themeName) => themeName === 'high contrast';
 
-// docs/lantern-stage-spec.md §9 (Accessibility, non-negotiable):
-//   body text >= 7:1 on plates, meta >= 4.5:1, white-light Join ink >= 12:1,
-//   emerald on plate >= 4.5:1 for text.
-// Every ramp step is checked against every ground it can actually land on —
-// a token that only passes on the darkest surface is not passing.
+// docs/glass-spec.md §9: text is at least 4.5:1 against its actual surface.
+// Body text is held to 7:1, and every ramp step is checked against every ground
+// it can land on: a token that only passes on the darkest surface is not passing.
 const GROUNDS = ['--bg-base', '--bg-plate', '--bg-raised', '--bg-well'];
 const IDENTITY_INKS = Array.from({ length: 8 }, (_, i) => `--identity-ink-${i + 1}`);
 
@@ -326,7 +319,8 @@ const checks = [
   ...GROUNDS.map((bg) => ({ fg: '--text-secondary', bg, min: 4.5 })),
   ...GROUNDS.map((bg) => ({ fg: '--text-muted', bg, min: 4.5 })),
   ...GROUNDS.map((bg) => ({ fg: '--text-faint', bg, min: 4.5 })),
-  // Action and semantics as text on a plate.
+  // Action and semantics as text on a plate. `--accent-danger` is the one
+  // danger ink: destructive confirms and error text.
   ...GROUNDS.map((bg) => ({ fg: '--accent-primary', bg, min: 4.5 })),
   ...GROUNDS.map((bg) => ({ fg: '--accent-danger', bg, min: 4.5 })),
   ...GROUNDS.map((bg) => ({ fg: '--accent-warning', bg, min: 4.5 })),
@@ -335,6 +329,7 @@ const checks = [
   { fg: '--text-on-light', bg: '--light-white', min: 12 },
   { fg: '--text-on-accent', bg: '--accent-primary', min: 4.5 },
   { fg: '--text-on-danger', bg: '--danger-well', min: 4.5 },
+  { fg: '--text-on-danger', bg: '--danger-well-hover', min: 4.5 },
   // The two lights must stay legible as a label as well as a fill.
   ...GROUNDS.map((bg) => ({ fg: '--light-white', bg, min: 4.5 })),
   ...GROUNDS.map((bg) => ({ fg: '--light-amber', bg, min: 4.5 })),
@@ -342,16 +337,17 @@ const checks = [
   // a tinted frame of its own, not on any of the four grounds above.
   { fg: '--light-white', bg: '--thumb-frame-lit', min: 4.5 },
   { fg: '--text-primary', bg: '--thumb-frame-lit', min: 7 },
-  // An author's name is written in their identity's ink (§1.2 / the Blend).
-  // Eight hues x four grounds: a name is a name, so 4.5:1 is the floor.
+  // An author's name is written in their identity's ink. Eight hues x four
+  // grounds: a name is a name, so 4.5:1 is the floor.
   ...IDENTITY_INKS.flatMap((fg) => GROUNDS.map((bg) => ({ fg, bg, min: 4.5 }))),
-  // Ink on the row you are on: the selection wash is translucent, so the real
-  // question is the ink over wash-over-plate.
+  // Ink on the row you are on: the selection is a solid step, but a row inside
+  // a server's group writes its own wash, so the real question is the ink over
+  // the selection over the plate.
   { fg: '--text-primary', bg: '--row-selected', over: '--bg-plate', min: 7 },
   { fg: '--text-secondary', bg: '--row-selected', over: '--bg-plate', min: 4.5 },
   { fg: '--text-primary', bg: '--bg-mod-strong', over: '--bg-plate', min: 7 },
   // Yard numbers, end-zone letters and the digits inside a pitch marker.
-  // The field is a fixed green, so these pairs do not move with --ui-hue.
+  // The field is a fixed green, so these pairs do not move with the room.
   { fg: '--sports-chalk', bg: '--sports-turf', min: 4.5 },
   { fg: '--sports-chalk', bg: '--sports-turf-alt', min: 4.5 },
   { fg: '--sports-chalk', bg: '--sports-endzone', min: 4.5 },
@@ -365,158 +361,30 @@ const checks = [
   { fg: '--sports-pitch-ink', bg: '--sports-pitch-other', min: 4.5 },
 ];
 
-// Paper & ink's spine: the sidebar is a block of cobalt with an ink set of its
-// own. Only a theme that declares `--spine-bg` is asked these.
-const spineChecks = [
-  ...['--spine-bg', '--spine-well', '--spine-raised'].flatMap((bg) => [
-    { fg: '--spine-accent', bg, min: 4.5 },
-    { fg: '--spine-danger', bg, min: 4.5 },
-    { fg: '--spine-text-primary', bg, min: 7 },
-    { fg: '--spine-text-secondary', bg, min: 4.5 },
-    { fg: '--spine-text-muted', bg, min: 4.5 },
-    { fg: '--spine-text-faint', bg, min: 4.5 },
-    { fg: '--spine-light-amber', bg, min: 4.5 },
-  ]),
-  { fg: '--spine-selected-ink', bg: '--spine-selected', min: 4.5 },
-];
-
-/**
- * Voices' bubbles. A bubble is `color-mix(in srgb, <author> M, <plate>)`, which
- * is exactly an alpha blend, so it can be measured here. Eight authors: the
- * body ink, the meta ink, a link and the author's own name all have to read on
- * each. Your own bubble is the same recipe at a stronger mix, so it is measured
- * the same way.
- */
-function bubbleChecks(vars, setting) {
-  const out = [];
-  const mix = Number(resolveVar('--bubble-mix', vars));
-  const ownMix = Number(resolveVar('--bubble-own-mix', vars));
-  const plate = groundColor('--bg-plate', vars, setting);
-  for (let i = 1; i <= 8; i += 1) {
-    const who = parseColor(resolveVar(`--color-avatar-${i}`, vars), `${setting}: avatar ${i}`);
-    for (const [amount, name] of [[mix, `bubble ${i}`], [ownMix, `own bubble ${i}`]]) {
-      const bubble = blend({ ...who, a: amount }, plate);
-      out.push({ fg: '--text-body-ink', bgColor: bubble, bgName: name, min: 7 });
-      out.push({ fg: '--text-faint', bgColor: bubble, bgName: name, min: 4.5 });
-      out.push({ fg: `--identity-ink-${i}`, bgColor: bubble, bgName: name, min: 4.5 });
-      out.push({ fg: '--text-link', bgColor: bubble, bgName: name, min: 4.5 });
-    }
-  }
-  return out;
-}
-
-/**
- * A ground, as it will actually be seen.
- *
- * Most grounds are opaque and this is just the color. A look may make them
- * translucent over a painted backdrop (Dusk sky): the plate and the street
- * scrim then sit over `--audit-backdrop` — the BRIGHTEST point of that
- * backdrop, the worst case for light ink — and everything inside a plate sits
- * over that composite. A translucent ground with no declared backdrop cannot
- * be measured, and says so rather than being waved through.
- */
-function groundColor(name, vars, setting) {
-  const value = resolveVar(name, vars);
-  const color = value ? parseColor(value, `${setting}: ${name}`) : null;
-  if (!color) throw new Error(`unable to resolve ${name}`);
-  if (!(color.a < 1)) return color;
-  const backdropValue = resolveVar('--audit-backdrop', vars);
-  if (!backdropValue) throw new Error(`${name} is translucent and the theme declares no --audit-backdrop`);
-  const backdrop = parseColor(backdropValue, `${setting}: --audit-backdrop`);
-  if (name === '--bg-plate' || name === '--street-scrim') return blend(color, backdrop);
-  return blend(color, groundColor('--bg-plate', vars, setting));
-}
-
-// The whole circle, every 30 degrees, at full tint and at none. `--ui-chroma: 0`
-// is the "neutral charcoal" preset, where the hue stops meaning anything — it is
-// swept anyway, because a zero that only works at one hue is not a zero.
-const HUES = Array.from({ length: 12 }, (_, i) => i * 30);
-const TINTS = [1, 0];
-
 let failures = 0;
 let worst = { ratio: Infinity };
 let comparisons = 0;
 
-for (const [themeName, overrides] of Object.entries(themeBlocks)) {
-  for (const hue of HUES) {
-    for (const tint of TINTS) {
-      const vars = {
-        ...themeBase,
-        ...rootBase,
-        ...overrides,
-        '--ui-hue': String(hue),
-        '--ui-chroma': String(tint),
-      };
-      const setting = `${themeName} hue ${hue} tint ${tint}`;
-      // Where the street is a painted sky, street-level ink sits on the scrim
-      // over it, not on `--bg-base` (which is then only what the desktop shell
-      // is told to paint behind a native video underlay).
-      const painted = vars['--audit-backdrop'] != null;
-      let themeChecks = painted
-        ? checks.map((check) => (check.bg === '--bg-base' ? { ...check, bg: '--street-scrim' } : check))
-        : checks;
-      if (vars['--spine-bg'] != null) themeChecks = [...themeChecks, ...spineChecks];
-      // Bubbles are audited where a look turns them on — the block that
-      // declares its own `--bubble-mix` — not in themes that only inherit it.
-      try {
-        if (overrides['--bubble-mix'] != null) themeChecks = [...themeChecks, ...bubbleChecks(vars, setting)];
-      } catch (error) {
-        console.error(`[contrast] ${setting}: bubbles: ${error.message}`);
-        failures += 1;
-      }
-      for (const check of themeChecks) {
-        let fg;
-        let bg;
-        try {
-          const fgValue = resolveVar(check.fg, vars);
-          fg = fgValue ? parseColor(fgValue, `${setting}: ${check.fg}`) : null;
-          if (check.bgColor) {
-            bg = check.bgColor;
-          } else if (check.over) {
-            const bgValue = resolveVar(check.bg, vars);
-            bg = bgValue ? parseColor(bgValue, `${setting}: ${check.bg}`) : null;
-            if (bg) bg = blend(bg, groundColor(check.over, vars, setting));
-          } else if (GROUNDS.includes(check.bg) || check.bg === '--street-scrim') {
-            bg = groundColor(check.bg, vars, setting);
-          } else {
-            const bgValue = resolveVar(check.bg, vars);
-            bg = bgValue ? parseColor(bgValue, `${setting}: ${check.bg}`) : null;
-          }
-        } catch (error) {
-          console.error(`[contrast] ${setting}: ${error.message}`);
-          failures += 1;
-          continue;
-        }
-        if (!fg || !bg) {
-          console.error(`[contrast] ${setting}: unable to resolve ${check.fg} on ${check.bgName ?? check.bg}`);
-          failures += 1;
-          continue;
-        }
-        const ratio = contrastRatio(fg, bg);
-        comparisons += 1;
-        const headroom = ratio / check.min;
-        if (headroom < worst.ratio / (worst.min ?? 1) || worst.ratio === Infinity) {
-          worst = { ratio, min: check.min, setting, fg: check.fg, bg: check.bgName ?? check.bg };
-        }
-        if (ratio < check.min) {
-          failures += 1;
-          console.error(
-            `[contrast] ${setting}: ${check.fg} on ${check.bgName ?? check.bg}`
-              + ` ratio ${ratio.toFixed(2)} < ${check.min.toFixed(2)}`,
-          );
-        }
-      }
+/* ---- The one danger ink ------------------------------------------------------
+   Owner decision (docs/design/glass-plan.md §8): one danger color, only for
+   destructive confirms and errors. It is written once, and every other danger
+   token is made from it, so there cannot be a second red to drift. */
+{
+  const declarations = css.match(/^\s*--accent-danger\s*:/gm) ?? [];
+  if (declarations.length !== 1) {
+    failures += 1;
+    console.error(`[contrast] --accent-danger is declared ${declarations.length} times; there must be exactly one.`);
+  }
+  for (const name of ['--danger-well', '--danger-well-hover', '--danger-tint']) {
+    const own = [...css.matchAll(new RegExp(`^\\s*${name}\\s*:\\s*([^;]+);`, 'gm'))].map((m) => m[1]);
+    if (own.length === 0 || own.some((value) => !value.includes('var(--accent-danger)'))) {
+      failures += 1;
+      console.error(`[contrast] ${name} must be made from --accent-danger, not written as a second color: ${own.join(' | ')}`);
     }
   }
 }
 
-
-/* ---- Glass (docs/glass-spec.md §2, §9) ------------------------------------- */
-
-const parseTriplet = (value) => {
-  const [r, g, b] = value.split(',').map((part) => Number(part.trim()));
-  return { r, g, b };
-};
+/* ---- The room tints to sweep ------------------------------------------------ */
 
 const hsvToRgb = (h, sat, v) => {
   const c = v * sat;
@@ -553,86 +421,167 @@ const INKS = [
   ['--amber', 4.5],
   ['--amber-ink', 4.5],
 ];
+// What High contrast is for. Its two ink steps are 12:1 and 7:1 (AAA), and
+// every edge it draws is at least the 3:1 that non-text contrast asks for.
+const INKS_HIGH_CONTRAST = [
+  ['--ink-1', 12],
+  ['--ink-2', 7],
+  ['--ink-3', 7],
+];
 
-/** A surface as it is seen: translucent ones over the worst backdrop, and the
-    far-corner glow over the pane it lights. */
-function glassSurface(name, vars, setting) {
+/**
+ * A ground or surface, as it is seen. Opaque ones are just their color; a
+ * translucent one is composited over the brightest backdrop the room can draw,
+ * which is the worst case for light ink.
+ */
+function surfaceColor(name, vars, setting) {
   const value = resolveVar(name, vars);
   const color = value ? parseColor(value, `${setting}: ${name}`) : null;
   if (!color) throw new Error(`${setting}: unable to resolve ${name}`);
   return color.a < 1 ? blend(color, WORST_BACKDROP) : color;
 }
 
-let glassComparisons = 0;
-const glassVars = (room) => ({ ...themeBase, ...rootBase, '--room-rgb': room });
-for (const [tintName, room] of Object.entries(tints)) {
-  const setting = `glass ${tintName} (${room})`;
-  const vars = glassVars(room);
-  try {
-    const check = (fgName, bgColor, bgName, min, fgColor) => {
-      const fg = fgColor ?? parseColor(resolveVar(fgName, vars), `${setting}: ${fgName}`);
-      const ratio = contrastRatio(fg, bgColor);
-      glassComparisons += 1;
-      const headroom = ratio / min;
-      if (headroom < worst.ratio / (worst.min ?? 1)) worst = { ratio, min, setting, fg: fgName, bg: bgName };
-      if (ratio < min) {
-        failures += 1;
-        console.error(`[contrast] ${setting}: ${fgName} on ${bgName} ratio ${ratio.toFixed(2)} < ${min.toFixed(2)}`);
-      }
-    };
-    const surfaces = Object.fromEntries(SURFACES.map((name) => [name, glassSurface(name, vars, setting)]));
-    // The glow washes the pane's far corner: measure the ink on pane + glow.
-    const glow = parseColor(resolveVar('--glow', vars), `${setting}: --glow`);
-    surfaces['--pane + --glow'] = blend(glow, surfaces['--pane']);
-    // The token itself must stay inside the cap: a surface never drifts from
-    // its neutral by more than 6% of the room.
-    for (const [name, bg] of Object.entries(surfaces)) {
-      for (const [ink, min] of INKS) check(ink, bg, name, min);
-    }
-    // Ink over the glass controls, which sit on every one of those surfaces.
-    for (const base of ['--pane', '--bub', '--solid', '--deep']) {
-      for (const [fill, ink] of [
-        ['--glass-fill', '--ink-1'],
-        ['--glass-fill-hover', '--ink-1'],
-        ['--glass-fill-on', '--ink-1'],
-        ['--amber-on', '--amber-ink'],
-      ]) {
-        const over = blend(parseColor(resolveVar(fill, vars), fill), surfaces[base]);
-        check(ink, over, `${fill} over ${base}`, 4.5);
-      }
-    }
-    // Text on the near-black pill, and over the surfaces it floats above.
-    const pill = blend(parseColor(resolveVar('--pill', vars), '--pill'), surfaces['--pane']);
-    for (const [ink] of INKS) check(ink, pill, '--pill', 4.5);
-    // Chips are solid tonal fills.
-    check('--ink-1', parseColor(resolveVar('--chip-count', vars), '--chip-count'), '--chip-count', 4.5);
-    check('--ink-1', parseColor(resolveVar('--chip-event', vars), '--chip-event'), '--chip-event', 4.5);
-    check('--ink-1', parseColor(resolveVar('--chip-react', vars), '--chip-react'), '--chip-react', 4.5);
-    for (const base of ['--pane', '--bub', '--raise', '--solid']) {
-      const chip = blend(parseColor(resolveVar('--amber-tint', vars), '--amber-tint'), surfaces[base]);
-      check('--amber-ink', chip, `--amber-tint over ${base}`, 4.5);
-    }
-    // Fixed pairs (they do not move with the room, but they are part of the set).
-    for (const [fg, bg] of [
-      ['--own-ink', '--own-bub'],
-      ['--mention-ink', '--mention-chip'],
-      ['--join-ink', '--join'],
-      ['--join-ink', '--join-hover'],
-      ['--join-ink', '--join-press'],
-    ]) {
-      check(fg, parseColor(resolveVar(bg, vars), bg), bg, 7);
-    }
-  } catch (error) {
+function record(setting, fgName, bgName, ratio, min) {
+  comparisons += 1;
+  const headroom = ratio / min;
+  if (worst.ratio === Infinity || headroom < worst.ratio / (worst.min ?? 1)) {
+    worst = { ratio, min, setting, fg: fgName, bg: bgName };
+  }
+  if (ratio < min) {
     failures += 1;
-    console.error(`[contrast] ${setting}: ${error.message}`);
+    console.error(`[contrast] ${setting}: ${fgName} on ${bgName} ratio ${ratio.toFixed(2)} < ${min.toFixed(2)}`);
+  }
+}
+
+/** The Lantern-named tokens the long tail of screens still reads. */
+function legacyChecks(vars, setting) {
+  for (const check of checks) {
+    let fg;
+    let bg;
+    try {
+      const fgValue = resolveVar(check.fg, vars);
+      fg = fgValue ? parseColor(fgValue, `${setting}: ${check.fg}`) : null;
+      if (check.over) {
+        const bgValue = resolveVar(check.bg, vars);
+        bg = bgValue ? parseColor(bgValue, `${setting}: ${check.bg}`) : null;
+        if (bg) bg = blend(bg, surfaceColor(check.over, vars, setting));
+      } else if (GROUNDS.includes(check.bg)) {
+        bg = surfaceColor(check.bg, vars, setting);
+      } else {
+        const bgValue = resolveVar(check.bg, vars);
+        bg = bgValue ? parseColor(bgValue, `${setting}: ${check.bg}`) : null;
+      }
+    } catch (error) {
+      console.error(`[contrast] ${setting}: ${error.message}`);
+      failures += 1;
+      continue;
+    }
+    if (!fg || !bg) {
+      console.error(`[contrast] ${setting}: unable to resolve ${check.fg} on ${check.bg}`);
+      failures += 1;
+      continue;
+    }
+    record(setting, check.fg, check.bg, contrastRatio(fg, bg), check.min);
+  }
+}
+
+/** The Glass primitives (spec §2), for one theme at one room tint. */
+function glassChecks(themeName, vars, setting) {
+  const check = (fgName, bgColor, bgName, min) => {
+    const fg = parseColor(resolveVar(fgName, vars), `${setting}: ${fgName}`);
+    record(setting, fgName, bgName, contrastRatio(fg, bgColor), min);
+  };
+  const surfaces = Object.fromEntries(SURFACES.map((name) => [name, surfaceColor(name, vars, setting)]));
+  // The glow washes the pane's far corner: measure the ink on pane + glow.
+  const glow = parseColor(resolveVar('--glow', vars), `${setting}: --glow`);
+  surfaces['--pane + --glow'] = blend(glow, surfaces['--pane']);
+  const inks = isHighContrast(themeName)
+    ? [...INKS_HIGH_CONTRAST, ...INKS.filter(([name]) => name.startsWith('--amber'))]
+    : INKS;
+  for (const [name, bg] of Object.entries(surfaces)) {
+    for (const [ink, min] of inks) check(ink, bg, name, min);
+  }
+  // Ink over the glass controls, which sit on every one of those surfaces.
+  for (const base of ['--pane', '--bub', '--solid', '--deep']) {
+    for (const [fill, ink] of [
+      ['--glass-fill', '--ink-1'],
+      ['--glass-fill-hover', '--ink-1'],
+      ['--glass-fill-on', '--ink-1'],
+      ['--amber-on', '--amber-ink'],
+    ]) {
+      const over = blend(parseColor(resolveVar(fill, vars), fill), surfaces[base]);
+      check(ink, over, `${fill} over ${base}`, 4.5);
+    }
+  }
+  // Text on the near-black pill, and over the surfaces it floats above.
+  const pill = blend(parseColor(resolveVar('--pill', vars), '--pill'), surfaces['--pane']);
+  for (const [ink] of INKS) check(ink, pill, '--pill', 4.5);
+  // Chips are solid tonal fills.
+  for (const chip of ['--chip-count', '--chip-event', '--chip-react']) {
+    check('--ink-1', parseColor(resolveVar(chip, vars), chip), chip, 4.5);
+  }
+  for (const base of ['--pane', '--bub', '--raise', '--solid']) {
+    const chip = blend(parseColor(resolveVar('--amber-tint', vars), '--amber-tint'), surfaces[base]);
+    check('--amber-ink', chip, `--amber-tint over ${base}`, 4.5);
+  }
+  // Fixed pairs (they do not move with the room, but they are part of the set).
+  for (const [fg, bg] of [
+    ['--own-ink', '--own-bub'],
+    ['--mention-ink', '--mention-chip'],
+    ['--join-ink', '--join'],
+    ['--join-ink', '--join-hover'],
+    ['--join-ink', '--join-press'],
+  ]) {
+    check(fg, parseColor(resolveVar(bg, vars), bg), bg, 7);
+  }
+
+  if (!isHighContrast(themeName)) return;
+
+  // High contrast: nothing is see-through, and every edge can be seen.
+  for (const name of ['--pane', '--deep']) {
+    const alpha = parseColor(resolveVar(name, vars), name).a;
+    comparisons += 1;
+    if (alpha !== 1) {
+      failures += 1;
+      console.error(`[contrast] ${setting}: ${name} must be opaque in High contrast, alpha ${alpha.toFixed(2)}`);
+    }
+  }
+  const plate = surfaceColor('--bg-plate', vars, setting);
+  for (const [edge, base, baseName] of [
+    ['--glass-hair', surfaces['--pane'], '--pane'],
+    ['--border-subtle', plate, '--bg-plate'],
+    ['--border-strong', plate, '--bg-plate'],
+  ]) {
+    const line = parseColor(resolveVar(edge, vars), `${setting}: ${edge}`);
+    record(setting, edge, baseName, contrastRatio(blend(line, base), base), 3);
+  }
+}
+
+for (const [themeName, overrides] of Object.entries(THEMES)) {
+  if (isHighContrast(themeName) && Object.keys(overrides).length < 20) {
+    failures += 1;
+    console.error("[contrast] the [data-theme='glass-contrast'] block in tokens.css is missing or empty.");
+    continue;
+  }
+  for (const [tintName, room] of Object.entries(tints)) {
+    const setting = `${themeName} @ ${tintName} (${room})`;
+    const vars = { ...themeBase, ...rootBase, ...overrides, '--room-rgb': room };
+    try {
+      legacyChecks(vars, setting);
+      glassChecks(themeName, vars, setting);
+    } catch (error) {
+      failures += 1;
+      console.error(`[contrast] ${setting}: ${error.message}`);
+    }
   }
 }
 
 /* ---- Glass reference tints (spec §2.1) --------------------------------------
-   The derivation has to reproduce the two reference tints, not merely look
-   like them. CIE76 delta-E in Lab (D65) on the resolved sRGB, under 2; alpha
-   within .005; the glow, which is 7% opaque, is compared as it lands on its
-   own pane. Set PARACORD_AUDIT_VERBOSE=1 for the table. */
+   The default theme's derivation has to reproduce the two reference tints, not
+   merely look like them. CIE76 delta-E in Lab (D65) on the resolved sRGB, under
+   2; alpha within .005; the glow, which is 7% opaque, is compared as it lands on
+   its own pane. Set PARACORD_AUDIT_VERBOSE=1 for the table. */
+const glassVars = (room) => ({ ...themeBase, ...rootBase, '--room-rgb': room });
 const REFERENCE = {
   'warm (spec §2.1)': {
     '--pane': [28, 25, 23, 0.94], '--bub': [45, 41, 38], '--raise': [56, 51, 47], '--sel': [54, 49, 45],
@@ -687,14 +636,11 @@ if (failures > 0) {
 }
 
 console.log(
-  `[contrast] ${comparisons} comparisons passed — ${Object.keys(themeBlocks).length} themes and looks x `
-    + `${HUES.length} hues x ${TINTS.length} tints `
-    + '(docs/lantern-stage-spec.md §9).',
-);
-console.log(
-  `[contrast] glass: ${glassComparisons} comparisons passed over ${Object.keys(tints).length} room tints `
+  `[contrast] ${comparisons} comparisons passed — ${Object.keys(THEMES).length} themes `
+    + `(${Object.keys(THEMES).join(', ')}) x ${Object.keys(tints).length} room tints `
     + `(${Object.keys(namedTints).join(', ')}, and a hue x saturation x brightness grid).`,
 );
+console.log('[contrast] one danger ink: --accent-danger is declared once and every other danger token is made from it.');
 console.log(`[contrast] glass reference tints reproduced: worst delta-E ${worstDelta.toFixed(2)} (limit 2).`);
 console.log(
   `[contrast] tightest margin: ${worst.fg} on ${worst.bg} at ${worst.setting} — `

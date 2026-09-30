@@ -1252,7 +1252,7 @@ function MotionSection() {
   const setThemeOf = useUIStore((state) => state.setTheme);
 
   const swapTheme = (force?: 'crossfade') => {
-    const next = themeOf === 'light' ? 'dark' : 'light';
+    const next = themeOf === 'glass-contrast' ? 'glass' : 'glass-contrast';
     void changeLights(() => setThemeOf(next), {
       engine: force ?? 'auto',
       applied: () => document.documentElement.getAttribute('data-theme') === next,
@@ -1514,7 +1514,7 @@ function MotionSection() {
           </div>
           <div className="flex min-h-[5.5rem] items-center justify-center">
             <span className="text-meta text-text-faint">
-              Currently {themeOf === 'light' ? 'Daylight' : 'Night'}.
+              Currently {themeOf === 'glass-contrast' ? 'High contrast' : 'Glass'}.
             </span>
           </div>
           <p className="text-meta leading-relaxed text-text-faint">
@@ -1728,17 +1728,11 @@ export default function DesignTokensPage() {
         <Section
           id="themes"
           title="Themes"
-          blurb="Themes remap the tokens, never the recipes. The light tokens are remapped in every theme, never removed: in Daylight they become ink so a lit channel still reads as presence on paper."
+          blurb="Glass is the only look, and there are two themes: the default, and High contrast, which keeps the same layout with opaque panels, brighter text and visible edges. A theme remaps the tokens, never the recipes."
         >
           <div className="flex flex-wrap gap-4">
-            <ThemePreview theme="dark" label="Night — the default" />
-            <ThemePreview theme="light" label="Daylight" />
-            <ThemePreview theme="amoled" label="AMOLED" />
-            <ThemePreview theme="high-contrast" label="High contrast" />
-            <ThemePreview theme="dusk" label="Dusk sky — a look" />
-            <ThemePreview theme="paper" label="Paper & ink — a look" />
-            <ThemePreview theme="slate" label="Slate — the default look" />
-            <ThemePreview theme="voices" label="Aubergine — a look" />
+            <ThemePreview theme="glass" label="Glass — the default" />
+            <ThemePreview theme="glass-contrast" label="High contrast" />
           </div>
         </Section>
       </div>

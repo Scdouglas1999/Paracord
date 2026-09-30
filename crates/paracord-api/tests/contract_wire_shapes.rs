@@ -287,6 +287,88 @@ async fn user_settings_match_contract() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Glass is the only look, so the default theme is `glass`. The theme is an
+/// opaque string the server never checks against a list (only its length), so
+/// an account that last chose a look that no longer exists keeps its stored
+/// value, and is never refused a settings update because of it. The client maps
+/// a retired id to a current one when it reads it.
+#[tokio::test]
+async fn user_settings_theme_default_is_glass_and_old_ids_still_round_trip() -> anyhow::Result<()> {
+    let app = new_app().await?;
+    let (token, _user_id) = new_user(&app, "contract_theme").await?;
+
+    let (status, settings) = request_json(
+        &app.app,
+        &token,
+        Method::GET,
+        "/api/v1/users/@me/settings",
+        None,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "unexpected settings: {settings}");
+    assert_eq!(settings["theme"], "glass");
+
+    for id in [
+        "glass",
+        "glass-contrast",
+        "slate",
+        "dark",
+        "light",
+        "amoled",
+        "high-contrast",
+        "dusk",
+        "paper",
+        "voices",
+    ] {
+        let (status, updated) = request_json(
+            &app.app,
+            &token,
+            Method::PATCH,
+            "/api/v1/users/@me/settings",
+            Some(json!({ "theme": id })),
+        )
+        .await?;
+        assert_eq!(status, StatusCode::OK, "{id} was refused: {updated}");
+        assert_eq!(updated["theme"], id);
+
+        // Saving anything else does not rewrite it.
+        let (status, other) = request_json(
+            &app.app,
+            &token,
+            Method::PATCH,
+            "/api/v1/users/@me/settings",
+            Some(json!({ "locale": "en-US" })),
+        )
+        .await?;
+        assert_eq!(status, StatusCode::OK, "{id}: {other}");
+        assert_eq!(other["theme"], id);
+
+        let (status, read) = request_json(
+            &app.app,
+            &token,
+            Method::GET,
+            "/api/v1/users/@me/settings",
+            None,
+        )
+        .await?;
+        assert_eq!(status, StatusCode::OK, "{id}: {read}");
+        assert_eq!(read["theme"], id);
+    }
+
+    // The one thing that is refused is a value that does not fit the column.
+    let too_long = "x".repeat(33);
+    let (status, _) = request_json(
+        &app.app,
+        &token,
+        Method::PATCH,
+        "/api/v1/users/@me/settings",
+        Some(json!({ "theme": too_long })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    Ok(())
+}
+
 #[tokio::test]
 async fn public_profile_matches_contract() -> anyhow::Result<()> {
     let app = new_app().await?;

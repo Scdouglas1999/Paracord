@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   useUIStore,
   SIDEBAR_WIDTH_MIN,
@@ -11,7 +11,8 @@ describe('uiStore', () => {
   beforeEach(() => {
     // Reset store to defaults
     useUIStore.setState({
-      theme: 'dark',
+      theme: 'glass',
+      transparency: 'system',
       customCss: '',
       serverRestarting: false,
       commandPaletteOpen: false,
@@ -23,7 +24,8 @@ describe('uiStore', () => {
 
   it('has correct initial state', () => {
     const state = useUIStore.getState();
-    expect(state.theme).toBe('dark');
+    expect(state.theme).toBe('glass');
+    expect(state.transparency).toBe('system');
     expect(state.customCss).toBe('');
     expect(state.contextPanelMode).toBeNull();
     expect(state.sidebarCollapsed).toBe(false);
@@ -31,22 +33,24 @@ describe('uiStore', () => {
   });
 
   it('sets theme', () => {
-    useUIStore.getState().setTheme('light');
-    expect(useUIStore.getState().theme).toBe('light');
-    useUIStore.getState().setTheme('amoled');
-    expect(useUIStore.getState().theme).toBe('amoled');
-    useUIStore.getState().setTheme('high-contrast');
-    expect(useUIStore.getState().theme).toBe('high-contrast');
-    useUIStore.getState().setTheme('dark');
-    expect(useUIStore.getState().theme).toBe('dark');
+    useUIStore.getState().setTheme('glass-contrast');
+    expect(useUIStore.getState().theme).toBe('glass-contrast');
+    useUIStore.getState().setTheme('glass');
+    expect(useUIStore.getState().theme).toBe('glass');
   });
 
-  // A look is a theme as far as this store is concerned: one string, stored and
-  // persisted exactly like the other four (lib/themes.ts).
-  it('sets a look like any other theme', () => {
-    for (const look of ['dusk', 'paper', 'slate', 'voices'] as const) {
-      useUIStore.getState().setTheme(look);
-      expect(useUIStore.getState().theme).toBe(look);
+  it('has no accent preset, base color or message style left', () => {
+    const state = useUIStore.getState() as unknown as Record<string, unknown>;
+    for (const gone of ['accentPreset', 'baseHue', 'baseTint', 'setAccentPreset', 'setBaseHue', 'setBaseTint']) {
+      expect(state[gone], gone).toBeUndefined();
+    }
+  });
+
+  it('sets the transparency preference and persists it', () => {
+    for (const value of ['reduced', 'standard', 'system'] as const) {
+      useUIStore.getState().setTransparency(value);
+      expect(useUIStore.getState().transparency).toBe(value);
+      expect(JSON.parse(localStorage.getItem('ui-storage') as string).state.transparency).toBe(value);
     }
   });
 
@@ -160,5 +164,100 @@ describe('uiStore', () => {
     expect(persisted.contextPanelMode).toBeUndefined();
     expect(persisted.sidebarWidth).toBe(360);
     expect(persisted.sidebarCollapsed).toBe(true);
+  });
+
+  // --- persisted state from a build that still had the looks ---
+
+  describe('persisted state from before Glass', () => {
+    const store = () => JSON.parse(localStorage.getItem('ui-storage') as string) as {
+      state: Record<string, unknown>;
+      version: number;
+    };
+
+    /** Write what an older build left behind, then load it the way startup does. */
+    async function load(state: Record<string, unknown>, version: number | undefined = 0) {
+      localStorage.setItem('ui-storage', JSON.stringify(version === undefined ? { state } : { state, version }));
+      await useUIStore.persist.rehydrate();
+    }
+
+    afterEach(() => {
+      localStorage.removeItem('ui-storage');
+    });
+
+    it('opens Glass for every look an account may have chosen', async () => {
+      for (const old of ['dark', 'light', 'amoled', 'dusk', 'paper', 'slate', 'voices']) {
+        await load({ theme: old, motion: 'system' });
+        expect(useUIStore.getState().theme, old).toBe('glass');
+      }
+    });
+
+    it('keeps High contrast as High contrast', async () => {
+      await load({ theme: 'high-contrast' });
+      expect(useUIStore.getState().theme).toBe('glass-contrast');
+    });
+
+    it('drops the accent, the base color and the tint, and keeps what else was stored', async () => {
+      await load({
+        theme: 'voices',
+        accentPreset: 'rose',
+        baseHue: 200,
+        baseTint: 0.4,
+        motion: 'reduced',
+        customCss: '.mine { display: block; }',
+        sidebarWidth: 360,
+        sidebarCollapsed: true,
+        lowBandwidthMode: true,
+      });
+
+      const state = useUIStore.getState() as unknown as Record<string, unknown>;
+      expect(state.theme).toBe('glass');
+      expect(state.transparency).toBe('system');
+      expect(state.motion).toBe('reduced');
+      expect(state.customCss).toBe('.mine { display: block; }');
+      expect(state.sidebarWidth).toBe(360);
+      expect(state.sidebarCollapsed).toBe(true);
+      expect(state.lowBandwidthMode).toBe(true);
+      for (const gone of ['accentPreset', 'baseHue', 'baseTint']) expect(state[gone], gone).toBeUndefined();
+    });
+
+    it('rewrites the stored blob at the new version, without the retired fields', async () => {
+      await load({ theme: 'paper', accentPreset: 'lime', baseHue: 10, baseTint: 1, motion: 'full' });
+      // A change writes the blob; the migrated one is what lands.
+      useUIStore.getState().setSidebarCollapsed(true);
+
+      const written = store();
+      expect(written.version).toBe(1);
+      expect(written.state.theme).toBe('glass');
+      expect(written.state.motion).toBe('full');
+      for (const gone of ['accentPreset', 'baseHue', 'baseTint']) expect(written.state[gone], gone).toBeUndefined();
+    });
+
+    it('does not throw on values nobody understands', async () => {
+      await load({ theme: 42, transparency: 'sparkly', accentPreset: {}, baseHue: 'blue' });
+      expect(useUIStore.getState().theme).toBe('glass');
+      expect(useUIStore.getState().transparency).toBe('system');
+    });
+
+    it('narrows a blob that carries no version number too', async () => {
+      await load({ theme: 'slate', accentPreset: 'red', baseHue: 5, sidebarWidth: 333 }, undefined);
+      const state = useUIStore.getState() as unknown as Record<string, unknown>;
+      expect(state.theme).toBe('glass');
+      expect(state.accentPreset).toBeUndefined();
+      expect(state.sidebarWidth).toBe(333);
+    });
+
+    it('leaves a current blob as it is', async () => {
+      await load({ theme: 'glass-contrast', transparency: 'reduced', motion: 'reduced' }, 1);
+      expect(useUIStore.getState().theme).toBe('glass-contrast');
+      expect(useUIStore.getState().transparency).toBe('reduced');
+      expect(useUIStore.getState().motion).toBe('reduced');
+    });
+
+    it('starts on Glass when nothing was stored', async () => {
+      localStorage.removeItem('ui-storage');
+      await useUIStore.persist.rehydrate();
+      expect(useUIStore.getState().theme).toBe('glass');
+      expect(useUIStore.getState().transparency).toBe('system');
+    });
   });
 });

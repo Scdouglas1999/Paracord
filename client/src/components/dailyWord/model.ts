@@ -132,7 +132,7 @@ export function writePalette(palette: WordPalette): void {
 /** High contrast theme means the color-blind friendly squares, unless the viewer chose. */
 export function effectivePalette(choice: WordPalette | null, theme: string | null | undefined): WordPalette {
   if (choice) return choice;
-  return theme === 'high-contrast' ? 'contrast' : 'standard';
+  return theme === 'glass-contrast' ? 'contrast' : 'standard';
 }
 
 export function dailyWordHref(guildId: string): string {

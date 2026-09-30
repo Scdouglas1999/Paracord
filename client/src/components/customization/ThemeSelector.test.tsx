@@ -2,23 +2,20 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ThemeSelector } from './ThemeSelector';
-import { BASE_HUE_DEFAULT, BASE_TINT_DEFAULT, useUIStore } from '../../stores/uiStore';
+import { useUIStore } from '../../stores/uiStore';
 import { configureMotion, resetMotionSwitchForTests } from '../../lib/motion/reducedMotion';
-import type { ThemeId } from '../../lib/themes';
 
 /**
- * Picking a theme goes through `changeLights`, which crosses the whole shell
- * over before it applies. Under reduced motion it simply calls the apply and
- * returns (§5.3), which is the deterministic path a test wants — and it is the
- * real engine either way, not a stub.
+ * Turning High contrast on goes through `changeLights`, which crosses the whole
+ * shell over before it applies. Under reduced motion it simply calls the apply
+ * and returns (§5.3), which is the deterministic path a test wants — and it is
+ * the real engine either way, not a stub.
  */
 beforeEach(() => {
   configureMotion('reduced');
   useUIStore.setState({
-    theme: 'dark',
-    accentPreset: 'emerald',
-    baseHue: BASE_HUE_DEFAULT,
-    baseTint: BASE_TINT_DEFAULT,
+    theme: 'glass',
+    transparency: 'system',
     motion: 'reduced',
   });
 });
@@ -27,112 +24,130 @@ afterEach(() => {
   resetMotionSwitchForTests();
 });
 
-/** The base-color presets, found by their hints so "Dusk" cannot collide with
- *  the "Dusk sky" look. */
-const hearth = () => screen.getByRole('button', { name: /Warm brown, the default/ });
-const swatch = () => screen.getByRole('button', { name: 'Set accent Emerald' });
-const hueSlider = () => screen.getByRole('slider');
+const highContrast = () => screen.getByRole('switch', { name: 'High contrast' });
 
 describe('ThemeSelector', () => {
-  it('offers the four themes and the four looks', () => {
+  it('offers High contrast, Transparency and Motion, and nothing that picks a look', () => {
     render(<ThemeSelector />);
 
-    for (const name of [/Night/, /Daylight/, /AMOLED/, /High contrast/]) {
-      expect(screen.getByRole('button', { name })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Contrast' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Transparency' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Motion' })).toBeInTheDocument();
+    expect(highContrast()).toBeInTheDocument();
+
+    // The retired looks, the accent presets and the base color are all gone.
+    for (const gone of [
+      /Night/,
+      /Daylight/,
+      /AMOLED/,
+      /Dusk sky/,
+      /Paper & ink/,
+      /Slate/,
+      /Aubergine/,
+      /Set accent/,
+      /Any other color/,
+    ]) {
+      expect(screen.queryByText(gone)).toBeNull();
+      expect(screen.queryByRole('button', { name: gone })).toBeNull();
     }
-    expect(screen.getByRole('button', { name: /Dusk sky/ })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Paper & ink/ })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /cool charcoal/ })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Aubergine/ })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Looks' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Base color' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Accent color' })).toBeNull();
+    expect(screen.queryByRole('slider')).toBeNull();
   });
 
-  it('labels the looks as their own group, in sentence case, and says what one is', () => {
-    render(<ThemeSelector />);
+  describe('High contrast', () => {
+    it('is off on Glass and on for the High contrast theme', () => {
+      const { rerender } = render(<ThemeSelector currentTheme="glass" />);
+      expect(highContrast()).toHaveAttribute('aria-checked', 'false');
 
-    const heading = screen.getByRole('heading', { name: 'Looks' });
-    expect(heading).toBeInTheDocument();
-    // spec §6.8: a section label is never uppercased.
-    expect(heading.className).not.toContain('uppercase');
-    expect(
-      screen.getByText('A look is a whole palette. It brings its own accent and ground colors.'),
-    ).toBeInTheDocument();
+      rerender(<ThemeSelector currentTheme="glass-contrast" />);
+      expect(highContrast()).toHaveAttribute('aria-checked', 'true');
+    });
+
+    it('stores glass-contrast when it is turned on, and reports it', () => {
+      const onThemeChange = vi.fn();
+      render(<ThemeSelector onThemeChange={onThemeChange} />);
+
+      fireEvent.click(highContrast());
+
+      expect(useUIStore.getState().theme).toBe('glass-contrast');
+      expect(onThemeChange).toHaveBeenCalledWith('glass-contrast');
+    });
+
+    it('goes back to Glass when it is turned off', () => {
+      useUIStore.setState({ theme: 'glass-contrast' });
+      const onThemeChange = vi.fn();
+      render(<ThemeSelector onThemeChange={onThemeChange} />);
+
+      fireEvent.click(highContrast());
+
+      expect(useUIStore.getState().theme).toBe('glass');
+      expect(onThemeChange).toHaveBeenCalledWith('glass');
+    });
+
+    it('reads a retired theme id as the theme it becomes', () => {
+      // A parent that still holds an old id (the server's value, say).
+      render(<ThemeSelector currentTheme={'high-contrast' as never} />);
+      expect(highContrast()).toHaveAttribute('aria-checked', 'true');
+    });
   });
 
-  it.each([
-    ['Dusk sky', 'dusk'],
-    ['Paper & ink', 'paper'],
-    ['cool charcoal', 'slate'],
-    ['Aubergine', 'voices'],
-  ] as Array<[string, ThemeId]>)('stores %s as %s and reports it', (label, id) => {
-    const onThemeChange = vi.fn();
-    render(<ThemeSelector onThemeChange={onThemeChange} />);
+  describe('Transparency', () => {
+    const option = (name: RegExp) => screen.getByRole('radio', { name });
 
-    fireEvent.click(screen.getByRole('button', { name: new RegExp(label) }));
+    it('offers match-my-system, standard and reduced, and marks the stored one', () => {
+      render(<ThemeSelector />);
 
-    expect(useUIStore.getState().theme).toBe(id);
-    expect(onThemeChange).toHaveBeenCalledWith(id);
+      expect(option(/Match my system.*reduce-transparency/)).toHaveAttribute('aria-checked', 'true');
+      expect(option(/Standard/)).toHaveAttribute('aria-checked', 'false');
+      expect(option(/Reduced.*fully solid/)).toHaveAttribute('aria-checked', 'false');
+    });
+
+    it.each([
+      [/Standard/, 'standard'],
+      [/Reduced.*fully solid/, 'reduced'],
+      [/Match my system.*reduce-transparency/, 'system'],
+    ] as const)('stores %s as %s', (name, expected) => {
+      useUIStore.setState({ transparency: expected === 'system' ? 'reduced' : 'system' });
+      render(<ThemeSelector />);
+
+      fireEvent.click(option(name));
+
+      expect(useUIStore.getState().transparency).toBe(expected);
+    });
+
+    it('does not change the theme', () => {
+      render(<ThemeSelector />);
+
+      fireEvent.click(option(/Reduced.*fully solid/));
+
+      expect(useUIStore.getState().theme).toBe('glass');
+    });
   });
 
-  it('marks the chosen look as selected', () => {
-    render(<ThemeSelector currentTheme="voices" />);
+  describe('Motion', () => {
+    it('keeps the three motion choices and stores the pick', () => {
+      useUIStore.setState({ motion: 'system' });
+      render(<ThemeSelector />);
 
-    expect(screen.getByRole('button', { name: /Aubergine/ })).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByRole('button', { name: /Night/ })).toHaveAttribute('aria-pressed', 'false');
+      fireEvent.click(screen.getByRole('radio', { name: /Reduced motion/ }));
+      expect(useUIStore.getState().motion).toBe('reduced');
+
+      fireEvent.click(screen.getByRole('radio', { name: /Full motion/ }));
+      expect(useUIStore.getState().motion).toBe('full');
+
+      fireEvent.click(screen.getByRole('radio', { name: /Match my system.*reduced-motion/ }));
+      expect(useUIStore.getState().motion).toBe('system');
+    });
   });
 
-  it('leaves the base color and the accent usable for a theme that is not a look', () => {
-    render(<ThemeSelector currentTheme="dark" />);
+  it('uses American spelling and plain words', () => {
+    const { container } = render(<ThemeSelector />);
+    const text = container.textContent ?? '';
 
-    expect(hearth()).toBeEnabled();
-    expect(swatch()).toBeEnabled();
-    expect(hueSlider()).toBeEnabled();
-    expect(screen.queryByText(/brings its own colors/)).toBeNull();
-  });
-
-  it('disables the base color and the accent for a look, and says which look', () => {
-    render(<ThemeSelector currentTheme="dusk" />);
-
-    expect(hearth()).toBeDisabled();
-    expect(hearth()).toHaveAttribute('aria-disabled', 'true');
-    expect(hueSlider()).toBeDisabled();
-    expect(swatch()).toBeDisabled();
-    expect(swatch()).toHaveAttribute('aria-disabled', 'true');
-
-    // Named for the look that is in charge, and shown twice: once under each
-    // control it explains. Disabled, never hidden.
-    const notes = screen.getAllByText(
-      'Dusk sky brings its own colors. Pick Night, Daylight, AMOLED or High contrast to change these.',
-    );
-    expect(notes).toHaveLength(2);
-    expect(screen.getByRole('heading', { name: 'Base color' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Accent color' })).toBeInTheDocument();
-  });
-
-  it('names the note after whichever look is active', () => {
-    render(<ThemeSelector currentTheme="paper" />);
-
-    expect(screen.getAllByText(/^Paper & ink brings its own colors\./)).toHaveLength(2);
-  });
-
-  it('does not change the base color while a look is active', () => {
-    render(<ThemeSelector currentTheme="voices" />);
-
-    // A disabled control cannot be clicked; the store is the proof.
-    fireEvent.click(hearth());
-    fireEvent.click(swatch());
-
-    expect(useUIStore.getState().baseHue).toBe(BASE_HUE_DEFAULT);
-    expect(useUIStore.getState().accentPreset).toBe('emerald');
-  });
-
-  it('hands the controls back when a look is swapped for a theme', () => {
-    const { rerender } = render(<ThemeSelector currentTheme="dusk" />);
-    expect(hearth()).toBeDisabled();
-
-    rerender(<ThemeSelector currentTheme="high-contrast" />);
-
-    expect(hearth()).toBeEnabled();
-    expect(swatch()).toBeEnabled();
-    expect(screen.queryByText(/brings its own colors/)).toBeNull();
+    expect(text).not.toMatch(/colour|behaviour|grey|centre|customis|organis|optimis/i);
+    // The vocabulary lint's rule for page copy: no "room" or "building".
+    expect(text).not.toMatch(/\broom\b|\bbuilding\b/i);
   });
 });

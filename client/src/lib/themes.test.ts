@@ -2,32 +2,28 @@ import { describe, expect, it } from 'vitest';
 
 import {
   DEFAULT_THEME,
-  LIGHT_THEMES,
-  LOOK_THEMES,
+  HIGH_CONTRAST_THEME,
   THEME_IDS,
+  TRANSPARENCY_PREFERENCES,
   asThemeId,
+  asTransparencyPreference,
   isThemeId,
-  messageStyleFor,
-  type ThemeId,
+  migrateThemeId,
 } from './themes';
 
+/** Every id a build before Glass could have written, to `localStorage` or the server. */
+const RETIRED = ['dark', 'light', 'amoled', 'high-contrast', 'dusk', 'paper', 'slate', 'voices'];
+
 describe('THEME_IDS', () => {
-  it('is the four themes and the four looks, in the order Settings shows them', () => {
-    expect([...THEME_IDS]).toEqual([
-      'dark',
-      'light',
-      'amoled',
-      'high-contrast',
-      'dusk',
-      'paper',
-      'slate',
-      'voices',
-    ]);
+  it('is Glass and High contrast, and nothing else', () => {
+    expect([...THEME_IDS]).toEqual(['glass', 'glass-contrast']);
   });
 
-  it('names Slate as the default', () => {
-    expect(DEFAULT_THEME).toBe('slate');
+  it('names Glass as the default, and High contrast as the other', () => {
+    expect(DEFAULT_THEME).toBe('glass');
+    expect(HIGH_CONTRAST_THEME).toBe('glass-contrast');
     expect(THEME_IDS).toContain(DEFAULT_THEME);
+    expect(THEME_IDS).toContain(HIGH_CONTRAST_THEME);
   });
 });
 
@@ -36,72 +32,69 @@ describe('isThemeId', () => {
     for (const id of THEME_IDS) expect(isThemeId(id)).toBe(true);
   });
 
-  it('rejects anything else, including the shapes stored state arrives in', () => {
-    for (const value of ['', 'Dark', 'midnight', 'looks', null, undefined, 0, 1, {}, ['dark']]) {
+  it('rejects the retired ids and the shapes stored state arrives in', () => {
+    for (const value of [...RETIRED, '', 'Glass', 'midnight', null, undefined, 0, 1, {}, ['glass']]) {
       expect(isThemeId(value)).toBe(false);
     }
   });
 });
 
+describe('migrateThemeId', () => {
+  it('passes a current id through', () => {
+    expect(migrateThemeId('glass')).toBe('glass');
+    expect(migrateThemeId('glass-contrast')).toBe('glass-contrast');
+  });
+
+  it('keeps a High contrast choice as High contrast', () => {
+    expect(migrateThemeId('high-contrast')).toBe('glass-contrast');
+  });
+
+  it('turns every other retired id into Glass', () => {
+    for (const id of RETIRED.filter((value) => value !== 'high-contrast')) {
+      expect(migrateThemeId(id), id).toBe('glass');
+    }
+  });
+
+  it('says null, not Glass, for a value that was never a theme', () => {
+    for (const value of ['sepia', '', 'GLASS', 'chartreuse-mist', null, undefined, 3, {}, ['dark']]) {
+      expect(migrateThemeId(value)).toBeNull();
+    }
+  });
+});
+
 describe('asThemeId', () => {
-  it('passes a known id through', () => {
-    expect(asThemeId('paper')).toBe('paper');
-    expect(asThemeId('high-contrast')).toBe('high-contrast');
+  it('passes a current id through', () => {
+    expect(asThemeId('glass-contrast')).toBe('glass-contrast');
   });
 
-  it('collapses an unknown value to Night', () => {
-    expect(asThemeId('sepia')).toBe('slate');
-    expect(asThemeId(undefined)).toBe('slate');
-    expect(asThemeId(null)).toBe('slate');
-  });
-
-  it('takes an explicit fallback', () => {
-    expect(asThemeId('sepia', 'paper')).toBe('paper');
-  });
-});
-
-describe('LIGHT_THEMES', () => {
-  it('is Daylight and Paper & ink', () => {
-    expect([...LIGHT_THEMES].sort()).toEqual(['light', 'paper']);
-  });
-
-  it('leaves every dark theme and dark look out', () => {
-    for (const id of ['dark', 'amoled', 'high-contrast', 'dusk', 'slate', 'voices'] as ThemeId[]) {
-      expect(LIGHT_THEMES.has(id)).toBe(false);
+  it('collapses every retired id to Glass, or High contrast for high-contrast', () => {
+    for (const id of RETIRED) {
+      expect(asThemeId(id), id).toBe(id === 'high-contrast' ? 'glass-contrast' : 'glass');
     }
   });
 
-  it('holds nothing that is not a theme id', () => {
-    for (const id of LIGHT_THEMES) expect(isThemeId(id)).toBe(true);
+  it('collapses an unknown value to the default', () => {
+    expect(asThemeId('sepia')).toBe('glass');
+    expect(asThemeId(undefined)).toBe('glass');
+    expect(asThemeId(null)).toBe('glass');
+  });
+
+  it('takes an explicit fallback for an unknown value only', () => {
+    expect(asThemeId('sepia', 'glass-contrast')).toBe('glass-contrast');
+    // A retired id is recognized, so the fallback does not apply to it.
+    expect(asThemeId('paper', 'glass-contrast')).toBe('glass');
   });
 });
 
-describe('LOOK_THEMES', () => {
-  it('is the four looks', () => {
-    expect([...LOOK_THEMES].sort()).toEqual(['dusk', 'paper', 'slate', 'voices']);
+describe('asTransparencyPreference', () => {
+  it('keeps the three preferences', () => {
+    expect([...TRANSPARENCY_PREFERENCES]).toEqual(['system', 'standard', 'reduced']);
+    for (const value of TRANSPARENCY_PREFERENCES) expect(asTransparencyPreference(value)).toBe(value);
   });
 
-  it('leaves the four themes out — they keep the accent and base-color controls', () => {
-    for (const id of ['dark', 'light', 'amoled', 'high-contrast'] as ThemeId[]) {
-      expect(LOOK_THEMES.has(id)).toBe(false);
-    }
-  });
-
-  it('holds nothing that is not a theme id', () => {
-    for (const id of LOOK_THEMES) expect(isThemeId(id)).toBe(true);
-  });
-});
-
-describe('messageStyleFor', () => {
-  it('gives Slate and Aubergine bubbles', () => {
-    expect(messageStyleFor('slate')).toBe('bubbles');
-    expect(messageStyleFor('voices')).toBe('bubbles');
-  });
-
-  it('gives every other theme and look rows', () => {
-    for (const id of THEME_IDS) {
-      if (id === 'voices' || id === 'slate') continue;
-      expect(messageStyleFor(id)).toBe('rows');
+  it('follows the system for anything else', () => {
+    for (const value of ['', 'on', 'full', null, undefined, true, 1]) {
+      expect(asTransparencyPreference(value)).toBe('system');
     }
   });
 });
