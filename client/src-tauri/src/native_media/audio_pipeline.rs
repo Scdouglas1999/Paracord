@@ -417,6 +417,13 @@ pub fn spawn_datagram_recv_task(session: &mut NativeMediaSession, app: super::Ca
 
                     match header.track_type {
                         TrackType::Audio => {
+                            // Clip intake (docs/glass-spec.md §6.4): the watched
+                            // stream's own audio, decrypted. Voices are never kept.
+                            super::clip_buffer::note_audio_datagram(
+                                header.ssrc,
+                                header.sequence,
+                                &decrypted,
+                            );
                             if deafened.load(Ordering::SeqCst) {
                                 continue;
                             }

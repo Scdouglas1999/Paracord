@@ -1882,6 +1882,9 @@ pub fn run() {
         native_media::commands::media_unsubscribe_audio,
         native_media::commands::media_apply_audio_sender_key,
         native_media::commands::media_apply_track_sender_key,
+        native_media::clip_buffer::media_clip_arm,
+        native_media::clip_buffer::media_clip_disarm,
+        native_media::clip_buffer::media_clip_cut,
         // Native surface rendering (spec §3.6)
         native_media::native_render::native_render_attach,
         native_media::native_render::native_render_update_geometry,

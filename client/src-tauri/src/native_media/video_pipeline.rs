@@ -730,6 +730,15 @@ async fn deliver_decoded_frame(
     keyframe_failures: &mut u32,
     frame: ReassembledVideoFrame,
 ) {
+    // Clip intake (docs/glass-spec.md §6.4): every decrypted frame of the
+    // track, in order, whichever route renders it and even while hidden.
+    super::clip_buffer::note_video_frame(
+        track_key,
+        frame.encoded.codec.header_id(),
+        frame.encoded.is_keyframe,
+        frame.timestamp_us,
+        &frame.encoded.data,
+    );
     let hidden = track_is_hidden(track_key);
 
     // ── native-surface route ────────────────────────────────────────────────

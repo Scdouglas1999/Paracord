@@ -51,6 +51,7 @@ import {
 } from './video/videoEncoder';
 import { VideoSendQueue } from './video/videoSendQueue';
 import { MediaVideoDecoder } from './video/videoDecoder';
+import { clipIntake } from './clips/clipIntake';
 import { CanvasRenderer } from './video/canvasRenderer';
 import { isMediaCallKey, MediaKeyring } from './mediaKeyring';
 import {
@@ -2471,6 +2472,7 @@ export class BrowserMediaEngine implements MediaEngine {
       this.requestSubscriptionKeyframe(subscription);
     }
     for (const frame of decode) {
+      clipIntake.video(this, userId, trackId, decoderCodec, frame); // clips (§6.4)
       subscription.decoder.decode(frame.data, frame.chunkTimestampUs, frame.isKeyframe);
     }
   }
@@ -3466,6 +3468,7 @@ export class BrowserMediaEngine implements MediaEngine {
       header.ssrc,
     ).then((decrypted) => {
         if (this.disposed) return;
+      clipIntake.audio(this, userId, header.sequence, decrypted); // clips (§6.4)
       if (this.deafened) return;
       subscription!.jitterBuffer.push(header.sequence, header.timestamp, decrypted);
     }).catch(() => {});

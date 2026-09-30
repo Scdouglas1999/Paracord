@@ -3,6 +3,7 @@ pub mod audio_pipeline;
 pub mod call_owner;
 pub mod camera_capture;
 pub mod capabilities;
+pub mod clip_buffer;
 pub mod commands;
 pub mod events;
 pub mod file_transfer;

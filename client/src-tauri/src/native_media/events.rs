@@ -813,6 +813,12 @@ async fn handle_control_message(
                 &track.track_id.0,
                 &track.layers,
             );
+            super::clip_buffer::note_track(
+                &track.stream_id.0,
+                &track.track_id.0,
+                track.publisher_user_id,
+                track.layers.iter().map(|layer| layer.ssrc).collect(),
+            );
             apply_delivered_track_key(
                 stream_registry,
                 frame_decryptor,
@@ -830,6 +836,7 @@ async fn handle_control_message(
             let mut registry = stream_registry.lock().await;
             registry.unpublish_track(&stream_id, &track_id);
             super::video_pipeline::unbind_remote_video_track(&stream_id.0, &track_id.0);
+            super::clip_buffer::forget_track(&stream_id.0, &track_id.0);
 
             let _ = app.emit(
                 "media_track_unpublish",
@@ -868,6 +875,12 @@ async fn handle_control_message(
                     &stream_id.0,
                     &track_id.0,
                     &track.layers,
+                );
+                super::clip_buffer::note_track(
+                    &stream_id.0,
+                    &track_id.0,
+                    track.publisher_user_id,
+                    track.layers.iter().map(|layer| layer.ssrc).collect(),
                 );
                 apply_delivered_track_key(stream_registry, frame_decryptor, &stream_id, &track_id)
                     .await;

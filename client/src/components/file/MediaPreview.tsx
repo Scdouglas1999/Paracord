@@ -1,4 +1,7 @@
 import { useEffect, useId, useRef, useState, type CSSProperties } from 'react';
+import { Play } from 'lucide-react';
+import { parseClipFilename } from '../../lib/media/clips/clipFilename';
+import '../../lib/media/clips/clips.css';
 
 interface MediaPreviewProps {
   src: string;
@@ -12,6 +15,51 @@ interface MediaPreviewProps {
 
 /** User-supplied media can be paired with a local caption file without uploading it. */
 export function MediaPreview({ src, filename, kind, autoPlay, videoStyle }: MediaPreviewProps) {
+  // A stream clip in a message (docs/glass-spec.md §6.4): a 16:9 media bubble
+  // with a play button and "0:30 from Vincent's screen". The lightbox, which
+  // opens a video to watch it, keeps the ordinary player.
+  const clip = kind === 'video' && !autoPlay && !videoStyle ? parseClipFilename(filename) : null;
+  if (clip) return <ClipPlayer src={src} label={clip.label} />;
+  return <MediaPlayer src={src} filename={filename} kind={kind} autoPlay={autoPlay} videoStyle={videoStyle} />;
+}
+
+/** A posted clip: its first picture, a play button and its label, until it plays. */
+function ClipPlayer({ src, label }: { src: string; label: string }) {
+  const video = useRef<HTMLVideoElement>(null);
+  const [playing, setPlaying] = useState(false);
+  const play = () => {
+    setPlaying(true);
+    void video.current?.play().catch(() => setPlaying(false));
+  };
+  return (
+    <div className="glass-clip" data-playing={playing ? 'true' : undefined}>
+      {/* A clip is a moment of someone's stream; there is no caption file to pair with it. */}
+      {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+      <video
+        ref={video}
+        src={src}
+        preload="metadata"
+        controls={playing}
+        playsInline
+        aria-label={label}
+        className="glass-clip__video"
+        onEnded={() => setPlaying(false)}
+      />
+      {!playing && (
+        <>
+          <button type="button" className="glass-clip__play glass-focusable" aria-label={`Play clip, ${label}`} onClick={play}>
+            <span className="glass-clip__play-circle">
+              <Play size={18} fill="currentColor" strokeWidth={1.8} aria-hidden="true" />
+            </span>
+          </button>
+          <span className="glass-clip__label" aria-hidden="true">{label}</span>
+        </>
+      )}
+    </div>
+  );
+}
+
+function MediaPlayer({ src, filename, kind, autoPlay, videoStyle }: MediaPreviewProps) {
   const inputId = useId();
   const selection = useRef(0);
   const audioCaptionTrack = useRef<HTMLTrackElement>(null);
