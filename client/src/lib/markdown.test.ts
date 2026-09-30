@@ -316,6 +316,20 @@ describe('messageSnippetText', () => {
     expect(messageSnippetText('<@&7> review', undefined, new Map([['7', 'Design']]))).toBe('@Design review');
   });
 
+  it('names an event when the caller knows it, and says "an event" when it does not', async () => {
+    const { messageSnippetText } = await import('./markdown');
+    const events = new Map([['7002', 'Movie night']]);
+    expect(messageSnippetText('is <event:7002> still on?', undefined, undefined, undefined, events)).toBe(
+      'is Movie night still on?',
+    );
+    expect(messageSnippetText('is <event:7003> still on?', undefined, undefined, undefined, events)).toBe(
+      'is an event still on?',
+    );
+    expect(messageSnippetText('is <event:7002> still on?')).toBe('is an event still on?');
+    // A name the map holds as nothing is no name.
+    expect(messageSnippetText('<event:7002>', undefined, undefined, undefined, new Map([['7002', '']]))).toBe('an event');
+  });
+
   it('keeps line breaks a snippet can wrap on', async () => {
     const { messageSnippetText } = await import('./markdown');
     expect(messageSnippetText('first line\nsecond line')).toBe('first line\nsecond line');

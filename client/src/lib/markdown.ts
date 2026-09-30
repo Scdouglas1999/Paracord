@@ -696,13 +696,15 @@ export function messagePreviewText(
  * never unwrapped — the word "spoiler" stands in for its content so a query
  * cannot leak what was hidden. Mentions resolve through the same maps the
  * preview uses; a channel mention resolves to its name when the caller has
- * the channel catalog, "#channel" when it does not.
+ * the channel catalog, "#channel" when it does not; an event token (`<event:id>`)
+ * reads as the event's name when the caller knows it and "an event" when not.
  */
 export function messageSnippetText(
   content: string,
   names?: ReadonlyMap<string, string>,
   roleNames?: ReadonlyMap<string, string>,
   channelNames?: ReadonlyMap<string, string>,
+  eventNames?: ReadonlyMap<string, string>,
 ): string {
   return stripMarkdown(
     content
@@ -715,7 +717,7 @@ export function messageSnippetText(
     .replace(/<@!?(\d+)>/g, (_match, id: string) => `@${names?.get(id) ?? 'someone'}`)
     .replace(/<@&(\d+)>/g, (_match, id: string) => `@${roleNames?.get(id) ?? 'role'}`)
     .replace(/<#(\d+)>/g, (_match, id: string) => `#${channelNames?.get(id) ?? 'channel'}`)
-    .replace(/<event:\d+>/g, 'an event')
+    .replace(/<event:(\d+)>/g, (_match, id: string) => eventNames?.get(id) || 'an event')
     .replace(/[^\S\n]+/g, ' ')
     .replace(/\n{3,}/g, '\n\n')
     .replace(/^[ \t]+|[ \t]+$/gm, '')
