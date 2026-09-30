@@ -329,8 +329,10 @@ describe('people', () => {
     unmount();
     joined();
     renderStage();
+    // A camera fills its tile (cropped), never letterboxed.
     expect(call.subscribeVideo).toHaveBeenCalledWith('brendan', expect.any(HTMLCanvasElement), expect.any(Function), {
       preferredTrackId: 'camera',
+      fit: 'cover',
     });
   });
 

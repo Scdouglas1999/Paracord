@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import type { MediaEngine } from '../../../lib/media/mediaEngine';
 import type { StagePerson } from './stageModel';
 import { TALKER_HOLD_MS, TheaterPeople } from './TheaterPeople';
 
@@ -47,6 +48,19 @@ afterEach(() => {
 });
 
 describe('TheaterPeople', () => {
+  it("draws the talker's camera filling its tile once joined", () => {
+    const subscribeVideo = vi.fn(() => () => {});
+    const engine = { subscribeVideo } as unknown as MediaEngine;
+    render(
+      <TheaterPeople people={[BRENDAN, VINCENT]} callEngine={engine} joined realVoice={false} watchedId="vincent" onSwitch={vi.fn()} />,
+    );
+    expect(subscribeVideo).toHaveBeenCalledTimes(1);
+    expect(subscribeVideo).toHaveBeenCalledWith('brendan', expect.any(HTMLCanvasElement), expect.any(Function), {
+      preferredTrackId: 'camera',
+      fit: 'cover',
+    });
+  });
+
   it('gives the talker the tile and everyone else a face, rings and mic-off included', () => {
     renderPeople([BRENDAN, VINCENT, NICK]);
     const tiles = document.querySelectorAll('.glass-stage__tile');
