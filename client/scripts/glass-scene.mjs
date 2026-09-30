@@ -21,7 +21,7 @@
 //
 // States live in glass-scene/shots.mjs; adding one is one small object there.
 // A holder prints its pid; `kill -USR2 <pid>` makes the cast rejoin in fresh
-// browsers (currently refused by the product, see docs/design/glass-g3-checkpoint.md).
+// browsers.
 //
 // Options
 //   --base <url>        instance (default http://127.0.0.1:$PARACORD_LIVE_PORT or :18420)

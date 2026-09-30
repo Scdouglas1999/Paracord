@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { channelApi } from '../../api/channels';
 import { guildApi } from '../../api/guilds';
+import { voiceApi } from '../../api/voice';
 import { toast } from '../../stores/toastStore';
 import { ChannelType, type Channel, type Role } from '../../types';
 import { ChannelManager } from './ChannelManager';
@@ -23,6 +24,13 @@ vi.mock('../../api/channels', () => ({
     getFollowers: vi.fn(),
     addFollower: vi.fn(),
     removeFollower: vi.fn(),
+  },
+}));
+
+vi.mock('../../api/voice', () => ({
+  voiceApi: {
+    getListenIn: vi.fn(),
+    setListenIn: vi.fn(),
   },
 }));
 
@@ -73,6 +81,18 @@ const announcementChannel: Channel = {
   guild_id: 'guild-1',
   name: 'updates',
   position: 2,
+  nsfw: false,
+  parent_id: 'cat-1',
+  created_at: '2026-01-01T00:00:00.000Z',
+};
+
+const voiceChannel: Channel = {
+  id: 'voice-1',
+  type: ChannelType.Voice,
+  channel_type: ChannelType.Voice,
+  guild_id: 'guild-1',
+  name: 'Lounge',
+  position: 3,
   nsfw: false,
   parent_id: 'cat-1',
   created_at: '2026-01-01T00:00:00.000Z',
@@ -171,5 +191,35 @@ describe('ChannelManager', () => {
     expect(await screen.findByText('Channel features')).toBeInTheDocument();
     expect(screen.getByText('Automation and privacy controls that apply only to #general.')).toBeInTheDocument();
     expect(channelApi.getFeatureSettings).toHaveBeenCalledWith('channel-1');
+  });
+
+  it('reads and turns off listening in for a voice channel', async () => {
+    vi.mocked(voiceApi.getListenIn).mockResolvedValue(true);
+    vi.mocked(voiceApi.setListenIn).mockResolvedValue(false);
+    renderChannelManager([category, voiceChannel]);
+    const toggle = await screen.findByRole('switch', { name: /listen in to Lounge/i });
+    await waitFor(() => expect(toggle).not.toBeDisabled());
+    expect(toggle).toHaveAttribute('aria-checked', 'true');
+    await userEvent.click(toggle);
+    expect(voiceApi.setListenIn).toHaveBeenCalledWith('voice-1', false);
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'));
+  });
+
+  it('keeps the switch honest when the server refuses the change', async () => {
+    vi.mocked(voiceApi.getListenIn).mockResolvedValue(true);
+    vi.mocked(voiceApi.setListenIn).mockRejectedValue(new Error('Missing Manage Channels'));
+    renderChannelManager([category, voiceChannel]);
+    const toggle = await screen.findByRole('switch', { name: /listen in to Lounge/i });
+    await waitFor(() => expect(toggle).not.toBeDisabled());
+    await userEvent.click(toggle);
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(toggle).toHaveAttribute('aria-checked', 'true');
+  });
+
+  it('leaves the switch disabled when the setting cannot be read', async () => {
+    vi.mocked(voiceApi.getListenIn).mockRejectedValue(new Error('offline'));
+    renderChannelManager([category, voiceChannel]);
+    expect(await screen.findByText('Listening in (could not load)')).toBeInTheDocument();
+    expect(screen.getByRole('switch', { name: /listen in to Lounge/i })).toBeDisabled();
   });
 });

@@ -52,17 +52,28 @@
    transitional adapters must beat the utilities on the Lantern components
    they fit into the frame. */
 @import './glass-layout.css';
+/* The room behind the panes (WP-G8). Unlayered, after the frame. */
 @import './glass-room.css';
 @import './glass-conversation.css';
+/* The call pill in the header's slot (WP-G12). Unlayered, after the header rules it refines. */
+@import './glass-pill.css';
+/* The stage: the stream beside the conversation, its people and controls (WP-G14).
+   Unlayered, after the frame and the pill it grows out of. */
+@import './glass-stage.css';
 /* The places panel (WP-G9). Unlayered, like the frame it fills. */
 /* The Glass timeline: bubbles in the column (WP-G10). */
 @import './glass-places.css';
 @import './glass-timeline.css' layer(components);
+/* What a message carries besides words: media, reactions, the catch-up divider,
+   inline chips and the plan card (WP-G13). After the timeline it refines. */
 @import './glass-cards.css' layer(components);
+/* The pages that render inside the conversation pane: Home, Friends, Messages,
+   a server's Overview, a forum, the incoming-call notice (WP-G19). */
 @import './glass-pages.css' layer(components);
+/* Sheets that slide over the conversation pane, and the panels they host
+   (WP-G18). Unlayered, after the frame and the conversation: it restyles the
+   Lantern panels in place. */
 @import './glass-sheets.css';
-@import './glass-pill.css';
-@import './glass-stage.css';
 /* The conversation's header and message box (WP-G11). Unlayered, after the
    frame: it refines the frame's region rules. */
 @import './components.css' layer(components);
