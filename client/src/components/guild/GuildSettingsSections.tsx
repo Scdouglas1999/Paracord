@@ -239,7 +239,7 @@ export function OverviewSection({
       <section className="pc-well grid grid-cols-2 gap-y-4 divide-border-subtle px-5 py-4 sm:grid-cols-4 sm:divide-x">
         {stats.map((stat) => (
           <div key={stat.label} className="px-1 first:pl-0 sm:px-5 sm:first:pl-1">
-            <div className="pc-mono text-title text-text-primary">{stat.value}</div>
+            <div className="glass-instrument text-title text-text-primary">{stat.value}</div>
             <div className="mt-0.5 text-meta text-text-muted">{stat.label}</div>
           </div>
         ))}
@@ -886,7 +886,7 @@ export function MembersSection({
                       </div>
                     )}
                     <div className="flex items-center gap-2.5">
-                      <Button size="sm" onClick={() => onSaveMemberRoles(member.user.id)}>
+                      <Button size="sm" variant="glass" onClick={() => onSaveMemberRoles(member.user.id)}>
                         Save roles
                       </Button>
                       <Button variant="ghost" size="sm" onClick={onCancelEditingMemberRoles}>
@@ -971,7 +971,7 @@ export function InvitesSection({
           />
         ) : (
           <>
-            <div className="hidden items-center gap-3 border-b border-border-subtle pb-2 text-section text-text-faint sm:flex">
+            <div className="hidden items-center gap-3 border-b border-border-subtle pb-2 glass-kicker text-text-faint sm:flex">
               <span className="flex-1">Code</span>
               <span className="w-24">Uses</span>
               <span className="w-28">Expires</span>
@@ -984,10 +984,10 @@ export function InvitesSection({
                   className="group flex flex-col items-start gap-1.5 py-3 sm:flex-row sm:items-center sm:gap-3"
                 >
                   <span className="flex-1 pc-mono text-label text-text-primary">{invite.code}</span>
-                  <span className="pc-mono text-meta text-text-muted sm:w-24">
+                  <span className="glass-instrument text-meta text-text-muted sm:w-24">
                     {invite.uses}/{invite.max_uses || '∞'}
                   </span>
-                  <span className="pc-mono text-meta text-text-muted sm:w-28">
+                  <span className="glass-instrument text-meta text-text-muted sm:w-28">
                     {inviteExpiryLabel(invite)}
                   </span>
                   <Button
@@ -1309,7 +1309,7 @@ export function WebhooksSection({
               </Button>
             </div>
             <label className="flex flex-wrap items-center gap-2 text-meta text-text-muted">
-              <span className="text-section text-text-faint">Filter</span>
+              <span className="text-[13px] font-medium text-text-secondary">Filter</span>
               <Select
                 className="w-auto min-w-[12rem]"
                 value={webhookFilterChannelId}
@@ -1373,7 +1373,7 @@ export function WebhooksSection({
                         <span className="text-label text-text-primary">{webhook.name}</span>
                       )}
                       <Chip size="sm">#{channelNameById.get(webhook.channel_id) || 'unknown'}</Chip>
-                      <span className="pc-mono text-meta text-text-muted">Created {createdLabel}</span>
+                      <span className="glass-instrument text-meta text-text-muted">Created {createdLabel}</span>
                     </div>
 
                     {/* A read-only readout is a well (§1.1), never a bordered box. */}
@@ -1566,7 +1566,7 @@ export function BotsSection({
                   {entry.application.description && (
                     <p className="truncate text-meta text-text-muted">{entry.application.description}</p>
                   )}
-                  <p className="pc-mono text-meta text-text-muted">
+                  <p className="glass-instrument text-meta text-text-muted">
                     Added {new Date(entry.install.created_at).toLocaleDateString()}
                   </p>
                 </div>
@@ -1737,11 +1737,11 @@ export function ReportsSection({
                         <span className="capitalize">{targetType}</span> report on{' '}
                         <span className="pc-mono">{targetId}</span>
                       </div>
-                      <div className="pc-mono text-meta text-text-muted">
+                      <div className="glass-instrument text-meta text-text-muted">
                         by {reporterName} · {createdLabel}
                       </div>
                       {isQuarantineReport && (
-                        <div className="mt-1 text-section text-text-faint">AutoMod quarantine review</div>
+                        <div className="glass-kicker mt-1 text-text-faint">AutoMod quarantine review</div>
                       )}
                     </div>
                     <Chip size="sm" className="capitalize">
@@ -1947,7 +1947,7 @@ export function AuditLogSection({
                 <li key={entry.id} className="py-3">
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-label text-text-primary">{label}</span>
-                    <span className="shrink-0 pc-mono text-meta text-text-muted">
+                    <span className="shrink-0 glass-instrument text-meta text-text-muted">
                       {new Date(entry.created_at).toLocaleString()}
                     </span>
                   </div>
@@ -2108,7 +2108,6 @@ export function ModerationTemplatesSection({
                   type="number"
                   min={1}
                   max={43200}
-                  className="pc-mono"
                   value={durationMinutes}
                   onChange={(e) => setDurationMinutes(Number(e.target.value))}
                 />
@@ -2178,7 +2177,7 @@ export function ModerationTemplatesSection({
                         {ACTION_TYPE_LABELS[template.action_type] ?? `Type ${template.action_type}`}
                       </Chip>
                       {template.action_type === 2 && template.duration_minutes != null && (
-                        <span className="pc-mono text-meta text-text-muted">{template.duration_minutes}m</span>
+                        <span className="glass-instrument text-meta text-text-muted">{template.duration_minutes}m</span>
                       )}
                     </div>
                     {template.reason_template && (

@@ -150,7 +150,7 @@ export function GuildWelcomeScreen({ guild, channels, onDismiss }: GuildWelcomeS
                 {Array.from(categories.entries()).map(([catId, cat]) => (
                   <div key={catId || '__uncategorized'}>
                     {catId && (
-                      <div className="mb-0.5 mt-2 px-2 text-section text-text-faint">
+                      <div className="mb-0.5 mt-2 px-2 glass-kicker text-text-faint">
                         {cat.name}
                       </div>
                     )}

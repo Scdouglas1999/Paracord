@@ -13,11 +13,12 @@ export interface SwitchProps
 }
 
 /**
- * Switch — the one boolean control in the app (spec §1.1, §3, §9).
+ * Switch: the one boolean control in the app (docs/glass-spec.md §1, §9).
  *
- * Off is a **well**: recessed, matte, with the inset shadow every other
- * recessed control carries. On is the emerald — an action you have taken, not a
- * light (§6.3: a light token would assert that somebody is in a room).
+ * Off is a glass capsule (the glass fill, a muted knob). On is cream with a dark
+ * knob: white means it is for you, the way the send circle turns cream (§1.3).
+ * Amber stays with what is live, so the knob carries no glow. Hover is one step
+ * lighter, press one step darker, over 120ms; nothing scales.
  *
  * `role="switch"` + `aria-checked` give assistive tech the state; the knob is
  * only the visual half of it.
@@ -49,12 +50,12 @@ export const Switch = React.forwardRef<HTMLButtonElement, SwitchProps>(function 
       onClick={() => onChange(!checked)}
       className={cn(
         'pc-focusable relative inline-flex shrink-0 items-center rounded-[var(--radius-full)]',
-        'transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]',
-        'disabled:cursor-not-allowed disabled:opacity-60',
+        'transition-colors duration-[var(--glass-ms)] ease-[var(--glass-ease)]',
+        'disabled:cursor-not-allowed disabled:opacity-40',
         track,
         checked
-          ? 'bg-accent-primary shadow-[var(--shadow-chip)]'
-          : 'bg-bg-well shadow-[var(--shadow-well)]',
+          ? 'bg-accent-primary hover:bg-accent-primary-hover active:bg-accent-primary-active'
+          : 'bg-[var(--glass-fill)] shadow-[var(--glass-edge)] hover:bg-[var(--glass-fill-hover)] active:bg-[var(--glass-fill-press)]',
         className,
       )}
       {...props}
@@ -63,14 +64,10 @@ export const Switch = React.forwardRef<HTMLButtonElement, SwitchProps>(function 
         aria-hidden
         className={cn(
           'relative inline-block rounded-[var(--radius-full)]',
-          // §5.1: the thumb slides on the ease-out over --duration-normal,
-          // never a jump; its light (--thumb-glow) fades in over the warm-up
-          // beat and only while the switch is on.
+          // The thumb slides on the ease-out over --duration-normal, never a jump.
           'transition-transform duration-[var(--duration-normal)] ease-[var(--ease-out)]',
-          'after:absolute after:inset-0 after:rounded-[var(--radius-full)] after:content-[""]',
-          'after:bg-[var(--thumb-glow)] after:transition-opacity after:duration-[var(--duration-warm-up)] after:ease-[var(--ease-out)]',
           knob,
-          checked ? 'bg-text-on-accent after:opacity-100' : 'bg-text-muted after:opacity-0',
+          checked ? 'bg-text-on-accent' : 'bg-text-secondary',
           travel,
         )}
       />
@@ -110,11 +107,11 @@ export function ToggleRow({
   return (
     <div className={cn('flex items-start justify-between gap-4 py-3', className)}>
       <div className="min-w-0">
-        <div id={labelId} className="text-label text-text-primary">
+        <div id={labelId} className="text-[15px] font-medium text-text-primary">
           {label}
         </div>
         {description && (
-          <p className="mt-0.5 text-meta leading-relaxed text-text-secondary">{description}</p>
+          <p className="mt-0.5 text-[13px] leading-relaxed text-text-secondary">{description}</p>
         )}
         {children}
       </div>

@@ -213,7 +213,7 @@ export function StickersSection({ guildId, canManage }: StickersSectionProps) {
       <section className="border-t border-border-subtle pt-6">
         <div className="flex items-baseline justify-between gap-3">
           <GroupLabel>Server stickers</GroupLabel>
-          <span className="pc-mono text-meta text-text-muted">{stickers.length} of {MAX_STICKERS}</span>
+          <span className="glass-instrument text-meta text-text-muted">{stickers.length} of {MAX_STICKERS}</span>
         </div>
         {loading ? (
           <p className="mt-4 text-body text-text-secondary">Loading stickers…</p>

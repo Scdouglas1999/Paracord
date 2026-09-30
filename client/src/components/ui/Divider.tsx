@@ -10,9 +10,9 @@ export interface DividerProps extends React.HTMLAttributes<HTMLElement> {
 }
 
 /**
- * Divider — a hairline, and only where a plate needs an internal division
- * (spec §1.6). Depth between surfaces comes from the plate/well recipes; a
- * border is never how two surfaces are told apart.
+ * Divider: a hairline, and only where a pane needs an internal division (the
+ * catch-up divider's rule). Depth between surfaces comes from tone; a border is
+ * never how two surfaces are told apart. A label is the instrument cut.
  */
 export const Divider = React.forwardRef<HTMLElement, DividerProps>(function Divider(
   { orientation = 'horizontal', strong = false, label, className, ...props },
@@ -29,7 +29,7 @@ export const Divider = React.forwardRef<HTMLElement, DividerProps>(function Divi
         {...props}
       >
         <span className={cn('h-px flex-1', line)} aria-hidden />
-        <span className="shrink-0 text-meta text-text-faint">{label}</span>
+        <span className="glass-instrument shrink-0 text-meta font-semibold text-text-secondary">{label}</span>
         <span className={cn('h-px flex-1', line)} aria-hidden />
       </div>
     );

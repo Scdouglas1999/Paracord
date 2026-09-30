@@ -289,7 +289,7 @@ export function SoundboardSection({ guildId, canManage }: SoundboardSectionProps
               onChange={(event) => setVolume(Number(event.target.value))}
               className="h-1.5 w-40 cursor-pointer appearance-none rounded-full bg-bg-mod-strong accent-accent-primary [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent-primary"
             />
-            <span className="pc-mono w-10 text-meta text-text-muted">{volume}%</span>
+            <span className="glass-instrument w-10 text-meta text-text-muted">{volume}%</span>
           </div>
           <p className="mt-3 max-w-prose text-meta leading-relaxed text-text-muted">
             {full
@@ -302,7 +302,7 @@ export function SoundboardSection({ guildId, canManage }: SoundboardSectionProps
       <section className="border-t border-border-subtle pt-6">
         <div className="flex items-baseline justify-between gap-3">
           <GroupLabel>Server sounds</GroupLabel>
-          <span className="pc-mono text-meta text-text-muted">{sounds.length} of {SOUNDBOARD_MAX_PER_GUILD}</span>
+          <span className="glass-instrument text-meta text-text-muted">{sounds.length} of {SOUNDBOARD_MAX_PER_GUILD}</span>
         </div>
         {loading ? (
           <p className="mt-4 text-body text-text-secondary">Loading sounds…</p>
@@ -405,7 +405,7 @@ export function SoundboardSection({ guildId, canManage }: SoundboardSectionProps
                         onBlur={() => void setSoundVolume(sound, sound.volume)}
                         className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-bg-mod-strong accent-accent-primary [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent-primary"
                       />
-                      <span className="pc-mono w-8 shrink-0 text-right text-[10px] text-text-faint">
+                      <span className="glass-instrument w-8 shrink-0 text-right text-meta text-text-faint">
                         {sound.volume}%
                       </span>
                     </div>

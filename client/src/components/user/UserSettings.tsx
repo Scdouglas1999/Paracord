@@ -1035,12 +1035,12 @@ export function UserSettings({ onClose }: UserSettingsProps) {
             )}
             {statusText && statusKind === 'success' && (
               <div
-                className="mb-6 flex items-center gap-2.5 pc-well px-4 py-3 shadow-[var(--shadow-chip)]"
+                className="mb-6 flex items-center gap-2.5 rounded-[var(--r-row)] bg-bg-raised px-4 py-3 shadow-[var(--sh-content)]"
                 role="status"
                 aria-live="polite"
               >
-                <CheckCircle2 size={18} className="shrink-0 text-accent-success" />
-                <span className="text-label text-text-primary">{statusText}</span>
+                <CheckCircle2 size={18} className="shrink-0 text-text-primary" />
+                <span className="text-[15px] text-text-primary">{statusText}</span>
               </div>
             )}
 
@@ -1101,7 +1101,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
 
                 {/* Public profile */}
                 <section>
-                  <h3 className="text-section text-text-muted">Public profile</h3>
+                  <h3 className="glass-kicker text-text-muted">Public profile</h3>
                   <div className="mt-2 divide-y divide-border-subtle">
                     <div className="flex flex-wrap items-center justify-between gap-4 py-4">
                       <div className="min-w-0">
@@ -1189,7 +1189,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
 
                 {/* Security & sign-in */}
                 <section className="mt-9 border-t border-border-subtle pt-8">
-                  <h3 className="text-section text-text-muted">Security &amp; sign-in</h3>
+                  <h3 className="glass-kicker text-text-muted">Security &amp; sign-in</h3>
 
                   <div className="mt-5">
                     <div className="text-label text-text-primary">Email address</div>
@@ -1305,7 +1305,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                             Disable 2FA
                           </Button>
                         ) : (
-                          <Button size="sm" loading={mfaLoading} onClick={() => void startMfaSetup()}>
+                          <Button size="sm" variant="glass" loading={mfaLoading} onClick={() => void startMfaSetup()}>
                             Enable 2FA
                           </Button>
                         )
@@ -1315,10 +1315,10 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                     {mfaStatus && (
                       <div
                         className={cn(
-                          'mt-3 rounded-[var(--radius-well)] border px-4 py-3 text-body font-medium',
+                          'mt-3 rounded-[var(--r-row)] px-4 py-3 text-[15px] font-medium',
                           mfaStatus.includes('enabled') || mfaStatus.includes('disabled')
-                            ? 'border-accent-success/30 bg-success-tint text-accent-success'
-                            : 'border-accent-danger/30 bg-danger-tint text-accent-danger'
+                            ? 'bg-bg-raised text-text-primary'
+                            : 'bg-danger-tint text-accent-danger'
                         )}
                         role={mfaStatus.includes('enabled') || mfaStatus.includes('disabled') ? 'status' : 'alert'}
                         aria-live={mfaStatus.includes('enabled') || mfaStatus.includes('disabled') ? 'polite' : 'assertive'}
@@ -1329,7 +1329,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
 
                     {mfaBackupCodes.length > 0 && (
                       <div className="mt-4 max-w-md">
-                        <div className="text-section text-accent-warning">Save these backup codes</div>
+                        <div className="glass-kicker text-text-primary">Save these backup codes</div>
                         <div className="mt-2 pc-well p-3 font-code text-body leading-relaxed text-text-primary">
                           {mfaBackupCodes.map((code) => (
                             <div key={code}>{code}</div>
@@ -1367,7 +1367,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                           onChange={(e) => setMfaVerifyCode(e.target.value.replace(/\D/g, ''))}
                         />
                         <div className="flex gap-3">
-                          <Button loading={mfaLoading} disabled={mfaVerifyCode.length < 6} onClick={() => void verifyMfaSetup()}>
+                          <Button variant="glass" loading={mfaLoading} disabled={mfaVerifyCode.length < 6} onClick={() => void verifyMfaSetup()}>
                             Confirm &amp; Enable
                           </Button>
                           <Button
@@ -1443,7 +1443,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                                 {session.user_agent || session.device_id || 'Unknown device'}
                               </span>
                               {session.current && (
-                                <span className="rounded-[var(--radius-chip)] bg-success-tint px-1.5 py-0.5 text-meta font-semibold text-accent-success">
+                                <span className="rounded-[var(--r-chip)] bg-[var(--chip-count)] px-1.5 py-0.5 text-[11px] font-bold text-text-primary">
                                   Current
                                 </span>
                               )}
@@ -1474,7 +1474,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
 
                 {/* Your data */}
                 <section className="mt-9 border-t border-border-subtle pt-8">
-                  <h3 className="text-section text-text-muted">Your data</h3>
+                  <h3 className="glass-kicker text-text-muted">Your data</h3>
                   <div className="mt-4 flex flex-wrap items-center justify-between gap-4">
                     <div className="min-w-0">
                       <div className="text-label text-text-primary">Download your data</div>
@@ -1489,7 +1489,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
 
                 {/* Device security */}
                 <section className="mt-9 border-t border-border-subtle pt-8">
-                  <h3 className="text-section text-text-muted">Device security</h3>
+                  <h3 className="glass-kicker text-text-muted">Device security</h3>
                   <div className="mt-2 divide-y divide-border-subtle">
                     <ToggleRow
                       title="Device crypto security"
@@ -1551,7 +1551,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 </section>
 
                 <section className="mt-9 border-t border-border-subtle pt-8">
-                  <h3 className="text-section text-text-muted">Display</h3>
+                  <h3 className="glass-kicker text-text-muted">Display</h3>
                   <div className="mt-2 divide-y divide-border-subtle">
                     <div className="flex flex-wrap items-center justify-between gap-4 py-4">
                       <div className="min-w-0">
@@ -1586,7 +1586,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 </section>
 
                 <section className="mt-9 border-t border-border-subtle pt-8">
-                  <h3 className="text-section text-text-muted">Custom CSS</h3>
+                  <h3 className="glass-kicker text-text-muted">Custom CSS</h3>
                   <p className="mt-2 max-w-xl text-body text-text-secondary">
                     For power users — inject your own styles. Applies instantly on save.
                   </p>
@@ -1608,9 +1608,9 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                   description="Choose your devices and how your mic behaves in calls."
                 />
                 <section>
-                  <h3 className="text-section text-text-muted">Devices</h3>
+                  <h3 className="glass-kicker text-text-muted">Devices</h3>
                   {deviceNamingWarning && (
-                    <p className="mt-2 rounded-md bg-bg-tertiary px-3 py-2 text-meta text-text-secondary">
+                    <p className="pc-well mt-2 px-3 py-2 text-[13px] text-text-secondary">
                       {deviceNamingWarning}
                     </p>
                   )}
@@ -1708,7 +1708,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 </section>
 
                 <section className="mt-9 border-t border-border-subtle pt-8">
-                  <h3 className="text-section text-text-muted">Input mode</h3>
+                  <h3 className="glass-kicker text-text-muted">Input mode</h3>
                   <div className="mt-4 flex flex-wrap items-center justify-between gap-4">
                     <div className="min-w-0">
                       <div className="text-label text-text-primary">How your mic activates</div>
@@ -1730,7 +1730,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 </section>
 
                 <section className="mt-9 border-t border-border-subtle pt-8">
-                  <h3 className="text-section text-text-muted">Processing</h3>
+                  <h3 className="glass-kicker text-text-muted">Processing</h3>
                   <div className="mt-2 divide-y divide-border-subtle">
                     <ToggleRow
                       title="Noise suppression"
@@ -1754,7 +1754,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 </section>
 
                 <section className="mt-9 border-t border-border-subtle pt-8">
-                  <h3 className="text-section text-text-muted">Soundboard</h3>
+                  <h3 className="glass-kicker text-text-muted">Soundboard</h3>
                   <div className="mt-2 divide-y divide-border-subtle">
                     <ToggleRow
                       title="Play soundboard sounds"
@@ -1790,7 +1790,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                           }
                           className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-bg-mod-strong accent-accent-primary [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent-primary"
                         />
-                        <span className="pc-mono w-10 shrink-0 text-right text-meta text-text-muted">
+                        <span className="glass-instrument w-10 shrink-0 text-right text-meta text-text-muted">
                           {Math.round(Number(mergedNotifications['soundboardVolume'] ?? 100))}%
                         </span>
                       </div>
@@ -1800,7 +1800,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
 
                 {systemAudioGrant && (
                   <section className="mt-9 border-t border-border-subtle pt-8">
-                    <h3 className="text-section text-text-muted">Desktop audio</h3>
+                    <h3 className="glass-kicker text-text-muted">Desktop audio</h3>
                     {systemAudioGrant.required ? (
                       <>
                         <p className="mt-2 max-w-xl text-body text-text-secondary">
@@ -1840,7 +1840,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 )}
 
                 <section className="mt-9 border-t border-border-subtle pt-8">
-                  <h3 className="text-section text-text-muted">Trouble with calls</h3>
+                  <h3 className="glass-kicker text-text-muted">Trouble with calls</h3>
                   <p className="mt-2 max-w-xl text-body text-text-secondary">
                     Calls travel over a different network path than chat, so they can fail on their
                     own. The connection check tests your microphone, speaker, this device&rsquo;s
@@ -1905,12 +1905,12 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                       }}
                     >
                       {notifPermission === 'denied' && notifEnabled && (
-                        <p className="mt-1.5 text-meta text-accent-warning">
+                        <p className="mt-1.5 text-[13px] font-medium text-text-primary">
                           Your system blocked notification permission. Toggle again to ask once more.
                         </p>
                       )}
                       {notifPermission === 'granted' && notifEnabled && (
-                        <p className="mt-1.5 text-meta text-accent-success">Permission granted.</p>
+                        <p className="mt-1.5 text-[13px] text-text-secondary">Permission granted.</p>
                       )}
                     </ToggleRow>
                     <ToggleRow
@@ -1970,7 +1970,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                         </p>
                       )}
                       {nowPlayingSupported && nowPlayingError && (
-                        <p className="mt-1.5 text-meta text-accent-warning" role="alert">
+                        <p className="mt-1.5 text-[13px] font-medium text-text-primary" role="alert">
                           {nowPlayingError}
                         </p>
                       )}
@@ -1990,7 +1990,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 </section>
 
                 <section className="mt-9 border-t border-border-subtle pt-8">
-                  <h3 className="text-section text-text-muted">Detected apps</h3>
+                  <h3 className="glass-kicker text-text-muted">Detected apps</h3>
                   <p className="mt-2 max-w-xl text-body text-text-secondary">
                     Turn off any app you'd rather keep private. Paracord stops reporting it right away.
                   </p>
@@ -2099,10 +2099,10 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 {identityStatus && (
                   <div
                     className={cn(
-                      'mb-6 rounded-[var(--radius-well)] border px-4 py-3 text-body font-medium',
+                      'mb-6 rounded-[var(--r-row)] px-4 py-3 text-[15px] font-medium',
                       identityStatus.toLowerCase().includes('failed')
-                        ? 'border-accent-danger/30 bg-danger-tint text-accent-danger'
-                        : 'border-accent-success/30 bg-success-tint text-accent-success'
+                        ? 'bg-danger-tint text-accent-danger'
+                        : 'bg-bg-raised text-text-primary'
                     )}
                     role={identityStatus.toLowerCase().includes('failed') ? 'alert' : 'status'}
                   >
@@ -2111,13 +2111,13 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 )}
 
                 <section>
-                  <h3 className="text-section text-text-muted">Current identity key</h3>
+                  <h3 className="glass-kicker text-text-muted">Current identity key</h3>
                   <p className="mt-2 max-w-xl text-body text-text-secondary">
                     Share this fingerprint with trusted contacts so they can confirm it's really you.
                   </p>
                   {ownIdentityFingerprint ? (
                     <div className="mt-3 pc-well px-4 py-3">
-                      <div className="text-section text-text-muted">Fingerprint</div>
+                      <div className="glass-kicker text-text-muted">Fingerprint</div>
                       <div className="mt-1.5 break-all font-code text-body text-text-primary">{ownIdentityFingerprint}</div>
                     </div>
                   ) : (
@@ -2128,7 +2128,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 </section>
 
                 <section className="mt-9 border-t border-border-subtle pt-8">
-                  <h3 className="text-section text-text-muted">Export identity</h3>
+                  <h3 className="glass-kicker text-text-muted">Export identity</h3>
                   <p className="mt-2 max-w-xl text-body text-text-secondary">
                     Download a signed bundle you can import into another Paracord instance.
                   </p>
@@ -2155,7 +2155,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 </section>
 
                 <section className="mt-9 border-t border-border-subtle pt-8">
-                  <h3 className="text-section text-text-muted">Import identity</h3>
+                  <h3 className="glass-kicker text-text-muted">Import identity</h3>
                   <p className="mt-2 max-w-xl text-body text-text-secondary">
                     Bring in a bundle from another instance. Imported data is merged with this account.
                   </p>
@@ -2166,7 +2166,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                       type="file"
                       accept=".json"
                       onChange={handleImportFileSelect}
-                      className="mt-2.5 block w-full max-w-md text-meta text-text-faint file:mr-3 file:h-[var(--h-control)] file:cursor-pointer file:rounded-[var(--radius-control)] file:border-0 file:bg-bg-raised file:px-3 file:text-label file:font-medium file:text-text-primary file:shadow-[var(--shadow-chip)] hover:file:bg-bg-mod-strong"
+                      className="mt-2.5 block w-full max-w-md text-meta text-text-faint file:mr-3 file:h-[var(--h-control)] file:cursor-pointer file:rounded-[var(--r-capsule)] file:border-0 file:bg-[var(--glass-fill)] file:px-3.5 file:text-[13px] file:font-semibold file:text-text-primary file:shadow-[var(--glass-edge)] hover:file:bg-[var(--glass-fill-hover)]"
                     />
                     {importFile && (
                       <p className="mt-2 text-meta text-text-secondary">Selected: {importFile.name}</p>
@@ -2175,7 +2175,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
 
                   {importPreview && (
                     <div className="mt-5 pc-well px-4 py-4">
-                      <div className="text-section text-text-muted">Import preview</div>
+                      <div className="glass-kicker text-text-muted">Import preview</div>
                       <dl className="mt-3 space-y-2 text-body">
                         {([
                           ['Origin instance', String(importPreview.origin_server ?? 'Unknown')],
@@ -2193,7 +2193,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                           </div>
                         ))}
                       </dl>
-                      <div className="mt-4 flex items-start gap-2.5 rounded-[var(--radius-well)] bg-warning-tint shadow-[var(--shadow-well)] px-3.5 py-3 text-meta text-accent-warning">
+                      <div className="pc-well mt-4 flex items-start gap-2.5 px-3.5 py-3 text-[13px] text-text-primary">
                         <ShieldAlert size={15} className="mt-0.5 shrink-0" />
                         <span>This merges the imported identity into your account. Profile fields will be overwritten.</span>
                       </div>
@@ -2215,9 +2215,9 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                   description="Administrative controls for this Paracord instance."
                 />
                 <section>
-                  <div className="rounded-[var(--radius-well)] bg-warning-tint shadow-[var(--shadow-well)] p-5">
+                  <div className="pc-well p-5">
                     <div className="flex items-start gap-3">
-                      <ShieldAlert size={18} className="mt-0.5 shrink-0 text-accent-warning" />
+                      <ShieldAlert size={18} className="mt-0.5 shrink-0 text-text-primary" />
                       <div className="min-w-0">
                         <h3 className="text-heading text-text-primary">Update &amp; restart</h3>
                         <p className="mt-1 max-w-xl text-body leading-relaxed text-text-secondary">

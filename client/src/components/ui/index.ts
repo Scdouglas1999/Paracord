@@ -1,16 +1,19 @@
 /**
- * The Lantern Stage primitive set (docs/lantern-stage-spec.md §1–§4, §9).
+ * The shared UI primitive set, on Glass (docs/glass-spec.md §1, §2, §9).
  *
  * These are the shared, prop-driven shells every package builds on: surfaces,
  * controls, rows and floating chrome, styled only from `src/styles/tokens.css`
  * and the `pc-*` recipes in `src/styles/primitives.css`. They carry no business
- * logic and no product copy.
+ * logic and no product copy. Content is solid and has no outline; controls are
+ * glass; hover is one step lighter and press one step darker, and nothing
+ * scales on press.
  *
- * The light-specific components (WindowMap, LitAvatar, HereNowStrip,
- * RoomThumbnail, StageTile) are WP1 and compose these.
+ * The Glass-only pieces (GlassButton, Pane, the glyphs) live in
+ * `components/glass/primitives`; `Button` and `IconButton` here use the same
+ * roles and tokens so a dialog and the call pill read as one system.
  *
  * `/design-tokens` (dev builds only) renders every token, type step, primitive
- * variant and state, in all four themes — start there.
+ * variant and state; start there.
  */
 export { Plate, Lamp, type PlateProps, type LampProps } from './Plate';
 export { Well, Raised, type WellProps, type RaisedProps } from './Well';

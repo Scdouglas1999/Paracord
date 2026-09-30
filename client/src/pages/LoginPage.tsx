@@ -359,7 +359,7 @@ export function LoginPage() {
     <button
       type="button"
       onClick={() => { setError(''); setSuccessMsg(''); setMfaCode(''); setMfaTicket(''); setView('login'); }}
-      className="text-label font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
+      className="text-label font-semibold text-text-link underline-offset-4 hover:underline"
     >
       Back to sign in
     </button>
@@ -395,7 +395,7 @@ export function LoginPage() {
               </Field>
             </AuthScroll>
 
-            <Button type="submit" loading={loading} disabled={loading || !mfaCode.trim()} className="w-full">
+            <Button size="lg" type="submit" loading={loading} disabled={loading || !mfaCode.trim()} className="w-full">
               Verify
             </Button>
 
@@ -433,7 +433,7 @@ export function LoginPage() {
               </Field>
             </AuthScroll>
 
-            <Button type="submit" loading={loading} disabled={loading} className="w-full">
+            <Button size="lg" type="submit" loading={loading} disabled={loading} className="w-full">
               Request reset token
             </Button>
 
@@ -441,7 +441,7 @@ export function LoginPage() {
               <button
                 type="button"
                 onClick={() => { setError(''); setSuccessMsg(''); setView('reset-password'); }}
-                className="font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
+                className="font-semibold text-text-link underline-offset-4 hover:underline"
               >
                 Enter token
               </button>
@@ -504,7 +504,7 @@ export function LoginPage() {
               </Field>
             </AuthScroll>
 
-            <Button type="submit" loading={loading} disabled={loading} className="w-full">
+            <Button size="lg" type="submit" loading={loading} disabled={loading} className="w-full">
               Set new password
             </Button>
 
@@ -512,7 +512,7 @@ export function LoginPage() {
               <button
                 type="button"
                 onClick={() => { setError(''); setSuccessMsg(''); setView('forgot-password'); }}
-                className="font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
+                className="font-semibold text-text-link underline-offset-4 hover:underline"
               >
                 Request a new token
               </button>
@@ -550,7 +550,7 @@ export function LoginPage() {
               </Field>
             </AuthScroll>
 
-            <Button type="submit" loading={loading} disabled={loading || !verifyEmailToken.trim()} className="w-full">
+            <Button size="lg" type="submit" loading={loading} disabled={loading || !verifyEmailToken.trim()} className="w-full">
               Verify email
             </Button>
 
@@ -609,11 +609,11 @@ export function LoginPage() {
               </Field>
             </AuthScroll>
 
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-meta text-text-muted">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] text-text-muted">
               <button
                 type="button"
                 onClick={() => { setError(''); setView('forgot-password'); }}
-                className="font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
+                className="font-semibold text-text-link underline-offset-4 hover:underline"
               >
                 Forgot your password?
               </button>
@@ -623,7 +623,7 @@ export function LoginPage() {
               <button
                 type="button"
                 onClick={() => { setError(''); setSuccessMsg(''); setView('verify-email'); }}
-                className="font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
+                className="font-semibold text-text-link underline-offset-4 hover:underline"
               >
                 Verify email token
               </button>
@@ -634,17 +634,17 @@ export function LoginPage() {
                 install reaches exactly this screen and nothing else. Its own
                 row: it is a different kind of way in from the two above, and a
                 wrapped middot reads as a typo. */}
-            <div className="text-meta text-text-muted">
+            <div className="text-[13px] text-text-muted">
               <button
                 type="button"
                 onClick={() => navigate('/recover')}
-                className="font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
+                className="font-semibold text-text-link underline-offset-4 hover:underline"
               >
                 Recover from phrase
               </button>
             </div>
 
-            <Button
+            <Button size="lg"
               type="submit"
               loading={loading}
               disabled={loading || Date.now() < cooldownUntil}
@@ -657,14 +657,14 @@ export function LoginPage() {
               Need an account?{' '}
               <Link
                 to="/register"
-                className="font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
+                className="font-semibold text-text-link underline-offset-4 hover:underline"
               >
                 Create one
               </Link>
             </p>
 
             {serverUrl && (
-              <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-border-subtle pt-5 text-meta text-text-muted">
+              <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-border-subtle pt-5 text-[13px] text-text-muted">
                 <span>Connected to</span>
                 <span className="font-code text-text-secondary">{serverUrl}</span>
                 <span className="text-text-faint" aria-hidden="true">
@@ -673,7 +673,7 @@ export function LoginPage() {
                 <button
                   type="button"
                   onClick={handleChangeServer}
-                  className="font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
+                  className="font-semibold text-text-link underline-offset-4 hover:underline"
                 >
                   Change instance
                 </button>

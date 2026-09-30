@@ -2,18 +2,18 @@ import * as React from "react"
 import { cn } from "../../lib/utils"
 
 /**
- * The three bare form controls, on the Lantern Stage well recipe
- * (docs/lantern-stage-spec.md §1.1, §3, §9).
+ * The three bare form controls (docs/glass-spec.md §2.3, §2.4, §9).
  *
- * A field you type into is a **well**: recessed inside its plate, depth from
- * the inset shadow, never a border-only edge. Focus is the §9 ring layered over
- * that shadow; an invalid field carries a 1px danger edge in the same slot.
+ * A field you type into is a **well**: recessed inside its pane at radius 12, a
+ * 15px body-role value and a placeholder at the token's own ink. Focus is the
+ * §9 ring layered over the well's depth; an invalid field carries a 1px danger
+ * edge in the same slot.
  *
  * {@link TextField} composes an Input with its label, hint and error wiring —
  * prefer it. These are for the cases that already own their labeling.
  */
 const fieldBase = [
-    "pc-well w-full text-label text-text-primary placeholder:text-text-faint",
+    "pc-well w-full rounded-[var(--r-ctl)] text-[15px] text-text-primary placeholder:text-[var(--ink-placeholder)]",
     "outline-none",
     "focus-visible:shadow-[var(--shadow-well),var(--focus-ring)]",
     "disabled:cursor-not-allowed disabled:opacity-60",

@@ -480,7 +480,7 @@ export function EventList({ guildId }: EventListProps) {
         <div className="min-w-0">
           <h2 className="pc-display text-title text-text-primary">Events</h2>
           <p className="mt-1.5 max-w-prose text-body text-text-secondary">
-            <span className="pc-mono">{upcoming.length}</span>
+            <span className="glass-instrument">{upcoming.length}</span>
             {upcoming.length === 1 ? ' event is' : ' events are'} still to come. Everyone who marks
             themselves interested gets the reminder.
           </p>
@@ -534,7 +534,7 @@ export function EventList({ guildId }: EventListProps) {
         <>
           {upcoming.length > 0 && (
             <section className="flex flex-col gap-3">
-              <h3 className="text-section text-text-faint">Upcoming</h3>
+              <h3 className="glass-kicker text-text-faint">Upcoming</h3>
               {upcoming.map((event) => (
                 <EventCard
                   key={event.id}
@@ -554,7 +554,7 @@ export function EventList({ guildId }: EventListProps) {
 
           {past.length > 0 && (
             <section className="flex flex-col gap-3">
-              <h3 className="text-section text-text-faint">Past events</h3>
+              <h3 className="glass-kicker text-text-faint">Past events</h3>
               {past.map((event) => (
                 <EventCard
                   key={event.id}
@@ -639,13 +639,13 @@ function EventCard({
         />
       )}
 
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+      <div className="flex flex-col gap-3">
         <div className="flex min-w-0 flex-1 gap-3">
           {day && (
             <div className="flex h-14 w-14 shrink-0 flex-col items-center justify-center rounded-[var(--radius-card)] bg-bg-raised shadow-[var(--shadow-raised)]">
-              <span className="pc-mono text-meta text-text-faint">{day.weekday}</span>
+              <span className="glass-instrument text-meta text-text-faint">{day.weekday}</span>
               <span className="pc-display text-name text-text-primary">{day.day}</span>
-              <span className="pc-mono text-meta text-text-faint">{day.month}</span>
+              <span className="glass-instrument text-meta text-text-faint">{day.month}</span>
             </div>
           )}
 
@@ -664,7 +664,7 @@ function EventCard({
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-meta text-text-faint">
               <span className="inline-flex items-center gap-1.5">
                 <Clock size={13} className="shrink-0" aria-hidden />
-                <span className="pc-mono">
+                <span className="glass-instrument">
                   {formatEventDate(event.scheduled_start)}
                   {event.scheduled_end && ` – ${formatEventDate(event.scheduled_end)}`}
                 </span>
@@ -678,7 +678,7 @@ function EventCard({
               {event.reminder_minutes && (
                 <span className="inline-flex items-center gap-1.5">
                   <Bell size={13} className="shrink-0" aria-hidden />
-                  <span className="pc-mono">{event.reminder_minutes}m</span> before
+                  <span className="glass-instrument">{event.reminder_minutes}m</span> before
                 </span>
               )}
               {event.location && (
@@ -702,13 +702,13 @@ function EventCard({
               )}
               <span className="inline-flex items-center gap-1.5">
                 <Users size={13} className="shrink-0" aria-hidden />
-                <span className="pc-mono">{`${event.user_count} interested`}</span>
+                <span className="glass-instrument">{`${event.user_count} interested`}</span>
               </span>
             </div>
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+        <div className="flex flex-wrap items-center gap-1">
           {!isPast && currentUserId && (
             <Button
               variant="ghost"
@@ -803,7 +803,7 @@ export function EventsIndicator({ guildId }: { guildId: string }) {
   if (count === 0) return null;
 
   return (
-    <Chip size="sm" tone="accent" className="pc-mono">
+    <Chip size="sm" tone="accent" className="glass-instrument">
       {count}
     </Chip>
   );

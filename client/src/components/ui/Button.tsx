@@ -4,78 +4,79 @@ import { Loader2 } from "lucide-react";
 import { cn } from "../../lib/utils";
 
 /**
- * Button — docs/lantern-stage-spec.md §2 (Label step), §3 (control heights and
- * radii), §9 (focus ring, hit targets).
+ * Button (docs/glass-spec.md §1.4, §1.5, §2.3, §9), on the same roles as the
+ * Glass primitives in `components/glass/primitives` (GlassButton):
  *
- * Four real variants:
- *   primary  solid emerald, near-black ink — an action you can take.
- *   light    white-light fill, ink text — the ONE button that uses a light
- *            token, and only inside a lit context (Join a room where people are
- *            actually talking). It is state, not emphasis: never use it to make
- *            a button "pop" (§0, §6.3).
- *   ghost    text-only, wash on hover — the default for toolbar actions.
- *   danger   the danger *well* carrying danger ink — leave, hang up, destroy.
- *            Never a saturated red fill.
+ *   primary  cream, dark ink, hover white, press #e8e3d8 (Join). The ONE filled
+ *            button on a screen: use it only where it is THE primary action of
+ *            the dialog or page ("Save changes", "Log in", "Confirm").
+ *   ghost    a text decision: transparent, ink, a wash on hover, a darker one on
+ *            press ("Cancel", "Back", "Skip").
+ *   glass    a control you press over content: a white fill at 12%, one step
+ *            lighter on hover, one darker on press. For an action that is not
+ *            the primary one ("Upload", "Copy", "Add").
+ *   danger   the danger *well* carrying the one danger ink: the button that
+ *            makes a destructive choice ("Delete channel", "Leave server").
+ *            Never a red fill.
  *
- * Sizes are the spec's control heights: sm 28, md 32 (default), lg 44 (phone).
- * `icon` is a square 32 and `icon-lg` a square 44, both meeting the §9 hit
- * target floor on their platform.
+ * Sizes: sm 32, md 36 (default), lg 44 (phone and the auth screens). Capsules
+ * for primary and glass, radius 12 for ghost (a text button). Hover is one
+ * token step lighter, press one step darker, 120ms ease-out; nothing scales.
  *
  * Legacy variant/size names (`default`, `destructive`, `secondary`, `outline`,
- * `link`) are kept as aliases so the un-restyled app keeps building; new code
- * uses the four above.
+ * `light`, `link`) are kept as aliases so the un-restyled app keeps building:
+ * `light` is the same cream as `primary` (Join is the light fill), `secondary`
+ * and `outline` are `glass`.
  */
+const PRIMARY =
+    "rounded-[var(--r-capsule)] bg-accent-primary text-text-on-accent hover:bg-accent-primary-hover active:bg-accent-primary-active";
+// `light` is the same cream (`--light-white` is `--join`); it keeps its own
+// token classes so a caller that asks for "the light fill" still gets exactly that.
+const LIGHT =
+    "rounded-[var(--r-capsule)] bg-light-white text-text-on-light hover:bg-accent-primary-hover active:bg-accent-primary-active";
+const GLASS =
+    "rounded-[var(--r-capsule)] bg-[var(--glass-fill)] text-text-primary shadow-[var(--glass-edge)] hover:bg-[var(--glass-fill-hover)] active:bg-[var(--glass-fill-press)] aria-pressed:bg-[var(--glass-fill-on)]";
+const DANGER =
+    "rounded-[var(--r-capsule)] bg-danger-well text-accent-danger hover:bg-danger-well-hover active:[background-image:linear-gradient(var(--wash-press),var(--wash-press))]";
+
 const buttonVariants = cva(
     [
-        // pc-focusable: the §9 ring (primitives).
-        // Each visual variant carries pc-pressable — the §5.1 shared press:
-        // a faint wash on hover and a 0.98 press, 120ms each way on the one
-        // ease-out — and the accent ones layer pc-pressable-accent's flash.
-        // `link` is underlined text, not a pressable surface, so it opts out.
+        // pc-focusable: the §9 ring (focus.css).
         "pc-focusable",
         "relative inline-flex select-none items-center justify-center gap-[7px] whitespace-nowrap",
-        "rounded-[var(--radius-control)] text-label font-medium outline-none",
-        // No `transition-*` utility here: `.pc-pressable` already transitions
-        // background, color AND transform. A utility naming a shorter list
-        // would now win and drop the press.
-        "disabled:pointer-events-none disabled:opacity-60",
+        "font-semibold outline-none",
+        // Color only, over --duration-fast on the one ease-out (§9). A press
+        // never moves or resizes the button.
+        "transition-[background-color,color] duration-[var(--glass-ms)] ease-[var(--glass-ease)]",
+        "disabled:pointer-events-none disabled:opacity-40",
     ].join(" "),
     {
         variants: {
             variant: {
-                primary:
-                    "pc-pressable pc-pressable-accent bg-accent-primary font-semibold text-text-on-accent hover:bg-accent-primary-hover active:bg-accent-primary-active",
-                light:
-                    "pc-pressable bg-light-white font-semibold text-text-on-light shadow-[var(--glow-light-fill)] hover:brightness-[1.04] active:brightness-[0.96]",
+                primary: PRIMARY,
+                light: LIGHT,
                 ghost:
-                    "pc-pressable bg-transparent text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary active:bg-bg-mod-strong",
-                danger:
-                    "pc-pressable bg-danger-well font-semibold text-accent-danger hover:brightness-125 active:brightness-95",
+                    "rounded-[var(--r-ctl)] bg-transparent text-text-primary hover:bg-[var(--wash-hover)] active:bg-[var(--wash-press)]",
+                glass: GLASS,
+                danger: DANGER,
                 // ---- legacy aliases (deprecated) ----
-                default:
-                    "pc-pressable pc-pressable-accent bg-accent-primary font-semibold text-text-on-accent hover:bg-accent-primary-hover active:bg-accent-primary-active",
-                destructive:
-                    "pc-pressable bg-danger-well font-semibold text-accent-danger hover:brightness-125 active:brightness-95",
-                secondary:
-                    "pc-pressable bg-bg-raised text-text-primary shadow-[var(--shadow-chip)] hover:bg-bg-mod-strong",
-                outline:
-                    "pc-pressable border border-border-subtle bg-transparent text-text-primary hover:bg-bg-mod-subtle",
-                link: "px-1 py-0 text-text-link underline-offset-4 hover:underline",
+                default: PRIMARY,
+                destructive: DANGER,
+                secondary: GLASS,
+                outline: GLASS,
+                link: "rounded-[var(--r-chip)] px-1 py-0 font-medium text-text-primary underline underline-offset-4 hover:no-underline",
             },
             size: {
                 // pc-touch (§9, primitives.css): on a coarse pointer the hit
                 // area is carried out to 44px around the control without
-                // changing the control. `sm` is 28px everywhere, and an
-                // icon-only `md` is ~38px wide however tall it is — both were
-                // targets a thumb had to aim at. A control already 44px in a
-                // dimension keeps that dimension (`max(100%, 44px)`).
-                sm: "pc-touch h-[var(--h-control-sm)] px-2.5 text-meta",
-                md: "pc-touch h-[var(--h-control)] px-[11px]",
-                lg: "h-[var(--h-control-phone)] px-4",
-                icon: "h-[var(--h-control)] w-[var(--h-control)] p-0",
-                "icon-lg": "h-[var(--h-control-phone)] w-[var(--h-control-phone)] p-0",
-                // ---- legacy alias (deprecated): the old 36px default ----
-                default: "h-[var(--h-control)] px-[11px]",
+                // changing the control.
+                sm: "pc-touch h-8 px-3.5 text-[13px]",
+                md: "pc-touch h-9 px-4 text-name",
+                lg: "h-[var(--h-control-phone)] px-5 text-name",
+                icon: "h-9 w-9 p-0 text-name",
+                "icon-lg": "h-[var(--h-control-phone)] w-[var(--h-control-phone)] p-0 text-name",
+                // ---- legacy alias (deprecated) ----
+                default: "h-9 px-4 text-name",
             },
         },
         defaultVariants: {

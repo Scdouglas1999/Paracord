@@ -9,17 +9,18 @@ import { cn } from '../lib/utils';
  * bot authorize).
  *
  * These are the first screens anyone sees, so they are held to the same law as
- * the rest of the app (docs/lantern-stage-spec.md §4): **one plate, centred on
- * the street.** Gabarito for the title, Onest for the body, the emerald for the
- * one action. No gradient hero, no marketing rail, no illustration filler —
- * the building is dark until somebody is in it.
+ * the rest of the app (docs/glass-spec.md): **one near-solid pane, centered on a
+ * dark room.** Instrument Sans throughout, cream for the one filled action.
+ * No gradient hero, no marketing rail, no illustration filler; the only light
+ * is the pane's own faint glow.
  */
 
 /** The app mark, re-exported for the entry surfaces that import it from here. */
 export { AppMark };
 
 /**
- * Full-page canvas: the street (`--bg-base`), flat and matte.
+ * Full-page canvas: the street (`--bg-base`), matte, with the room's faint glow
+ * behind the pane (`--glow`, the same token the panes carry in their far corner).
  *
  * **The fit law.** At the desktop client's window sizes — 1280×800 default,
  * 940×560 minimum (`client/src-tauri/tauri.conf.json`) — a first-run surface
@@ -40,7 +41,10 @@ export function AuthCanvas({ children, className }: { children: ReactNode; class
       aria-label="Account access"
       // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- Keyboard users must be able to scroll this viewport with Page Up/Down and Home/End.
       tabIndex={0}
-      className={cn('h-dvh w-full overflow-y-auto bg-bg-base sm:overflow-hidden', className)}
+      className={cn(
+        'h-dvh w-full overflow-y-auto bg-bg-base bg-[radial-gradient(56rem_40rem_at_50%_42%,var(--glow),transparent_70%)] sm:overflow-hidden',
+        className,
+      )}
     >
       <div className="flex min-h-full w-full items-center justify-center px-4 py-10 sm:h-full sm:min-h-0 sm:py-6">
         {children}
@@ -50,7 +54,8 @@ export function AuthCanvas({ children, className }: { children: ReactNode; class
 }
 
 /**
- * One plate on the street: `--bg-plate`, the plate radius and the plate shadow.
+ * One pane on the dark room: the pane surface (near-solid, radius 28, the pane
+ * shadow, a faint corner glow), which reduced transparency makes fully opaque.
  *
  * A column, and bounded by the window from `sm` up — see {@link AuthCanvas}.
  * `min-h-0` is what lets an {@link AuthScroll} inside it actually shrink
@@ -58,7 +63,7 @@ export function AuthCanvas({ children, className }: { children: ReactNode; class
  */
 export function AuthCard({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <div className={cn('pc-plate flex w-full min-h-0 flex-col p-0 sm:max-h-full', className)}>
+    <div className={cn('glass-pane glass-pane--glow flex w-full min-h-0 flex-col p-0 sm:max-h-full', className)}>
       {children}
     </div>
   );
@@ -141,8 +146,8 @@ export function useFocusRejectedField(
 }
 
 /**
- * Heading block: optional app mark, a Gabarito title, and one specific line of
- * `--text-secondary` subcopy.
+ * Heading block: optional app mark, a window title (20/600), and one specific
+ * line of `--text-secondary` subcopy.
  */
 export function AuthHeading({
   title,
@@ -179,7 +184,7 @@ export function AuthHeading({
   );
 }
 
-/** Sentence-case label above a control (spec §2 Label step, §6.8). */
+/** Sentence-case label above a control (13/500 secondary, matching TextField). */
 export function FieldLabel({
   children,
   required,
@@ -188,10 +193,11 @@ export function FieldLabel({
   required?: boolean;
 }) {
   return (
-    <span className="mb-1.5 flex items-center gap-1 text-label font-medium text-text-secondary">
+    <span className="mb-1.5 flex items-center gap-1 text-[13px] font-medium text-text-secondary">
       {children}
       {required && (
-        <span className="text-accent-danger" aria-hidden>
+        // A required mark is a sign, not an error: ink, not the danger color.
+        <span className="text-text-muted" aria-hidden>
           *
         </span>
       )}
@@ -230,13 +236,13 @@ export function Field({
         {children}
       </label>
       {error ? (
-        <p id={descriptionId} className="mt-2 flex items-start gap-1.5 text-meta text-accent-danger">
+        <p id={descriptionId} className="mt-2 flex items-start gap-1.5 text-[13px] text-accent-danger">
           <AlertCircle size={13} className="mt-px shrink-0" />
           <span className="leading-relaxed">{error}</span>
         </p>
       ) : (
         hint && (
-          <p id={descriptionId} className="mt-2 text-meta leading-relaxed text-text-faint">
+          <p id={descriptionId} className="mt-2 text-[13px] leading-relaxed text-text-faint">
             {hint}
           </p>
         )
@@ -245,10 +251,10 @@ export function Field({
   );
 }
 
-/** Success callout — a well carrying the emerald ink, never a green fill. */
+/** Success callout: a well carrying ink, never a green fill. */
 export function SuccessNote({ children }: { children: ReactNode }) {
   return (
-    <div className="pc-well flex items-start gap-2.5 px-4 py-3 text-label text-accent-success">
+    <div className="pc-well flex items-start gap-2.5 px-4 py-3 text-[15px] text-text-primary">
       <CheckCircle2 size={16} className="mt-px shrink-0" />
       <span className="leading-relaxed [&_strong]:font-semibold">{children}</span>
     </div>
@@ -276,7 +282,7 @@ export function AuthSteps({
 }) {
   return (
     <div className="flex flex-col gap-2">
-      <p id={id} className="pc-mono text-meta tabular-nums text-text-faint">
+      <p id={id} className="glass-instrument text-[13px] tabular-nums text-text-faint">
         Step {step} of {count}
       </p>
       <div className="flex items-center gap-1.5" aria-hidden="true">
@@ -351,7 +357,7 @@ export function AuthStep({
           {description && (
             <p
               className={cn(
-                'mt-1.5 text-meta leading-relaxed text-text-secondary',
+                'mt-1.5 text-[13px] leading-relaxed text-text-secondary',
                 dense && 'short-window:hidden',
               )}
             >

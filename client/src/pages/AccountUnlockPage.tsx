@@ -124,7 +124,7 @@ export function AccountUnlockPage() {
               </div>
               <div className="min-w-0">
                 <p className="truncate pc-display text-name text-text-primary">{username}</p>
-                <p className="truncate pc-mono text-meta text-text-faint">{shortKey}</p>
+                <p className="truncate pc-mono text-[13px] text-text-faint">{shortKey}</p>
               </div>
             </div>
           )}
@@ -157,18 +157,18 @@ export function AccountUnlockPage() {
 
           <Divider />
 
-          <div className="flex flex-col items-start gap-2 text-meta text-text-secondary">
+          <div className="flex flex-col items-start gap-2 text-[13px] text-text-secondary">
             <button
               type="button"
               onClick={() => navigate('/recover')}
-              className="pc-focusable rounded-[var(--radius-chip)] font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
+              className="pc-focusable rounded-[var(--r-chip)] font-semibold text-text-link underline-offset-4 hover:underline"
             >
               Forgot password? Recover from phrase
             </button>
             <button
               type="button"
               onClick={() => navigate('/app?settings=identity')}
-              className="pc-focusable rounded-[var(--radius-chip)] font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
+              className="pc-focusable rounded-[var(--r-chip)] font-semibold text-text-link underline-offset-4 hover:underline"
             >
               Import account from file
             </button>
@@ -178,7 +178,7 @@ export function AccountUnlockPage() {
             <button
               type="button"
               onClick={() => navigate('/login')}
-              className="pc-focusable rounded-[var(--radius-chip)] font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
+              className="pc-focusable rounded-[var(--r-chip)] font-semibold text-text-link underline-offset-4 hover:underline"
             >
               Sign in with a password instead
             </button>

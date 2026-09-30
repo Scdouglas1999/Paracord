@@ -417,7 +417,7 @@ export function ChannelPermissionsEditor({
             <h2 id="channel-permissions-title" className="pc-display text-title text-text-primary">
               Permissions
             </h2>
-            <div className="pc-mono truncate text-meta text-text-faint">#{channelName}</div>
+            <div className="truncate text-meta text-text-faint">#{channelName}</div>
           </div>
           <Button variant="ghost" size="sm" onClick={onClose}>Close</Button>
         </div>
@@ -587,7 +587,7 @@ export function ChannelPermissionsEditor({
                   <Well className="mx-5 my-3 px-4 py-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <GroupLabel>Effective access preview</GroupLabel>
-                      <span className="pc-mono text-meta text-text-secondary">
+                      <span className="glass-instrument text-meta text-text-secondary">
                         {previewAllowedCount} allowed · {previewPermissionCount - previewAllowedCount} denied
                       </span>
                     </div>

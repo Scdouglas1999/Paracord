@@ -24,8 +24,9 @@ const TONES: Record<ChipTone, string> = {
 };
 
 /**
- * Chip — a small raised pill for a count, a shortcut, a filter or a label
- * (spec §3: radius 7, height 24). Depth is one warm inset highlight.
+ * Chip: a small solid tonal chip for a count, a shortcut, a filter or a label
+ * (docs/glass-spec.md §2.4: radius 8, height 24), with no outline. Counts and
+ * durations in it use the instrument cut when it is a `tabular-nums` figure.
  */
 export const Chip = React.forwardRef<HTMLSpanElement, ChipProps>(function Chip(
   { size = 'md', tone = 'neutral', as = 'span', className, children, ...props },
@@ -40,13 +41,13 @@ export const Chip = React.forwardRef<HTMLSpanElement, ChipProps>(function Chip(
         'rounded-[var(--radius-chip)] bg-bg-raised shadow-[var(--shadow-chip)]',
         'font-medium tabular-nums',
         size === 'sm'
-          ? 'h-[var(--h-chip-sm)] px-1.5 text-[11px]'
+          ? 'h-[var(--h-chip-sm)] px-1.5 text-[11px] font-bold'
           : 'h-[var(--h-chip)] px-2 text-meta',
         TONES[tone],
         as === 'button' &&
           // No `transition-colors` beside `pc-pressable`: the recipe's list
-          // already covers color and carries the §5.1 press with it.
-          'pc-focusable pc-pressable hover:bg-bg-mod-strong hover:text-text-primary',
+          // already covers color and carries the §9 hover and press with it.
+          'pc-focusable pc-pressable hover:text-text-primary',
         className,
       )}
       {...props}

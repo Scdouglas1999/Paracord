@@ -70,16 +70,43 @@ describe('Well and Raised', () => {
 });
 
 describe('Button', () => {
-  it('defaults to the emerald primary action', () => {
+  it('defaults to the cream primary action (Join), one step lighter on hover and darker on press', () => {
     render(<Button>Join</Button>);
-    expect(screen.getByRole('button', { name: 'Join' })).toHaveClass('bg-accent-primary');
+    const btn = screen.getByRole('button', { name: 'Join' });
+    expect(btn).toHaveClass('bg-accent-primary', 'text-text-on-accent');
+    expect(btn).toHaveClass('hover:bg-accent-primary-hover', 'active:bg-accent-primary-active');
   });
 
-  it('the light variant is a white-light fill with ink text', () => {
+  it('the light variant is the same cream fill (`--light-white` is `--join`), not a second look', () => {
     render(<Button variant="light">Join</Button>);
     const btn = screen.getByRole('button', { name: 'Join' });
     expect(btn).toHaveClass('bg-light-white');
     expect(btn).toHaveClass('text-text-on-light');
+    expect(btn).toHaveClass('hover:bg-accent-primary-hover', 'active:bg-accent-primary-active');
+  });
+
+  it('nothing scales on press, in any variant or size (§9)', () => {
+    const variants = ['primary', 'light', 'ghost', 'glass', 'danger', 'default', 'destructive', 'secondary', 'outline', 'link'] as const;
+    const sizes = ['sm', 'md', 'lg', 'icon', 'icon-lg', 'default'] as const;
+    for (const variant of variants) {
+      for (const size of sizes) {
+        const { unmount } = render(
+          <Button variant={variant} size={size}>
+            x
+          </Button>,
+        );
+        const cls = screen.getByRole('button').className;
+        expect(cls, `${variant}/${size}`).not.toMatch(/scale|pc-pressable|brightness/);
+        unmount();
+      }
+    }
+  });
+
+  it('ghost is a text decision and glass is the 12% white control', () => {
+    const { rerender } = render(<Button variant="ghost">Cancel</Button>);
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveClass('bg-transparent', 'hover:bg-[var(--wash-hover)]');
+    rerender(<Button variant="glass">Upload</Button>);
+    expect(screen.getByRole('button', { name: 'Upload' })).toHaveClass('bg-[var(--glass-fill)]', 'hover:bg-[var(--glass-fill-hover)]');
   });
 
   it('danger is the danger well carrying danger ink, never a red fill', () => {
@@ -89,11 +116,11 @@ describe('Button', () => {
     expect(btn).toHaveClass('text-accent-danger');
   });
 
-  it('sizes map onto the spec control heights (28 / 32 / 44)', () => {
+  it('sizes are 32 / 36 / 44', () => {
     const { rerender } = render(<Button size="sm">a</Button>);
-    expect(screen.getByRole('button').className).toContain('var(--h-control-sm)');
+    expect(screen.getByRole('button')).toHaveClass('h-8');
     rerender(<Button size="md">a</Button>);
-    expect(screen.getByRole('button').className).toContain('var(--h-control)');
+    expect(screen.getByRole('button')).toHaveClass('h-9');
     rerender(<Button size="lg">a</Button>);
     expect(screen.getByRole('button').className).toContain('var(--h-control-phone)');
   });
@@ -113,7 +140,7 @@ describe('Button', () => {
 
   it('keeps the legacy variant names building', () => {
     render(<Button variant="secondary">Cancel</Button>);
-    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveClass('bg-bg-raised');
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveClass('bg-[var(--glass-fill)]');
   });
 });
 
@@ -144,6 +171,18 @@ describe('IconButton', () => {
   it('carries the focus-ring recipe', () => {
     render(<IconButton label="More">…</IconButton>);
     expect(screen.getByRole('button')).toHaveClass('pc-focusable');
+  });
+
+  it('is a circle that never scales, with a glass tone for the raised look', () => {
+    render(
+      <IconButton label="Close" tone="raised">
+        x
+      </IconButton>,
+    );
+    const cls = screen.getByRole('button').className;
+    expect(cls).toContain('rounded-[var(--r-capsule)]');
+    expect(cls).toContain('bg-[var(--glass-fill)]');
+    expect(cls).not.toMatch(/scale|pc-pressable|brightness/);
   });
 });
 
@@ -199,19 +238,21 @@ describe('NavRow', () => {
 });
 
 describe('SectionLabel', () => {
-  it('is sentence case — it never uppercases its own text (§6.8)', () => {
-    const { container } = render(<SectionLabel meta="24 in">Kestrel Robotics</SectionLabel>);
-    expect(screen.getByText('Kestrel Robotics')).toBeInTheDocument();
-    expect(container.firstElementChild?.className).not.toContain('uppercase');
-    expect(screen.getByText('24 in')).toBeInTheDocument();
+  it('is the Glass kicker (12/700, uppercase by CSS) and keeps its text as written', () => {
+    const { container } = render(<SectionLabel meta="24 in">Coming up</SectionLabel>);
+    // The words stay as typed (a screen reader reads them, and a test can find
+    // them); the uppercase is `.glass-kicker`'s `text-transform`.
+    expect(screen.getByText('Coming up')).toBeInTheDocument();
+    expect(container.firstElementChild).toHaveClass('glass-kicker');
+    expect(screen.getByText('24 in')).toHaveClass('glass-instrument');
   });
 });
 
 describe('Kbd', () => {
-  it('renders a kbd element in the meta face', () => {
+  it('renders a kbd element in the instrument cut', () => {
     const { container } = render(<Kbd>⌘K</Kbd>);
     const kbd = container.querySelector('kbd')!;
-    expect(kbd).toHaveClass('pc-mono');
+    expect(kbd).toHaveClass('glass-instrument');
     expect(kbd).toHaveTextContent('⌘K');
   });
 });
@@ -358,13 +399,14 @@ describe('Switch', () => {
     expect(onChange).toHaveBeenCalledWith(false);
   });
 
-  it('off is a well, on is the emerald — never a light token (§6.3)', () => {
-    const { rerender } = render(<Switch checked={false} onChange={() => {}} label="a" />);
-    expect(screen.getByRole('switch')).toHaveClass('bg-bg-well');
+  it('off is glass, on is cream, and neither glows amber (amber means live)', () => {
+    const { rerender, container } = render(<Switch checked={false} onChange={() => {}} label="a" />);
+    expect(screen.getByRole('switch')).toHaveClass('bg-[var(--glass-fill)]');
     rerender(<Switch checked onChange={() => {}} label="a" />);
     const on = screen.getByRole('switch');
     expect(on).toHaveClass('bg-accent-primary');
     expect(on.className).not.toContain('light-white');
+    expect(container.innerHTML).not.toContain('thumb-glow');
   });
 
   it('ToggleRow names its switch from the row text', () => {
@@ -394,15 +436,16 @@ describe('Tabs', () => {
     expect(within(list).getByRole('tab', { name: 'General' })).toHaveAttribute('aria-selected', 'false');
   });
 
-  it('selection is a raised surface, never an accent bar', () => {
+  it('selection is the "on" glass fill, never an accent bar', () => {
     render(<Tabs items={TAB_ITEMS} value="general" onChange={() => {}} label="Server settings" />);
-    // The raised surface is ONE element the engine slides between the tabs
-    // (§5.1 "the indicator slides, never jumps"), so it is the indicator that
-    // carries the raised recipe — and no tab carries a fill of its own.
+    // The selected pill is ONE element the engine slides between the tabs (it
+    // slides, it never jumps), so it is the indicator that carries the fill,
+    // and no tab carries a fill of its own.
     const list = screen.getByRole('tablist', { name: 'Server settings' });
     const indicator = list.querySelector('[aria-hidden="true"]');
-    expect(indicator).toHaveClass('bg-bg-raised');
+    expect(indicator).toHaveClass('bg-[var(--glass-fill-on)]');
     expect(screen.getByRole('tab', { name: 'General' })).not.toHaveClass('bg-accent-primary');
+    expect(screen.getByRole('tab', { name: 'General' }).className).not.toMatch(/scale/);
   });
 
   it('the sliding indicator is marked on the selected tab only', () => {
@@ -459,7 +502,7 @@ describe('SettingsShell', () => {
     expect(screen.getByRole('heading', { name: 'Voice and video' })).toBeInTheDocument();
   });
 
-  it('section labels stay sentence case (§6.8)', () => {
+  it('section labels are Glass kickers', () => {
     render(
       <SettingsShell
         label="User settings"
@@ -473,7 +516,7 @@ describe('SettingsShell', () => {
         content
       </SettingsShell>,
     );
-    expect(screen.getByText('Preferences').className).not.toContain('uppercase');
+    expect(screen.getByText('Preferences').parentElement).toHaveClass('glass-kicker');
   });
 
   it('selects a section from the index', async () => {

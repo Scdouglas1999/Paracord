@@ -145,10 +145,10 @@ export function ChannelSwitcher({
           // hands the button only that reduced width — so the trigger came up 4px
           // short of its own content and EVERY room name ellipsized ("shop-fl…"),
           // at every viewport, however much free header space there was.
-          'pc-focusable -translate-x-1 flex h-8 w-full min-w-0 max-w-[18rem] items-center gap-1.5 rounded-[var(--radius-control)] px-1 text-left outline-none',
-          'text-text-primary transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]',
-          'hover:bg-bg-mod-subtle',
-          open && 'bg-bg-mod-subtle',
+          'pc-focusable -translate-x-1 flex h-8 w-full min-w-0 max-w-[18rem] items-center gap-1.5 rounded-[var(--r-ctl)] px-1 text-left outline-none',
+          'text-text-primary transition-colors duration-[var(--glass-ms)] ease-[var(--glass-ease)]',
+          'hover:bg-[var(--wash-hover)] active:bg-[var(--wash-press)]',
+          open && 'bg-[var(--wash-hover)]',
         )}
       >
         {/* A text room's kind is already said by the window dot beside this
@@ -156,12 +156,12 @@ export function ChannelSwitcher({
         {channelType != null && channelType !== ChannelType.Text && (
           <CurrentIcon size={18} className="shrink-0 text-text-muted" aria-hidden />
         )}
-        <span className="pc-display truncate text-[20px] font-bold leading-tight tracking-[-0.01em]">{channelName}</span>
+        <span className="pc-display glass-title-channel truncate">{channelName}</span>
         <ChevronDown
           size={14}
           aria-hidden
           className={cn(
-            'shrink-0 text-text-muted transition-transform duration-[var(--duration-fast)] ease-[var(--ease-out)]',
+            'shrink-0 text-text-muted transition-transform duration-[var(--glass-ms)] ease-[var(--glass-ease)]',
             open && 'rotate-180',
           )}
         />
@@ -192,7 +192,7 @@ export function ChannelSwitcher({
           }}
         >
           <div className="border-b border-border-subtle p-2">
-            <label className="flex h-9 items-center gap-2 rounded-chip border border-border-subtle bg-bg-well px-2.5 focus-within:border-accent-primary focus-within:shadow-[var(--focus-ring-input)]">
+            <label className="flex h-9 items-center gap-2 rounded-[var(--r-ctl)] bg-bg-well px-2.5 focus-within:shadow-[var(--focus-ring-input)]">
               <Search size={15} className="shrink-0 text-text-muted" aria-hidden />
               <span className="sr-only">Find a channel</span>
               <input
@@ -200,7 +200,7 @@ export function ChannelSwitcher({
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder="Find a channel"
-                className="min-w-0 flex-1 bg-transparent text-label text-text-primary outline-none placeholder:text-text-muted"
+                className="min-w-0 flex-1 bg-transparent text-[15px] text-text-primary outline-none placeholder:text-[var(--ink-placeholder)]"
               />
             </label>
           </div>
@@ -213,23 +213,23 @@ export function ChannelSwitcher({
                 navigate(`/app/guilds/${guildId}`);
                 close();
               }}
-              // `pc-focusable`: the accent tint alone cannot say where focus
-              // is — the current room wears the same tint — so every row in
-              // this menu carries the §9 ring as well.
-              className="pc-focusable flex h-9 w-full items-center gap-2 rounded-chip px-2 text-left text-label font-medium text-text-secondary outline-none transition-colors hover:bg-bg-mod-subtle hover:text-text-primary focus:bg-accent-tint focus:text-text-primary"
+              // `pc-focusable`: the tone alone cannot say where focus is (the
+              // current channel wears the selected tone), so every row in this
+              // menu carries the §9 ring as well.
+              className="pc-focusable flex h-9 w-full items-center gap-2 rounded-[10px] px-2 text-left text-[15px] font-medium text-text-secondary outline-none transition-colors duration-[var(--glass-ms)] ease-[var(--glass-ease)] hover:bg-[var(--wash-hover)] hover:text-text-primary active:bg-[var(--wash-press)] focus:bg-[var(--wash-hover)] focus:text-text-primary"
             >
               <LayoutGrid size={17} className="shrink-0 text-channel-icon" aria-hidden />
               <span className="flex-1 truncate">Channels home</span>
             </button>
 
             {groups.length === 0 ? (
-              <p className="px-2 py-5 text-center text-label text-text-muted">
+              <p className="px-2 py-5 text-center text-[15px] text-text-muted">
                 No matching channels.
               </p>
             ) : (
               groups.map((group) => (
                 <div key={group.id} className="mt-1 border-t border-border-subtle pt-1">
-                  <p className="px-2 py-1 text-section text-text-muted">{group.name}</p>
+                  <p className="glass-kicker px-2 py-1 text-text-muted">{group.name}</p>
                   {group.channels.map((channel) => {
                     const type = channel.type ?? channel.channel_type;
                     const Icon = iconForType(type);
@@ -245,21 +245,18 @@ export function ChannelSwitcher({
                           close();
                         }}
                         className={cn(
-                          'pc-focusable relative flex h-9 w-full items-center gap-2 rounded-chip px-2 text-left outline-none transition-colors',
+                          'pc-focusable relative flex h-9 w-full items-center gap-2 rounded-[10px] px-2 text-left outline-none transition-colors duration-[var(--glass-ms)] ease-[var(--glass-ease)]',
                           active
-                            ? 'bg-accent-tint text-text-primary'
-                            : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary focus:bg-accent-tint focus:text-text-primary',
+                            ? 'bg-[var(--sel)] text-text-primary'
+                            : 'text-text-secondary hover:bg-[var(--wash-hover)] hover:text-text-primary active:bg-[var(--wash-press)] focus:bg-[var(--wash-hover)] focus:text-text-primary',
                         )}
                       >
-                        {active && (
-                          <span className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-accent-primary" aria-hidden />
-                        )}
                         <Icon
                           size={17}
-                          className={active ? 'text-accent-primary' : 'text-channel-icon'}
+                          className={active ? 'text-text-primary' : 'text-channel-icon'}
                           aria-hidden
                         />
-                        <span className="min-w-0 flex-1 truncate text-label font-medium">
+                        <span className="min-w-0 flex-1 truncate text-[15px] font-medium">
                           {channel.name || 'unknown'}
                         </span>
                       </button>

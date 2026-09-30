@@ -21,10 +21,11 @@ export interface ChoiceCardsProps<T extends string> {
 }
 
 /**
- * One answer out of a few, each with a line saying what it means. The same
- * raised-card radio the Appearance page uses for motion, with the arrow keys a
- * radio group is expected to answer to: one tab stop for the whole group,
- * arrows to move and choose.
+ * One answer out of a few, each with a line saying what it means: solid tonal
+ * cards (radius 20, no outline), the chosen one on the selected-row tone with a
+ * check and the word "Selected", so the choice never depends on color. The
+ * arrow keys a radio group is expected to answer to: one tab stop for the whole
+ * group, arrows to move and choose.
  */
 export function ChoiceCards<T extends string>({
   labeledBy,
@@ -77,24 +78,24 @@ export function ChoiceCards<T extends string>({
             onClick={() => onChange(option.id)}
             onKeyDown={(event) => onKeyDown(event, index)}
             className={cn(
-              'pc-focusable flex flex-1 flex-col gap-1 rounded-[var(--radius-card)] px-4 py-3 text-left',
-              'transition-[color,background-color,transform] duration-[var(--duration-fast)] ease-[var(--ease-out)] active:scale-[0.98]',
-              'disabled:cursor-not-allowed disabled:opacity-60',
+              'pc-focusable flex flex-1 flex-col gap-1 rounded-[var(--r-bubble)] px-4 py-3 text-left',
+              'transition-[color,background-color] duration-[var(--glass-ms)] ease-[var(--glass-ease)]',
+              'disabled:cursor-not-allowed disabled:opacity-40',
               active
-                ? 'bg-bg-raised shadow-[var(--shadow-raised),0_0_0_1px_var(--accent-primary)]'
-                : 'bg-bg-mod-subtle hover:bg-bg-mod-strong',
+                ? 'bg-[var(--sel)] shadow-[var(--sh-content)]'
+                : 'bg-bg-mod-subtle hover:bg-bg-mod-strong active:bg-[var(--wash-press)]',
             )}
           >
             <span className="flex items-center gap-2">
-              <span className="text-label font-semibold text-text-primary">{option.label}</span>
+              <span className="text-[15px] font-semibold text-text-primary">{option.label}</span>
               {active && (
-                <span className="ml-auto inline-flex shrink-0 items-center gap-1 text-meta font-semibold text-accent-primary">
+                <span className="ml-auto inline-flex shrink-0 items-center gap-1 text-[13px] font-semibold text-text-primary">
                   <Check size={14} aria-hidden />
                   Selected
                 </span>
               )}
             </span>
-            <span className="text-meta leading-relaxed text-text-faint">{option.hint}</span>
+            <span className="text-[13px] leading-relaxed text-text-secondary">{option.hint}</span>
           </button>
         );
       })}

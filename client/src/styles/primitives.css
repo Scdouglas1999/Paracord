@@ -1,25 +1,33 @@
 /* =============================================================================
-   Paracord primitive recipes — "Lantern Stage" (v2).
+   Paracord primitive recipes, on Glass (docs/glass-spec.md §1, §2, §5, §9).
 
-   The shared, tokens-only implementation of the surfaces and effects in
-   docs/lantern-stage-spec.md §1, §3, §4, §5 and §9. Every class here reads from
+   The shared, tokens-only implementation of the surfaces and effects the
+   React primitives in src/components/ui/ compose. Every class here reads from
    src/styles/tokens.css and nothing else: no hex, no literal shadow, no ad-hoc
-   spacing. React primitives in src/components/ui/ compose these classes; a
-   feature component that needs a plate, a well, a lit rim or a lamp uses these
-   too rather than re-deriving the recipe.
+   spacing. A feature component that needs a plate, a well, a dialog or a
+   floating surface uses these rather than re-deriving the recipe.
+
+   The rules they carry (docs/glass-spec.md §1): content is solid and has no
+   outline; translucency, blur and a hairline belong to what you press or what
+   floats over text (menus, popovers, pickers). Hover is one step lighter and
+   press one step darker, over 120ms; nothing scales on press.
 
    NAMING: `pc-` prefix so a recipe class can never collide with a Tailwind
    utility. Modifiers are plain adjectives applied alongside (`pc-plate is-lit`).
    ============================================================================= */
 
 /* -----------------------------------------------------------------------------
-   §4 Elevation — three layers only: street → plate → raised / well.
+   Elevation. A pane (the settings window, an auth card) is near-solid at radius
+   28. Inside it, a well is recessed (`--well`), a raised card is a tonal step
+   (`--bub`, `--raise`), and neither carries an outline. Only what floats over
+   text (a menu, a picker, a tooltip) is glass: near-solid black at .97 with the
+   heavier blur (§5), and a hairline because it is a control you press.
    Never nest a plate in a plate.
    -------------------------------------------------------------------------- */
 
 .pc-plate {
   background: var(--bg-plate);
-  border-radius: var(--radius-plate);
+  border-radius: var(--r-pane);
   box-shadow: var(--shadow-plate);
 }
 
@@ -30,40 +38,65 @@
 
 .pc-well {
   background: var(--bg-well);
-  border-radius: var(--radius-well);
+  border-radius: var(--r-row);
   box-shadow: var(--shadow-well);
 }
 
 .pc-raised {
   background: var(--bg-raised);
-  border-radius: var(--radius-control);
+  border-radius: var(--r-ctl);
   box-shadow: var(--shadow-raised);
 }
 
-/* Menus, popovers and tooltips over content (§4). */
+/* Menus, popovers, pickers and the small floating bars over content (§5): a
+   near-solid fill so text behind never ghosts through, the heavier blur, a
+   hairline, and the raised shadow. Rows inside sit at radius 8-12. */
 .pc-floating {
-  background: var(--bg-floating);
-  border-radius: var(--radius-card);
-  box-shadow: var(--shadow-floating);
+  background: var(--popover);
+  border-radius: var(--r-row);
+  box-shadow: inset 0 0 0 1px var(--border-subtle), var(--sh-raised);
+  -webkit-backdrop-filter: blur(30px) saturate(1.2);
+  backdrop-filter: blur(30px) saturate(1.2);
 }
 
-/* A dialog: a plate that floats over the street (§4). Same fill as a menu, the
-   plate's radius and depth, because it carries content rather than a menu. */
+/* A tooltip: the same near-solid fill and hairline, no blur (it is a few words
+   long, and a translucent label can stick over a native video hole on Linux),
+   and the small-control radius. */
+.pc-tip {
+  background: var(--popover);
+  border-radius: var(--r-ctl);
+  box-shadow: inset 0 0 0 1px var(--border-subtle), var(--sh-raised);
+}
+
+/* A dialog is a near-solid pane that floats over the dimmed app: the pane's
+   fill and depth, no border. `Modal` sets `--pc-dialog-r` per size (24 for a
+   confirm, 28 for a window); a bare `pc-dialog` is a pane. */
 .pc-dialog {
-  background: var(--bg-floating);
-  border-radius: var(--radius-plate);
-  box-shadow: var(--shadow-floating);
+  background: var(--bg-plate);
+  border-radius: var(--pc-dialog-r, var(--r-pane));
+  box-shadow: var(--shadow-plate);
+}
+
+/* A floating sheet (the command palette, the channel switcher): a dialog that is
+   glass rather than a pane, so it takes the popover's near-solid black at .97,
+   the heavier blur and a hairline, at the dialog's radius and depth. The
+   compound selector is what lets it beat `.pc-dialog` regardless of order. */
+.pc-dialog.pc-sheet {
+  background: var(--popover);
+  box-shadow: inset 0 0 0 1px var(--border-subtle), var(--sh-pane);
+  -webkit-backdrop-filter: blur(30px) saturate(1.2);
+  backdrop-filter: blur(30px) saturate(1.2);
 }
 
 /* A coach-mark: a floating card that deliberately sits ON the surface it is
-   introducing, so unlike a menu it cannot be translucent — the display-size
+   introducing, so unlike a menu it cannot be translucent: the display-size
    heading beneath it ghosted straight through 97% alpha. Opaque plate fill,
    the floating depth, and a hairline so it separates from a plate of the same
    color underneath. */
 .pc-coach {
   background: var(--bg-plate);
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-card);
+  border-radius: var(--r-bubble);
   box-shadow: var(--shadow-floating);
 }
 
@@ -74,7 +107,7 @@
   background: linear-gradient(var(--bg-floating), var(--bg-floating)), var(--bg-plate);
 }
 
-/* §3: on a phone, plates round up. */
+/* §3: on a phone, panes round up. */
 @media (max-width: 640px) {
   .pc-dialog {
     border-radius: var(--radius-plate-phone);
@@ -82,18 +115,22 @@
   }
 }
 
-/* §9 reduced transparency: a floating surface becomes opaque. */
-@media (prefers-reduced-transparency: reduce) {
-  .pc-floating,
-  .pc-dialog {
-    background: var(--bg-plate);
-  }
+/* Reduced transparency (Settings › Appearance writes the attribute, following
+   the device when it is left on "Match my system"): a floating surface becomes
+   opaque and drops its blur. */
+:root[data-reduced-transparency='true'] :where(.pc-floating, .pc-tip, .pc-dialog.pc-sheet) {
+  background: var(--solid);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
-/* §1.7 High contrast: surfaces get a real edge as well as their depth, so a
-   plate still separates from the street when the shadow is not enough. */
-[data-theme='high-contrast'] :where(.pc-plate, .pc-floating, .pc-dialog, .pc-coach) {
-  border: 1px solid var(--border-strong);
+/* High contrast: nothing is see-through. The edge comes from the shadow tokens
+   (`--sh-raised`, `--sh-pane`), which that theme draws as a 1px line, so a
+   surface needs no border of its own. */
+[data-theme='glass-contrast'] :where(.pc-floating, .pc-tip, .pc-dialog.pc-sheet) {
+  background: var(--solid);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 /* -----------------------------------------------------------------------------
@@ -694,48 +731,43 @@
 }
 
 /* -----------------------------------------------------------------------------
-   §5.1 Controls are tactile.
+   §9 Hover and press. Hover is one step lighter (a 4% white wash), press is one
+   step darker (a darker wash over the same fill), both over 120ms on the one
+   ease-out. NOTHING scales on press.
 
-   `.pc-pressable` is the whole gesture for a button, icon button or chip: a
-   faint --bg-mod-subtle wash on hover and a 0.98 press, both over 120ms on the
-   one ease-out, and back the same way on release. Nothing lifts on hover —
-   the wash is the hover. `.pc-pressable-row` is the same gesture for a row
-   (a channel, a person, a setting): a row does not shrink, it darkens a step
-   on press. `.pc-pressable-accent` adds the one-beat brighter flash primary
-   buttons take on press — an opacity-only veil. Disabled controls get none of
-   it. Only color, transform and opacity are in the transition list: a
-   control's shadow never animates.
+   `.pc-pressable` is that gesture for a chip or any control that keeps its own
+   fill: the wash is a gradient rather than a background-color so it layers OVER
+   whatever fill the variant already carries. `.pc-pressable-row` is the same
+   gesture for a row (a channel, a person, a setting), which keeps its own hover
+   fill and only darkens on press. `Button` and `IconButton` do not use these:
+   their variants name the hover and press fills outright, the way
+   `GlassButton` does. Disabled controls get none of it. Only color animates.
    -------------------------------------------------------------------------- */
 .pc-pressable {
-  /* The wash is a gradient rather than a background-color so it layers OVER
-     whatever fill the variant already carries. */
   background-image: linear-gradient(transparent, transparent);
   transition:
-    transform var(--duration-fast) var(--ease-out),
-    background-color var(--duration-fast) var(--ease-out),
-    color var(--duration-fast) var(--ease-out);
+    background-color var(--glass-ms) var(--glass-ease),
+    color var(--glass-ms) var(--glass-ease);
 }
 
 @media (hover: hover) {
   .pc-pressable:not(:disabled):not([aria-disabled='true']):hover {
-    background-image: linear-gradient(var(--bg-mod-subtle), var(--bg-mod-subtle));
+    background-image: linear-gradient(var(--wash-hover), var(--wash-hover));
   }
 }
 
 .pc-pressable:not(:disabled):not([aria-disabled='true']):active {
-  transform: scale(0.98);
+  background-image: linear-gradient(var(--wash-press), var(--wash-press));
 }
 
-/* A row keeps its own hover fill (every row in the app already has one); the
-   press lays one more step of wash over whatever fill it has. */
 .pc-pressable-row {
   transition:
-    background-color var(--duration-fast) var(--ease-out),
-    color var(--duration-fast) var(--ease-out);
+    background-color var(--glass-ms) var(--glass-ease),
+    color var(--glass-ms) var(--glass-ease);
 }
 
 .pc-pressable-row:not(:disabled):not([aria-disabled='true']):active {
-  background-image: linear-gradient(var(--bg-mod-subtle), var(--bg-mod-subtle));
+  background-image: linear-gradient(var(--wash-press), var(--wash-press));
 }
 
 /* A card that deepens under the pointer. The lifted shadow is a still layer
@@ -761,25 +793,6 @@
   .pc-hover-lift:hover::after {
     opacity: 1;
   }
-}
-
-.pc-pressable-accent {
-  position: relative;
-}
-
-.pc-pressable-accent::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  background: var(--light-white);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity var(--duration-fast) var(--ease-out);
-}
-
-.pc-pressable-accent:not(:disabled):not([aria-disabled='true']):active::after {
-  opacity: 0.2;
 }
 
 /* -----------------------------------------------------------------------------
@@ -1147,8 +1160,15 @@
 }
 
 /* -----------------------------------------------------------------------------
-   §2 Type — the three faces. `text-*` size steps are Tailwind utilities
-   generated from tokens.css; these classes only carry the face.
+   Type (docs/glass-spec.md §2.3). One family, Instrument Sans: the roles are the
+   `glass-*` classes in glass.css (titles 28/20/17, body 15, secondary 13, the
+   kicker, the badge, and `glass-instrument` for counts, times, dates and
+   durations). `text-*` size steps are Tailwind utilities generated from
+   tokens.css; these classes only carry the face.
+
+   `.pc-mono` is the one exception, and it is for identifiers a person has to
+   read character by character or copy exactly: a code, a key, a URL, an ID, a
+   pattern. A number, a date or a count is `glass-instrument`, never this.
    -------------------------------------------------------------------------- */
 
 .pc-display {

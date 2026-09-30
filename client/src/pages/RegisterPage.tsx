@@ -273,7 +273,7 @@ export function RegisterPage() {
               {unavailable.message}
             </p>
             {registrationEnabled && (
-              <p className="text-meta leading-relaxed text-text-faint">
+              <p className="text-[13px] leading-relaxed text-text-faint">
                 When you have the link, open it in this browser and choose “Create an account to
                 join”.
               </p>
@@ -426,7 +426,7 @@ export function RegisterPage() {
                     field half its width. */}
                 <p
                   id={passwordHintId}
-                  className="pc-auth-span text-meta leading-relaxed text-text-faint"
+                  className="pc-auth-span text-[13px] leading-relaxed text-text-faint"
                 >
                   {PASSWORD_REQUIREMENTS_HINT}
                 </p>
@@ -436,7 +436,7 @@ export function RegisterPage() {
 
           {stepId === 'password' && (
               <div>
-                <label className="flex cursor-pointer items-start gap-3 rounded-well border border-border-subtle bg-bg-mod-subtle px-4 py-3.5 transition-colors hover:border-border-strong">
+                <label className="flex cursor-pointer items-start gap-3 rounded-[var(--r-row)] bg-bg-mod-subtle px-4 py-3.5 transition-colors duration-[var(--glass-ms)] hover:bg-bg-mod-strong">
                   <input
                     type="checkbox"
                     checked={draft.agreed}
@@ -445,18 +445,18 @@ export function RegisterPage() {
                     aria-invalid={Boolean(errorFor('agreed')) || undefined}
                     aria-describedby={errorFor('agreed') ? termsErrorId : undefined}
                   />
-                  <span className="text-meta leading-relaxed text-text-secondary">
+                  <span className="text-[13px] leading-relaxed text-text-secondary">
                     I have read and agree to the{' '}
                     <Link
                       to="/terms"
-                      className="font-semibold text-text-link hover:text-accent-primary-hover"
+                      className="font-semibold text-text-link underline-offset-4 hover:underline"
                     >
                       Terms of Service
                     </Link>{' '}
                     and{' '}
                     <Link
                       to="/privacy"
-                      className="font-semibold text-text-link hover:text-accent-primary-hover"
+                      className="font-semibold text-text-link underline-offset-4 hover:underline"
                     >
                       Privacy Policy
                     </Link>
@@ -464,7 +464,7 @@ export function RegisterPage() {
                   </span>
                 </label>
                 {errorFor('agreed') && (
-                  <p id={termsErrorId} className="mt-2 text-meta text-accent-danger">
+                  <p id={termsErrorId} className="mt-2 text-[13px] text-accent-danger">
                     {errorFor('agreed')}
                   </p>
                 )}
@@ -486,7 +486,7 @@ export function RegisterPage() {
             Already have an account?{' '}
             <Link
               to="/login"
-              className="font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
+              className="font-semibold text-text-link underline-offset-4 hover:underline"
             >
               Sign in
             </Link>

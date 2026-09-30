@@ -40,6 +40,7 @@ import {
   parseIdentityVerificationPayload,
 } from '../../lib/keyVerification';
 import { writeClipboardText } from '../../lib/clipboard';
+import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import QRCode from 'qrcode';
 
@@ -68,14 +69,13 @@ function formatDate(dateStr: string): string {
   }
 }
 
-// Shared focus ring against the floating popover surface.
-const FOCUS_RING =
-  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-bg-floating';
+// The §9 focus ring (2px white, offset 2) on a control that has no recipe of its own.
+const FOCUS_RING = 'focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]';
 
-// UPPERCASE category label — the Section type step, muted for hierarchy.
+// A category label: the Glass kicker (12/700, uppercase), muted for hierarchy.
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <div className="mb-2 text-section" style={{ color: 'var(--text-muted)' }}>
+    <div className="glass-kicker mb-2" style={{ color: 'var(--text-muted)' }}>
       {children}
     </div>
   );
@@ -542,21 +542,21 @@ function UserProfileCard({
           </div>
 
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <h2 className="pc-display text-title leading-none" style={{ color: 'var(--text-primary)' }}>
+            <h2 className="pc-display glass-title-channel leading-none" style={{ color: 'var(--text-primary)' }}>
               {displayName}
             </h2>
             {isBotUser && (
               <span
-                className="inline-flex items-center rounded-[var(--radius-chip)] px-1.5 py-0.5 text-meta font-semibold"
-                style={{ background: 'var(--bg-mod-strong)', color: 'var(--text-secondary)' }}
+                className="inline-flex items-center rounded-[var(--r-chip)] px-1.5 py-0.5 text-[11px] font-bold"
+                style={{ background: 'var(--chip-count)', color: 'var(--text-primary)' }}
               >
                 Bot
               </span>
             )}
             {isStaffUser && (
               <span
-                className="inline-flex items-center gap-1 rounded-[var(--radius-chip)] px-1.5 py-0.5 text-meta font-semibold"
-                style={{ background: 'var(--accent-tint)', color: 'var(--accent-primary)' }}
+                className="inline-flex items-center gap-1 rounded-[var(--r-chip)] px-1.5 py-0.5 text-[11px] font-bold"
+                style={{ background: 'var(--chip-count)', color: 'var(--text-primary)' }}
               >
                 <BadgeCheck size={11} />
                 Staff
@@ -565,7 +565,7 @@ function UserProfileCard({
           </div>
 
           <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
-            <span className="font-code text-sm" style={{ color: 'var(--text-secondary)' }}>
+            <span className="text-[15px]" style={{ color: 'var(--text-secondary)' }}>
               @{user.username}
             </span>
             {pronouns && (
@@ -594,7 +594,7 @@ function UserProfileCard({
         {bio && (
           <div className="px-5 pb-4">
             <SectionLabel>About</SectionLabel>
-            <div className="pc-well px-3.5 py-3 text-body text-text-secondary">
+            <div className="pc-well px-3.5 py-3 text-[15px] text-text-secondary">
               {parseMarkdown(bio)}
             </div>
           </div>
@@ -603,56 +603,51 @@ function UserProfileCard({
         {identityFingerprint && (
           <div className="px-5 pb-4">
             <SectionLabel>Identity verification</SectionLabel>
-            <div className="rounded-well px-3.5 py-3" style={{ background: 'var(--bg-well)' }}>
+            <div className="rounded-[var(--r-row)] px-3.5 py-3" style={{ background: 'var(--bg-well)' }}>
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="inline-flex items-center gap-1.5 text-meta font-semibold">
+                {/* Trust is said in words and an icon, in ink: no green, no yellow. */}
+                <div className="inline-flex items-center gap-1.5 text-[13px] font-semibold">
                   {identityTrust === 'verified' ? (
                     <>
-                      <ShieldCheck size={13} className="text-accent-success" />
-                      <span className="text-accent-success">Verified</span>
+                      <ShieldCheck size={14} className="text-text-primary" />
+                      <span className="text-text-primary">Verified</span>
                     </>
                   ) : identityTrust === 'unknown' ? (
                     <>
-                      <ShieldQuestion size={13} className="text-text-muted" />
+                      <ShieldQuestion size={14} className="text-text-muted" />
                       <span className="text-text-secondary">Unknown until you unlock encryption</span>
                     </>
                   ) : (
                     <>
-                      <ShieldAlert size={13} className="text-accent-warning" />
-                      <span className="text-accent-warning">Not verified</span>
+                      <ShieldAlert size={14} className="text-text-primary" />
+                      <span className="text-text-primary">Not verified</span>
                     </>
                   )}
                 </div>
-                <button
-                  className={`inline-flex items-center gap-1.5 rounded-chip bg-bg-mod-subtle px-2 py-1 text-meta font-medium text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary ${FOCUS_RING}`}
-                  onClick={() => setShowIdentityVerifyModal(true)}
-                >
-                  <QrCode size={12} />
+                <Button variant="glass" size="sm" onClick={() => setShowIdentityVerifyModal(true)}>
+                  <QrCode size={13} />
                   Verify
-                </button>
+                </Button>
               </div>
               <div
-                className="mt-2 break-all rounded-chip px-2 py-1.5 font-code text-[11px]"
+                className="mt-2 break-all rounded-[var(--r-chip)] px-2 py-1.5 font-code text-[12px]"
                 style={{ background: 'var(--bg-raised)', color: 'var(--text-secondary)' }}
               >
                 {identityFingerprint}
               </div>
               {identityRotationWarning && (
                 <div
-                  className="mt-2 rounded-chip px-2 py-1.5 text-[11px]"
+                  className="mt-2 rounded-[var(--r-chip)] px-2 py-1.5 text-[13px]"
                   style={{ background: 'var(--danger-tint)', color: 'var(--accent-danger)' }}
                 >
                   {identityRotationWarning}
                 </div>
               )}
               {identityTrust !== 'verified' && (
-                <button
-                  className={`mt-2 inline-flex items-center gap-1.5 rounded-chip bg-success-tint px-2 py-1 text-meta font-medium text-accent-success transition-colors hover:bg-accent-success/20 ${FOCUS_RING}`}
-                  onClick={() => void handleMarkIdentityVerified()}
-                >
-                  <ShieldCheck size={12} />
+                <Button variant="glass" size="sm" className="mt-2" onClick={() => void handleMarkIdentityVerified()}>
+                  <ShieldCheck size={13} />
                   Mark verified
-                </button>
+                </Button>
               )}
             </div>
           </div>
@@ -661,9 +656,9 @@ function UserProfileCard({
         {createdAt && (
           <div className="px-5 pb-4">
             <SectionLabel>Member since</SectionLabel>
-            <div className="flex items-center gap-2 text-meta" style={{ color: 'var(--text-secondary)' }}>
-              <CalendarDays size={13} style={{ color: 'var(--text-muted)' }} />
-              <span className="font-code">{formatDate(createdAt)}</span>
+            <div className="flex items-center gap-2 text-[13px]" style={{ color: 'var(--text-secondary)' }}>
+              <CalendarDays size={14} style={{ color: 'var(--text-muted)' }} />
+              <span className="glass-instrument">{formatDate(createdAt)}</span>
             </div>
           </div>
         )}
@@ -675,8 +670,8 @@ function UserProfileCard({
               {displayRoles.map((role) => (
                 <span
                   key={role.id}
-                  className="inline-flex items-center gap-1.5 rounded-window px-2 py-0.5 text-meta font-medium"
-                  style={{ background: 'var(--bg-mod-strong)', color: 'var(--text-secondary)' }}
+                  className="inline-flex items-center gap-1.5 rounded-[var(--r-chip)] px-2 py-0.5 text-[13px] font-medium"
+                  style={{ background: 'var(--chip-count)', color: 'var(--text-primary)' }}
                 >
                   <span className="h-2 w-2 rounded-full" style={{ backgroundColor: roleColorToHex(role.color) }} />
                   {role.name}
@@ -693,12 +688,12 @@ function UserProfileCard({
               {mutualGuilds.slice(0, 5).map((guild) => (
                 <div
                   key={guild.id}
-                  className="flex items-center gap-2.5 rounded-chip px-1.5 py-1.5 transition-colors hover:bg-bg-mod-subtle"
+                  className="flex items-center gap-2.5 rounded-[10px] px-1.5 py-1.5 transition-colors duration-[var(--glass-ms)] hover:bg-[var(--wash-hover)]"
                   title={guild.name}
                 >
                   <div
-                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[10px] font-bold"
-                    style={{ background: 'var(--accent-tint-strong)', color: 'var(--accent-primary)' }}
+                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-bold"
+                    style={{ background: 'var(--glass-fill)', color: 'var(--text-primary)' }}
                   >
                     {guild.name.charAt(0).toUpperCase()}
                   </div>
@@ -730,15 +725,15 @@ function UserProfileCard({
                 return (
                   <div
                     key={friend.id}
-                    className="flex items-center gap-2.5 rounded-chip px-1.5 py-1.5 transition-colors hover:bg-bg-mod-subtle"
+                    className="flex items-center gap-2.5 rounded-[10px] px-1.5 py-1.5 transition-colors duration-[var(--glass-ms)] hover:bg-[var(--wash-hover)]"
                     title={friend.username}
                   >
                     {friendAvatar ? (
                       <img src={friendAvatar} alt="" className="h-6 w-6 shrink-0 rounded-full object-cover" />
                     ) : (
                       <div
-                        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[10px] font-bold"
-                        style={{ background: 'var(--accent-tint-strong)', color: 'var(--accent-primary)' }}
+                        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-bold"
+                        style={{ background: 'var(--glass-fill)', color: 'var(--text-primary)' }}
                       >
                         {friend.username.charAt(0).toUpperCase()}
                       </div>
@@ -768,7 +763,7 @@ function UserProfileCard({
                   href={account.url}
                   target="_blank"
                   rel="noreferrer"
-                  className={`flex items-center justify-between gap-2 rounded-chip px-2 py-1.5 text-meta text-text-secondary transition-colors hover:bg-bg-mod-subtle hover:text-text-primary ${FOCUS_RING}`}
+                  className={`flex items-center justify-between gap-2 rounded-[10px] px-2 py-1.5 text-[13px] text-text-secondary transition-colors duration-[var(--glass-ms)] hover:bg-[var(--wash-hover)] hover:text-text-primary ${FOCUS_RING}`}
                 >
                   <span className="truncate">{account.label}</span>
                   <Link2 size={12} className="shrink-0" style={{ color: 'var(--text-muted)' }} />
@@ -788,100 +783,106 @@ function UserProfileCard({
           <input
             type="text"
             placeholder="Add a private note — only you can see this"
-            className={`h-10 w-full rounded-chip border border-border-subtle bg-bg-well px-3 text-body text-text-primary transition-colors placeholder:text-text-muted focus:border-accent-primary ${FOCUS_RING}`}
+            className={`pc-well h-10 w-full rounded-[var(--r-ctl)] px-3 text-[15px] text-text-primary placeholder:text-[var(--ink-placeholder)] ${FOCUS_RING}`}
             value={note}
             onChange={(e) => setNote(e.target.value)}
           />
         </div>
 
-        {/* Actions — primary emerald message, ghost add-friend, danger block/report */}
+        {/* Actions: Message is THE primary action (cream); the rest are glass; Block
+            and Report take the one danger ink. */}
         <div className="flex flex-col gap-2 px-5 pb-5 pt-1">
-          <button
-            className={`flex h-9 w-full items-center justify-center gap-2 rounded-chip bg-accent-primary text-label font-semibold text-text-on-accent shadow-[var(--shadow-chip)] transition-[transform,background-color] duration-[var(--duration-fast)] hover:bg-accent-primary-hover active:scale-[0.98] active:bg-accent-primary-active ${FOCUS_RING}`}
-            onClick={() => void handleMessage()}
-          >
+          <Button className="w-full" onClick={() => void handleMessage()}>
             <MessageSquare size={16} />
             Message
-          </button>
+          </Button>
           <div className="flex items-center gap-2">
             {!isBotUser && relationshipType === 1 && (
-              <button
-                className={`flex h-9 flex-1 items-center justify-center gap-2 rounded-chip border border-border-subtle text-label font-medium text-text-secondary transition-colors duration-[var(--duration-fast)] hover:bg-bg-mod-subtle hover:text-text-primary active:scale-[0.98] ${FOCUS_RING}`}
+              <Button
+                variant="glass"
+                className="flex-1"
                 aria-label={`Remove ${user.username} as a friend`}
                 onClick={() => void handleRemoveRelationship(`Removed ${user.username} from friends.`)}
               >
                 <UserMinus size={16} />
                 Remove friend
-              </button>
+              </Button>
             )}
             {!isBotUser && relationshipType === 2 && (
-              <button
-                className={`flex h-9 flex-1 items-center justify-center gap-2 rounded-chip border border-border-subtle text-label font-medium text-text-secondary transition-colors duration-[var(--duration-fast)] hover:bg-bg-mod-subtle hover:text-text-primary active:scale-[0.98] ${FOCUS_RING}`}
+              <Button
+                variant="glass"
+                className="flex-1"
                 aria-label={`Unblock ${user.username}`}
                 onClick={() => void handleRemoveRelationship(`Unblocked ${user.username}.`)}
               >
                 <UserCheck size={16} />
                 Unblock
-              </button>
+              </Button>
             )}
             {!isBotUser && relationshipType === 3 && (
               <>
-                <button
-                  className={`flex h-9 flex-1 items-center justify-center gap-2 rounded-chip border border-border-subtle text-label font-medium text-text-secondary transition-colors duration-[var(--duration-fast)] hover:bg-bg-mod-subtle hover:text-text-primary active:scale-[0.98] ${FOCUS_RING}`}
+                <Button
+                  variant="glass"
+                  className="flex-1"
                   aria-label={`Accept friend request from ${user.username}`}
                   onClick={() => void handleAcceptFriend()}
                 >
                   <UserCheck size={16} />
                   Accept
-                </button>
-                <button
-                  className={`flex h-9 items-center justify-center gap-2 rounded-chip border border-border-subtle px-3 text-label font-medium text-text-secondary transition-colors duration-[var(--duration-fast)] hover:bg-bg-mod-subtle hover:text-text-primary active:scale-[0.98] ${FOCUS_RING}`}
+                </Button>
+                <Button
+                  variant="glass"
+                  size="icon"
                   aria-label={`Decline friend request from ${user.username}`}
                   onClick={() => void handleRemoveRelationship(`Declined friend request from ${user.username}.`)}
                 >
                   <UserX size={16} />
-                </button>
+                </Button>
               </>
             )}
             {!isBotUser && relationshipType === 4 && (
-              <button
-                className={`flex h-9 flex-1 items-center justify-center gap-2 rounded-chip border border-border-subtle text-label font-medium text-text-secondary transition-colors duration-[var(--duration-fast)] hover:bg-bg-mod-subtle hover:text-text-primary active:scale-[0.98] ${FOCUS_RING}`}
+              <Button
+                variant="glass"
+                className="flex-1"
                 aria-label={`Cancel friend request to ${user.username}`}
                 onClick={() => void handleRemoveRelationship(`Canceled friend request to ${user.username}.`)}
               >
                 <UserX size={16} />
                 Cancel request
-              </button>
+              </Button>
             )}
             {!isBotUser && relationshipType == null && (
-              <button
-                className={`flex h-9 flex-1 items-center justify-center gap-2 rounded-chip border border-border-subtle text-label font-medium text-text-secondary transition-colors duration-[var(--duration-fast)] hover:bg-bg-mod-subtle hover:text-text-primary active:scale-[0.98] ${FOCUS_RING}`}
+              <Button
+                variant="glass"
+                className="flex-1"
                 aria-label={`Add ${user.username} as a friend`}
                 onClick={() => void handleAddFriend()}
               >
                 <UserPlus size={16} />
                 Add friend
-              </button>
+              </Button>
             )}
             {relationshipType !== 2 && (
-              <button
-                className={`flex h-9 items-center justify-center gap-2 rounded-chip border border-accent-danger/30 px-3 text-label font-medium text-accent-danger transition-colors duration-[var(--duration-fast)] hover:bg-danger-tint active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-danger focus-visible:ring-offset-2 focus-visible:ring-offset-bg-floating ${isBotUser || relationshipType != null && relationshipType !== 1 ? 'flex-1' : ''}`}
+              <Button
+                variant="danger"
+                className={isBotUser || relationshipType != null && relationshipType !== 1 ? 'flex-1' : ''}
                 aria-label={`Block ${user.username}`}
                 onClick={() => void handleBlock()}
               >
                 <Ban size={16} />
                 Block
-              </button>
+              </Button>
             )}
             {!isBotUser && activeGuildId && (
-              <button
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-chip text-accent-danger transition-colors duration-[var(--duration-fast)] hover:bg-danger-tint active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-danger focus-visible:ring-offset-2 focus-visible:ring-offset-bg-floating"
+              <Button
+                variant="danger"
+                size="icon"
                 title="Report user"
                 aria-label={`Report ${user.username}`}
                 onClick={() => { setShowReportDialog(true); setActionError(null); }}
               >
                 <Flag size={16} />
-              </button>
+              </Button>
             )}
           </div>
         </div>
@@ -900,19 +901,19 @@ function UserProfileCard({
           open
           onClose={() => { setShowReportDialog(false); setActionError(null); }}
           labeledBy="report-user-title"
-          panelClassName="w-full max-w-md p-5"
+          panelClassName="w-full max-w-md p-6 [--pc-dialog-r:24px]"
         >
           <div>
-            <h3 id="report-user-title" className="font-display text-heading text-text-primary">Report user</h3>
-            <p className="mt-1.5 text-meta text-text-muted">
+            <h3 id="report-user-title" className="pc-display glass-title-channel text-text-primary">Report user</h3>
+            <p className="glass-secondary mt-1.5 text-text-muted">
               Reports go to this server's moderators. Add concise, verifiable evidence to speed up review.
             </p>
-            <div className="mt-3 rounded-chip border border-border-subtle bg-bg-well px-3 py-2 text-meta text-text-secondary">
+            <div className="pc-well mt-3 px-3 py-2 text-[13px] text-text-secondary">
               <span className="font-semibold text-text-primary">{user.username}</span>
               <span className="ml-1 text-text-muted">({user.id})</span>
             </div>
             <label className="mt-4 block">
-              <span className="text-section text-text-faint">Reason</span>
+              <span className="text-[13px] font-medium text-text-secondary">Reason</span>
               <textarea
                 className="input-field mt-2 min-h-[96px] resize-y"
                 value={reportReason}
@@ -922,7 +923,7 @@ function UserProfileCard({
               />
             </label>
             <label className="mt-3 block">
-              <span className="text-section text-text-faint">Evidence (optional)</span>
+              <span className="text-[13px] font-medium text-text-secondary">Evidence (optional)</span>
               <textarea
                 className="input-field mt-2 min-h-[72px] resize-y"
                 value={reportEvidence}
@@ -939,21 +940,17 @@ function UserProfileCard({
                 {actionError}
               </div>
             )}
-            <div className="mt-4 flex flex-wrap items-center gap-2.5">
-              <button
-                className="btn-primary"
-                onClick={() => void handleReportUser()}
-                disabled={reportSubmitting}
-              >
-                {reportSubmitting ? 'Submitting...' : 'Submit report'}
-              </button>
-              <button
-                className={`rounded-chip px-3.5 py-2 text-label font-medium text-text-secondary transition-colors hover:bg-bg-mod-subtle hover:text-text-primary ${FOCUS_RING}`}
+            <div className="mt-5 flex flex-wrap items-center justify-end gap-2">
+              <Button
+                variant="ghost"
                 onClick={() => { setShowReportDialog(false); setActionError(null); setReportReason(''); setReportEvidence(''); }}
                 disabled={reportSubmitting}
               >
                 Cancel
-              </button>
+              </Button>
+              <Button onClick={() => void handleReportUser()} disabled={reportSubmitting}>
+                {reportSubmitting ? 'Submitting...' : 'Submit report'}
+              </Button>
             </div>
           </div>
         </Modal>
@@ -964,26 +961,28 @@ function UserProfileCard({
           open
           onClose={() => setShowIdentityVerifyModal(false)}
           labeledBy="identity-verification-title"
-          panelClassName="w-full max-w-md p-5"
+          panelClassName="w-full max-w-md p-6 [--pc-dialog-r:24px]"
         >
           <div>
-            <h3 id="identity-verification-title" className="font-display text-heading text-text-primary">Cross-device identity verification</h3>
-            <p className="mt-1.5 mb-4 text-meta text-text-muted">
+            <h3 id="identity-verification-title" className="pc-display glass-title-channel text-text-primary">Cross-device identity verification</h3>
+            <p className="glass-secondary mt-1.5 mb-4 text-text-muted">
               Scan this code on your other signed-in device, confirm the fingerprints match, then mark it verified.
             </p>
-            <div className="mb-4 flex justify-center rounded-well p-3" style={{ background: 'var(--bg-well)' }}>
+            <div className="mb-4 flex justify-center rounded-[var(--r-row)] p-3" style={{ background: 'var(--bg-well)' }}>
               {identityQrDataUrl ? (
-                <img src={identityQrDataUrl} alt="Identity verification QR code" className="h-52 w-52 rounded-chip" />
+                <img src={identityQrDataUrl} alt="Identity verification QR code" className="h-52 w-52 rounded-[var(--r-chip)]" />
               ) : (
                 <div className="flex h-52 w-52 items-center justify-center text-meta text-text-muted">Generating code…</div>
               )}
             </div>
-            <div className="mb-2 text-section text-text-muted">Payload</div>
-            <div className="mb-3 break-all rounded-chip px-2 py-1.5 font-code text-[11px] text-text-secondary" style={{ background: 'var(--bg-well)' }}>
+            <div className="glass-kicker mb-2 text-text-muted">Payload</div>
+            <div className="mb-3 break-all rounded-[var(--r-chip)] px-2 py-1.5 font-code text-[12px] text-text-secondary" style={{ background: 'var(--bg-well)' }}>
               {verificationPayload}
             </div>
-            <button
-              className={`mb-5 inline-flex items-center gap-1.5 rounded-chip bg-bg-mod-subtle px-2.5 py-1.5 text-meta font-medium text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary ${FOCUS_RING}`}
+            <Button
+              variant="glass"
+              size="sm"
+              className="mb-5"
               onClick={() => {
                 if (!verificationPayload) return;
                 void writeClipboardText(verificationPayload)
@@ -991,30 +990,22 @@ function UserProfileCard({
                   .catch((err) => toast.error(`Failed to copy verification payload: ${err instanceof Error ? err.message : String(err)}`));
               }}
             >
-              <Copy size={12} />
+              <Copy size={13} />
               Copy payload
-            </button>
-            <div className="mb-2 text-section text-text-muted">Verify from scanned payload</div>
+            </Button>
+            <div className="glass-kicker mb-2 text-text-muted">Verify from scanned payload</div>
             <input
               type="text"
-              className={`mb-4 h-10 w-full rounded-chip border border-border-subtle bg-bg-well px-3 text-body text-text-primary transition-colors placeholder:text-text-muted focus:border-accent-primary ${FOCUS_RING}`}
+              className={`pc-well mb-4 h-10 w-full rounded-[var(--r-ctl)] px-3 text-[15px] text-text-primary placeholder:text-[var(--ink-placeholder)] ${FOCUS_RING}`}
               placeholder="Paste scanned payload JSON"
               value={identityVerifyPayload}
               onChange={(e) => setIdentityVerifyPayload(e.target.value)}
             />
             <div className="flex items-center justify-end gap-2">
-              <button
-                className={`rounded-chip px-3 py-1.5 text-label font-medium text-text-secondary transition-colors hover:bg-bg-mod-subtle hover:text-text-primary ${FOCUS_RING}`}
-                onClick={() => setShowIdentityVerifyModal(false)}
-              >
+              <Button variant="ghost" onClick={() => setShowIdentityVerifyModal(false)}>
                 Close
-              </button>
-              <button
-                className={`rounded-chip bg-success-tint px-3 py-1.5 text-label font-medium text-accent-success transition-colors hover:bg-accent-success/20 ${FOCUS_RING}`}
-                onClick={() => void handleVerifyIdentityPayload()}
-              >
-                Verify payload
-              </button>
+              </Button>
+              <Button onClick={() => void handleVerifyIdentityPayload()}>Verify payload</Button>
             </div>
           </div>
         </Modal>

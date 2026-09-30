@@ -491,7 +491,7 @@ export function ServerConnectPage() {
             {/* One sentence, not a table of URL formats: the person on this
                 screen was sent a link, and the box takes whatever they paste —
                 an invite, a paracord:// link, or a bare address. */}
-            <p className="text-meta leading-relaxed text-text-secondary">
+            <p className="text-[13px] leading-relaxed text-text-secondary">
               No invite link? The address of the server works too, for example{' '}
               <span className="pc-mono">chat.example.com</span>. Whoever runs it can tell you.
             </p>
@@ -532,7 +532,7 @@ export function ServerConnectPage() {
             <div className="flex min-h-0 flex-col p-4 sm:p-5">
               <div className="flex items-center justify-between px-2 pb-1">
                 <h2 className="pc-display text-heading text-text-primary">Servers you have joined</h2>
-                <span className="pc-mono text-meta text-text-faint">{servers.length}</span>
+                <span className="glass-instrument text-[13px] text-text-faint">{servers.length}</span>
               </div>
               <ul className="mt-1 flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain">
                 {servers.map((server, index) => {
@@ -558,8 +558,8 @@ export function ServerConnectPage() {
                             {server.name}
                           </div>
                           <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
-                            <span className="shrink-0 text-meta text-text-secondary">{stateLabel}</span>
-                            <span className="truncate pc-mono text-meta text-text-faint">
+                            <span className="shrink-0 text-[13px] text-text-secondary">{stateLabel}</span>
+                            <span className="truncate pc-mono text-[13px] text-text-faint">
                               · {server.url}
                             </span>
                           </div>

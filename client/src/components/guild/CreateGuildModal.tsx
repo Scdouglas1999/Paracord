@@ -311,7 +311,7 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
                     >
                       <div className="flex items-center justify-between gap-2">
                         <span className="pc-display text-name text-text-primary">{t.name}</span>
-                        <span className="pc-mono shrink-0 text-meta text-text-faint">
+                        <span className="glass-instrument shrink-0 text-meta text-text-faint">
                           {t.template_data.channels.length} channels
                         </span>
                       </div>

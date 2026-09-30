@@ -298,11 +298,11 @@ export function AutomodSection({ guildId, channels, roles }: AutomodSectionProps
           <Well bare className="divide-y divide-border-subtle px-4">
             {hits.map((hit) => (
               <div key={hit.id} className="flex items-start gap-3 py-3">
-                <ShieldAlert size={15} className="mt-0.5 shrink-0 text-accent-warning" aria-hidden />
+                <ShieldAlert size={15} className="mt-0.5 shrink-0 text-text-primary" aria-hidden />
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-baseline gap-2">
                     <span className="pc-display text-name text-text-primary">{hit.rule_name}</span>
-                    <span className="pc-mono text-meta text-text-faint">
+                    <span className="glass-instrument text-meta text-text-faint">
                       {new Date(hit.created_at).toLocaleString()}
                     </span>
                   </div>
@@ -489,7 +489,7 @@ function RuleEditor({ guildId, channels, roles, onCancel, onCreated }: RuleEdito
         {testResult && (
           <p
             className={`mt-2 text-meta leading-relaxed ${
-              testResult.matched ? 'text-accent-warning' : 'text-accent-success'
+              testResult.matched ? 'font-medium text-text-primary' : 'text-text-secondary'
             }`}
           >
             {testResult.matched

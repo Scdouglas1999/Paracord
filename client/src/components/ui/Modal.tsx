@@ -16,7 +16,7 @@ import { cn } from '../../lib/utils';
 
 /**
  * Single base modal/dialog primitive for the app. Owns the portal, backdrop,
- * enter/exit motion (the shared §5.1 overlay recipe: fade + 6px rise and
+ * enter/exit motion (the shared overlay recipe: fade + 6px rise and
  * 0.98 scale in on ease-out, fade out on the quicker ease-in), ARIA wiring, focus trap and
  * Escape handling. Complex consumers that already manage their own focus trap
  * can opt out with `manageFocus={false}` and pass their own `panelRef`.
@@ -27,9 +27,12 @@ import { cn } from '../../lib/utils';
 type ModalPlacement = 'center' | 'top';
 type ModalSize = 'sm' | 'md' | 'lg' | 'xl' | 'auto';
 
+// A dialog is a near-solid pane over the dimmed app (docs/glass-spec.md §2.4):
+// radius 24 for a confirm or a short form, 28 for a window. `--pc-dialog-r`
+// is what `.pc-dialog` reads (primitives.css).
 const SIZE_CLASS: Record<ModalSize, string> = {
-  sm: 'w-full max-w-md',
-  md: 'w-full max-w-xl',
+  sm: 'w-full max-w-md [--pc-dialog-r:24px]',
+  md: 'w-full max-w-xl [--pc-dialog-r:24px]',
   lg: 'w-full max-w-2xl',
   xl: 'w-full max-w-3xl',
   auto: '',
@@ -148,8 +151,8 @@ export function Modal({
         aria-label={labeledBy ? undefined : ariaLabel}
         tabIndex={-1}
         className={cn(
-          // A dialog is a plate that floats over the street (spec §4):
-          // --bg-floating + the plate shadow, the plate's radius, no border.
+          // A dialog is a near-solid pane that floats over the dimmed app:
+          // the pane's fill and depth, a radius by size, and no border.
           'pc-dialog relative max-h-[calc(100dvh-2rem)] max-w-[calc(100vw-2rem)] overflow-hidden',
           exiting ? 'pc-exit' : 'pc-enter',
           SIZE_CLASS[size],
@@ -178,9 +181,9 @@ export function ModalCloseButton({ className }: { className?: string }) {
       onClick={ctx.onClose}
       aria-label={ctx.closeLabel}
       className={cn(
-        'pc-focusable absolute right-4 top-4 flex h-[var(--h-control)] w-[var(--h-control)] items-center justify-center',
-        'rounded-[var(--radius-control)] text-text-muted',
-        'transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary',
+        'pc-focusable absolute right-4 top-4 flex h-9 w-9 items-center justify-center',
+        'rounded-[var(--r-capsule)] text-text-muted',
+        'transition-colors duration-[var(--glass-ms)] ease-[var(--glass-ease)] hover:bg-[var(--wash-hover)] hover:text-text-primary active:bg-[var(--wash-press)]',
         className,
       )}
     >
@@ -218,7 +221,7 @@ export function ModalTitle({
   return (
     <h2
       id={id}
-      className={cn('pc-display text-title text-text-primary', className)}
+      className={cn('pc-display glass-title-channel text-text-primary', className)}
     >
       {children}
     </h2>
@@ -237,7 +240,7 @@ export function ModalDescription({
   return (
     <p
       id={id}
-      className={cn('mt-2 max-w-prose text-body text-text-secondary', className)}
+      className={cn('glass-body mt-2 max-w-prose text-text-secondary', className)}
     >
       {children}
     </p>
@@ -263,7 +266,7 @@ export function ModalFooter({
 }) {
   return (
     <div
-      className={cn('flex flex-wrap justify-end gap-2 px-6 pb-6 pt-5', className)}
+      className={cn('flex flex-wrap items-center justify-end gap-2 px-6 pb-6 pt-5', className)}
     >
       {children}
     </div>

@@ -68,14 +68,14 @@ export function BotStoreCard({ bot, onAdd, adding, canManage }: BotStoreCardProp
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-meta text-text-faint">
             <span className="inline-flex items-center gap-1.5">
               <Download size={12} aria-hidden />
-              <span className="pc-mono">
+              <span className="glass-instrument">
                 {`${bot.install_count.toLocaleString()} ${bot.install_count === 1 ? 'server' : 'servers'}`}
               </span>
             </span>
             {typeof bot.average_rating === 'number' && typeof bot.review_count === 'number' && (
               <span className="inline-flex items-center gap-1.5">
-                <Star size={12} className="text-accent-warning" aria-hidden />
-                <span className="pc-mono">
+                <Star size={12} className="text-text-primary" aria-hidden />
+                <span className="glass-instrument">
                   {bot.average_rating.toFixed(1)} ({bot.review_count})
                 </span>
               </span>

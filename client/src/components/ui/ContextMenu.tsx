@@ -89,7 +89,10 @@ export function ContextMenu({ items, position, open = true, onClose, label = 'Co
       window.visualViewport?.removeEventListener('resize', place);
       window.visualViewport?.removeEventListener('scroll', place);
     };
-  }, [anchor.x, anchor.y, anchorRef]);
+  // `mounted` is a dependency because the menu node only exists while mounted:
+  // a menu reopened at the same anchor is a new node that has to be measured
+  // again, or it keeps the position of the last time it opened.
+  }, [anchor.x, anchor.y, anchorRef, mounted]);
 
   useLayoutEffect(() => {
     const menu = menuRef.current;
@@ -208,7 +211,7 @@ export function ContextMenu({ items, position, open = true, onClose, label = 'Co
       */}
       {items.map((item, i) => {
         if (item.divider) {
-          return <div key={i} className="mx-1 my-1 h-px bg-border-subtle" />;
+          return <div key={i} className="mx-2 my-1 h-px bg-border-subtle" />;
         }
         const active = focusedIndex === i;
         return (
@@ -219,13 +222,15 @@ export function ContextMenu({ items, position, open = true, onClose, label = 'Co
             role={item.selected === undefined ? 'menuitem' : 'menuitemradio'}
             aria-checked={item.selected === undefined ? undefined : item.selected}
             className={cn(
-              'flex w-full items-center justify-between gap-3 rounded-[var(--radius-chip)] px-2.5 py-1.5 text-left text-label outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] [@media(pointer:coarse)]:min-h-11',
-              // A destructive item takes danger INK, never a red fill (§1.3).
+              'flex w-full items-center justify-between gap-3 rounded-[10px] px-2.5 py-1.5 text-left text-[15px] font-medium outline-none transition-colors duration-[var(--glass-ms)] ease-[var(--glass-ease)] [@media(pointer:coarse)]:min-h-11',
+              // A destructive item takes the one danger INK, never a red fill
+              // (§1.3). Hover is one step lighter, press one step darker.
               item.danger ? 'text-accent-danger' : 'text-text-secondary',
               item.disabled && 'cursor-not-allowed text-text-muted',
+              !item.disabled && 'active:bg-[var(--wash-press)]',
               active &&
                 !item.disabled &&
-                (item.danger ? 'bg-bg-mod-subtle' : 'bg-bg-mod-subtle text-text-primary'),
+                (item.danger ? 'bg-[var(--wash-hover)]' : 'bg-[var(--wash-hover)] text-text-primary'),
             )}
             disabled={item.disabled}
             onClick={() => {
@@ -242,11 +247,11 @@ export function ContextMenu({ items, position, open = true, onClose, label = 'Co
                   {item.icon}
                 </span>
               )}
-              <span className="min-w-0"><span className="block truncate">{item.label}</span>{item.description && <span className="mt-0.5 block max-w-56 whitespace-normal text-meta text-text-muted">{item.description}</span>}</span>
+              <span className="min-w-0"><span className="block truncate">{item.label}</span>{item.description && <span className="mt-0.5 block max-w-56 whitespace-normal text-[13px] font-normal text-text-muted">{item.description}</span>}</span>
             </span>
-            {item.selected && <Check size={14} aria-hidden className="shrink-0 text-accent-primary" />}
+            {item.selected && <Check size={14} aria-hidden className="shrink-0 text-text-primary" />}
             {item.shortcut && (
-              <span className="shrink-0 text-meta text-text-muted">{item.shortcut}</span>
+              <span className="glass-instrument shrink-0 text-meta font-normal text-text-muted">{item.shortcut}</span>
             )}
           </button>
         );

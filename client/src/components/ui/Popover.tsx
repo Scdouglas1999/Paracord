@@ -65,13 +65,11 @@ function position(
 }
 
 /**
- * Popover — the floating-surface shell (spec §4): `--bg-floating` plus the plate
- * shadow, nothing else. It owns placement, Escape, outside-click and scroll
+ * Popover: the floating-surface shell (docs/glass-spec.md §5), a near-solid
+ * black at .97 with the heavier blur, a hairline and the raised shadow (the
+ * `pc-floating` recipe, which also goes fully opaque under reduced transparency
+ * and High contrast). It owns placement, Escape, outside-click and scroll
  * dismissal; what goes inside is the caller's business.
- *
- * No blur: WebKitGTK renders `backdrop-filter` on the CPU, and §9 requires the
- * surface to go fully opaque under reduced transparency anyway (the `pc-floating`
- * recipe handles that).
  */
 export function Popover({
   anchor,
@@ -178,13 +176,13 @@ export const MenuItem = React.forwardRef<HTMLButtonElement, MenuItemProps>(funct
       type={type}
       role="menuitem"
       className={cn(
-        'pc-focusable flex w-full items-center gap-2.5 rounded-[var(--radius-chip)] px-2.5 text-left',
-        'h-[var(--h-list-row)] text-label',
+        'pc-focusable flex w-full items-center gap-2.5 rounded-[10px] px-2.5 text-left',
+        'h-[var(--h-list-row)] text-[15px] font-medium',
         'pc-pressable-row',
         danger
           ? 'text-accent-danger hover:bg-danger-well'
-          : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary',
-        'disabled:pointer-events-none disabled:opacity-60',
+          : 'text-text-secondary hover:bg-[var(--wash-hover)] hover:text-text-primary',
+        'disabled:pointer-events-none disabled:opacity-40',
         className,
       )}
       {...props}
@@ -195,12 +193,12 @@ export const MenuItem = React.forwardRef<HTMLButtonElement, MenuItemProps>(funct
         </span>
       )}
       <span className="min-w-0 flex-1 truncate">{children}</span>
-      {trailing != null && <span className="ml-auto shrink-0 text-meta text-text-faint">{trailing}</span>}
+      {trailing != null && <span className="glass-instrument ml-auto shrink-0 text-meta font-normal text-text-faint">{trailing}</span>}
     </button>
   );
 });
 
-/** A quiet group heading inside a menu. Sentence case (spec §6.8). */
+/** A quiet group heading inside a menu: the Glass kicker (12/700, uppercase). */
 export function MenuLabel({ children }: { children: React.ReactNode }) {
-  return <div className="px-2.5 pb-1 pt-2 text-section text-text-faint">{children}</div>;
+  return <div className="glass-kicker px-2.5 pb-1 pt-2.5 text-text-faint">{children}</div>;
 }

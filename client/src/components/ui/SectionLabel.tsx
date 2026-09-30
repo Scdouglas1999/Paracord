@@ -10,10 +10,9 @@ export interface SectionLabelProps extends React.HTMLAttributes<HTMLDivElement> 
 }
 
 /**
- * SectionLabel — "Kestrel Robotics · 24 online" (spec §2 Section step, §6.8).
- *
- * **Sentence case, never uppercase.** No tracking. It is a quiet signpost, not
- * a heading: if the words need to shout, they belong in a Heading instead.
+ * SectionLabel: the Glass kicker (docs/glass-spec.md §2.3): 12/700, the narrow
+ * cut, uppercase with .1em tracking, in the tertiary ink ("COMING UP"). A quiet
+ * signpost, not a heading: if the words need to shout, they belong in a title.
  */
 export const SectionLabel = React.forwardRef<HTMLDivElement, SectionLabelProps>(
   function SectionLabel({ meta, className, children, ...props }, ref) {
@@ -21,14 +20,14 @@ export const SectionLabel = React.forwardRef<HTMLDivElement, SectionLabelProps>(
       <div
         ref={ref}
         className={cn(
-          'flex items-center justify-between gap-2 px-2.5 pb-1.5 pt-4',
-          'text-section text-text-faint',
+          'glass-kicker flex items-center justify-between gap-2 px-2.5 pb-1.5 pt-4',
+          'text-text-faint',
           className,
         )}
         {...props}
       >
         <span className="min-w-0 truncate">{children}</span>
-        {meta != null && <span className="shrink-0 text-meta text-text-faint">{meta}</span>}
+        {meta != null && <span className="glass-instrument shrink-0 text-meta font-medium normal-case tracking-normal text-text-faint">{meta}</span>}
       </div>
     );
   },

@@ -50,10 +50,11 @@ export interface SettingsShellProps {
 }
 
 /**
- * SettingsShell — settings open as **one plate over the street** (spec §4):
- * a left index of sections in sentence case, and the selected section's content
- * beside it in wells and raised rows. There is no second plate inside; the
- * index and the content share this one, parted by a hairline (§1.6).
+ * SettingsShell: settings open as **one near-solid pane over the dimmed app**
+ * (docs/glass-spec.md §2.4, radius 28): a left index of sections under kickers,
+ * and the selected section's content beside it in wells and tonal rows. There
+ * is no second pane inside; the index and the content share this one, parted by
+ * a hairline. The close control is a glass circle; Esc closes.
  *
  * Presentation only: the caller owns which section is active, what the content
  * is, and — on phones, where the index and the content are two screens — the
@@ -94,7 +95,7 @@ export function SettingsShell({
         {showIndex ? (
           <>
             <header className="flex items-center justify-between gap-3 px-4 pb-3 pt-[calc(var(--safe-top)+0.75rem)]">
-              <h1 className="pc-display min-w-0 truncate text-title text-text-primary">{title}</h1>
+              <h1 className="pc-display glass-title-channel min-w-0 truncate text-text-primary">{title}</h1>
               <IconButton label={closeLabel} size="lg" tone="raised" onClick={onClose}>
                 <X size={18} />
               </IconButton>
@@ -146,7 +147,7 @@ export function SettingsShell({
               {/* The section's own name is the first thing in the content
                   below, so this bar carries what is being configured instead —
                   context without saying the same word twice. */}
-              <p className="min-w-0 flex-1 truncate text-section text-text-faint">{title}</p>
+              <p className="glass-secondary min-w-0 flex-1 truncate text-text-faint">{title}</p>
               <span className="sr-only">{activeLabel}</span>
               <IconButton label={closeLabel} size="lg" tone="raised" onClick={onClose}>
                 <X size={18} />
@@ -177,7 +178,7 @@ export function SettingsShell({
         aria-label={label}
         className="flex w-[clamp(13rem,22vw,17rem)] shrink-0 flex-col overflow-y-auto px-3 py-5"
       >
-        <SectionLabel className="pt-0">{title}</SectionLabel>
+        <p className="pc-display glass-title-section shrink-0 truncate px-2.5 pb-2 text-text-primary">{title}</p>
         <div className="flex flex-col gap-4">
           {groups.map((group, index) => (
             <div key={group.label ?? `group-${index}`} className="flex flex-col gap-0.5">
@@ -232,7 +233,7 @@ export interface SettingsSectionHeaderProps {
 }
 
 /**
- * The head of a settings section: a Gabarito heading, one line of specific
+ * The head of a settings section: a window title (20/600), one line of specific
  * explanation, and at most one primary action.
  */
 export function SettingsSectionHeader({
@@ -244,9 +245,9 @@ export function SettingsSectionHeader({
   return (
     <header className={cn('mb-6 flex flex-wrap items-start justify-between gap-4', className)}>
       <div className="min-w-0">
-        <h2 className="pc-display text-title text-text-primary">{title}</h2>
+        <h2 className="pc-display glass-title-channel text-text-primary">{title}</h2>
         {description && (
-          <p className="mt-1.5 max-w-prose text-body text-text-secondary">{description}</p>
+          <p className="glass-body mt-1.5 max-w-prose text-text-secondary">{description}</p>
         )}
       </div>
       {action && <div className="shrink-0">{action}</div>}

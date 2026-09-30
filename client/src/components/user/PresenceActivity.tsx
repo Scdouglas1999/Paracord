@@ -137,7 +137,7 @@ export function ActivityCard({ view, className }: { view: ActivityView; classNam
                 style={{ '--pc-fill': progress.fraction.toFixed(4) } as CSSProperties}
               />
             </div>
-            <div className="pc-mono mt-1 flex justify-between text-[11px] text-text-muted" aria-hidden>
+            <div className="glass-instrument mt-1 flex justify-between text-meta text-text-muted" aria-hidden>
               <span>{formatTrackTime(progress.elapsedMs)}</span>
               <span>{formatTrackTime(progress.durationMs)}</span>
             </div>

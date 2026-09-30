@@ -150,14 +150,14 @@ export function BannerEditor({
 
   return (
     <section className="flex flex-col gap-3" aria-label={label}>
-      <div className="text-section text-text-faint">{label}</div>
+      <div className="text-[13px] font-medium text-text-secondary">{label}</div>
       <div
         ref={frameRef}
         className={cn(
-          'relative aspect-[3/1] w-full overflow-hidden rounded-[var(--radius-card)] bg-bg-mod-subtle',
+          'relative aspect-[3/1] w-full overflow-hidden rounded-[var(--r-bubble)] bg-bg-mod-subtle',
           loaded && 'cursor-grab touch-none active:cursor-grabbing',
         )}
-        style={loaded || currentSrc ? undefined : { background: accent ?? 'var(--accent-tint-strong)' }}
+        style={loaded || currentSrc ? undefined : { background: accent ?? 'var(--bub)' }}
         onPointerDown={(event) => {
           if (!loaded) return;
           event.currentTarget.setPointerCapture(event.pointerId);
@@ -215,7 +215,7 @@ export function BannerEditor({
         </div>
       ) : (
         <div className="flex flex-wrap items-center gap-2">
-          <label className="inline-flex rounded-[var(--radius-control)] focus-within:shadow-[var(--focus-ring)]">
+          <label className="inline-flex rounded-[var(--r-capsule)] focus-within:shadow-[var(--focus-ring)]">
             <input
               type="file"
               accept="image/png,image/jpeg,image/gif,image/webp"
@@ -226,7 +226,7 @@ export function BannerEditor({
                 event.target.value = '';
               }}
             />
-            <span className={cn(buttonVariants({ variant: 'primary' }), 'cursor-pointer')}>
+            <span className={cn(buttonVariants({ variant: 'glass' }), 'cursor-pointer')}>
               <Upload size={15} aria-hidden />
               Upload
             </span>

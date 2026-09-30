@@ -666,7 +666,7 @@ export function InstanceSetupPage() {
                     boxes it governs. */}
                 <p
                   id={passwordHintId}
-                  className="pc-auth-span text-meta leading-relaxed text-text-faint"
+                  className="pc-auth-span text-[13px] leading-relaxed text-text-faint"
                 >
                   {PASSWORD_REQUIREMENTS_HINT}
                 </p>
@@ -749,11 +749,11 @@ export function InstanceSetupPage() {
                 </div>
                 {reachExplanation(routerForwarding) && (
                   <div className="pc-well flex flex-col gap-1 px-4 py-3">
-                    <span className="text-meta text-text-faint">How this server was installed</span>
+                    <span className="text-[13px] text-text-faint">How this server was installed</span>
                     <span className="text-label font-semibold text-text-primary">
                       {reachLabel(Boolean(routerForwarding))}
                     </span>
-                    <span className="text-meta leading-relaxed text-text-secondary">
+                    <span className="text-[13px] leading-relaxed text-text-secondary">
                       {reachExplanation(routerForwarding)}
                     </span>
                   </div>
@@ -780,7 +780,7 @@ export function InstanceSetupPage() {
           </div>
 
           {stepIndex === 0 && (
-            <p className="text-meta leading-relaxed text-text-secondary">
+            <p className="text-[13px] leading-relaxed text-text-secondary">
               Joining someone else’s server instead? You don’t need a setup code — ask them for an
               invite link and sign up there.
             </p>

@@ -48,7 +48,7 @@ export function AccountSetupPage() {
               </p>
               <Link
                 to="/app"
-                className="pc-focusable rounded-[var(--radius-chip)] text-label font-semibold text-text-link underline underline-offset-4"
+                className="pc-focusable rounded-[var(--r-chip)] text-label font-semibold text-text-link underline underline-offset-4"
               >
                 Return to Paracord
               </Link>
@@ -191,7 +191,7 @@ function OwnedAccountSetupPage() {
               title="This account already has an identity"
               subtitle={`${signedInUser?.username ?? 'This account'} has a device identity on another device. Restore it here with your 24-word recovery phrase, so your key — and everything encrypted to it — stays the same.`}
             />
-            <p className="pc-well px-4 py-3 text-meta text-text-secondary">
+            <p className="pc-well px-4 py-3 text-[13px] text-text-secondary">
               Its key ends in{' '}
               <span className="pc-mono text-text-primary">
                 {(signedInUser?.public_key ?? '').slice(-8)}
@@ -204,13 +204,13 @@ function OwnedAccountSetupPage() {
               Recover from phrase
             </Button>
             {/* One way out per line: a wrapped separator reads as a typo. */}
-            <div className="flex flex-col items-start gap-1 text-meta text-text-secondary">
+            <div className="flex flex-col items-start gap-1 text-[13px] text-text-secondary">
               <p>
                 Lost the phrase?{' '}
                 <button
                   type="button"
                   onClick={() => navigate('/app?settings=identity')}
-                  className="pc-focusable rounded-[var(--radius-chip)] font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
+                  className="pc-focusable rounded-[var(--r-chip)] font-semibold text-text-link underline-offset-4 hover:underline"
                 >
                   Import the account from a file
                 </button>
@@ -218,7 +218,7 @@ function OwnedAccountSetupPage() {
               <button
                 type="button"
                 onClick={() => navigate('/login')}
-                className="pc-focusable rounded-[var(--radius-chip)] font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
+                className="pc-focusable rounded-[var(--r-chip)] font-semibold text-text-link underline-offset-4 hover:underline"
               >
                 Use a different account
               </button>
@@ -252,7 +252,7 @@ function OwnedAccountSetupPage() {
 
             {/* A caution is a well carrying warning ink, never a tinted box
                 with a colored border (spec §1.1, §1.6). */}
-            <div className="pc-well flex items-start gap-2.5 px-4 py-3 text-label text-accent-warning">
+            <div className="pc-well flex items-start gap-2.5 px-4 py-3 text-[15px] font-medium text-text-primary">
               <ShieldAlert size={16} className="mt-px shrink-0" />
               <span className="leading-relaxed">
                 Never share these words. Anyone who has them can take over your account.
@@ -265,9 +265,9 @@ function OwnedAccountSetupPage() {
                 {words.map((word, i) => (
                   <div
                     key={i}
-                    className="flex items-center gap-2 rounded-[var(--radius-chip)] bg-bg-raised px-2.5 py-1.5 shadow-[var(--shadow-chip)]"
+                    className="flex items-center gap-2 rounded-[var(--r-chip)] bg-bg-raised px-2.5 py-1.5 shadow-[var(--shadow-chip)]"
                   >
-                    <span className="pc-mono text-meta text-text-faint">
+                    <span className="glass-instrument text-[13px] text-text-faint">
                       {String(i + 1).padStart(2, '0')}
                     </span>
                     <span className="pc-mono text-label text-text-primary">{word}</span>
@@ -278,7 +278,7 @@ function OwnedAccountSetupPage() {
                 type="button"
                 aria-label={copied ? 'Recovery phrase copied' : 'Copy recovery phrase'}
                 onClick={handleCopyPhrase}
-                className="pc-focusable mt-3 inline-flex h-[var(--h-control)] items-center gap-1.5 rounded-[var(--radius-control)] px-2.5 text-meta font-semibold text-text-link transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle"
+                className="pc-focusable mt-3 inline-flex h-[var(--h-control)] items-center gap-1.5 rounded-[var(--radius-control)] px-2.5 text-[13px] font-semibold text-text-link transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle"
               >
                 {copied ? <Check size={14} /> : <Copy size={14} />}
                 {copied ? 'Copied to clipboard' : 'Copy phrase'}
@@ -331,7 +331,7 @@ function OwnedAccountSetupPage() {
 
           {isMigration && scope && <p className="text-label text-text-secondary">Instance account: {targetUser?.username} ({serverName})</p>}
           {existingIdentity && (
-            <p className="text-meta text-text-secondary">
+            <p className="text-[13px] text-text-secondary">
               Using saved identity <span className="pc-mono">{existingIdentity.slice(0, 12)}…</span>
             </p>
           )}
@@ -408,12 +408,12 @@ function OwnedAccountSetupPage() {
           </Button>
 
           {!isMigration ? (
-            <p className="text-meta text-text-secondary">
+            <p className="text-[13px] text-text-secondary">
               Already have an account?{' '}
               <button
                 type="button"
                 onClick={() => navigate('/login')}
-                className="pc-focusable rounded-[var(--radius-chip)] font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
+                className="pc-focusable rounded-[var(--r-chip)] font-semibold text-text-link underline-offset-4 hover:underline"
               >
                 Sign in
               </button>
@@ -421,17 +421,17 @@ function OwnedAccountSetupPage() {
               <button
                 type="button"
                 onClick={() => navigate('/recover')}
-                className="pc-focusable rounded-[var(--radius-chip)] font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
+                className="pc-focusable rounded-[var(--r-chip)] font-semibold text-text-link underline-offset-4 hover:underline"
               >
                 Recover from phrase
               </button>
             </p>
           ) : (
-            <p className="text-meta text-text-secondary">
+            <p className="text-[13px] text-text-secondary">
               <button
                 type="button"
                 onClick={() => navigate('/app')}
-                className="pc-focusable rounded-[var(--radius-chip)] font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
+                className="pc-focusable rounded-[var(--r-chip)] font-semibold text-text-link underline-offset-4 hover:underline"
               >
                 Skip for now
               </button>

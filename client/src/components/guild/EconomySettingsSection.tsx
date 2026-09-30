@@ -155,7 +155,7 @@ export function EconomySettingsSection({ guildId, roles }: EconomySettingsSectio
               const roleName = roleNameById.get(m.role_id) ?? m.role_id;
               return (
                 <li key={`${m.level}-${m.role_id}`} className="flex items-center gap-3 py-2">
-                  <span className="min-w-[4.5rem] pc-mono text-meta text-text-muted">
+                  <span className="min-w-[4.5rem] glass-instrument text-meta text-text-muted">
                     LVL {m.level}
                   </span>
                   <span
@@ -188,7 +188,7 @@ export function EconomySettingsSection({ guildId, roles }: EconomySettingsSectio
               placeholder="5"
               value={newMappingLevel}
               onChange={(e) => setNewMappingLevel(e.target.value)}
-              className="w-24 pc-mono"
+              className="w-24"
             />
           </label>
           <label className="flex flex-col">
@@ -232,13 +232,13 @@ export function EconomySettingsSection({ guildId, roles }: EconomySettingsSectio
             <div className="flex items-baseline justify-between gap-4 py-3">
               <dt className="text-text-secondary">XP per message</dt>
               <dd className="text-right text-text-primary">
-                <span className="pc-mono">15–25</span> XP, scaled by length
+                <span className="glass-instrument">15–25</span> XP, scaled by length
               </dd>
             </div>
             <div className="flex items-baseline justify-between gap-4 py-3">
               <dt className="text-text-secondary">Cooldown</dt>
               <dd className="text-right text-text-primary">
-                <span className="pc-mono">45s</span> default, env-configurable
+                <span className="glass-instrument">45s</span> default, env-configurable
               </dd>
             </div>
             <div className="flex items-baseline justify-between gap-4 py-3">

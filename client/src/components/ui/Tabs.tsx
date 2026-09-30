@@ -19,9 +19,9 @@ export interface TabsProps<T extends string = string>
   /** Accessible name for the tab list. */
   label: string;
   /**
-   * `segmented` (default) is a raised pill sliding inside a well — for a small
-   * either/or choice. `underline` is a row of labels under a hairline — for the
-   * top of a panel with several pages of content.
+   * `segmented` (default) is a glass control with a lighter pill sliding inside
+   * it, for a small either/or choice. `underline` is a row of labels under a
+   * hairline, for the top of a panel with several pages of content.
    */
   variant?: 'segmented' | 'underline';
   size?: 'sm' | 'md';
@@ -30,15 +30,15 @@ export interface TabsProps<T extends string = string>
 }
 
 /**
- * Tabs — one control for every "pick one of these views" in the app
- * (spec §3 control heights, §6.8 no uppercase, §9 focus + roving keyboard).
+ * Tabs: one control for every "pick one of these views" in the app
+ * (docs/glass-spec.md §1 controls are glass, §9 focus + roving keyboard).
  *
- * Selection is a **raised** surface inside a well, exactly like a selected row
- * anywhere else — never an accent bar on the segmented pill, never a light
- * token. That surface is ONE element the engine slides between the tabs on the
- * one ease-out (`useIndicator`): the mark moves, the pill travels to it — it
- * never jumps (§5.1). Arrow keys move between tabs; Home/End jump to the ends
- * (WAI-ARIA tabs pattern).
+ * Selection is the "on" glass fill on a pill inside a quieter glass control,
+ * the way Listen lights when it is on: never an accent bar on the segmented
+ * pill, never a color. That pill is ONE element the engine slides between the
+ * tabs on the one ease-out (`useIndicator`): it travels, it never jumps.
+ * Arrow keys move between tabs; Home/End jump to the ends (WAI-ARIA tabs
+ * pattern). Hover is one step lighter, press one step darker; nothing scales.
  *
  * The panel each tab controls stays the caller's job: give the panel
  * `role="tabpanel"` and `aria-labelledby` the tab's id if you need the full
@@ -104,7 +104,7 @@ export function Tabs<T extends string = string>({
       className={cn(
         'relative flex items-center',
         variant === 'segmented'
-          ? 'pc-well gap-1 p-1'
+          ? 'gap-1 rounded-[var(--r-ctl)] bg-[var(--glass-fill-quiet)] p-1 shadow-[var(--glass-edge)]'
           : 'gap-1 border-b border-border-subtle',
         fill && 'w-full',
         className,
@@ -120,7 +120,7 @@ export function Tabs<T extends string = string>({
         className={cn(
           'pointer-events-none absolute left-0 top-0 opacity-0',
           variant === 'segmented'
-            ? 'rounded-[var(--radius-chip)] bg-bg-raised shadow-[var(--shadow-raised)]'
+            ? 'rounded-[9px] bg-[var(--glass-fill-on)]'
             : 'rounded-[var(--radius-full)] bg-accent-primary',
         )}
       />
@@ -142,19 +142,19 @@ export function Tabs<T extends string = string>({
             onKeyDown={(event) => onKeyDown(event, index)}
             className={cn(
               'pc-focusable relative inline-flex shrink-0 select-none items-center justify-center gap-2 whitespace-nowrap',
-              'text-label transition-[color,background-color,transform] duration-[var(--duration-fast)] ease-[var(--ease-out)] active:scale-[0.98]',
-              'disabled:pointer-events-none disabled:opacity-60',
+              'text-[15px] font-medium transition-[color,background-color] duration-[var(--glass-ms)] ease-[var(--glass-ease)]',
+              'disabled:pointer-events-none disabled:opacity-40',
               size === 'sm' ? 'h-[var(--h-control-sm)] px-2.5' : 'h-[var(--h-control)] px-3',
               fill && 'flex-1',
               variant === 'segmented'
                 ? cn(
-                    'rounded-[var(--radius-chip)]',
+                    'rounded-[9px]',
                     selected
                       ? 'font-semibold text-text-primary'
-                      : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary',
+                      : 'text-text-secondary hover:bg-[var(--wash-hover)] hover:text-text-primary active:bg-[var(--wash-press)]',
                   )
                 : cn(
-                    'rounded-t-[var(--radius-chip)] px-3',
+                    'rounded-t-[var(--r-chip)] px-3',
                     selected
                       ? 'font-semibold text-text-primary'
                       : 'text-text-secondary hover:text-text-primary',
@@ -168,7 +168,7 @@ export function Tabs<T extends string = string>({
             )}
             <span className="min-w-0 truncate">{item.label}</span>
             {item.meta != null && (
-              <span className="shrink-0 text-meta tabular-nums text-text-faint">{item.meta}</span>
+              <span className="glass-instrument shrink-0 text-meta tabular-nums text-text-faint">{item.meta}</span>
             )}
           </button>
         );

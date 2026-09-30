@@ -103,13 +103,6 @@ export function Tooltip({
         showTooltip();
     };
 
-    const arrowPositions = {
-        top: "bottom-[-4px] left-1/2 -translate-x-1/2",
-        right: "left-[-4px] top-1/2 -translate-y-1/2",
-        bottom: "top-[-4px] left-1/2 -translate-x-1/2",
-        left: "right-[-4px] top-1/2 -translate-y-1/2",
-    };
-
     return (
         <div
             ref={triggerRef}
@@ -137,11 +130,12 @@ export function Tooltip({
                         id={tooltipId}
                         role="tooltip"
                         className={cn(
-                            // A floating surface (spec §4): --bg-floating + the plate
-                            // shadow. No backdrop blur — over Linux underlay holes a
-                            // translucent tooltip composites into the live stream and
-                            // can stick there as a ghost label.
-                            "pc-floating pointer-events-none fixed z-[9999] whitespace-nowrap px-2.5 py-1.5 text-meta font-medium text-text-primary",
+                            // A floating label (docs/glass-spec.md §5): near-solid
+                            // at .97 with a hairline and no arrow. No backdrop blur
+                            // (`pc-tip`): over Linux underlay holes a translucent
+                            // tooltip composites into the live stream and can stick
+                            // there as a ghost label.
+                            "pc-tip pointer-events-none fixed z-[9999] whitespace-nowrap px-2.5 py-1.5 text-[13px] font-medium text-text-primary",
                             exiting ? "pc-pop-out" : "pc-pop-in",
                             className
                         )}
@@ -153,13 +147,6 @@ export function Tooltip({
                         {...scenery}
                     >
                         {content}
-                        {/* Arrow */}
-                        <div
-                            className={cn(
-                                "absolute h-2 w-2 rotate-45 bg-bg-floating",
-                                arrowPositions[side]
-                            )}
-                        />
                     </div>
                 ),
                 document.body

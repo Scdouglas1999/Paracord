@@ -28,10 +28,10 @@ export function ErrorBanner({
     <div
       role="alert"
       className={cn(
-        // A danger surface is the danger *well* carrying danger ink (§1.3),
+        // An error is the danger *well* carrying the one danger ink (§1.3),
         // never a saturated red fill and never a border-only edge.
-        'flex justify-between gap-3 rounded-[var(--radius-well)] bg-danger-well px-4 py-3',
-        'text-label text-accent-danger shadow-[var(--shadow-well)]',
+        'flex justify-between gap-3 rounded-[var(--r-row)] bg-danger-well px-4 py-3',
+        'text-[15px] text-accent-danger',
         multiline ? 'items-start' : 'items-center',
         className,
       )}
@@ -44,7 +44,7 @@ export function ErrorBanner({
         <button
           type="button"
           onClick={onRetry}
-          className="pc-focusable shrink-0 rounded-[var(--radius-chip)] bg-bg-mod-strong px-2.5 py-1 text-meta font-semibold transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary"
+          className="pc-focusable shrink-0 rounded-[var(--r-capsule)] bg-[var(--glass-fill)] px-3 py-1 text-[13px] font-semibold text-text-primary shadow-[var(--glass-edge)] transition-colors duration-[var(--glass-ms)] ease-[var(--glass-ease)] hover:bg-[var(--glass-fill-hover)] active:bg-[var(--glass-fill-press)]"
         >
           {retryLabel}
         </button>
@@ -77,7 +77,7 @@ export function LoadingSpinner({
       aria-busy="true"
     >
       <Loader2 className={cn('animate-spin text-accent-primary', spinnerSizeClass[size])} />
-      {label && <span className="text-label">{label}</span>}
+      {label && <span className="text-[15px]">{label}</span>}
     </div>
   );
 }
@@ -92,9 +92,9 @@ interface EmptyStateProps {
   role?: 'alert' | 'status';
 }
 
-// Recipe: lantern-stage-spec §6.10 — left-aligned, never a centred
-// icon-in-circle. A line icon in a well, a Gabarito heading, one specific line
-// of copy, then one action. Never "No data" / "It's quiet here" (§6.9).
+// Left-aligned, never a centered icon-in-circle. A line icon in a well, a
+// section-title heading (17/600), one specific line of copy, then one action.
+// Never "No data" / "It's quiet here".
 export function EmptyState({
   title,
   description,
@@ -106,13 +106,13 @@ export function EmptyState({
   return (
     <div role={role} className={cn('flex flex-col items-start px-2 py-8', className)}>
       {icon && (
-        <div className="pc-well mb-4 flex h-10 w-10 items-center justify-center text-text-muted">
+        <div className="pc-well mb-4 flex h-10 w-10 items-center justify-center rounded-[var(--r-ctl)] text-text-muted">
           {icon}
         </div>
       )}
-      <h3 className="pc-display text-heading text-text-primary">{title}</h3>
+      <h3 className="pc-display glass-title-section text-text-primary">{title}</h3>
       {description && (
-        <p className="mt-1.5 max-w-prose text-body text-text-secondary">{description}</p>
+        <p className="glass-body mt-1.5 max-w-prose text-text-secondary">{description}</p>
       )}
       {action && <div className="mt-5">{action}</div>}
     </div>

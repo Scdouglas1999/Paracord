@@ -238,7 +238,6 @@ export function OnboardingSettingsSection({ guildId, roles }: OnboardingSettings
               <Input
                 type="number"
                 min={0}
-                className="pc-mono"
                 value={progressiveMinMessages}
                 onChange={(event) =>
                   setProgressiveMinMessages(Number.isFinite(event.target.valueAsNumber) ? event.target.valueAsNumber : 0)

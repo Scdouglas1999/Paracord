@@ -146,7 +146,7 @@ const STORE_TABS: readonly TabItem<'built-in' | 'public'>[] = [
 ];
 
 /** The label above a control inside the configure panel (§2 Section step). */
-const fieldLabelClass = 'mb-2 block text-section text-text-faint';
+const fieldLabelClass = 'mb-2 block text-[13px] font-medium text-text-secondary';
 
 const DEFAULT_ANTI_RAID = {
   enabled: false,

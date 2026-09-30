@@ -1,6 +1,6 @@
 import { createRef } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from './ContextMenu';
 
 describe('ContextMenu', () => {
@@ -158,6 +158,31 @@ describe('ContextMenu', () => {
     fireEvent.scroll(document);
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.getByRole('menu')).toBeInTheDocument();
+  });
+
+  it('places a menu again when it reopens at the same anchor', async () => {
+    // The placement effect used to key on the anchor's coordinates alone. A menu
+    // that closed and reopened under the same position was a NEW node that never
+    // got measured, so it kept whatever offset the last opening left behind (the
+    // composer's "Message tools" menu ran off the bottom of a phone screen).
+    const anchor = createRef<HTMLButtonElement>();
+    const rect = (right: number, bottom: number) =>
+      ({ left: right - 40, right, top: bottom - 32, bottom, width: 40, height: 32, x: right - 40, y: bottom - 32, toJSON: () => ({}) }) as DOMRect;
+    const props = { anchorRef: anchor, items: defaultItems, position: { x: 100, y: 100 }, onClose } as const;
+    const { rerender } = render(<><button ref={anchor}>Actions</button><ContextMenu {...props} open /></>);
+    const measure = vi.spyOn(anchor.current!, 'getBoundingClientRect');
+
+    measure.mockReturnValue(rect(300, 200));
+    rerender(<><button ref={anchor}>Actions</button><ContextMenu {...props} open={false} /></>);
+    // A leaving menu is aria-hidden, so query the DOM: wait until the node is gone.
+    await waitFor(() => expect(document.querySelector('[role="menu"]')).toBeNull());
+
+    measure.mockReturnValue(rect(500, 400));
+    rerender(<><button ref={anchor}>Actions</button><ContextMenu {...props} open /></>);
+    const menu = await screen.findByRole('menu');
+    // The anchor moved while the menu was closed: the new node sits under it.
+    expect(menu.style.left).toBe('500px');
+    expect(menu.style.top).toBe('406px');
   });
 
   it('supports Home and End across disabled items and exits on Tab', () => {

@@ -131,7 +131,7 @@ export function InvitePage() {
           {/* Who is inviting you — one identity row, no gradient banner and no
               floating circle (spec §6.1, §6.2). */}
           <div>
-            <p className="text-section text-text-faint">You’re invited</p>
+            <p className="glass-kicker text-text-faint">You’re invited</p>
             <div className="mt-4 flex items-center gap-4">
               <div className="pc-well flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-[var(--radius-card)]">
                 {iconSrc ? (
@@ -144,7 +144,7 @@ export function InvitePage() {
                 <h1 className="truncate pc-display text-title text-text-primary">
                   {loadingPreview ? 'Loading invite…' : guild?.name ?? 'Join this server'}
                 </h1>
-                <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-meta text-text-faint">
+                <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] text-text-faint">
                   {memberCount !== null && (
                     <span className="inline-flex items-center gap-1.5">
                       <Users size={13} aria-hidden />
@@ -168,7 +168,7 @@ export function InvitePage() {
               <button
                 type="button"
                 onClick={() => navigate('/app')}
-                className="pc-focusable self-start rounded-[var(--radius-chip)] text-label font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
+                className="pc-focusable self-start rounded-[var(--r-chip)] text-label font-semibold text-text-link underline-offset-4 hover:underline"
               >
                 Back to Paracord
               </button>
@@ -248,7 +248,7 @@ export function InvitePage() {
               has it, and one download away for somebody who does not. Inside
               the app there is nothing to offer. */}
           {!isTauri() && code && (
-            <p className="text-meta leading-relaxed text-text-faint">
+            <p className="text-[13px] leading-relaxed text-text-faint">
               Prefer the desktop app?{' '}
               <a className="text-text-link hover:underline" href={toPortableUri(window.location.origin, code)}>
                 Open this invite in it

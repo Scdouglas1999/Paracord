@@ -97,14 +97,14 @@ export function GuildEconomyPanel({ guildId }: GuildEconomyPanelProps) {
             <Well bare className="px-4 py-3.5">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-label text-text-primary">Your progress</span>
-                <span className="pc-mono text-meta text-text-muted">
+                <span className="glass-instrument text-meta text-text-muted">
                   {progress?.rank != null ? `Rank #${progress.rank}` : 'Unranked'}
                 </span>
               </div>
               <div className="mt-2.5 flex flex-wrap items-center gap-2.5 text-meta text-text-secondary">
                 <Chip tone="accent">Level {progress?.level ?? 0}</Chip>
-                <span className="pc-mono">{progress?.xp ?? 0} XP</span>
-                <span className="inline-flex items-center gap-1 pc-mono text-accent-warning">
+                <span className="glass-instrument">{progress?.xp ?? 0} XP</span>
+                <span className="inline-flex items-center gap-1 glass-instrument text-text-primary">
                   <Flame size={13} aria-hidden />
                   {progress?.streak.days ?? 0}d
                 </span>
@@ -123,14 +123,14 @@ export function GuildEconomyPanel({ guildId }: GuildEconomyPanelProps) {
                 />
               </div>
               {/* §9: the meter is never the only cue — the count reads it out. */}
-              <div className="mt-2 pc-mono text-meta text-text-muted">
+              <div className="mt-2 glass-instrument text-meta text-text-muted">
                 {progress?.progress.xp_into_level ?? 0}/{progress?.progress.xp_required_this_level ?? 0} XP this level
               </div>
               {progress && progress.achievements.length > 0 && (
                 <div className="mt-3 flex flex-wrap gap-1.5">
                   {progress.achievements.slice(-4).map((achievement) => (
                     <Chip key={achievement.key} size="sm" title={achievement.key}>
-                      <Medal size={10} className="text-accent-warning" aria-hidden />
+                      <Medal size={12} className="text-text-primary" aria-hidden />
                       {achievement.key}
                     </Chip>
                   ))}
@@ -159,14 +159,14 @@ export function GuildEconomyPanel({ guildId }: GuildEconomyPanelProps) {
                     >
                       <div className="min-w-0">
                         <div className="flex items-center gap-1.5 text-label text-text-primary">
-                          {entry.rank === 1 && <Crown size={12} className="text-accent-warning" aria-hidden />}
+                          {entry.rank === 1 && <Crown size={12} className="text-text-primary" aria-hidden />}
                           #{entry.rank} {displayName(entry.user)}
                         </div>
-                        <div className="pc-mono text-meta text-text-muted">
+                        <div className="glass-instrument text-meta text-text-muted">
                           L{entry.level} &middot; {entry.xp} XP &middot; {entry.streak_days}d streak
                         </div>
                       </div>
-                      <Chip size="sm" className="pc-mono">
+                      <Chip size="sm" className="glass-instrument">
                         L{entry.level}
                       </Chip>
                     </li>

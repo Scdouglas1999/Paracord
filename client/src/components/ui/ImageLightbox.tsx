@@ -132,11 +132,11 @@ export function ImageLightbox() {
   if (!mounted || !currentImage) return null;
   if (!safeImageSrc && !currentImage.load) return null;
 
-  // A control over arbitrary imagery is a name tag (spec §8 `pc-tag`): the tag
-  // fill plus the primary ink. That is the system's answer to "ink over a
-  // photo", so nothing here has to invent a literal white.
+  // A control over arbitrary imagery is a circle on the tag fill (`pc-tag`): a
+  // dark, near-solid fill plus the primary ink, which is the system's answer to
+  // "ink over a photo". Hover is one step lighter (the fill's own opacity).
   const controlClass =
-    'pc-tag pc-focusable flex h-9 w-9 items-center justify-center opacity-85 transition-opacity hover:opacity-100';
+    'pc-tag pc-focusable flex h-10 w-10 items-center justify-center rounded-[var(--r-capsule)] opacity-85 transition-opacity duration-[var(--glass-ms)] ease-[var(--glass-ease)] hover:opacity-100';
 
   return createPortal(
     <div
@@ -167,27 +167,27 @@ export function ImageLightbox() {
         <span className="pc-tag truncate px-2.5 py-1 text-meta">
           {currentImage.filename}
           {images.length > 1 && (
-            <span className="pc-mono ml-2 text-text-secondary">
+            <span className="glass-instrument ml-2 text-text-secondary">
               {currentIndex + 1} / {images.length}
             </span>
           )}
         </span>
         <div className="flex items-center gap-1.5">
-          <div className="pc-tag flex items-center gap-1 px-1">
+          <div className="pc-tag flex items-center gap-1 rounded-[var(--r-capsule)] px-1">
             <button
               onClick={() => setZoom((z) => Math.max(z - ZOOM_STEP, MIN_ZOOM))}
-              className="pc-focusable flex h-8 w-8 items-center justify-center rounded-[var(--radius-chip)] text-text-secondary transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-strong hover:text-text-primary"
+              className="pc-focusable flex h-8 w-8 items-center justify-center rounded-[var(--r-capsule)] text-text-secondary transition-colors duration-[var(--glass-ms)] ease-[var(--glass-ease)] hover:bg-[var(--wash-hover)] hover:text-text-primary active:bg-[var(--wash-press)]"
               title="Zoom out"
               aria-label="Zoom out"
             >
               <ZoomOut size={18} />
             </button>
-            <span className="pc-mono min-w-[3rem] text-center text-meta text-text-secondary">
+            <span className="glass-instrument min-w-[3rem] text-center text-meta text-text-secondary">
               {Math.round(zoom * 100)}%
             </span>
             <button
               onClick={() => setZoom((z) => Math.min(z + ZOOM_STEP, MAX_ZOOM))}
-              className="pc-focusable flex h-8 w-8 items-center justify-center rounded-[var(--radius-chip)] text-text-secondary transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-strong hover:text-text-primary"
+              className="pc-focusable flex h-8 w-8 items-center justify-center rounded-[var(--r-capsule)] text-text-secondary transition-colors duration-[var(--glass-ms)] ease-[var(--glass-ease)] hover:bg-[var(--wash-hover)] hover:text-text-primary active:bg-[var(--wash-press)]"
               title="Zoom in"
               aria-label="Zoom in"
             >
@@ -251,7 +251,7 @@ export function ImageLightbox() {
           )
         ) : currentImage.kind === 'video' ? (
           // The same player as a message's video, so a gallery video can take captions too.
-          <div className="rounded-[var(--radius-card)] bg-bg-raised p-2 shadow-[var(--shadow-lifted)]">
+          <div className="rounded-[var(--r-bubble)] bg-bg-raised p-2 shadow-[var(--sh-raised)]">
             <MediaPreview
               key={safeImageSrc}
               src={safeImageSrc}

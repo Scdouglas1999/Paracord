@@ -157,9 +157,7 @@ export function FileStorageSection({ guildId, canManage }: FileStorageSectionPro
   // the same reading the meter does.
   const meterTone = overQuota
     ? 'bg-accent-danger'
-    : usagePercent >= 75
-      ? 'bg-accent-warning'
-      : 'bg-accent-primary';
+    : 'bg-accent-primary';
 
   return (
     <div className="flex flex-col gap-8">
@@ -182,14 +180,14 @@ export function FileStorageSection({ guildId, canManage }: FileStorageSectionPro
           <Well as="section" bare className="px-5 py-4">
             <div className="flex items-baseline justify-between gap-3">
               <GroupLabel>Storage used</GroupLabel>
-              <span className="pc-mono text-meta text-text-muted">
+              <span className="glass-instrument text-meta text-text-muted">
                 {quota != null ? `${usagePercent.toFixed(1)}%` : 'no quota set'}
               </span>
             </div>
             <div className="mt-3 flex items-baseline gap-2">
-              <span className="pc-mono text-title text-text-primary">{formatBytes(usage)}</span>
+              <span className="glass-instrument text-title text-text-primary">{formatBytes(usage)}</span>
               {quota != null && (
-                <span className="pc-mono text-meta text-text-muted">/ {formatBytes(quota)}</span>
+                <span className="glass-instrument text-meta text-text-muted">/ {formatBytes(quota)}</span>
               )}
             </div>
             {quota != null && quota > 0 && (
@@ -228,7 +226,6 @@ export function FileStorageSection({ guildId, canManage }: FileStorageSectionPro
                     min="0"
                     value={maxFileSizeMB}
                     onChange={(e) => setMaxFileSizeMB(e.target.value)}
-                    className="pc-mono"
                     placeholder="No limit"
                   />
                 </label>
@@ -239,7 +236,6 @@ export function FileStorageSection({ guildId, canManage }: FileStorageSectionPro
                     min="0"
                     value={storageQuotaMB}
                     onChange={(e) => setStorageQuotaMB(e.target.value)}
-                    className="pc-mono"
                     placeholder="No limit"
                   />
                 </label>
@@ -250,7 +246,6 @@ export function FileStorageSection({ guildId, canManage }: FileStorageSectionPro
                     min="0"
                     value={retentionDays}
                     onChange={(e) => setRetentionDays(e.target.value)}
-                    className="pc-mono"
                     placeholder="Forever"
                   />
                 </label>
@@ -324,7 +319,7 @@ export function FileStorageSection({ guildId, canManage }: FileStorageSectionPro
               />
             ) : (
               <div className="mt-4">
-                <div className="hidden items-center gap-3 px-1 pb-2 text-section text-text-faint sm:flex">
+                <div className="hidden items-center gap-3 px-1 pb-2 glass-kicker text-text-faint sm:flex">
                   {canManage && <span className="w-4" />}
                   <span className="flex-1">Filename</span>
                   <span className="w-24 text-right">Size</span>
@@ -350,10 +345,10 @@ export function FileStorageSection({ guildId, canManage }: FileStorageSectionPro
                       {file.content_type && (
                         <span className="hidden pc-mono text-meta text-text-muted sm:inline">{file.content_type}</span>
                       )}
-                      <span className="pc-mono text-meta text-text-muted sm:w-24 sm:text-right">
+                      <span className="glass-instrument text-meta text-text-muted sm:w-24 sm:text-right">
                         {formatBytes(file.size)}
                       </span>
-                      <span className="pc-mono text-meta text-text-muted sm:w-32 sm:text-right">
+                      <span className="glass-instrument text-meta text-text-muted sm:w-32 sm:text-right">
                         {new Date(file.created_at).toLocaleDateString()}
                       </span>
                     </li>

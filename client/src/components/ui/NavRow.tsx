@@ -20,9 +20,10 @@ export interface NavRowProps extends Omit<React.HTMLAttributes<HTMLElement>, 'ti
 }
 
 /**
- * NavRow — the 34px row the servers column is built from (spec §3, §7.1).
- * Grid is `icon · name · trailing`; the active row is a warm wash under a warm
- * top highlight, never an accent bar.
+ * NavRow: a 34px row (docs/glass-spec.md §2.4: radius 12 here, the small
+ * control step). Grid is `icon, name, trailing`; the active row is the
+ * selected-row tone, never an accent bar. Hover is one step lighter, press one
+ * step darker.
  */
 export const NavRow = React.forwardRef<HTMLElement, NavRowProps>(function NavRow(
   { icon, children, trailing, active = false, display = false, href, className, ...props },
@@ -41,7 +42,7 @@ export const NavRow = React.forwardRef<HTMLElement, NavRowProps>(function NavRow
       className={cn(
         'pc-focusable pc-pressable-row flex w-full select-none items-center gap-2.5 text-left',
         'h-[var(--h-nav-row)] rounded-[var(--radius-control)] px-2.5',
-        'text-label text-text-secondary',
+        'text-[15px] font-medium text-text-secondary',
         // The transition and the press belong to `.pc-pressable-row`: a row
         // darkens a step under the finger rather than shrinking (§5.1).
         // The selected row is a wash in the base hue rather than a gray step,

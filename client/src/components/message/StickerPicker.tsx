@@ -7,6 +7,7 @@ import { resolveResourceUrl } from '../../lib/config/apiBaseUrl';
 import { getDownloadTicket } from '../../lib/downloadTicket';
 import { useDownloadTicket } from '../../hooks/useDownloadTicket';
 import { safeClientResourceUrl } from '../../lib/security';
+import { Button } from '../ui/Button';
 import { EmptyState } from '../ui/Feedback';
 import { ResourceImage } from '../ui/ResourceImage';
 import { Skeleton, SkeletonSwap } from '../ui/Skeleton';
@@ -116,13 +117,13 @@ export function StickerPicker({ guildId, onSelect, onClose, leaving = false }: S
   return (
     <div
       ref={pickerRef}
-      className={`${leaving ? 'pc-pop-out' : 'pc-pop-in'} flex w-[min(21.25rem,calc(100vw-1rem))] max-h-[min(26.25rem,calc(100dvh-1rem))] flex-col overflow-hidden rounded-well border border-border-subtle bg-bg-floating shadow-[var(--shadow-plate)]`}
+      className={`${leaving ? 'pc-pop-out' : 'pc-pop-in'} pc-floating flex w-[min(21.25rem,calc(100vw-1rem))] max-h-[min(26.25rem,calc(100dvh-1rem))] flex-col overflow-hidden rounded-[var(--r-bubble)]`}
       aria-hidden={leaving || undefined}
     >
       {/* Header */}
       <div className="shrink-0 border-b border-border-subtle px-3 pb-2.5 pt-3">
-        <div className="text-section mb-2 text-text-muted">Stickers</div>
-        <div className="flex items-center gap-2 rounded-chip border border-border-subtle bg-bg-well px-2.5 py-2 transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-within:border-accent-primary focus-within:shadow-[var(--focus-ring-input)]">
+        <div className="glass-kicker mb-2 text-text-muted">Stickers</div>
+        <div className="flex items-center gap-2 rounded-[var(--r-ctl)] bg-bg-well px-2.5 py-2 focus-within:shadow-[var(--focus-ring-input)]">
           <Search size={16} className="shrink-0 text-text-muted" />
           <input
             type="text"
@@ -130,7 +131,7 @@ export function StickerPicker({ guildId, onSelect, onClose, leaving = false }: S
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             autoFocus
-            className="flex-1 bg-transparent text-body text-text-primary placeholder:text-text-muted outline-none"
+            className="flex-1 bg-transparent text-[15px] text-text-primary placeholder:text-[var(--ink-placeholder)] outline-none"
           />
         </div>
       </div>
@@ -145,21 +146,17 @@ export function StickerPicker({ guildId, onSelect, onClose, leaving = false }: S
             description={error}
             action={
               guildId ? (
-                <button
-                  type="button"
-                  onClick={() => void fetchStickers()}
-                  className="inline-flex items-center gap-1.5 rounded-chip bg-accent-primary px-3.5 py-2 text-label font-semibold text-text-on-accent shadow-[var(--shadow-chip)] outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-accent-primary-hover active:bg-accent-primary-active focus-visible:shadow-[var(--focus-ring)]"
-                >
+                <Button variant="glass" size="sm" onClick={() => void fetchStickers()}>
                   <RotateCw size={15} />
                   Try again
-                </button>
+                </Button>
               ) : undefined
             }
           />
         ) : loading ? (
           <div className="grid grid-cols-4 gap-1.5" aria-busy="true" aria-label="Loading stickers">
             {Array.from({ length: 8 }).map((_, i) => (
-              <Skeleton key={i} borderRadius="var(--radius-chip)" className="aspect-square" />
+              <Skeleton key={i} borderRadius="12px" className="aspect-square" />
             ))}
           </div>
         ) : filtered.length === 0 && stickers.length === 0 ? (
@@ -189,13 +186,13 @@ export function StickerPicker({ guildId, onSelect, onClose, leaving = false }: S
                   onClick={() => onSelect(sticker.id)}
                   title={sticker.name}
                   aria-label={`Select sticker ${sticker.name}`}
-                  className="flex aspect-square items-center justify-center rounded-chip p-1 outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
+                  className="flex aspect-square items-center justify-center rounded-[10px] p-1 outline-none transition-colors duration-[var(--glass-ms)] ease-[var(--glass-ease)] hover:bg-[var(--wash-hover)] active:bg-[var(--wash-press)] focus-visible:bg-[var(--wash-hover)] focus-visible:shadow-[var(--focus-ring)]"
                 >
                   <ResourceImage
                     src={imageUrl}
                     alt={sticker.name}
                     loading="lazy"
-                    className="block h-full w-full rounded-window object-contain"
+                    className="block h-full w-full rounded-[var(--r-chip)] object-contain"
                     fallback={
                       <span className="flex h-full w-full items-center justify-center break-words p-0.5 text-center text-[10px] text-text-muted">
                         {sticker.name}
@@ -211,7 +208,7 @@ export function StickerPicker({ guildId, onSelect, onClose, leaving = false }: S
 
       {/* Footer: sticker count */}
       {stickers.length > 0 && (
-        <div className="shrink-0 border-t border-border-subtle px-3 py-1.5 text-right text-[10px] text-text-muted">
+        <div className="shrink-0 border-t border-border-subtle px-3 py-1.5 text-right text-[12px] text-text-muted">
           {filtered.length} sticker{filtered.length !== 1 ? 's' : ''}
         </div>
       )}

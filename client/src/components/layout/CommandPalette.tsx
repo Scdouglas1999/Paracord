@@ -8,6 +8,7 @@ import { useCurrentUser } from '../../hooks/useCurrentUser';
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { Search, Hash, Volume2, Settings, Home, Shield, MessageCircle, ArrowRight, Bot, UserPlus, Users, MessagesSquare, MessageSquarePlus } from 'lucide-react';
+import { Kbd } from '../ui/Kbd';
 import { Modal } from '../ui/Modal';
 import { DmPickerModal } from '../message/DmPickerModal';
 import { useUIStore } from '../../stores/uiStore';
@@ -226,7 +227,7 @@ export function CommandPalette() {
         label: guild.name,
         sublabel: `${(guildChannels.filter(c => c.type !== 4)).length} channels`,
         icon: (
-          <div className="flex h-5 w-5 items-center justify-center rounded bg-accent-primary/20 text-[9px] font-bold text-accent-primary">
+          <div className="flex h-5 w-5 items-center justify-center rounded-[6px] bg-[var(--glass-fill)] text-[11px] font-bold text-text-primary">
             {guild.name.charAt(0).toUpperCase()}
           </div>
         ),
@@ -371,9 +372,11 @@ export function CommandPalette() {
       labeledBy="command-palette-title"
       placement="top"
       size="md"
+      // Glass over the dimmed app: near-solid black, the heavier blur, radius 24.
+      panelClassName="pc-sheet"
     >
       <h2 id="command-palette-title" className="sr-only">Command palette</h2>
-      {/* Search input — top inset, on the deeper tertiary surface */}
+      {/* Search input, then a hairline: the palette is one glass control */}
       <div className="flex items-center gap-3 border-b border-border-subtle px-4 py-3.5">
         <Search size={18} className="shrink-0 text-text-muted" />
         <input
@@ -382,7 +385,7 @@ export function CommandPalette() {
           aria-controls="command-palette-list"
           aria-activedescendant={activeItemId ? `command-item-${activeItemId}` : undefined}
           aria-label="Search command palette"
-          className="pc-focusable flex-1 rounded-chip bg-transparent px-1 py-0.5 text-body text-text-primary outline-none placeholder:text-text-muted"
+          className="pc-focusable flex-1 rounded-[var(--r-chip)] bg-transparent px-1 py-0.5 text-[17px] text-text-primary outline-none placeholder:text-[var(--ink-placeholder)]"
           placeholder="Jump to a channel, server, or setting…"
           value={query}
           onChange={(e) => {
@@ -390,9 +393,7 @@ export function CommandPalette() {
             setSelectedIndex(0);
           }}
         />
-        <kbd className="rounded-window bg-bg-mod-strong px-1.5 py-0.5 font-code text-meta font-semibold text-text-muted">
-          ESC
-        </kbd>
+        <Kbd>Esc</Kbd>
       </div>
 
       {/* Results */}
@@ -406,7 +407,7 @@ export function CommandPalette() {
         {groupedItems.length > 0 ? (
           groupedItems.map((group) => (
             <div key={group.category} className="mb-1.5 last:mb-0">
-              <div className="px-3 pb-1 pt-3 text-section text-text-muted first:pt-1">
+              <div className="glass-kicker px-3 pb-1 pt-3 text-text-muted first:pt-1">
                 {group.category}
               </div>
               {group.items.map((item) => {
@@ -423,28 +424,26 @@ export function CommandPalette() {
                     onClick={() => handleSelect(item)}
                     onMouseEnter={() => setSelectedIndex(currentIndex)}
                     className={cn(
-                      'flex w-full items-center gap-3 rounded-chip px-3 py-2.5 text-left transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]',
+                      'flex w-full items-center gap-3 rounded-[12px] px-3 py-2.5 text-left transition-colors duration-[var(--glass-ms)] ease-[var(--glass-ease)] active:bg-[var(--wash-press)]',
                       isSelected
-                        ? 'bg-accent-tint text-text-primary'
-                        : 'text-text-secondary hover:bg-bg-mod-subtle'
+                        ? 'bg-[var(--sel)] text-text-primary'
+                        : 'text-text-secondary hover:bg-[var(--wash-hover)]'
                     )}
                   >
                     <span className={cn(
                       'flex h-5 w-5 shrink-0 items-center justify-center transition-colors',
-                      isSelected ? 'text-accent-primary' : 'text-text-muted'
+                      isSelected ? 'text-text-primary' : 'text-text-muted'
                     )}>
                       {item.icon}
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-label font-semibold">{item.label}</span>
+                      <span className="block truncate text-[15px] font-semibold">{item.label}</span>
                       {item.sublabel && (
-                        <span className="block truncate text-meta text-text-muted">{item.sublabel}</span>
+                        <span className="block truncate text-[13px] text-text-muted">{item.sublabel}</span>
                       )}
                     </span>
                     {isSelected ? (
-                      <kbd className="shrink-0 rounded-window bg-bg-mod-strong px-1.5 py-0.5 font-code text-meta tabular-nums text-text-secondary">
-                        ↵
-                      </kbd>
+                      <Kbd>↵</Kbd>
                     ) : (
                       <ArrowRight size={14} className="shrink-0 text-text-muted opacity-0" aria-hidden />
                     )}
@@ -455,10 +454,10 @@ export function CommandPalette() {
           ))
         ) : (
           <div className="px-3 py-8">
-            <div className="text-label font-semibold text-text-primary">
+            <div className="text-[15px] font-semibold text-text-primary">
               Nothing matches “{query.trim()}”
             </div>
-            <p className="mt-1 text-meta text-text-secondary">
+            <p className="mt-1 text-[13px] text-text-secondary">
               Try a command name, a channel, or a server you belong to.
             </p>
           </div>
@@ -467,18 +466,18 @@ export function CommandPalette() {
 
       {/* Footer hints */}
       <div className="flex items-center justify-between border-t border-border-subtle px-4 py-2">
-        <div className="flex items-center gap-3 text-meta text-text-muted">
+        <div className="flex items-center gap-3 text-[13px] text-text-muted">
           <span className="flex items-center gap-1">
-            <kbd className="rounded-window bg-bg-mod-strong px-1 py-0.5 font-code text-[10px] text-text-secondary">&uarr;</kbd>
-            <kbd className="rounded-window bg-bg-mod-strong px-1 py-0.5 font-code text-[10px] text-text-secondary">&darr;</kbd>
+            <Kbd>&uarr;</Kbd>
+            <Kbd>&darr;</Kbd>
             navigate
           </span>
           <span className="flex items-center gap-1">
-            <kbd className="rounded-window bg-bg-mod-strong px-1 py-0.5 font-code text-[10px] text-text-secondary">&crarr;</kbd>
+            <Kbd>&crarr;</Kbd>
             select
           </span>
         </div>
-        <div className="font-code text-meta tabular-nums text-text-muted">
+        <div className="glass-instrument text-meta tabular-nums text-text-muted">
           {flatItems.length} result{flatItems.length !== 1 ? 's' : ''}
         </div>
       </div>

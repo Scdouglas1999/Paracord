@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { Search, WifiOff, RotateCw } from 'lucide-react';
 import { tenorApi } from '../../api/tenor';
 import { safeExternalUrl } from '../../lib/security';
+import { Button } from '../ui/Button';
 import { EmptyState } from '../ui/Feedback';
 import { Skeleton, SkeletonSwap } from '../ui/Skeleton';
 
@@ -148,12 +149,12 @@ export function GifPicker({ onSelect, onClose, leaving = false }: GifPickerProps
   return (
     <div
       ref={pickerRef}
-      className={`${leaving ? 'pc-pop-out' : 'pc-pop-in'} flex w-[min(25rem,calc(100vw-1rem))] max-h-[min(28.75rem,calc(100dvh-1rem))] flex-col overflow-hidden rounded-well border border-border-subtle bg-bg-floating shadow-[var(--shadow-plate)]`}
+      className={`${leaving ? 'pc-pop-out' : 'pc-pop-in'} pc-floating flex w-[min(25rem,calc(100vw-1rem))] max-h-[min(28.75rem,calc(100dvh-1rem))] flex-col overflow-hidden rounded-[var(--r-bubble)]`}
       aria-hidden={leaving || undefined}
     >
       {/* Inset search */}
       <div className="shrink-0 px-3 pb-1.5 pt-3">
-        <div className="flex items-center gap-2 rounded-chip border border-border-subtle bg-bg-well px-2.5 py-2 transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-within:border-accent-primary focus-within:shadow-[var(--focus-ring-input)]">
+        <div className="flex items-center gap-2 rounded-[var(--r-ctl)] bg-bg-well px-2.5 py-2 focus-within:shadow-[var(--focus-ring-input)]">
           <Search size={16} className="shrink-0 text-text-muted" />
           <input
             type="text"
@@ -161,7 +162,7 @@ export function GifPicker({ onSelect, onClose, leaving = false }: GifPickerProps
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             autoFocus
-            className="flex-1 bg-transparent text-body text-text-primary placeholder:text-text-muted outline-none"
+            className="flex-1 bg-transparent text-[15px] text-text-primary placeholder:text-[var(--ink-placeholder)] outline-none"
           />
         </div>
       </div>
@@ -187,14 +188,10 @@ export function GifPicker({ onSelect, onClose, leaving = false }: GifPickerProps
             description={error.message}
             action={
               error.kind === 'unconfigured' ? undefined : (
-                <button
-                  type="button"
-                  onClick={() => void fetchGifs(query)}
-                  className="inline-flex items-center gap-1.5 rounded-chip bg-accent-primary px-3.5 py-2 text-label font-semibold text-text-on-accent shadow-[var(--shadow-chip)] outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-accent-primary-hover active:bg-accent-primary-active focus-visible:shadow-[var(--focus-ring)]"
-                >
+                <Button variant="glass" size="sm" onClick={() => void fetchGifs(query)}>
                   <RotateCw size={15} />
                   Try again
-                </button>
+                </Button>
               )
             }
           />
@@ -202,7 +199,7 @@ export function GifPicker({ onSelect, onClose, leaving = false }: GifPickerProps
           <div className="p-1 [column-gap:0.5rem] [columns:2]" aria-busy="true" aria-label="Loading GIFs">
             {[168, 120, 148, 132, 176, 112].map((h, i) => (
               <div key={i} className="mb-2 [break-inside:avoid]">
-                <Skeleton height={h} borderRadius="var(--radius-chip)" />
+                <Skeleton height={h} borderRadius="12px" />
               </div>
             ))}
           </div>
@@ -225,14 +222,14 @@ export function GifPicker({ onSelect, onClose, leaving = false }: GifPickerProps
                 onClick={() => handleSelect(gif)}
                 title={gif.title || 'GIF'}
                 aria-label={`Select GIF ${gif.title || gif.id}`}
-                className="mb-2 block w-full overflow-hidden rounded-chip outline-none [break-inside:avoid] pc-hover-lift focus-visible:shadow-[var(--focus-ring)]"
+                className="mb-2 block w-full overflow-hidden rounded-[12px] outline-none [break-inside:avoid] pc-hover-lift focus-visible:shadow-[var(--focus-ring)]"
                 style={{ aspectRatio: String(renderData.aspectRatio) }}
               >
                 <img
                   src={renderData.thumbUrl}
                   alt={gif.title || 'GIF'}
                   loading="lazy"
-                  className="block h-full w-full rounded-chip object-cover"
+                  className="block h-full w-full rounded-[12px] object-cover"
                 />
               </button>
             ))}
@@ -241,7 +238,7 @@ export function GifPicker({ onSelect, onClose, leaving = false }: GifPickerProps
       </SkeletonSwap>
 
       {/* Attribution */}
-      <div className="shrink-0 border-t border-border-subtle px-3 py-1.5 text-right text-[10px] text-text-muted">
+      <div className="shrink-0 border-t border-border-subtle px-3 py-1.5 text-right text-[12px] text-text-muted">
         Powered by Tenor
       </div>
     </div>
