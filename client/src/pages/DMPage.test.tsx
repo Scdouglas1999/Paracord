@@ -11,8 +11,12 @@ import { useUIStore } from '../stores/uiStore';
 import type { Channel } from '../types';
 import { DMPage } from './DMPage';
 
-vi.mock('../components/layout/TopBar', () => ({
-  TopBar: ({ dmChannelId, recipientName }: { dmChannelId?: string; recipientName?: string }) => <div data-testid="topbar" data-channel-id={dmChannelId}>{recipientName}</div>,
+// The conversation header (WP-G11) is covered in components/glass/conversation;
+// this suite is about the page, so it is reduced to what it was handed.
+vi.mock('../components/glass/conversation/ConversationHeader', () => ({
+  ConversationHeader: ({ subject }: { subject: { channelId: string; kind: string; title?: string; channelName?: string } }) => (
+    <div data-testid="topbar" data-channel-id={subject.channelId}>{subject.kind === 'dm' ? subject.title : subject.channelName}</div>
+  ),
 }));
 
 vi.mock('../components/message/MessageList', () => ({

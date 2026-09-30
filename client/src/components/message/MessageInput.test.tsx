@@ -6,10 +6,10 @@ vi.mock('../../hooks/useLights', () => import('../../test/messageLightMock'));
 vi.mock('../../lib/channelView', () => ({ getAccountChannelView: (_scope: unknown, state: unknown) => state }));
 import { MemoryRouter } from 'react-router';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { channelApi } from '../../api/channels';
-import { MessageInput } from './MessageInput';
+import { MessageInput, composerPlaceholder, replyPlaceholder } from './MessageInput';
 import { groupEnrollmentReason } from '../../lib/messages/messagingReadiness';
 
 const mockEncryption = vi.hoisted(() => ({ encrypted: false, encryption: 'ready' }));
@@ -156,6 +156,13 @@ function futureDatetimeLocal(daysFromNow = 30): string {
   ].join('');
 }
 
+
+/** Everything the capsule has no button for is one click away in the "+" menu. */
+async function chooseTool(user: ReturnType<typeof userEvent.setup>, name: RegExp) {
+  await user.click(screen.getByRole('button', { name: 'More message tools' }));
+  await user.click(screen.getByRole('menuitem', { name }));
+}
+
 describe('MessageInput', () => {
   beforeEach(() => {
     mockEncryption.encrypted = false; mockEncryption.encryption = 'ready';
@@ -232,7 +239,7 @@ describe('MessageInput', () => {
 
   it('names the channel the message goes to', () => {
     render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
-    const textarea = screen.getByPlaceholderText('Message #general');
+    const textarea = screen.getByPlaceholderText('Message general');
     expect(textarea).toBeInTheDocument();
     expect(textarea.tagName).toBe('TEXTAREA');
   });
@@ -245,7 +252,7 @@ describe('MessageInput', () => {
   it('allows typing in the textarea', async () => {
     const user = userEvent.setup();
     render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
-    const textarea = screen.getByPlaceholderText('Message #general');
+    const textarea = screen.getByPlaceholderText('Message general');
 
     await user.type(textarea, 'Hello world');
     expect(textarea).toHaveValue('Hello world');
@@ -254,7 +261,7 @@ describe('MessageInput', () => {
   it('sends message on Enter key', async () => {
     const user = userEvent.setup();
     render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
-    const textarea = screen.getByPlaceholderText('Message #general');
+    const textarea = screen.getByPlaceholderText('Message general');
 
     await user.type(textarea, 'Hello');
     await user.keyboard('{Enter}');
@@ -268,7 +275,7 @@ describe('MessageInput', () => {
   it('does not send on Shift+Enter (allows newline)', async () => {
     const user = userEvent.setup();
     render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
-    const textarea = screen.getByPlaceholderText('Message #general');
+    const textarea = screen.getByPlaceholderText('Message general');
 
     await user.type(textarea, 'Line 1');
     await user.keyboard('{Shift>}{Enter}{/Shift}');
@@ -279,7 +286,7 @@ describe('MessageInput', () => {
   it('does not send empty message', async () => {
     const user = userEvent.setup();
     render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
-    const textarea = screen.getByPlaceholderText('Message #general');
+    const textarea = screen.getByPlaceholderText('Message general');
 
     await user.click(textarea);
     await user.keyboard('{Enter}');
@@ -290,7 +297,7 @@ describe('MessageInput', () => {
   it('clears textarea after successful send', async () => {
     const user = userEvent.setup();
     render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
-    const textarea = screen.getByPlaceholderText('Message #general');
+    const textarea = screen.getByPlaceholderText('Message general');
 
     await user.type(textarea, 'Test message');
     await user.keyboard('{Enter}');
@@ -309,7 +316,7 @@ describe('MessageInput', () => {
     );
 
     render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
-    const textarea = screen.getByPlaceholderText('Message #general');
+    const textarea = screen.getByPlaceholderText('Message general');
     await user.type(textarea, 'once');
     await user.keyboard('{Enter}');
     await user.keyboard('{Enter}');
@@ -322,19 +329,19 @@ describe('MessageInput', () => {
   it('isolates colliding accounts and keeps typing across an immediate server switch', async () => {
     const user = userEvent.setup();
     const view = render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
-    await user.type(screen.getByPlaceholderText('Message #general'), 'private A');
-    await user.click(screen.getByRole('button', { name: 'Create a poll' }));
+    await user.type(screen.getByPlaceholderText('Message general'), 'private A');
+    await chooseTool(user, /Create a poll/);
     mockOwner.serverId = 'b';
     view.rerender(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
-    expect(screen.getByPlaceholderText('Message #general')).toHaveValue('');
-    expect(screen.queryByRole('button', { name: 'Poll composer enabled' })).not.toBeInTheDocument();
-    await user.type(screen.getByPlaceholderText('Message #general'), 'private B');
+    expect(screen.getByPlaceholderText('Message general')).toHaveValue('');
+    expect(screen.queryByPlaceholderText('What should everyone weigh in on?')).not.toBeInTheDocument();
+    await user.type(screen.getByPlaceholderText('Message general'), 'private B');
     mockOwner.serverId = '__local__';
     view.rerender(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
-    expect(screen.getByPlaceholderText('Message #general')).toHaveValue('private A');
+    expect(screen.getByPlaceholderText('Message general')).toHaveValue('private A');
     mockOwner.serverId = 'b';
     view.rerender(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
-    expect(screen.getByPlaceholderText('Message #general')).toHaveValue('private B');
+    expect(screen.getByPlaceholderText('Message general')).toHaveValue('private B');
   });
 
   it('preserves typing during delivery and does not cancel another composer reply', async () => {
@@ -343,16 +350,16 @@ describe('MessageInput', () => {
     mockSendMessage.mockImplementation(() => new Promise<void>(done => { resolve = done; }));
     const cancelReply = vi.fn();
     const view = render(<MessageInput channelId="ch1" channelName="general" onCancelReply={cancelReply} />);
-    await user.type(screen.getByPlaceholderText('Message #general'), 'first');
+    await user.type(screen.getByPlaceholderText('Message general'), 'first');
     await user.keyboard('{Enter}');
-    await user.type(screen.getByPlaceholderText('Message #general'), ' second');
+    await user.type(screen.getByPlaceholderText('Message general'), ' second');
     view.rerender(<MessageInput channelId="ch2" channelName="next" onCancelReply={cancelReply} />);
-    await user.type(screen.getByPlaceholderText('Message #next'), 'other channel');
+    await user.type(screen.getByPlaceholderText('Message next'), 'other channel');
     await act(async () => resolve());
-    expect(screen.getByPlaceholderText('Message #next')).toHaveValue('other channel');
+    expect(screen.getByPlaceholderText('Message next')).toHaveValue('other channel');
     expect(cancelReply).not.toHaveBeenCalled();
     view.rerender(<MessageInput channelId="ch1" channelName="general" onCancelReply={cancelReply} />);
-    expect(screen.getByPlaceholderText('Message #general')).toHaveValue('first second');
+    expect(screen.getByPlaceholderText('Message general')).toHaveValue('first second');
   });
 
   it('clears staged attachments when switching channels', async () => {
@@ -372,11 +379,11 @@ describe('MessageInput', () => {
   it('restores draft text when disabling the poll composer', async () => {
     const user = userEvent.setup();
     render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
-    const textarea = screen.getByPlaceholderText('Message #general');
+    const textarea = screen.getByPlaceholderText('Message general');
     await user.type(textarea, 'Should we ship?');
-    await user.click(screen.getByRole('button', { name: 'Create a poll' }));
+    await chooseTool(user, /Create a poll/);
     expect(textarea).toHaveValue('');
-    await user.click(screen.getByRole('button', { name: 'Poll composer enabled' }));
+    await user.click(screen.getByRole('button', { name: 'Close' }));
     expect(textarea).toHaveValue('Should we ship?');
   });
 
@@ -396,7 +403,7 @@ describe('MessageInput', () => {
   it('retains a completed poll after permission is revoked and prevents submission', async () => {
     const user = userEvent.setup();
     const view = render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
-    await user.click(screen.getByRole('button', { name: 'Create a poll' }));
+    await chooseTool(user, /Create a poll/);
     await user.type(screen.getByPlaceholderText('What should everyone weigh in on?'), 'Lunch?');
     await user.type(screen.getByPlaceholderText('Option 1'), 'Soup');
     await user.type(screen.getByPlaceholderText('Option 2'), 'Salad');
@@ -425,7 +432,8 @@ describe('MessageInput', () => {
     fireEvent.paste(textarea, { clipboardData: { files: [file], items: [{ kind: 'file', type: 'image/png', getAsFile: () => file }], getData: () => '' } });
     fireEvent.drop(textarea, { dataTransfer: { files: [file], types: ['Files'] } });
     fireEvent.change(view.container.querySelector('input[type="file"]')!, { target: { files: [file] } });
-    expect(screen.getByRole('button', { name: 'Attach files' })).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: 'More message tools' }));
+    expect(screen.getByRole('menuitem', { name: /Attach files/ })).toBeDisabled();
     expect(screen.queryByAltText('private.png')).not.toBeInTheDocument();
     expect(textarea).toHaveValue('Keep this draft');
     expect(mockUpload).not.toHaveBeenCalled();
@@ -445,26 +453,33 @@ describe('MessageInput', () => {
     expect(mockSendMessage).not.toHaveBeenCalled();
   });
 
-  it('shows reply indicator when replyingTo is provided', () => {
+  it('shows who you are replying to as a chip, and the placeholder says so', async () => {
+    const user = userEvent.setup();
+    const onCancelReply = vi.fn();
     render(
       <MessageInput
         channelId="ch1"
         guildId="g1"
         channelName="general"
         replyingTo={{ id: 'm1', author: 'TestUser', content: 'Original message' }}
-        onCancelReply={vi.fn()}
+        onCancelReply={onCancelReply}
       />,
     );
 
-    expect(screen.getByText('Replying to')).toBeInTheDocument();
-    expect(screen.getByText('TestUser')).toBeInTheDocument();
-    expect(screen.getByText('Original message')).toBeInTheDocument();
+    const chip = screen.getByRole('group', { name: 'Replying to TestUser' });
+    expect(chip).toHaveTextContent('TestUser');
+    // What was said stays reachable, without taking a row of its own.
+    expect(chip).toHaveAttribute('title', 'TestUser: Original message');
+    expect(screen.getByPlaceholderText('Reply to TestUser')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Cancel reply' }));
+    expect(onCancelReply).toHaveBeenCalledTimes(1);
   });
 
   it('shows send button when content is typed', async () => {
     const user = userEvent.setup();
     render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
-    const textarea = screen.getByPlaceholderText('Message #general');
+    const textarea = screen.getByPlaceholderText('Message general');
 
     await user.type(textarea, 'Some text');
 
@@ -490,7 +505,7 @@ describe('MessageInput', () => {
 
     render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
 
-    await user.type(screen.getByPlaceholderText('Message #general'), 'Too fast');
+    await user.type(screen.getByPlaceholderText('Message general'), 'Too fast');
     await user.keyboard('{Enter}');
 
     expect(await screen.findByText('Slowmode active. Try again in 10 seconds.')).toBeInTheDocument();
@@ -504,7 +519,7 @@ describe('MessageInput', () => {
     const refusal = 'Messaging and calls are unavailable between these accounts.';
     mockSendMessage.mockRejectedValue({ response: { data: { message: refusal } } });
     const view = render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
-    await user.type(screen.getByPlaceholderText('Message #general'), 'after the block');
+    await user.type(screen.getByPlaceholderText('Message general'), 'after the block');
     await user.keyboard('{Enter}');
     expect(await screen.findByText(refusal)).toBeInTheDocument();
 
@@ -525,7 +540,7 @@ describe('MessageInput', () => {
     expect(screen.getByAltText('release.png')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Remove release.png' })).toBeInTheDocument();
 
-    await user.type(screen.getByPlaceholderText('Message #general'), 'with upload');
+    await user.type(screen.getByPlaceholderText('Message general'), 'with upload');
     await user.keyboard('{Enter}');
 
     await waitFor(() => {
@@ -546,7 +561,7 @@ describe('MessageInput', () => {
     render(<MemoryRouter><MessageInput channelId="ch1" guildId="g1" channelName="general" /></MemoryRouter>);
     const file = new File(['private bytes'], 'secret.txt', { type: 'text/plain' });
     await user.upload(document.querySelector('input[type="file"]') as HTMLInputElement, file);
-    await user.type(screen.getByPlaceholderText('Message #general'), 'private file');
+    await user.type(screen.getByPlaceholderText('Message general'), 'private file');
     await user.keyboard('{Enter}');
 
     await waitFor(() => expect(mockSendMessage).toHaveBeenCalled());
@@ -575,7 +590,7 @@ describe('MessageInput', () => {
     const scheduledAt = futureDatetimeLocal();
     render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
 
-    await user.click(screen.getByRole('button', { name: 'Schedule message' }));
+    await chooseTool(user, /Schedule message/);
     await user.type(screen.getByPlaceholderText('Schedule a message for general'), 'Standup reminder');
     await user.type(screen.getByLabelText(/Send at/), scheduledAt);
 
@@ -604,7 +619,7 @@ describe('MessageInput', () => {
 
     render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
 
-    await user.click(screen.getByRole('button', { name: 'Schedule message' }));
+    await chooseTool(user, /Schedule message/);
     const textarea = screen.getByPlaceholderText('Schedule a message for general');
     await user.type(textarea, 'Too soon');
     await user.type(screen.getByLabelText(/Send at/), scheduledAt);
@@ -633,13 +648,94 @@ describe('MessageInput', () => {
 
     render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
 
-    await user.click(screen.getByRole('button', { name: 'Schedule message' }));
+    await chooseTool(user, /Schedule message/);
     await user.type(screen.getByPlaceholderText('Schedule a message for general'), 'Too late');
     await user.type(screen.getByLabelText(/Send at/), pastScheduledAt);
     await user.click(screen.getByRole('button', { name: 'Schedule message' }));
 
     expect(await screen.findByText('Choose a time at least 5 seconds in the future.')).toBeInTheDocument();
     expect(mockScheduleMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('the Glass message box', () => {
+  beforeEach(() => {
+    mockEncryption.encrypted = false; mockEncryption.encryption = 'ready';
+    for (const key of Object.keys(mockActionOverrides)) delete mockActionOverrides[key];
+    mockMessaging.runtimes.clear();
+    localStorage.clear();
+    vi.clearAllMocks();
+    mockSendMessage.mockResolvedValue(undefined);
+    vi.mocked(channelApi.getFeatureSettings).mockImplementation(() => new Promise(() => {}));
+  });
+
+  it('names where the message goes, with no "#"', () => {
+    expect(composerPlaceholder('General')).toBe('Message General');
+    expect(composerPlaceholder('Mara', 'person')).toBe('Message Mara');
+    expect(composerPlaceholder()).toBe('Write a message');
+    render(<MessageInput channelId="ch1" guildId="g1" channelName="General" />);
+    expect(screen.getByPlaceholderText('Message General')).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/#/)).not.toBeInTheDocument();
+  });
+
+  it('asks "Reply to Jeremy" while replying, and just "Reply" where the chip carries the name', () => {
+    expect(replyPlaceholder('Jeremy')).toBe('Reply to Jeremy');
+    expect(replyPlaceholder('Jeremy', true)).toBe('Reply');
+  });
+
+  it('keeps send quiet until there is something to send', async () => {
+    const user = userEvent.setup();
+    render(<MessageInput channelId="ch1" guildId="g1" channelName="General" />);
+    const send = screen.getByRole('button', { name: 'Send message' });
+    expect(send).toBeDisabled();
+    await user.type(screen.getByRole('textbox'), 'hi');
+    expect(send).toBeEnabled();
+    await user.clear(screen.getByRole('textbox'));
+    expect(send).toBeDisabled();
+  });
+
+  it('carries attach and every secondary tool in one "+" menu', async () => {
+    const user = userEvent.setup();
+    render(<MessageInput channelId="ch1" guildId="g1" channelName="General" />);
+    await user.click(screen.getByRole('button', { name: 'More message tools' }));
+    const menu = screen.getByRole('menu', { name: 'Message tools' });
+    const names = within(menu).getAllByRole('menuitem').map((item) => item.textContent);
+    expect(names).toEqual([
+      'Attach files',
+      'Formatting tools',
+      'Create a poll',
+      'Schedule message',
+      'Stickers',
+      'GIFs',
+    ]);
+    // Emoji has its own button in a capsule with room for it.
+    expect(screen.getByRole('button', { name: 'Emoji' })).toBeInTheDocument();
+  });
+
+  it('folds emoji into the menu where the capsule is narrow', async () => {
+    const user = userEvent.setup();
+    render(<MessageInput channelId="ch1" guildId="g1" channelName="General" narrow />);
+    expect(screen.queryByRole('button', { name: 'Emoji' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'More message tools' }));
+    expect(screen.getByRole('menuitem', { name: /Emoji/ })).toBeInTheDocument();
+  });
+
+  it('offers no sticker entry in a conversation with no server', async () => {
+    const user = userEvent.setup();
+    render(<MessageInput channelId="ch1" channelName="Mara" conversationKind="person" />);
+    await user.click(screen.getByRole('button', { name: 'More message tools' }));
+    expect(screen.queryByRole('menuitem', { name: /Stickers/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /GIFs/ })).toBeInTheDocument();
+  });
+
+  it('lets a scheduled message be cancelled from its card', async () => {
+    const user = userEvent.setup();
+    render(<MessageInput channelId="ch1" guildId="g1" channelName="General" />);
+    await chooseTool(user, /Schedule message/);
+    expect(screen.getByLabelText(/Send at/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByLabelText(/Send at/)).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Message General')).toBeInTheDocument();
   });
 });
 

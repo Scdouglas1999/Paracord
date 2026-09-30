@@ -29,10 +29,13 @@ vi.mock('../../components/message/MessageInput', () => ({
     <div data-testid="composer">{channelId}</div>
   ),
 }));
-// The conversation pane's header is the Lantern TopBar until WP-G11; this suite
-// is about the body, so the header is reduced to the title it was handed.
-vi.mock('../../components/layout/TopBar', () => ({
-  TopBar: ({ channelName }: { channelName?: string }) => <div data-testid="header">{channelName}</div>,
+// The conversation pane's header (WP-G11) is covered in
+// components/glass/conversation; this suite is about the body, so the header is
+// reduced to the title it was handed.
+vi.mock('../../components/glass/conversation/ConversationHeader', () => ({
+  ConversationHeader: ({ subject }: { subject: { kind: string; channelName?: string; title?: string } }) => (
+    <div data-testid="header">{subject.kind === 'dm' ? subject.title : subject.channelName}</div>
+  ),
 }));
 
 const SCOPE = { serverId: '__local__', userId: 'user-1' };

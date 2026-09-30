@@ -5,12 +5,12 @@ import { getAccountChannelView } from '../../lib/channelView';
 import { isGroupDm, pendingGroupMembers, runtimeAttachDecision, runtimeSendDecision } from '../../lib/messages/messagingReadiness';
 import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
 import { entityScopeKey as memberScopeKey, type AccountScope } from '../../lib/serverScope';
-import { Fragment, useState, useRef, useEffect, useMemo, useCallback, lazy, Suspense, type CSSProperties } from 'react';
+import { Fragment, useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback, lazy, Suspense, type CSSProperties } from 'react';
 
 // §5.3: one reduced-motion switch for the whole app — lib/motion is the only
 // JavaScript motion engine; the composer's enter/exit surfaces are CSS.
-import { emitMotion, flash, liftOut, press, relax, useLingering, useReducedMotion } from '../../lib/motion';
-import { Plus, Smile, Send, X, FileText, BarChart3, PlusCircle, MinusCircle, Image, Clock3, EyeOff, Type, Loader2 } from 'lucide-react';
+import { emitMotion, liftOut, useLingering, useReducedMotion } from '../../lib/motion';
+import { ArrowUp, BarChart3, Clock3, CornerUpLeft, EyeOff, FileText, Image, Loader2, MinusCircle, Plus, PlusCircle, Smile, Type, X } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { Input, Select } from '../ui/Input';
 import { Button } from '../ui/Button';
@@ -71,9 +71,10 @@ interface MessageInputProps {
   replyingTo?: { id: string; author: string; content: string } | null;
   onCancelReply?: () => void;
   /**
-   * What `channelName` names: a server channel ("Message #general"), a group
-   * DM or a person ("Message Mara"). It only changes the words, never the
-   * behavior.
+   * What `channelName` names: a server channel, a group DM or a person. It no
+   * longer changes anything (the Glass words are "Message General" and
+   * "Message Mara" alike, docs/glass-spec.md §3.2); it stays so callers need no
+   * edit and a future distinction has somewhere to live.
    */
   conversationKind?: 'channel' | 'group' | 'person';
   /**
@@ -97,29 +98,6 @@ interface MessageInputProps {
   narrow?: boolean;
 }
 
-// 36px icon control (lantern-stage-spec §8): radius-sm, --interactive-normal →
-// --interactive-hover on a --bg-mod-subtle wash, press = scale(.97), layered focus
-// ring, 44px min touch target on coarse pointers.
-// §8 Composer tool: a quiet 32px ghost control inside the raised bar (§3
-// control heights, §9 hit targets — 44px on a coarse pointer).
-// Everything but `display`. The tool buttons that the composer's container
-// query shows and hides (`.message-composer-secondary`, `.message-composer-more`
-// in components.css) must not also carry an `inline-flex` utility: utilities
-// outrank the component layer, so the utility would win and the hidden half of
-// the row would show at every width.
-const ICON_BTN_BASE =
-  'pc-focusable h-8 w-8 shrink-0 items-center justify-center ' +
-  'rounded-[var(--radius-control)] text-text-muted ' +
-  'transition-[color,background-color] duration-[var(--duration-fast)] ease-[var(--ease-out)] ' +
-  'hover:bg-bg-mod-subtle hover:text-text-primary ' +
-  'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent ' +
-  '[@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:w-11';
-const ICON_BTN = `inline-flex ${ICON_BTN_BASE}`;
-
-// A composer mode that is switched on — the action color, never a light token.
-const ICON_BTN_ACTIVE =
-  'bg-accent-tint text-accent-primary hover:bg-accent-tint-strong hover:text-accent-primary';
-
 const POLL_DURATION_OPTIONS = [
   { label: 'No end time', minutes: 0 },
   { label: '1 hour', minutes: 60 },
@@ -131,16 +109,18 @@ const POLL_DURATION_OPTIONS = [
 ];
 
 /**
- * The composer's placeholder: "Message #general", "Message Mara"
- * (docs/server-home-spec.md, "Plain words").
+ * The composer's placeholder: "Message General", "Message Mara" (docs/glass-spec.md
+ * §3.2: no `#` anywhere; the name is the thing). `_kind` no longer changes the
+ * words (a channel and a person read alike now); it stays so existing callers
+ * and tests need no edit.
  */
 export function composerPlaceholder(
   name?: string | null,
-  kind: 'channel' | 'group' | 'person' = 'channel',
+  _kind: 'channel' | 'group' | 'person' = 'channel',
   compact = false,
 ): string {
   if (!name) return GENERIC_PLACEHOLDER;
-  const full = kind === 'channel' ? `Message #${name}` : `Message ${name}`;
+  const full = `Message ${name}`;
   // A phone's composer is about 230px of text and a placeholder cannot wrap,
   // so a long name would arrive cut off mid-word. There is no telling how long
   // a name is, so past what fits the short form drops it.
@@ -148,10 +128,26 @@ export function composerPlaceholder(
   return full;
 }
 
+/**
+ * While replying: "Reply to Jeremy". In a capsule too narrow for the sentence
+ * the reply chip already carries the name, so it is just "Reply" (`screens/07`).
+ */
+export function replyPlaceholder(author: string, compact = false): string {
+  if (compact) return 'Reply';
+  const full = `Reply to ${author}`;
+  return full.length > COMPACT_PLACEHOLDER_MAX * 2 ? 'Reply' : full;
+}
+
 const GENERIC_PLACEHOLDER = 'Write a message';
 
 /** What fits a phone's composer at the body size, with room to spare. */
 const COMPACT_PLACEHOLDER_MAX = 26;
+
+/**
+ * Below this capsule width the emoji button and the pickers' entry points fold
+ * into the "+" menu (the 420px side chat and a phone are both under it).
+ */
+const COMPACT_CAPSULE_MAX = 420;
 
 function canPreviewImageFile(file: File): boolean {
   return isAllowedImageMimeType(file.type);
@@ -374,6 +370,13 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [toolsPosition, setToolsPosition] = useState<{ x: number; y: number } | null>(null);
   const toolsButtonRef = useRef<HTMLButtonElement>(null);
+  // The "+" menu opens ABOVE the capsule, and the menu's own height is only
+  // known once it is on the page, so it is placed twice: at the button, then
+  // (before paint) lifted by its measured height. See the layout effect below.
+  const toolsAnchorRef = useRef<{ left: number; top: number } | null>(null);
+  const toolsPlacedRef = useRef(false);
+  // The capsule's measured width says whether the emoji button still fits.
+  const [compact, setCompact] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [showGifPicker, setShowGifPicker] = useState(false);
   const [showStickerPicker, setShowStickerPicker] = useState(false);
@@ -402,7 +405,6 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
      DOM node the engine owns, not React state: the send frame is the one frame
      in this moment that must not be spent re-rendering a 1,600-line composer,
      and the ghost has nothing to do with the draft anyway. */
-  const sendButtonRef = useRef<HTMLButtonElement>(null);
   const liftNode = useRef<HTMLSpanElement | null>(null);
   const liftTimer = useRef<number | null>(null);
   const { upload, uploading, maxUploadSize } = useFileUpload(channelId);
@@ -562,9 +564,13 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
     const shell = composerShellRef.current;
     if (!shell) return;
     let width = shell.clientWidth;
+    // Zero means "not laid out" (a detached or hidden tree), never "narrow".
+    const measure = () => setCompact(shell.clientWidth > 0 && shell.clientWidth < COMPACT_CAPSULE_MAX);
+    measure();
     const observer = new ResizeObserver(() => {
       if (shell.clientWidth === width) return;
       width = shell.clientWidth;
+      measure();
       resizeDraft();
     });
     observer.observe(shell);
@@ -636,9 +642,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
    * "Say something" — §5.1 "a message has mass".
    *
    * The typed words lift out of the composer along the path they land in the
-   * timeline; the composer relaxes 0.8% and springs back; the send control
-   * catches the white light for one beat; and the room's amber window flickers,
-   * because reading light just changed in it. `MessageList` picks the gesture
+   * timeline. `MessageList` picks the gesture
    * up from the bus and lands the row that arrives from it, so the words
    * leaving and the row arriving read as one object moving.
    *
@@ -657,8 +661,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
       const textBox = textarea.getBoundingClientRect();
       const ghost = document.createElement('span');
       ghost.setAttribute('aria-hidden', 'true');
-      ghost.className =
-        'pointer-events-none absolute z-10 whitespace-pre-wrap break-words px-1.5 py-2 text-body text-text-primary';
+      ghost.className = 'glass-composer__ghost';
       ghost.textContent = text;
       ghost.style.left = `${textBox.left - shellBox.left}px`;
       ghost.style.top = `${textBox.top - shellBox.top}px`;
@@ -680,8 +683,6 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
       // invisible; the words come back on their own.
       liftTimer.current = window.setTimeout(() => { textarea.style.opacity = ''; }, 4000);
     }
-    relax(shell);
-    flash(sendButtonRef.current);
     emitMotion('say:sent', { channelId, nonce: `${channelId}:${Date.now()}` });
   };
 
@@ -1202,14 +1203,29 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
     }
     fileInputRef.current?.click();
   };
+  useLayoutEffect(() => {
+    if (!toolsPosition) { toolsPlacedRef.current = false; return; }
+    const anchor = toolsAnchorRef.current;
+    if (toolsPlacedRef.current || !anchor) return;
+    const menu = document.querySelector<HTMLElement>('[role="menu"][aria-label="Message tools"]');
+    if (!menu) return;
+    toolsPlacedRef.current = true;
+    setToolsPosition({ x: anchor.left, y: Math.max(8, anchor.top - menu.offsetHeight - 8) });
+  }, [toolsPosition]);
+
+  // Everything the capsule does not carry stays one click from "+": attach
+  // first (the reason for the button), then the composers and pickers. Emoji
+  // only appears here when the capsule has no room for its own button.
   const composerTools: ContextMenuItem[] = [
     { label: 'Attach files', icon: <Plus size={18} />, action: attachFiles, disabled: showPollComposer || !canAttachFiles || !canSendMessages, description: actions.attach.reason ?? undefined },
-    { label: 'Formatting tools', icon: <Type size={18} />, action: () => setShowFormattingTools((value) => !value) },
+    { label: 'Formatting tools', icon: <Type size={18} />, action: () => { setShowFormattingTools(true); requestAnimationFrame(() => textareaRef.current?.focus()); }, selected: showFormattingTools || undefined },
     { label: 'Create a poll', icon: <BarChart3 size={18} />, action: togglePollComposer, disabled: !canCreatePoll, description: actions.poll.reason ?? undefined },
     { label: 'Schedule message', icon: <Clock3 size={18} />, action: () => setShowScheduleComposer((value) => !value), disabled: showPollComposer || !actions.schedule.allowed, description: actions.schedule.reason ?? undefined },
     ...(guildId ? [{ label: 'Stickers', icon: <Image size={18} />, action: () => { setShowStickerPicker(true); setShowGifPicker(false); setShowEmojiPicker(false); }, disabled: showPollComposer || !canSendMessages, description: actions.send.reason ?? undefined }] : []),
     { label: 'GIFs', icon: <Image size={18} />, action: () => { setShowGifPicker(true); setShowEmojiPicker(false); setShowStickerPicker(false); }, disabled: showPollComposer || !canSendMessages, description: actions.send.reason ?? undefined },
-    { label: 'Emoji', icon: <Smile size={18} />, action: () => { setShowEmojiPicker(true); setShowGifPicker(false); setShowStickerPicker(false); }, disabled: showPollComposer },
+    ...(ribbon || narrow || compact
+      ? [{ label: 'Emoji', icon: <Smile size={18} />, action: () => { setShowEmojiPicker(true); setShowGifPicker(false); setShowStickerPicker(false); }, disabled: showPollComposer }]
+      : []),
   ];
 
   const [blockerSettled, setBlockerSettled] = useState(false);
@@ -1233,12 +1249,33 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
       : !showPollComposer && !content.trim() && stagedFiles.length === 0);
   const nearLimit = content.length > MAX_MESSAGE_LENGTH * 0.9;
   const overLimit = content.length > MAX_MESSAGE_LENGTH;
+  // The tools the capsule has no room for live in the "+" menu: on a phone, in
+  // the Stage's ribbon, in a thread panel, and in any capsule narrower than
+  // COMPACT_CAPSULE_MAX (the 420px side chat included).
+  const foldTools = ribbon || narrow || compact;
+  const fullLabel = replyingTo
+    ? `Reply to ${replyingTo.author}`
+    : composerPlaceholder(channelName, conversationKind);
+  const placeholder = showPollComposer
+    ? 'The question above is what gets sent'
+    : showScheduleComposer
+      ? `Schedule a message for ${channelName ?? 'this conversation'}`
+      : ribbon || narrow
+        ? // The ribbon and the thread panel are narrower than a sentence, and the
+          // room they belong to is named in the heading directly above them.
+          'Say something'
+        : replyingTo
+          ? replyPlaceholder(replyingTo.author, foldTools)
+          : composerPlaceholder(channelName, conversationKind, phoneWidth);
+  const sendLabel = showScheduleComposer
+    ? (schedulingMessage ? 'Scheduling message' : 'Schedule message')
+    : 'Send message';
+
   return (
     <div
-      className={cn(
-        'message-composer-surface relative flex w-full min-w-0 flex-col gap-2 px-4 pb-[calc(var(--safe-bottom)+0.875rem)] pt-3.5 sm:px-8',
-        ribbon && 'gap-1.5 px-0 pb-0 pt-0 sm:px-0',
-      )}
+      className={cn('glass-composer', ribbon && 'glass-composer--ribbon', narrow && 'glass-composer--narrow')}
+      data-compact={foldTools ? 'true' : undefined}
+      data-drag-over={isDragOver ? 'true' : undefined}
       onDragOver={(e) => {
         if (!canAttachFiles || !canSendMessages) return;
         e.preventDefault();
@@ -1247,290 +1284,247 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
       onDragLeave={() => setIsDragOver(false)}
       onDrop={canAttachFiles && canSendMessages ? handleDrop : undefined}
     >
-      {showCommandThinking && (
-        <div
-          role="status"
-          aria-live="polite"
-          className="flex items-center gap-2 rounded-[var(--radius-control)] bg-bg-raised px-3 py-2 text-meta text-text-secondary shadow-[var(--shadow-raised)]"
-        >
-          <Loader2 size={14} className="shrink-0 animate-spin text-accent-primary" />
-          <span>Waiting for command response…</span>
-        </div>
-      )}
-      {!composerAction.allowed && blockerSettled && (
-        <div role="status" className="rounded-[var(--radius-control)] bg-bg-raised px-3 py-2 text-meta text-text-muted shadow-[var(--shadow-raised)]">
-          {composerAction.reason}
-          {!groupDmRefusal && encrypted && encryption === 'setup' && <Link className="ml-2 underline" to={`/setup?${new URLSearchParams({ migrate: '1', server: scope.serverId, user: scope.userId, returnTo: window.location.pathname + window.location.search })}`}>Set up encryption</Link>}
-          {!groupDmRefusal && encrypted && encryption === 'unlock' && <Link className="ml-2 underline" to={`/unlock?${new URLSearchParams({ returnTo: window.location.pathname + window.location.search })}`}>Unlock encryption</Link>}
-          {/* A second device — a fresh browser, a new laptop — signs in and
-              lands here holding no identity, or a different one. Without this
-              it was the one encryption blocker with no route out: nothing but
-              "Check again". Setup is not the answer either — it refuses when
-              the account already has an identity, and tells the user to restore
-              the recovery phrase — so link straight at the page that does it. */}
-          {!groupDmRefusal && encrypted && encryption === 'identity_mismatch' && <Link className="ml-2 underline" to="/recover">Restore your identity</Link>}
-          {/* A blocker can be resolved by someone else (a recipient finishing
-              encryption setup, a restored permission), so the check is always
-              repeatable from here instead of only after a request failure. */}
-          {/* A group waiting on somebody's enrollment is not a server answer to
-              re-ask: the capability call already said the group is encrypted,
-              and the missing key is the other person's to publish. */}
-          {!groupDmRefusal && <button type="button" className="ml-2 underline" onClick={refreshActions}>{capabilityError ? 'Retry' : 'Check again'}</button>}
-        </div>
-      )}
-      {isAnonymousChannel && (
-        <div className="flex items-center gap-2 rounded-[var(--radius-control)] bg-accent-tint px-3 py-2 text-meta text-accent-primary">
-          <EyeOff size={14} className="shrink-0" />
-          <span>Messages in this channel are posted anonymously</span>
-        </div>
-      )}
+      <div className="glass-composer__stack">
+        {showCommandThinking && (
+          <div role="status" aria-live="polite" className="glass-composer__note">
+            <Loader2 size={14} className="shrink-0 animate-spin" />
+            <span>Waiting for command response…</span>
+          </div>
+        )}
+        {!composerAction.allowed && blockerSettled && (
+          <div role="status" className="glass-composer__note">
+            <span>
+              {composerAction.reason}
+              {!groupDmRefusal && encrypted && encryption === 'setup' && <Link className="ml-2 underline" to={`/setup?${new URLSearchParams({ migrate: '1', server: scope.serverId, user: scope.userId, returnTo: window.location.pathname + window.location.search })}`}>Set up encryption</Link>}
+              {!groupDmRefusal && encrypted && encryption === 'unlock' && <Link className="ml-2 underline" to={`/unlock?${new URLSearchParams({ returnTo: window.location.pathname + window.location.search })}`}>Unlock encryption</Link>}
+              {/* A second device — a fresh browser, a new laptop — signs in and
+                  lands here holding no identity, or a different one. Without this
+                  it was the one encryption blocker with no route out: nothing but
+                  "Check again". Setup is not the answer either — it refuses when
+                  the account already has an identity, and tells the user to restore
+                  the recovery phrase — so link straight at the page that does it. */}
+              {!groupDmRefusal && encrypted && encryption === 'identity_mismatch' && <Link className="ml-2 underline" to="/recover">Restore your identity</Link>}
+              {/* A blocker can be resolved by someone else (a recipient finishing
+                  encryption setup, a restored permission), so the check is always
+                  repeatable from here instead of only after a request failure. */}
+              {/* A group waiting on somebody's enrollment is not a server answer to
+                  re-ask: the capability call already said the group is encrypted,
+                  and the missing key is the other person's to publish. */}
+              {!groupDmRefusal && <button type="button" className="ml-2 underline" onClick={refreshActions}>{capabilityError ? 'Retry' : 'Check again'}</button>}
+            </span>
+          </div>
+        )}
+        {isAnonymousChannel && (
+          <div className="glass-composer__note">
+            <EyeOff size={14} className="shrink-0" />
+            <span>Messages in this channel are posted anonymously</span>
+          </div>
+        )}
 
-      {replyingTo && (
-        <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius-well)] bg-bg-raised px-3 py-1.5 text-meta text-text-muted shadow-[var(--shadow-raised)]">
-          <span>Replying to</span>
-          <span className="font-semibold text-text-primary">{replyingTo.author}</span>
-          <span className="min-w-0 flex-1 truncate text-text-muted">{replyingTo.content}</span>
-          <button
-            onClick={onCancelReply}
-            className={cn(ICON_BTN, 'h-7 w-7')}
-            aria-label="Cancel reply"
-            title="Cancel reply"
-          >
-            <X size={15} />
-          </button>
-        </div>
-      )}
-
-      {stagedFiles.length > 0 && (
-        <div className="flex flex-col gap-1">
-          <div className="flex gap-2 overflow-x-auto pb-1">
-            {stagedFiles.map((file, i) => {
-              const overLimit = file.size > maxUploadSize;
-              return (
-                <div
-                  key={i}
-                  className={cn(
-                    'relative flex flex-shrink-0 items-center gap-2 rounded-[var(--radius-well)] bg-bg-raised px-2 py-1.5',
-                    overLimit ? 'shadow-[0_0_0_1px_var(--accent-danger)]' : 'shadow-[var(--shadow-raised)]',
-                  )}
-                  style={{ maxWidth: 'min(220px, 60vw)' }}
-                >
-                  {canPreviewImageFile(file) ? (
-                    <img
-                      src={stagedImagePreviews[i] || ''}
-                      alt={file.name}
-                      className="h-10 w-10 rounded-[var(--radius-chip)] object-cover"
-                    />
-                  ) : (
-                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-chip)] bg-bg-well text-text-muted">
-                      <FileText size={18} />
-                    </span>
-                  )}
-                  <div className="min-w-0">
-                    <div className="truncate text-label text-text-primary">{file.name}</div>
-                    <div
-                      className={`text-meta tabular-nums ${overLimit ? 'text-accent-danger' : 'text-text-muted'}`}
-                    >
-                      {formatFileSize(file.size)}
-                      {overLimit ? ' · exceeds limit' : ''}
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => removeFile(i)}
-                    className="pc-focusable ml-1 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-[var(--radius-chip)] bg-bg-mod-strong text-text-secondary transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-danger-well hover:text-accent-danger"
-                    aria-label={`Remove ${file.name}`}
-                    title={`Remove ${file.name}`}
+        {stagedFiles.length > 0 && (
+          <div className="flex flex-col gap-1">
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {stagedFiles.map((file, i) => {
+                const overLimit = file.size > maxUploadSize;
+                return (
+                  <div
+                    key={i}
+                    className={cn('glass-composer__file', overLimit && 'glass-composer__file--over')}
+                    style={{ maxWidth: 'min(220px, 60vw)' }}
                   >
-                    <X size={13} />
+                    {canPreviewImageFile(file) ? (
+                      <img
+                        src={stagedImagePreviews[i] || ''}
+                        alt={file.name}
+                        className="h-10 w-10 rounded-[var(--radius-chip)] object-cover"
+                      />
+                    ) : (
+                      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-chip)] bg-bg-well text-text-muted">
+                        <FileText size={18} />
+                      </span>
+                    )}
+                    <div className="min-w-0">
+                      <div className="truncate text-label text-text-primary">{file.name}</div>
+                      <div className={`text-meta tabular-nums ${overLimit ? 'text-accent-danger' : 'text-text-muted'}`}>
+                        {formatFileSize(file.size)}
+                        {overLimit ? ' · exceeds limit' : ''}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => removeFile(i)}
+                      className="glass-composer__icon glass-focusable"
+                      aria-label={`Remove ${file.name}`}
+                      title={`Remove ${file.name}`}
+                    >
+                      <X size={13} aria-hidden />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="px-0.5 text-meta text-text-faint">
+              Max file size <span className="pc-mono">{formatFileSize(maxUploadSize)}</span>
+            </div>
+          </div>
+        )}
+
+        {showPollComposer && (
+          <div className="glass-composer__card">
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <span className="inline-flex items-center gap-1.5 text-section text-text-secondary">
+                <BarChart3 size={14} className="text-accent-primary" />
+                Poll
+              </span>
+              <Button variant="ghost" size="sm" onClick={togglePollComposer}>
+                Close
+              </Button>
+            </div>
+
+            <label className="block">
+              <span className="text-label text-text-secondary">Question</span>
+              <Input
+                type="text"
+                maxLength={300}
+                value={pollQuestion}
+                onChange={(e) => setPollQuestion(e.target.value)}
+                className="mt-1.5"
+                placeholder="What should everyone weigh in on?"
+              />
+            </label>
+
+            <div className="mt-3 flex flex-col gap-2">
+              {pollOptions.map((option, index) => (
+                <div key={index} className="flex items-center gap-2">
+                  <Input
+                    type="text"
+                    value={option}
+                    maxLength={100}
+                    onChange={(e) => updatePollOption(index, e.target.value)}
+                    placeholder={`Option ${index + 1}`}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removePollOption(index)}
+                    disabled={pollOptions.length <= 2}
+                    className="glass-composer__icon glass-focusable"
+                    aria-label={`Remove option ${index + 1}`}
+                  >
+                    <MinusCircle size={16} aria-hidden />
                   </button>
                 </div>
-              );
-            })}
-          </div>
-          <div className="px-0.5 text-meta text-text-faint">
-            Max file size <span className="pc-mono">{formatFileSize(maxUploadSize)}</span>
-          </div>
-        </div>
-      )}
+              ))}
+            </div>
 
-      {showPollComposer && (
-        <div className="rounded-[var(--radius-well)] bg-bg-raised p-4 shadow-[var(--shadow-raised)]">
-          <div className="mb-3 flex items-center justify-between gap-2">
-            <span className="inline-flex items-center gap-1.5 text-section text-text-secondary">
-              <BarChart3 size={14} className="text-accent-primary" />
-              Poll
-            </span>
-            <Button variant="ghost" size="sm" onClick={togglePollComposer}>
-              Close
-            </Button>
-          </div>
-
-          <label className="block">
-            <span className="text-label text-text-secondary">Question</span>
-            <Input
-              type="text"
-              maxLength={300}
-              value={pollQuestion}
-              onChange={(e) => setPollQuestion(e.target.value)}
-              className="mt-1.5"
-              placeholder="What should everyone weigh in on?"
-            />
-          </label>
-
-          <div className="mt-3 flex flex-col gap-2">
-            {pollOptions.map((option, index) => (
-              <div key={index} className="flex items-center gap-2">
-                <Input
-                  type="text"
-                  value={option}
-                  maxLength={100}
-                  onChange={(e) => updatePollOption(index, e.target.value)}
-                  placeholder={`Option ${index + 1}`}
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={addPollOption}
+                disabled={pollOptions.length >= 10}
+              >
+                <PlusCircle size={14} className="mr-1.5" />
+                Add option
+              </Button>
+              <label className="inline-flex items-center gap-2 text-label text-text-secondary">
+                <input
+                  type="checkbox"
+                  checked={pollAllowMultiselect}
+                  onChange={(e) => setPollAllowMultiselect(e.target.checked)}
+                  className="h-4 w-4 rounded-window accent-[color:var(--accent-primary)]"
                 />
-                <button
-                  type="button"
-                  onClick={() => removePollOption(index)}
-                  disabled={pollOptions.length <= 2}
-                  className={ICON_BTN}
-                  aria-label={`Remove option ${index + 1}`}
-                >
-                  <MinusCircle size={16} />
-                </button>
-              </div>
-            ))}
+                Allow multiple answers
+              </label>
+              <label className="inline-flex items-center gap-2 text-label text-text-secondary">
+                <span>Duration</span>
+                <span className="inline-block w-40">
+                  <Select
+                    value={pollDurationMinutes}
+                    onChange={(e) => setPollDurationMinutes(Number(e.target.value))}
+                  >
+                    {POLL_DURATION_OPTIONS.map((option) => (
+                      <option key={option.minutes} value={option.minutes}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </Select>
+                </span>
+              </label>
+            </div>
           </div>
+        )}
 
-          <div className="mt-3 flex flex-wrap items-center gap-3">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={addPollOption}
-              disabled={pollOptions.length >= 10}
-            >
-              <PlusCircle size={14} className="mr-1.5" />
-              Add option
-            </Button>
-            <label className="inline-flex items-center gap-2 text-label text-text-secondary">
-              <input
-                type="checkbox"
-                checked={pollAllowMultiselect}
-                onChange={(e) => setPollAllowMultiselect(e.target.checked)}
-                className="h-4 w-4 rounded-window accent-[color:var(--accent-primary)]"
+        {showScheduleComposer && (
+          <div className="glass-composer__card">
+            <label className="block">
+              <span className="text-section text-text-secondary">Send at</span>
+              <Input
+                type="datetime-local"
+                value={scheduledAt}
+                onChange={(e) => setScheduledAt(e.target.value)}
+                className="mt-1.5"
+                min={toDatetimeLocalValue(Date.now() + SCHEDULED_MESSAGE_MIN_LEAD_MS)}
               />
-              Allow multiple answers
             </label>
-            <label className="inline-flex items-center gap-2 text-label text-text-secondary">
-              <span>Duration</span>
-              <span className="inline-block w-40">
-                <Select
-                  value={pollDurationMinutes}
-                  onChange={(e) => setPollDurationMinutes(Number(e.target.value))}
-                >
-                  {POLL_DURATION_OPTIONS.map((option) => (
-                    <option key={option.minutes} value={option.minutes}>
-                      {option.label}
-                    </option>
-                  ))}
-                </Select>
-              </span>
-            </label>
+            <div className="mt-2 flex items-center justify-between gap-2">
+              <Button
+                variant="link"
+                size="sm"
+                className="h-auto px-0"
+                onClick={() => setShowScheduledPanel(true)}
+              >
+                {scheduledCount > 0 ? `View scheduled (${scheduledCount})` : 'View scheduled'}
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => setShowScheduleComposer(false)}>
+                Cancel
+              </Button>
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {showScheduleComposer && (
-        <div className="rounded-[var(--radius-well)] bg-bg-raised p-4 shadow-[var(--shadow-raised)]">
-          <label className="block">
-            <span className="text-section text-text-secondary">Send at</span>
-            <Input
-              type="datetime-local"
-              value={scheduledAt}
-              onChange={(e) => setScheduledAt(e.target.value)}
-              className="mt-1.5"
-              min={toDatetimeLocalValue(Date.now() + SCHEDULED_MESSAGE_MIN_LEAD_MS)}
-            />
-          </label>
-          <Button
-            variant="link"
-            size="sm"
-            className="mt-2 h-auto px-0"
-            onClick={() => setShowScheduledPanel(true)}
-          >
-            {scheduledCount > 0 ? `View scheduled (${scheduledCount})` : 'View scheduled'}
-          </Button>
-        </div>
-      )}
+        {showScheduledPanel && (
+          <ScheduledMessagesPanel
+            channelId={channelId}
+            channelName={channelName}
+            onClose={() => setShowScheduledPanel(false)}
+            onCountChange={setScheduledCount}
+          />
+        )}
 
-      {showScheduledPanel && (
-        <ScheduledMessagesPanel
-          channelId={channelId}
-          channelName={channelName}
-          onClose={() => setShowScheduledPanel(false)}
-          onCountChange={setScheduledCount}
-        />
-      )}
-
-      <MessagingRecoveryNotice runtime={messagingRuntime} encryptedConversation={!guildId} channelId={channelId} />
-      <MessagingQueuePanel runtime={messagingRuntime} channelId={channelId} />
-      {draftError && (
-        <div role="alert" className="mb-2 flex items-center justify-between gap-2 text-meta text-accent-danger">
-          <span>{draftError}</span>
-          <Button variant="ghost" onClick={() => void retrySave().catch(() => {})}>Retry saving draft</Button>
-        </div>
-      )}
-      {/* The blocker row above already carries the reason a send was refused —
-          for a blocked sender, word for word. Printing it again underneath said
-          the same sentence twice, stacked, which reads as two problems. */}
-      {submitError && submitError !== composerAction.reason && (
-        <div
-          className="rounded-[var(--radius-control)] bg-danger-well px-3 py-2 text-meta font-semibold text-accent-danger"
-          role="alert"
-        >
-          {submitError}
-        </div>
-      )}
+        <MessagingRecoveryNotice runtime={messagingRuntime} encryptedConversation={!guildId} channelId={channelId} />
+        <MessagingQueuePanel runtime={messagingRuntime} channelId={channelId} />
+        {draftError && (
+          <div role="alert" className="flex items-center justify-between gap-2 text-meta text-accent-danger">
+            <span>{draftError}</span>
+            <Button variant="ghost" onClick={() => void retrySave().catch(() => {})}>Retry saving draft</Button>
+          </div>
+        )}
+        {/* The blocker row above already carries the reason a send was refused —
+            for a blocked sender, word for word. Printing it again underneath said
+            the same sentence twice, stacked, which reads as two problems. */}
+        {submitError && submitError !== composerAction.reason && (
+          <div className="glass-composer__note glass-composer__note--error" role="alert">
+            {submitError}
+          </div>
+        )}
+      </div>
 
       <div
         ref={composerShellRef}
-        className={cn(
-          // §8 Composer: raised, 50px, radius 12. Depth is the warm top
-          // highlight plus a lift — never a border, so the drop state cannot
-          // reflow the row.
-          // `origin-bottom`: §5.1's "the composer relaxes 0.8% and springs
-          // back" is a settling, not a shrink — it gives way under the press
-          // and rises from where it sits.
-          'group relative flex min-h-[var(--h-composer)] origin-bottom items-end gap-2 rounded-[var(--radius-card)] py-1.5 pl-2.5 pr-2',
-          'transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]',
-          // §9: the composer is one control, so it shows one ring. The plate
-          // lights for the TEXT FIELD only — `focus-within` also matched the
-          // plus/poll/emoji/send buttons, which draw their own `pc-focusable`
-          // ring, and the two together read as a double outline.
-          'has-[textarea:focus-visible]:shadow-[var(--focus-ring-input)]',
-          isDragOver ? 'bg-accent-tint' : 'bg-bg-raised shadow-[var(--shadow-composer)]',
-          '[@media(max-width:640px)]:min-h-[var(--h-composer-phone)]',
-          // §8: the ribbon composer is 42px, and it is a well rather than a
-          // raised bar because the ribbon plate is already the raised surface.
-          ribbon && 'min-h-[var(--h-composer-ribbon)] gap-1.5 pl-2 [@media(max-width:640px)]:min-h-[var(--h-composer-ribbon)]',
-          ribbon && !isDragOver && 'pc-well bg-bg-well shadow-[var(--shadow-well)]',
-        )}
+        className="glass-composer__capsule"
       >
         {nearLimit && (
-          <span
-            className={cn(
-              'pointer-events-none absolute -top-6 right-1 rounded-[var(--radius-chip)] px-1.5 py-0.5 text-meta tabular-nums',
-              overLimit ? 'bg-danger-well text-accent-danger' : 'text-text-faint',
-            )}
-          >
+          <span className="glass-composer__count" data-over={overLimit ? 'true' : undefined}>
             <span className="pc-mono">{content.length}/{MAX_MESSAGE_LENGTH}</span>
           </span>
         )}
 
-        {/* Upload progress — indeterminate accent sweep while attachments upload. */}
+        {/* Upload progress — indeterminate sweep while attachments upload. */}
         {uploading && (
           reduceMotion ? (
-            <span className="pointer-events-none absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-accent-primary/70" />
+            <span className="glass-composer__progress" />
           ) : (
-            <span className="pointer-events-none absolute inset-x-2 bottom-0 h-0.5 overflow-hidden rounded-full">
+            <span className="glass-composer__progress">
               <span className="pc-sweep block h-full w-1/3 rounded-full bg-accent-primary" />
             </span>
           )
@@ -1628,19 +1622,25 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
           </div>
         )}
 
+        {/* "+" — attach, and everything the capsule has no room for. */}
         <button
           ref={toolsButtonRef}
           type="button"
-          className={cn(ICON_BTN_BASE, 'message-composer-more')}
+          className="glass-composer__btn glass-focusable"
           aria-label="More message tools"
           aria-haspopup="menu"
           aria-expanded={toolsPosition !== null}
           onClick={(event) => {
+            if (toolsPosition) { setToolsPosition(null); return; }
             const rect = event.currentTarget.getBoundingClientRect();
-            setToolsPosition((current) => current ? null : { x: rect.left, y: rect.top });
+            // The menu stands on the capsule's top edge, not on the button.
+            const capsuleTop = composerShellRef.current?.getBoundingClientRect().top ?? rect.top;
+            toolsAnchorRef.current = { left: rect.left, top: capsuleTop };
+            toolsPlacedRef.current = false;
+            setToolsPosition({ x: rect.left, y: rect.top });
           }}
         >
-          <Plus size={18} />
+          <Plus size={19} strokeWidth={1.7} aria-hidden />
         </button>
         <ContextMenu
           label="Message tools"
@@ -1653,16 +1653,6 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
           }}
         />
 
-        <button
-          onClick={attachFiles}
-          className={cn(ICON_BTN_BASE, 'message-composer-secondary')}
-          disabled={showPollComposer || !canAttachFiles || !canSendMessages}
-          aria-label="Attach files"
-          title={actions.attach.reason ?? 'Attach files'}
-        >
-          <Plus size={18} />
-        </button>
-
         <input
           ref={fileInputRef}
           type="file"
@@ -1670,6 +1660,27 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
           className="hidden"
           onChange={handleFileSelect}
         />
+
+        {replyingTo && (
+          <span
+            role="group"
+            aria-label={`Replying to ${replyingTo.author}`}
+            title={replyingTo.content ? `${replyingTo.author}: ${replyingTo.content}` : undefined}
+            className="glass-composer__reply"
+          >
+            <CornerUpLeft size={14} strokeWidth={1.7} aria-hidden />
+            <span className="glass-composer__reply-name">{replyingTo.author}</span>
+            <button
+              type="button"
+              onClick={onCancelReply}
+              className="glass-composer__reply-x glass-focusable"
+              aria-label="Cancel reply"
+              title="Cancel reply"
+            >
+              <X size={12} strokeWidth={2} aria-hidden />
+            </button>
+          </span>
+        )}
 
         <textarea
           ref={textareaRef}
@@ -1681,232 +1692,122 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
           }}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
-          placeholder={
-            showPollComposer
-                ? 'The question above is what gets sent'
-                : showScheduleComposer
-                  ? `Schedule a message for ${channelName ?? 'this conversation'}`
-                  : ribbon || narrow
-                    ? // §7.2's ribbon is a 336px plate and the thread panel is
-                      // narrower still, and in both the room this field belongs
-                      // to is named in the heading directly above it. "Say
-                      // something to the room" needed 192px of a 185px box, so
-                      // it arrived ellipsised mid-word — "Say something to the
-                      // roor" on the Stage, "Say something in Bra" in a thread.
-                      'Say something'
-                    : composerPlaceholder(channelName, conversationKind, phoneWidth)
-          }
+          placeholder={placeholder}
+          aria-label={fullLabel}
           rows={1}
           maxLength={MAX_MESSAGE_LENGTH}
           disabled={showPollComposer}
           data-composer-input=""
           // A placeholder with a long channel name can be wider than a phone's
-          // composer. Clipping the PLACEHOLDER
-          // to one line keeps the composer at its §3 height; a real draft still
-          // wraps and grows, which is what a draft should do.
-          className={
-            'min-w-[160px] flex-1 resize-none self-center bg-transparent px-1.5 py-2 text-body '
-            // 16px on a coarse pointer, or the mobile browser zooms the page when
-            // the field takes focus. It is a utility rather than a rule in
-            // components.css because `text-body` is a utility too, and since the
-            // component sheets moved into `@layer components` a rule there would
-            // lose to it.
-            + '[@media(pointer:coarse)]:text-[16px] '
-            // The plate carries this field's focus ring (the shell above), so the
-            // field draws none: `outline-none` is a utility and the generic
-            // `:focus-visible` fallback lives in `@layer base`, so it wins.
-            + 'text-text-primary outline-none disabled:cursor-not-allowed disabled:opacity-70 '
-            + 'placeholder:overflow-hidden placeholder:text-ellipsis placeholder:whitespace-nowrap '
-            + 'placeholder:text-text-faint'
-          }
+          // composer. Clipping the PLACEHOLDER to one line keeps the capsule at
+          // its 52px; a real draft still wraps and grows, which is what a draft
+          // should do.
+          className="glass-composer__input"
           style={{ maxHeight: '50vh' }}
         />
 
-        <button
-          type="button"
-          data-composer-picker-toggle="formatting"
-          onMouseDown={(e) => e.stopPropagation()}
-          onClick={() => setShowFormattingTools((prev) => !prev)}
-          className={cn(ICON_BTN_BASE, 'message-composer-secondary', showFormattingTools && ICON_BTN_ACTIVE)}
-          aria-label="Formatting tools"
-          title="Formatting tools"
-        >
-          <Type size={18} />
-        </button>
-
-        {actions.poll.supported && (
-          <button
-            type="button"
-            onClick={togglePollComposer}
-            className={cn(ICON_BTN_BASE, 'message-composer-secondary', showPollComposer && ICON_BTN_ACTIVE)}
-            disabled={!canCreatePoll && !showPollComposer}
-            aria-label={showPollComposer ? 'Poll composer enabled' : 'Create a poll'}
-            title={actions.poll.reason ?? (showPollComposer ? 'Poll composer enabled' : 'Create a poll')}
-          >
-            <BarChart3 size={18} />
-          </button>
-        )}
-
-        <button
-          type="button"
-          onClick={() => setShowScheduleComposer((prev) => !prev)}
-          className={cn(ICON_BTN_BASE, 'message-composer-secondary', showScheduleComposer && ICON_BTN_ACTIVE)}
-          aria-label={showScheduleComposer ? 'Scheduling enabled' : 'Schedule message'}
-          title={actions.schedule.reason ?? (showScheduleComposer ? 'Scheduling enabled' : 'Schedule message')}
-          disabled={showPollComposer || (!showScheduleComposer && !actions.schedule.allowed)}
-        >
-          <Clock3 size={18} />
-        </button>
-
-        {guildId && (
-          <div className="relative">
-            <button
-              className={cn(ICON_BTN_BASE, 'message-composer-secondary')}
-              data-composer-picker-toggle="sticker"
-              onMouseDown={(e) => e.stopPropagation()}
-              onClick={() => { setShowStickerPicker(!showStickerPicker); setShowGifPicker(false); setShowEmojiPicker(false); }}
-              disabled={showPollComposer || !canSendMessages}
-              aria-label="Stickers"
-              title={actions.send.reason ?? 'Stickers'}
-            >
-              {/* Sticker icon: a square with a folded corner (lucide-style stroke). */}
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M15.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8.5L15.5 2z" />
-                <polyline points="15 2 15 9 22 9" />
-                <circle cx="10" cy="14" r="2" />
-                <path d="m20 17-1.09-1.09a2 2 0 0 0-2.82 0L10 22" />
-              </svg>
-            </button>
-            {stickerLayer.value && (
-              <div className="absolute bottom-full right-0 mb-2 max-w-[90vw]" style={PICKER_LAYER_STYLE}>
-                <Suspense fallback={null}>
-                  <StickerPicker
-                    leaving={stickerLayer.leaving}
-                    guildId={guildId}
-                    onSelect={(stickerId) => {
-                      if (!actions.send.allowed) { setSubmitError(actions.send.reason); return; }
-                      setShowStickerPicker(false);
-                      void (async () => {
-                        try {
-                          await messageStore.getState().sendMessage(channelId, '', replyingTo?.id, undefined, [stickerId]);
+        {/* The layers of the pickers grow out of the capsule's right end. */}
+        {stickerLayer.value && guildId && (
+          <div className="absolute bottom-full right-0 mb-2 max-w-[90vw]" style={PICKER_LAYER_STYLE}>
+            <Suspense fallback={null}>
+              <StickerPicker
+                leaving={stickerLayer.leaving}
+                guildId={guildId}
+                onSelect={(stickerId) => {
+                  if (!actions.send.allowed) { setSubmitError(actions.send.reason); return; }
+                  setShowStickerPicker(false);
+                  void (async () => {
+                    try {
+                      await messageStore.getState().sendMessage(channelId, '', replyingTo?.id, undefined, [stickerId]);
                       if (mounted.current) onCancelReply?.();
-                        } catch (err) {
-                          setSubmitError(`Failed to send sticker: ${messageInputError(err, 'Request failed')}`);
-                        }
-                      })();
-                    }}
-                    onClose={() => setShowStickerPicker(false)}
-                  />
-                </Suspense>
-              </div>
-            )}
+                    } catch (err) {
+                      setSubmitError(`Failed to send sticker: ${messageInputError(err, 'Request failed')}`);
+                    }
+                  })();
+                }}
+                onClose={() => setShowStickerPicker(false)}
+              />
+            </Suspense>
+          </div>
+        )}
+        {gifLayer.value && (
+          <div className="absolute bottom-full right-0 mb-2 max-w-[90vw]" style={PICKER_LAYER_STYLE}>
+            <Suspense fallback={null}>
+              <GifPicker
+                leaving={gifLayer.leaving}
+                onSelect={(gifUrl) => {
+                  if (!actions.send.allowed) { setSubmitError(actions.send.reason); return; }
+                  setShowGifPicker(false);
+                  void (async () => {
+                    try {
+                      await messageStore.getState().sendMessage(channelId, gifUrl, replyingTo?.id);
+                      if (mounted.current) onCancelReply?.();
+                    } catch (err) {
+                      setSubmitError(`Failed to send GIF: ${messageInputError(err, 'Request failed')}`);
+                    }
+                  })();
+                }}
+                onClose={() => setShowGifPicker(false)}
+              />
+            </Suspense>
+          </div>
+        )}
+        {emojiLayer.value && (
+          <div className="absolute bottom-full right-0 mb-2 max-w-[90vw]" style={PICKER_LAYER_STYLE}>
+            <Suspense fallback={null}>
+              <EmojiPicker
+                leaving={emojiLayer.leaving}
+                onSelect={(emoji) => {
+                  setContent((prev) => `${prev}${emoji}`);
+                  triggerTyping();
+                  setShowEmojiPicker(false);
+                }}
+                onClose={() => setShowEmojiPicker(false)}
+                guildId={guildId}
+              />
+            </Suspense>
           </div>
         )}
 
-        <div className="relative">
+        {!foldTools && (
           <button
-            className={cn(ICON_BTN_BASE, 'message-composer-secondary')}
-            data-composer-picker-toggle="gif"
-            onMouseDown={(e) => e.stopPropagation()}
-            onClick={() => { setShowGifPicker(!showGifPicker); setShowEmojiPicker(false); setShowStickerPicker(false); }}
-            disabled={showPollComposer || !canSendMessages}
-            aria-label="GIF"
-            title={actions.send.reason ?? 'GIF'}
-          >
-            <Image size={18} />
-          </button>
-          {gifLayer.value && (
-            <div className="absolute bottom-full right-0 mb-2 max-w-[90vw]" style={PICKER_LAYER_STYLE}>
-              <Suspense fallback={null}>
-                <GifPicker
-                  leaving={gifLayer.leaving}
-                  onSelect={(gifUrl) => {
-                    if (!actions.send.allowed) { setSubmitError(actions.send.reason); return; }
-                    setShowGifPicker(false);
-                    void (async () => {
-                      try {
-                        await messageStore.getState().sendMessage(channelId, gifUrl, replyingTo?.id);
-                    if (mounted.current) onCancelReply?.();
-                      } catch (err) {
-                        setSubmitError(`Failed to send GIF: ${messageInputError(err, 'Request failed')}`);
-                      }
-                    })();
-                  }}
-                  onClose={() => setShowGifPicker(false)}
-                />
-              </Suspense>
-            </div>
-          )}
-        </div>
-
-        <div className="relative">
-          <button
-            className={cn(ICON_BTN_BASE, 'message-composer-secondary')}
+            type="button"
             data-composer-picker-toggle="emoji"
             onMouseDown={(e) => e.stopPropagation()}
             onClick={() => { setShowEmojiPicker(!showEmojiPicker); setShowGifPicker(false); setShowStickerPicker(false); }}
             disabled={showPollComposer}
+            className="glass-composer__btn glass-focusable"
             aria-label="Emoji"
             title="Emoji"
           >
-            <Smile size={18} />
+            <Smile size={19} strokeWidth={1.7} aria-hidden />
           </button>
-          {emojiLayer.value && (
-            <div className="absolute bottom-full right-0 mb-2 max-w-[90vw]" style={PICKER_LAYER_STYLE}>
-              <Suspense fallback={null}>
-                <EmojiPicker
-                  leaving={emojiLayer.leaving}
-                  onSelect={(emoji) => {
-                    setContent((prev) => `${prev}${emoji}`);
-                    triggerTyping();
-                    setShowEmojiPicker(false);
-                  }}
-                  onClose={() => setShowEmojiPicker(false)}
-                  guildId={guildId}
-                />
-              </Suspense>
-            </div>
-          )}
-        </div>
+        )}
 
         <button
-          ref={sendButtonRef}
           type="button"
           onClick={() => void handleSubmit()}
-          // §5.1 "controls are tactile": 0.96 in 80ms, then springs back. The
-          // send's own beat — the white-light flash — is `beginSay`'s, so a
-          // press that does not send still answers the finger.
-          onPointerDown={() => { if (!sendDisabled) press(sendButtonRef.current); }}
           disabled={sendDisabled}
-          className={cn(
-            'pc-focusable inline-flex h-[34px] shrink-0 items-center justify-center gap-1.5 rounded-[var(--radius-control)] px-3',
-            'transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]',
-            '[@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:px-4',
-            sendDisabled
-              ? 'cursor-not-allowed bg-bg-mod-subtle text-text-faint'
-              // Inside the Stage the send button is white light: everybody it
-              // reaches is in the room right now (§8 Composer).
-              : ribbon
-                ? 'bg-light-white font-semibold text-text-on-light shadow-[var(--glow-control-on)]'
-                : 'bg-accent-primary font-semibold text-text-on-accent hover:bg-accent-primary-hover active:bg-accent-primary-active',
-          )}
-          aria-label={showScheduleComposer ? (schedulingMessage ? 'Scheduling message' : 'Schedule message') : 'Send message'}
-          title={showScheduleComposer ? (schedulingMessage ? 'Scheduling message' : 'Schedule message') : 'Send message'}
+          // Quiet until there is something to send, then cream: the one primary
+          // action on the screen (§1.4). It does not scale on press (§9).
+          className="glass-composer__send glass-focusable"
+          aria-label={sendLabel}
+          title={sendLabel}
         >
           {showsSpinner ? (
-            <Loader2 size={17} className="animate-spin" />
+            <Loader2 size={17} className="animate-spin" aria-hidden />
           ) : showScheduleComposer ? (
-            <Clock3 size={17} />
+            <Clock3 size={17} aria-hidden />
           ) : (
-            <Send size={17} />
+            <ArrowUp size={17} strokeWidth={2.3} aria-hidden />
           )}
         </button>
       </div>
 
       {isDragOver && (
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-[var(--radius-card)] border-2 border-dashed border-accent-primary/50 bg-bg-plate/70">
-          <div className="pc-display inline-flex items-center gap-2 text-heading text-accent-primary">
-            <Plus size={20} />
+        <div className="glass-composer__drop">
+          <div className="inline-flex items-center gap-2 text-heading text-text-primary">
+            <Plus size={20} aria-hidden />
             Drop files to attach
           </div>
         </div>

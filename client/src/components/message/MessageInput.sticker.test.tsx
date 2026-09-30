@@ -162,7 +162,8 @@ describe('MessageInput sticker flow', () => {
 
     render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
 
-    await user.click(screen.getByRole('button', { name: 'Stickers' }));
+    await user.click(screen.getByRole('button', { name: 'More message tools' }));
+    await user.click(screen.getByRole('menuitem', { name: /Stickers/ }));
     await user.click(await screen.findByRole('button', { name: 'Select sticker ship_it' }));
 
     expect(mockSendMessage).toHaveBeenCalledWith('ch1', '', undefined, undefined, ['1001']);
@@ -176,7 +177,8 @@ describe('MessageInput sticker flow', () => {
 
     render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
 
-    await user.click(screen.getByRole('button', { name: 'Stickers' }));
+    await user.click(screen.getByRole('button', { name: 'More message tools' }));
+    await user.click(screen.getByRole('menuitem', { name: /Stickers/ }));
     await user.click(await screen.findByRole('button', { name: 'Select sticker ship_it' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
@@ -192,7 +194,8 @@ describe('MessageInput sticker flow', () => {
 
     render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
 
-    await user.click(screen.getByRole('button', { name: 'GIF' }));
+    await user.click(screen.getByRole('button', { name: 'More message tools' }));
+    await user.click(screen.getByRole('menuitem', { name: /GIFs/ }));
     await user.click(await screen.findByRole('button', { name: 'Select GIF' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(

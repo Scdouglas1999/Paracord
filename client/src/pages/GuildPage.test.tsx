@@ -12,8 +12,15 @@ import { useVoiceStore } from '../stores/voiceStore';
 import type { Channel } from '../types';
 import { GuildPage } from './GuildPage';
 
+// The state screens (loading, failed, not found) still draw the Lantern TopBar.
 vi.mock('../components/layout/TopBar', () => ({
   TopBar: ({ channelName }: { channelName: string }) => <div data-testid="topbar">{channelName}</div>,
+}));
+// The conversation header (WP-G11) is covered in components/glass/conversation.
+vi.mock('../components/glass/conversation/ConversationHeader', () => ({
+  ConversationHeader: ({ subject }: { subject: { kind: string; channelName?: string; title?: string } }) => (
+    <div data-testid="topbar">{subject.kind === 'dm' ? subject.title : subject.channelName}</div>
+  ),
 }));
 
 vi.mock('../components/channel/ForumView', () => ({

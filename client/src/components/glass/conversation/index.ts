@@ -4,7 +4,10 @@
  * Mounted by GuildPage, TextChannelView and DMPage inside the conversation pane
  * the shell paints.
  *
- * WP-G7 stub: replace this re-export with the real pane, keeping the props.
+ * WP-G11: the real pane. The header, the channel menu behind its title, the
+ * DM call control and the interim sheet bridge live beside it; the message box
+ * is `components/message/MessageInput`.
  */
-export { ConversationPane } from '../shell/stubs/ConversationPaneStub';
+export { ConversationPane } from './ConversationPane';
+export { ConversationHeader } from './ConversationHeader';
 export type { ConversationPaneProps, ConversationSubject } from '../shell/slots';
