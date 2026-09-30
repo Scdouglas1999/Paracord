@@ -3,9 +3,71 @@ use std::net::SocketAddr;
 
 use serde::{Deserialize, Serialize};
 
+use paracord_transport::connection::MediaViewClaim;
+use paracord_transport::control::TrackKind;
 use paracord_transport::stream::{
     PublishedTrack, StreamId, TrackId, TrackSubscription, VideoCodecCapability,
 };
+
+/// The kind of a view session (see [`ViewTarget`]).
+pub type ViewKind = MediaViewClaim;
+
+/// Suffix of the stream id every client gives its screen share
+/// (`stream:{id}:screen`, carrying the `screen` video track and, when shared,
+/// the `screen-audio` track). A camera is `stream:{id}:camera`.
+pub const SCREEN_STREAM_SUFFIX: &str = ":screen";
+
+/// What a view session may receive: one publisher's screen share.
+///
+/// A view session is a receive-only room member that is *not* a call member:
+/// it has no voice state, is not in the call roster, never publishes, and
+/// receives nothing but the tracks of the stream it watches.
+///
+/// - `Watch`: the stream's video and its own audio (`screen-audio`), never the
+///   voices. Counted as watching.
+/// - `Ambient`: the stream's video only, pinned to its lowest simulcast layer
+///   and delivered as keyframes at a capped rate. Not counted, not shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ViewTarget {
+    pub kind: ViewKind,
+    pub publisher_user_id: i64,
+}
+
+impl ViewTarget {
+    /// Whether a track, identified by its ids and publisher, belongs to the
+    /// watched stream. `kind` is checked when known: an ambient view never
+    /// receives audio.
+    pub fn allows(
+        &self,
+        publisher_user_id: i64,
+        stream_id: &StreamId,
+        kind: Option<TrackKind>,
+    ) -> bool {
+        if publisher_user_id != self.publisher_user_id
+            || !stream_id.0.ends_with(SCREEN_STREAM_SUFFIX)
+        {
+            return false;
+        }
+        match self.kind {
+            ViewKind::Watch => true,
+            ViewKind::Ambient => !matches!(kind, Some(TrackKind::Audio)),
+        }
+    }
+
+    /// [`Self::allows`] for a published track.
+    pub fn allows_track(&self, track: &PublishedTrack) -> bool {
+        self.allows(track.publisher_user_id, &track.stream_id, Some(track.kind))
+    }
+
+    pub fn is_ambient(&self) -> bool {
+        matches!(self.kind, ViewKind::Ambient)
+    }
+
+    /// The publisher this view counts as watching, if it counts at all.
+    pub fn counted_publisher(&self) -> Option<i64> {
+        matches!(self.kind, ViewKind::Watch).then_some(self.publisher_user_id)
+    }
+}
 
 /// Largest number of distinct `(stream_id, track_id)` announcements one
 /// participant may have live at once.
@@ -64,6 +126,12 @@ pub struct MediaParticipant {
     pub can_publish: bool,
     /// The participant's publicly reachable address (for P2P).
     pub public_addr: Option<SocketAddr>,
+    /// `Some` when this member is a view session rather than a call member.
+    pub view: Option<ViewTarget>,
+    /// For a call member: the publisher whose stream it is watching through
+    /// its call (counted as watching). Always `None` for a view session, whose
+    /// target is in `view`.
+    pub watching: Option<i64>,
 }
 
 impl MediaParticipant {
@@ -81,6 +149,35 @@ impl MediaParticipant {
             deafened: false,
             can_publish: true,
             public_addr: None,
+            view: None,
+            watching: None,
+        }
+    }
+
+    /// A view session: receive-only, subscribed to nobody's audio, and limited
+    /// by the relay to the tracks `target` allows.
+    pub fn viewer(user_id: i64, session_id: String, target: ViewTarget) -> Self {
+        Self {
+            can_publish: false,
+            view: Some(target),
+            ..Self::new(user_id, session_id)
+        }
+    }
+
+    pub fn is_viewer(&self) -> bool {
+        self.view.is_some()
+    }
+
+    pub fn is_ambient_viewer(&self) -> bool {
+        self.view.is_some_and(|view| view.is_ambient())
+    }
+
+    /// The publisher this member counts as watching: a watch view's target, or
+    /// the stream a call member watches through its call.
+    pub fn watched_publisher(&self) -> Option<i64> {
+        match self.view {
+            Some(view) => view.counted_publisher(),
+            None => self.watching,
         }
     }
 
@@ -95,8 +192,12 @@ impl MediaParticipant {
         self.video_capabilities = capabilities;
     }
 
-    /// Subscribe to another user's media.
+    /// Subscribe to another user's media. A view session never takes the
+    /// voices, so it holds no participant-level subscription at all.
     pub fn subscribe(&mut self, user_id: i64) {
+        if self.is_viewer() {
+            return;
+        }
         self.subscriptions.insert(user_id);
     }
 
@@ -107,6 +208,9 @@ impl MediaParticipant {
 
     /// Subscribe to all other participants' media given a list of user IDs.
     pub fn subscribe_all(&mut self, user_ids: &[i64]) {
+        if self.is_viewer() {
+            return;
+        }
         for &uid in user_ids {
             if uid != self.user_id {
                 self.subscriptions.insert(uid);
@@ -330,6 +434,75 @@ mod tests {
         };
         p.publish_track(track);
         assert!(p.published_tracks.is_empty());
+    }
+
+    fn screen_track(publisher: i64, track_id: &str, kind: TrackKind) -> PublishedTrack {
+        PublishedTrack {
+            stream_id: StreamId::new(format!("stream:{publisher}:screen")),
+            track_id: TrackId::new(track_id),
+            publisher_user_id: publisher,
+            kind,
+            codec: None,
+            layers: vec![],
+        }
+    }
+
+    #[test]
+    fn a_viewer_is_receive_only_and_takes_no_voices() {
+        let target = ViewTarget {
+            kind: ViewKind::Watch,
+            publisher_user_id: 7,
+        };
+        let mut viewer = MediaParticipant::viewer(1, "view-1".into(), target);
+        assert!(!viewer.can_publish);
+        assert!(viewer.is_viewer());
+        viewer.subscribe(7);
+        viewer.subscribe_all(&[2, 3, 7]);
+        assert!(
+            viewer.subscriptions.is_empty(),
+            "a viewer never takes voices"
+        );
+        viewer.publish_track(screen_track(1, "screen", TrackKind::Video));
+        assert!(viewer.published_tracks.is_empty());
+        assert_eq!(viewer.watched_publisher(), Some(7));
+    }
+
+    #[test]
+    fn view_targets_allow_only_the_watched_stream() {
+        let watch = ViewTarget {
+            kind: ViewKind::Watch,
+            publisher_user_id: 7,
+        };
+        let ambient = ViewTarget {
+            kind: ViewKind::Ambient,
+            publisher_user_id: 7,
+        };
+        let screen = screen_track(7, "screen", TrackKind::Video);
+        let screen_audio = screen_track(7, "screen-audio", TrackKind::Audio);
+        let camera = PublishedTrack {
+            stream_id: StreamId::new("stream:7:camera"),
+            ..screen.clone()
+        };
+        let someone_else = screen_track(8, "screen", TrackKind::Video);
+
+        assert!(watch.allows_track(&screen));
+        assert!(watch.allows_track(&screen_audio));
+        assert!(!watch.allows_track(&camera));
+        assert!(!watch.allows_track(&someone_else));
+
+        assert!(ambient.allows_track(&screen));
+        assert!(
+            !ambient.allows_track(&screen_audio),
+            "ambient is video only"
+        );
+        assert!(!ambient.allows_track(&camera));
+
+        assert_eq!(watch.counted_publisher(), Some(7));
+        assert_eq!(
+            ambient.counted_publisher(),
+            None,
+            "ambient is never counted"
+        );
     }
 
     #[test]

@@ -24,8 +24,42 @@ use paracord_transport::stream::{
 use paracord_transport::webtransport::WebTransportStreams;
 
 use crate::bandwidth::{BandwidthEstimator, DownlinkEstimator};
-use crate::room::MediaRoomManager;
+use crate::participant::{MediaParticipant, ViewTarget};
+use crate::room::{MediaRoomManager, ViewRecord};
 use crate::speaker::SpeakerDetector;
+
+/// Longest an ambient view waits for its next frame. An ambient view receives
+/// only keyframes of its stream's lowest layer, at most one per this interval
+/// (so at most 1 fps); when the publisher's own keyframes are further apart
+/// the relay asks it for one on that layer, no more often than this.
+pub const AMBIENT_FRAME_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Which of an account's two relay connections a handle is.
+///
+/// An account holds at most one call membership and at most one view session
+/// at a time (a call in one server while the room of another is lit by its
+/// stream), each on its own media connection. Everything the relay keys by
+/// connection is keyed by `(user_id, slot)`, so a view connection never
+/// supersedes the account's call connection or vice versa.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ConnectionSlot {
+    /// A call membership (joined or listening in), backed by a voice state.
+    Call,
+    /// A view session: receive-only, one stream, no voice state.
+    View,
+}
+
+/// Relay-internal key for one of an account's connections.
+type ConnKey = (i64, ConnectionSlot);
+
+/// The slot a room member's media connection occupies.
+fn slot_of(participant: &MediaParticipant) -> ConnectionSlot {
+    if participant.is_viewer() {
+        ConnectionSlot::View
+    } else {
+        ConnectionSlot::Call
+    }
+}
 
 /// Maximum sustained media packets per second a single sender may forward.
 ///
@@ -248,6 +282,10 @@ pub(crate) struct CachedRecipients {
     conn_generation: u64,
     /// Resolved recipient connection handles to fan the datagram out to.
     pub(crate) recipients: Vec<ConnectionHandle>,
+    /// Ambient views that match this `(sender, ssrc)`. They never receive
+    /// datagrams (deltas); the keyframe path hands them a whole keyframe at
+    /// most once per [`AMBIENT_FRAME_INTERVAL`].
+    pub(crate) ambient: Vec<ConnectionHandle>,
 }
 
 /// Distinct SSRCs the relay keeps a cached fan-out plan for, per sender.
@@ -492,6 +530,9 @@ struct ConnectionLease {
     gate: OnceLock<Arc<std::sync::Mutex<()>>>,
     /// Per-account membership gate (owned by [`MediaRoomManager`]).
     membership_gate: OnceLock<Arc<std::sync::Mutex<()>>>,
+    /// Which of the account's connections this is, resolved from the room
+    /// membership its receipt names when the connection is registered.
+    slot: OnceLock<ConnectionSlot>,
 }
 
 /// Handle to a connected participant's QUIC connection for datagram forwarding.
@@ -576,6 +617,20 @@ impl ConnectionHandle {
     /// frame, so it identifies exactly one call for the life of the connection.
     pub fn session_id(&self) -> &str {
         &self.session_id
+    }
+
+    /// Which of the account's connections this is. A handle that was never
+    /// registered is treated as a call connection; it owns nothing either way.
+    pub fn slot(&self) -> ConnectionSlot {
+        self.lease
+            .slot
+            .get()
+            .copied()
+            .unwrap_or(ConnectionSlot::Call)
+    }
+
+    fn key(&self) -> ConnKey {
+        (self.user_id, self.slot())
     }
 
     /// Send a datagram to this connection.
@@ -811,13 +866,14 @@ impl ConnectionHandle {
 /// It never inspects or decrypts the encrypted payload -- it only reads the
 /// cleartext 16-byte MediaHeader to determine routing and audio level.
 pub struct RelayForwarder {
-    /// Map of user_id -> ConnectionHandle for active connections.
-    connections: DashMap<i64, ConnectionHandle>,
+    /// Active connections, keyed by `(user_id, slot)`: an account's call
+    /// connection and its view connection are independent.
+    connections: DashMap<ConnKey, ConnectionHandle>,
     connection_gates: std::sync::Mutex<HashMap<i64, Weak<std::sync::Mutex<()>>>>,
     /// Room manager for subscription lookups.
     room_manager: Arc<MediaRoomManager>,
-    /// Currently announced active media sessions keyed by user id.
-    active_sessions: DashMap<i64, ActiveSessionInfo>,
+    /// Currently announced active media sessions keyed by `(user_id, slot)`.
+    active_sessions: DashMap<ConnKey, ActiveSessionInfo>,
     /// Speaker detector for audio level tracking.
     speaker_detector: Arc<SpeakerDetector>,
     /// Per-sender packet-rate limiter guarding the forwarding hot path.
@@ -829,11 +885,21 @@ pub struct RelayForwarder {
     /// Publisher-ingress bandwidth estimates driving uplink adaptation feedback.
     bandwidth_estimator: BandwidthEstimator,
     /// Per-viewer downlink (relay→viewer egress) estimates driving simulcast
-    /// layer selection (spec §4.2).
+    /// layer selection (spec §4.2), for call connections.
     downlink_estimator: DownlinkEstimator,
-    /// Per-`(viewer, stream, track)` relay-driven layer selection state,
+    /// The same estimates for view connections, kept apart so an account's
+    /// call and view connections never mix their samples.
+    view_downlink_estimator: DownlinkEstimator,
+    /// Per-`(connection, stream, track)` relay-driven layer selection state,
     /// including any keyframe-gated pending switch (spec §4.2).
-    layer_selection: DashMap<(i64, StreamId, TrackId), LayerSelectionState>,
+    layer_selection: DashMap<(ConnKey, StreamId, TrackId), LayerSelectionState>,
+    /// Last keyframe forwarded to each ambient view, by viewer user id; gates
+    /// ambient delivery at [`AMBIENT_FRAME_INTERVAL`].
+    ambient_frame_gate: DashMap<i64, Instant>,
+    /// Last ambient keyframe request per `(publisher, stream, track)`, so any
+    /// number of ambient views cost the publisher at most one extra lowest-layer
+    /// keyframe per [`AMBIENT_FRAME_INTERVAL`].
+    ambient_keyframe_throttle: DashMap<(i64, StreamId, TrackId), Instant>,
     /// Precomputed per-`(sender_id, ssrc)` fan-out plans for the hot path,
     /// nested per sender so each sender's SSRC set is bounded independently at
     /// [`MAX_CACHED_SSRCS_PER_SENDER`].
@@ -865,6 +931,9 @@ struct ActiveSessionInfo {
     /// participant roster. The relay never uses it; it only carries it, and it
     /// only ever carries one that is the right shape.
     media_public_key: Option<String>,
+    /// The session's view target when it is a view session, so the roster
+    /// can be scoped per recipient.
+    view: Option<ViewTarget>,
 }
 
 /// Relay-driven per-viewer, per-track simulcast layer selection state (spec §4.2).
@@ -919,7 +988,10 @@ impl RelayForwarder {
             ),
             bandwidth_estimator: BandwidthEstimator::new(),
             downlink_estimator: DownlinkEstimator::new(),
+            view_downlink_estimator: DownlinkEstimator::new(),
             layer_selection: DashMap::new(),
+            ambient_frame_gate: DashMap::new(),
+            ambient_keyframe_throttle: DashMap::new(),
             recipient_cache: DashMap::new(),
             conn_generation: AtomicU64::new(0),
             keyframe_throttle: DashMap::new(),
@@ -968,7 +1040,7 @@ impl RelayForwarder {
     /// same user, room and session id) yields a distinct owner.
     fn owns_connection(&self, handle: &ConnectionHandle) -> bool {
         self.connections
-            .get(&handle.user_id)
+            .get(&handle.key())
             .is_some_and(|current| Arc::ptr_eq(&current.lease, &handle.lease))
     }
 
@@ -1013,6 +1085,11 @@ impl RelayForwarder {
         )
     }
 
+    ///
+    /// The slot (call or view) comes from the room membership the handle's
+    /// receipt names: a view session's receipt is a view, anything else is a
+    /// call. A new connection supersedes only the account's connection in the
+    /// same slot.
     pub fn add_connection(&self, handle: ConnectionHandle) {
         let user_id = handle.user_id;
         let gate = self.connection_gate(user_id);
@@ -1024,18 +1101,30 @@ impl RelayForwarder {
             .lease
             .membership_gate
             .set(self.room_manager.membership_gate(user_id));
+        let slot =
+            if self
+                .room_manager
+                .is_view_session(&handle.room_id, user_id, &handle.session_id)
+            {
+                ConnectionSlot::View
+            } else {
+                ConnectionSlot::Call
+            };
+        let _ = handle.lease.slot.set(slot);
+        let key = handle.key();
         let _guard = gate.lock().unwrap_or_else(|error| error.into_inner());
-        // The incoming connection owns this user from here on, so drop every
-        // piece of per-user relay state the displaced connection accumulated
-        // (announced session, rate-limiter buckets, bandwidth estimates,
-        // keyframe throttles, cached fan-out plans) *under the gate*. The
-        // displaced connection's own cleanup is lease-checked and will now
-        // find itself unowned, so it cannot re-clear any of this afterwards.
-        self.active_sessions.remove(&user_id);
-        self.forget_sender_state(user_id);
+        // The incoming connection owns this slot from here on, so drop every
+        // piece of per-connection relay state the displaced connection
+        // accumulated (announced session, rate-limiter buckets, bandwidth
+        // estimates, keyframe throttles, cached fan-out plans) *under the
+        // gate*. The displaced connection's own cleanup is lease-checked and
+        // will now find itself unowned, so it cannot re-clear any of this
+        // afterwards.
+        self.active_sessions.remove(&key);
+        self.forget_connection_state(key);
         let room_id = handle.room_id.clone();
-        info!(user_id, room_id = %room_id, "relay: participant connected");
-        if let Some(previous) = self.connections.insert(user_id, handle) {
+        info!(user_id, room_id = %room_id, ?slot, "relay: participant connected");
+        if let Some(previous) = self.connections.insert(key, handle) {
             info!(
                 user_id,
                 room_id = %previous.room_id,
@@ -1055,21 +1144,49 @@ impl RelayForwarder {
     pub fn remove_connection(&self, user_id: i64) {
         let gate = self.connection_gate(user_id);
         let _guard = gate.lock().unwrap_or_else(|error| error.into_inner());
-        if self.connections.remove(&user_id).is_some() {
-            info!(user_id, "relay: participant disconnected");
+        for slot in [ConnectionSlot::Call, ConnectionSlot::View] {
+            let key = (user_id, slot);
+            if self.connections.remove(&key).is_some() {
+                info!(user_id, ?slot, "relay: participant disconnected");
+            }
+            self.active_sessions.remove(&key);
+            self.forget_connection_state(key);
         }
-        self.active_sessions.remove(&user_id);
-        self.forget_sender_state(user_id);
     }
 
-    fn forget_sender_state(&self, user_id: i64) {
-        self.forget_sender_cache(user_id);
-        self.forget_keyframe_state(user_id);
-        self.sender_rate_limiter.forget(user_id);
-        self.control_rate_limiter.forget(user_id);
-        self.bandwidth_estimator.remove_user(user_id);
-        self.downlink_estimator.remove_user(user_id);
+    /// Drop the relay state one connection accumulated.
+    ///
+    /// A call connection owns the account's sender-side state (it is the only
+    /// connection that may publish). A view connection never publishes, so it
+    /// owns only its own receive-side state: retiring a view must never reset
+    /// the rate-limiter buckets or estimates of the account's call.
+    fn forget_connection_state(&self, key: ConnKey) {
+        let (user_id, slot) = key;
+        match slot {
+            ConnectionSlot::Call => {
+                self.forget_sender_cache(user_id);
+                self.forget_keyframe_state(user_id);
+                self.sender_rate_limiter.forget(user_id);
+                self.control_rate_limiter.forget(user_id);
+                self.bandwidth_estimator.remove_user(user_id);
+                self.downlink_estimator.remove_user(user_id);
+            }
+            ConnectionSlot::View => {
+                self.view_downlink_estimator.remove_user(user_id);
+                self.ambient_frame_gate.remove(&user_id);
+            }
+        }
+        self.layer_selection
+            .retain(|(entry_key, _, _), _| *entry_key != key);
         self.invalidate_connection_cache();
+    }
+
+    /// The downlink estimator for connections in `slot`.
+    fn downlink(&self, slot: ConnectionSlot) -> &DownlinkEstimator {
+        match slot {
+            ConnectionSlot::Call => &self.downlink_estimator,
+            ConnectionSlot::View => &self.view_downlink_estimator,
+        }
     }
 
     /// Retire one connection's relay state on transport close.
@@ -1093,14 +1210,15 @@ impl RelayForwarder {
         if !self.owns_connection(handle) {
             return false;
         }
-        self.connections.remove(&handle.user_id);
+        let key = handle.key();
+        self.connections.remove(&key);
         let announced = self
             .active_sessions
-            .remove_if(&handle.user_id, |_, session| {
+            .remove_if(&key, |_, session| {
                 Arc::ptr_eq(&session.lease, &handle.lease)
             })
             .is_some();
-        self.forget_sender_state(handle.user_id);
+        self.forget_connection_state(key);
         announced
     }
 
@@ -1108,7 +1226,17 @@ impl RelayForwarder {
     /// registered connection's control/selection paths.
     #[cfg(test)]
     pub(crate) fn connection_for_test(&self, user_id: i64) -> Option<ConnectionHandle> {
-        self.connections.get(&user_id).map(|entry| entry.clone())
+        self.connections
+            .get(&(user_id, ConnectionSlot::Call))
+            .map(|entry| entry.clone())
+    }
+
+    /// The view connection that currently owns `user_id`'s view slot (tests).
+    #[cfg(test)]
+    pub(crate) fn view_connection_for_test(&self, user_id: i64) -> Option<ConnectionHandle> {
+        self.connections
+            .get(&(user_id, ConnectionSlot::View))
+            .map(|entry| entry.clone())
     }
 
     /// Bump the connection generation so every cached recipient snapshot
@@ -1128,12 +1256,10 @@ impl RelayForwarder {
     fn forget_keyframe_state(&self, user_id: i64) {
         self.keyframe_throttle
             .retain(|(publisher, _, _), _| *publisher != user_id);
+        self.ambient_keyframe_throttle
+            .retain(|(publisher, _, _), _| *publisher != user_id);
         self.keyframe_bridge_skip_warned
             .retain(|(viewer, _), _| *viewer != user_id);
-        // Layer-selection state is keyed by viewer; drop this user's entries so
-        // the map never grows unbounded across churning subscriptions.
-        self.layer_selection
-            .retain(|(viewer, _, _), _| *viewer != user_id);
     }
 
     /// Forcibly evict a participant's live media connection.
@@ -1146,12 +1272,91 @@ impl RelayForwarder {
     pub fn disconnect_user(&self, user_id: i64) {
         let gate = self.connection_gate(user_id);
         let _guard = gate.lock().unwrap_or_else(|error| error.into_inner());
-        if let Some((_, handle)) = self.connections.remove(&user_id) {
-            handle.close("evicted");
-            info!(user_id, "relay: participant force-disconnected");
+        for slot in [ConnectionSlot::Call, ConnectionSlot::View] {
+            let key = (user_id, slot);
+            if let Some((_, handle)) = self.connections.remove(&key) {
+                handle.close("evicted");
+                info!(user_id, ?slot, "relay: participant force-disconnected");
+            }
+            self.active_sessions.remove(&key);
+            self.forget_connection_state(key);
         }
-        self.active_sessions.remove(&user_id);
-        self.forget_sender_state(user_id);
+    }
+
+    /// The room manager this relay routes against.
+    pub fn room_manager(&self) -> &Arc<MediaRoomManager> {
+        &self.room_manager
+    }
+
+    /// The receipt of `user_id`'s live view connection, if it has one.
+    pub fn view_connection_session(&self, user_id: i64) -> Option<String> {
+        self.connections
+            .get(&(user_id, ConnectionSlot::View))
+            .filter(|handle| handle.is_alive())
+            .map(|handle| handle.session_id.clone())
+    }
+
+    /// Close `user_id`'s view connection when it carries `session_id` (the
+    /// view it served has ended). The connection's own tasks then retire it.
+    pub fn close_view_connection(&self, user_id: i64, session_id: &str) {
+        if let Some(handle) = self
+            .connections
+            .get(&(user_id, ConnectionSlot::View))
+            .filter(|handle| handle.session_id == session_id)
+            .map(|handle| handle.clone())
+        {
+            handle.close("view session ended");
+        }
+    }
+
+    /// Retire every view session that has not been backed by a live view
+    /// connection for longer than `grace`, and close the connections of views
+    /// that no longer exist. Returns the views it ended.
+    ///
+    /// A view that is connected is marked live on each sweep, so `grace`
+    /// covers both a view that never connects and a transient drop.
+    pub fn sweep_views(&self, grace: Duration) -> Vec<ViewRecord> {
+        self.sweep_views_at(Instant::now(), grace)
+    }
+
+    pub(crate) fn sweep_views_at(&self, now: Instant, grace: Duration) -> Vec<ViewRecord> {
+        let mut ended = Vec::new();
+        for (user_id, view) in self.room_manager.views_snapshot() {
+            if self.view_connection_session(user_id).as_deref() == Some(view.session_id.as_str()) {
+                self.room_manager.touch_view(user_id, &view.session_id, now);
+                continue;
+            }
+            if now.saturating_duration_since(view.last_live) < grace {
+                continue;
+            }
+            if let Some(ended_view) = self
+                .room_manager
+                .end_view_if_session(user_id, Some(&view.session_id))
+            {
+                info!(
+                    user_id,
+                    room_id = %ended_view.room_id,
+                    "relay: retired a view session with no media connection"
+                );
+                ended.push(ended_view);
+            }
+        }
+        // A view connection whose view is gone (ended, replaced, or retired
+        // above) has nothing left to receive.
+        // Collected first: `is_current_participant` reads `connections`, and a
+        // DashMap must not be re-entered while one of its shards is held.
+        let view_connections: Vec<ConnectionHandle> = self
+            .connections
+            .iter()
+            .filter(|entry| entry.key().1 == ConnectionSlot::View)
+            .map(|entry| entry.value().clone())
+            .collect();
+        for handle in view_connections {
+            if !self.is_current_participant(&handle) {
+                handle.close("view session ended");
+            }
+        }
+        ended
     }
 
     /// Spawn the forwarding loop for a single participant.
@@ -1164,6 +1369,13 @@ impl RelayForwarder {
 
         forwarder.spawn_bandwidth_task(handle.clone());
         forwarder.spawn_uni_stream_task(handle.clone());
+        forwarder.spawn_ambient_refresh_task(handle.clone());
+        // A view's target is fixed for its receipt; captured now because the
+        // view may be gone by the time the connection's leave is announced.
+        let sender_view = match handle.slot() {
+            ConnectionSlot::View => forwarder.room_manager.view_target(&room_id, user_id),
+            ConnectionSlot::Call => None,
+        };
 
         tokio::spawn(async move {
             info!(user_id, room_id = %room_id, "relay: forwarding task started");
@@ -1283,7 +1495,8 @@ impl RelayForwarder {
                 forwarder
                     .broadcast_control_in_room(
                         &room_id,
-                        Some(user_id),
+                        user_id,
+                        sender_view,
                         &ControlMessage::SessionParticipantLeave {
                             user_id,
                             session_id: Some(handle.session_id.clone()),
@@ -1320,7 +1533,17 @@ impl RelayForwarder {
                     _ = forwarder.shutdown.notified() => break,
                 }
 
-                if !handle.is_alive() || !forwarder.is_current_participant(&handle) {
+                if !handle.is_alive() {
+                    break;
+                }
+                if !forwarder.is_current_participant(&handle) {
+                    // A view connection whose view ended (stopped, replaced,
+                    // retired) has nothing left to receive: close it rather
+                    // than leave it open and silent. A call connection is
+                    // closed by its client or superseded by its replacement.
+                    if handle.slot() == ConnectionSlot::View && forwarder.owns_connection(&handle) {
+                        handle.close("view session ended");
+                    }
                     break;
                 }
 
@@ -1328,11 +1551,12 @@ impl RelayForwarder {
                 // and re-evaluate this viewer's simulcast layer selection (spec
                 // §4.2). Bridged viewers sample their WebTransport control
                 // connection, so the selection is identical for both transports.
+                let slot = handle.slot();
                 if let Some(conn) = handle.quinn_connection() {
                     if forwarder
                         .with_owned(&handle, || {
                             forwarder
-                                .downlink_estimator
+                                .downlink(slot)
                                 .record_from_connection(user_id, conn)
                         })
                         .is_none()
@@ -1341,6 +1565,12 @@ impl RelayForwarder {
                     }
                 }
                 forwarder.run_layer_selection_for(&handle).await;
+
+                // A view connection publishes nothing, so it has no uplink to
+                // adapt: the account's publisher feedback belongs to its call.
+                if slot == ConnectionSlot::View {
+                    continue;
+                }
 
                 // Uplink feedback derives from measured publisher ingress at the
                 // relay (goodput + per-SSRC loss), not the relay's send-side
@@ -1503,26 +1733,39 @@ impl RelayForwarder {
         // layer. Commit those viewers BEFORE the recipient snapshot so the
         // (generation-invalidated) snapshot rebuilds to include them — this
         // keyframe then reaches them as the first frame of their new layer.
-        if body.len() > HEADER_SIZE {
-            if let Ok(metadata) = VideoFrameMetadata::decode(&mut &body[HEADER_SIZE..]) {
-                if metadata.is_keyframe {
+        let is_keyframe = body.len() > HEADER_SIZE
+            && VideoFrameMetadata::decode(&mut &body[HEADER_SIZE..])
+                .ok()
+                .filter(|metadata| metadata.is_keyframe)
+                .inspect(|metadata| {
                     self.commit_pending_switches(
                         room_id,
                         &metadata.stream_id,
                         &metadata.track_id,
                         metadata.layer_id,
                     );
-                }
-            }
-        }
+                })
+                .is_some();
 
         let snapshot = self.recipient_snapshot(sender_id, room_id, header);
-        if snapshot.recipients.is_empty() {
+        // Ambient views take a keyframe of their pinned layer at most once per
+        // `AMBIENT_FRAME_INTERVAL` and never a delta.
+        let now = Instant::now();
+        let ambient: Vec<&ConnectionHandle> = if is_keyframe {
+            snapshot
+                .ambient
+                .iter()
+                .filter(|viewer| self.admit_ambient_frame(viewer.user_id, now))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if snapshot.recipients.is_empty() && ambient.is_empty() {
             return;
         }
 
         let msg = Bytes::from(body);
-        for recipient in &snapshot.recipients {
+        for recipient in snapshot.recipients.iter().chain(ambient) {
             if !recipient.supports_media_uni_streams() {
                 // Both raw-QUIC and bridged WebTransport viewers now carry the
                 // keyframe uni-stream path, so reaching here means a recipient with
@@ -1740,6 +1983,7 @@ impl RelayForwarder {
             room_generation,
             conn_generation,
             recipients: Vec::new(),
+            ambient: Vec::new(),
         };
 
         // The closure holds a read guard on the room map; it only touches
@@ -1759,23 +2003,28 @@ impl RelayForwarder {
             }
 
             let published_track = resolve_published_track_for_ssrc(room, sender_id, header.ssrc);
-            let recipients = room
-                .participants
-                .values()
-                .filter(|participant| {
-                    should_relay_packet_to(participant, sender_id, header, published_track.as_ref())
-                })
-                .filter_map(|participant| {
-                    self.connections
-                        .get(&participant.user_id)
-                        .map(|entry| entry.clone())
-                })
-                .collect();
+            let mut recipients = Vec::new();
+            let mut ambient = Vec::new();
+            for participant in room.participants.values() {
+                if !should_relay_packet_to(participant, sender_id, header, published_track.as_ref())
+                {
+                    continue;
+                }
+                let Some(connection) = self.connection_in_room(room_id, participant) else {
+                    continue;
+                };
+                if participant.is_ambient_viewer() {
+                    ambient.push(connection);
+                } else {
+                    recipients.push(connection);
+                }
+            }
 
             CachedRecipients {
                 room_generation,
                 conn_generation,
                 recipients,
+                ambient,
             }
         });
 
@@ -1806,9 +2055,12 @@ impl RelayForwarder {
             return Vec::new();
         }
         let published_track = resolve_published_track_for_ssrc(&room, sender_id, header.ssrc);
+        // Datagram fan-out: ambient views take keyframes only (see
+        // `CachedRecipients::ambient`).
         let mut recipients: Vec<i64> = room
             .participants
             .values()
+            .filter(|participant| !participant.is_ambient_viewer())
             .filter(|participant| {
                 should_relay_packet_to(participant, sender_id, header, published_track.as_ref())
             })
@@ -1823,26 +2075,28 @@ impl RelayForwarder {
         self.shutdown.notify_waiters();
     }
 
-    /// Get the number of active connections.
+    /// Get the number of active connections (call and view).
     pub fn connection_count(&self) -> usize {
         self.connections.len()
     }
 
-    /// Cumulative media counters for the connection that currently owns
-    /// `user_id`, or `None` when that account has no live media connection.
+    /// Cumulative media counters for the *call* connection that currently
+    /// owns `user_id`, or `None` when that account has no live call connection.
+    /// A view connection is not a call and never answers this.
     pub fn connection_media_stats(&self, user_id: i64) -> Option<ConnectionMediaStats> {
         self.connections
-            .get(&user_id)
+            .get(&(user_id, ConnectionSlot::Call))
             .map(|entry| entry.media_stats())
     }
 
-    /// Cumulative media counters for every live connection in one room,
-    /// ordered by user id so a caller sees a stable list.
+    /// Cumulative media counters for every live call connection in one room,
+    /// ordered by user id so a caller sees a stable list. View connections are
+    /// not call members and are left out.
     pub fn room_media_stats(&self, room_id: &str) -> Vec<ConnectionMediaStats> {
         let mut stats: Vec<_> = self
             .connections
             .iter()
-            .filter(|entry| entry.room_id == room_id)
+            .filter(|entry| entry.key().1 == ConnectionSlot::Call && entry.room_id == room_id)
             .map(|entry| entry.media_stats())
             .collect();
         stats.sort_by_key(|entry| entry.user_id);
@@ -1875,6 +2129,19 @@ impl RelayForwarder {
             .record_sample_at(user_id, cwnd_bytes, rtt, 1000, 0, now);
     }
 
+    /// [`Self::record_downlink_sample_for_test`] for a view connection.
+    #[cfg(test)]
+    pub(crate) fn record_view_downlink_sample_for_test(
+        &self,
+        user_id: i64,
+        cwnd_bytes: u64,
+        rtt: Duration,
+        now: Instant,
+    ) {
+        self.view_downlink_estimator
+            .record_sample_at(user_id, cwnd_bytes, rtt, 1000, 0, now);
+    }
+
     pub(crate) async fn handle_control_message(
         &self,
         handle: &ConnectionHandle,
@@ -1897,6 +2164,18 @@ impl RelayForwarder {
             };
         }
         owned!(());
+        // A view session is receive-only and sees one stream. Resolve its
+        // target once; `None` is a call member. The target is fixed for the
+        // life of a view receipt, so this read cannot go stale mid-message.
+        let view = self.room_manager.view_target(room_id, user_id);
+        if view.is_some() && !viewer_may_send(&message) {
+            debug!(
+                user_id,
+                room_id = %room_id,
+                "relay: ignoring a publish or voice-key message from a view session"
+            );
+            return;
+        }
         match message {
             ControlMessage::SessionJoin {
                 room_id: requested_room_id,
@@ -1946,13 +2225,14 @@ impl RelayForwarder {
                     )
                     .inspect(|()| {
                         self.active_sessions.insert(
-                            user_id,
+                            handle.key(),
                             ActiveSessionInfo {
                                 lease: Arc::clone(&handle.lease),
                                 room_id: room_id.to_string(),
                                 session_id: handle.session_id.clone(),
                                 video_capabilities: video_capabilities.clone(),
                                 media_public_key: media_public_key.clone(),
+                                view,
                             },
                         );
                     }));
@@ -1966,21 +2246,24 @@ impl RelayForwarder {
                     return;
                 }
 
+                // The roster this connection may see: a call member sees the
+                // call, plus the view sessions watching its own stream (it
+                // wraps its stream key to them); a view session sees only the
+                // publisher it watches.
                 let participants = self
                     .active_sessions
                     .iter()
                     .filter_map(|entry| {
+                        let (member_id, _) = *entry.key();
                         let active_session = entry.value();
-                        if active_session.room_id == room_id {
-                            Some(SessionParticipant {
-                                user_id: *entry.key(),
-                                session_id: active_session.session_id.clone(),
-                                video_capabilities: active_session.video_capabilities.clone(),
-                                media_public_key: active_session.media_public_key.clone(),
-                            })
-                        } else {
-                            None
-                        }
+                        (active_session.room_id == room_id
+                            && roster_visible(user_id, view, member_id, active_session.view))
+                        .then(|| SessionParticipant {
+                            user_id: member_id,
+                            session_id: active_session.session_id.clone(),
+                            video_capabilities: active_session.video_capabilities.clone(),
+                            media_public_key: active_session.media_public_key.clone(),
+                        })
                     })
                     .collect::<Vec<_>>();
 
@@ -2037,7 +2320,7 @@ impl RelayForwarder {
                 }
                 let removed = owned!(self
                     .active_sessions
-                    .remove_if(&user_id, |_, active| {
+                    .remove_if(&handle.key(), |_, active| {
                         Arc::ptr_eq(&active.lease, &handle.lease)
                             && active.room_id == room_id
                             && active.session_id == session_id
@@ -2149,7 +2432,7 @@ impl RelayForwarder {
                 )
                 .await;
             }
-            ControlMessage::SubscribeStream { subscription } => {
+            ControlMessage::SubscribeStream { mut subscription } => {
                 if let Err(err) = owned!(self.room_manager.subscribe_track(
                     room_id,
                     user_id,
@@ -2163,6 +2446,16 @@ impl RelayForwarder {
                     &subscription.stream_id,
                     &subscription.track_id,
                 );
+                // The room pinned an ambient view to the lowest layer; answer
+                // (and ask the publisher) in those terms, not the request's.
+                if let (Some(view), Some(track)) = (view, resolved_track.as_ref()) {
+                    if view.is_ambient() {
+                        let lowest = lowest_layer_id(track);
+                        subscription.requested_layer = Some(lowest);
+                        subscription.active_layer = Some(lowest);
+                        subscription.viewport = None;
+                    }
+                }
                 self.send_control_from(
                     handle,
                     user_id,
@@ -2231,7 +2524,7 @@ impl RelayForwarder {
                 }
                 // Drop any relay-driven layer-selection state for this viewer/track.
                 owned!(self.layer_selection.remove(&(
-                    user_id,
+                    handle.key(),
                     stream_id.clone(),
                     track_id.clone()
                 )));
@@ -2250,7 +2543,7 @@ impl RelayForwarder {
             ControlMessage::RequestKeyframe {
                 stream_id,
                 track_id,
-                layer_id,
+                mut layer_id,
             } => {
                 // Resolve the publisher first: with no live publisher there is
                 // nothing to request and nothing to throttle (recording a throttle
@@ -2259,6 +2552,14 @@ impl RelayForwarder {
                 else {
                     return;
                 };
+                if let Some(view) = view {
+                    if !view.allows_track(&track) {
+                        return;
+                    }
+                    if view.is_ambient() {
+                        layer_id = Some(lowest_layer_id(&track));
+                    }
+                }
                 // Coalesce keyframe-request storms: a single lossy viewer can
                 // otherwise pump the publisher for an IDR many times a second,
                 // collapsing the shared stream's average bitrate for everyone.
@@ -2296,6 +2597,18 @@ impl RelayForwarder {
                 estimated_bitrate_kbps,
                 packet_loss_ppm,
             } => {
+                // An ambient view is pinned and its reports are not a viewer
+                // the publisher should adapt to; a watch view may report only
+                // on the stream it watches.
+                if let Some(view) = view {
+                    let allowed = !view.is_ambient()
+                        && self
+                            .resolve_any_published_track(room_id, &stream_id, &track_id)
+                            .is_some_and(|track| view.allows_track(&track));
+                    if !allowed {
+                        return;
+                    }
+                }
                 // Layer selection is relay-driven from the relay's own per-viewer
                 // downlink estimate (spec §4.2), so the viewer's reported active
                 // layer is no longer applied to forwarding. The report still
@@ -2358,6 +2671,9 @@ impl RelayForwarder {
                     );
                     return;
                 }
+                let announced_kind = self
+                    .resolve_published_track(room_id, user_id, &stream_id, &track_id)
+                    .map(|track| track.kind);
                 for (recipient_user_id, ciphertext) in encrypted_keys {
                     // Authorization is membership, not reachability: a peer that
                     // has joined the call but whose media connection has not
@@ -2370,6 +2686,17 @@ impl RelayForwarder {
                             room_id = %room_id,
                             "relay: refusing to announce a track key to a non-member"
                         );
+                        continue;
+                    }
+                    // A view session gets the key of the stream it watches and
+                    // nothing else (never a camera's, never another stream's).
+                    if self
+                        .room_manager
+                        .view_target(room_id, recipient_user_id)
+                        .is_some_and(|recipient_view| {
+                            !recipient_view.allows(user_id, &stream_id, announced_kind)
+                        })
+                    {
                         continue;
                     }
                     if let Err(err) = owned!(self.room_manager.store_track_key(
@@ -2432,6 +2759,15 @@ impl RelayForwarder {
                     return;
                 }
                 for (recipient_user_id, ciphertext) in encrypted_keys {
+                    // The voice key never goes to a view session: a view never
+                    // hears the voices.
+                    if self
+                        .room_manager
+                        .view_target(room_id, recipient_user_id)
+                        .is_some()
+                    {
+                        continue;
+                    }
                     self.send_control_from(
                         handle,
                         recipient_user_id,
@@ -2518,19 +2854,32 @@ impl RelayForwarder {
 
     /// Room-wide fan-out on behalf of one connection, with the same fence as
     /// [`Self::send_control_from`] applied per recipient.
+    ///
+    /// Recipients are the room members the message is visible to
+    /// ([`control_visible_to`]): a view session hears only about the stream it
+    /// watches, and a call member hears about view sessions only when they
+    /// watch its own stream.
     async fn broadcast_control_from(
         &self,
         handle: &ConnectionHandle,
         exclude: Option<i64>,
         message: &ControlMessage,
     ) {
+        let sender_view = self
+            .room_manager
+            .view_target(&handle.room_id, handle.user_id);
         let recipients = self
             .room_manager
             .with_room(&handle.room_id, |room| {
                 room.participants
-                    .keys()
-                    .copied()
-                    .filter(|recipient| exclude.is_none_or(|excluded| excluded != *recipient))
+                    .values()
+                    .filter(|recipient| {
+                        exclude.is_none_or(|excluded| excluded != recipient.user_id)
+                    })
+                    .filter(|recipient| {
+                        control_visible_to(recipient, handle.user_id, sender_view, message)
+                    })
+                    .map(|recipient| recipient.user_id)
                     .collect::<Vec<i64>>()
             })
             .unwrap_or_default();
@@ -2543,10 +2892,15 @@ impl RelayForwarder {
         }
     }
 
+    /// Room-wide fan-out of a message about `sender_id` (whose view target, if
+    /// it was a view session, is `sender_view`), with the same visibility as
+    /// [`Self::broadcast_control_from`]. Used when the sender's connection is
+    /// already gone, so its view target is passed in rather than looked up.
     pub(crate) async fn broadcast_control_in_room(
         &self,
         room_id: &str,
-        exclude_user_id: Option<i64>,
+        sender_id: i64,
+        sender_view: Option<ViewTarget>,
         message: &ControlMessage,
     ) {
         // Borrow the room just long enough to collect recipient ids. Cloning the
@@ -2557,9 +2911,12 @@ impl RelayForwarder {
             .room_manager
             .with_room(room_id, |room| {
                 room.participants
-                    .keys()
-                    .copied()
-                    .filter(|user_id| exclude_user_id.is_none_or(|excluded| excluded != *user_id))
+                    .values()
+                    .filter(|recipient| recipient.user_id != sender_id)
+                    .filter(|recipient| {
+                        control_visible_to(recipient, sender_id, sender_view, message)
+                    })
+                    .map(|recipient| recipient.user_id)
                     .collect::<Vec<i64>>()
             })
             .unwrap_or_default();
@@ -2575,7 +2932,11 @@ impl RelayForwarder {
             return;
         }
         // Snapshot only the published tracks (not the whole room) and drop the
-        // read guard before the first await.
+        // read guard before the first await. A view session is told only about
+        // the stream it watches.
+        let view = self
+            .room_manager
+            .view_target(&handle.room_id, handle.user_id);
         let published: Vec<(i64, PublishedTrack)> = self
             .room_manager
             .with_room(&handle.room_id, |room| {
@@ -2585,6 +2946,7 @@ impl RelayForwarder {
                         participant
                             .published_tracks
                             .values()
+                            .filter(|track| view.is_none_or(|view| view.allows_track(track)))
                             .map(|track| (participant.user_id, track.clone()))
                     })
                     .collect()
@@ -2638,7 +3000,8 @@ impl RelayForwarder {
                 }
             } else if let Some(publisher_handle) = self
                 .connections
-                .get(&participant_user_id)
+                .get(&(participant_user_id, ConnectionSlot::Call))
+                .filter(|publisher| publisher.room_id == handle.room_id)
                 .map(|entry| entry.clone())
             {
                 if let Err(err) = publisher_handle
@@ -2657,6 +3020,146 @@ impl RelayForwarder {
                     );
                 }
             }
+        }
+    }
+
+    /// The connection a room member is reached on, when that connection is
+    /// registered for *this* room. A handle authenticated for another room is
+    /// never used: a connection admitted to one call must not receive another
+    /// room's media or control traffic.
+    fn connection_in_room(
+        &self,
+        room_id: &str,
+        participant: &MediaParticipant,
+    ) -> Option<ConnectionHandle> {
+        self.connections
+            .get(&(participant.user_id, slot_of(participant)))
+            .filter(|handle| handle.room_id == room_id)
+            .map(|handle| handle.clone())
+    }
+
+    /// Admit one keyframe to an ambient view, at most once per
+    /// [`AMBIENT_FRAME_INTERVAL`].
+    fn admit_ambient_frame(&self, viewer_id: i64, now: Instant) -> bool {
+        use dashmap::mapref::entry::Entry;
+        match self.ambient_frame_gate.entry(viewer_id) {
+            Entry::Occupied(mut last) => {
+                if now.saturating_duration_since(*last.get()) >= AMBIENT_FRAME_INTERVAL {
+                    *last.get_mut() = now;
+                    true
+                } else {
+                    false
+                }
+            }
+            Entry::Vacant(slot) => {
+                slot.insert(now);
+                true
+            }
+        }
+    }
+
+    /// Rate-gate the relay's own lowest-layer keyframe requests for ambient
+    /// views: at most one per `(publisher, stream, track)` per
+    /// [`AMBIENT_FRAME_INTERVAL`], however many ambient views watch it.
+    fn allow_ambient_keyframe_request(
+        &self,
+        publisher_user_id: i64,
+        stream_id: &StreamId,
+        track_id: &TrackId,
+        now: Instant,
+    ) -> bool {
+        let key = (publisher_user_id, stream_id.clone(), track_id.clone());
+        if let Some(last) = self.ambient_keyframe_throttle.get(&key) {
+            if now.saturating_duration_since(*last.value()) < AMBIENT_FRAME_INTERVAL {
+                return false;
+            }
+        }
+        self.ambient_keyframe_throttle.insert(key, now);
+        true
+    }
+
+    /// For an ambient view connection: once a second, when no keyframe has
+    /// reached the view for [`AMBIENT_FRAME_INTERVAL`], ask the publisher for a
+    /// keyframe on the lowest layer. Publishers whose keyframes already come
+    /// that often are never asked.
+    fn spawn_ambient_refresh_task(self: &Arc<Self>, handle: ConnectionHandle) {
+        if handle.slot() != ConnectionSlot::View
+            || !self
+                .room_manager
+                .view_target(&handle.room_id, handle.user_id)
+                .is_some_and(|view| view.is_ambient())
+        {
+            return;
+        }
+        let forwarder = Arc::clone(self);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(AMBIENT_FRAME_INTERVAL);
+            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {}
+                    _ = forwarder.shutdown.notified() => break,
+                }
+                if !handle.is_alive() || !forwarder.is_current_participant(&handle) {
+                    break;
+                }
+                forwarder.request_ambient_keyframe(&handle).await;
+            }
+        });
+    }
+
+    async fn request_ambient_keyframe(&self, handle: &ConnectionHandle) {
+        let now = Instant::now();
+        if self
+            .ambient_frame_gate
+            .get(&handle.user_id)
+            .is_some_and(|last| now.saturating_duration_since(*last) < AMBIENT_FRAME_INTERVAL)
+        {
+            return;
+        }
+        let requests: Vec<(i64, StreamId, TrackId, u8)> = self
+            .room_manager
+            .with_room(&handle.room_id, |room| {
+                let Some(viewer) = room.participants.get(&handle.user_id) else {
+                    return Vec::new();
+                };
+                viewer
+                    .track_subscriptions
+                    .values()
+                    .filter_map(|subscription| {
+                        let track = find_published_track_in_room(
+                            room,
+                            &subscription.stream_id,
+                            &subscription.track_id,
+                        )?;
+                        Some((
+                            track.publisher_user_id,
+                            subscription.stream_id.clone(),
+                            subscription.track_id.clone(),
+                            lowest_layer_id(&track),
+                        ))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        for (publisher, stream_id, track_id, layer_id) in requests {
+            match self.with_owned(handle, || {
+                self.allow_ambient_keyframe_request(publisher, &stream_id, &track_id, now)
+            }) {
+                None => return,
+                Some(false) => continue,
+                Some(true) => {}
+            }
+            self.send_control_from(
+                handle,
+                publisher,
+                &ControlMessage::RequestKeyframe {
+                    stream_id,
+                    track_id,
+                    layer_id: Some(layer_id),
+                },
+            )
+            .await;
         }
     }
 
@@ -2693,7 +3196,15 @@ impl RelayForwarder {
             );
             return false;
         }
-        let Some(handle) = self.connections.get(&user_id).map(|entry| entry.clone()) else {
+        let Some(handle) = self
+            .room_manager
+            .with_room(room_id, |room| {
+                room.participants
+                    .get(&user_id)
+                    .and_then(|participant| self.connection_in_room(room_id, participant))
+            })
+            .flatten()
+        else {
             return false;
         };
         // A recipient whose connection has been superseded must not be written
@@ -2801,8 +3312,10 @@ impl RelayForwarder {
     /// emit once the ownership guard has been released: the selection itself must
     /// be atomic with respect to connection replacement, but the sends must not
     /// hold a lock across the network.
-    fn prepare_layer_selection(&self, viewer_id: i64, room_id: &str) -> Vec<(i64, ControlMessage)> {
-        if !self.downlink_estimator.is_sampled(viewer_id) {
+    fn prepare_layer_selection(&self, key: ConnKey, room_id: &str) -> Vec<(i64, ControlMessage)> {
+        let (viewer_id, slot) = key;
+        let downlink = self.downlink(slot);
+        if !downlink.is_sampled(viewer_id) {
             return Vec::new();
         }
         // Snapshot each video subscription (stream/track/viewport/active layer)
@@ -2824,6 +3337,11 @@ impl RelayForwarder {
                 let Some(participant) = room.participants.get(&viewer_id) else {
                     return Vec::new();
                 };
+                // An ambient view is pinned to the lowest layer; there is
+                // nothing to select.
+                if participant.is_ambient_viewer() {
+                    return Vec::new();
+                }
                 participant
                     .track_subscriptions
                     .values()
@@ -2850,14 +3368,14 @@ impl RelayForwarder {
             })
             .unwrap_or_default();
 
-        let egress_kbps = self.downlink_estimator.estimate_kbps(viewer_id);
-        let loss = self.downlink_estimator.windowed_loss(viewer_id);
+        let egress_kbps = downlink.estimate_kbps(viewer_id);
+        let loss = downlink.windowed_loss(viewer_id);
         let now = Instant::now();
 
         let mut messages = Vec::new();
         for (stream_id, track_id, viewport, active_layer, track) in subscriptions {
             if let Some(message) = self.evaluate_layer_selection(
-                viewer_id,
+                key,
                 &track,
                 &stream_id,
                 &track_id,
@@ -2881,7 +3399,7 @@ impl RelayForwarder {
     /// emitted with the fence re-checked per send, so no guard crosses an await.
     pub(crate) async fn run_layer_selection_for(&self, handle: &ConnectionHandle) {
         let Some(messages) = self.with_owned(handle, || {
-            self.prepare_layer_selection(handle.user_id, &handle.room_id)
+            self.prepare_layer_selection(handle.key(), &handle.room_id)
         }) else {
             return;
         };
@@ -2897,7 +3415,7 @@ impl RelayForwarder {
     #[allow(clippy::too_many_arguments)]
     fn evaluate_layer_selection(
         &self,
-        viewer_id: i64,
+        viewer: ConnKey,
         track: &PublishedTrack,
         stream_id: &StreamId,
         track_id: &TrackId,
@@ -2907,7 +3425,7 @@ impl RelayForwarder {
         loss: f64,
         now: Instant,
     ) -> Option<(i64, ControlMessage)> {
-        let key = (viewer_id, stream_id.clone(), track_id.clone());
+        let key = (viewer, stream_id.clone(), track_id.clone());
         let target = {
             let mut entry = self.layer_selection.entry(key.clone()).or_insert_with(|| {
                 LayerSelectionState::new(active_layer.unwrap_or_else(|| lowest_layer_id(track)))
@@ -2962,7 +3480,7 @@ impl RelayForwarder {
         layer_id: u8,
     ) -> bool {
         // Collect first so no DashMap shard guard is held across the room mutation.
-        let viewers: Vec<i64> = self
+        let viewers: Vec<ConnKey> = self
             .layer_selection
             .iter()
             .filter(|entry| {
@@ -2975,16 +3493,18 @@ impl RelayForwarder {
             .collect();
 
         let mut committed = false;
-        for viewer in viewers {
+        for viewer_key in viewers {
+            let viewer = viewer_key.0;
             match self
                 .room_manager
                 .set_subscription_active_layer(room_id, viewer, stream_id, track_id, layer_id)
             {
                 Ok(true) => {
-                    if let Some(mut entry) =
-                        self.layer_selection
-                            .get_mut(&(viewer, stream_id.clone(), track_id.clone()))
-                    {
+                    if let Some(mut entry) = self.layer_selection.get_mut(&(
+                        viewer_key,
+                        stream_id.clone(),
+                        track_id.clone(),
+                    )) {
                         entry.current_layer = layer_id;
                         entry.pending_layer = None;
                         entry.headroom_since = None;
@@ -3033,6 +3553,66 @@ fn resolve_published_track_for_ssrc(
         .cloned()
 }
 
+/// Control messages a view session may send. Everything that publishes media
+/// or a key (and the participant-level audio subscription, which is how the
+/// voices are received) is refused.
+fn viewer_may_send(message: &ControlMessage) -> bool {
+    !matches!(
+        message,
+        ControlMessage::TrackPublish { .. }
+            | ControlMessage::TrackUnpublish { .. }
+            | ControlMessage::TrackLayers { .. }
+            | ControlMessage::StreamKeyAnnounce { .. }
+            | ControlMessage::KeyAnnounce { .. }
+            | ControlMessage::Subscribe { .. }
+            | ControlMessage::Unsubscribe { .. }
+    )
+}
+
+/// Whether `recipient` (whose view target is `recipient_view`) sees
+/// `subject` (whose view target is `subject_view`) in the call roster.
+///
+/// - A view session sees only the publisher it watches.
+/// - A call member sees every call member, and the view sessions watching its
+///   own stream (it must wrap its stream key to them). It never sees anybody
+///   else's viewers.
+fn roster_visible(
+    recipient_id: i64,
+    recipient_view: Option<ViewTarget>,
+    subject_id: i64,
+    subject_view: Option<ViewTarget>,
+) -> bool {
+    match (recipient_view, subject_view) {
+        (Some(recipient_view), None) => subject_id == recipient_view.publisher_user_id,
+        (Some(_), Some(_)) => false,
+        (None, Some(subject_view)) => subject_view.publisher_user_id == recipient_id,
+        (None, None) => true,
+    }
+}
+
+/// Whether a room-wide control message from `sender_id` reaches `recipient`.
+fn control_visible_to(
+    recipient: &MediaParticipant,
+    sender_id: i64,
+    sender_view: Option<ViewTarget>,
+    message: &ControlMessage,
+) -> bool {
+    match message {
+        ControlMessage::SessionParticipantJoin { .. }
+        | ControlMessage::SessionParticipantLeave { .. } => {
+            roster_visible(recipient.user_id, recipient.view, sender_id, sender_view)
+        }
+        ControlMessage::TrackPublish { track } => {
+            recipient.view.is_none_or(|view| view.allows_track(track))
+        }
+        ControlMessage::TrackUnpublish { stream_id, .. }
+        | ControlMessage::TrackLayers { stream_id, .. } => recipient
+            .view
+            .is_none_or(|view| view.allows(sender_id, stream_id, None)),
+        _ => recipient.view.is_none(),
+    }
+}
+
 /// Full relay-forwarding decision for one candidate recipient.
 ///
 /// Layers the room-wide invariants on top of the per-subscription
@@ -3062,6 +3642,14 @@ fn should_relay_packet_to(
     // Deafened participants receive no media.
     if participant.deafened {
         return false;
+    }
+    // A view session receives the tracks of the stream it watches and nothing
+    // else: never a voice (unpublished audio), never a camera, never another
+    // publisher's stream.
+    if let Some(view) = participant.view {
+        if !published_track.is_some_and(|track| view.allows_track(track)) {
+            return false;
+        }
     }
     should_forward_to_participant(participant, sender_id, header, published_track)
 }
@@ -3276,13 +3864,14 @@ mod tests {
         // Seed per-sender relay bookkeeping as if the user had been actively
         // forwarding media on a live connection.
         forwarder.active_sessions.insert(
-            user_id,
+            (user_id, ConnectionSlot::Call),
             ActiveSessionInfo {
                 lease: Arc::new(ConnectionLease::default()),
                 room_id: "1:100".to_string(),
                 session_id: "sess".to_string(),
                 video_capabilities: vec![],
                 media_public_key: None,
+                view: None,
             },
         );
         assert!(forwarder.sender_rate_limiter.try_acquire(user_id));
@@ -3290,7 +3879,9 @@ mod tests {
         // Evicting the user tears down the relay-side state so they can no
         // longer be routed to or from.
         forwarder.disconnect_user(user_id);
-        assert!(!forwarder.active_sessions.contains_key(&user_id));
+        assert!(!forwarder
+            .active_sessions
+            .contains_key(&(user_id, ConnectionSlot::Call)));
 
         // Calling it again for a user with no live connection is a safe no-op.
         forwarder.disconnect_user(user_id);
@@ -4722,7 +5313,11 @@ mod tests {
 
         // Stage a pending downswitch to L (as the selection pass would).
         forwarder.layer_selection.insert(
-            (2, stream_id.clone(), track_id.clone()),
+            (
+                (2, ConnectionSlot::Call),
+                stream_id.clone(),
+                track_id.clone(),
+            ),
             LayerSelectionState {
                 current_layer: 2,
                 pending_layer: Some(0),
@@ -4753,7 +5348,11 @@ mod tests {
         // Selection state and subscription both flipped to L; forwarding follows.
         let state = *forwarder
             .layer_selection
-            .get(&(2, stream_id.clone(), track_id.clone()))
+            .get(&(
+                (2, ConnectionSlot::Call),
+                stream_id.clone(),
+                track_id.clone(),
+            ))
             .unwrap();
         assert_eq!(state.current_layer, 0);
         assert_eq!(state.pending_layer, None);
@@ -4835,7 +5434,11 @@ mod tests {
         assert_eq!(
             forwarder
                 .layer_selection
-                .get(&(2, stream_id.clone(), track_id.clone()))
+                .get(&(
+                    (2, ConnectionSlot::Call),
+                    stream_id.clone(),
+                    track_id.clone()
+                ))
                 .unwrap()
                 .pending_layer,
             Some(0)
@@ -4843,7 +5446,11 @@ mod tests {
         assert_eq!(
             forwarder
                 .layer_selection
-                .get(&(3, stream_id.clone(), track_id.clone()))
+                .get(&(
+                    (3, ConnectionSlot::Call),
+                    stream_id.clone(),
+                    track_id.clone()
+                ))
                 .unwrap()
                 .pending_layer,
             Some(1)
@@ -4950,7 +5557,7 @@ mod tests {
     fn announced_session(forwarder: &RelayForwarder, user_id: i64) -> Option<String> {
         forwarder
             .active_sessions
-            .get(&user_id)
+            .get(&(user_id, ConnectionSlot::Call))
             .map(|session| session.session_id.clone())
     }
 
@@ -5328,5 +5935,612 @@ mod tests {
             raw, bridged,
             "both transports must reach the identical fenced outcome"
         );
+    }
+
+    // ── View sessions (Glass: watch without joining, ambient room light) ────
+
+    use crate::participant::{ViewKind, ViewTarget};
+
+    fn watch_target(publisher: i64) -> ViewTarget {
+        ViewTarget {
+            kind: ViewKind::Watch,
+            publisher_user_id: publisher,
+        }
+    }
+
+    fn ambient_target(publisher: i64) -> ViewTarget {
+        ViewTarget {
+            kind: ViewKind::Ambient,
+            publisher_user_id: publisher,
+        }
+    }
+
+    /// A screen share on `stream:{publisher}:screen` with one layer per ssrc.
+    fn screen_share(publisher: i64, track: &str, kind: TrackKind, ssrcs: &[u32]) -> PublishedTrack {
+        PublishedTrack {
+            stream_id: StreamId::new(format!("stream:{publisher}:screen")),
+            track_id: TrackId::new(track),
+            publisher_user_id: publisher,
+            kind,
+            codec: Some(VideoCodec::Vp9),
+            layers: ssrcs
+                .iter()
+                .enumerate()
+                .map(|(index, ssrc)| PublishedLayer {
+                    layer_id: index as u8,
+                    ssrc: *ssrc,
+                    width: None,
+                    height: None,
+                    max_bitrate_kbps: Some(800 * (index as u32 + 1)),
+                    active: true,
+                })
+                .collect(),
+        }
+    }
+
+    fn subscribe_to(mgr: &MediaRoomManager, room_id: &str, user_id: i64, track: &PublishedTrack) {
+        mgr.subscribe_track(
+            room_id,
+            user_id,
+            TrackSubscription {
+                stream_id: track.stream_id.clone(),
+                track_id: track.track_id.clone(),
+                requested_layer: Some(0),
+                active_layer: Some(0),
+                viewport: None,
+            },
+        )
+        .unwrap();
+    }
+
+    fn user_ids(handles: &[ConnectionHandle]) -> Vec<i64> {
+        let mut ids: Vec<i64> = handles.iter().map(|handle| handle.user_id).collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    /// An account in a call in one server while it views a stream in another
+    /// holds two connections; neither supersedes the other, and each room's
+    /// media reaches the account only on the connection admitted to it.
+    #[test]
+    fn a_view_connection_and_a_call_connection_coexist() {
+        let mgr = MediaRoomManager::new();
+        // Room A (1:100): user 5 is in the call with speaker 1.
+        mgr.join_room(
+            1,
+            100,
+            crate::participant::MediaParticipant::new(1, "s1".into()),
+        )
+        .unwrap();
+        mgr.join_room(
+            1,
+            100,
+            crate::participant::MediaParticipant::new(5, "call-5".into()),
+        )
+        .unwrap();
+        // Room B (2:200): streamer 7, and user 5 watching 7's screen.
+        mgr.join_room(
+            2,
+            200,
+            crate::participant::MediaParticipant::new(7, "s7".into()),
+        )
+        .unwrap();
+        mgr.join_view(
+            2,
+            200,
+            crate::participant::MediaParticipant::viewer(5, "view-5".into(), watch_target(7)),
+        )
+        .unwrap();
+        let screen = screen_share(7, "screen", TrackKind::Video, &[700]);
+        mgr.publish_track("2:200", 7, screen.clone()).unwrap();
+        subscribe_to(&mgr, "2:200", 5, &screen);
+
+        let mgr = Arc::new(mgr);
+        let forwarder = RelayForwarder::new(Arc::clone(&mgr), Arc::new(SpeakerDetector::new()));
+        add_bridged_session(&forwarder, 5, "1:100", "call-5");
+        // Keep the view's outbound receiver: a bridged handle whose bridge is
+        // closed is not alive.
+        let (view_tx, _view_out) = mpsc::channel::<Bytes>(8);
+        let (_view_in, view_rx) = mpsc::channel::<Bytes>(8);
+        forwarder.add_connection(ConnectionHandle::new_bridged(
+            5,
+            "2:200".into(),
+            "view-5".into(),
+            view_tx,
+            view_rx,
+            None,
+        ));
+        add_bridged(&forwarder, 1, "1:100");
+        add_bridged(&forwarder, 7, "2:200");
+
+        let call = forwarder
+            .connection_for_test(5)
+            .expect("call connection kept");
+        let view = forwarder
+            .view_connection_for_test(5)
+            .expect("view connection kept");
+        assert_eq!(
+            (call.slot(), call.room_id.as_str()),
+            (ConnectionSlot::Call, "1:100")
+        );
+        assert_eq!(
+            (view.slot(), view.room_id.as_str()),
+            (ConnectionSlot::View, "2:200")
+        );
+        assert_eq!(forwarder.connection_count(), 4);
+        assert!(forwarder.is_current_participant(&call));
+        assert!(forwarder.is_current_participant(&view));
+
+        // Speaker 1's voice in room A reaches user 5's call connection.
+        let voice = forwarder.recipient_snapshot(1, "1:100", &audio_header(111));
+        assert_eq!(user_ids(&voice.recipients), vec![5]);
+        assert_eq!(voice.recipients[0].slot(), ConnectionSlot::Call);
+        // Streamer 7's screen in room B reaches user 5's view connection.
+        let stream = forwarder.recipient_snapshot(7, "2:200", &video_header(700));
+        assert_eq!(user_ids(&stream.recipients), vec![5]);
+        assert_eq!(stream.recipients[0].slot(), ConnectionSlot::View);
+        assert_eq!(stream.recipients[0].room_id, "2:200");
+
+        // The call's diagnostics never list the view.
+        assert_eq!(forwarder.room_media_stats("2:200").len(), 1);
+        assert_eq!(
+            forwarder
+                .connection_media_stats(5)
+                .map(|stats| stats.room_id),
+            Some("1:100".to_string())
+        );
+        assert_eq!(
+            forwarder.view_connection_session(5).as_deref(),
+            Some("view-5")
+        );
+    }
+
+    /// Watch = the stream's video and its own audio. Never the voices, never
+    /// the camera, never another publisher's stream.
+    #[test]
+    fn a_watch_view_receives_only_the_watched_stream() {
+        let mgr = MediaRoomManager::new();
+        for (uid, session) in [(1, "s1"), (2, "s2"), (3, "s3")] {
+            mgr.join_room(
+                1,
+                100,
+                crate::participant::MediaParticipant::new(uid, session.into()),
+            )
+            .unwrap();
+        }
+        mgr.join_view(
+            1,
+            100,
+            crate::participant::MediaParticipant::viewer(9, "view-9".into(), watch_target(1)),
+        )
+        .unwrap();
+        let room_id = "1:100";
+        let screen = screen_share(1, "screen", TrackKind::Video, &[500]);
+        let screen_audio = screen_share(1, "screen-audio", TrackKind::Audio, &[501]);
+        let camera = PublishedTrack {
+            stream_id: StreamId::new("stream:1:camera"),
+            track_id: TrackId::new("camera"),
+            ..screen_share(1, "camera", TrackKind::Video, &[502])
+        };
+        let other_screen = screen_share(3, "screen", TrackKind::Video, &[600]);
+        for track in [&screen, &screen_audio, &camera] {
+            mgr.publish_track(room_id, 1, track.clone()).unwrap();
+        }
+        mgr.publish_track(room_id, 3, other_screen.clone()).unwrap();
+
+        subscribe_to(&mgr, room_id, 9, &screen);
+        subscribe_to(&mgr, room_id, 9, &screen_audio);
+        for track in [&camera, &other_screen] {
+            assert!(matches!(
+                mgr.subscribe_track(
+                    room_id,
+                    9,
+                    TrackSubscription {
+                        stream_id: track.stream_id.clone(),
+                        track_id: track.track_id.clone(),
+                        requested_layer: Some(0),
+                        active_layer: Some(0),
+                        viewport: None,
+                    }
+                ),
+                Err(crate::room::RoomError::NotAllowedForViewer)
+            ));
+        }
+        // Member 2 takes everything.
+        for track in [&screen, &screen_audio, &camera, &other_screen] {
+            subscribe_to(&mgr, room_id, 2, track);
+        }
+
+        let mgr = Arc::new(mgr);
+        let forwarder = RelayForwarder::new(Arc::clone(&mgr), Arc::new(SpeakerDetector::new()));
+        assert_eq!(
+            forwarder.compute_forward_recipients(1, room_id, &video_header(500)),
+            vec![2, 9]
+        );
+        assert_eq!(
+            forwarder.compute_forward_recipients(1, room_id, &audio_header(501)),
+            vec![2, 9]
+        );
+        assert_eq!(
+            forwarder.compute_forward_recipients(1, room_id, &video_header(502)),
+            vec![2]
+        );
+        assert_eq!(
+            forwarder.compute_forward_recipients(3, room_id, &video_header(600)),
+            vec![2]
+        );
+        // The streamer's microphone (unpublished audio) is a voice: never.
+        assert_eq!(
+            forwarder.compute_forward_recipients(1, room_id, &audio_header(777)),
+            vec![2, 3]
+        );
+        // A viewer sends nothing, even if it tried.
+        assert!(forwarder
+            .compute_forward_recipients(9, room_id, &audio_header(900))
+            .is_empty());
+    }
+
+    /// Ambient = the lowest layer, keyframes only, at most one a second, video
+    /// only; it rides no datagram and is never counted.
+    #[tokio::test]
+    async fn an_ambient_view_takes_capped_lowest_layer_keyframes_only() {
+        let mgr = MediaRoomManager::new();
+        mgr.join_room(
+            1,
+            100,
+            crate::participant::MediaParticipant::new(1, "s1".into()),
+        )
+        .unwrap();
+        mgr.join_view(
+            1,
+            100,
+            crate::participant::MediaParticipant::viewer(9, "view-9".into(), ambient_target(1)),
+        )
+        .unwrap();
+        let room_id = mgr.get_or_create_room(1, 100);
+        let mut screen = three_layer_track(1);
+        screen.stream_id = StreamId::new("stream:1:screen");
+        mgr.publish_track(&room_id, 1, screen.clone()).unwrap();
+        mgr.subscribe_track(
+            &room_id,
+            9,
+            TrackSubscription {
+                stream_id: screen.stream_id.clone(),
+                track_id: screen.track_id.clone(),
+                requested_layer: Some(2),
+                active_layer: Some(2),
+                viewport: None,
+            },
+        )
+        .unwrap();
+        let screen_audio = screen_share(1, "screen-audio", TrackKind::Audio, &[501]);
+        mgr.publish_track(&room_id, 1, screen_audio.clone())
+            .unwrap();
+        assert!(mgr
+            .subscribe_track(
+                &room_id,
+                9,
+                TrackSubscription {
+                    stream_id: screen_audio.stream_id.clone(),
+                    track_id: screen_audio.track_id.clone(),
+                    requested_layer: None,
+                    active_layer: None,
+                    viewport: None,
+                },
+            )
+            .is_err());
+        assert!(
+            mgr.watcher_counts(1, 100).is_empty(),
+            "ambient is not watching"
+        );
+
+        let mgr = Arc::new(mgr);
+        let forwarder = Arc::new(RelayForwarder::new(
+            Arc::clone(&mgr),
+            Arc::new(SpeakerDetector::new()),
+        ));
+        let (server_conn, client_conn) = quinn_pair().await;
+        forwarder.add_connection(ConnectionHandle::new(
+            9,
+            room_id.clone(),
+            "view-9".to_string(),
+            server_conn,
+        ));
+        assert_eq!(
+            forwarder
+                .view_connection_for_test(9)
+                .map(|handle| handle.slot()),
+            Some(ConnectionSlot::View)
+        );
+
+        // Datagrams (deltas) never reach it; the lowest layer's plan lists it
+        // as ambient, the higher layers not at all.
+        assert!(forwarder
+            .compute_forward_recipients(1, &room_id, &video_header(10))
+            .is_empty());
+        let lowest = forwarder.recipient_snapshot(1, &room_id, &video_header(10));
+        assert!(lowest.recipients.is_empty());
+        assert_eq!(user_ids(&lowest.ambient), vec![9]);
+        for ssrc in [11, 12] {
+            let plan = forwarder.recipient_snapshot(1, &room_id, &video_header(ssrc));
+            assert!(plan.recipients.is_empty() && plan.ambient.is_empty());
+        }
+
+        // Layer selection never moves it off the lowest layer.
+        forwarder.record_view_downlink_sample_for_test(
+            9,
+            10_000_000,
+            Duration::from_millis(10),
+            Instant::now(),
+        );
+        let view = forwarder.view_connection_for_test(9).unwrap();
+        assert!(forwarder
+            .with_owned(&view, || forwarder
+                .prepare_layer_selection(view.key(), &room_id))
+            .unwrap()
+            .is_empty());
+
+        // A delta on the keyframe path is dropped; the first keyframe goes
+        // out; a second within the interval does not.
+        let delta = {
+            use paracord_transport::protocol::MediaStreamFrame;
+            MediaStreamFrame {
+                header: video_header(10),
+                metadata: VideoFrameMetadata {
+                    stream_id: screen.stream_id.clone(),
+                    track_id: screen.track_id.clone(),
+                    frame_id: 2,
+                    layer_id: 0,
+                    codec: VideoCodec::Vp9,
+                    timestamp_us: 0,
+                    is_keyframe: false,
+                    fragment_index: 0,
+                    fragment_count: 1,
+                },
+                payload: Bytes::from_static(b"delta"),
+            }
+            .encode()
+            .unwrap()
+            .to_vec()
+        };
+        forwarder.forward_stream_frame_to_subscribers(1, &room_id, &video_header(10), delta);
+        let keyframe = keyframe_body(&screen, 0);
+        forwarder.forward_stream_frame_to_subscribers(
+            1,
+            &room_id,
+            &video_header(10),
+            keyframe.clone(),
+        );
+        forwarder.forward_stream_frame_to_subscribers(
+            1,
+            &room_id,
+            &video_header(10),
+            keyframe.clone(),
+        );
+
+        let mut first = tokio::time::timeout(Duration::from_secs(5), client_conn.accept_uni())
+            .await
+            .expect("the first keyframe arrives")
+            .expect("accept_uni ok");
+        let got = first.read_to_end(MAX_STREAM_FRAME_SIZE).await.unwrap();
+        assert_eq!(
+            got, keyframe,
+            "the ambient view's first frame is the keyframe"
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(300), client_conn.accept_uni())
+                .await
+                .is_err(),
+            "neither the delta nor the second keyframe within the interval arrives"
+        );
+    }
+
+    #[test]
+    fn ambient_frames_are_gated_at_the_interval() {
+        let forwarder = RelayForwarder::new(
+            Arc::new(MediaRoomManager::new()),
+            Arc::new(SpeakerDetector::new()),
+        );
+        let start = Instant::now();
+        assert!(forwarder.admit_ambient_frame(9, start));
+        assert!(!forwarder.admit_ambient_frame(9, start + Duration::from_millis(500)));
+        assert!(forwarder.admit_ambient_frame(9, start + AMBIENT_FRAME_INTERVAL));
+        assert!(forwarder.admit_ambient_frame(8, start), "per viewer");
+
+        let stream_id = StreamId::new("stream:1:screen");
+        let track_id = TrackId::new("screen");
+        assert!(forwarder.allow_ambient_keyframe_request(1, &stream_id, &track_id, start));
+        assert!(!forwarder.allow_ambient_keyframe_request(
+            1,
+            &stream_id,
+            &track_id,
+            start + Duration::from_millis(900)
+        ));
+        assert!(forwarder.allow_ambient_keyframe_request(
+            1,
+            &stream_id,
+            &track_id,
+            start + AMBIENT_FRAME_INTERVAL
+        ));
+    }
+
+    /// A view session is receive-only on the control plane too: it cannot
+    /// announce a track or a key, and the publisher's keys reach it only for
+    /// the stream it watches.
+    #[tokio::test]
+    async fn a_view_session_cannot_publish_and_gets_only_its_streams_keys() {
+        let mgr = MediaRoomManager::new();
+        mgr.join_room(
+            1,
+            100,
+            crate::participant::MediaParticipant::new(1, "s1".into()),
+        )
+        .unwrap();
+        mgr.join_room(
+            1,
+            100,
+            crate::participant::MediaParticipant::new(2, "s2".into()),
+        )
+        .unwrap();
+        mgr.join_view(
+            1,
+            100,
+            crate::participant::MediaParticipant::viewer(9, "view-9".into(), watch_target(1)),
+        )
+        .unwrap();
+        let room_id = mgr.get_or_create_room(1, 100);
+        let mgr = Arc::new(mgr);
+        let forwarder = Arc::new(RelayForwarder::new(
+            Arc::clone(&mgr),
+            Arc::new(SpeakerDetector::new()),
+        ));
+        add_bridged_session(&forwarder, 1, &room_id, "s1");
+        add_bridged_session(&forwarder, 9, &room_id, "view-9");
+        let publisher = forwarder.connection_for_test(1).unwrap();
+        let view = forwarder.view_connection_for_test(9).unwrap();
+
+        for message in [
+            ControlMessage::TrackPublish {
+                track: screen_share(9, "screen", TrackKind::Video, &[900]),
+            },
+            ControlMessage::Subscribe {
+                user_id: 1,
+                track_type: TrackKind::Audio,
+            },
+        ] {
+            forwarder.handle_control_message(&view, message).await;
+        }
+        let room = mgr.get_room(&room_id).unwrap();
+        assert!(room.participants[&9].published_tracks.is_empty());
+        assert!(room.participants[&9].subscriptions.is_empty());
+
+        // The publisher announces keys for its screen and its camera to
+        // everyone in its roster, the viewer included.
+        let screen = screen_share(1, "screen", TrackKind::Video, &[500]);
+        let camera = PublishedTrack {
+            stream_id: StreamId::new("stream:1:camera"),
+            ..screen_share(1, "camera", TrackKind::Video, &[502])
+        };
+        for track in [&screen, &camera] {
+            forwarder
+                .handle_control_message(
+                    &publisher,
+                    ControlMessage::TrackPublish {
+                        track: track.clone(),
+                    },
+                )
+                .await;
+            forwarder
+                .handle_control_message(
+                    &publisher,
+                    ControlMessage::StreamKeyAnnounce {
+                        stream_id: track.stream_id.clone(),
+                        track_id: track.track_id.clone(),
+                        codec: None,
+                        epoch: 1,
+                        encrypted_keys: vec![(2, vec![2; 16]), (9, vec![9; 16])],
+                    },
+                )
+                .await;
+        }
+        let key_for = |track: &PublishedTrack, recipient: i64| {
+            mgr.latest_track_key_for_recipient(
+                &room_id,
+                1,
+                &track.stream_id,
+                &track.track_id,
+                recipient,
+            )
+            .unwrap()
+        };
+        assert!(
+            key_for(&screen, 9).is_some(),
+            "the watched stream's key is stored"
+        );
+        assert!(
+            key_for(&camera, 9).is_none(),
+            "a camera key never reaches a viewer"
+        );
+        assert!(key_for(&camera, 2).is_some());
+    }
+
+    #[test]
+    fn roster_visibility_is_scoped_per_recipient() {
+        let watching_1 = Some(watch_target(1));
+        let watching_3 = Some(ambient_target(3));
+        // Members see members.
+        assert!(roster_visible(2, None, 1, None));
+        // A member sees only the viewers of its own stream.
+        assert!(roster_visible(1, None, 9, watching_1));
+        assert!(!roster_visible(2, None, 9, watching_1));
+        assert!(roster_visible(3, None, 8, watching_3));
+        // A viewer sees only its publisher, and never another viewer.
+        assert!(roster_visible(9, watching_1, 1, None));
+        assert!(!roster_visible(9, watching_1, 2, None));
+        assert!(!roster_visible(9, watching_1, 8, watching_1));
+
+        let viewer = crate::participant::MediaParticipant::viewer(9, "v".into(), watch_target(1));
+        let member = crate::participant::MediaParticipant::new(2, "s".into());
+        let screen = screen_share(1, "screen", TrackKind::Video, &[500]);
+        let camera = PublishedTrack {
+            stream_id: StreamId::new("stream:1:camera"),
+            ..screen.clone()
+        };
+        let publish = |track: &PublishedTrack| ControlMessage::TrackPublish {
+            track: track.clone(),
+        };
+        assert!(control_visible_to(&viewer, 1, None, &publish(&screen)));
+        assert!(!control_visible_to(&viewer, 1, None, &publish(&camera)));
+        assert!(control_visible_to(&member, 1, None, &publish(&camera)));
+        assert!(!control_visible_to(&viewer, 1, None, &ControlMessage::Ping));
+        assert!(control_visible_to(&member, 1, None, &ControlMessage::Ping));
+    }
+
+    /// A view that never connects, or whose connection is gone past the grace,
+    /// is retired; a connected one is kept alive by the sweep.
+    #[test]
+    fn the_sweep_retires_unbacked_views_and_keeps_connected_ones() {
+        let mgr = MediaRoomManager::new();
+        mgr.join_room(
+            1,
+            100,
+            crate::participant::MediaParticipant::new(1, "s1".into()),
+        )
+        .unwrap();
+        for (uid, session) in [(8, "view-8"), (9, "view-9")] {
+            mgr.join_view(
+                1,
+                100,
+                crate::participant::MediaParticipant::viewer(uid, session.into(), watch_target(1)),
+            )
+            .unwrap();
+        }
+        let mgr = Arc::new(mgr);
+        let forwarder = RelayForwarder::new(Arc::clone(&mgr), Arc::new(SpeakerDetector::new()));
+        // Viewer 9 connects; viewer 8 never does. The bridged handle's
+        // outbound receiver must stay open for the connection to be alive.
+        let (tx, _out) = mpsc::channel::<Bytes>(8);
+        let (_in, rx) = mpsc::channel::<Bytes>(8);
+        forwarder.add_connection(ConnectionHandle::new_bridged(
+            9,
+            "1:100".into(),
+            "view-9".into(),
+            tx,
+            rx,
+            None,
+        ));
+
+        let grace = Duration::from_secs(20);
+        let now = Instant::now();
+        assert!(
+            forwarder.sweep_views_at(now, grace).is_empty(),
+            "inside the grace"
+        );
+        let ended = forwarder.sweep_views_at(now + grace + Duration::from_secs(1), grace);
+        assert_eq!(ended.len(), 1);
+        assert_eq!(ended[0].session_id, "view-8");
+        assert!(mgr.view_for_user(8).is_none());
+        assert!(mgr.view_for_user(9).is_some(), "a connected view stays");
+        assert_eq!(mgr.watcher_counts(1, 100).get(&1), Some(&1));
     }
 }

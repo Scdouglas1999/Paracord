@@ -85,6 +85,10 @@ pub const EVENT_VOICE_STATE_UPDATE: &str = "VOICE_STATE_UPDATE";
 pub const EVENT_VOICE_SERVER_UPDATE: &str = "VOICE_SERVER_UPDATE";
 /// Somebody started or stopped talking in a voice channel you can see.
 pub const EVENT_VOICE_SPEAKING: &str = "VOICE_SPEAKING";
+/// How many people watch each stream in a voice channel (view sessions of kind
+/// `watch`, plus call members watching through their call). Guild-scoped with a
+/// `channel_id`, so only sessions that may view the channel receive it.
+pub const EVENT_VOICE_WATCHERS_UPDATE: &str = "VOICE_WATCHERS_UPDATE";
 
 // Invite events
 pub const EVENT_INVITE_CREATE: &str = "INVITE_CREATE";

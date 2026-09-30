@@ -43,6 +43,43 @@ pub struct MediaClaims {
     pub room: Option<String>,
 }
 
+/// What a view-session media token admits (the `view` claim).
+///
+/// A view session is not a call membership and has no voice state: it watches
+/// one stream in one room, receive-only. A token carrying this claim is
+/// admitted against the relay's view sessions, never against `voice_states`;
+/// a token without it is admitted only as a call membership. The claim picks
+/// the path, so neither kind of receipt can be presented as the other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MediaViewClaim {
+    /// The stream's video and its own audio, counted as watching.
+    Watch,
+    /// The stream's lowest simulcast layer at a capped frame rate, video only.
+    /// Not counted and not shown to anybody.
+    Ambient,
+}
+
+impl MediaViewClaim {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Watch => "watch",
+            Self::Ambient => "ambient",
+        }
+    }
+}
+
+/// The media token as decoded on admission: [`MediaClaims`] plus the optional
+/// `view` claim. Kept separate so `MediaClaims` stays constructible as a plain
+/// struct literal by every existing issuer.
+#[derive(Debug, Deserialize)]
+struct AdmissionClaims {
+    #[serde(flatten)]
+    base: MediaClaims,
+    #[serde(default)]
+    view: Option<MediaViewClaim>,
+}
+
 /// Metadata tracked for each authenticated connection.
 #[derive(Debug, Clone)]
 pub struct ConnectionMeta {
@@ -50,6 +87,8 @@ pub struct ConnectionMeta {
     pub session_id: Option<String>,
     pub auth_session_id: Option<String>,
     pub room_id: Option<String>,
+    /// `Some` when the token admits a view session rather than a call.
+    pub view: Option<MediaViewClaim>,
     pub remote_addr: SocketAddr,
     pub mode: ConnectionMode,
 }
@@ -133,19 +172,20 @@ impl MediaConnection {
 
             // Validate JWT
             let validation = Validation::new(Algorithm::HS256);
-            let token_data = decode::<MediaClaims>(
+            let token_data = decode::<AdmissionClaims>(
                 &token,
                 &DecodingKey::from_secret(jwt_secret.as_bytes()),
                 &validation,
             )
             .map_err(|e| ConnectionError::AuthFailed(e.to_string()))?;
 
-            let claims = token_data.claims;
+            let AdmissionClaims { base: claims, view } = token_data.claims;
             let meta = ConnectionMeta {
                 user_id: claims.sub,
                 session_id: claims.sid,
                 auth_session_id: claims.auth_sid,
                 room_id: claims.room,
+                view,
                 remote_addr,
                 mode,
             };
@@ -214,6 +254,7 @@ impl MediaConnection {
                 session_id: None,
                 auth_session_id: None,
                 room_id: None,
+                view: None,
                 remote_addr,
                 mode,
             };
@@ -310,6 +351,51 @@ mod tests {
         assert_eq!(parsed.sid.as_deref(), Some("session-1"));
         assert_eq!(parsed.auth_sid.as_deref(), Some("auth-session-1"));
         assert_eq!(parsed.room.as_deref(), Some("guild:1:channel:2"));
+    }
+
+    #[test]
+    fn view_claim_is_read_on_admission_and_absent_for_calls() {
+        let secret = b"media-secret";
+        let encode = |claims: serde_json::Value| {
+            jsonwebtoken::encode(
+                &jsonwebtoken::Header::new(Algorithm::HS256),
+                &claims,
+                &jsonwebtoken::EncodingKey::from_secret(secret),
+            )
+            .unwrap()
+        };
+        let decode_admission = |token: &str| {
+            decode::<AdmissionClaims>(
+                token,
+                &DecodingKey::from_secret(secret),
+                &Validation::new(Algorithm::HS256),
+            )
+            .map(|data| data.claims)
+        };
+        let base = serde_json::json!({
+            "sub": "42", "exp": 9_999_999_999u64, "iat": 0,
+            "sid": "view-1", "auth_sid": "auth-1", "room": "1:2",
+        });
+
+        let call = decode_admission(&encode(base.clone())).unwrap();
+        assert_eq!(call.base.sub, 42);
+        assert_eq!(call.view, None);
+
+        for (raw, expected) in [
+            ("watch", MediaViewClaim::Watch),
+            ("ambient", MediaViewClaim::Ambient),
+        ] {
+            let mut claims = base.clone();
+            claims["view"] = serde_json::json!(raw);
+            let view = decode_admission(&encode(claims)).unwrap();
+            assert_eq!(view.view, Some(expected));
+            assert_eq!(view.base.sid.as_deref(), Some("view-1"));
+        }
+
+        // An unknown view kind is a malformed token, not a call.
+        let mut claims = base;
+        claims["view"] = serde_json::json!("everything");
+        assert!(decode_admission(&encode(claims)).is_err());
     }
 
     #[test]

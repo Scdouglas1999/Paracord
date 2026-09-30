@@ -1927,6 +1927,12 @@ async fn build_ready_guilds(
                             "suppress": vs.suppress,
                             "mute": false,
                             "deaf": false,
+                            // `listen` shows as "Listening in" on the roster.
+                            "mode": vs.mode.as_str(),
+                            // When the current stream started, for "LIVE 42 MIN".
+                            "self_stream_started_at": vs
+                                .self_stream_started_at
+                                .map(|value| value.to_rfc3339()),
                             "username": &vs.username,
                             "avatar_hash": &vs.avatar_hash,
                             // Talking right now (see `voice_speaking`).
@@ -3408,7 +3414,7 @@ async fn handle_client_message(
                             });
                         // Record the flags, so a later stream start or stop
                         // announces them as they are.
-                        if let Err(err) = paracord_db::voice_states::update_voice_state(
+                        let stored = match paracord_db::voice_states::update_voice_state(
                             &state.db,
                             session.user_id,
                             Some(guild_id),
@@ -3419,12 +3425,33 @@ async fn handle_client_message(
                         )
                         .await
                         {
-                            tracing::warn!(
-                                user_id = session.user_id,
-                                channel_id,
-                                "failed to record voice flags: {err}"
-                            );
-                        }
+                            Ok(stored) => stored,
+                            Err(err) => {
+                                tracing::warn!(
+                                    user_id = session.user_id,
+                                    channel_id,
+                                    "failed to record voice flags: {err}"
+                                );
+                                None
+                            }
+                        };
+                        // The mode and stream start time as stored; when the
+                        // write failed, as they stood before it (a flag
+                        // update never changes the mode).
+                        let same_channel_row = existing
+                            .as_ref()
+                            .filter(|current| current.channel_id == channel_id);
+                        let mode = stored
+                            .as_ref()
+                            .or(same_channel_row)
+                            .map(|row| row.mode)
+                            .unwrap_or_default();
+                        let stream_started_at = stored
+                            .as_ref()
+                            .or(same_channel_row)
+                            .and_then(|row| row.self_stream_started_at)
+                            .filter(|_| current_self_stream)
+                            .map(|value| value.to_rfc3339());
 
                         state.event_bus.dispatch(
                             EVENT_VOICE_STATE_UPDATE,
@@ -3439,6 +3466,8 @@ async fn handle_client_message(
                                 "suppress": false,
                                 "mute": false,
                                 "deaf": false,
+                                "mode": mode.as_str(),
+                                "self_stream_started_at": stream_started_at,
                                 "username": vs_user.as_ref().map(|u| u.username.as_str()),
                                 "avatar_hash": vs_user.as_ref().and_then(|u| u.avatar_hash.as_deref()),
                             }),

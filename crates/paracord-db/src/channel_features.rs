@@ -12,6 +12,8 @@ pub struct ChannelFeatureSettingsRow {
     pub adaptive_slowmode_threshold: i32,
     pub adaptive_slowmode_step_seconds: i32,
     pub thread_rate_limit_per_user: i32,
+    /// Whether a voice channel admits listeners (receive-only members).
+    pub listen_in_enabled: bool,
 }
 
 impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for ChannelFeatureSettingsRow {
@@ -26,6 +28,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for ChannelFeatureSettingsRow {
             adaptive_slowmode_threshold: row.try_get("adaptive_slowmode_threshold")?,
             adaptive_slowmode_step_seconds: row.try_get("adaptive_slowmode_step_seconds")?,
             thread_rate_limit_per_user: row.try_get("thread_rate_limit_per_user")?,
+            listen_in_enabled: bool_from_any_row(row, "listen_in_enabled")?,
         })
     }
 }
@@ -41,6 +44,7 @@ pub fn default_for_channel(channel_id: i64) -> ChannelFeatureSettingsRow {
         adaptive_slowmode_threshold: 20,
         adaptive_slowmode_step_seconds: 5,
         thread_rate_limit_per_user: 0,
+        listen_in_enabled: true,
     }
 }
 
@@ -51,7 +55,8 @@ pub async fn get_for_channel(
     let row = sqlx::query_as::<_, ChannelFeatureSettingsRow>(
         "SELECT channel_id, disappearing_seconds, CASE WHEN anonymous_posting_enabled THEN 1 ELSE 0 END AS anonymous_posting_enabled, slowmode_exempt_role_ids,
                 CASE WHEN adaptive_slowmode_enabled THEN 1 ELSE 0 END AS adaptive_slowmode_enabled, adaptive_slowmode_window_seconds, adaptive_slowmode_threshold,
-                adaptive_slowmode_step_seconds, thread_rate_limit_per_user
+                adaptive_slowmode_step_seconds, thread_rate_limit_per_user,
+                CASE WHEN listen_in_enabled THEN 1 ELSE 0 END AS listen_in_enabled
          FROM channel_feature_settings
          WHERE channel_id = $1",
     )
@@ -80,6 +85,7 @@ pub struct ChannelFeaturePatch<'a> {
     pub adaptive_slowmode_threshold: Option<i32>,
     pub adaptive_slowmode_step_seconds: Option<i32>,
     pub thread_rate_limit_per_user: Option<i32>,
+    pub listen_in_enabled: Option<bool>,
 }
 
 pub async fn upsert_for_channel(
@@ -115,6 +121,9 @@ pub async fn upsert_for_channel(
         thread_rate_limit_per_user: patch
             .thread_rate_limit_per_user
             .unwrap_or(existing.thread_rate_limit_per_user),
+        listen_in_enabled: patch
+            .listen_in_enabled
+            .unwrap_or(existing.listen_in_enabled),
     };
 
     let row = sqlx::query_as::<_, ChannelFeatureSettingsRow>(
@@ -128,8 +137,9 @@ pub async fn upsert_for_channel(
             adaptive_slowmode_threshold,
             adaptive_slowmode_step_seconds,
             thread_rate_limit_per_user,
+            listen_in_enabled,
             updated_at
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, datetime('now'))
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, datetime('now'))
          ON CONFLICT(channel_id) DO UPDATE SET
             disappearing_seconds = EXCLUDED.disappearing_seconds,
             anonymous_posting_enabled = EXCLUDED.anonymous_posting_enabled,
@@ -139,10 +149,12 @@ pub async fn upsert_for_channel(
             adaptive_slowmode_threshold = EXCLUDED.adaptive_slowmode_threshold,
             adaptive_slowmode_step_seconds = EXCLUDED.adaptive_slowmode_step_seconds,
             thread_rate_limit_per_user = EXCLUDED.thread_rate_limit_per_user,
+            listen_in_enabled = EXCLUDED.listen_in_enabled,
             updated_at = datetime('now')
          RETURNING channel_id, disappearing_seconds, CASE WHEN anonymous_posting_enabled THEN 1 ELSE 0 END AS anonymous_posting_enabled, slowmode_exempt_role_ids,
                    CASE WHEN adaptive_slowmode_enabled THEN 1 ELSE 0 END AS adaptive_slowmode_enabled, adaptive_slowmode_window_seconds, adaptive_slowmode_threshold,
-                   adaptive_slowmode_step_seconds, thread_rate_limit_per_user",
+                   adaptive_slowmode_step_seconds, thread_rate_limit_per_user,
+                   CASE WHEN listen_in_enabled THEN 1 ELSE 0 END AS listen_in_enabled",
     )
     .bind(next.channel_id)
     .bind(next.disappearing_seconds)
@@ -153,6 +165,7 @@ pub async fn upsert_for_channel(
     .bind(next.adaptive_slowmode_threshold)
     .bind(next.adaptive_slowmode_step_seconds)
     .bind(next.thread_rate_limit_per_user)
+    .bind(next.listen_in_enabled)
     .fetch_one(pool)
     .await?;
 
@@ -174,4 +187,10 @@ pub async fn list_channels_with_disappearing(
     .fetch_all(pool)
     .await?;
     Ok(rows)
+}
+
+/// Whether `channel_id` admits listeners. A channel without a settings row
+/// uses the default (on).
+pub async fn listen_in_enabled(pool: &DbPool, channel_id: i64) -> Result<bool, DbError> {
+    Ok(get_or_default(pool, channel_id).await?.listen_in_enabled)
 }

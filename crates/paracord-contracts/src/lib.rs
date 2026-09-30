@@ -7,6 +7,7 @@ pub mod guild;
 pub mod invite;
 pub mod relationship;
 pub mod user;
+pub mod voice;
 
 use schemars::{generate::SchemaSettings, JsonSchema};
 use serde_json::{json, Map, Value};
@@ -146,6 +147,30 @@ pub fn schemas() -> Value {
         "ChannelPreviewList".into(),
         response_schema::<Vec<channel::ChannelPreview>>(),
     );
+    schemas.insert(
+        "VoiceStateSnapshot".into(),
+        response_schema::<voice::VoiceStateSnapshot>(),
+    );
+    schemas.insert(
+        "UpdateVoiceModeRequest".into(),
+        request_schema::<voice::UpdateVoiceModeRequest>(),
+    );
+    schemas.insert(
+        "VoiceModeResponse".into(),
+        response_schema::<voice::VoiceModeResponse>(),
+    );
+    schemas.insert(
+        "StartVoiceViewRequest".into(),
+        request_schema::<voice::StartVoiceViewRequest>(),
+    );
+    schemas.insert(
+        "VoiceViewSession".into(),
+        response_schema::<voice::VoiceViewSession>(),
+    );
+    schemas.insert(
+        "VoiceWatchers".into(),
+        response_schema::<voice::VoiceWatchers>(),
+    );
     for (name, schema) in &mut schemas {
         schema["title"] = json!(name);
         schema["$id"] = json!(format!("urn:paracord:contract:{name}"));
@@ -219,6 +244,46 @@ mod tests {
             "has_sticker": false
         }))
         .is_ok());
+    }
+
+    #[test]
+    fn voice_contracts_require_the_glass_fields_and_accept_real_payloads() {
+        let schemas = schemas();
+        let snapshot = &schemas["schemas"]["VoiceStateSnapshot"];
+        let required = snapshot["required"].as_array().unwrap();
+        for name in ["mode", "self_stream_started_at", "user_id", "channel_id"] {
+            assert!(required.contains(&json!(name)), "missing: {name}");
+        }
+        for name in ["session_id", "username", "speaking", "request_to_speak_at"] {
+            assert!(
+                !required.contains(&json!(name)),
+                "should be optional: {name}"
+            );
+        }
+        assert!(serde_json::from_value::<voice::VoiceStateSnapshot>(json!({
+            "user_id": "1", "channel_id": "2", "guild_id": "3",
+            "self_mute": false, "self_deaf": false, "self_stream": true,
+            "self_video": false, "suppress": false, "mute": false, "deaf": false,
+            "mode": "listen", "self_stream_started_at": "2026-09-29T12:00:00+00:00",
+            "username": "sean", "avatar_hash": null
+        }))
+        .is_ok());
+        assert!(
+            serde_json::from_value::<voice::UpdateVoiceModeRequest>(json!({"mode": "full"}))
+                .is_err(),
+            "only joined and listen exist"
+        );
+        let request = &schemas["schemas"]["StartVoiceViewRequest"];
+        assert_eq!(request["required"], json!(["kind", "user_id"]));
+        let view = &schemas["schemas"]["VoiceViewSession"];
+        for name in ["session_id", "media", "via_membership"] {
+            assert!(view["required"].as_array().unwrap().contains(&json!(name)));
+        }
+        let watchers = &schemas["schemas"]["VoiceWatchers"];
+        assert_eq!(
+            watchers["required"],
+            json!(["guild_id", "channel_id", "streams"])
+        );
     }
 
     #[test]

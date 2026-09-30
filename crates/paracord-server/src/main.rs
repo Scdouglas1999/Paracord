@@ -4247,14 +4247,26 @@ async fn handle_raw_quic_connection(
             return;
         }
     };
-    let room_id = match resolve_active_media_room(
-        &db,
-        user_id,
-        session_id,
-        media_conn.meta().room_id.as_deref(),
-    )
-    .await
-    {
+    // The token's `view` claim decides what it admits: a view session
+    // (checked against the relay's view receipts) or a call membership
+    // (checked against `voice_states`). Never one presented as the other.
+    let admitted = match media_conn.meta().view {
+        Some(_) => relay.room_manager().resolve_view_admission(
+            user_id,
+            session_id,
+            media_conn.meta().room_id.as_deref(),
+        ),
+        None => {
+            resolve_active_media_room(
+                &db,
+                user_id,
+                session_id,
+                media_conn.meta().room_id.as_deref(),
+            )
+            .await
+        }
+    };
+    let room_id = match admitted {
         Some(room_id) => room_id,
         None => {
             tracing::warn!(
@@ -4723,10 +4735,34 @@ async fn handle_webtransport_connection(
                         };
                         let claimed_room = claims.get("room").and_then(|r| r.as_str());
                         media_session_id = session_id.to_string();
-                        room_id =
-                            match resolve_active_media_room(&db, user_id, session_id, claimed_room)
-                                .await
+                        // A view-session token (`view` claim) is admitted only
+                        // as a view, a call token only as a call. A `view`
+                        // claim that is not a known kind is a bad token.
+                        let view = match claims.get("view") {
+                            None | Some(serde_json::Value::Null) => None,
+                            Some(raw) => match serde_json::from_value::<
+                                paracord_transport::connection::MediaViewClaim,
+                            >(raw.clone())
                             {
+                                Ok(view) => Some(view),
+                                Err(_) => {
+                                    tracing::warn!(addr = %remote_addr, "WebTransport: media token has an unknown view kind");
+                                    return;
+                                }
+                            },
+                        };
+                        let admitted = match view {
+                            Some(_) => relay.room_manager().resolve_view_admission(
+                                user_id,
+                                session_id,
+                                claimed_room,
+                            ),
+                            None => {
+                                resolve_active_media_room(&db, user_id, session_id, claimed_room)
+                                    .await
+                            }
+                        };
+                        room_id = match admitted {
                                 Some(room_id) => room_id,
                                 None => {
                                     tracing::warn!(

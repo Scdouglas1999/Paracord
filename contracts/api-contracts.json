@@ -1772,6 +1772,38 @@
       "title": "RelationshipList",
       "type": "array"
     },
+    "StartVoiceViewRequest": {
+      "$defs": {
+        "VoiceViewKind": {
+          "description": "What a view session receives.\n\n- `watch`: the chosen stream's video and its own audio (never the voices).\n  Counted in the channel's watcher counts, so others see \"2 watching\".\n- `ambient`: the stream's lowest simulcast layer, keyframes only, at most\n  one frame a second, video only. Not counted and not shown to anybody.",
+          "enum": [
+            "watch",
+            "ambient"
+          ],
+          "type": "string"
+        }
+      },
+      "$id": "urn:paracord:contract:StartVoiceViewRequest",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`POST /api/v2/voice/{channel_id}/view`: start a view session.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/VoiceViewKind"
+        },
+        "user_id": {
+          "description": "The streamer (a member of the channel with `self_stream`).",
+          "minLength": 1,
+          "pattern": "^[0-9]+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "user_id"
+      ],
+      "title": "StartVoiceViewRequest",
+      "type": "object"
+    },
     "TransferOwnershipRequest": {
       "$id": "urn:paracord:contract:TransferOwnershipRequest",
       "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -1999,6 +2031,38 @@
       "title": "UpdateSettingsRequest",
       "type": "object"
     },
+    "UpdateVoiceModeRequest": {
+      "$defs": {
+        "VoiceMode": {
+          "description": "How a member takes part in a voice channel. `listen` hears the voices and\nnever sends; everyone in the channel sees the member as listening in.",
+          "enum": [
+            "joined",
+            "listen"
+          ],
+          "type": "string"
+        }
+      },
+      "$id": "urn:paracord:contract:UpdateVoiceModeRequest",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`POST /api/v2/voice/{channel_id}/mode`: switch between listening in and a\nfull membership in place (no reconnect).",
+      "properties": {
+        "mode": {
+          "$ref": "#/$defs/VoiceMode"
+        },
+        "session_id": {
+          "description": "The call receipt from the join. When present the switch applies only\nto that call (409 otherwise).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "title": "UpdateVoiceModeRequest",
+      "type": "object"
+    },
     "UpdatedCurrentUser": {
       "$id": "urn:paracord:contract:UpdatedCurrentUser",
       "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -2137,6 +2201,319 @@
         "keybinds"
       ],
       "title": "UserSettingsResponse",
+      "type": "object"
+    },
+    "VoiceModeResponse": {
+      "$defs": {
+        "VoiceMode": {
+          "description": "How a member takes part in a voice channel. `listen` hears the voices and\nnever sends; everyone in the channel sees the member as listening in.",
+          "enum": [
+            "joined",
+            "listen"
+          ],
+          "type": "string"
+        }
+      },
+      "$id": "urn:paracord:contract:VoiceModeResponse",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "Response of `POST /api/v2/voice/{channel_id}/mode`.",
+      "properties": {
+        "can_publish": {
+          "description": "Whether the relay now accepts this member's media. `joined` without the\nSPEAK permission is still `false`.",
+          "type": "boolean"
+        },
+        "channel_id": {
+          "minLength": 1,
+          "pattern": "^[0-9]+$",
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/$defs/VoiceMode"
+        },
+        "session_id": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "channel_id",
+        "session_id",
+        "mode",
+        "can_publish"
+      ],
+      "title": "VoiceModeResponse",
+      "type": "object"
+    },
+    "VoiceStateSnapshot": {
+      "$defs": {
+        "VoiceMode": {
+          "description": "How a member takes part in a voice channel. `listen` hears the voices and\nnever sends; everyone in the channel sees the member as listening in.",
+          "enum": [
+            "joined",
+            "listen"
+          ],
+          "type": "string"
+        }
+      },
+      "$id": "urn:paracord:contract:VoiceStateSnapshot",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "A voice state as READY lists it (`guilds[].voice_states[]`) and as a\n`VOICE_STATE_UPDATE` for someone *in* a channel carries it. (A leave is\n`channel_id: null` plus `prior_channel_id` and is not this shape.)",
+      "properties": {
+        "avatar_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "channel_id": {
+          "minLength": 1,
+          "pattern": "^[0-9]+$",
+          "type": "string"
+        },
+        "deaf": {
+          "default": false,
+          "type": "boolean"
+        },
+        "guild_id": {
+          "description": "Null for a DM call.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mode": {
+          "$ref": "#/$defs/VoiceMode",
+          "description": "`listen` shows as \"Listening in\" on the roster."
+        },
+        "mute": {
+          "default": false,
+          "type": "boolean"
+        },
+        "request_to_speak_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "self_deaf": {
+          "type": "boolean"
+        },
+        "self_mute": {
+          "type": "boolean"
+        },
+        "self_stream": {
+          "type": "boolean"
+        },
+        "self_stream_started_at": {
+          "description": "When the member's current stream started (RFC 3339), for \"LIVE 42 MIN\".\nNon-null exactly while `self_stream` is true.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "self_video": {
+          "type": "boolean"
+        },
+        "session_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "speaking": {
+          "description": "READY only: talking right now.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "suppress": {
+          "type": "boolean"
+        },
+        "user_id": {
+          "minLength": 1,
+          "pattern": "^[0-9]+$",
+          "type": "string"
+        },
+        "username": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "user_id",
+        "channel_id",
+        "guild_id",
+        "self_mute",
+        "self_deaf",
+        "self_stream",
+        "self_video",
+        "suppress",
+        "mute",
+        "deaf",
+        "mode",
+        "self_stream_started_at"
+      ],
+      "title": "VoiceStateSnapshot",
+      "type": "object"
+    },
+    "VoiceViewSession": {
+      "$defs": {
+        "VoiceViewKind": {
+          "description": "What a view session receives.\n\n- `watch`: the chosen stream's video and its own audio (never the voices).\n  Counted in the channel's watcher counts, so others see \"2 watching\".\n- `ambient`: the stream's lowest simulcast layer, keyframes only, at most\n  one frame a second, video only. Not counted and not shown to anybody.",
+          "enum": [
+            "watch",
+            "ambient"
+          ],
+          "type": "string"
+        },
+        "VoiceViewMedia": {
+          "description": "How to connect a view session's media (the same native endpoint a call\nuses; the token admits only this view).",
+          "properties": {
+            "cert_hash": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "media_endpoint": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "media_endpoint_candidates": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "media_token": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "room_name": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "media_endpoint",
+            "media_endpoint_candidates",
+            "media_token",
+            "cert_hash",
+            "room_name"
+          ],
+          "type": "object"
+        }
+      },
+      "$id": "urn:paracord:contract:VoiceViewSession",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "Response of `POST /api/v2/voice/{channel_id}/view`.\n\nWhen the caller is already in this channel's call (joined or listening),\nthe view rides that call: `via_membership` is true, `session_id` and\n`media` are null, and the caller subscribes to the stream through its call\nconnection. Otherwise it is a separate view session with its own receipt\nand media credentials; an account holds one at a time, and a new one\nreplaces the old (whose connection the relay closes).",
+      "properties": {
+        "channel_id": {
+          "minLength": 1,
+          "pattern": "^[0-9]+$",
+          "type": "string"
+        },
+        "guild_id": {
+          "minLength": 1,
+          "pattern": "^[0-9]+$",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/VoiceViewKind"
+        },
+        "media": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VoiceViewMedia"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "session_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "user_id": {
+          "description": "The streamer being viewed.",
+          "minLength": 1,
+          "pattern": "^[0-9]+$",
+          "type": "string"
+        },
+        "via_membership": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "guild_id",
+        "channel_id",
+        "kind",
+        "user_id",
+        "via_membership",
+        "session_id",
+        "media"
+      ],
+      "title": "VoiceViewSession",
+      "type": "object"
+    },
+    "VoiceWatchers": {
+      "$defs": {
+        "VoiceStreamWatchers": {
+          "description": "One stream's watcher count.",
+          "properties": {
+            "user_id": {
+              "description": "The streamer.",
+              "minLength": 1,
+              "pattern": "^[0-9]+$",
+              "type": "string"
+            },
+            "watchers": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "user_id",
+            "watchers"
+          ],
+          "type": "object"
+        }
+      },
+      "$id": "urn:paracord:contract:VoiceWatchers",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "Watcher counts for one voice channel: `GET\n/api/v2/voice/{channel_id}/watchers` and the `VOICE_WATCHERS_UPDATE`\ngateway event. A complete snapshot for the channel: a stream that is not\nlisted has no watchers.",
+      "properties": {
+        "channel_id": {
+          "minLength": 1,
+          "pattern": "^[0-9]+$",
+          "type": "string"
+        },
+        "guild_id": {
+          "minLength": 1,
+          "pattern": "^[0-9]+$",
+          "type": "string"
+        },
+        "streams": {
+          "items": {
+            "$ref": "#/$defs/VoiceStreamWatchers"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "guild_id",
+        "channel_id",
+        "streams"
+      ],
+      "title": "VoiceWatchers",
       "type": "object"
     }
   }

@@ -147,6 +147,10 @@ async fn dispatch_stage_voice_state(
             "request_to_speak_at": voice_state.request_to_speak_at.map(|value| value.to_rfc3339()),
             "mute": false,
             "deaf": false,
+            "mode": voice_state.mode.as_str(),
+            "self_stream_started_at": voice_state
+                .self_stream_started_at
+                .map(|value| value.to_rfc3339()),
             "username": user.as_ref().map(|u| u.username.as_str()),
             "avatar_hash": user.as_ref().and_then(|u| u.avatar_hash.as_deref()),
         }),

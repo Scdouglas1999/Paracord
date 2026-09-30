@@ -374,7 +374,7 @@ async fn control_messages_never_deep_clone_the_room() {
     // The other peer-reachable control paths are held to the same rule.
     reset_get_room_clones();
     forwarder
-        .broadcast_control_in_room(&room_id, Some(1), &ControlMessage::Ping)
+        .broadcast_control_in_room(&room_id, 1, None, &ControlMessage::Ping)
         .await;
     forwarder.run_layer_selection_for(&viewer_two).await;
     forwarder

@@ -1050,7 +1050,7 @@ pub fn build_router(state: &AppState) -> Router<AppState> {
         // Voice
         .route(
             "/api/v1/voice/{channel_id}/join",
-            get(routes::voice::join_voice),
+            get(routes::voice::join_voice_with_mode),
         )
         .route(
             "/api/v1/voice/{channel_id}/stream",
@@ -1086,7 +1086,21 @@ pub fn build_router(state: &AppState) -> Router<AppState> {
         )
         .route(
             "/api/v2/voice/{channel_id}/join",
-            post(routes::voice_v2::join_voice_v2),
+            post(routes::voice::join_voice_with_mode),
+        )
+        // Listen in: switch a call between listening and joined in place.
+        .route(
+            "/api/v2/voice/{channel_id}/mode",
+            post(routes::voice::update_voice_mode),
+        )
+        // View sessions: watch a stream (or light the room) without joining.
+        .route(
+            "/api/v2/voice/{channel_id}/view",
+            post(routes::voice::start_voice_view).delete(routes::voice::stop_voice_view),
+        )
+        .route(
+            "/api/v2/voice/{channel_id}/watchers",
+            get(routes::voice::get_voice_watchers),
         )
         .route(
             "/api/v2/voice/{channel_id}/leave",
@@ -1098,7 +1112,7 @@ pub fn build_router(state: &AppState) -> Router<AppState> {
         )
         .route(
             "/api/v2/voice/recover",
-            post(routes::voice_v2::recover_voice_v2),
+            post(routes::voice::recover_voice_with_mode),
         )
         // Files
         .route(

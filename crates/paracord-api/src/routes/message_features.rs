@@ -99,6 +99,7 @@ fn features_to_json(row: &paracord_db::channel_features::ChannelFeatureSettingsR
         "adaptive_slowmode_threshold": row.adaptive_slowmode_threshold,
         "adaptive_slowmode_step_seconds": row.adaptive_slowmode_step_seconds,
         "thread_rate_limit_per_user": row.thread_rate_limit_per_user,
+        "listen_in_enabled": row.listen_in_enabled,
     })
 }
 
@@ -112,6 +113,9 @@ pub struct ChannelFeatureSettingsPatch {
     pub adaptive_slowmode_threshold: Option<i32>,
     pub adaptive_slowmode_step_seconds: Option<i32>,
     pub thread_rate_limit_per_user: Option<i32>,
+    /// Voice channels only: whether members may listen in (receive only)
+    /// rather than join. On by default.
+    pub listen_in_enabled: Option<bool>,
 }
 
 pub async fn get_channel_feature_settings(
@@ -180,6 +184,11 @@ pub async fn update_channel_feature_settings(
         .ok_or(ApiError::NotFound)?;
     let perms = compute_channel_permissions(&state, &channel, auth.user_id).await?;
     paracord_core::permissions::require_permission(perms, Permissions::MANAGE_CHANNELS)?;
+    if body.listen_in_enabled.is_some() && channel.channel_type != 2 {
+        return Err(ApiError::BadRequest(
+            "listen_in_enabled applies to voice channels only".into(),
+        ));
+    }
 
     let slowmode_exempt_role_ids = body
         .slowmode_exempt_role_ids
@@ -207,6 +216,7 @@ pub async fn update_channel_feature_settings(
             adaptive_slowmode_threshold: body.adaptive_slowmode_threshold,
             adaptive_slowmode_step_seconds: body.adaptive_slowmode_step_seconds,
             thread_rate_limit_per_user: body.thread_rate_limit_per_user,
+            listen_in_enabled: body.listen_in_enabled,
         },
     )
     .await

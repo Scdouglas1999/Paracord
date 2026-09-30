@@ -103,7 +103,9 @@ pub fn intent_required_for_event(event_name: &str) -> Option<GatewayIntents> {
         }
 
         // GUILD_VOICE_STATES
-        EVENT_VOICE_STATE_UPDATE => Some(GatewayIntents::GUILD_VOICE_STATES),
+        EVENT_VOICE_STATE_UPDATE | EVENT_VOICE_WATCHERS_UPDATE => {
+            Some(GatewayIntents::GUILD_VOICE_STATES)
+        }
 
         // GUILD_PRESENCES (privileged)
         EVENT_PRESENCE_UPDATE => Some(GatewayIntents::GUILD_PRESENCES),

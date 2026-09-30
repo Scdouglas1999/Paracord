@@ -1350,6 +1350,12 @@ async fn build_ready_payload(
                     "request_to_speak_at": vs.request_to_speak_at.map(|value| value.to_rfc3339()),
                     "mute": false,
                     "deaf": false,
+                    // `listen` shows as "Listening in" on the roster.
+                    "mode": vs.mode.as_str(),
+                    // When the current stream started, for "LIVE 42 MIN".
+                    "self_stream_started_at": vs
+                        .self_stream_started_at
+                        .map(|value| value.to_rfc3339()),
                     "username": &vs.username,
                     "avatar_hash": &vs.avatar_hash,
                     // Talking right now, so a fresh page shows a current
@@ -2087,8 +2093,9 @@ pub async fn post_command(
                             .as_ref()
                             .is_some_and(|voice_state| voice_state.self_stream));
                 // Record the flags, so a later stream start or stop announces
-                // them as they are.
-                paracord_db::voice_states::update_voice_state(
+                // them as they are. The stored row carries the mode and the
+                // stream start time the announcement repeats.
+                let stored = paracord_db::voice_states::update_voice_state(
                     &state.db,
                     auth.user_id,
                     Some(guild_id),
@@ -2098,7 +2105,8 @@ pub async fn post_command(
                     self_video,
                 )
                 .await
-                .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+                .ok_or_else(|| ApiError::Conflict("Voice session changed".into()))?;
                 let user = paracord_db::users::get_user_by_id(&state.db, auth.user_id)
                     .await
                     .ok()
@@ -2120,6 +2128,10 @@ pub async fn post_command(
                             .map(|value| value.to_rfc3339()),
                         "mute": false,
                         "deaf": false,
+                        "mode": stored.mode.as_str(),
+                        "self_stream_started_at": stored
+                            .self_stream_started_at
+                            .map(|value| value.to_rfc3339()),
                         "username": user.as_ref().map(|u| u.username.as_str()),
                         "avatar_hash": user.as_ref().and_then(|u| u.avatar_hash.as_deref()),
                     }),

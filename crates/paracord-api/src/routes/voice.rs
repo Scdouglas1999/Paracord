@@ -2,19 +2,156 @@ use axum::{
     body::Bytes,
     extract::{Path, Query, State},
     http::{header, HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
     Json,
 };
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
+use paracord_contracts::voice as wire;
 use paracord_core::AppState;
 use paracord_federation::client::{FederationMediaRelayRequest, FederationMediaTokenRequest};
 use paracord_models::permissions::Permissions;
-use paracord_relay::participant::MediaParticipant;
+use paracord_models::voice::VoiceMode;
+use paracord_relay::participant::{MediaParticipant, ViewKind, ViewTarget};
+use paracord_relay::room::RoomError;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use crate::error::ApiError;
 use crate::middleware::AuthUser;
+
+/// A voice route's refusal: an ordinary [`ApiError`], or one with its own
+/// machine-readable code that `ApiError` has no variant for. The body has the
+/// same shape as every other API error (`code`, `message`, `error`,
+/// `details`).
+#[derive(Debug)]
+pub enum VoiceRouteError {
+    Api(ApiError),
+    /// 403 `LISTEN_IN_DISABLED`: this voice channel does not admit listeners
+    /// (its `listen_in_enabled` feature setting is off). Join it instead.
+    ListenInDisabled,
+}
+
+impl VoiceRouteError {
+    /// The closest plain [`ApiError`], for callers whose signature cannot carry
+    /// the code (the legacy `voice_v2` wrappers).
+    pub fn into_api_error(self) -> ApiError {
+        match self {
+            Self::Api(error) => error,
+            Self::ListenInDisabled => ApiError::Forbidden,
+        }
+    }
+}
+
+impl From<ApiError> for VoiceRouteError {
+    fn from(error: ApiError) -> Self {
+        Self::Api(error)
+    }
+}
+
+impl From<paracord_core::error::CoreError> for VoiceRouteError {
+    fn from(error: paracord_core::error::CoreError) -> Self {
+        Self::Api(error.into())
+    }
+}
+
+impl From<paracord_db::DbError> for VoiceRouteError {
+    fn from(error: paracord_db::DbError) -> Self {
+        Self::Api(error.into())
+    }
+}
+
+impl IntoResponse for VoiceRouteError {
+    fn into_response(self) -> Response {
+        match self {
+            Self::Api(error) => error.into_response(),
+            Self::ListenInDisabled => {
+                let message = "Listening in is turned off for this channel";
+                (
+                    StatusCode::FORBIDDEN,
+                    Json(json!({
+                        "code": "LISTEN_IN_DISABLED",
+                        "message": message,
+                        "error": message,
+                        "details": Value::Null,
+                    })),
+                )
+                    .into_response()
+            }
+        }
+    }
+}
+
+/// Parse the `mode` a join asks for. Absent is a full membership; anything
+/// other than `joined` or `listen` is refused, never guessed.
+fn parse_join_mode(raw: Option<&str>) -> Result<VoiceMode, ApiError> {
+    match raw {
+        None => Ok(VoiceMode::Joined),
+        Some(value) => VoiceMode::parse(value)
+            .ok_or_else(|| ApiError::BadRequest("mode must be \"joined\" or \"listen\"".into())),
+    }
+}
+
+fn mode_from_wire(mode: wire::VoiceMode) -> VoiceMode {
+    match mode {
+        wire::VoiceMode::Joined => VoiceMode::Joined,
+        wire::VoiceMode::Listen => VoiceMode::Listen,
+    }
+}
+
+fn mode_to_wire(mode: VoiceMode) -> wire::VoiceMode {
+    match mode {
+        VoiceMode::Joined => wire::VoiceMode::Joined,
+        VoiceMode::Listen => wire::VoiceMode::Listen,
+    }
+}
+
+/// Listening in is a voice-channel feature (a stage's audience already
+/// receives without sending) that each channel can turn off.
+async fn ensure_listen_in_allowed(
+    state: &AppState,
+    channel: &paracord_db::channels::ChannelRow,
+) -> Result<(), VoiceRouteError> {
+    if channel.channel_type != 2 {
+        return Err(ApiError::BadRequest("Listening in is only for voice channels".into()).into());
+    }
+    if !paracord_db::channel_features::listen_in_enabled(&state.db, channel.id).await? {
+        return Err(VoiceRouteError::ListenInDisabled);
+    }
+    Ok(())
+}
+
+/// The wire form of a stream start time (RFC 3339), or null.
+fn stream_started_at_wire(value: Option<chrono::DateTime<chrono::Utc>>) -> Value {
+    value.map_or(Value::Null, |value| Value::String(value.to_rfc3339()))
+}
+
+/// A `VOICE_STATE_UPDATE` for a member who is in `row.channel_id`, built from
+/// the stored row so every field (mode, stream start time, flags) is the one
+/// the database holds.
+pub(crate) fn voice_state_payload(
+    row: &paracord_db::voice_states::VoiceStateRow,
+    user: Option<&paracord_db::users::UserRow>,
+) -> Value {
+    json!({
+        "user_id": row.user_id.to_string(),
+        "channel_id": row.channel_id.to_string(),
+        "guild_id": row.guild_id().map(|id| id.to_string()),
+        "session_id": &row.session_id,
+        "self_mute": row.self_mute,
+        "self_deaf": row.self_deaf,
+        "self_stream": row.self_stream,
+        "self_video": row.self_video,
+        "suppress": row.suppress,
+        "request_to_speak_at": row.request_to_speak_at.map(|value| value.to_rfc3339()),
+        "mute": false,
+        "deaf": false,
+        "mode": row.mode.as_str(),
+        "self_stream_started_at": stream_started_at_wire(row.self_stream_started_at),
+        "username": user.map(|u| u.username.as_str()),
+        "avatar_hash": user.and_then(|u| u.avatar_hash.as_deref()),
+    })
+}
 
 pub fn livekit_url_candidates_pub(headers: &HeaderMap, fallback: &str) -> Vec<String> {
     livekit_url_candidates(headers, fallback)
@@ -177,6 +314,10 @@ pub async fn evict_user_from_guild_media(state: &AppState, guild_id: i64, user_i
                 .rooms
                 .leave_room(guild_id, *channel_id, user_id);
         }
+        // A view session in this guild ends too (it has no voice state, so
+        // the snapshot above does not name it). The watcher-count listener
+        // announces the change.
+        native_media.rooms.end_view_in_guild(user_id, guild_id);
         // Actively close the live QUIC/WebTransport media connection so the
         // removed member immediately stops receiving and can no longer inject
         // media, regardless of which channel it was bound to.
@@ -303,6 +444,9 @@ fn verify_livekit_webhook_auth(
 pub struct VoiceJoinQuery {
     pub fallback: Option<String>,
     pub session_id: Option<String>,
+    /// `joined` (default) or `listen` (receive only, shown as listening in).
+    /// Read by the join routes only.
+    pub mode: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -345,8 +489,35 @@ pub(crate) async fn commit_native_membership(
     suppress: bool,
     can_publish: bool,
 ) -> Result<(), ApiError> {
-    let transaction = paracord_db::voice_states::begin_voice_state_transition(
-        &state.db, user_id, guild_id, channel_id, session_id, suppress,
+    commit_native_membership_with_mode(
+        state,
+        user_id,
+        guild_id,
+        channel_id,
+        session_id,
+        suppress,
+        can_publish,
+        VoiceMode::Joined,
+    )
+    .await
+}
+
+/// [`commit_native_membership`] for a given [`VoiceMode`]. A listener's relay
+/// membership is receive-only (`can_publish` must be false for `listen`).
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn commit_native_membership_with_mode(
+    state: &AppState,
+    user_id: i64,
+    guild_id: Option<i64>,
+    channel_id: i64,
+    session_id: &str,
+    suppress: bool,
+    can_publish: bool,
+    mode: VoiceMode,
+) -> Result<(), ApiError> {
+    debug_assert!(!(mode.is_listen() && can_publish));
+    let transaction = paracord_db::voice_states::begin_voice_state_transition_with_mode(
+        &state.db, user_id, guild_id, channel_id, session_id, suppress, mode,
     )
     .await
     .map_err(|error| ApiError::Internal(error.into()))?;
@@ -411,6 +582,35 @@ pub(crate) async fn release_previous_memberships(
     // otherwise remove a new call that reused this room name.
 }
 
+/// Join a voice channel (`GET /api/v1/voice/{id}/join`,
+/// `POST /api/v2/voice/{id}/join`), as a full member or, with `?mode=listen`,
+/// listening in: receive only, never sends, and shown to everyone as
+/// listening in. A listen join answers 403 `LISTEN_IN_DISABLED` when the
+/// channel has turned listening in off.
+pub async fn join_voice_with_mode(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    headers: HeaderMap,
+    Path(channel_id): Path<i64>,
+    Query(query): Query<VoiceJoinQuery>,
+) -> Result<Json<Value>, VoiceRouteError> {
+    join_voice_inner(state, auth, headers, channel_id, query).await
+}
+
+/// `POST /api/v2/voice/recover`: rejoin after a media failure. The mode is
+/// whatever `?mode=` says (absent is a full membership), exactly as a join.
+pub async fn recover_voice_with_mode(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    headers: HeaderMap,
+    Query(query): Query<VoiceJoinQuery>,
+    Json(req): Json<super::voice_v2::VoiceRecoverRequest>,
+) -> Result<Json<Value>, VoiceRouteError> {
+    join_voice_inner(state, auth, headers, req.channel_id, query).await
+}
+
+/// The join as an [`ApiError`]-typed handler, for callers that cannot carry
+/// [`VoiceRouteError`]'s code (a refused listen join becomes a plain 403).
 pub async fn join_voice(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -418,14 +618,27 @@ pub async fn join_voice(
     Path(channel_id): Path<i64>,
     Query(query): Query<VoiceJoinQuery>,
 ) -> Result<Json<Value>, ApiError> {
+    join_voice_inner(state, auth, headers, channel_id, query)
+        .await
+        .map_err(VoiceRouteError::into_api_error)
+}
+
+async fn join_voice_inner(
+    state: AppState,
+    auth: AuthUser,
+    headers: HeaderMap,
+    channel_id: i64,
+    query: VoiceJoinQuery,
+) -> Result<Json<Value>, VoiceRouteError> {
+    let mode = parse_join_mode(query.mode.as_deref())?;
     let _membership = state.voice.lock_membership(auth.user_id).await;
     if !state.config.livekit_available
         && !state.config.native_media_enabled
         && !paracord_federation::is_enabled()
     {
-        return Err(ApiError::ServiceUnavailable(
-            "Voice is not available on this server".into(),
-        ));
+        return Err(
+            ApiError::ServiceUnavailable("Voice is not available on this server".into()).into(),
+        );
     }
 
     let channel = paracord_db::channels::get_channel(&state.db, channel_id)
@@ -434,7 +647,7 @@ pub async fn join_voice(
         .ok_or(ApiError::NotFound)?;
 
     if channel.channel_type != 2 && channel.channel_type != 13 {
-        return Err(ApiError::BadRequest("Not a voice channel".into()));
+        return Err(ApiError::BadRequest("Not a voice channel".into()).into());
     }
 
     let guild_id = channel.guild_id().ok_or(ApiError::BadRequest(
@@ -455,6 +668,11 @@ pub async fn join_voice(
     .await?;
     paracord_core::permissions::require_permission(perms, Permissions::VIEW_CHANNEL)?;
     paracord_core::permissions::require_permission(perms, Permissions::CONNECT)?;
+    // Checked after the permissions, so the channel's settings are never
+    // revealed to someone who may not see or enter it.
+    if mode.is_listen() {
+        ensure_listen_in_allowed(&state, &channel).await?;
+    }
     // SPEAK gates whether the issued media credential may publish audio/video.
     // A member with CONNECT but denied SPEAK (e.g. a listen-only / muted role)
     // joins as a subscriber only. Applied to both the LiveKit token grant and
@@ -471,7 +689,8 @@ pub async fn join_voice(
     // member and receives a subscriber-only media credential until promoted.
     let stage_moderator = is_stage && can_speak && perms.contains(Permissions::MANAGE_CHANNELS);
     let suppress = is_stage && !stage_moderator;
-    let can_publish = can_speak && !suppress;
+    // A listener never sends, whatever its permissions.
+    let can_publish = can_speak && !suppress && !mode.is_listen();
 
     // Enforce user_limit: count current participants; 0 means unlimited.
     if let Some(limit) = channel.user_limit {
@@ -485,7 +704,7 @@ pub async fn join_voice(
                 participants.len() + 1
             };
             if effective_count > limit as usize {
-                return Err(ApiError::BadRequest("Voice channel is full".into()));
+                return Err(ApiError::BadRequest("Voice channel is full".into()).into());
             }
         }
     }
@@ -509,6 +728,15 @@ pub async fn join_voice(
             Some(channel_id),
         )
         .await;
+        if outbound.uses_remote_mapping && mode.is_listen() {
+            // The remote server issues the media credential and would not know
+            // to make it receive-only; refuse rather than hand out a
+            // publishing membership that is labeled as listening.
+            return Err(ApiError::Conflict(
+                "Listening in is not available for a channel hosted on another server".into(),
+            )
+            .into());
+        }
         if outbound.uses_remote_mapping {
             if let (Some(remote_channel_id), Some(peer), Some(client), Some(local_identity)) = (
                 outbound.payload_channel_id.clone(),
@@ -565,6 +793,8 @@ pub async fn join_voice(
                                 "request_to_speak_at": Value::Null,
                                 "mute": false,
                                 "deaf": false,
+                                "mode": VoiceMode::Joined.as_str(),
+                                "self_stream_started_at": Value::Null,
                                 "username": &user.username,
                                 "avatar_hash": user.avatar_hash,
                             }),
@@ -594,6 +824,7 @@ pub async fn join_voice(
                             "room_name": remote.room_name,
                             "session_id": remote.session_id,
                             "suppress": suppress,
+                            "mode": VoiceMode::Joined.as_str(),
                         })));
                     }
                     Err(err) => {
@@ -621,7 +852,7 @@ pub async fn join_voice(
     let requesting_livekit_fallback = query.fallback.as_deref() == Some("livekit");
     if state.config.native_media_enabled && !requesting_livekit_fallback {
         let session_id = uuid::Uuid::new_v4().to_string();
-        commit_native_membership(
+        commit_native_membership_with_mode(
             &state,
             auth.user_id,
             channel.guild_id(),
@@ -629,6 +860,7 @@ pub async fn join_voice(
             &session_id,
             suppress,
             can_publish,
+            mode,
         )
         .await?;
         release_previous_memberships(&state, auth.user_id, &previous_memberships).await;
@@ -648,6 +880,8 @@ pub async fn join_voice(
                 "request_to_speak_at": Value::Null,
                 "mute": false,
                 "deaf": false,
+                "mode": mode.as_str(),
+                "self_stream_started_at": Value::Null,
                 "username": &user.username,
                 "avatar_hash": user.avatar_hash,
             }),
@@ -703,6 +937,7 @@ pub async fn join_voice(
             "room_name": room_name,
             "session_id": session_id,
             "suppress": suppress,
+            "mode": mode.as_str(),
             "livekit_available": state.config.livekit_available,
         })));
     }
@@ -710,7 +945,8 @@ pub async fn join_voice(
     if !state.config.livekit_available {
         return Err(ApiError::ServiceUnavailable(
             "LiveKit voice is not available on this server".into(),
-        ));
+        )
+        .into());
     }
 
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -729,13 +965,14 @@ pub async fn join_voice(
         .await
         .map_err(ApiError::Internal)?;
 
-    paracord_db::voice_states::begin_voice_state_transition(
+    paracord_db::voice_states::begin_voice_state_transition_with_mode(
         &state.db,
         auth.user_id,
         channel.guild_id(),
         channel_id,
         &session_id,
         suppress,
+        mode,
     )
     .await
     .map_err(|error| ApiError::Internal(error.into()))?
@@ -766,6 +1003,8 @@ pub async fn join_voice(
             "request_to_speak_at": Value::Null,
             "mute": false,
             "deaf": false,
+            "mode": mode.as_str(),
+            "self_stream_started_at": Value::Null,
             "username": &user.username,
             "avatar_hash": user.avatar_hash,
         }),
@@ -790,6 +1029,7 @@ pub async fn join_voice(
         "room_name": join_resp.room_name,
         "session_id": session_id,
         "suppress": suppress,
+        "mode": mode.as_str(),
     })))
 }
 
@@ -821,35 +1061,54 @@ struct HeldVoiceFlags {
     self_mute: bool,
     self_deaf: bool,
     self_video: bool,
-    suppress: bool,
 }
 
-/// The flags as last recorded for this call (every mute, deafen and camera
-/// change writes them). Someone not in this call has none to hold.
-async fn held_voice_flags(
+/// The caller's voice state in this call (every mute, deafen and camera change
+/// writes its flags), or `None` when the caller is not in this channel.
+async fn current_voice_state(
     state: &AppState,
     channel_id: i64,
     user_id: i64,
     guild_id: Option<i64>,
-) -> Result<HeldVoiceFlags, ApiError> {
-    let row = paracord_db::voice_states::get_user_voice_state(&state.db, user_id, guild_id)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
-        .filter(|row| row.channel_id == channel_id);
-    Ok(match row {
-        Some(row) => HeldVoiceFlags {
-            self_mute: row.self_mute,
-            self_deaf: row.self_deaf,
-            self_video: row.self_video,
-            suppress: row.suppress,
-        },
-        None => HeldVoiceFlags {
-            self_mute: false,
-            self_deaf: false,
-            self_video: false,
-            suppress: false,
-        },
-    })
+) -> Result<Option<paracord_db::voice_states::VoiceStateRow>, ApiError> {
+    Ok(
+        paracord_db::voice_states::get_user_voice_state(&state.db, user_id, guild_id)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+            .filter(|row| row.channel_id == channel_id),
+    )
+}
+
+fn held_flags(row: &paracord_db::voice_states::VoiceStateRow) -> HeldVoiceFlags {
+    HeldVoiceFlags {
+        self_mute: row.self_mute,
+        self_deaf: row.self_deaf,
+        self_video: row.self_video,
+    }
+}
+
+/// Record the stream flag (keeping every other flag as it is) and return the
+/// stored row, whose `self_stream_started_at` the database stamps on a start
+/// and clears on a stop.
+async fn record_stream_flag(
+    state: &AppState,
+    user_id: i64,
+    guild_id: i64,
+    held: &HeldVoiceFlags,
+    streaming: bool,
+) -> Result<paracord_db::voice_states::VoiceStateRow, ApiError> {
+    paracord_db::voice_states::update_voice_state(
+        &state.db,
+        user_id,
+        Some(guild_id),
+        held.self_mute,
+        held.self_deaf,
+        streaming,
+        held.self_video,
+    )
+    .await
+    .map_err(|error| ApiError::Internal(error.into()))?
+    .ok_or_else(|| ApiError::Conflict("The voice session for this stream has ended".into()))
 }
 
 pub async fn start_stream(
@@ -922,8 +1181,17 @@ pub async fn start_stream(
         .ok_or(ApiError::NotFound)?;
     // Sharing a screen changes only the stream flag. The person's mute,
     // deafen and camera stay as they are, or everyone else sees a muted
-    // streamer as unmuted until their next change.
-    let held = held_voice_flags(&state, channel_id, auth.user_id, Some(guild_id)).await?;
+    // streamer as unmuted until their next change. Only someone in the call
+    // can stream into it, and a listener never sends.
+    let current = current_voice_state(&state, channel_id, auth.user_id, Some(guild_id))
+        .await?
+        .ok_or_else(|| ApiError::Conflict("Join the voice channel before streaming".into()))?;
+    if current.mode.is_listen() {
+        return Err(ApiError::Conflict(
+            "Listening in never sends; join the call to share a screen".into(),
+        ));
+    }
+    let held = held_flags(&current);
 
     let requested_quality = body
         .as_ref()
@@ -972,32 +1240,12 @@ pub async fn start_stream(
                 match client.relay_media_action(target, &payload).await {
                     Ok(remote) => {
                         if let (Some(token), Some(room_name)) = (remote.token, remote.room_name) {
-                            let _ = paracord_db::voice_states::update_voice_state(
-                                &state.db,
-                                auth.user_id,
-                                Some(guild_id),
-                                held.self_mute,
-                                held.self_deaf,
-                                true,
-                                held.self_video,
-                            )
-                            .await;
+                            let row =
+                                record_stream_flag(&state, auth.user_id, guild_id, &held, true)
+                                    .await?;
                             state.event_bus.dispatch(
                                 "VOICE_STATE_UPDATE",
-                                json!({
-                                    "user_id": auth.user_id.to_string(),
-                                    "channel_id": channel_id.to_string(),
-                                    "guild_id": Some(guild_id.to_string()),
-                                    "self_mute": held.self_mute,
-                                    "self_deaf": held.self_deaf,
-                                    "self_stream": true,
-                                    "self_video": held.self_video,
-                                    "suppress": held.suppress,
-                                    "mute": false,
-                                    "deaf": false,
-                                    "username": &user.username,
-                                    "avatar_hash": user.avatar_hash,
-                                }),
+                                voice_state_payload(&row, Some(&user)),
                                 Some(guild_id),
                             );
 
@@ -1052,33 +1300,11 @@ pub async fn start_stream(
     // explicitly requests LiveKit as a fallback.
     let requesting_livekit_fallback = query.fallback.as_deref() == Some("livekit");
     if state.config.native_media_enabled && !requesting_livekit_fallback {
-        let _ = paracord_db::voice_states::update_voice_state(
-            &state.db,
-            auth.user_id,
-            Some(guild_id),
-            held.self_mute,
-            held.self_deaf,
-            true,
-            held.self_video,
-        )
-        .await;
+        let row = record_stream_flag(&state, auth.user_id, guild_id, &held, true).await?;
 
         state.event_bus.dispatch(
             "VOICE_STATE_UPDATE",
-            json!({
-                "user_id": auth.user_id.to_string(),
-                "channel_id": channel_id.to_string(),
-                "guild_id": Some(guild_id.to_string()),
-                "self_mute": held.self_mute,
-                "self_deaf": held.self_deaf,
-                "self_stream": true,
-                "self_video": held.self_video,
-                "suppress": held.suppress,
-                "mute": false,
-                "deaf": false,
-                "username": &user.username,
-                "avatar_hash": user.avatar_hash,
-            }),
+            voice_state_payload(&row, Some(&user)),
             Some(guild_id),
         );
 
@@ -1113,33 +1339,11 @@ pub async fn start_stream(
         .map_err(ApiError::Internal)?;
 
     // Persist stream state in DB and notify all guild members.
-    let _ = paracord_db::voice_states::update_voice_state(
-        &state.db,
-        auth.user_id,
-        Some(guild_id),
-        held.self_mute,
-        held.self_deaf,
-        true,
-        held.self_video,
-    )
-    .await;
+    let row = record_stream_flag(&state, auth.user_id, guild_id, &held, true).await?;
 
     state.event_bus.dispatch(
         "VOICE_STATE_UPDATE",
-        json!({
-            "user_id": auth.user_id.to_string(),
-            "channel_id": channel_id.to_string(),
-            "guild_id": Some(guild_id.to_string()),
-            "self_mute": held.self_mute,
-            "self_deaf": held.self_deaf,
-            "self_stream": true,
-            "self_video": held.self_video,
-            "suppress": held.suppress,
-            "mute": false,
-            "deaf": false,
-            "username": &user.username,
-            "avatar_hash": user.avatar_hash,
-        }),
+        voice_state_payload(&row, Some(&user)),
         Some(guild_id),
     );
 
@@ -1255,24 +1459,19 @@ pub async fn stop_stream(
         }
     }
 
-    let held = held_voice_flags(&state, channel_id, auth.user_id, guild_id).await?;
-
     // Clear stream state in the voice manager.
     state.voice.stop_stream(channel_id, auth.user_id).await;
 
-    // Update DB voice state.
-    if let Some(gid) = guild_id {
-        let _ = paracord_db::voice_states::update_voice_state(
-            &state.db,
-            auth.user_id,
-            Some(gid),
-            held.self_mute,
-            held.self_deaf,
-            false,
-            held.self_video,
-        )
-        .await;
-    }
+    // Someone not in this channel has no stream here to stop, and announcing
+    // one would place them in a channel they are not in.
+    let (Some(gid), Some(current)) = (
+        guild_id,
+        current_voice_state(&state, channel_id, auth.user_id, guild_id).await?,
+    ) else {
+        return Ok(StatusCode::NO_CONTENT);
+    };
+    let held = held_flags(&current);
+    let row = record_stream_flag(&state, auth.user_id, gid, &held, false).await?;
 
     // Notify all guild members that the stream ended.
     let user = paracord_db::users::get_user_by_id(&state.db, auth.user_id)
@@ -1281,20 +1480,7 @@ pub async fn stop_stream(
         .flatten();
     state.event_bus.dispatch(
         "VOICE_STATE_UPDATE",
-        json!({
-            "user_id": auth.user_id.to_string(),
-            "channel_id": channel_id.to_string(),
-            "guild_id": guild_id.map(|id| id.to_string()),
-            "self_mute": held.self_mute,
-            "self_deaf": held.self_deaf,
-            "self_stream": false,
-            "self_video": held.self_video,
-            "suppress": held.suppress,
-            "mute": false,
-            "deaf": false,
-            "username": user.as_ref().map(|u| u.username.as_str()),
-            "avatar_hash": user.as_ref().and_then(|u| u.avatar_hash.as_deref()),
-        }),
+        voice_state_payload(&row, user.as_ref()),
         guild_id,
     );
 
@@ -1559,6 +1745,528 @@ pub async fn livekit_webhook(
     });
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ── Listen in: switching mode in place ─────────────────────────────────────
+
+/// `POST /api/v2/voice/{channel_id}/mode`: switch the caller's membership of
+/// this voice channel between listening in and joined, in place.
+///
+/// The call keeps its receipt and its media connection: the relay flips the
+/// member's publish permission (receive-only ↔ SPEAK-gated), the stored voice
+/// state changes mode, and everyone who can see the channel gets a
+/// `VOICE_STATE_UPDATE`. Entering `listen` also ends any screen share or
+/// camera (a listener never sends). Switching to `listen` answers 403
+/// `LISTEN_IN_DISABLED` when the channel has listening in turned off.
+pub async fn update_voice_mode(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(channel_id): Path<i64>,
+    Json(body): Json<wire::UpdateVoiceModeRequest>,
+) -> Result<Json<wire::VoiceModeResponse>, VoiceRouteError> {
+    let _membership = state.voice.lock_membership(auth.user_id).await;
+    let mode = mode_from_wire(body.mode);
+    let channel = paracord_db::channels::get_channel(&state.db, channel_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+    if channel.channel_type != 2 {
+        return Err(ApiError::BadRequest("Listening in is only for voice channels".into()).into());
+    }
+    let guild_id = channel.guild_id().ok_or(ApiError::BadRequest(
+        "Voice is only supported in guild channels".into(),
+    ))?;
+    paracord_core::permissions::ensure_guild_member(&state.db, guild_id, auth.user_id).await?;
+    let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+    let perms = paracord_core::permissions::compute_channel_permissions(
+        &state.db,
+        guild_id,
+        channel_id,
+        guild.owner_id,
+        auth.user_id,
+    )
+    .await?;
+    paracord_core::permissions::require_permission(perms, Permissions::VIEW_CHANNEL)?;
+    paracord_core::permissions::require_permission(perms, Permissions::CONNECT)?;
+
+    let current = current_voice_state(&state, channel_id, auth.user_id, Some(guild_id))
+        .await?
+        .ok_or_else(|| ApiError::Conflict("You are not in this voice channel".into()))?;
+    if body
+        .session_id
+        .as_deref()
+        .is_some_and(|expected| expected != current.session_id)
+    {
+        return Err(ApiError::Conflict("The voice session for this call has ended".into()).into());
+    }
+    if mode.is_listen() {
+        ensure_listen_in_allowed(&state, &channel).await?;
+    }
+
+    let can_speak = perms.contains(Permissions::SPEAK);
+    let can_publish = !mode.is_listen() && can_speak;
+    if current.mode == mode {
+        return Ok(Json(wire::VoiceModeResponse {
+            channel_id: channel_id.to_string(),
+            session_id: current.session_id,
+            mode: mode_to_wire(mode),
+            can_publish,
+        }));
+    }
+    let previous_can_publish = !current.mode.is_listen() && can_speak;
+
+    // Flip the relay first: until the stored mode says `joined`, nobody else
+    // is told the member may speak, and a failed write below puts the relay
+    // back. A call on the native relay is switched there; a LiveKit call
+    // through its participant permission; a call on neither cannot switch.
+    let switched_native = match state.native_media.as_ref() {
+        Some(native) => match native
+            .rooms
+            .update_participant_publish_permission_if_session(
+                guild_id,
+                channel_id,
+                auth.user_id,
+                &current.session_id,
+                can_publish,
+            ) {
+            Ok(()) => true,
+            Err(RoomError::NotFound(_) | RoomError::UserNotInRoom(..)) => false,
+            Err(error) => return Err(ApiError::Internal(error.into()).into()),
+        },
+        None => false,
+    };
+    if !switched_native {
+        if !state.config.livekit_available {
+            return Err(ApiError::Conflict(
+                "This call has no media session to switch; rejoin in the mode you want".into(),
+            )
+            .into());
+        }
+        state
+            .voice
+            .set_participant_can_publish(channel_id, auth.user_id, can_publish)
+            .await
+            .map_err(ApiError::Internal)?;
+    }
+    let revert = |state: &AppState| {
+        if switched_native {
+            if let Some(native) = state.native_media.as_ref() {
+                let _ = native
+                    .rooms
+                    .update_participant_publish_permission_if_session(
+                        guild_id,
+                        channel_id,
+                        auth.user_id,
+                        &current.session_id,
+                        previous_can_publish,
+                    );
+            }
+        }
+    };
+
+    let row = match paracord_db::voice_states::set_voice_mode(
+        &state.db,
+        auth.user_id,
+        Some(guild_id),
+        channel_id,
+        &current.session_id,
+        mode,
+    )
+    .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => {
+            revert(&state);
+            return Err(
+                ApiError::Conflict("The voice session for this call has ended".into()).into(),
+            );
+        }
+        Err(error) => {
+            revert(&state);
+            return Err(ApiError::Internal(error.into()).into());
+        }
+    };
+    if mode.is_listen() && current.self_stream {
+        state.voice.stop_stream(channel_id, auth.user_id).await;
+    }
+
+    let user = paracord_db::users::get_user_by_id(&state.db, auth.user_id)
+        .await
+        .ok()
+        .flatten();
+    state.event_bus.dispatch(
+        "VOICE_STATE_UPDATE",
+        voice_state_payload(&row, user.as_ref()),
+        Some(guild_id),
+    );
+    tracing::info!(
+        user_id = auth.user_id,
+        channel_id,
+        mode = mode.as_str(),
+        "voice: switched call mode in place"
+    );
+    Ok(Json(wire::VoiceModeResponse {
+        channel_id: channel_id.to_string(),
+        session_id: row.session_id,
+        mode: mode_to_wire(mode),
+        can_publish,
+    }))
+}
+
+// ── View sessions: watch without joining, ambient room light ───────────────
+
+/// How long a view-session media token stays valid for connecting. A view
+/// that has not connected within [`VIEW_CONNECT_GRACE`] is retired anyway.
+const VIEW_TOKEN_TTL_SECS: i64 = 10 * 60;
+/// How long a view may go without a live media connection (before its first
+/// connect, or after a drop) before the relay retires it.
+const VIEW_CONNECT_GRACE: std::time::Duration = std::time::Duration::from_secs(20);
+/// How often unbacked views are swept.
+const VIEW_SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+/// Watcher-count changes arriving within this window go out as one event.
+const WATCHERS_COALESCE: std::time::Duration = std::time::Duration::from_millis(250);
+
+fn view_kind_from_wire(kind: wire::VoiceViewKind) -> ViewKind {
+    match kind {
+        wire::VoiceViewKind::Watch => ViewKind::Watch,
+        wire::VoiceViewKind::Ambient => ViewKind::Ambient,
+    }
+}
+
+fn watchers_payload(
+    guild_id: i64,
+    channel_id: i64,
+    counts: &std::collections::BTreeMap<i64, u32>,
+) -> wire::VoiceWatchers {
+    wire::VoiceWatchers {
+        guild_id: guild_id.to_string(),
+        channel_id: channel_id.to_string(),
+        streams: counts
+            .iter()
+            .map(|(user_id, watchers)| wire::VoiceStreamWatchers {
+                user_id: user_id.to_string(),
+                watchers: *watchers,
+            })
+            .collect(),
+    }
+}
+
+/// Start (once per server state) the task that keeps view sessions honest:
+/// it broadcasts `VOICE_WATCHERS_UPDATE` whenever a channel's watcher counts
+/// change, however the change happened (a view started, ended or expired, a
+/// watching member left the call by any path), and retires views that have
+/// no live media connection.
+fn ensure_view_housekeeping(state: &AppState) {
+    let Some(native) = state.native_media.as_ref() else {
+        return;
+    };
+    let Some(signal) = native.rooms.claim_watch_listener() else {
+        return;
+    };
+    let state = state.clone();
+    tokio::spawn(async move {
+        let Some(native) = state.native_media.as_ref() else {
+            return;
+        };
+        let mut sweep = tokio::time::interval(VIEW_SWEEP_INTERVAL);
+        sweep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut announced: std::collections::HashMap<
+            (i64, i64),
+            std::collections::BTreeMap<i64, u32>,
+        > = std::collections::HashMap::new();
+        loop {
+            tokio::select! {
+                _ = signal.notified() => tokio::time::sleep(WATCHERS_COALESCE).await,
+                _ = sweep.tick() => {
+                    native.relay_forwarder.sweep_views(VIEW_CONNECT_GRACE);
+                }
+            }
+            for (guild_id, channel_id) in native.rooms.drain_watch_dirty() {
+                let counts = native.rooms.watcher_counts(guild_id, channel_id);
+                let key = (guild_id, channel_id);
+                let unchanged = match announced.get(&key) {
+                    Some(previous) => *previous == counts,
+                    None => counts.is_empty(),
+                };
+                if unchanged {
+                    continue;
+                }
+                // Guild-scoped with a `channel_id`: both transports deliver it
+                // only to sessions that may view this channel.
+                state.event_bus.dispatch(
+                    paracord_models::gateway::EVENT_VOICE_WATCHERS_UPDATE,
+                    json!(watchers_payload(guild_id, channel_id, &counts)),
+                    Some(guild_id),
+                );
+                if counts.is_empty() {
+                    announced.remove(&key);
+                } else {
+                    announced.insert(key, counts);
+                }
+            }
+        }
+    });
+}
+
+/// The channel, guild and permissions a view route acts under.
+async fn view_channel_context(
+    state: &AppState,
+    user_id: i64,
+    channel_id: i64,
+) -> Result<(paracord_db::channels::ChannelRow, i64, Permissions), ApiError> {
+    let channel = paracord_db::channels::get_channel(&state.db, channel_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+    if channel.channel_type != 2 && channel.channel_type != 13 {
+        return Err(ApiError::BadRequest("Not a voice channel".into()));
+    }
+    let guild_id = channel.guild_id().ok_or(ApiError::BadRequest(
+        "Voice is only supported in guild channels".into(),
+    ))?;
+    paracord_core::permissions::ensure_guild_member(&state.db, guild_id, user_id).await?;
+    let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+    let perms = paracord_core::permissions::compute_channel_permissions(
+        &state.db,
+        guild_id,
+        channel_id,
+        guild.owner_id,
+        user_id,
+    )
+    .await?;
+    paracord_core::permissions::require_permission(perms, Permissions::VIEW_CHANNEL)?;
+    Ok((channel, guild_id, perms))
+}
+
+/// `POST /api/v2/voice/{channel_id}/view`: watch a stream without joining the
+/// call (`watch`: the stream's video and its own audio, counted), or light the
+/// room with it (`ambient`: lowest layer, capped frame rate, not counted).
+///
+/// Needs VIEW_CHANNEL, and CONNECT for `watch`. The streamer must be sharing
+/// in this channel (409 otherwise). A caller already in this channel's call
+/// watches through it (`via_membership`); anyone else gets a separate view
+/// session with its own media credentials, replacing any view session the
+/// account already holds. Never creates a voice state and never shows the
+/// viewer in the call.
+pub async fn start_voice_view(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    headers: HeaderMap,
+    Path(channel_id): Path<i64>,
+    Json(body): Json<wire::StartVoiceViewRequest>,
+) -> Result<Json<wire::VoiceViewSession>, ApiError> {
+    let _membership = state.voice.lock_membership(auth.user_id).await;
+    let native = state.native_media.as_ref().ok_or_else(|| {
+        ApiError::NotConfigured(
+            "Watching without joining needs native media, which this server has not enabled".into(),
+        )
+    })?;
+    let (_, guild_id, perms) = view_channel_context(&state, auth.user_id, channel_id).await?;
+    let kind = view_kind_from_wire(body.kind);
+    if matches!(kind, ViewKind::Watch) {
+        paracord_core::permissions::require_permission(perms, Permissions::CONNECT)?;
+    }
+    let streamer_id: i64 = body
+        .user_id
+        .parse()
+        .map_err(|_| ApiError::BadRequest("Invalid user_id".into()))?;
+    if streamer_id == auth.user_id {
+        return Err(ApiError::BadRequest(
+            "Your own stream is already on your screen".into(),
+        ));
+    }
+    let streaming = current_voice_state(&state, channel_id, streamer_id, Some(guild_id))
+        .await?
+        .is_some_and(|row| row.self_stream);
+    if !streaming {
+        return Err(ApiError::Conflict(
+            "That person is not streaming in this channel".into(),
+        ));
+    }
+    let target = ViewTarget {
+        kind,
+        publisher_user_id: streamer_id,
+    };
+    ensure_view_housekeeping(&state);
+
+    // Already in this call (joined or listening): the view rides the call.
+    if let Some(own) = current_voice_state(&state, channel_id, auth.user_id, Some(guild_id)).await?
+    {
+        if let Some(publisher) = target.counted_publisher() {
+            native
+                .rooms
+                .set_watching(
+                    guild_id,
+                    channel_id,
+                    auth.user_id,
+                    &own.session_id,
+                    Some(publisher),
+                )
+                .map_err(|error| match error {
+                    RoomError::NotFound(_) | RoomError::UserNotInRoom(..) => ApiError::Conflict(
+                        "Your call in this channel has no native media session".into(),
+                    ),
+                    other => ApiError::Internal(other.into()),
+                })?;
+        }
+        return Ok(Json(wire::VoiceViewSession {
+            guild_id: guild_id.to_string(),
+            channel_id: channel_id.to_string(),
+            kind: body.kind,
+            user_id: streamer_id.to_string(),
+            via_membership: true,
+            session_id: None,
+            media: None,
+        }));
+    }
+
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let replaced = native
+        .rooms
+        .join_view(
+            guild_id,
+            channel_id,
+            MediaParticipant::viewer(auth.user_id, session_id.clone(), target),
+        )
+        .map_err(|error| match error {
+            RoomError::ViewersFull(_) => {
+                ApiError::Conflict("This stream has as many viewers as it can take".into())
+            }
+            RoomError::AlreadyInRoom(..) => {
+                ApiError::Conflict("You are already in this call; watch through it".into())
+            }
+            other => ApiError::Internal(other.into()),
+        })?;
+    if let Some(previous) = replaced {
+        native
+            .relay_forwarder
+            .close_view_connection(auth.user_id, &previous.session_id);
+    }
+
+    let (media_endpoint, media_endpoint_candidates) =
+        native_media_endpoints(&headers, state.config.native_media_port);
+    let room_name = format!("{}:{}", guild_id, channel_id);
+    let issued_at = chrono::Utc::now().timestamp();
+    // The same claims a call token carries, plus `view`: the claim that makes
+    // the media endpoint admit this receipt as a view session (and only as
+    // one). See `paracord_transport::connection::MediaViewClaim`.
+    let media_claims = json!({
+        "sub": auth.user_id.to_string(),
+        "sid": &session_id,
+        "auth_sid": auth.session_id.as_deref(),
+        "iat": issued_at,
+        "exp": issued_at + VIEW_TOKEN_TTL_SECS,
+        "session_id": &session_id,
+        "auth_session_id": auth.session_id.as_deref(),
+        "room": &room_name,
+        "view": kind.as_str(),
+    });
+    let media_token = jsonwebtoken::encode(
+        &jsonwebtoken::Header::new(Algorithm::HS256),
+        &media_claims,
+        &jsonwebtoken::EncodingKey::from_secret(state.config.jwt_secret.as_bytes()),
+    )
+    .map_err(|error| {
+        native
+            .rooms
+            .end_view_if_session(auth.user_id, Some(&session_id));
+        ApiError::Internal(error.into())
+    })?;
+    tracing::info!(
+        user_id = auth.user_id,
+        channel_id,
+        streamer_id,
+        kind = kind.as_str(),
+        "voice: view session issued"
+    );
+    Ok(Json(wire::VoiceViewSession {
+        guild_id: guild_id.to_string(),
+        channel_id: channel_id.to_string(),
+        kind: body.kind,
+        user_id: streamer_id.to_string(),
+        via_membership: false,
+        session_id: Some(session_id),
+        media: Some(wire::VoiceViewMedia {
+            media_endpoint,
+            media_endpoint_candidates,
+            media_token,
+            cert_hash: Some(native.cert_hash.get()),
+            room_name,
+        }),
+    }))
+}
+
+/// `DELETE /api/v2/voice/{channel_id}/view[?session_id=…]`: stop viewing.
+///
+/// Ends the caller's view session in this channel (only the one `session_id`
+/// names, when given) and stops a watch the caller holds through its call
+/// here. Idempotent: nothing to stop is still 204.
+pub async fn stop_voice_view(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(channel_id): Path<i64>,
+    Query(query): Query<VoiceLeaveQuery>,
+) -> Result<StatusCode, ApiError> {
+    let _membership = state.voice.lock_membership(auth.user_id).await;
+    let Some(native) = state.native_media.as_ref() else {
+        return Ok(StatusCode::NO_CONTENT);
+    };
+    let channel = paracord_db::channels::get_channel(&state.db, channel_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+    let Some(guild_id) = channel.guild_id() else {
+        return Ok(StatusCode::NO_CONTENT);
+    };
+    let expected = query.session_id.as_deref();
+
+    if let Some(view) = native
+        .rooms
+        .view_for_user(auth.user_id)
+        .filter(|view| view.channel_id == channel_id)
+        .filter(|view| expected.is_none_or(|expected| expected == view.session_id))
+    {
+        native
+            .rooms
+            .end_view_if_session(auth.user_id, Some(&view.session_id));
+        native
+            .relay_forwarder
+            .close_view_connection(auth.user_id, &view.session_id);
+    }
+    if let Some(own) = current_voice_state(&state, channel_id, auth.user_id, Some(guild_id))
+        .await?
+        .filter(|own| expected.is_none_or(|expected| expected == own.session_id))
+    {
+        // No native membership (or already not watching) is nothing to stop.
+        let _ =
+            native
+                .rooms
+                .set_watching(guild_id, channel_id, auth.user_id, &own.session_id, None);
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `GET /api/v2/voice/{channel_id}/watchers`: the channel's watcher counts
+/// now (the same snapshot `VOICE_WATCHERS_UPDATE` carries). Needs
+/// VIEW_CHANNEL. Empty when nobody watches (or native media is off).
+pub async fn get_voice_watchers(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(channel_id): Path<i64>,
+) -> Result<Json<wire::VoiceWatchers>, ApiError> {
+    let (_, guild_id, _) = view_channel_context(&state, auth.user_id, channel_id).await?;
+    let counts = state
+        .native_media
+        .as_ref()
+        .map(|native| native.rooms.watcher_counts(guild_id, channel_id))
+        .unwrap_or_default();
+    Ok(Json(watchers_payload(guild_id, channel_id, &counts)))
 }
 
 #[cfg(test)]
