@@ -5,7 +5,7 @@ import type { Member, Message } from '../../types';
 import { MessageType } from '../../types';
 import { entityScopeKey } from '../../lib/serverScope';
 import { parseMarkdown } from '../../lib/markdown';
-import { MessageList, isSystemMessage, markSelfMention, systemMessageText } from './MessageList';
+import { MessageList, isSystemMessage, systemMessageText } from './MessageList';
 
 /**
  * The Glass timeline (docs/glass-spec.md §2.4, §3.2; WP-G10): bubbles grouped
@@ -41,6 +41,8 @@ const mocks = vi.hoisted(() => ({
   readStateStoreState: {
     markRead: vi.fn(),
     saveReadPosition: vi.fn().mockResolvedValue(undefined),
+    // Where the reader had read up to (the catch-up divider); nowhere by default.
+    getReadState: vi.fn((): { last_message_id: string } | undefined => undefined),
   },
   typingByChannel: {} as Record<string, string[]>,
   members: new Map<string, Member[]>(),
@@ -52,6 +54,14 @@ const mocks = vi.hoisted(() => ({
     remove: vi.fn().mockResolvedValue(undefined),
   },
   avatarRenders: new Map<string, number>(),
+  /** What `useGuildEvent` answers: the plan card and the event chip read it. */
+  eventResult: {
+    status: 'ready' as 'loading' | 'ready' | 'missing' | 'error',
+    event: null as import('../glass/cards').GuildEventView | null,
+    error: null as string | null,
+    busy: false,
+    toggleRsvp: vi.fn(),
+  },
 }));
 
 // Count every face the timeline draws, by person: a row that redraws redraws
@@ -175,6 +185,17 @@ vi.mock('../ui/EmojiPicker', () => ({ EmojiPicker: () => null }));
 vi.mock('./MessageEmbed', () => ({ MessageEmbedCard: () => null, extractUrls: () => [] }));
 vi.mock('./GitHubEventEmbed', () => ({ GitHubEventEmbed: () => null, isGitHubWebhookMessage: () => false }));
 vi.mock('./PollMessageCard', () => ({ PollMessageCard: () => null }));
+vi.mock('../../api/files', () => ({
+  fileApi: {
+    resolveAttachmentObjectUrl: vi.fn(async (url: string) => url),
+    download: vi.fn(),
+    delete: vi.fn(),
+  },
+}));
+vi.mock('../glass/cards/useGuildEvent', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../glass/cards/useGuildEvent')>()),
+  useGuildEvent: () => mocks.eventResult,
+}));
 
 const USERS: Record<string, { id: string; username: string }> = {
   // Snowflake-shaped ids: markdown only reads a mention of digits.
@@ -376,18 +397,27 @@ describe('whose bubble (§3.2)', () => {
   });
 });
 
-describe('the self mention seam', () => {
-  // `markSelfMention` recognizes the mention `lib/markdown.ts` draws. If
-  // markdown changes how it draws one, this fails instead of the chip
-  // silently disappearing.
-  it('finds the reader’s mention in parsed markdown, and only theirs', () => {
+describe('the mention chip', () => {
+  // The chip is markdown's: it names who it is for in `data-user-id`, and the
+  // reader's own is the white one. If markdown stops doing either, this fails
+  // instead of the chip silently disappearing.
+  it('names every mention and whitens only the reader’s', () => {
     const names = new Map([['42', 'Sean'], ['7', 'Nick']]);
-    const nodes = markSelfMention(parseMarkdown('hey <@42> and <@7>', undefined, names), '@Sean');
+    const nodes = parseMarkdown('hey <@42> and <@7>', undefined, names, undefined, { selfUserId: '42' });
     const { container } = render(<div>{nodes}</div>);
+    expect(container.querySelectorAll('[data-user-id]')).toHaveLength(2);
     const chips = container.querySelectorAll('.glass-mention-self');
     expect(chips).toHaveLength(1);
     expect(chips[0]).toHaveTextContent('@Sean');
+    expect(chips[0]).toHaveAttribute('data-user-id', '42');
+    expect(within(container).getByText('@Nick')).toHaveAttribute('data-user-id', '7');
     expect(within(container).getByText('@Nick')).not.toHaveClass('glass-mention-self');
+  });
+
+  it('whitens nobody when nobody is the reader', () => {
+    const { container } = render(<div>{parseMarkdown('hey <@42>', undefined, new Map([['42', 'Sean']]))}</div>);
+    expect(container.querySelector('.glass-mention-self')).toBeNull();
+    expect(container.querySelector('.glass-mention')).toHaveAttribute('data-user-id', '42');
   });
 });
 
@@ -463,4 +493,219 @@ describe('a row redraws only when something it draws changed', () => {
     await waitFor(() => expect(within(hovered).getByRole('button', { name: 'More actions' })).toBeInTheDocument());
     expect(faces()).toBe(before + 1);
   }, 60_000);
+});
+
+describe('the catch-up divider (§3.2)', () => {
+  const readUpTo = (id: string) => mocks.readStateStoreState.getReadState.mockReturnValue({ last_message_id: id });
+  const after = (a: Element, b: Element) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+
+  it('says how many you missed and sits above the first of them', async () => {
+    mocks.useMessagesReturn.messages = [
+      message('viewer', todayAt(0), { id: '1001', content: 'home in 20' }),
+      message('brendan', todayAt(4), { id: '1002', content: 'okay who is on' }),
+      message('nick', todayAt(6), { id: '1003', content: 'new personal best' }),
+      // Yours, sent from somewhere else: not something you missed.
+      message('viewer', todayAt(7), { id: '1004', content: 'nice one' }),
+    ];
+    readUpTo('1001');
+    renderList();
+    const divider = await screen.findByTestId('catch-up-divider');
+    expect(within(divider).getByText(/^2 new since /)).toBeInTheDocument();
+    expect(within(divider).getByRole('button', { name: 'Mark read' })).toBeInTheDocument();
+    expect(after(rowOf('home in 20'), divider)).toBe(true);
+    expect(after(divider, rowOf('okay who is on'))).toBe(true);
+  });
+
+  it('starts a new group after it, even for the author it interrupts', async () => {
+    mocks.useMessagesReturn.messages = [
+      message('brendan', todayAt(0), { id: '1001', content: 'first words' }),
+      message('brendan', todayAt(1), { id: '1002', content: 'second words' }),
+    ];
+    readUpTo('1001');
+    renderList();
+    await screen.findByTestId('catch-up-divider');
+    expect(rowOf('second words')).not.toHaveAttribute('data-grouped');
+    expect(within(rowOf('second words')).getByText('Brendan')).toBeInTheDocument();
+    expect(rowOf('first words')).toHaveAttribute('data-last', 'true');
+  });
+
+  it('reads the position before opening the conversation moves it', async () => {
+    mocks.useMessagesReturn.messages = [
+      message('brendan', todayAt(0), { id: '1001', content: 'read' }),
+      message('brendan', todayAt(9), { id: '1002', content: 'unread' }),
+    ];
+    readUpTo('1001');
+    renderList();
+    await screen.findByTestId('catch-up-divider');
+    expect(mocks.readStateStoreState.markRead).toHaveBeenCalled();
+    expect(mocks.readStateStoreState.getReadState.mock.invocationCallOrder[0])
+      .toBeLessThan(mocks.readStateStoreState.markRead.mock.invocationCallOrder[0]);
+  });
+
+  it('goes away on Mark read', async () => {
+    mocks.useMessagesReturn.messages = [
+      message('brendan', todayAt(0), { id: '1001', content: 'read' }),
+      message('nick', todayAt(9), { id: '1002', content: 'unread' }),
+    ];
+    readUpTo('1001');
+    renderList();
+    fireEvent.click(within(await screen.findByTestId('catch-up-divider')).getByRole('button', { name: 'Mark read' }));
+    await waitFor(() => expect(screen.queryByTestId('catch-up-divider')).toBeNull());
+  });
+
+  it('is not there when nothing was missed, or when the channel was never read', async () => {
+    mocks.useMessagesReturn.messages = [
+      message('brendan', todayAt(0), { id: '1001', content: 'read' }),
+      message('nick', todayAt(9), { id: '1002', content: 'also read' }),
+    ];
+    readUpTo('1002');
+    const view = renderList();
+    await screen.findByText('also read');
+    expect(screen.queryByTestId('catch-up-divider')).toBeNull();
+    view.unmount();
+
+    mocks.readStateStoreState.getReadState.mockReturnValue(undefined);
+    renderList();
+    await screen.findByText('also read');
+    expect(screen.queryByTestId('catch-up-divider')).toBeNull();
+  });
+});
+
+describe('reactions bite the corner (§3.2)', () => {
+  const like = { emoji: '\u{1F44D}', count: 2, me: true };
+  const image = {
+    id: 'a1',
+    filename: 'mission.png',
+    size: 100_000,
+    content_type: 'image/png',
+    url: '/attachments/a1',
+    width: 480,
+    height: 270,
+  };
+
+  it('is ONE chip on the bubble of a message of words, with an icon and a count for each reaction', async () => {
+    mocks.useMessagesReturn.messages = [
+      message('nick', todayAt(0), { content: 'new personal best', reactions: [like, { emoji: '\u{1F525}', count: 5, me: false }] }),
+    ];
+    renderList();
+    const row = rowOf('new personal best');
+    const chips = within(row).getAllByRole('group', { name: 'Reactions' });
+    expect(chips).toHaveLength(1);
+    // It hangs off the bubble's line, not under the message.
+    expect(chips[0].parentElement).toHaveClass('glass-msg__line');
+    expect(chips[0]).toHaveAttribute('data-placement', 'bubble');
+    expect(chips[0].parentElement).toHaveAttribute('data-bitten', 'true');
+    const thumbs = within(chips[0]).getByRole('button', { name: /2 reactions, including yours/ });
+    expect(thumbs).toHaveAttribute('aria-pressed', 'true');
+    expect(thumbs).toHaveTextContent('2');
+    // The flame is Paracord's own line mark, not the emoji.
+    const flame = within(chips[0]).getByRole('button', { name: /5 reactions/ });
+    expect(flame.querySelector('[data-glyph="flame"]')).not.toBeNull();
+    expect(flame).toHaveTextContent('5');
+  });
+
+  it('bites the picture instead when the message has one, outside its clipping frame', async () => {
+    mocks.useMessagesReturn.messages = [
+      message('nick', todayAt(0), { content: '', attachments: [image], reactions: [like] }),
+    ];
+    const { container } = renderList();
+    const media = await waitFor(() => {
+      const found = container.querySelector('.glass-media');
+      expect(found).not.toBeNull();
+      return found as HTMLElement;
+    });
+    const chip = within(media).getByRole('group', { name: 'Reactions' });
+    // A child of the host, not of the frame that clips the picture.
+    expect(chip.parentElement).toBe(media);
+    expect(media.querySelector('.glass-media__frame')).not.toContainElement(chip);
+    expect(media.querySelector('.glass-media__frame')).toHaveAttribute('data-shaped');
+    // No footer: nothing about the file's name or size is written under it.
+    expect(container.querySelector('.glass-tl-media__footer')).toBeNull();
+    expect(screen.queryByText('mission.png')).toBeNull();
+  });
+
+  it('toggles yours when a reaction is pressed', async () => {
+    mocks.useMessagesReturn.messages = [message('nick', todayAt(0), { content: 'hello there', reactions: [like] })];
+    renderList();
+    fireEvent.click(within(rowOf('hello there')).getByRole('button', { name: /2 reactions, including yours/ }));
+    await waitFor(() => expect(mocks.messageStoreState.removeReaction).toHaveBeenCalledWith('ch1', expect.any(String), like.emoji));
+  });
+
+  it('keeps adding a reaction one gesture away, from the message’s React action', async () => {
+    mocks.useMessagesReturn.messages = [message('nick', todayAt(0), { content: 'hello there', reactions: [like] })];
+    renderList();
+    const row = rowOf('hello there');
+    act(() => {
+      fireEvent.mouseEnter(row);
+    });
+    expect(await within(row).findByRole('button', { name: 'React to Nick' })).toBeInTheDocument();
+  });
+});
+
+describe('media (§3.2)', () => {
+  const image = {
+    id: 'a1',
+    filename: 'mission.png',
+    size: 100_000,
+    content_type: 'image/png',
+    url: '/attachments/a1',
+    width: 480,
+    height: 270,
+  };
+
+  it('keeps open and download reachable without a footer: open on the picture, download in its tools', async () => {
+    mocks.useMessagesReturn.messages = [message('nick', todayAt(0), { content: '', attachments: [image] })];
+    renderList();
+    expect(await screen.findByRole('button', { name: 'Open image preview: mission.png' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Download mission.png' })).toBeInTheDocument();
+    // Yours only: delete.
+    expect(screen.queryByRole('button', { name: 'Delete mission.png' })).toBeNull();
+  });
+
+  it('offers delete on your own picture', async () => {
+    mocks.useMessagesReturn.messages = [message('viewer', todayAt(0), { content: '', attachments: [image] })];
+    renderList();
+    expect(await screen.findByRole('button', { name: 'Delete mission.png' })).toBeInTheDocument();
+  });
+
+  it('joins the corner under a bubble of the same group', async () => {
+    mocks.useMessagesReturn.messages = [message('nick', todayAt(0), { content: 'look at this', attachments: [image] })];
+    const { container } = renderList();
+    await screen.findByRole('button', { name: 'Open image preview: mission.png' });
+    expect(container.querySelector('.glass-media')).toHaveAttribute('data-join-top', 'true');
+  });
+});
+
+describe('events and channels in a message (§3.2)', () => {
+  const haz = {
+    id: '7001',
+    guildId: 'g1',
+    name: 'Haz 5 run',
+    startsAt: new Date(Date.now() + 3 * 60 * 60 * 1000),
+    endsAt: null,
+    channelId: null,
+    location: null,
+    creatorId: '101',
+    going: 3,
+    youAreGoing: false,
+    status: 1,
+  };
+
+  it('draws a message that is only an event as a plan card, with no bubble', async () => {
+    mocks.eventResult = { ...mocks.eventResult, status: 'ready', event: haz };
+    mocks.useMessagesReturn.messages = [message('brendan', todayAt(0), { content: '<event:7001>' })];
+    const { container } = renderList();
+    const card = await screen.findByRole('group', { name: 'Event: Haz 5 run' });
+    expect(within(card).getByRole('button', { name: 'Take the spot' })).toBeInTheDocument();
+    expect(container.querySelector('.glass-bubble')).toBeNull();
+  });
+
+  it('keeps an event named inside a sentence as a chip in that sentence', async () => {
+    mocks.eventResult = { ...mocks.eventResult, status: 'ready', event: haz };
+    mocks.useMessagesReturn.messages = [message('jeremy', todayAt(0), { content: 'is <event:7001> still on? bring snacks' })];
+    const { container } = renderList();
+    const row = (await screen.findByText(/still on\? bring snacks/)).closest('[role="article"]') as HTMLElement;
+    expect(row.querySelector('.glass-bubble .glass-chip--event')).toHaveTextContent('Haz 5 run');
+    expect(container.querySelector('.glass-plan')).toBeNull();
+  });
 });

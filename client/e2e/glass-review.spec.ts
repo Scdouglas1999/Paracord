@@ -59,7 +59,7 @@ const STATES: GlassState[] = [
     name: '01-conversation',
     // Game Night, General: unread with a mention, the Lounge live above it.
     route: channelRoute(GAME_NIGHT_ID, CH.general),
-    expectText: [/what are we playing tonight/, /haz 5 run/i, /new personal best btw/, /Movie night still on/],
+    expectText: [/what are we playing tonight/, /haz 5 run/i, /new personal best btw/, /still on\? I'm bringing the projector/],
     pending: 'G7 shell, G9 places, G10 conversation, G11 composer, G12 pill (compact), G13 cards',
   },
   {
@@ -97,7 +97,7 @@ const STATES: GlassState[] = [
     name: '07-phone',
     // The phone conversation with the pill and stream above it.
     route: channelRoute(GAME_NIGHT_ID, CH.general),
-    expectText: [/Movie night still on/, /new personal best btw/],
+    expectText: [/still on\? I'm bringing the projector/, /new personal best btw/],
     pending: 'G20 and every component’s phone variant',
   },
 ];

@@ -9,6 +9,7 @@ import { CustomEmojiImage } from '../components/ui/ResourceImage';
 import { safeExternalUrl } from './security';
 import CodeBlock from '../components/message/CodeBlock';
 import { RoleMentionChip } from '../components/message/RoleMentionChip';
+import { ChannelMentionChip, EventChip } from '../components/glass/cards/InlineChips';
 
 interface Token {
   type:
@@ -25,7 +26,9 @@ interface Token {
     | 'br'
     | 'customemoji'
     | 'mention'
-    | 'rolemention';
+    | 'rolemention'
+    | 'channelmention'
+    | 'eventmention';
   content: string;
   href?: string;
   emojiName?: string;
@@ -33,6 +36,14 @@ interface Token {
   language?: string;
   mentionUserId?: string;
   mentionRoleId?: string;
+  mentionChannelId?: string;
+  eventId?: string;
+}
+
+/** What the reader is, so what is addressed to them can be told from what is not. */
+export interface MarkdownOptions {
+  /** The reader's user id: their own `<@id>` mention is drawn as the white chip (docs/glass-spec.md §3.2). */
+  selfUserId?: string | null;
 }
 
 
@@ -115,6 +126,28 @@ function tokenizeInline(text: string): Token[] {
             type: 'mention',
             content: remaining.slice(0, closingIndex + 1),
             mentionUserId: userId,
+          });
+          remaining = remaining.slice(closingIndex + 1);
+          continue;
+        }
+        // `<#id>`: a channel. `<event:id>`: a scheduled event. Both are drawn as
+        // chips in a sentence and resolved against the conversation's server.
+        const channelMatch = inner.match(/^#(\d+)$/);
+        if (channelMatch) {
+          tokens.push({
+            type: 'channelmention',
+            content: remaining.slice(0, closingIndex + 1),
+            mentionChannelId: channelMatch[1],
+          });
+          remaining = remaining.slice(closingIndex + 1);
+          continue;
+        }
+        const eventMatch = inner.match(/^event:(\d+)$/);
+        if (eventMatch) {
+          tokens.push({
+            type: 'eventmention',
+            content: remaining.slice(0, closingIndex + 1),
+            eventId: eventMatch[1],
           });
           remaining = remaining.slice(closingIndex + 1);
           continue;
@@ -245,7 +278,7 @@ function tokenizeInline(text: string): Token[] {
 }
 
 
-function renderInline(text: string, guildId?: string, mentionMap?: Map<string, string>, onMentionClick?: (userId: string) => void): ReactNode[] {
+function renderInline(text: string, guildId?: string, mentionMap?: Map<string, string>, onMentionClick?: (userId: string) => void, selfUserId?: string | null): ReactNode[] {
   const tokens = tokenizeInline(text);
   return tokens.map((token, i) => {
     switch (token.type) {
@@ -366,22 +399,25 @@ function renderInline(text: string, guildId?: string, mentionMap?: Map<string, s
           guildId,
           roleId: token.mentionRoleId ?? '',
         });
+      case 'channelmention':
+        // A channel means nothing without the server it is in.
+        if (!guildId || !token.mentionChannelId) return token.content;
+        return createElement(ChannelMentionChip, { key: i, channelId: token.mentionChannelId });
+      case 'eventmention':
+        if (!guildId || !token.eventId) return token.content;
+        return createElement(EventChip, { key: i, guildId, eventId: token.eventId });
       case 'mention': {
         const userId = token.mentionUserId ?? '';
         const displayName = mentionMap?.get(userId) ?? `<@${userId}>`;
+        // A mention is a chip (glass-cards.css). It names who it is for in
+        // `data-user-id`; the reader's own is the white chip (glass-timeline.css).
         return createElement(
           'span',
           {
             key: i,
-            style: {
-              // §1.2: an @mention is the action color, not the v1 blurple.
-              backgroundColor: 'var(--accent-tint-strong)',
-              color: 'var(--accent-primary)',
-              borderRadius: 'var(--radius-window)',
-              padding: '0 2px',
-              fontWeight: 500,
-              cursor: onMentionClick ? 'pointer' : 'default',
-            },
+            className: selfUserId && userId === selfUserId ? 'glass-mention glass-mention-self' : 'glass-mention',
+            'data-user-id': userId,
+            'data-clickable': onMentionClick ? '' : undefined,
             onClick: onMentionClick ? () => onMentionClick(userId) : undefined,
           },
           `@${displayName}`,
@@ -416,8 +452,15 @@ function isOrderedList(line: string): boolean {
   return /^\s*\d+\.\s+/.test(line);
 }
 
-export function parseMarkdown(text: string, guildId?: string, mentionMap?: Map<string, string>, onMentionClick?: (userId: string) => void): ReactNode[] {
+export function parseMarkdown(
+  text: string,
+  guildId?: string,
+  mentionMap?: Map<string, string>,
+  onMentionClick?: (userId: string) => void,
+  options?: MarkdownOptions,
+): ReactNode[] {
   if (!text) return [];
+  const selfUserId = options?.selfUserId ?? null;
 
   ensureMarkdownStyles();
 
@@ -468,7 +511,7 @@ export function parseMarkdown(text: string, guildId?: string, mentionMap?: Map<s
               lineHeight: '1.3',
             },
           },
-          renderInline(headingText, guildId, mentionMap, onMentionClick),
+          renderInline(headingText, guildId, mentionMap, onMentionClick, selfUserId),
         ),
       );
       index += 1;
@@ -484,7 +527,7 @@ export function parseMarkdown(text: string, guildId?: string, mentionMap?: Map<s
       const quoteNodes: ReactNode[] = [];
       quoteLines.forEach((quoteLine, quoteIndex) => {
         if (quoteIndex > 0) quoteNodes.push(createElement('br', { key: `quote-br-${quoteIndex}` }));
-        quoteNodes.push(...renderInline(quoteLine, guildId, mentionMap, onMentionClick));
+        quoteNodes.push(...renderInline(quoteLine, guildId, mentionMap, onMentionClick, selfUserId));
       });
       nodes.push(
         createElement(
@@ -525,7 +568,7 @@ export function parseMarkdown(text: string, guildId?: string, mentionMap?: Map<s
             createElement(
               'li',
               { key: `li-${itemIndex}`, style: { marginBottom: '2px' } },
-              renderInline(item, guildId, mentionMap, onMentionClick),
+              renderInline(item, guildId, mentionMap, onMentionClick, selfUserId),
             ),
           ),
         ),
@@ -554,7 +597,7 @@ export function parseMarkdown(text: string, guildId?: string, mentionMap?: Map<s
             createElement(
               'li',
               { key: `oli-${itemIndex}`, style: { marginBottom: '2px' } },
-              renderInline(item, guildId, mentionMap, onMentionClick),
+              renderInline(item, guildId, mentionMap, onMentionClick, selfUserId),
             ),
           ),
         ),
@@ -579,7 +622,7 @@ export function parseMarkdown(text: string, guildId?: string, mentionMap?: Map<s
     const paragraphNodes: ReactNode[] = [];
     paragraphLines.forEach((paragraphLine, paragraphIndex) => {
       if (paragraphIndex > 0) paragraphNodes.push(createElement('br', { key: `paragraph-br-${paragraphIndex}` }));
-      paragraphNodes.push(...renderInline(paragraphLine, guildId, mentionMap, onMentionClick));
+      paragraphNodes.push(...renderInline(paragraphLine, guildId, mentionMap, onMentionClick, selfUserId));
     });
     nodes.push(
       createElement(
@@ -640,6 +683,7 @@ export function messagePreviewText(
     .replace(/<@!?(\d+)>/g, (_match, id: string) => `@${names?.get(id) ?? 'someone'}`)
     .replace(/<@&(\d+)>/g, (_match, id: string) => `@${roleNames?.get(id) ?? 'role'}`)
     .replace(/<#\d+>/g, '#channel')
+    .replace(/<event:\d+>/g, 'an event')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -671,6 +715,7 @@ export function messageSnippetText(
     .replace(/<@!?(\d+)>/g, (_match, id: string) => `@${names?.get(id) ?? 'someone'}`)
     .replace(/<@&(\d+)>/g, (_match, id: string) => `@${roleNames?.get(id) ?? 'role'}`)
     .replace(/<#(\d+)>/g, (_match, id: string) => `#${channelNames?.get(id) ?? 'channel'}`)
+    .replace(/<event:\d+>/g, 'an event')
     .replace(/[^\S\n]+/g, ' ')
     .replace(/\n{3,}/g, '\n\n')
     .replace(/^[ \t]+|[ \t]+$/gm, '')

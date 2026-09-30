@@ -183,7 +183,11 @@ export const GUILDS: GuildSeed[] = [
 export const ATTACHMENT = {
   mission: { id: '9001', file: 'mission-41-07.png', filename: 'mission-41-07.png', width: 480, height: 270 },
   photo: { id: '9002', file: 'photo-ridge.png', filename: 'ridge-first-light.png', width: 640, height: 400 },
-} as const;
+  // Not in the reference scene: shapes a review shot can add (WP-G13) — a tall
+  // picture (the frame crops past 320px) and a file that is not a picture.
+  tall: { id: '9004', file: 'photo-ridge.png', filename: 'ridge-portrait.png', width: 300, height: 600 },
+  doc: { id: '9005', file: 'photo-ridge.png', filename: 'patch-notes-1.4.2.pdf', width: 0, height: 0, contentType: 'application/pdf' },
+} as const satisfies Record<string, { id: string; file: string; filename: string; width: number; height: number; contentType?: string }>;
 
 export const BANNER_FILE = 'basecamp-banner.png';
 
@@ -220,9 +224,10 @@ export const MESSAGES: MessageSeed[] = [
   // Game Night · General — the reference conversation, exactly.
   msg(CH.general, 'sean', TODAY, '20:58', 'home in 20. what are we playing tonight?'),
   msg(CH.general, 'brendan', TODAY, '21:02', "okay who's actually on tonight? need two more for a haz 5 run"),
-  // Stand-in for the plan card WP-G13 draws; the words are the card's.
-  msg(CH.general, 'brendan', TODAY, '21:02', 'Haz 5 run: Tonight at 9:30 PM in Lounge'),
-  msg(CH.general, 'vincent', TODAY, '21:04', 'already in Lounge streaming the warmup. come heckle'),
+  // An event shared on its own: the plan card (WP-G13). `<event:7001>` is Haz 5 run.
+  msg(CH.general, 'brendan', TODAY, '21:02', '<event:7001>'),
+  // `<#2002>` is the Lounge, with people in it: the live-channel chip.
+  msg(CH.general, 'vincent', TODAY, '21:04', `already in <#${CH.lounge}> streaming the warmup. come heckle`),
   msg(CH.general, 'nick', TODAY, '21:06', 'new personal best btw. 41 minutes, nobody went down'),
   msg(CH.general, 'nick', TODAY, '21:06', '', {
     attachments: [{ key: 'mission' }],
@@ -231,7 +236,8 @@ export const MESSAGES: MessageSeed[] = [
       { emoji: '🤍', count: 3, me: false },
     ],
   }),
-  msg(CH.general, 'jeremy', TODAY, '21:09', "<@42> is Movie night still on? I'm bringing the projector"),
+  // `<event:7002>` is Movie night, named inside a sentence: the event chip.
+  msg(CH.general, 'jeremy', TODAY, '21:09', "<@42> is <event:7002> still on? I'm bringing the projector"),
 
   // Game Night · Clips — three unread, the last is the 41:07.
   msg(CH.clips, 'brendan', TODAY, '20:47', 'that revive at 38 min though'),

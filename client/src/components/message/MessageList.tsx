@@ -1,7 +1,7 @@
 import { useCurrentChannelStore, useChannelActions } from '../../hooks/useChannels';
 import { entityScopeKey as memberScopeKey, type AccountScope } from '../../lib/serverScope';
 import { useCurrentUser, useCurrentAccountScope } from '../../hooks/useCurrentUser';
-import { Children, cloneElement, isValidElement, memo, useRef, useEffect, useLayoutEffect, useMemo, useState, useReducer, useCallback, useSyncExternalStore, type CSSProperties, type MouseEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { memo, useRef, useEffect, useLayoutEffect, useMemo, useState, useReducer, useCallback, useSyncExternalStore, type CSSProperties, type MouseEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { captureScopedOperation, type OperationContext } from '../../lib/operationContext';
 import { useVirtualizer } from '@tanstack/react-virtual';
@@ -36,14 +36,13 @@ import { resolveResourceUrl } from '../../lib/config/apiBaseUrl';
 import { getDownloadTicket } from '../../lib/downloadTicket';
 import { writeClipboardText } from '../../lib/clipboard';
 import { SkeletonMessage } from '../ui/Skeleton';
-import { fadeIn, flicker, motionToken, ms, onMotion, prefersReducedMotion, settleIn, useFlipList, useLingering, walkIntoRoom } from '../../lib/motion';
+import { fadeIn, flicker, motionToken, ms, onMotion, prefersReducedMotion, settleIn, useLingering, walkIntoRoom } from '../../lib/motion';
 import { messagePreviewText, parseMarkdown } from '../../lib/markdown';
 import { useDownloadTicket } from '../../hooks/useDownloadTicket';
 import { formatFileSize, formatTimestamp, relativeTime } from '../../lib/formatters';
 import { createResolvedLightboxImage, useLightboxStore } from '../../stores/lightboxStore';
 import { confirm } from '../../stores/confirmStore';
-import { parseCustomEmojiToken } from '../../lib/customEmoji';
-import { CustomEmojiImage, ResourceImage } from '../ui/ResourceImage';
+import { ResourceImage } from '../ui/ResourceImage';
 import { isAllowedImageMimeType, safeClientResourceUrl } from '../../lib/security';
 import { mentionsEveryone } from '../../lib/mentions';
 import { MessageEmbedCard, extractUrls } from './MessageEmbed';
@@ -51,7 +50,6 @@ import { FeedPostCard, isFeedEmbed } from '../feeds/FeedPostCard';
 import { FeedSourceIcon, GAME_SERVER_POST_KIND } from '../feeds/feedKinds';
 import { Chip } from '../ui';
 import {
-  AttachmentFrame,
   DayDivider,
   dayDividerLabel,
   isToday,
@@ -65,6 +63,20 @@ import {
   typingSentence,
 } from './TimelineParts';
 import { InstrumentText } from '../glass/primitives';
+import {
+  CatchUpDivider,
+  DownloadMark,
+  EventPlanCard,
+  GlassFile,
+  GlassMedia,
+  MediaTool,
+  ReactionBite,
+  TrashMark,
+  catchUpLabel,
+  eventCardIds,
+  findCatchUp,
+  type ReactionTally,
+} from '../glass/cards';
 import { TimelineAuthor, TimelineLightSource, createTimelineLightStore, type RoomLitEvent } from './messageLight';
 import { useVoiceStore } from '../../stores/voiceStore';
 import { GitHubEventEmbed, isGitHubWebhookMessage } from './GitHubEventEmbed';
@@ -82,87 +94,12 @@ import { displayName } from '../../lib/displayName';
 import { cn } from '../../lib/utils';
 import { fetchChannelOverwrites, fetchGuildRoles } from '../../lib/permissionDataCache';
 import { forwardBlockedReason, forwardQuote, messageBubbleText } from '../../lib/forwardedMessage';
-import { ReactionChip } from './ReactionPeople';
 import { RemindMeMenu } from './RemindMeMenu';
 import { ForwardPicker } from './ForwardPicker';
 import { ForwardedCard } from './ForwardedCard';
 
 const EMPTY_TYPING: string[] = [];
-
-interface ReactionTally {
-  emoji: string;
-  count: number;
-  me: boolean;
-}
-
-/**
- * The reactions under a message (§5.1: "a reaction pops").
- *
- * A reaction is something somebody put there, so it lands rather than slides:
- * 0.9 to 1 on the ease-out when it's yours, 0.96 to 1 when it arrives from
- * somebody else.
- * Removing fades and shrinks the chip back out the way it came. It is its own
- * component because that is the only way the engine's list hook can watch the
- * row — and the hook is what keeps the pop honest: nothing plays on the first
- * commit, so a message scrolling into view with six reactions on it is still,
- * and only a reaction that ARRIVES while you are looking pops.
- */
-// Memoised so the list hook's layout effect (which measures every chip) runs
-// when THIS message's reactions change, not on every render of the timeline:
-// scrolling re-renders every visible row, and the forced layouts were the
-// largest single item left in a scroll profile once `wallClock` stopped
-// building a formatter per call.
-const ReactionRow = memo(function ReactionRow({
-  reactions,
-  guildId,
-  channelId,
-  messageId,
-  onToggle,
-}: {
-  reactions: readonly ReactionTally[];
-  guildId: string | null | undefined;
-  channelId: string;
-  messageId: string;
-  onToggle: (messageId: string, reaction: ReactionTally) => void;
-}) {
-  const rowRef = useFlipList<HTMLDivElement>({ enter: 'pop' });
-  // A custom-emoji reaction is an authenticated image; re-render when the
-  // download ticket its URL needs is minted.
-  useDownloadTicket();
-  return (
-    <div ref={rowRef} className="mt-1 flex flex-wrap gap-1">
-      {reactions.map((r, reactionIndex) => {
-        const parsedCustomEmoji = guildId ? parseCustomEmojiToken(r.emoji) : null;
-        return (
-          <ReactionChip
-            key={`${r.emoji}-${reactionIndex}`}
-            emoji={r.emoji}
-            count={r.count}
-            me={r.me}
-            channelId={channelId}
-            messageId={messageId}
-            onToggle={() => onToggle(messageId, r)}
-            glyph={
-              parsedCustomEmoji && guildId ? (
-                <CustomEmojiImage
-                  guildId={guildId}
-                  emojiId={parsedCustomEmoji.id}
-                  alt={parsedCustomEmoji.name}
-                  title={`:${parsedCustomEmoji.name}:`}
-                  style={{ width: 18, height: 18, objectFit: 'contain' }}
-                  loading="lazy"
-                  fallback={<>{r.emoji}</>}
-                />
-              ) : (
-                r.emoji
-              )
-            }
-          />
-        );
-      })}
-    </div>
-  );
-});
+const NO_EVENT_CARDS: string[] = [];
 
 /**
  * Message types the server writes about the conversation rather than as
@@ -209,39 +146,6 @@ export function systemMessageText(message: Message, authorName: string): string 
     default:
       return content || `${authorName} posted a system message`;
   }
-}
-
-/**
- * The inline style `lib/markdown.ts` gives a user mention. A mention of the
- * reader is recognized by it (and by its exact words) so it can become the
- * white chip (§3.2) without a second markdown path. "the self mention seam"
- * in `MessageList.bubbles.test.tsx` pins this: if markdown changes how it draws
- * a mention, that test fails rather than the chip silently disappearing.
- */
-const MARKDOWN_MENTION_FILL = 'var(--accent-tint-strong)';
-
-/**
- * Turn the reader's own mention inside parsed message content into the white
- * mention chip. `label` is the exact text markdown renders for it ("@Sean").
- */
-export function markSelfMention(nodes: readonly ReactNode[], label: string): ReactNode[] {
-  const mark = (node: ReactNode): ReactNode => {
-    if (!isValidElement(node)) return node;
-    const props = node.props as { children?: ReactNode; style?: CSSProperties };
-    if (
-      node.type === 'span'
-      && props.children === label
-      && props.style?.backgroundColor === MARKDOWN_MENTION_FILL
-    ) {
-      return cloneElement(node as React.ReactElement<{ style?: CSSProperties; className?: string }>, {
-        style: undefined,
-        className: 'glass-mention-self',
-      });
-    }
-    if (props.children == null || typeof props.children !== 'object') return node;
-    return cloneElement(node, undefined, ...(Children.map(props.children, mark) ?? []));
-  };
-  return nodes.map(mark);
 }
 
 /**
@@ -309,13 +213,16 @@ function getCachedParsedMarkdown(
   // a tree of permanently broken images. The ticket is part of the identity of
   // what was parsed.
   downloadTicket: string | null,
+  // Whose mention is the white chip: a mention names who it is for, so the
+  // parse depends on who is reading.
+  selfUserId: string | null,
 ): ReactNode[] {
-  const key = `${messageId}\0${editedKey}\0${content}\0${guildId ?? ''}\0${downloadTicket ?? ''}`;
+  const key = `${messageId}\0${editedKey}\0${content}\0${guildId ?? ''}\0${downloadTicket ?? ''}\0${selfUserId ?? ''}`;
   const hit = markdownParseCache.get(key);
   if (hit && hit.mentionMap === mentionMap && hit.onMentionClick === onMentionClick) {
     return hit.nodes;
   }
-  const nodes = parseMarkdown(content || '', guildId, mentionMap, onMentionClick);
+  const nodes = parseMarkdown(content || '', guildId, mentionMap, onMentionClick, { selfUserId });
   markdownParseCache.set(key, { nodes, mentionMap, onMentionClick });
   if (markdownParseCache.size > MARKDOWN_CACHE_MAX) {
     const oldest = markdownParseCache.keys().next().value;
@@ -430,10 +337,11 @@ function ResolvedAttachmentImage({
   alt: string;
   className?: string;
   style?: CSSProperties;
-  /** A thumbnail: while loading, hold its own box instead of the full-size well. */
+  /** A thumbnail: while loading, hold its own box instead of the full-size frame. */
   compact?: boolean;
 }) {
   const [resolvedSrc, setResolvedSrc] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
   const safeRawUrl = safeClientResourceUrl(url);
 
   useEffect(() => {
@@ -449,8 +357,12 @@ function ResolvedAttachmentImage({
       }
       if (src.startsWith('blob:')) blobUrl = src;
       setResolvedSrc(src);
+      setFailed(false);
     }).catch(() => {
-      if (!canceled) setResolvedSrc(null);
+      if (!canceled) {
+        setResolvedSrc(null);
+        setFailed(true);
+      }
     });
 
     return () => {
@@ -463,12 +375,11 @@ function ResolvedAttachmentImage({
     return <span className={cn(className, 'block bg-bg-mod-subtle')} role="img" aria-label={`Loading ${alt}`} />;
   }
   if (!safeRawUrl || !resolvedSrc) {
+    // The picture's own frame (the tone of a bubble, 16:9 unless the server
+    // told us better) says it is coming; if it cannot come, it says so.
     return (
-      <div
-        className="max-w-[min(100%,400px)] rounded-[var(--radius-well)] bg-bg-well px-3 py-6 text-center text-meta text-text-faint shadow-[var(--shadow-well)]"
-        style={{ maxHeight: '300px' }}
-      >
-        Loading attachment…
+      <div className="glass-media__pending" role={failed || !safeRawUrl ? 'alert' : 'img'} aria-label={failed || !safeRawUrl ? undefined : `Loading ${alt}`}>
+        {failed || !safeRawUrl ? `${alt} could not be loaded` : null}
       </div>
     );
   }
@@ -686,6 +597,12 @@ type VirtualRow =
       replyParentId: string | null;
     }
   | { type: 'typing' }
+  /**
+   * "6 new since 8:58": above the first message the reader had not read when
+   * they opened the conversation (docs/glass-spec.md §3.2). A row of its own
+   * that breaks the group it lands in.
+   */
+  | { type: 'catch-up'; count: number; atLeast: boolean; since: string | null }
   /**
    * A voice room in this building lit up while you were reading (§7.4). It is a
    * transition in WP1's room light observed by this client, never a server
@@ -1306,6 +1223,15 @@ function OwnedMessageList({
 
   const replyLayoutById = useMemo(() => computeReplyLayout(messages), [messages]);
 
+  // The catch-up divider's marker: the message the reader had read up to when
+  // they opened this conversation. Taken once, by `markLatestRead` just before
+  // it moves the read position (which opening the conversation does), so the
+  // divider keeps saying what was new when you arrived while you read it.
+  // "Mark read" clears it. The list is keyed by channel, so it starts empty
+  // for each conversation.
+  const [catchUpFrom, setCatchUpFrom] = useState<string | null>(null);
+  const catchUpCapturedRef = useRef(false);
+
   // Build flat row list for virtualization.
   //
   // Grouping decides the bubbles' shape (§2.4): a group is one author, close in
@@ -1321,6 +1247,7 @@ function OwnedMessageList({
     const joinsPrevious: boolean[] = new Array(count);
     const dayBreaks: boolean[] = new Array(count);
     const systems: boolean[] = new Array(count);
+    const catchUp = findCatchUp(messages, catchUpFrom, me, isSystemMessage, hasMore);
 
     for (let i = 0; i < count; i++) {
       const msg = messages[i];
@@ -1339,6 +1266,8 @@ function OwnedMessageList({
       joinsPrevious[i] =
         prevMsg !== null
         && !dayBreaks[i]
+        // The divider splits a group: what you missed starts a new one.
+        && catchUp?.index !== i
         && !parentId
         && !systems[i]
         && !systems[i - 1]
@@ -1349,6 +1278,9 @@ function OwnedMessageList({
       const msg = messages[i];
       if (dayBreaks[i]) {
         result.push({ type: 'date-separator', date: getTimestamp(msg) });
+      }
+      if (catchUp && catchUp.index === i) {
+        result.push({ type: 'catch-up', count: catchUp.count, atLeast: catchUp.atLeast, since: catchUp.since });
       }
       result.push({
         type: 'message',
@@ -1374,7 +1306,7 @@ function OwnedMessageList({
 
     result.push({ type: 'bottom-sentinel' });
     return result;
-  }, [messages, activeTyping.length, replyLayoutById, roomLitEvents]);
+  }, [messages, activeTyping.length, replyLayoutById, roomLitEvents, catchUpFrom, me, hasMore]);
 
   const isNearBottom = useCallback(() => {
     const el = scrollRef.current;
@@ -1395,6 +1327,15 @@ function OwnedMessageList({
     if (!lastMessage?.id || lastReadStateMessageIdRef.current === lastMessage.id) return;
     const scope = memberScope;
     if (!scope) return;
+
+    // Before the position moves, remember where it was: that is where "new"
+    // starts for the catch-up divider. Once per conversation opened; a channel
+    // never read has no position and so nothing to catch up on.
+    if (!catchUpCapturedRef.current) {
+      catchUpCapturedRef.current = true;
+      const readUpTo = useReadStateStore.getState().getReadState(scope, channelId)?.last_message_id;
+      if (readUpTo) setCatchUpFrom(readUpTo);
+    }
 
     // Update the visible state immediately. Persistence is retried below and the
     // server enforces a monotonic cursor, so a delayed older request cannot undo it.
@@ -1425,6 +1366,8 @@ function OwnedMessageList({
     estimateSize: (index) => {
       const row = rows[index];
       if (row.type === 'date-separator') return 44;
+      // 12px above a 28px row.
+      if (row.type === 'catch-up') return 40;
       if (row.type === 'room-event') return 36;
       if (row.type === 'typing') return 46;
       if (row.type === 'bottom-sentinel') return 1;
@@ -2743,6 +2686,18 @@ function OwnedMessageList({
       return <DayDivider label={dayDividerLabel(row.date)} />;
     }
 
+    if (row.type === 'catch-up') {
+      return (
+        <CatchUpDivider
+          label={catchUpLabel(row)}
+          onMarkRead={() => {
+            setCatchUpFrom(null);
+            markLatestRead();
+          }}
+        />
+      );
+    }
+
     if (row.type === 'room-event') {
       return <RoomLitEventRow event={row.event} onJoin={joinLitRoom} />;
     }
@@ -2836,7 +2791,6 @@ function OwnedMessageList({
     // A message that addresses the reader: its bubble takes the raised step
     // and their own mention becomes the white chip (§3.2).
     const mentionsMe = messageMentionsUser(msg, me, myRoleIds);
-    const selfMentionLabel = mentionsMe && me ? `@${mentionMap.get(me) ?? `<@${me}>`}` : null;
     const isActiveRow = hoveredMessageId === msg.id || focusedMessageId === msg.id;
     const menuOpen = menuMessageId === msg.id;
     // "From the room": written by somebody who is in the call right now (§7.2).
@@ -2918,12 +2872,43 @@ function OwnedMessageList({
     const ephemeral = Boolean((msg.flags ?? 0) & 64);
     const scoreCard = !msg.poll && !decrypting && scoreUpdate && scoreSides;
     const feedCard = !msg.poll && !decrypting && !scoreCard && feedEmbed;
-    const hasText = Boolean(bubbleText && bubbleText.trim());
+    // A message that is only events is an event share: a plan card, not a
+    // bubble holding a chip (§3.2). An event inside a sentence stays a chip.
+    const eventCards = activeGuildId && !decrypting && !ephemeral && !msg.forwarded_from && !msg.poll
+      ? eventCardIds(bubbleText)
+      : NO_EVENT_CARDS;
+    const hasText = Boolean(bubbleText && bubbleText.trim()) && eventCards.length === 0;
     // A bubble holds words (or the promise of them: a decrypting skeleton, a
     // forwarded quote, a reply's context). A message that is only a picture or
     // only a card has no empty bubble above it.
     const hasBubble = !msg.poll && !scoreCard && !feedCard
       && (ephemeral || decrypting || hasText || Boolean(msg.forwarded_from) || Boolean(replyParentId));
+    // Reactions are ONE chip biting the top-right corner of what the message
+    // is (§3.2): its first picture, else its bubble, else its card. A message
+    // with none of those (a sticker, an embed) gets the same chip in the flow.
+    // The picture must be one the frame below actually draws.
+    const biteMedia = !feedEmbed && !msg.e2ee && !lowBandwidthMode
+      ? (msg.attachments ?? []).find((att) =>
+        !inForwardCard(msg, att) && isImageAttachment(att) && Boolean(resolveFederatedAttachmentUrl(att, msg.channel_id)))
+      : undefined;
+    const biteCard = scoreCard ? 'score' : feedCard ? 'feed' : msg.poll ? 'poll' : eventCards.length > 0 ? 'event' : null;
+    const biteHost: 'media' | 'bubble' | 'card' | 'inline' = biteMedia
+      ? 'media'
+      : hasBubble && !isEditing
+        ? 'bubble'
+        : biteCard && !isEditing
+          ? 'card'
+          : 'inline';
+    const bite = Array.isArray(msg.reactions) && msg.reactions.length > 0 ? (
+      <ReactionBite
+        reactions={msg.reactions as ReactionTally[]}
+        guildId={activeGuildId}
+        channelId={channelId}
+        messageId={msg.id}
+        onToggle={toggleReactionFromRow}
+        placement={biteHost}
+      />
+    ) : null;
     // The actions a row offers: react, reply, more (§3.2). On the first of a
     // group they sit beside the name and time; a row without a header gets
     // them beside its bubble (fine pointer) or under it (touch, where a tap on
@@ -2969,8 +2954,9 @@ function OwnedMessageList({
         mentionMap,
         handleMentionClick,
         downloadTicket,
+        me ?? null,
       );
-      return selfMentionLabel ? markSelfMention(nodes, selfMentionLabel) : nodes;
+      return nodes;
     };
     const editedMark = edited ? (
       <button
@@ -3149,7 +3135,7 @@ function OwnedMessageList({
           ) : (
             <>
               {hasBubble && (
-                <div className="glass-msg__line">
+                <div className="glass-msg__line" data-bitten={(biteHost === 'bubble' && bite !== null) || undefined}>
                     <div
                       className="glass-bubble"
                       data-join-top={isGrouped || undefined}
@@ -3197,6 +3183,7 @@ function OwnedMessageList({
                         </>
                       )}
                     </div>
+                  {biteHost === 'bubble' && bite}
                   {showActions && actionsPlacement === 'beside' && renderActions()}
                 </div>
               )}
@@ -3206,29 +3193,44 @@ function OwnedMessageList({
                 <div className="glass-msg__float">{renderActions()}</div>
               )}
               {scoreCard && scoreSides && scoreUpdate && (
-                <div className="glass-msg__card" data-join-top={isGrouped || undefined}>
+                <div className="glass-msg__card" data-join-top={isGrouped || undefined} data-bitten={(biteHost === 'card' && biteCard === 'score' && bite !== null) || undefined}>
                   <ScoreUpdateCard
                     update={scoreUpdate}
                     lead={scoreSides.lead}
                     other={scoreSides.other}
                     href={scoreUpdateHref(activeGuildId || '', pinnedSportsGame)}
                   />
+                  {biteHost === 'card' && biteCard === 'score' && bite}
                 </div>
               )}
               {feedCard && (
-                <div className="glass-msg__card" data-join-top={isGrouped || undefined}>
+                <div className="glass-msg__card" data-join-top={isGrouped || undefined} data-bitten={(biteHost === 'card' && biteCard === 'feed' && bite !== null) || undefined}>
                   <FeedPostCard embed={feedCard} />
+                  {biteHost === 'card' && biteCard === 'feed' && bite}
                 </div>
               )}
               {msg.poll && (
-                <div className="glass-msg__card" data-join-top={isGrouped || undefined}>
+                <div className="glass-msg__card glass-msg__card--plan" data-join-top={isGrouped || undefined} data-bitten={(biteHost === 'card' && biteCard === 'poll' && bite !== null) || undefined}>
                   <PollMessageCard
                     channelId={channelId}
                     poll={msg.poll}
                     canVote={canVoteInPolls}
+                    joinTop={isGrouped}
                   />
+                  {biteHost === 'card' && biteCard === 'poll' && bite}
                 </div>
               )}
+              {eventCards.map((eventId, eventIndex) => (
+                <div
+                  key={eventId}
+                  className="glass-msg__card glass-msg__card--plan"
+                  data-join-top={isGrouped || eventIndex > 0 || undefined}
+                  data-bitten={(eventIndex === 0 && biteHost === 'card' && biteCard === 'event' && bite !== null) || undefined}
+                >
+                  <EventPlanCard guildId={activeGuildId} eventId={eventId} joinTop={isGrouped || eventIndex > 0} />
+                  {eventIndex === 0 && biteHost === 'card' && biteCard === 'event' && bite}
+                </div>
+              ))}
             </>
           )}
 
@@ -3286,16 +3288,8 @@ function OwnedMessageList({
               ))}
             </div>
           )}
-          {/* Reactions (WP-G13 turns these into one chip biting the media) */}
-          {msg.reactions && Array.isArray(msg.reactions) && msg.reactions.length > 0 && (
-            <ReactionRow
-              reactions={msg.reactions as ReactionTally[]}
-              guildId={activeGuildId}
-              channelId={channelId}
-              messageId={msg.id}
-              onToggle={toggleReactionFromRow}
-            />
-          )}
+          {/* Reactions with nothing to bite (§3.2): the same chip, in the flow. */}
+          {biteHost === 'inline' && bite}
           {msg.stickers && msg.stickers.length > 0 && (
             <div className="glass-msg__extras glass-msg__stickers">
               {msg.stickers.map((sticker) => {
@@ -3344,53 +3338,39 @@ function OwnedMessageList({
                 }
                 const src = resolveFederatedAttachmentUrl(att, msg.channel_id);
                 const isFederated = Boolean(att.origin_server);
-                const federatedBadge = isFederated ? (
-                  <Chip
-                    size="sm"
-                    tone="accent"
-                    title={att.content_hash ? `Hash: ${att.content_hash}` : `From: ${att.origin_server}`}
-                  >
-                    Federated
-                  </Chip>
+                const federatedNote = isFederated ? (
+                  <span title={att.content_hash ? `Hash: ${att.content_hash}` : `From: ${att.origin_server}`}>Federated</span>
                 ) : null;
                 const attachmentIsImage = isImageAttachment(att) && Boolean(src);
+                const busy = attachmentBusyId === att.id;
+                const busyLabel = busy ? (downloadProgress != null ? `${downloadProgress}%` : 'Downloading…') : null;
+                const joinTop = hasBubble || isGrouped || attIndex > 0;
+                // Downloading is one gesture whether it is a picture's tool or a
+                // file's text button; so is deleting your own attachment.
+                const download = () => void rowActions.downloadAttachment(att.id, att.filename);
+                const remove = () => void rowActions.deleteAttachment(msg.id, att.id);
                 if (attachmentIsImage) {
                   if (lowBandwidthMode) {
                     return (
-                      <div
+                      <GlassFile
                         key={att.id}
-                        // `[&>button]:mt-0`: see AttachmentFrame — the same
-                    // vertical-rhythm fallback would push Download out of line.
-                    className="mt-2 inline-flex max-w-full flex-wrap items-center gap-2 rounded-[var(--radius-well)] bg-bg-well px-3 py-2 text-meta shadow-[var(--shadow-chip)]"
-                      >
-                        {federatedBadge}
-                        <span className="max-w-[20rem] truncate font-medium text-text-body">
-                          {att.filename}
-                        </span>
-                        <Chip size="sm" className="text-text-faint">Preview off</Chip>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => void rowActions.downloadAttachment(att.id, att.filename)}
-                          disabled={attachmentBusyId === att.id}
-                        >
-                          {attachmentBusyId === att.id
-                            ? downloadProgress != null
-                              ? `${downloadProgress}%`
-                              : 'Downloading…'
-                            : 'Download'}
-                        </Button>
-                        {isOwnMessage && !isFederated && (
-                          <Button
-                            variant="danger"
-                            size="sm"
-                            onClick={() => void rowActions.deleteAttachment(msg.id, att.id)}
-                            disabled={attachmentBusyId === att.id}
-                          >
-                            {attachmentBusyId === att.id ? 'Deleting…' : 'Delete'}
-                          </Button>
-                        )}
-                      </div>
+                        name={att.filename}
+                        note="Preview off"
+                        badge={federatedNote}
+                        joinTop={joinTop}
+                        actions={
+                          <>
+                            <button type="button" className="glass-file__action glass-focusable" onClick={download} disabled={busy}>
+                              {busyLabel ?? 'Download'}
+                            </button>
+                            {isOwnMessage && !isFederated && (
+                              <button type="button" className="glass-file__action glass-focusable" onClick={remove} disabled={busy}>
+                                {busy ? 'Deleting…' : 'Delete'}
+                              </button>
+                            )}
+                          </>
+                        }
+                      />
                     );
                   }
                   const imageAttachments = msg.attachments!.filter(isImageAttachment);
@@ -3430,101 +3410,63 @@ function OwnedMessageList({
                     useLightboxStore.getState().open(lightboxImages, imageIndex >= 0 ? imageIndex : 0);
                   };
                   return (
-                    // §7.4: the picture sits in a well with its own line under
-                    // it — the file's name and size, then what you can do with
-                    // it. No frame, no border, no card-in-a-card.
-                    <AttachmentFrame
+                    // §3.2: the picture is its own frame, 240px, no footer. To
+                    // open it, press it (the lightbox downloads too); the
+                    // tools over its corner download and, for your own,
+                    // delete. The reactions chip bites its top-right corner.
+                    <GlassMedia
                       key={att.id}
-                      joinTop={hasBubble || isGrouped || attIndex > 0}
-                      footer={
+                      joinTop={joinTop}
+                      width={att.width}
+                      height={att.height}
+                      badge={federatedNote}
+                      bite={att.id === biteMedia?.id ? bite : undefined}
+                      tools={
                         <>
-                          {federatedBadge}
-                          <span className="min-w-0 truncate font-medium text-text-body">{att.filename}</span>
-                          {att.size != null && (
-                            <span className="pc-mono ml-auto shrink-0">{formatFileSize(att.size)}</span>
+                          <MediaTool label={`Download ${att.filename}`} busy={busyLabel} disabled={busy} onClick={download}>
+                            <DownloadMark />
+                          </MediaTool>
+                          {isOwnMessage && !isFederated && (
+                            <MediaTool label={`Delete ${att.filename}`} disabled={busy} onClick={remove}>
+                              <TrashMark />
+                            </MediaTool>
                           )}
-                          {/* One row for the actions, so a narrow footer wraps
-                              them together under the filename rather than
-                              breaking the group across two lines. */}
-                          <span className="flex flex-wrap items-center gap-2">
-                            <Button variant="ghost" size="sm" onClick={() => void openImageLightbox()}>
-                              Open
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => void rowActions.downloadAttachment(att.id, att.filename)}
-                              disabled={attachmentBusyId === att.id}
-                            >
-                              {attachmentBusyId === att.id ? (downloadProgress != null ? `${downloadProgress}%` : 'Downloading…') : 'Download'}
-                            </Button>
-                            {isOwnMessage && !isFederated && (
-                              <Button
-                                variant="danger"
-                                size="sm"
-                                onClick={() => void rowActions.deleteAttachment(msg.id, att.id)}
-                                disabled={attachmentBusyId === att.id}
-                              >
-                                {attachmentBusyId === att.id ? 'Deleting…' : 'Delete'}
-                              </Button>
-                            )}
-                          </span>
                         </>
                       }
                     >
                       <button
                         type="button"
                         aria-label={`Open image preview: ${att.filename}`}
-                        className="pc-focusable block w-full cursor-pointer border-0 bg-transparent p-0 text-left"
+                        title={att.filename}
+                        className="glass-media__open"
                         onClick={() => void openImageLightbox()}
                       >
-                        <ResolvedAttachmentImage
-                          url={src!}
-                          alt={att.filename}
-                          className="block w-full"
-                          style={{ maxHeight: '300px', objectFit: 'contain' }}
-                        />
+                        <ResolvedAttachmentImage url={src!} alt={att.filename} className="glass-media__img" />
                       </button>
-                    </AttachmentFrame>
+                    </GlassMedia>
                   );
                 }
                 return (
-                  <div
+                  <GlassFile
                     key={att.id}
-                    className="mt-2 inline-flex max-w-full flex-wrap items-center gap-2 rounded-[var(--radius-well)] bg-bg-well px-3 py-2 text-meta shadow-[var(--shadow-chip)]"
-                  >
-                    {federatedBadge}
-                    <button
-                      type="button"
-                      className="pc-focusable max-w-[20rem] truncate rounded-[var(--radius-chip)] text-left font-medium text-text-link transition-colors hover:underline"
-                      onClick={() => void rowActions.downloadAttachment(att.id, att.filename)}
-                      disabled={attachmentBusyId === att.id}
-                    >
-                      {att.filename}
-                    </button>
-                    {att.size != null && <span className="pc-mono text-text-faint">{formatFileSize(att.size)}</span>}
-                    {/* One row — see the image footer above. */}
-                    <span className="flex flex-wrap items-center gap-2">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => void rowActions.downloadAttachment(att.id, att.filename)}
-                        disabled={attachmentBusyId === att.id}
-                      >
-                        {attachmentBusyId === att.id ? (downloadProgress != null ? `${downloadProgress}%` : 'Downloading…') : 'Download'}
-                      </Button>
-                      {isOwnMessage && !isFederated && (
-                        <Button
-                          variant="danger"
-                          size="sm"
-                          onClick={() => void rowActions.deleteAttachment(msg.id, att.id)}
-                          disabled={attachmentBusyId === att.id}
-                        >
-                          {attachmentBusyId === att.id ? 'Deleting…' : 'Delete'}
-                        </Button>
-                      )}
-                    </span>
-                  </div>
+                    name={att.filename}
+                    size={att.size != null ? formatFileSize(att.size) : null}
+                    badge={federatedNote}
+                    joinTop={joinTop}
+                    onOpen={download}
+                    actions={
+                      <>
+                        <button type="button" className="glass-file__action glass-focusable" onClick={download} disabled={busy}>
+                          {busyLabel ?? 'Download'}
+                        </button>
+                        {isOwnMessage && !isFederated && (
+                          <button type="button" className="glass-file__action glass-focusable" onClick={remove} disabled={busy}>
+                            {busy ? 'Deleting…' : 'Delete'}
+                          </button>
+                        )}
+                      </>
+                    }
+                  />
                 );
               })}
             </div>

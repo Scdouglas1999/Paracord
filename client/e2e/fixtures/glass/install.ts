@@ -88,10 +88,9 @@ function messageRecord(seed: MessageSeed) {
       id: a.id,
       filename: a.filename,
       size: 100_000,
-      content_type: 'image/png',
+      content_type: ('contentType' in a ? a.contentType : undefined) ?? 'image/png',
       url: `/attachments/${a.id}`,
-      width: a.width,
-      height: a.height,
+      ...(a.width && a.height ? { width: a.width, height: a.height } : {}),
     };
   });
   const poll = seed.poll
@@ -431,6 +430,12 @@ export async function installGlassScene(page: Page, options: GlassSceneOptions =
           );
         if (rest === 'members') return json(guild.members.map(memberRecord));
         if (rest === 'events') return json(EVENTS.filter((e) => e.guild_id === guild.id).map(eventRecord));
+        // One event, for the plan card and the event chip (`<event:ID>` in a message).
+        const oneEvent = rest.match(/^events\/(\d+)$/);
+        if (oneEvent && method === 'GET') {
+          const found = EVENTS.find((e) => e.guild_id === guild.id && e.id === oneEvent[1]);
+          return found ? json(eventRecord(found)) : json({ error: 'not_found' }, 404);
+        }
         if (rest === 'onboarding/me')
           return json({
             settings: { welcome_title: guild.name, welcome_body: null, rules_text: null, role_prompt: null, role_options: [] },
@@ -452,6 +457,14 @@ export async function installGlassScene(page: Page, options: GlassSceneOptions =
           const newer = messagesIn(seed.id).filter((m) => (after ? BigInt(m.id) > BigInt(after) : true));
           return json(newer.slice(-limit).reverse().map(messageRecord));
         }
+        // Who reacted with an emoji (the list a rest on a reaction opens).
+        if (/^messages\/\d+\/reactions\/[^/]+$/.test(rest) && method === 'GET')
+          return json(['brendan', 'vincent', 'nick'].map((who) => ({
+            id: CAST[who as CastKey].id,
+            username: CAST[who as CastKey].username,
+            display_name: CAST[who as CastKey].display_name,
+            avatar_hash: null,
+          })));
         if (rest === 'capabilities')
           return json({
             version: 1,

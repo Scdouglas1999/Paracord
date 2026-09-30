@@ -1,18 +1,22 @@
-import { useEffect, useMemo, useState } from 'react';
-import { BarChart3, Check, Clock3 } from 'lucide-react';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import type { Poll, PollOption } from '../../types';
 import { channelApi } from '../../api/channels';
 import { usePollStore } from '../../stores/pollStore';
 import { toast } from '../../stores/toastStore';
+import { CheckMark } from '../glass/cards/CardGlyphs';
+import { PlanCard } from '../glass/cards/PlanCard';
 
 interface PollMessageCardProps {
   channelId: string;
   poll: Poll;
   canVote: boolean;
+  /** Follows a bubble of the same group, so the card's top corner joins too. */
+  joinTop?: boolean;
 }
 
-function formatExpiryLabel(expiresAt: string | null | undefined, nowMs: number): string {
-  if (!expiresAt) return 'No end time';
+/** "2h 5m left", or null when the poll has no end (that is the ordinary case: nothing to say). */
+function formatExpiryLabel(expiresAt: string | null | undefined, nowMs: number): string | null {
+  if (!expiresAt) return null;
   const expiresMs = new Date(expiresAt).getTime();
   const remaining = expiresMs - nowMs;
   if (remaining <= 0) return 'Ended';
@@ -29,7 +33,13 @@ function formatExpiryLabel(expiresAt: string | null | undefined, nowMs: number):
   return `${seconds}s left`;
 }
 
-export function PollMessageCard({ channelId, poll, canVote }: PollMessageCardProps) {
+/**
+ * A poll, as a plan card (docs/glass-spec.md §3.2): the question is the title,
+ * the line under it says how it is answered and how it is going, and each
+ * option is a row you press to vote (press again to take the vote back). The
+ * bar behind an option is its share of the vote; a check marks yours.
+ */
+export function PollMessageCard({ channelId, poll, canVote, joinTop }: PollMessageCardProps) {
   const livePoll = usePollStore((s) => s.pollsById[poll.id]) ?? poll;
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [pendingOptionId, setPendingOptionId] = useState<string | null>(null);
@@ -94,70 +104,54 @@ export function PollMessageCard({ channelId, poll, canVote }: PollMessageCardPro
     }
   };
 
-  return (
-    <div className="mt-2 max-w-[480px] rounded-well border border-border-subtle bg-bg-raised p-4 shadow-[var(--shadow-chip)]">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="flex min-w-0 items-start gap-2">
-          <BarChart3 size={16} className="mt-0.5 shrink-0 text-accent-primary" />
-          <p className="text-heading text-text-primary">{livePoll.question}</p>
-        </div>
-        <span className="shrink-0 rounded-window bg-bg-mod-strong px-2 py-0.5 text-section text-text-secondary">
-          {livePoll.allow_multiselect ? 'Multi select' : 'Single select'}
-        </span>
-      </div>
+  const expiry = formatExpiryLabel(livePoll.expires_at, nowMs);
+  const meta = [
+    livePoll.allow_multiselect ? 'Pick any' : 'Pick one',
+    `${totalVotes} vote${totalVotes === 1 ? '' : 's'}`,
+    expiry && !isExpired ? expiry : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
 
-      <div className="mt-3.5 flex flex-col gap-2">
+  return (
+    <PlanCard
+      kind="Poll"
+      joinTop={joinTop}
+      title={livePoll.question}
+      meta={meta}
+      action={isExpired ? <span className="glass-plan__state">Closed</span> : undefined}
+    >
+      <ul className="glass-plan__options">
         {orderedOptions.map((option) => {
           const votePercent = totalVotes > 0 ? Math.round((option.vote_count / totalVotes) * 100) : 0;
           const canToggle = canVote && !isExpired;
           return (
-            <button
-              key={option.id}
-              type="button"
-              disabled={!canToggle || pendingOptionId === option.id}
-              onClick={() => void applyVoteChange(option)}
-              className="relative overflow-hidden rounded-chip border border-border-subtle bg-bg-well px-3 py-2.5 text-left transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:border-border-strong focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-75"
-            >
-              {/* The share of the vote, drawn as a scale from the left edge so a
-                  vote moving the bars is a composited change, not a relayout. */}
-              <span
-                className="pointer-events-none absolute inset-0 origin-left bg-accent-tint transition-transform duration-[var(--duration-slow)] ease-[var(--ease-out)]"
-                style={{ transform: `scaleX(${votePercent / 100})` }}
-              />
-              <span className="relative z-[1] flex items-center gap-2.5">
-                <span className="min-w-0 flex-1 break-words text-label text-text-primary">
-                  {option.emoji ? `${option.emoji} ` : ''}
-                  {option.text}
-                </span>
-                <span className="shrink-0 text-meta font-semibold tabular-nums text-text-secondary">{votePercent}%</span>
-                <span className="shrink-0 text-meta font-semibold tabular-nums text-text-muted">{option.vote_count}</span>
-                {option.voted && (
-                  <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent-tint-strong text-accent-primary">
-                    <Check size={12} />
+            <li key={option.id}>
+              <button
+                type="button"
+                className="glass-plan__option"
+                data-voted={option.voted || undefined}
+                aria-pressed={option.voted}
+                disabled={!canToggle || pendingOptionId === option.id}
+                onClick={() => void applyVoteChange(option)}
+                // The share of the vote, drawn as a scale from the left edge so
+                // a vote moving the bar is a composited change, not a relayout.
+                style={{ '--share': votePercent / 100 } as CSSProperties}
+              >
+                <span className="glass-plan__option-body">
+                  <span className="glass-plan__option-text">
+                    {option.emoji ? `${option.emoji} ` : ''}
+                    {option.text}
                   </span>
-                )}
-              </span>
-            </button>
+                  <span className="glass-plan__option-stat glass-instrument">{votePercent}%</span>
+                  <span className="glass-plan__option-stat glass-instrument">{option.vote_count}</span>
+                  {option.voted && <CheckMark />}
+                </span>
+              </button>
+            </li>
           );
         })}
-      </div>
-
-      <div className="mt-3.5 flex flex-wrap items-center gap-2.5 text-meta text-text-muted">
-        <span className="tabular-nums">{totalVotes} vote{totalVotes === 1 ? '' : 's'}</span>
-        <span className="inline-flex items-center gap-1">
-          <Clock3 size={12} />
-          {formatExpiryLabel(livePoll.expires_at, nowMs)}
-        </span>
-        {isExpired ? (
-          <span className="rounded-window bg-bg-mod-strong px-2 py-0.5 text-section text-text-secondary">
-            Closed
-          </span>
-        ) : (
-          <span className="rounded-window bg-success-tint px-2 py-0.5 text-section text-accent-success">
-            Open
-          </span>
-        )}
-      </div>
-    </div>
+      </ul>
+    </PlanCard>
   );
 }

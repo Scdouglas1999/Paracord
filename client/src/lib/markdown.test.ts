@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { render, fireEvent } from '@testing-library/react';
 import { createElement } from 'react';
-import { parseMarkdown, stripMarkdown } from './markdown';
+import { messagePreviewText, messageSnippetText, parseMarkdown, stripMarkdown } from './markdown';
+import { ChannelMentionChip, EventChip } from '../components/glass/cards/InlineChips';
 
 describe('stripMarkdown', () => {
   it('strips bold markers', () => {
@@ -318,5 +319,60 @@ describe('messageSnippetText', () => {
   it('keeps line breaks a snippet can wrap on', async () => {
     const { messageSnippetText } = await import('./markdown');
     expect(messageSnippetText('first line\nsecond line')).toBe('first line\nsecond line');
+  });
+});
+
+describe('mentions and chips in a sentence (§3.2)', () => {
+  const names = new Map([['42', 'Sean'], ['7', 'Nick']]);
+  const draw = (text: string, guildId?: string, options?: Parameters<typeof parseMarkdown>[4]) =>
+    render(createElement('div', null, parseMarkdown(text, guildId, names, undefined, options)));
+
+  it('puts the person a mention is for on the mention, as data', () => {
+    const { container } = draw('<@42> and <@!7>');
+    const chips = [...container.querySelectorAll('.glass-mention')];
+    expect(chips.map((chip) => chip.getAttribute('data-user-id'))).toEqual(['42', '7']);
+    expect(chips.map((chip) => chip.textContent)).toEqual(['@Sean', '@Nick']);
+    expect(container.querySelector('.glass-mention-self')).toBeNull();
+  });
+
+  it('marks the reader’s own mention, and only theirs', () => {
+    const { container } = draw('<@42> and <@7>', undefined, { selfUserId: '42' });
+    const own = container.querySelectorAll('.glass-mention-self');
+    expect(own).toHaveLength(1);
+    expect(own[0]).toHaveAttribute('data-user-id', '42');
+  });
+
+  it('is clickable only when somebody listens', () => {
+    const clicked: string[] = [];
+    const listening = render(createElement('div', null, parseMarkdown('<@42>', undefined, names, (id) => clicked.push(id))));
+    const chip = listening.container.querySelector('.glass-mention') as HTMLElement;
+    expect(chip).toHaveAttribute('data-clickable');
+    fireEvent.click(chip);
+    expect(clicked).toEqual(['42']);
+    expect(draw('<@42>').container.querySelector('.glass-mention')).not.toHaveAttribute('data-clickable');
+  });
+
+  it('draws a channel and an event as chips when it knows the server', () => {
+    const [paragraph] = parseMarkdown('join <#2002> for <event:7001>', 'g1') as Array<{ props: { children: Array<{ type?: unknown; props?: Record<string, string> }> } }>;
+    const kids = paragraph.props.children;
+    const channel = kids.find((node) => node.type === ChannelMentionChip);
+    const event = kids.find((node) => node.type === EventChip);
+    expect(channel?.props?.channelId).toBe('2002');
+    expect(event?.props).toMatchObject({ guildId: 'g1', eventId: '7001' });
+  });
+
+  it('leaves them as typed where there is no server (a direct message, a bio)', () => {
+    const { container } = draw('join <#2002> for <event:7001>');
+    expect(container).toHaveTextContent('join <#2002> for <event:7001>');
+  });
+
+  it('does not mistake an emoji or a role for one', () => {
+    const { container } = draw('<:wave:12> <@&7>', 'g1');
+    expect(container.querySelector('.glass-inline-chip')).toBeNull();
+  });
+
+  it('reads an event as “an event” in a preview, a snippet or a reply', () => {
+    expect(messagePreviewText('is <event:7001> still on?')).toBe('is an event still on?');
+    expect(messageSnippetText('is <event:7001> still on?')).toBe('is an event still on?');
   });
 });
