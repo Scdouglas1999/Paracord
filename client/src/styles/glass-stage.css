@@ -1,0 +1,648 @@
+/* =============================================================================
+   The stage, side by side (docs/glass-spec.md §6, §6.1; WP-G14).
+
+   The shell (glass-layout.css) places and sizes the stage pane and paints its
+   `--deep` fill; this fills it: the stream (16:9, radius 18) with its overlay,
+   the people row (camera tiles, chips), the control row, and the popovers of
+   the controls. The only rule here that reaches the pane itself is its glow,
+   because the glow is sampled from the stream this slot draws.
+
+   No literal colors: every value is a token or a `color-mix()` of tokens (the
+   literal-color lint). Only colors transition (the motion lint); layout does not
+   move here (the 650ms moves are WP-G15's).
+
+   The desktop app's native video route on Linux draws the stream on a surface
+   UNDER the webview. Nothing in the page can blur it, so every control drawn
+   over the video switches to a near-solid fill while `html[data-native-underlay]`
+   is set (see the end of this file).
+
+   Unlayered, like the frame it fills.
+   ============================================================================= */
+
+/* ---- The pane's glow: a soft spill of the stream, left and right (§6.1) ------ */
+/* `--stage-glow-l` / `-r` are written about once a second by useStageGlow.ts, as
+   channel numbers; until the first sample the room's own color stands in. */
+.glass-frame:not([data-layout='phone'])[data-stage='side'] .glass-frame__stage {
+  box-shadow:
+    var(--sh-pane),
+    -50px 10px 140px color-mix(in srgb, rgb(var(--stage-glow-l, var(--room-rgb))) 14%, transparent),
+    60px 0 150px color-mix(in srgb, rgb(var(--stage-glow-r, var(--room-rgb))) 18%, transparent);
+}
+
+/* ---- Layout -------------------------------------------------------------------- */
+.glass-stage {
+  --stage-inset: 12px;
+  --stage-gap: 12px;
+  --stage-ctl-h: 64px;
+  --stage-chip-w: 200px;
+  --stage-over: color-mix(in srgb, var(--pill) 50%, transparent);
+  --stage-over-hover: color-mix(in srgb, var(--ink-1) 12%, color-mix(in srgb, var(--pill) 58%, transparent));
+  --stage-over-press: color-mix(in srgb, var(--pill) 72%, transparent);
+  --stage-shade: color-mix(in srgb, var(--pill) 57%, transparent);
+  --stage-text-shadow: 0 1px 8px color-mix(in srgb, var(--pill) 50%, transparent);
+
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--stage-gap);
+  min-width: 0;
+  min-height: 0;
+  padding: var(--stage-inset);
+  color: var(--ink-1);
+}
+
+/* ---- The stream ---------------------------------------------------------------- */
+.glass-stage__stream {
+  position: relative;
+  flex: 0 0 auto;
+  /* Until the pane is measured: full width at 16:9. Then useLayoutEffect sets
+     the exact box (stageModel.ts, stageGeometry). */
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  max-width: 100%;
+  overflow: hidden;
+  border-radius: 18px;
+  background-color: var(--pill);
+}
+
+.glass-stage[data-measured='true'] .glass-stage__stream {
+  aspect-ratio: auto;
+}
+
+/* The native route: this box is the hole the video shows through. */
+.glass-stage__stream[data-underlay='live'] {
+  background-color: transparent;
+}
+
+.glass-stage__canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  transition: opacity var(--glass-ms) var(--glass-ease);
+}
+
+.glass-stage__notice {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 72px 32px 32px;
+  text-align: center;
+}
+
+.glass-stage__notice-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  max-width: 44ch;
+  font-size: 15px;
+  line-height: 1.4;
+  color: var(--ink-1);
+}
+
+.glass-stage__notice-body[data-pending='true'] {
+  color: var(--ink-2);
+}
+
+/* The top shade under the overlay, so the title reads on any frame. */
+.glass-stage__scrim {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 120px;
+  pointer-events: none;
+  background-image: linear-gradient(var(--stage-shade), transparent);
+}
+
+.glass-stage__overlay {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  left: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  pointer-events: none;
+  text-shadow: var(--stage-text-shadow);
+}
+
+.glass-stage__title-group,
+.glass-stage__actions {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  pointer-events: auto;
+}
+
+.glass-stage__title-group {
+  gap: 12px;
+}
+
+.glass-stage__actions {
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.glass-stage__live-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--amber);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--amber) 20%, transparent);
+}
+
+.glass-stage__titles {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.3;
+}
+
+.glass-stage__title {
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.glass-stage__subtitle {
+  overflow: hidden;
+  font-size: 13px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: color-mix(in srgb, var(--ink-1) 80%, transparent);
+}
+
+.glass-stage__watching {
+  font-size: 13px;
+}
+
+/* The stream's own buttons: glass over the video (S, T, Stop watching). */
+.glass-stage__sbtn {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-ctl);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-shadow: none;
+  cursor: pointer;
+  color: var(--ink-1);
+  background-color: var(--stage-over);
+  box-shadow: inset 0 0 0 1px var(--glass-hair);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  transition: background-color var(--glass-ms) var(--glass-ease);
+}
+
+.glass-stage__sbtn:hover {
+  background-color: var(--stage-over-hover);
+}
+
+.glass-stage__sbtn:active {
+  background-color: var(--stage-over-press);
+}
+
+.glass-stage__sbtn[aria-pressed='true'] {
+  background-color: var(--glass-fill-on);
+}
+
+.glass-stage__stop {
+  width: auto;
+  padding: 0 14px 0 11px;
+}
+
+/* ---- The people row ------------------------------------------------------------- */
+.glass-stage__row {
+  display: flex;
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+}
+
+.glass-stage[data-measured='true'] .glass-stage__row {
+  flex: 0 0 auto;
+}
+
+.glass-stage__people {
+  display: flex;
+  gap: var(--stage-gap);
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.glass-stage__tiles {
+  display: flex;
+  flex: 1 1 auto;
+  gap: var(--stage-gap);
+  min-width: 0;
+  height: 100%;
+}
+
+.glass-stage__tile {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
+  border-radius: var(--r-tile);
+  background-color: var(--solid);
+}
+
+/* The talker: a 2px amber inner edge (drawn over the picture) and an amber glow. */
+.glass-stage__tile[data-talking='true'] {
+  box-shadow: 0 0 24px var(--amber-tint);
+}
+
+.glass-stage__tile::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.glass-stage__tile[data-talking='true']::after {
+  box-shadow: inset 0 0 0 2px var(--amber);
+}
+
+.glass-stage__tile[data-underlay='live'] {
+  background-color: transparent;
+}
+
+.glass-stage__tile-button {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: inherit;
+  cursor: pointer;
+  color: inherit;
+  background: none;
+  text-align: left;
+}
+
+.glass-stage__camera {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+  transition: opacity var(--glass-ms) var(--glass-ease);
+}
+
+.glass-stage__camera[data-self='true'] {
+  transform: scaleX(-1);
+}
+
+.glass-stage__tile-face {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+}
+
+.glass-stage__tile-shade {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: linear-gradient(transparent 55%, color-mix(in srgb, var(--pill) 55%, transparent));
+}
+
+.glass-stage__tile-name {
+  position: absolute;
+  right: 10px;
+  bottom: 8px;
+  left: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+  text-shadow: 0 1px 6px color-mix(in srgb, var(--pill) 60%, transparent);
+}
+
+.glass-stage__tile-who {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.glass-stage__tile-mic {
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--ink-1) 80%, transparent);
+}
+
+/* The waveform follows the real voice where this client hears it (the level
+   lib/motion/voiceLevel.ts writes on the element marked data-motion-speaking). */
+.glass-stage__wave[data-real] > span {
+  animation: none;
+  transform: scaleY(calc(0.35 + 0.65 * min(1, var(--voice-level, 0) * var(--wave-gain, 1))));
+  transition: transform 90ms linear;
+}
+
+.glass-stage__wave[data-real] > span:nth-child(1) {
+  --wave-gain: 0.85;
+}
+
+.glass-stage__wave[data-real] > span:nth-child(3) {
+  --wave-gain: 0.9;
+}
+
+.glass-stage__wave[data-real] > span:nth-child(4) {
+  --wave-gain: 0.95;
+}
+
+.glass-stage__wave[data-real] > span:nth-child(5) {
+  --wave-gain: 0.75;
+}
+
+/* People without a camera: 200x52 chips in a column at the end of the row. */
+.glass-stage__chips {
+  display: flex;
+  flex: 0 0 var(--stage-chip-w);
+  flex-direction: column;
+  gap: 8px;
+  max-height: 100%;
+  margin-left: auto;
+  overflow-y: auto;
+}
+
+.glass-stage__chip {
+  flex: 0 0 52px;
+  width: var(--stage-chip-w);
+  height: 52px;
+  border-radius: var(--r-tile);
+  background-color: var(--solid);
+}
+
+.glass-stage__chip-inner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 100%;
+  padding: 0 12px 0 10px;
+  border: 0;
+  border-radius: inherit;
+  color: inherit;
+  background: none;
+  text-align: left;
+}
+
+.glass-stage__chip--button .glass-stage__chip-inner {
+  cursor: pointer;
+  transition: background-color var(--glass-ms) var(--glass-ease);
+}
+
+.glass-stage__chip--button .glass-stage__chip-inner:hover {
+  background-color: var(--wash-hover);
+}
+
+.glass-stage__chip--button .glass-stage__chip-inner:active {
+  background-color: var(--wash-press);
+}
+
+.glass-stage__chip-text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.glass-stage__chip-name {
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 500;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.glass-stage__chip-state {
+  overflow: hidden;
+  font-size: 13px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--ink-2);
+}
+
+.glass-stage__chip-state[data-tone='amber'] {
+  color: var(--amber-ink);
+}
+
+.glass-stage__chip-state[data-tone='ink'] {
+  color: var(--ink-1);
+}
+
+.glass-stage__chip-mic {
+  flex: 0 0 auto;
+  color: var(--ink-2);
+}
+
+/* ---- The control row --------------------------------------------------------------- */
+.glass-stage__controls {
+  display: flex;
+  flex: 0 0 var(--stage-ctl-h);
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+}
+
+.glass-stage__ctl--flame {
+  color: var(--amber);
+}
+
+.glass-stage__clip {
+  gap: 8px;
+  padding: 0 16px 0 13px;
+  font-size: 15px;
+}
+
+.glass-stage__clip[data-fit='1'],
+.glass-stage__clip[data-fit='2'] {
+  width: 44px;
+  padding: 0;
+}
+
+.glass-stage__divider {
+  flex: 0 0 auto;
+  width: 1px;
+  height: 24px;
+  margin: 0 4px;
+  background-color: var(--glass-hair);
+}
+
+.glass-stage__leave {
+  padding: 0 20px;
+  border-radius: var(--r-capsule);
+}
+
+/* A control that is not available yet keeps its place and says why on hover. */
+.glass-stage__controls [aria-disabled='true'] {
+  cursor: default;
+}
+
+/* ---- Popovers of the controls (the mic's menu, More) ------------------------------ */
+.glass-stage-popover {
+  overflow: hidden;
+  border-radius: var(--r-tile);
+  color: var(--ink-1);
+  background-color: var(--popover);
+  box-shadow: inset 0 0 0 1px var(--glass-hair), var(--sh-raised);
+  backdrop-filter: blur(40px);
+  -webkit-backdrop-filter: blur(40px);
+}
+
+.glass-stage-popover__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+}
+
+.glass-stage-popover__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 10px;
+  font-size: 15px;
+  text-align: left;
+  cursor: pointer;
+  color: var(--ink-1);
+  background-color: transparent;
+  transition: background-color var(--glass-ms) var(--glass-ease);
+}
+
+.glass-stage-popover__row:hover,
+.glass-stage-popover__row:focus-visible {
+  background-color: var(--glass-fill-quiet);
+}
+
+.glass-stage-popover__row:active {
+  background-color: var(--wash-press);
+}
+
+.glass-stage-popover__row[aria-pressed='true'] {
+  background-color: var(--glass-fill-on);
+}
+
+.glass-stage-popover__icon {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 20px;
+  color: var(--ink-2);
+}
+
+.glass-stage-popover__label {
+  flex: 1 1 auto;
+  font-weight: 500;
+}
+
+.glass-stage-popover__hint {
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.glass-stage-popover__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px;
+}
+
+.glass-stage-popover__kicker {
+  font-size: 12px;
+  font-weight: 700;
+  font-stretch: 82%;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+.glass-stage-popover__select {
+  height: 36px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--r-ctl);
+  font-size: 13px;
+  color: var(--ink-1);
+  background-color: var(--glass-fill-quiet);
+  box-shadow: inset 0 0 0 1px var(--glass-hair);
+}
+
+/* ---- The phone: the stream alone above the conversation (§8; G20 finishes it) ----- */
+.glass-stage[data-layout='phone'] {
+  padding: 0;
+}
+
+.glass-stage[data-layout='phone'] .glass-stage__stream {
+  width: 100%;
+  height: 100%;
+  aspect-ratio: auto;
+  border-radius: 0;
+}
+
+.glass-stage[data-layout='phone'] .glass-stage__overlay {
+  top: 10px;
+  right: 10px;
+  left: 12px;
+}
+
+.glass-stage[data-layout='phone'] .glass-stage__sbtn {
+  width: 36px;
+  height: 36px;
+}
+
+/* ---- Reduced transparency, and the native video route ------------------------------ */
+:root[data-reduced-transparency='true'] .glass-stage__sbtn,
+:root[data-reduced-transparency='true'] .glass-stage-popover {
+  background-color: var(--solid);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* Over a surface under the webview no blur can reach the video: the controls on
+   the stream carry near-solid fills instead, so they stay legible on any frame. */
+html[data-native-underlay] .glass-stage__sbtn {
+  background-color: color-mix(in srgb, var(--pill) 90%, transparent);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+html[data-native-underlay] .glass-stage__sbtn:hover {
+  background-color: color-mix(in srgb, var(--ink-1) 10%, var(--pill));
+}
+
+html[data-native-underlay] .glass-stage__sbtn[aria-pressed='true'] {
+  background-color: color-mix(in srgb, var(--ink-1) 22%, var(--pill));
+}

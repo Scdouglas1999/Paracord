@@ -278,10 +278,3 @@
   --shadow-plate: none;
 }
 
-/* Stage stub (delete with WP-G14): the StreamViewer fills the stage. */
-.glass-stub-stage {
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-  min-height: 0;
-}

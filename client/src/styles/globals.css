@@ -62,6 +62,7 @@
 @import './glass-pages.css' layer(components);
 @import './glass-sheets.css';
 @import './glass-pill.css';
+@import './glass-stage.css';
 /* The conversation's header and message box (WP-G11). Unlayered, after the
    frame: it refines the frame's region rules. */
 @import './components.css' layer(components);

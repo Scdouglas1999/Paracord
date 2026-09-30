@@ -45,8 +45,11 @@ vi.mock('./SettingsPage', () => ({
 vi.mock('./GuildSettingsPage', () => ({
   GuildSettingsPage: () => <div data-testid="guild-settings-page" />,
 }));
-vi.mock('../components/voice/StreamViewer', () => ({
-  StreamViewer: ({ streamerId }: { streamerId: string }) => <div data-testid="stream-viewer">{streamerId}</div>,
+// The stage slot (WP-G14) has its own suite; the shell only has to mount it with the target and mode.
+vi.mock('../components/glass/stage', () => ({
+  Stage: ({ target, mode }: { target: { streamerId: string }; mode: string }) => (
+    <div data-testid="stage-slot" data-mode={mode}>{target.streamerId}</div>
+  ),
 }));
 vi.mock('../components/onboarding/LayoutTour', () => ({ LayoutTour: () => null }));
 vi.mock('../components/motion/MotionDirector', () => ({ MotionDirector: () => null }));
@@ -194,8 +197,9 @@ describe('AppShell', () => {
 
     const frame = container.querySelector('.glass-frame');
     expect(frame).toHaveAttribute('data-stage', 'side');
-    expect(screen.getByRole('region', { name: 'Stage' })).toContainElement(screen.getByTestId('stream-viewer'));
-    expect(screen.getByTestId('stream-viewer')).toHaveTextContent('vincent');
+    expect(screen.getByRole('region', { name: 'Stage' })).toContainElement(screen.getByTestId('stage-slot'));
+    expect(screen.getByTestId('stage-slot')).toHaveTextContent('vincent');
+    expect(screen.getByTestId('stage-slot')).toHaveAttribute('data-mode', 'side');
     // Side by side: no places pane, the conversation stays and keeps working.
     expect(container.querySelector('.glass-frame__places')).toBeNull();
     expect(screen.getByRole('main')).not.toHaveAttribute('inert');

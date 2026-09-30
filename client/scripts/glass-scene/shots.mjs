@@ -29,6 +29,35 @@ async function settleOn(page, text, timeoutMs = 30_000) {
   await page.waitForTimeout(1500);
 }
 
+/**
+ * Wait until Vincent's scene is on screen inside the stage's stream (its teal
+ * and amber, counted in a fresh screenshot of that box) and return a frame of
+ * the whole window taken then. A share that goes away again a few seconds later
+ * is reported: the watch must never close itself (docs/design/glass-fix-rejoin.md, Bug 2).
+ */
+async function keepStageFrame(page, log) {
+  const stream = page.locator('.glass-stage__stream').first();
+  await stream.waitFor({ state: 'visible', timeout: 30_000 });
+  const deadline = Date.now() + 60_000;
+  let seen = { teal: 0, amber: 0 };
+  for (;;) {
+    const box = await stream.boundingBox();
+    seen = await sceneOnScreen(page, box ?? undefined);
+    if (seen.teal > 300 && seen.amber > 1500) break;
+    if (Date.now() > deadline) {
+      throw new Error(`Vincent's share never showed in the stage (teal ${seen.teal}px, amber ${seen.amber}px)`);
+    }
+    await page.waitForTimeout(1000);
+  }
+  log(`  ${' '.repeat(17)} Vincent's scene in the stage: ${seen.teal}px teal, ${seen.amber}px amber`);
+  await page.waitForTimeout(3000);
+  const box = await stream.boundingBox();
+  const later = await sceneOnScreen(page, box ?? undefined);
+  if (!(later.teal > 300)) log(`  ${' '.repeat(17)} …and 3s later it is gone again (teal ${later.teal}px)`);
+  const full = await sceneOnScreen(page);
+  return { png: full.png };
+}
+
 export const STATES = {
   '01-conversation': {
     reference: '01-conversation.png',
@@ -53,47 +82,27 @@ export const STATES = {
   '03-listen': { reference: '03-listen.png', pending: 'G6 + G12 (listen-in and the call pill)' },
 
   /**
-   * Watching Vincent's share with Sean in the call. Until G14 builds the Glass
-   * stage this is whatever the current client shows for it: join Lounge, open
-   * the share, and keep the frame in which Vincent's scene is on screen.
+   * Watching Vincent's share beside General, joined (screens/04), through the
+   * Glass controls: the call pill's Join, then its Watch, which grows the stage
+   * (WP-G14). The kept frame is one in which Vincent's scene is on screen inside
+   * the stage's stream, not just a canvas somewhere in the DOM.
    */
   '04-side-by-side': {
     reference: '04-side-by-side.png',
     viewport: DESKTOP,
     async run({ page, go, session, log }) {
-      // The lobby offers Watch beside a sharer: it joins and opens the share.
       // One attempt: a refused join (even a rejoin into a running call) is a
       // product failure to report, not something to retry past.
-      await go('gameNight', 'lounge');
-      await press(page, CONTROLS.watch, { timeoutMs: 45_000 });
+      await go('gameNight', 'general');
+      await settleOn(page, 'bringing the projector');
+      await press(page, ['Join Lounge'], { timeoutMs: 45_000 });
       await awaitJoined(session, { log });
-      // Sean has to *see* the share: its teal and amber on screen, not just a
-      // stream canvas somewhere in the DOM. If the lobby's Watch did not bring
-      // it up, take the Watch the call offers on Vincent's tile.
-      const deadline = Date.now() + 60_000;
-      let seen = await sceneOnScreen(page);
-      let pressedTileWatch = false;
-      while (!(seen.teal > 300 && seen.amber > 1500)) {
-        if (Date.now() > deadline) {
-          throw new Error(`Vincent's share never showed on Sean's screen (teal ${seen.teal}px, amber ${seen.amber}px)`);
-        }
-        if (!pressedTileWatch && Date.now() > deadline - 45_000) {
-          const watch = await findControl(page, CONTROLS.watch);
-          if (watch) { await watch.click().catch(() => {}); pressedTileWatch = true; }
-        }
-        await page.waitForTimeout(1000);
-        seen = await sceneOnScreen(page);
-      }
-      log(`  ${' '.repeat(17)} Vincent's scene on screen: ${seen.teal}px teal, ${seen.amber}px amber${pressedTileWatch ? ' (via the tile\'s Watch)' : ''}`);
-      // The watched share used to close itself about a second after joining
-      // (docs/design/glass-fix-rejoin.md, Bug 2). The frame that was verified
-      // is the one kept; say whether the share stayed, since it should.
-      await page.waitForTimeout(3000);
-      const later = await sceneOnScreen(page);
-      if (!(later.teal > 300)) log(`  ${' '.repeat(17)} …and 3s later it is gone again (teal ${later.teal}px): the current stage dropped the share`);
-      return { png: seen.png };
+      await press(page, CONTROLS.watch, { timeoutMs: 30_000 });
+      return keepStageFrame(page, log);
     },
     async after({ page, api, people, ids }) {
+      const stop = await findControl(page, CONTROLS.stopWatching);
+      if (stop) await stop.click().catch(() => {});
       const leave = await findControl(page, CONTROLS.leave);
       if (leave) await leave.click().catch(() => {});
       await leaveCall(api, people.sean, ids.servers.gameNight.channels.lounge);
@@ -102,7 +111,29 @@ export const STATES = {
   },
 
   '05-theater': { reference: '05-theater.png', pending: 'G15 (theater)' },
-  '06-browse': { reference: '06-browse.png', pending: 'G15 (browse)' },
+  /**
+   * Browsing while watching, not joined (screens/06): Watch from the pill, then
+   * the stage's sidebar button (S). The move between the two is WP-G15's; the
+   * resting layout is the frame's (WP-G7) and the stage's (WP-G14).
+   */
+  '06-browse': {
+    reference: '06-browse.png',
+    viewport: DESKTOP,
+    unread: true,
+    async run({ page, go, log }) {
+      await go('gameNight', 'clips');
+      await press(page, CONTROLS.watch, { timeoutMs: 30_000 });
+      await keepStageFrame(page, log);
+      await press(page, CONTROLS.browse, { timeoutMs: 10_000 });
+      await page.waitForTimeout(1200);
+      return keepStageFrame(page, log);
+    },
+    async after({ page }) {
+      const stop = await findControl(page, CONTROLS.stopWatching);
+      if (stop) await stop.click().catch(() => {});
+      await page.waitForTimeout(800);
+    },
+  },
 
   /** The phone frame of General; the Glass phone shell arrives with G20. */
   '07-phone': {

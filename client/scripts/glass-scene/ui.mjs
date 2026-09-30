@@ -20,8 +20,8 @@ export const MEDIA_ARGS = [
 ];
 
 export const CONTROLS = {
-  join: ['Join voice', 'Join'],
-  leave: ['Disconnect from voice', 'Leave'],
+  join: ['Join voice', 'Join', 'Join Lounge'],
+  leave: ['Disconnect from voice', 'Leave', 'Leave Lounge'],
   share: ['Share screen', 'Share your screen'],
   stopShare: ['Stop streaming', 'Stop sharing'],
   cameraOn: ['Turn on camera'],
@@ -31,6 +31,9 @@ export const CONTROLS = {
   // The lobby's per-person Watch joins and opens that share in one go.
   watch: [/^Watch \w+'s screen$/i, 'Watch'],
   retryJoin: ['Try joining again'],
+  // The Glass stage (WP-G14).
+  stopWatching: ['Stop watching'],
+  browse: ['Show servers and channels'],
 };
 
 const OVERLAYS = ['Close welcome screen', 'Skip tour', 'Got it', 'Maybe later', 'Dismiss'];
