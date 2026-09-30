@@ -48,16 +48,42 @@ describe('SearchOverlay', () => {
     vi.mocked(guildApi.searchMessages).mockResolvedValue({ data: { total: 0, messages: [] } } as never);
   });
 
-  it('opens as a named panel with a labeled search field, the server scope and close action', async () => {
+  it('opens as a named sheet with a labeled search field, the server scope and close action', async () => {
     const { onClose } = renderSearchOverlay();
 
-    expect(screen.getByRole('complementary', { name: 'Search messages' })).toBeInTheDocument();
+    // A sheet: a modal page over the conversation, named for what it does.
+    expect(screen.getByRole('dialog', { name: 'Search messages' })).toBeInTheDocument();
     expect(screen.getByRole('combobox', { name: 'Search messages' })).toBeInTheDocument();
     expect(screen.getByText('This server')).toBeInTheDocument();
     expect(screen.getByText('Narrow it down')).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: 'Close search' }));
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('puts focus in the field, where a person starts typing, and closes on Escape', async () => {
+    const user = userEvent.setup();
+    const { onClose } = renderSearchOverlay();
+    expect(screen.getByRole('combobox', { name: 'Search messages' })).toHaveFocus();
+    await user.keyboard('{Escape}');
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps Tab inside the sheet', async () => {
+    const user = userEvent.setup();
+    renderSearchOverlay();
+    const sheet = screen.getByRole('dialog', { name: 'Search messages' });
+    for (let i = 0; i < 20; i++) {
+      await user.tab();
+      expect(sheet).toContainElement(document.activeElement as HTMLElement);
+    }
+  });
+
+  it('draws the filter guide as rows, and a filter row inserts its word', async () => {
+    const user = userEvent.setup();
+    renderSearchOverlay();
+    await user.click(screen.getByRole('button', { name: /^from:/ }));
+    expect(screen.getByRole('combobox', { name: 'Search messages' })).toHaveValue('from:');
   });
 
   it('shows the server error and does not scan loaded messages', async () => {
@@ -236,7 +262,7 @@ describe('SearchOverlay', () => {
 
     const mark = await screen.findByText('postgres');
     const row = mark.closest('button')!;
-    const when = row.querySelector('.tabular-nums')!;
+    const when = row.querySelector('.glass-instrument')!;
     expect(when.textContent).toMatch(/\d{1,2}:\d{2} [ap]m/);
     expect(when.textContent).not.toMatch(/[AP]M/);
   });

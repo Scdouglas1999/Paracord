@@ -1,8 +1,9 @@
 import { useRef } from 'react';
 import type { RefObject } from 'react';
-import { Keyboard } from 'lucide-react';
 import { useFocusTrap } from '../../../hooks/useFocusTrap';
 import { formatShortcutKey } from '../../../lib/keyboardShortcuts';
+import { SheetKicker } from '../../glass/sheets/SheetParts';
+import { Kbd } from '../../ui/Kbd';
 import { TopBarOverlay } from './TopBarOverlay';
 
 interface HelpOverlayProps {
@@ -40,10 +41,11 @@ const SHORTCUT_GROUPS: Array<{ title: string; shortcuts: Shortcut[] }> = [
   },
   {
     title: 'General',
-    shortcuts: [{ label: 'Close modal', keys: ['Esc'] }],
+    shortcuts: [{ label: 'Close a sheet or dialog', keys: ['Esc'] }],
   },
 ];
 
+/** Keyboard shortcuts, as a sheet: group kickers, a name and its keys on each row. */
 export function HelpOverlay({ open, onClose }: HelpOverlayProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
 
@@ -56,35 +58,25 @@ export function HelpOverlay({ open, onClose }: HelpOverlayProps) {
       dialogRef={dialogRef as RefObject<HTMLDivElement | null>}
       titleId="topbar-help-title"
       title="Keyboard shortcuts"
-      icon={Keyboard}
       closeLabel="Close keyboard shortcuts"
-      panelClassName="max-h-[min(82dvh,34rem)] w-full max-w-2xl"
-      bodyClassName="px-5 py-5"
     >
-      <div className="grid gap-x-10 gap-y-6 sm:grid-cols-2">
-        {SHORTCUT_GROUPS.map((group) => (
-          <section key={group.title}>
-            <h3 className="mb-2.5 text-section text-text-muted">{group.title}</h3>
-            <dl className="space-y-2">
-              {group.shortcuts.map((item) => (
-                <div key={item.label} className="flex items-center justify-between gap-4">
-                  <dt className="text-label text-text-secondary">{item.label}</dt>
-                  <dd className="flex shrink-0 items-center gap-1">
-                    {item.keys.map((k) => (
-                      <kbd
-                        key={k}
-                        className="inline-flex min-w-[1.75rem] items-center justify-center rounded-window bg-bg-mod-strong px-1.5 py-1 font-code text-meta font-semibold text-text-secondary"
-                      >
-                        {formatShortcutKey(k)}
-                      </kbd>
-                    ))}
-                  </dd>
-                </div>
-              ))}
-            </dl>
-          </section>
-        ))}
-      </div>
+      {SHORTCUT_GROUPS.map((group) => (
+        <section key={group.title} aria-label={group.title}>
+          <SheetKicker>{group.title}</SheetKicker>
+          <dl className="glass-help__list">
+            {group.shortcuts.map((item) => (
+              <div key={item.label} className="glass-help__row">
+                <dt className="glass-sheet-row__name glass-help__name">{item.label}</dt>
+                <dd className="glass-help__keys">
+                  {item.keys.map((k) => (
+                    <Kbd key={k}>{formatShortcutKey(k)}</Kbd>
+                  ))}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </section>
+      ))}
     </TopBarOverlay>
   );
 }

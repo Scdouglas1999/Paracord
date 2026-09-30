@@ -202,6 +202,50 @@ describe('ThreadPanel', () => {
     });
   });
 
+  it('goes back to the list, not out of the sheet, when a pushed thread is deleted', async () => {
+    const user = userEvent.setup();
+    vi.mocked(confirm).mockResolvedValueOnce(true);
+    vi.mocked(channelApi.deleteThread).mockResolvedValueOnce({} as never);
+    const onClose = vi.fn();
+    const onDeleted = vi.fn();
+    renderThreadPanel(
+      <ThreadPanel
+        guildId="guild-1"
+        threadChannelId="thread-1"
+        threadName="Release thread"
+        parentChannelName="general"
+        onClose={onClose}
+        onDeleted={onDeleted}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => expect(onDeleted).toHaveBeenCalledTimes(1));
+    expect(channelApi.deleteThread).toHaveBeenCalledWith('parent-1', 'thread-1');
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('closes the panel after a delete when nothing says where else to go', async () => {
+    const user = userEvent.setup();
+    vi.mocked(confirm).mockResolvedValueOnce(true);
+    vi.mocked(channelApi.deleteThread).mockResolvedValueOnce({} as never);
+    const onClose = vi.fn();
+    renderThreadPanel(
+      <ThreadPanel
+        guildId="guild-1"
+        threadChannelId="thread-1"
+        threadName="Release thread"
+        parentChannelName="general"
+        onClose={onClose}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+  });
+
   it('hides destructive controls from a thread owner without channel-management access', () => {
     mockState.permissions = 0n;
 

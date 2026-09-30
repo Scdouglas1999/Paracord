@@ -93,13 +93,6 @@
   flex: 1 1 0;
 }
 
-/* The transitional sheet pane (the sheets stub): after the conversation. */
-.glass-frame__sheet {
-  display: flex;
-  flex: 0 0 auto;
-  min-height: 0;
-}
-
 /* The conversation stepped aside (browse) or hidden (theater, H). It stays
    mounted and inert; it slides out past the window's right edge. */
 .glass-frame__conversation[data-away='true'] {
@@ -296,12 +289,6 @@
 .glass-outlet {
   --color-bg-base: transparent;
   --shadow-plate: none;
-}
-
-/* Sheets stub (delete with WP-G18): the ContextPanel's own 12px gutter goes
-   to zero so the frame's 16px gap is the only one, and it runs full height. */
-.glass-stub-sheet {
-  --gutter: 0px;
 }
 
 /* Stage stub (delete with WP-G14): the StreamViewer fills the stage. */

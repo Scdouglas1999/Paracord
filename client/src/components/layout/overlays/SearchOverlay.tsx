@@ -5,7 +5,6 @@ import {
   Calendar,
   ChevronsUpDown,
   File,
-  Hash,
   Image,
   Link2,
   ListChecks,
@@ -24,11 +23,8 @@ import { guildApi } from '../../../api/guilds';
 import type { GuildMessageSearchHit } from '../../../api/guilds';
 import { useChannel, useGuildChannels } from '../../../hooks/useChannels';
 import { useCurrentAccountScope } from '../../../hooks/useCurrentUser';
-import { useMobile } from '../../../hooks/useMobile';
 import { useCurrentMessageStore } from '../../../hooks/useMessageStore';
-import { personLight } from '../../../lib/attention/personLight';
 import { displayName } from '../../../lib/displayName';
-import { wallClock } from '../../../lib/formatters';
 import { messageSnippetText } from '../../../lib/markdown';
 import {
   applyChip,
@@ -55,8 +51,9 @@ import { entityScopeKey } from '../../../lib/serverScope';
 import { cn } from '../../../lib/utils';
 import { useMemberStore } from '../../../stores/memberStore';
 import type { Message } from '../../../types';
-import { LitAvatar } from '../../light/LitAvatar';
-import { Chip } from '../../ui/Chip';
+import { Face } from '../../glass/places/Lead';
+import { SheetFrame } from '../../glass/sheets/SheetFrame';
+import { whenLabel } from '../../glass/sheets/whenLabel';
 import { ResourceImage } from '../../ui/ResourceImage';
 
 interface SearchOverlayProps {
@@ -77,7 +74,7 @@ const EMPTY_MESSAGES: Message[] = [];
 
 const FILTER_GUIDE: Array<{ insert: string; hint: string; icon: LucideIcon; serverOnly?: boolean }> = [
   { insert: 'from:', hint: 'a person', icon: User },
-  { insert: 'in:', hint: 'a channel', icon: Hash, serverOnly: true },
+  { insert: 'in:', hint: 'a channel', icon: MessagesSquare, serverOnly: true },
   { insert: 'has:', hint: 'link, image, video, file, poll, embed', icon: Link2 },
   { insert: 'mentions:', hint: 'a person', icon: AtSign },
   { insert: 'before:', hint: 'a date', icon: Calendar },
@@ -131,20 +128,6 @@ function highlightTerms(text: string, query: string): ReactNode {
   return parts;
 }
 
-function formatWhen(raw: string | undefined): string {
-  if (!raw) return '';
-  const date = new Date(raw);
-  if (Number.isNaN(date.getTime())) return '';
-  const sameYear = date.getFullYear() === new Date().getFullYear();
-  const day = date.toLocaleDateString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    ...(sameYear ? {} : { year: 'numeric' }),
-  });
-  // The app's one wall clock ("3:04 pm"), not the locale's "3:04 PM".
-  return `${day}, ${wallClock(date)}`;
-}
-
 interface HitGroup {
   channelId: string;
   channelName: string;
@@ -178,7 +161,7 @@ function suggestionIcon(chip: SearchChip): LucideIcon {
     case 'has':
       return HAS_ICON[chip.value];
     case 'in':
-      return Hash;
+      return MessagesSquare;
     case 'pinned':
       return Pin;
     case 'before':
@@ -207,7 +190,6 @@ export function SearchOverlay({
   const inputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
-  const mobile = useMobile();
   const scopeAccount = useCurrentAccountScope();
   const activeChannel = useChannel(channelId);
   const guildChannels = useGuildChannels(guildId);
@@ -539,82 +521,60 @@ export function SearchOverlay({
       ? hitId(orderedHits[selected])
       : undefined;
 
-  const header = (
-    <header className="shrink-0 border-b border-border-subtle px-3 pb-3 pt-3">
-      <div className="flex items-start gap-2">
-        {/* A label for the field: a click anywhere in the well that is not a chip focuses it. */}
-        <label
-          htmlFor="message-search-field"
-          className={cn(
-            'pc-well flex min-h-[var(--h-control-phone)] min-w-0 flex-1 flex-wrap items-center gap-1.5 rounded-[var(--radius-well)] py-1.5 pl-2 pr-2',
-            '',
-            'focus-within:shadow-[var(--shadow-well),var(--focus-ring)]',
-          )}
-        >
-          <Search size={16} className="ml-0.5 shrink-0 text-text-muted" aria-hidden />
-          {canScopeChannel ? (
-            <Chip
-              as="button"
-              tone="accent"
-              aria-label={`Searching ${scopeLabel.toLowerCase()}. Switch to ${scope === 'server' ? 'this channel' : 'this server'}.`}
-              onClick={() => {
-                setServerScope((current) => (current === 'server' ? 'channel' : 'server'));
-                focusField();
-              }}
-            >
-              {scopeLabel}
-              <ChevronsUpDown size={12} aria-hidden />
-            </Chip>
-          ) : (
-            <Chip tone="accent">{scopeLabel}</Chip>
-          )}
-          {chips.map((chip, index) => (
-            <Chip
-              key={`${chipLabel(chip)}-${index}`}
-              as="button"
-              aria-label={`Remove ${chipLabel(chip)}`}
-              onClick={() => {
-                setChips((current) => current.filter((_, chipIndex) => chipIndex !== index));
-                focusField();
-              }}
-              className="text-text-primary"
-            >
-              {chipLabel(chip)}
-              <X size={12} className="text-text-muted" aria-hidden />
-            </Chip>
-          ))}
-          <input
-            ref={inputRef}
-            id="message-search-field"
-            autoFocus
-            role="combobox"
-            aria-label="Search messages"
-            aria-expanded={menuOpen}
-            aria-controls={menuOpen ? 'search-suggestions' : 'search-results'}
-            aria-activedescendant={activeDescendant}
-            aria-autocomplete="list"
-            autoComplete="off"
-            spellCheck={false}
-            className="h-7 min-w-[6rem] flex-1 bg-transparent px-0.5 text-label text-text-primary outline-none placeholder:text-text-faint"
-            placeholder={chips.length ? 'Add words or filters' : 'Words or filters'}
-            value={draft}
-            onChange={(event) => commitDraft(event.target.value)}
-            onKeyDown={onKeyDown}
-          />
-        </label>
+
+  const field = (
+    // A label for the field: a click anywhere in it that is not a chip focuses it.
+    <label htmlFor="message-search-field" className="glass-sheet-field glass-search__field">
+      <Search size={18} className="glass-search__icon" aria-hidden />
+      {canScopeChannel ? (
         <button
           type="button"
-          onClick={onClose}
-          aria-label="Close search"
-          className="inline-flex h-[var(--h-control-phone)] w-9 shrink-0 items-center justify-center rounded-chip text-text-muted outline-none hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
+          className="glass-sheet-chip glass-sheet-chip--scope glass-focusable"
+          aria-label={`Searching ${scopeLabel.toLowerCase()}. Switch to ${scope === 'server' ? 'this channel' : 'this server'}.`}
+          onClick={() => {
+            setServerScope((current) => (current === 'server' ? 'channel' : 'server'));
+            focusField();
+          }}
         >
-          <X size={18} aria-hidden />
+          {scopeLabel}
+          <ChevronsUpDown size={12} aria-hidden />
         </button>
-      </div>
-      {conversation && (
-        <p className="mt-2 px-1 text-meta text-text-muted">Searching messages loaded on this device</p>
+      ) : (
+        <span className="glass-sheet-chip glass-sheet-chip--scope">{scopeLabel}</span>
       )}
-    </header>
+      {chips.map((chip, index) => (
+        <button
+          key={`${chipLabel(chip)}-${index}`}
+          type="button"
+          className="glass-sheet-chip glass-focusable"
+          aria-label={`Remove ${chipLabel(chip)}`}
+          onClick={() => {
+            setChips((current) => current.filter((_, chipIndex) => chipIndex !== index));
+            focusField();
+          }}
+        >
+          {chipLabel(chip)}
+          <X size={12} aria-hidden />
+        </button>
+      ))}
+      <input
+        ref={inputRef}
+        id="message-search-field"
+        data-sheet-autofocus=""
+        role="combobox"
+        aria-label="Search messages"
+        aria-expanded={menuOpen}
+        aria-controls={menuOpen ? 'search-suggestions' : 'search-results'}
+        aria-activedescendant={activeDescendant}
+        aria-autocomplete="list"
+        autoComplete="off"
+        spellCheck={false}
+        placeholder={chips.length ? 'Add words or filters' : 'Words or filters'}
+        value={draft}
+        onChange={(event) => commitDraft(event.target.value)}
+        onKeyDown={onKeyDown}
+      />
+    </label>
   );
 
   const menu = menuOpen ? (
@@ -622,9 +582,9 @@ export function SearchOverlay({
       id="search-suggestions"
       role="listbox"
       aria-label="Filter suggestions"
-      className="pc-enter mb-2 overflow-hidden rounded-[var(--radius-control)] bg-bg-raised py-1 shadow-[var(--shadow-lifted)]"
+      className="glass-sheet-card glass-sheet-card--raise glass-search__menu"
     >
-      <li role="presentation" className="px-3 pb-1 pt-1.5 text-meta text-text-faint">
+      <li role="presentation" className="glass-kicker glass-search__menu-title">
         {interpreted.active?.key === 'from' || interpreted.active?.key === 'mentions'
           ? 'People'
           : interpreted.active?.key === 'in'
@@ -636,7 +596,7 @@ export function SearchOverlay({
                 : 'Dates'}
       </li>
       {suggestions.length === 0 ? (
-        <li role="presentation" className="px-3 py-2 text-label text-text-muted">
+        <li role="presentation" className="glass-search__menu-empty">
           {interpreted.active?.key === 'from' || interpreted.active?.key === 'mentions'
             ? (conversation || membersLoaded ? 'No one matches.' : 'Loading members…')
             : interpreted.active?.key === 'in'
@@ -659,24 +619,17 @@ export function SearchOverlay({
             onMouseDown={(event) => event.preventDefault()}
             onMouseEnter={() => setMenuIndex(index)}
             onClick={() => chooseSuggestion(suggestion)}
-            className={cn(
-              'mx-1 flex cursor-pointer items-center gap-2.5 rounded-[var(--radius-chip)] px-2 py-1.5 text-label',
-              index === menuIndex ? 'bg-bg-mod-strong text-text-primary' : 'text-text-secondary',
-            )}
+            className="glass-search__option"
           >
             {person ? (
-              <LitAvatar
-                size={22}
-                hideLabel
-                person={personLight({ userId: person.id, name: person.label, status: null, avatar: person.avatar })}
-              />
+              <Face face={{ userId: person.id, name: person.label, avatar: person.avatar ?? null }} size={24} />
             ) : (
-              <span className="inline-flex h-[22px] w-[22px] shrink-0 items-center justify-center text-text-muted">
+              <span className="glass-search__option-icon">
                 <Icon size={16} aria-hidden />
               </span>
             )}
-            <span className="min-w-0 flex-1 truncate">{suggestion.label}</span>
-            {suggestion.hint && <span className="shrink-0 font-code text-meta text-text-muted">{suggestion.hint}</span>}
+            <span className="glass-search__option-label">{suggestion.label}</span>
+            {suggestion.hint && <span className="glass-search__option-hint">{suggestion.hint}</span>}
           </li>
         );
       })}
@@ -686,23 +639,23 @@ export function SearchOverlay({
   let body: ReactNode = null;
   const alertText = interpreted.error ?? searchError;
   if (alertText) {
-    body = <p role="alert" className="px-3 py-6 text-label text-accent-danger">{alertText}</p>;
+    body = <p role="alert" className="glass-sheet-alert">{alertText}</p>;
   } else if (menuOpen) {
     body = null;
   } else if (!hasQuery) {
     body = (
-      <div className="pb-2">
+      <div>
         {recentError && (
-          <div role="alert" className="flex items-center gap-2 px-3 pt-3 text-label text-accent-danger">
-            <span className="min-w-0 flex-1">{recentError}</span>
+          <div role="alert" className="glass-sheet-alert glass-search__recent-error">
+            <span>{recentError}</span>
             <button
               type="button"
+              className="glass-sheet-chip glass-focusable"
               onClick={() => {
                 clearRecentSearches(recentScope);
                 setRecentError(null);
                 setRecents([]);
               }}
-              className="shrink-0 rounded-chip px-2 py-1 text-meta font-semibold text-text-secondary outline-none hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
             >
               Clear them
             </button>
@@ -710,25 +663,26 @@ export function SearchOverlay({
         )}
         {recents.length > 0 && (
           <section aria-labelledby="search-recent-title">
-            <h3 id="search-recent-title" className="px-3 pb-1.5 pt-3 text-section text-text-faint">Recent searches</h3>
-            <ul>
+            <h3 id="search-recent-title" className="glass-kicker glass-sheet-kicker">Recent searches</h3>
+            <ul className="glass-sheet-list">
               {recents.map((recent) => (
-                <li key={recent.id} className="group flex items-center gap-1 px-1">
+                <li key={recent.id} className="glass-search__recent">
                   <button
                     type="button"
+                    className="glass-sheet-row glass-search__filter glass-focusable"
                     onClick={() => {
                       setChips(recent.chips);
                       setDraft(recent.text);
                       focusField();
                     }}
-                    className="flex min-w-0 flex-1 items-center gap-2.5 rounded-chip px-2 py-1.5 text-left text-label text-text-secondary outline-none hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
                   >
-                    <Search size={14} className="shrink-0 text-text-muted" aria-hidden />
-                    <span className="min-w-0 truncate">{recent.label}</span>
+                    <Search size={16} className="glass-search__filter-icon" aria-hidden />
+                    <span className="glass-sheet-row__name">{recent.label}</span>
                   </button>
                   <button
                     type="button"
                     aria-label={`Remove recent search ${recent.label}`}
+                    className="glass-sheet-row__action glass-search__forget glass-focusable"
                     onClick={() => {
                       try {
                         setRecents(forgetSearch(recentScope, recent.id));
@@ -736,7 +690,6 @@ export function SearchOverlay({
                         setRecentError(err instanceof Error ? err.message : String(err));
                       }
                     }}
-                    className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-chip text-text-muted outline-none hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
                   >
                     <X size={14} aria-hidden />
                   </button>
@@ -746,18 +699,18 @@ export function SearchOverlay({
           </section>
         )}
         <section aria-labelledby="search-filters-title">
-          <h3 id="search-filters-title" className="px-3 pb-1.5 pt-3 text-section text-text-faint">Narrow it down</h3>
-          <ul>
+          <h3 id="search-filters-title" className="glass-kicker glass-sheet-kicker">Narrow it down</h3>
+          <ul className="glass-sheet-list">
             {FILTER_GUIDE.filter((filter) => !(conversation && filter.serverOnly)).map((filter) => (
-              <li key={filter.insert} className="px-1">
+              <li key={filter.insert}>
                 <button
                   type="button"
                   onClick={() => insertFilter(filter.insert)}
-                  className="flex w-full items-center gap-2.5 rounded-chip px-2 py-1.5 text-left outline-none hover:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
+                  className="glass-sheet-row glass-search__filter glass-focusable"
                 >
-                  <filter.icon size={14} className="shrink-0 text-text-muted" aria-hidden />
-                  <span className="shrink-0 font-code text-meta font-semibold text-text-primary">{filter.insert}</span>
-                  <span className="min-w-0 truncate text-meta text-text-muted">{filter.hint}</span>
+                  <filter.icon size={16} className="glass-search__filter-icon" aria-hidden />
+                  <span className="glass-search__filter-code">{filter.insert}</span>
+                  <span className="glass-sheet-row__detail">{filter.hint}</span>
                 </button>
               </li>
             ))}
@@ -767,20 +720,21 @@ export function SearchOverlay({
     );
   } else if (visibleHits.length === 0 && searching) {
     body = (
-      <p role="status" aria-live="polite" className="px-3 py-6 text-label text-text-muted">
+      <p role="status" aria-live="polite" className="glass-sheet-line glass-search__status">
         Searching messages…
       </p>
     );
   } else if (visibleHits.length === 0) {
     const lastChip = chips[chips.length - 1];
     body = (
-      <div className="px-3 py-6">
-        <p className="text-label text-text-primary">No messages match this search.</p>
+      <div className="glass-search__none">
+        <p className="glass-search__none-title">No messages match this search.</p>
         {lastChip ? (
-          <p className="mt-2 flex flex-wrap items-center gap-1.5 text-label text-text-muted">
-            Try dropping a filter:
-            <Chip
-              as="button"
+          <p className="glass-sheet-line">
+            Try dropping a filter:{' '}
+            <button
+              type="button"
+              className="glass-sheet-chip glass-focusable"
               aria-label={`Remove ${chipLabel(lastChip)}`}
               onClick={() => {
                 setChips((current) => current.slice(0, -1));
@@ -788,11 +742,11 @@ export function SearchOverlay({
               }}
             >
               {chipLabel(lastChip)}
-              <X size={12} className="text-text-muted" aria-hidden />
-            </Chip>
+              <X size={12} aria-hidden />
+            </button>
           </p>
         ) : (
-          <p className="mt-1 text-label text-text-muted">
+          <p className="glass-sheet-line">
             {conversation ? 'Only messages loaded on this device can be searched.' : 'Try fewer or different words.'}
           </p>
         )}
@@ -801,21 +755,19 @@ export function SearchOverlay({
   } else {
     body = (
       <div id="search-results" key={resultKey}>
-        <p className="flex items-center justify-between px-3 pb-1 pt-2 text-meta text-text-muted" aria-live="polite">
-          <span>{visibleTotal === 1 ? '1 result' : `${visibleTotal.toLocaleString()} results`}</span>
+        <p className="glass-sheet-line glass-search__count" aria-live="polite">
+          <span className="glass-instrument">{visibleTotal === 1 ? '1 result' : `${visibleTotal.toLocaleString()} results`}</span>
           {searching && <span>Updating…</span>}
         </p>
         {groups.map((group) => (
           <section key={group.channelId} aria-label={group.channelName}>
             {!conversation && (
-              <h3 className="flex items-center gap-1.5 px-3 pb-1 pt-3 text-section text-text-faint">
-                {group.thread
-                  ? <MessagesSquare size={13} className="shrink-0" aria-hidden />
-                  : <Hash size={13} className="shrink-0" aria-hidden />}
+              <h3 className="glass-kicker glass-sheet-kicker glass-search__group">
+                {group.thread && <MessagesSquare size={13} className="shrink-0" aria-hidden />}
                 <span className="min-w-0 truncate">{group.channelName}</span>
               </h3>
             )}
-            <ul className="px-1">
+            <ul className="glass-sheet-list">
               {group.hits.map((hit) => {
                 const index = hitOrder.get(hit) ?? 0;
                 const animate = index < ANIMATED_ROWS;
@@ -835,51 +787,43 @@ export function SearchOverlay({
                       type="button"
                       onClick={() => jumpTo(hit)}
                       onMouseMove={() => { if (selected !== index) setSelected(index); }}
-                      className={cn(
-                        'flex w-full gap-3 rounded-chip px-2 py-2 text-left outline-none focus-visible:shadow-[var(--focus-ring)]',
-                        animate && 'pc-search-row',
-                        index === selected ? 'bg-bg-mod-subtle' : 'hover:bg-bg-mod-subtle',
-                      )}
+                      data-selected={index === selected ? 'true' : undefined}
+                      className={cn('glass-sheet-row glass-search__hit glass-focusable', animate && 'pc-search-row')}
                       style={animate ? { animationDelay: `calc(var(--stagger-light) * ${index})` } : undefined}
                     >
-                      <LitAvatar
-                        size={32}
-                        hideLabel
-                        className="mt-0.5"
-                        person={personLight({
+                      <Face
+                        face={{
                           userId: author?.id ?? hit.message.id,
                           name: authorName,
-                          status: null,
                           avatar: author?.avatar_hash ?? author?.avatar ?? null,
-                        })}
+                        }}
+                        size={36}
                       />
-                      <span className="min-w-0 flex-1">
-                        <span className="flex items-baseline gap-2">
-                          <span className="min-w-0 truncate text-label font-semibold text-text-primary">{authorName}</span>
-                          <span className="shrink-0 text-meta tabular-nums text-text-muted">
-                            {formatWhen(hit.message.created_at || hit.message.timestamp)}
+                      <span className="glass-sheet-row__text">
+                        <span className="glass-search__hit-head">
+                          <span className="glass-sheet-row__name">{authorName}</span>
+                          <span className="glass-sheet-row__aside glass-instrument">
+                            {whenLabel(hit.message.created_at || hit.message.timestamp)}
                           </span>
                           {hit.message.pinned && <Pin size={12} className="shrink-0 text-text-muted" aria-label="Pinned" />}
                         </span>
                         {text ? (
-                          <span className="mt-0.5 line-clamp-4 block whitespace-pre-line break-words text-label text-text-secondary">
-                            {highlightTerms(text, freeText)}
-                          </span>
+                          <span className="glass-search__snippet">{highlightTerms(text, freeText)}</span>
                         ) : null}
                         {images.length > 0 && (
-                          <span className="mt-1.5 flex gap-1.5">
+                          <span className="glass-search__thumbs">
                             {images.slice(0, 3).map((attachment) => (
                               <ResourceImage
                                 key={attachment.id}
                                 src={attachment.proxy_url || attachment.url}
                                 alt={attachment.filename}
-                                className="h-14 w-14 rounded-[var(--radius-chip)] bg-bg-well object-cover"
+                                className="glass-search__thumb"
                               />
                             ))}
                           </span>
                         )}
                         {otherFiles > 0 && (
-                          <span className="mt-1 flex items-center gap-1 text-meta text-text-muted">
+                          <span className="glass-search__files">
                             <File size={12} aria-hidden />
                             {otherFiles === 1 ? '1 file' : `${otherFiles} files`}
                           </span>
@@ -893,40 +837,29 @@ export function SearchOverlay({
           </section>
         ))}
         {moreToLoad && <div ref={sentinelRef} className="h-6" aria-hidden />}
-        {loadingMore && <p role="status" className="px-3 py-2 text-meta text-text-muted">Loading more…</p>}
+        {loadingMore && <p role="status" className="glass-sheet-line">Loading more…</p>}
       </div>
     );
   }
 
-  if (!open) return null;
-
-  const fill = mobile;
   return (
-    <aside
-      ref={panelRef}
-      aria-label="Search messages"
-      tabIndex={-1}
-      data-testid="context-panel"
-      data-mode="search"
-      onKeyDown={(event) => {
-        if (event.key === 'Escape') {
-          event.stopPropagation();
-          onClose();
-        }
-      }}
-      className={cn(
-        'flex min-h-0 shrink-0 flex-col overflow-hidden outline-none',
-        fill
-          ? 'h-full w-full bg-bg-plate pt-[env(safe-area-inset-top)]'
-          : 'pc-plate my-[var(--gutter)] mr-[var(--gutter)] h-[calc(100%-var(--gutter)*2)]',
+    <SheetFrame
+      open={open}
+      onClose={onClose}
+      kind="search"
+      label="Search messages"
+      closeLabel="Close search"
+      header={(
+        <div className="glass-search__header">
+          {field}
+          {conversation && <p className="glass-sheet-line glass-sheet-line--faint">Searching messages loaded on this device</p>}
+        </div>
       )}
-      style={fill ? undefined : { width: 'var(--w-context-panel)' }}
+      panelRef={panelRef}
+      bodyRef={scrollRef}
     >
-      {header}
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto p-2 scrollbar-thin">
-        {menu}
-        {body}
-      </div>
-    </aside>
+      {menu}
+      {body}
+    </SheetFrame>
   );
 }

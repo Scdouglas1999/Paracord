@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAuthStore } from '../../stores/authStore';
@@ -159,8 +159,10 @@ describe('TopBar inbox', () => {
     fireEvent.click(screen.getByRole('button', { name: 'More channel actions' }));
     fireEvent.click(screen.getByRole('menuitem', { name: /^Inbox/ }));
 
-    expect(await screen.findByText('#random')).toBeInTheDocument();
-    expect(screen.queryByText('#general')).not.toBeInTheDocument();
+    // The inbox is a Glass sheet now: its rows name a channel without the `#`.
+    const inbox = await screen.findByRole('dialog', { name: 'Inbox' });
+    expect(await within(inbox).findByText('random')).toBeInTheDocument();
+    expect(within(inbox).queryByText('general')).not.toBeInTheDocument();
   });
 });
 

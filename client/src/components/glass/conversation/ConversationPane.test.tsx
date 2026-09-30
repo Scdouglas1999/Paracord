@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useGlassStore } from '../../../stores/glassStore';
+import { useSheetPages } from '../sheets';
 import { useUIStore } from '../../../stores/uiStore';
 import { useVoiceStore } from '../../../stores/voiceStore';
 import { useAuthStore } from '../../../stores/authStore';
@@ -205,15 +206,13 @@ describe('the header of a channel', () => {
     renderPane();
     const search = screen.getByRole('button', { name: 'Search messages' });
     await user.click(search);
+    // The header states its intent on the store; the Sheets slot renders it.
     expect(useGlassStore.getState().sheet).toBe('search');
-    // Until the sheets slot renders glassStore.sheet (WP-G18), the panel that
-    // can show it today is driven too.
-    expect(useUIStore.getState().contextPanelMode).toBe('search');
+    expect(useUIStore.getState().contextPanelMode).toBeNull();
     expect(search).toHaveAttribute('aria-expanded', 'true');
 
     await user.click(search);
     expect(useGlassStore.getState().sheet).toBeNull();
-    expect(useUIStore.getState().contextPanelMode).toBeNull();
     expect(search).toHaveAttribute('aria-expanded', 'false');
   });
 
@@ -228,8 +227,10 @@ describe('the header of a channel', () => {
     const user = userEvent.setup();
     renderPane();
     await user.click(screen.getByRole('button', { name: 'Your profile, online' }));
+    // Your face opens the account menu (a popover the Sheets slot renders);
+    // settings is one of its rows, no longer what the face does by itself.
     expect(useGlassStore.getState().sheet).toBe('account');
-    expect(useUIStore.getState().userSettingsOpen).toBe(true);
+    expect(useUIStore.getState().userSettingsOpen).toBe(false);
   });
 
   it('opens the channel menu from the title, with the actions the header used to carry', async () => {
@@ -240,13 +241,14 @@ describe('the header of a channel', () => {
     await user.click(title);
     const menu = screen.getByRole('menu', { name: 'Channel actions' });
     const rows = within(menu).getAllByRole('menuitem');
-    expect(rows).toHaveLength(7);
+    expect(rows).toHaveLength(8);
     for (const name of [
       /^Catch up summary/,
       /^Pinned messages/,
       /^Threads/,
       /^Media/,
       /^Server leaderboard/,
+      /^Notifications/,
       /^Inbox/,
       /^Keyboard shortcuts/,
     ]) {
@@ -261,7 +263,9 @@ describe('the header of a channel', () => {
     renderPane();
     await user.click(screen.getByRole('button', { name: 'General' }));
     await user.click(screen.getByRole('menuitem', { name: 'Pinned messages' }));
-    expect(useUIStore.getState().contextPanelMode).toBe('pins');
+    // The row opens the channel sheet on its Pins page.
+    expect(useGlassStore.getState().sheet).toBe('channel');
+    expect(useSheetPages.getState().channelPage).toBe('pins');
     expect(screen.queryByRole('menu', { name: 'Channel actions' })).not.toBeInTheDocument();
   });
 
@@ -357,7 +361,6 @@ describe('the header of a direct message', () => {
     renderPane(GROUP_DM);
     await user.click(screen.getByRole('button', { name: 'People in this message' }));
     expect(useGlassStore.getState().sheet).toBe('people');
-    expect(useUIStore.getState().contextPanelMode).toBe('recipients');
   });
 });
 

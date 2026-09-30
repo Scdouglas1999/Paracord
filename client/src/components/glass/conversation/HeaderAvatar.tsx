@@ -25,7 +25,7 @@ export function initialsOf(name: string): string {
 
 /**
  * Your face at the pane's right edge, with a presence dot (docs/glass-spec.md
- * §3.2). It opens the account sheet (WP-G18).
+ * §3.2). It opens the account menu (WP-G18).
  *
  * Presence is not a color (plan §1.3 / §7): online is a solid dot in the
  * ink, away a ring, do not disturb a dot with a bar, invisible and offline a
@@ -48,7 +48,7 @@ export function HeaderAvatar() {
         type="button"
         className="glass-header__avatar glass-focusable"
         aria-label={label}
-        aria-haspopup="dialog"
+        aria-haspopup="menu"
         aria-expanded={accountOpen}
         onClick={() => toggleHeaderSheet('account')}
       >

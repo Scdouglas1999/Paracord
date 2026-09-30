@@ -1,7 +1,7 @@
 import { useCurrentChannelStore, useChannelActions } from '../../hooks/useChannels';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
-import { useEffect, useState } from 'react';
-import { Hash, MessageSquare, X } from 'lucide-react';
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
+import { CornerUpLeft } from 'lucide-react';
 import { useNavigate } from 'react-router';
 import { MessageList } from './MessageList';
 import { MessageInput } from './MessageInput';
@@ -14,6 +14,8 @@ import { confirm } from '../../stores/confirmStore';
 import { usePermissions } from '../../hooks/usePermissions';
 import { hasPermission, Permissions } from '../../types';
 import { ErrorBoundary } from '../ErrorBoundary';
+import { GlassButton } from '../glass/primitives';
+import { cn } from '../../lib/utils';
 
 interface ThreadPanelProps {
   guildId: string;
@@ -21,7 +23,31 @@ interface ThreadPanelProps {
   threadName: string;
   parentChannelName: string;
   onClose: () => void;
+  /**
+   * Called after the thread is deleted, in place of `onClose`: a thread pushed
+   * over a list goes back to the list rather than closing the whole sheet.
+   */
+  onDeleted?: () => void;
   className?: string;
+}
+
+/** Below this the message box asks for a short invitation (a phone, a side chat). */
+const NARROW_BELOW = 560;
+
+/** The element's width, or 0 until it has been laid out. */
+function useElementWidth<T extends HTMLElement>(): [RefObject<T | null>, number] {
+  const ref = useRef<T>(null);
+  const [width, setWidth] = useState(0);
+  useLayoutEffect(() => {
+    const node = ref.current;
+    if (!node) return;
+    setWidth(node.getBoundingClientRect().width);
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => setWidth(node.getBoundingClientRect().width));
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+  return [ref, width];
 }
 
 function threadPanelError(action: string, err: unknown): string {
@@ -35,9 +61,13 @@ export function ThreadPanel({
   threadName,
   parentChannelName,
   onClose,
+  onDeleted,
   className = '',
 }: ThreadPanelProps) {
   const navigate = useNavigate();
+  const [rootRef, width] = useElementWidth<HTMLDivElement>();
+  // Zero means "not laid out" (a detached tree), never "wide".
+  const narrow = width < NARROW_BELOW;
   const [replyingTo, setReplyingTo] = useState<{ id: string; author: string; content: string } | null>(null);
   const [restoring, setRestoring] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -85,7 +115,7 @@ export function ThreadPanel({
       if (guildId) {
         channelActions.removeChannel(guildId, threadChannelId);
       }
-      onClose();
+      (onDeleted ?? onClose)();
     } catch (err: unknown) {
       toast.error(threadPanelError('Failed to delete thread', err));
     } finally {
@@ -94,64 +124,45 @@ export function ThreadPanel({
   };
 
   return (
-    <div className={`pc-plate flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${className}`}>
-      <div className="panel-divider flex shrink-0 items-center justify-between gap-3 border-b border-border-subtle px-4 py-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 text-label font-semibold text-text-primary">
-            <MessageSquare size={15} className="text-accent-primary" />
-            <span className="truncate">{threadName || 'Thread'}</span>
-          </div>
-          <button
-            type="button"
-            onClick={openParentChannel}
-            disabled={!threadChannel?.parent_id}
-            className="mt-0.5 flex max-w-full items-center gap-1.5 rounded-window text-meta text-text-muted outline-none transition-colors hover:text-accent-primary focus-visible:shadow-[var(--focus-ring)] disabled:pointer-events-none"
-            aria-label={`Open parent channel ${parentChannelName || 'parent channel'}`}
-          >
-            <Hash size={12} className="shrink-0" />
-            <span className="truncate">{parentChannelName || 'parent channel'}</span>
-          </button>
-        </div>
-        <div className="flex items-center gap-2">
+    <div
+      ref={rootRef}
+      className={cn('glass-sheet-thread', className)}
+      data-testid="thread-page"
+      data-thread={threadChannelId}
+    >
+      <div className="glass-sheet-thread__bar">
+        <button
+          type="button"
+          onClick={openParentChannel}
+          disabled={!threadChannel?.parent_id}
+          className="glass-sheet-thread__parent glass-focusable"
+          aria-label={`Open parent channel ${parentChannelName || 'parent channel'}`}
+        >
+          <CornerUpLeft size={14} className="shrink-0" aria-hidden />
+          <span className="truncate">{parentChannelName || 'parent channel'}</span>
+        </button>
+        <div className="glass-sheet-thread__actions">
           {isArchived && canRestoreThread && (
-            <button
-              type="button"
-              onClick={() => void restoreThread()}
-              disabled={restoring}
-              className="rounded-chip border border-border-subtle bg-bg-mod-subtle px-3 py-1.5 text-label font-semibold text-text-secondary shadow-[var(--shadow-chip)] transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-strong hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
-            >
+            <GlassButton variant="text" onClick={() => void restoreThread()} disabled={restoring}>
               Restore
-            </button>
+            </GlassButton>
           )}
           {canManageThread && (
-            <button
-              type="button"
-              onClick={() => void deleteThread()}
-              disabled={deleting}
-              className="rounded-chip border border-border-subtle bg-bg-mod-subtle px-3 py-1.5 text-label font-semibold text-accent-danger shadow-[var(--shadow-chip)] transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-danger-tint focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
-            >
+            <GlassButton variant="text" onClick={() => void deleteThread()} disabled={deleting}>
               {deleting ? 'Deleting...' : 'Delete'}
-            </button>
+            </GlassButton>
           )}
-          <button
-            onClick={onClose}
-            className="command-icon-btn h-9 w-9 rounded-chip border border-border-subtle bg-bg-mod-subtle text-text-secondary transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-strong hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-            aria-label="Close thread"
-            title="Close thread"
-          >
-            <X size={16} />
-          </button>
         </div>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col">
-        {isArchived && (
-          <div className="mx-4 mt-3 flex items-start gap-2 rounded-chip border-l-2 border-accent-warning bg-warning-tint px-3 py-2 text-meta text-text-secondary">
-            {canRestoreThread
-              ? 'This thread is archived. Restore it to send new messages.'
-              : 'This thread is archived. Its owner or a moderator can restore it.'}
-          </div>
-        )}
+      {isArchived && (
+        <p className="glass-sheet-thread__notice">
+          {canRestoreThread
+            ? 'This thread is archived. Restore it to send new messages.'
+            : 'This thread is archived. Its owner or a moderator can restore it.'}
+        </p>
+      )}
+      <div className="glass-sheet-thread__timeline">
         <ErrorBoundary variant="section" label="this thread">
           <MessageList
             channelId={threadChannelId}
@@ -164,19 +175,22 @@ export function ThreadPanel({
             }
           />
         </ErrorBoundary>
-        {!isArchived && (
+      </div>
+      {!isArchived && (
+        <div className="glass-sheet-thread__composer" data-narrow={narrow ? 'true' : 'false'}>
           <MessageInput
             channelId={threadChannelId}
             guildId={guildId}
             channelName={threadName}
-            // The panel is 320px at most and the thread's name is the heading
-            // at the top of it, so the field asks for a short invitation.
-            narrow
+            // A pane too narrow for a sentence (a phone, the side-by-side chat)
+            // asks for a short invitation: the thread's name is the title of the
+            // sheet already.
+            narrow={narrow}
             replyingTo={replyingTo}
             onCancelReply={() => setReplyingTo(null)}
           />
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

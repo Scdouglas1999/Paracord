@@ -59,6 +59,7 @@
 @import './glass-timeline.css' layer(components);
 @import './glass-cards.css' layer(components);
 @import './glass-pages.css' layer(components);
+@import './glass-sheets.css';
 /* The conversation's header and message box (WP-G11). Unlayered, after the
    frame: it refines the frame's region rules. */
 @import './components.css' layer(components);

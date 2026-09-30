@@ -4,9 +4,8 @@ import { Crown, Flame, Medal, TrendingUp } from 'lucide-react';
 
 import { economyApi, type EconomyLeaderboardEntry, type EconomyProgressResponse } from '../../api/economy';
 import { extractApiError } from '../../api/client';
-import { cn } from '../../lib/utils';
 import { displayName } from '../../lib/displayName';
-import { Chip, EmptyState, ErrorBanner, Well } from '../ui';
+import { Chip, EmptyState, ErrorBanner } from '../ui';
 import { Skeleton } from '../ui/Skeleton';
 
 interface GuildEconomyPanelProps {
@@ -72,32 +71,24 @@ export function GuildEconomyPanel({ guildId }: GuildEconomyPanelProps) {
   );
 
   return (
-    <div className="flex min-h-full min-w-0 w-full flex-col bg-bg-plate">
-      <div className="flex min-w-0 flex-1 flex-col gap-4 p-4">
-        <div>
-          <div className="flex items-center gap-2 text-text-primary">
-            <TrendingUp size={16} className="text-accent-primary" aria-hidden />
-            <span className="pc-display text-name">Server leaderboard</span>
-          </div>
-          <div className="mt-1 text-meta leading-relaxed text-text-muted">
-            Activity XP, streaks, and levels update live.
-          </div>
-        </div>
+    <div className="glass-economy flex min-w-0 w-full flex-col">
+      <div className="flex min-w-0 flex-1 flex-col gap-4">
+        <p className="glass-sheet-line">Activity XP, streaks and levels update live.</p>
 
         {loading ? (
           <div className="flex flex-col gap-2.5">
-            <Skeleton height={96} borderRadius="var(--radius-well)" />
-            <Skeleton height={160} borderRadius="var(--radius-well)" />
+            <Skeleton height={96} borderRadius="var(--r-bubble)" />
+            <Skeleton height={160} borderRadius="var(--r-bubble)" />
           </div>
         ) : error ? (
           <ErrorBanner message={error} multiline />
         ) : (
           <>
-            {/* Your own standing — a recessed readout inside the panel. */}
-            <Well bare className="px-4 py-3.5">
+            {/* Your own standing: a solid card, one step above the sheet. */}
+            <section className="glass-sheet-card glass-economy__you" aria-label="Your progress">
               <div className="flex items-center justify-between gap-2">
-                <span className="text-label text-text-primary">Your progress</span>
-                <span className="glass-instrument text-meta text-text-muted">
+                <span className="glass-name">Your progress</span>
+                <span className="glass-instrument glass-secondary">
                   {progress?.rank != null ? `Rank #${progress.rank}` : 'Unranked'}
                 </span>
               </div>
@@ -110,7 +101,7 @@ export function GuildEconomyPanel({ guildId }: GuildEconomyPanelProps) {
                 </span>
               </div>
               <div
-                className="mt-3 h-2 overflow-hidden rounded-[var(--radius-full)] bg-bg-mod-strong"
+                className="glass-economy__meter"
                 role="progressbar"
                 aria-valuenow={progressPercent}
                 aria-valuemin={0}
@@ -118,12 +109,12 @@ export function GuildEconomyPanel({ guildId }: GuildEconomyPanelProps) {
                 aria-label="Progress through this level"
               >
                 <div
-                  className="pc-meter-fill bg-accent-primary"
+                  className="pc-meter-fill glass-economy__fill"
                   style={{ '--pc-fill': progressPercent / 100 } as CSSProperties}
                 />
               </div>
               {/* §9: the meter is never the only cue — the count reads it out. */}
-              <div className="mt-2 glass-instrument text-meta text-text-muted">
+              <div className="mt-2 glass-instrument glass-secondary">
                 {progress?.progress.xp_into_level ?? 0}/{progress?.progress.xp_required_this_level ?? 0} XP this level
               </div>
               {progress && progress.achievements.length > 0 && (
@@ -136,7 +127,7 @@ export function GuildEconomyPanel({ guildId }: GuildEconomyPanelProps) {
                   ))}
                 </div>
               )}
-            </Well>
+            </section>
 
             {entries.length === 0 ? (
               <EmptyState
@@ -146,23 +137,21 @@ export function GuildEconomyPanel({ guildId }: GuildEconomyPanelProps) {
                 description="Post in a channel and you'll be the first name on this board."
               />
             ) : (
-              <ul className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto">
+              <ul className="glass-sheet-list">
                 {entries.map((entry) => {
                   const isMe = currentUserId != null && entry.user.id === currentUserId;
                   return (
                     <li
                       key={entry.user.id}
-                      className={cn(
-                        'flex items-center justify-between gap-2 rounded-[var(--radius-control)] px-3 py-2.5',
-                        isMe && 'bg-bg-raised shadow-[var(--shadow-raised)]',
-                      )}
+                      className="glass-sheet-row glass-economy__row"
+                      data-selected={isMe ? 'true' : undefined}
                     >
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-1.5 text-label text-text-primary">
-                          {entry.rank === 1 && <Crown size={12} className="text-text-primary" aria-hidden />}
+                      <div className="glass-sheet-row__text">
+                        <div className="glass-sheet-row__name flex items-center gap-1.5">
+                          {entry.rank === 1 && <Crown size={13} className="shrink-0" aria-hidden />}
                           #{entry.rank} {displayName(entry.user)}
                         </div>
-                        <div className="glass-instrument text-meta text-text-muted">
+                        <div className="glass-sheet-row__detail glass-instrument">
                           L{entry.level} &middot; {entry.xp} XP &middot; {entry.streak_days}d streak
                         </div>
                       </div>
@@ -176,9 +165,9 @@ export function GuildEconomyPanel({ guildId }: GuildEconomyPanelProps) {
             )}
 
             {highlighted == null && currentUserId != null && progress != null && progress.rank != null && entries.length > 0 && (
-              <Well bare className="px-3 py-2.5 text-meta leading-relaxed text-text-secondary">
+              <p className="glass-sheet-card glass-sheet-line">
                 You're just outside the top 8 — currently rank #{progress.rank}.
-              </Well>
+              </p>
             )}
           </>
         )}

@@ -2,7 +2,7 @@ import { useCurrentChannelStore } from '../../hooks/useChannels';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
-import { LogOut, UserMinus, UserPlus, Users, X } from 'lucide-react';
+import { LogOut, UserMinus, UserPlus } from 'lucide-react';
 import { useChannelStore } from '../../stores/channelStore';
 import { useRelationshipStore } from '../../stores/relationshipStore';
 import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
@@ -10,6 +10,12 @@ import { extractApiError } from '../../api/client';
 import { displayName } from '../../lib/displayName';
 import { confirm } from '../../stores/confirmStore';
 import { toast } from '../../stores/toastStore';
+import { statusLine } from '../../lib/activityDisplay';
+import { presenceLabel } from '../../lib/presence';
+import { usePresenceStore } from '../../stores/presenceStore';
+import { GlassButton } from '../glass/primitives';
+import { PersonRow } from '../glass/sheets/PersonRow';
+import { SheetAlert, SheetKicker } from '../glass/sheets/SheetParts';
 
 interface GroupDmMembersPanelProps {
   channelId: string;
@@ -17,14 +23,12 @@ interface GroupDmMembersPanelProps {
 }
 
 /**
- * Who a group message is addressed to, and the one place that list is editable
- * (lantern-stage-spec §6.5, §7.6). It is NOT a member list: a room's people are
- * the here-now strip and its sheet, and nothing else in the product opens a
- * docked roster. This one exists because adding and removing a recipient is a
+ * Who a group message is addressed to, and the one place that list is editable.
+ * It is the group's page inside the people sheet (`glass/sheets/PeopleSheet`,
+ * which supplies the frame, the title and the close button): each person with
+ * their presence and what they are doing, an Add toggle, a remove control on
+ * hover for the owner, and Leave group. Adding and removing a recipient is a
  * thing you do to the conversation, not a way to look at who is around.
- *
- * The ContextPanel `recipients` mode, self-chromed like the other overlay-style
- * surfaces (its own header + Add toggle + close).
  */
 export function GroupDmMembersPanel({ channelId, onClose }: GroupDmMembersPanelProps) {
   const navigate = useNavigate();
@@ -34,6 +38,9 @@ export function GroupDmMembersPanel({ channelId, onClose }: GroupDmMembersPanelP
   const currentUser = useCurrentUser();
   const relationships = useRelationshipStore((s) => s.relationships);
   const fetchRelationships = useRelationshipStore((s) => s.fetchRelationships);
+  // Read through the store's own index; `presences` is subscribed so a change re-renders.
+  usePresenceStore((state) => state.presences);
+  const getPresence = usePresenceStore.getState().getPresence;
   const [addingMember, setAddingMember] = useState(false);
   const [memberActionError, setMemberActionError] = useState<string | null>(null);
 
@@ -97,108 +104,99 @@ export function GroupDmMembersPanel({ channelId, onClose }: GroupDmMembersPanelP
     currentUser?.id && dmChannel?.recipients?.some((r) => r.id === currentUser.id),
   );
 
-  return (
-    <aside
+  const owner = dmChannel?.owner_id === currentUser?.id;
 
-      aria-label="People in this message"
-      className="pc-plate flex h-[calc(100%-var(--gutter)*2)] shrink-0 flex-col overflow-hidden my-[var(--gutter)] mr-[var(--gutter)]"
-      style={{ width: 'var(--w-context-panel)' }}
-      data-testid="context-panel"
-      data-mode="recipients"
-    >
-      <header className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-4 py-3">
-        <Users size={18} className="shrink-0 text-text-secondary" aria-hidden />
-        <h2 className="min-w-0 flex-1 truncate text-heading text-text-primary">People in this message</h2>
-        <button
-          type="button"
-          className="rounded-chip px-2 py-1 text-meta font-semibold text-accent-primary outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-accent-tint focus-visible:shadow-[var(--focus-ring)]"
+  return (
+    <div data-testid="group-dm-people" data-mode="recipients">
+      <div className="glass-people__bar">
+        <GlassButton
+          variant="glass"
           onClick={() => {
             setMemberActionError(null);
             setAddingMember((v) => !v);
           }}
+          pressed={addingMember}
         >
           {addingMember ? 'Cancel' : 'Add'}
-        </button>
-        <button
-          type="button"
-          onClick={onClose}
-          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-chip text-text-muted outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
-          aria-label="Close the people panel"
-        >
-          <X size={18} aria-hidden />
-        </button>
-      </header>
-
-      {memberActionError && (
-        <div
-          role="alert"
-          className="mx-4 mt-3 rounded-well border border-accent-danger/35 bg-danger-tint px-3 py-2 text-meta font-medium text-accent-danger"
-        >
-          {memberActionError}
-        </div>
-      )}
-
-      {addingMember && (
-        <div className="border-b border-border-subtle p-2">
-          <div className="px-2 pb-1.5 text-section text-text-muted">Add from friends</div>
-          {eligibleFriends.map((rel) => (
-            <button
-              key={rel.id}
-              type="button"
-              className="flex w-full items-center gap-2.5 rounded-chip px-2 py-1.5 text-left outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
-              onClick={() => void handleAddMember(rel.user.id)}
-            >
-              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-chip bg-bg-mod-subtle text-text-secondary">
-                <UserPlus size={13} />
-              </span>
-              <span className="min-w-0 flex-1 truncate text-label text-text-secondary">{displayName(rel.user)}</span>
-            </button>
-          ))}
-          {eligibleFriends.length === 0 && (
-            <div className="px-2 py-3 text-meta leading-relaxed text-text-muted">
-              Everyone on your friends list is already in this conversation.
-            </div>
-          )}
-        </div>
-      )}
-
-      <div className="min-h-0 flex-1 overflow-y-auto p-2 scrollbar-thin">
-        {dmChannel?.recipients?.map((recipient) => (
-          <div
-            key={recipient.id}
-            className="group flex items-center gap-2.5 rounded-chip px-2 py-1.5 transition-colors hover:bg-bg-mod-subtle"
-          >
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-tint text-meta font-semibold text-accent-primary">
-              {recipient.username.charAt(0).toUpperCase()}
-            </div>
-            <span className="min-w-0 flex-1 truncate text-label text-text-secondary">{recipient.username}</span>
-            {dmChannel.owner_id === currentUser?.id && recipient.id !== currentUser?.id && (
-              <button
-                type="button"
-                aria-label={`Remove ${recipient.username} from group DM`}
-                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-chip text-text-muted opacity-100 outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-strong hover:text-accent-danger focus-visible:shadow-[var(--focus-ring)] sm:opacity-0 sm:focus-visible:opacity-100 sm:group-hover:opacity-100"
-                onClick={() => void handleRemoveMember(recipient.id)}
-                title="Remove from group"
-              >
-                <UserMinus size={14} />
-              </button>
-            )}
-          </div>
-        ))}
+        </GlassButton>
       </div>
 
+      {memberActionError && <SheetAlert>{memberActionError}</SheetAlert>}
+
+      {addingMember && (
+        <section aria-label="Add from friends">
+          <SheetKicker>Add from friends</SheetKicker>
+          <ul className="glass-sheet-list">
+            {eligibleFriends.map((rel) => (
+              <li key={rel.id}>
+                <button
+                  type="button"
+                  className="glass-sheet-row glass-focusable"
+                  onClick={() => void handleAddMember(rel.user.id)}
+                >
+                  <span className="glass-sheet-row__lead" aria-hidden>
+                    <UserPlus size={16} />
+                  </span>
+                  <span className="glass-sheet-row__name">{displayName(rel.user)}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+          {eligibleFriends.length === 0 && (
+            <p className="glass-sheet-line">Everyone on your friends list is already in this conversation.</p>
+          )}
+        </section>
+      )}
+
+      <section aria-label="People">
+        <SheetKicker>
+          In this message <span className="glass-instrument">{dmChannel?.recipients?.length ?? 0}</span>
+        </SheetKicker>
+        <ul className="glass-sheet-list">
+          {dmChannel?.recipients?.map((recipient) => {
+            const presence = getPresence(recipient.id, scope?.serverId);
+            const status = presence?.status === 'online' || presence?.status === 'idle' || presence?.status === 'dnd'
+              ? presence.status
+              : 'offline';
+            const line = statusLine(presence);
+            const name = displayName(recipient);
+            return (
+              <PersonRow
+                key={recipient.id}
+                userId={recipient.id}
+                name={name}
+                you={recipient.id === currentUser?.id}
+                avatar={recipient.avatar_hash ?? null}
+                status={status}
+                detail={line ? (line.type === 'custom' ? line.text : line.activity.line) : presenceLabel(status)}
+                trailing={
+                  owner && recipient.id !== currentUser?.id ? (
+                    <button
+                      type="button"
+                      aria-label={`Remove ${recipient.username} from group DM`}
+                      className="glass-sheet-row__action glass-focusable"
+                      data-tone="danger"
+                      onClick={() => void handleRemoveMember(recipient.id)}
+                      title="Remove from group"
+                    >
+                      <UserMinus size={15} aria-hidden />
+                    </button>
+                  ) : undefined
+                }
+              />
+            );
+          })}
+        </ul>
+      </section>
+
       {isMember && (
-        <div className="shrink-0 border-t border-border-subtle p-3">
-          <button
-            type="button"
-            onClick={() => void handleLeaveGroup()}
-            className="flex h-9 w-full items-center justify-center gap-2 rounded-chip border border-accent-danger/30 text-label font-medium text-accent-danger outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-danger-tint focus-visible:shadow-[var(--focus-ring)]"
-          >
-            <LogOut size={16} />
+        <div className="glass-people__leave">
+          <GlassButton variant="text" onClick={() => void handleLeaveGroup()}>
+            <LogOut size={16} aria-hidden />
             Leave group
-          </button>
+          </GlassButton>
         </div>
       )}
-    </aside>
+    </div>
   );
 }

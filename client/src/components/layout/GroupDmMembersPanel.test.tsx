@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { dmApi } from '../../api/dms';
 import { useAuthStore } from '../../stores/authStore';
 import { useChannelStore } from '../../stores/channelStore';
+import { usePresenceStore } from '../../stores/presenceStore';
 import { useRelationshipStore } from '../../stores/relationshipStore';
 import type { Channel } from '../../types';
 import { GroupDmMembersPanel } from './GroupDmMembersPanel';
@@ -96,6 +97,27 @@ describe('GroupDmMembersPanel — recipient management', () => {
   it('lists current recipients', () => {
     renderPanel();
     expect(screen.getByText('Bob')).toBeInTheDocument();
+  });
+
+  it('says how each is, in words, and marks which is you', () => {
+    usePresenceStore.getState().reset();
+    usePresenceStore.getState().updatePresence({ user_id: 'bob', status: 'idle', activities: [], custom_status: 'Back in ten' } as never, '__local__');
+    renderPanel();
+    expect(screen.getByText('Back in ten')).toBeInTheDocument();
+    expect(screen.getByText('Self (you)')).toBeInTheDocument();
+    expect(screen.getByText('Offline')).toBeInTheDocument();
+  });
+
+  it('offers Leave group, as a decision, to a member', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    render(
+      <MemoryRouter>
+        <GroupDmMembersPanel channelId="dm-1" onClose={onClose} />
+      </MemoryRouter>,
+    );
+    await user.click(screen.getByRole('button', { name: 'Leave group' }));
+    await waitFor(() => expect(dmApi.removeRecipient).toHaveBeenCalledWith('dm-1', 'me'));
   });
 
   it('shows an inline alert when adding a member fails', async () => {

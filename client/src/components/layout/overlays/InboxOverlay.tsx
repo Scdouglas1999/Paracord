@@ -1,7 +1,7 @@
 import { useCurrentAccountScope } from '../../../hooks/useCurrentUser';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { RefObject } from 'react';
-import { Bookmark, Check, CheckCheck, Clock, Hash, Inbox, Loader2, MessageSquare, Trash2 } from 'lucide-react';
+import { Bookmark, Check, CheckCheck, Clock, Inbox, Loader2, MessageSquare, MessagesSquare, Trash2 } from 'lucide-react';
 import { useNavigate } from 'react-router';
 import type { Message, ReadState } from '../../../types';
 import { useFocusTrap } from '../../../hooks/useFocusTrap';
@@ -15,7 +15,8 @@ import { relativeTime } from '../../../lib/formatters';
 import { messagePreviewText } from '../../../lib/markdown';
 import { fetchGuildRoles } from '../../../lib/permissionDataCache';
 import { RollingNumber } from '../../../lib/motion';
-import { cn } from '../../../lib/utils';
+import { GlassButton } from '../../glass/primitives';
+import { SheetAlert, SheetEmpty, SheetStatus } from '../../glass/sheets/SheetParts';
 import { TopBarOverlay } from './TopBarOverlay';
 import { RemindersPane } from './RemindersPane';
 import { useReminderStore } from '../../../stores/reminderStore';
@@ -196,92 +197,79 @@ export function InboxOverlay({ open, onClose, unreadItems, allChannels, error }:
       dialogRef={dialogRef as RefObject<HTMLDivElement | null>}
       titleId="topbar-inbox-title"
       title="Inbox"
-      icon={Inbox}
       closeLabel="Close inbox"
-      panelClassName="max-h-[min(82dvh,42rem)] w-full max-w-2xl"
-      bodyClassName="p-0"
     >
-      <div className="sticky top-0 z-[1] flex items-center gap-1 overflow-x-auto border-b border-border-subtle bg-bg-floating px-3 py-2">
-        {([
-          ['mentions', 'Mentions', mentionCount],
-          ['unread', 'Unread', unreadItems.length],
-          ['saved', 'Saved', savedItems.length],
-          ['reminders', 'Reminders', reminderCount],
-        ] as const).map(([value, label, count]) => (
-          <button
-            key={value}
-            type="button"
-            role="tab"
-            aria-selected={tab === value}
-            onClick={() => setTab(value)}
-            className={cn(
-              'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-chip px-3 text-label font-semibold outline-none transition-colors focus-visible:shadow-[var(--focus-ring)]',
-              tab === value
-                ? 'bg-accent-tint text-accent-primary'
-                : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary',
-            )}
-          >
-            {label}
-            {count > 0 && (
-              <span className="min-w-4 rounded-full bg-bg-mod-strong px-1 text-center text-[10px] tabular-nums text-text-secondary">
-                {/* §5.1: the tab's count re-rolls as mentions land and are
-                    read. The tab announces itself; the number stays silent. */}
-                <RollingNumber
-                  value={count}
-                  format={(n) => (n > 99 ? '99+' : String(n))}
-                  announce={false}
-                />
-              </span>
-            )}
-          </button>
-        ))}
+      <div className="glass-inbox__bar">
+        <div className="glass-sheet-tabs" role="tablist" aria-label="Inbox">
+          {([
+            ['mentions', 'Mentions', mentionCount],
+            ['unread', 'Unread', unreadItems.length],
+            ['saved', 'Saved', savedItems.length],
+            ['reminders', 'Reminders', reminderCount],
+          ] as const).map(([value, label, count]) => (
+            <button
+              key={value}
+              type="button"
+              role="tab"
+              aria-selected={tab === value}
+              onClick={() => setTab(value)}
+              className="glass-sheet-tab glass-focusable"
+            >
+              {label}
+              {count > 0 && (
+                <span className="glass-inbox__count glass-instrument">
+                  {/* §5.1: the tab's count re-rolls as mentions land and are
+                      read. The tab announces itself; the number stays silent. */}
+                  <RollingNumber
+                    value={count}
+                    format={(n) => (n > 99 ? '99+' : String(n))}
+                    announce={false}
+                  />
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
         {tab !== 'saved' && unreadItems.length > 0 && (
-          <button
-            type="button"
+          <GlassButton
+            variant="text"
             onClick={() => void markAllRead()}
             disabled={markingAllRead}
-            className="ml-auto inline-flex h-8 items-center gap-1.5 rounded-chip px-2.5 text-meta font-semibold text-text-secondary outline-none transition-colors hover:bg-bg-mod-subtle hover:text-accent-success focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
           >
-            {markingAllRead ? <Loader2 size={14} className="animate-spin" /> : <CheckCheck size={14} />}
-            <span className="hidden sm:inline">Mark all read</span>
-          </button>
+            {markingAllRead ? <Loader2 size={14} className="animate-spin" aria-hidden /> : <CheckCheck size={14} aria-hidden />}
+            Mark all read
+          </GlassButton>
         )}
       </div>
 
       {error ? (
-        <div role="alert" className="m-3 rounded-well border border-accent-danger/30 bg-danger-tint px-4 py-3 text-label text-accent-danger">
-          {error}
-        </div>
+        <SheetAlert>{error}</SheetAlert>
       ) : tab === 'reminders' ? (
         <RemindersPane
           onOpen={(item) => goToChannel(item.channel.id, item.message.id, item.channel.guild_id)}
-          empty={<EmptyState icon={Clock} title="No reminders" body="Choose Remind me on a message and it will come back here when it is due." />}
+          empty={<SheetEmpty icon={<Clock size={20} />} title="No reminders">Choose Remind me on a message and it will come back here when it is due.</SheetEmpty>}
         />
       ) : tab === 'saved' ? (
         savedLoading && savedItems.length === 0 ? (
-          <div className="flex items-center justify-center gap-2 px-5 py-12 text-label text-text-muted">
-            <Loader2 size={18} className="animate-spin" /> Loading saved messages…
-          </div>
+          <SheetStatus><Loader2 size={16} className="animate-spin" aria-hidden /> Loading saved messages…</SheetStatus>
         ) : savedError && savedItems.length === 0 ? (
-          <div role="alert" className="m-3 rounded-well border border-accent-danger/30 bg-danger-tint px-4 py-3 text-label text-accent-danger">
-            {savedError}
-          </div>
+          <SheetAlert>{savedError}</SheetAlert>
         ) : savedItems.length > 0 ? (
-          <ul className="space-y-1 p-2">
+          <ul className="glass-sheet-cards">
             {savedItems.map((item) => (
-              <li key={item.message.id} className="group flex items-start gap-3 rounded-chip px-3 py-2.5 hover:bg-bg-mod-subtle focus-within:bg-bg-mod-subtle">
+              <li key={item.message.id} className="glass-pin">
                 <button
                   type="button"
                   onClick={() => goToChannel(item.channel.id, item.message.id, item.channel.guild_id)}
-                  className="pc-focusable min-w-0 flex-1 rounded-chip text-left outline-none"
+                  className="glass-sheet-card glass-pin__card glass-focusable"
                 >
-                  <span className="flex min-w-0 items-center gap-2 text-meta text-text-muted">
-                    <Bookmark size={13} className="shrink-0 text-accent-primary" />
-                    <strong className="truncate text-label text-text-primary">{authorName(item.message)}</strong>
-                    <span className="truncate">in {item.channel.guild_id ? `#${item.channel.name}` : item.channel.name}</span>
-                    <span className="ml-auto shrink-0">{relativeTime(item.saved_at)}</span>
+                  <span className="glass-sheet-card__head">
+                    <Bookmark size={14} className="shrink-0 text-text-muted" aria-hidden />
+                    <span className="glass-sheet-card__author">{authorName(item.message)}</span>
+                    <span className="glass-sheet-line glass-inbox__where">in {item.channel.guild_id ? item.channel.name : item.channel.name}</span>
+                    <span className="glass-sheet-card__when">{relativeTime(item.saved_at)}</span>
                   </span>
-                  <span className="mt-1 block line-clamp-2 text-label leading-5 text-text-secondary">
+                  <span className="glass-sheet-card__body glass-inbox__preview">
                     {messagePreview(item.message, roleNames)}
                   </span>
                 </button>
@@ -289,39 +277,38 @@ export function InboxOverlay({ open, onClose, unreadItems, allChannels, error }:
                   type="button"
                   onClick={() => void removeSaved(item.message.id)}
                   aria-label={`Remove message from ${authorName(item.message)} from saved messages`}
-                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-chip text-text-muted opacity-0 outline-none transition-[opacity,color,background-color] hover:bg-danger-tint hover:text-accent-danger focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] group-hover:opacity-100"
+                  className="glass-sheet-row__action glass-pin__unpin glass-focusable"
+                  data-tone="danger"
                 >
-                  <Trash2 size={15} />
+                  <Trash2 size={15} aria-hidden />
                 </button>
               </li>
             ))}
           </ul>
         ) : (
-          <EmptyState icon={Bookmark} title="Nothing saved yet" body="Save a message from its actions menu and it will stay here for later." />
+          <SheetEmpty icon={<Bookmark size={20} />} title="Nothing saved yet">Save a message from its actions menu and it will stay here for later.</SheetEmpty>
         )
       ) : visibleUnread.length > 0 ? (
-        <ul className="space-y-1 p-2">
+        <ul className="glass-sheet-list">
           {visibleUnread.map(({ state, channelName }) => {
             const channel = allChannels.find((candidate) => candidate.id === state.channel_id);
             const isGuildChannel = Boolean(channel?.guild_id);
             const preview = previews[state.channel_id];
             return (
-              <li key={state.channel_id} className="group flex items-start gap-3 rounded-chip px-2.5 py-2.5 hover:bg-bg-mod-subtle focus-within:bg-bg-mod-subtle">
+              <li key={state.channel_id} className="glass-sheet-row glass-inbox__row">
                 <button
                   type="button"
                   onClick={() => goToChannel(state.channel_id, preview?.id)}
-                  className="pc-focusable flex min-w-0 flex-1 items-start gap-3 rounded-chip text-left outline-none"
+                  className="glass-inbox__open glass-focusable"
                 >
-                  <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-chip bg-accent-tint text-accent-primary">
-                    {isGuildChannel ? <Hash size={16} /> : <MessageSquare size={16} />}
+                  <span className="glass-sheet-row__lead" aria-hidden>
+                    {isGuildChannel ? <MessagesSquare size={17} /> : <MessageSquare size={17} />}
                   </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="flex min-w-0 items-center gap-1.5">
-                      <strong className="truncate text-label text-text-primary">
-                        {isGuildChannel ? `#${channelName}` : channelName}
-                      </strong>
+                  <span className="glass-sheet-row__text">
+                    <span className="glass-inbox__title">
+                      <span className="glass-sheet-row__name">{channelName}</span>
                       {state.mention_count > 0 ? (
-                        <span className="shrink-0 rounded-full bg-danger-well px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-text-on-danger">
+                        <span className="glass-badge-text glass-inbox__mention">
                           <RollingNumber
                             value={state.mention_count}
                             format={(n) => (n > 99 ? '99+' : String(n))}
@@ -329,48 +316,30 @@ export function InboxOverlay({ open, onClose, unreadItems, allChannels, error }:
                           />
                         </span>
                       ) : (
-                        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent-primary" aria-hidden />
+                        <span className="glass-inbox__dot" aria-hidden />
                       )}
                     </span>
-                    {preview && (
-                      <span className="mt-0.5 block truncate text-meta font-semibold text-text-secondary">
-                        {authorName(preview)}
-                      </span>
-                    )}
-                    <span className="block truncate text-label text-text-muted">{messagePreview(preview, roleNames)}</span>
+                    {preview && <span className="glass-inbox__author">{authorName(preview)}</span>}
+                    <span className="glass-sheet-row__detail">{messagePreview(preview, roleNames)}</span>
                   </span>
                 </button>
                 <button
                   type="button"
                   onClick={() => markItemRead(state.channel_id)}
-                  aria-label={`Mark ${isGuildChannel ? `#${channelName}` : channelName} as read`}
-                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-chip text-text-muted opacity-0 outline-none transition-[opacity,color,background-color] hover:bg-bg-mod-strong hover:text-accent-success focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] group-hover:opacity-100"
+                  aria-label={`Mark ${channelName} as read`}
+                  className="glass-sheet-row__action glass-focusable"
                 >
-                  <Check size={16} />
+                  <Check size={16} aria-hidden />
                 </button>
               </li>
             );
           })}
         </ul>
       ) : tab === 'mentions' ? (
-        <EmptyState icon={MessageSquare} title="No mentions waiting" body="Direct mentions and replies that need your attention will appear here." />
+        <SheetEmpty icon={<MessageSquare size={20} />} title="No mentions waiting">Direct mentions and replies that need your attention will appear here.</SheetEmpty>
       ) : (
-        <EmptyState icon={Inbox} title="You’re all caught up" body="New messages in other channels will land here as they arrive." />
+        <SheetEmpty icon={<Inbox size={20} />} title="You’re all caught up">New messages in other channels will land here as they arrive.</SheetEmpty>
       )}
     </TopBarOverlay>
-  );
-}
-
-function EmptyState({ icon: Icon, title, body }: { icon: typeof Inbox; title: string; body: string }) {
-  return (
-    <div className="flex items-start gap-3.5 px-5 py-10">
-      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-chip bg-accent-tint text-accent-primary">
-        <Icon size={20} />
-      </span>
-      <div className="min-w-0 pt-0.5">
-        <h3 className="text-heading text-text-primary">{title}</h3>
-        <p className="mt-1 text-label text-text-secondary">{body}</p>
-      </div>
-    </div>
   );
 }

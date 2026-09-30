@@ -1,13 +1,15 @@
 import { useRef } from 'react';
 import type { RefObject } from 'react';
-import { Pin, PinOff, X } from 'lucide-react';
+import { Pin, PinOff } from 'lucide-react';
 import { extractApiError } from '../../../api/client';
 import { channelApi } from '../../../api/channels';
 import { useCurrentMessageStore } from '../../../hooks/useMessageStore';
 import type { Message } from '../../../types';
 import { useFocusTrap } from '../../../hooks/useFocusTrap';
-import { safeStoredImageDataUrl } from '../../../lib/security';
 import { displayName } from '../../../lib/displayName';
+import { Face } from '../../glass/places/Lead';
+import { SheetAlert, SheetEmpty } from '../../glass/sheets/SheetParts';
+import { whenLabel } from '../../glass/sheets/whenLabel';
 import { TopBarOverlay } from './TopBarOverlay';
 
 interface PinnedMessagesOverlayProps {
@@ -18,10 +20,18 @@ interface PinnedMessagesOverlayProps {
   onPinsChange: (pins: Message[]) => void;
   error?: string | null;
   onErrorChange?: (error: string | null) => void;
+  /**
+   * `panel`: the page inside the channel sheet, which supplies the frame, the
+   * title and the close button. `overlay`: a dialog of its own.
+   */
   presentation?: 'overlay' | 'panel';
   panelRef?: RefObject<HTMLElement | null>;
 }
 
+/**
+ * Pinned messages, as solid cards: who, when and what, one press to jump to the
+ * message, and (for people who may) a quiet unpin on hover and focus.
+ */
 export function PinnedMessagesOverlay({
   open,
   onClose,
@@ -40,52 +50,43 @@ export function PinnedMessagesOverlay({
 
   const content = (
     <>
-      {error && (
-        <div
-          role="alert"
-          className="m-4 rounded-well border border-accent-danger/30 bg-danger-tint px-4 py-3 text-label text-accent-danger"
-        >
-          {error}
-        </div>
-      )}
+      {error && <SheetAlert>{error}</SheetAlert>}
       {pins.length > 0 ? (
-        <ul className="divide-y divide-border-subtle">
+        <ul className="glass-sheet-cards">
           {pins.map((msg) => {
-            const avatarSrc = safeStoredImageDataUrl(msg.author.avatar);
-            const pinnedAt = new Date(msg.created_at || msg.timestamp || '');
+            const name = displayName(msg.author);
             return (
-              <li
-                key={msg.id}
-                className="group relative px-5 py-4 transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-within:bg-bg-mod-subtle"
-              >
+              <li key={msg.id} className="glass-pin">
                 <button
                   type="button"
-                  className="w-full rounded-chip text-left outline-none focus-visible:shadow-[var(--focus-ring)]"
+                  className="glass-sheet-card glass-pin__card glass-focusable"
                   onClick={() => {
                     window.location.hash = `msg-${msg.id}`;
                     onClose();
                   }}
-                  aria-label={`Jump to pinned message from ${displayName(msg.author)}`}
+                  aria-label={`Jump to pinned message from ${name}`}
                 >
-                  <div className="flex items-center gap-2.5 pr-9">
-                    <div className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-full bg-bg-well text-meta font-semibold text-text-secondary">
-                      {avatarSrc ? <img src={avatarSrc} alt="" className="h-full w-full object-cover" /> : displayName(msg.author)[0]}
-                    </div>
-                    <span className="text-label font-semibold text-text-primary">{displayName(msg.author)}</span>
-                    <time className="ml-auto font-code text-meta tabular-nums text-text-muted">
-                      {Number.isNaN(pinnedAt.getTime()) ? '' : pinnedAt.toLocaleDateString()}
+                  <span className="glass-sheet-card__head">
+                    <Face
+                      face={{ userId: msg.author.id, name, avatar: msg.author.avatar_hash ?? msg.author.avatar ?? null }}
+                      size={28}
+                    />
+                    <span className="glass-sheet-card__author">{name}</span>
+                    <time className="glass-sheet-card__when glass-instrument">
+                      {whenLabel(msg.created_at || msg.timestamp)}
                     </time>
-                  </div>
-                  <p className="mt-1.5 pl-[2.375rem] pr-9 text-body text-text-primary">
-                    {msg.content || <span className="italic text-text-muted">Attachment only</span>}
-                  </p>
+                  </span>
+                  <span className={msg.content ? 'glass-sheet-card__body' : 'glass-sheet-card__body glass-sheet-card__body--muted'}>
+                    {msg.content || 'Attachment only'}
+                  </span>
                 </button>
                 {channelId && (
                   <button
                     type="button"
                     aria-label="Unpin this message"
                     title="Unpin this message"
-                    className="absolute right-4 top-4 inline-flex h-8 w-8 items-center justify-center rounded-chip text-text-muted opacity-0 outline-none transition-[opacity,color,background-color] duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-strong hover:text-accent-danger focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] group-hover:opacity-100"
+                    className="glass-sheet-row__action glass-pin__unpin glass-focusable"
+                    data-tone="danger"
                     onClick={async (e) => {
                       e.stopPropagation();
                       onErrorChange?.(null);
@@ -98,7 +99,7 @@ export function PinnedMessagesOverlay({
                       }
                     }}
                   >
-                    <PinOff size={16} />
+                    <PinOff size={16} aria-hidden />
                   </button>
                 )}
               </li>
@@ -107,18 +108,9 @@ export function PinnedMessagesOverlay({
         </ul>
       ) : (
         !error && (
-          <div className="flex items-start gap-3.5 px-5 py-8">
-            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-chip bg-accent-tint text-accent-primary">
-              <Pin size={20} />
-            </span>
-            <div className="min-w-0 pt-0.5">
-              <h3 className="text-heading text-text-primary">No pinned messages yet</h3>
-              <p className="mt-1 text-label text-text-secondary">
-                Pin a message from its <span className="font-code text-text-primary">⋯</span> menu to keep
-                the important stuff one click away for everyone here.
-              </p>
-            </div>
-          </div>
+          <SheetEmpty icon={<Pin size={20} />} title="No pinned messages yet">
+            Pin a message from its more menu to keep the important stuff one press away for everyone here.
+          </SheetEmpty>
         )
       )}
     </>
@@ -127,30 +119,13 @@ export function PinnedMessagesOverlay({
   if (!open) return null;
   if (presentation === 'panel') {
     return (
-      <aside
-        ref={panelRef}
-
-        aria-label="Pinned messages"
-        tabIndex={-1}
-        data-testid="context-panel"
+      <div
+        ref={panelRef as RefObject<HTMLDivElement | null> | undefined}
+        data-testid="pins-page"
         data-mode="pins"
-        className="pc-plate flex h-[calc(100%-var(--gutter)*2)] shrink-0 flex-col overflow-hidden outline-none my-[var(--gutter)] mr-[var(--gutter)]"
-        style={{ width: 'var(--w-context-panel)' }}
       >
-        <header className="flex shrink-0 items-center gap-2.5 border-b border-border-subtle px-4 py-3">
-          <Pin size={18} className="shrink-0 text-text-secondary" aria-hidden />
-          <h2 className="min-w-0 flex-1 truncate text-heading text-text-primary">Pinned messages</h2>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close pinned messages panel"
-            className="inline-flex h-9 w-9 items-center justify-center rounded-chip text-text-muted outline-none hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
-          >
-            <X size={18} aria-hidden />
-          </button>
-        </header>
-        <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">{content}</div>
-      </aside>
+        {content}
+      </div>
     );
   }
 

@@ -3,9 +3,7 @@ import type { KeyboardEvent, RefObject } from 'react';
 import {
   Download,
   Film,
-  Image as ImageIcon,
   Link2,
-  X,
 } from 'lucide-react';
 
 import { galleryApi, type GalleryAttachment, type GalleryLink, type GalleryPage } from '../../api/gallery';
@@ -21,12 +19,11 @@ import { ChannelType } from '../../types';
 import { createDeferredLightboxImage, useLightboxStore } from '../../stores/lightboxStore';
 import { useUIStore } from '../../stores/uiStore';
 import { toast } from '../../stores/toastStore';
-import { IconButton, Select, Tabs } from '../ui';
+import { IconButton, Select } from '../ui';
 import { ResourceImage } from '../ui/ResourceImage';
 import { authorLabel, groupByMonth } from './groupMedia';
 import { DeviceMediaGallery } from './DeviceMediaGallery';
 import { fileIcon, PlainLine, shortWhen, useSeen } from './mediaParts';
-import { displayName } from '../../lib/displayName';
 
 type GalleryTab = 'media' | 'files' | 'links';
 
@@ -35,7 +32,8 @@ const PAGE = 50;
 interface MediaGalleryPanelProps {
   guildId?: string | null;
   channelId?: string | null;
-  onClose: () => void;
+  /** Kept for the legacy panel host; the sheet's frame owns closing now. */
+  onClose?: () => void;
   panelRef?: RefObject<HTMLElement | null>;
   onKeyDown?: (event: KeyboardEvent<HTMLElement>) => void;
 }
@@ -43,10 +41,13 @@ interface MediaGalleryPanelProps {
 /**
  * Media, files and links posted in a channel, or across a server when opened
  * from the server home. Direct messages are end-to-end encrypted, so the
- * server cannot list their attachments; for those the panel shows what this
+ * server cannot list their attachments; for those the page shows what this
  * device has decrypted (see DeviceMediaGallery).
+ *
+ * The media page of the channel sheet: the frame supplies the title and the
+ * close button, this is the body. Solid tiles at 16 radius, no outlines.
  */
-export function MediaGalleryPanel({ guildId, channelId, onClose, panelRef, onKeyDown }: MediaGalleryPanelProps) {
+export function MediaGalleryPanel({ guildId, channelId, panelRef, onKeyDown }: MediaGalleryPanelProps) {
   const channelsById = useCurrentChannelStore((state) => state.channelsById);
   const channelsByGuild = useCurrentChannelStore((state) => state.channelsByGuild);
   const channel = channelId ? channelsById[channelId] : undefined;
@@ -66,65 +67,53 @@ export function MediaGalleryPanel({ guildId, channelId, onClose, panelRef, onKey
       return type === ChannelType.Text || type === ChannelType.Announcement;
     });
   }, [channelsByGuild, guildId]);
-  const subtitle = isDm
-    ? channel?.recipient ? displayName(channel.recipient) : channel?.name || 'Group conversation'
-    : scope?.kind === 'channel'
-      ? `#${channel?.name ?? 'channel'}`
-      : scope?.kind === 'guild'
-        ? 'Every channel you can read'
-        : null;
 
   return (
-    <aside
-      ref={panelRef}
-      aria-label="Media"
+    <div
+      ref={panelRef as RefObject<HTMLDivElement | null> | undefined}
       tabIndex={-1}
       onKeyDown={onKeyDown}
-      data-testid="context-panel"
+      data-testid="media-page"
       data-mode="media"
-      className="pc-plate flex h-full min-h-0 w-full flex-col overflow-hidden outline-none md:my-[var(--gutter)] md:mr-[var(--gutter)] md:h-[calc(100%-var(--gutter)*2)] md:w-[var(--w-context-panel)] md:shrink-0"
+      className="glass-media flex w-full min-w-0 flex-col outline-none"
     >
-      <header className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-4 py-3">
-        <ImageIcon size={18} className="shrink-0 text-text-secondary" aria-hidden />
-        <div className="min-w-0 flex-1">
-          <h2 className="truncate text-label font-semibold text-text-primary">Media</h2>
-          {subtitle && <p className="truncate text-meta text-text-muted">{subtitle}</p>}
-        </div>
-        <IconButton label="Close media" onClick={onClose}>
-          <X size={16} />
-        </IconButton>
-      </header>
       {isDm && channelId ? (
         // End-to-end encrypted: the instance cannot list these files, so the
-        // panel is built from what this device has decrypted.
+        // page is built from what this device has decrypted.
         <DeviceMediaGallery key={channelId} channelId={channelId} />
       ) : !scope ? (
         <PlainLine>Choose a channel to see its media.</PlainLine>
       ) : (
-        <div className="flex min-h-0 flex-1 flex-col">
-          <div className="flex shrink-0 flex-col gap-3 px-3 pt-3">
-            <Tabs
-              label="Media views"
-              variant="underline"
-              fill
-              value={tab}
-              onChange={setTab}
-              items={[
-                { value: 'media', label: 'Media' },
-                { value: 'files', label: 'Files' },
-                { value: 'links', label: 'Links' },
-              ]}
-            />
+        <div className="flex min-w-0 flex-col">
+          <div className="glass-media__bar">
+            <div className="glass-sheet-tabs" role="tablist" aria-label="Media views">
+              {([
+                ['media', 'Media'],
+                ['files', 'Files'],
+                ['links', 'Links'],
+              ] as const).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === value}
+                  className="glass-sheet-tab glass-focusable"
+                  onClick={() => setTab(value)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
             {scope.kind === 'guild' && (
               <Select
                 aria-label="Channel"
-                className="w-full"
+                className="glass-media__select"
                 value={channelFilter}
                 onChange={(event) => setChannelFilter(event.target.value)}
               >
                 <option value="">{tab === 'links' ? 'Pick a channel' : 'All channels'}</option>
                 {textChannels.map((item) => (
-                  <option key={item.id} value={item.id}>#{item.name || 'channel'}</option>
+                  <option key={item.id} value={item.id}>{item.name || 'channel'}</option>
                 ))}
               </Select>
             )}
@@ -145,7 +134,7 @@ export function MediaGalleryPanel({ guildId, channelId, onClose, panelRef, onKey
           )}
         </div>
       )}
-    </aside>
+    </div>
   );
 }
 
@@ -235,11 +224,11 @@ function AttachmentList({
   }
   if (!loading && items.length === 0) return <PlainLine>{emptyCopy(tab, scope.kind === 'guild')}</PlainLine>;
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3 pt-2">
+    <div className="min-w-0 pt-2">
       {tab === 'media' ? <MediaGrid items={items} /> : <FileRows items={items} />}
-      {error && <p role="alert" className="px-1 py-2 text-meta text-accent-danger">Could not load more: {error}</p>}
+      {error && <p role="alert" className="glass-sheet-alert">Could not load more: {error}</p>}
       {hasMore && <div ref={sentinel} className="h-6" />}
-      {loading && <p className="px-1 py-2 text-meta text-text-muted">Loading…</p>}
+      {loading && <p role="status" className="glass-sheet-line">Loading…</p>}
     </div>
   );
 }
@@ -261,11 +250,11 @@ function MediaGrid({ items }: { items: GalleryAttachment[] }) {
   };
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col">
       {groups.map((group) => (
         <section key={group.label} aria-label={group.label}>
-          <h3 className="mb-2 px-1 text-label font-semibold text-text-secondary">{group.label}</h3>
-          <ul className="grid grid-cols-3 gap-1.5">
+          <h3 className="glass-kicker glass-sheet-kicker">{group.label}</h3>
+          <ul className="glass-media__grid">
             {group.items.map((item) => (
               <li key={item.id}>
                 <MediaTile item={item} onOpen={() => openAt(item.id)} />
@@ -286,7 +275,7 @@ function MediaTile({ item, onOpen }: { item: GalleryAttachment; onOpen: () => vo
     <button
       ref={ref}
       type="button"
-      className="group relative block aspect-square w-full overflow-hidden rounded-[var(--radius-control)] bg-bg-mod-subtle outline-none focus-visible:shadow-[var(--focus-ring)]"
+      className="group relative block aspect-square w-full overflow-hidden rounded-[var(--r-tile)] bg-[var(--bub)] outline-none focus-visible:shadow-[var(--focus-ring)]"
       onClick={onOpen}
       aria-label={`${item.filename}, from ${author}, ${relativeTime(item.created_at)}`}
     >
@@ -345,19 +334,19 @@ function FileRows({ items }: { items: GalleryAttachment[] }) {
     }
   };
   return (
-    <ul className="flex flex-col divide-y divide-border-subtle">
+    <ul className="glass-sheet-list">
       {items.map((item) => {
         const Icon = fileIcon(item);
         return (
-          <li key={item.id} className="flex items-center gap-3 px-1 py-2.5">
-            <span className="pc-well inline-flex h-9 w-9 shrink-0 items-center justify-center p-0 text-text-secondary">
-              <Icon size={16} aria-hidden />
+          <li key={item.id} className="glass-sheet-row">
+            <span className="glass-sheet-row__lead" aria-hidden>
+              <Icon size={17} />
             </span>
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-label text-text-primary">{item.filename}</p>
-              <p className="truncate text-meta text-text-muted">
-                {formatFileSize(item.size)} · {authorLabel(item.author)} · {relativeTime(item.created_at)}
-              </p>
+            <div className="glass-sheet-row__text">
+              <span className="glass-sheet-row__name">{item.filename}</span>
+              <span className="glass-sheet-row__detail">
+                <span className="glass-instrument">{formatFileSize(item.size)}</span> · {authorLabel(item.author)} · {relativeTime(item.created_at)}
+              </span>
             </div>
             <IconButton label={`Download ${item.filename}`} onClick={() => void download(item)}>
               <Download size={15} />
@@ -381,15 +370,15 @@ function LinkList({ channelId }: { channelId: string }) {
   if (!loading && items.length === 0) return <PlainLine>No links in this channel yet.</PlainLine>;
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3 pt-2">
-      <ul className="flex flex-col divide-y divide-border-subtle">
+    <div className="min-w-0 pt-2">
+      <ul className="glass-sheet-list">
         {items.map((item, index) => (
           <LinkRow key={`${item.message_id}-${index}`} item={item} showImage={!lowBandwidthMode} />
         ))}
       </ul>
-      {error && <p role="alert" className="px-1 py-2 text-meta text-accent-danger">Could not load more: {error}</p>}
+      {error && <p role="alert" className="glass-sheet-alert">Could not load more: {error}</p>}
       {hasMore && <div ref={sentinel} className="h-6" />}
-      {loading && <p className="px-1 py-2 text-meta text-text-muted">Loading…</p>}
+      {loading && <p role="status" className="glass-sheet-line">Loading…</p>}
     </div>
   );
 }
@@ -407,30 +396,30 @@ function LinkRow({ item, showImage }: { item: GalleryLink; showImage: boolean })
   }
   const title = item.title || item.url.replace(/^https?:\/\//, '');
   return (
-    <li className="flex items-center gap-3 px-1 py-2.5">
-      <span className="pc-well inline-flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden p-0 text-text-secondary">
+    <li className="glass-sheet-row">
+      <span className="glass-sheet-row__lead overflow-hidden" aria-hidden={image ? undefined : true}>
         {image ? (
           <img src={image} alt="" loading="lazy" className="h-full w-full object-cover" />
         ) : (
-          <Link2 size={16} aria-hidden />
+          <Link2 size={17} aria-hidden />
         )}
       </span>
-      <div className="min-w-0 flex-1">
+      <div className="glass-sheet-row__text">
         {href ? (
           <a
             href={href}
             target="_blank"
             rel="noreferrer noopener"
-            className="block truncate rounded-chip text-label text-text-primary outline-none hover:underline focus-visible:shadow-[var(--focus-ring)]"
+            className="glass-sheet-row__name glass-focusable rounded-[6px] hover:underline"
           >
             {title}
           </a>
         ) : (
-          <p className="truncate text-label text-text-primary">{title}</p>
+          <span className="glass-sheet-row__name">{title}</span>
         )}
-        <p className="truncate text-meta text-text-muted">
+        <span className="glass-sheet-row__detail">
           {site} · {authorLabel(item.author)} · {relativeTime(item.created_at)}
-        </p>
+        </span>
       </div>
     </li>
   );
