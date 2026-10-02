@@ -5,12 +5,14 @@ import {
   type RefObject,
 } from 'react';
 import { createPortal } from 'react-dom';
+import { useParams } from 'react-router';
 import { ChevronLeft, X } from 'lucide-react';
 import { useFocusTrap } from '../../../hooks/useFocusTrap';
 import { usePresence } from '../../../lib/motion';
 import { cn } from '../../../lib/utils';
 import { useMobile } from '../../../hooks/useMobile';
 import { Tooltip } from '../../ui/Tooltip';
+import { CallPill, useRegisterSheetCover } from '../pill';
 
 /**
  * A sheet: a solid pane that slides over the conversation (docs/glass-spec.md
@@ -32,9 +34,18 @@ import { Tooltip } from '../../ui/Tooltip';
  *                  every layout (side by side is 420px, theater 380px).
  *   phone          a portal to the window, full screen, over the bottom bar.
  *
+ * The call pill: a sheet covers the conversation's header, and the call's
+ * controls have to stay reachable, so the sheet draws the pill itself
+ * (`placement="sheet"`) where the header's was: in its own header, between the
+ * title and the buttons, and on a phone in a row above it (the conversation's
+ * place for it). The covered pill goes inert until the sheet does
+ * (`pill/sheetCover.ts`). The pill sits after the close button in the document, so
+ * focus still lands on the sheet's own first control; it is drawn before it.
+ *
  * Keyboard: Escape closes, focus moves into the sheet and comes back to what
  * opened it, and Tab stays inside (the shared `useFocusTrap`). A sheet that
- * already runs its own trap passes `manageFocus={false}`.
+ * already runs its own trap passes `manageFocus={false}`. Escape on an expanded
+ * pill only puts its roster away.
  *
  * Motion: the sheet slides in 28px and fades (transform and opacity only);
  * reduced motion lands it in place.
@@ -77,6 +88,25 @@ function paneHost(): HTMLElement | null {
   return document.getElementById('main-content');
 }
 
+/**
+ * The call pill a sheet draws: the same one the conversation's header does, for
+ * the same conversation (the route's server and channel; a DM has neither a
+ * server nor a channel to ask for, as `ConversationPane` passes it).
+ */
+function SheetPill({ phone, className }: { phone: boolean; className: string }) {
+  const { guildId, channelId } = useParams();
+  return (
+    <div className={className}>
+      <CallPill
+        guildId={guildId ?? null}
+        channelId={guildId ? (channelId ?? null) : null}
+        layout={phone ? 'stacked' : 'row'}
+        placement="sheet"
+      />
+    </div>
+  );
+}
+
 export function SheetFrame({
   open,
   onClose,
@@ -105,6 +135,9 @@ export function SheetFrame({
   const ref = (panelRef ?? ownRef) as RefObject<HTMLDivElement | null>;
 
   useFocusTrap(ref, open && manageFocus, onClose);
+  // Counted from the moment it is drawn to the end of its leave, so the pill
+  // under it is never visible next to the sheet's own.
+  useRegisterSheetCover(mounted);
 
   // The trap puts focus on the first control (the back or close button); a page
   // with a field (search) names it, and it wins.
@@ -173,7 +206,9 @@ export function SheetFrame({
             </button>
           </Tooltip>
         </div>
+        {!phone && <SheetPill phone={false} className="glass-sheet__pill" />}
       </div>
+      {phone && <SheetPill phone className="glass-sheet__phone-pill" />}
       <div ref={bodyRef} className={cn('glass-sheet__body', bodyClassName)} data-body={body}>
         {children}
       </div>

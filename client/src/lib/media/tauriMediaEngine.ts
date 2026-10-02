@@ -1869,6 +1869,7 @@ export class TauriMediaEngine implements MediaEngine {
     const preferredTrackId = options?.preferredTrackId;
     const headless = options?.headless === true;
     const fit = options?.fit;
+    const anchor = options?.anchor;
     // Camera and screen can be subscribed concurrently for the same publisher;
     // key the map so they don't tear each other down.
     const subscriptionKey = preferredTrackId ? `${userId}:${preferredTrackId}` : userId;
@@ -1941,7 +1942,7 @@ export class TauriMediaEngine implements MediaEngine {
           userId,
           preferredTrackId: preferredTrackId ?? null,
         });
-        const renderer = new CanvasRenderer(canvas, { fit });
+        const renderer = new CanvasRenderer(canvas, { fit, anchor });
         own(() => renderer.destroy());
         // A headless tap paints nothing: its frames go to the taps only.
         if (headless) renderer.setRenderingEnabled(false);
@@ -2163,8 +2164,9 @@ export class TauriMediaEngine implements MediaEngine {
               streamId,
               trackId,
               // The surface places the picture as the canvas would (cover for
-              // camera tiles).
+              // camera tiles, cropped around the anchor).
               fit,
+              anchor,
               invoke: async (command, args) => {
                 if (command === 'native_render_attach') {
                   this.assertOpen();

@@ -706,6 +706,64 @@ button.glass-sheet-chip:hover {
   padding: 0 8px 10px;
 }
 
+/* ---- The call pill (pill/CallPill.tsx, placement="sheet") --------------------
+   A sheet covers the conversation's header, and the call's controls stay one
+   press away, so the sheet draws the pill itself where the header's was: right
+   aligned to the column, its top 6px under the header's top, taking what the
+   title leaves (the title gives up to 40%, as in the conversation's header) so
+   the pill gives up its labels exactly as it does there. It sits after the close
+   button in the document and before it on screen, and never under it: the close
+   button hangs at the pane's edge, past the column's end where the pill stops.
+   The header lifts above the body so an expanded roster, which grows over the
+   page as the conversation's does, is not painted under the rows.
+   ----------------------------------------------------------------------------- */
+.glass-sheet > .glass-sheet__header {
+  z-index: 2;
+}
+
+.glass-sheet__pill {
+  position: relative;
+  z-index: 3;
+  display: flex;
+  flex: 1 1 0;
+  align-self: flex-start;
+  justify-content: flex-end;
+  min-width: 0;
+  height: 52px;
+  margin-top: 6px;
+}
+
+.glass-sheet__pill:empty {
+  display: none;
+}
+
+.glass-sheet__header:has(.glass-sheet__pill:not(:empty)) .glass-sheet__heading {
+  flex: 0 1 auto;
+  max-width: max(40%, 200px);
+}
+
+/* Search is a field, not a title: it keeps most of the row and the pill the rest. */
+.glass-sheet__header:has(.glass-sheet__pill:not(:empty)) .glass-search__header {
+  flex: 1 1 0;
+}
+
+.glass-sheet[data-sheet='search'] .glass-sheet__pill {
+  flex: 0 1 34%;
+}
+
+/* On a phone the pill is a row above the header, where the conversation has it
+   (two rows, 12px in), so it does not move when the sheet opens. */
+.glass-sheet > .glass-sheet__phone-pill {
+  z-index: 2;
+  order: -1;
+  flex: 0 0 auto;
+  padding: 12px 12px 6px;
+}
+
+.glass-sheet__phone-pill:empty {
+  display: none;
+}
+
 /* ---- Phone (§8): full screen, a 56px header --------------------------------- */
 .glass-sheet[data-host='window'] .glass-sheet__header {
   min-height: 56px;

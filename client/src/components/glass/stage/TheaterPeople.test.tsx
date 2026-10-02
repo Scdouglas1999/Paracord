@@ -58,6 +58,7 @@ describe('TheaterPeople', () => {
     expect(subscribeVideo).toHaveBeenCalledWith('brendan', expect.any(HTMLCanvasElement), expect.any(Function), {
       preferredTrackId: 'camera',
       fit: 'cover',
+      anchor: { x: 0.5, y: 0.35 },
     });
   });
 

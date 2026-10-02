@@ -86,34 +86,105 @@ impl SurfaceGeometry {
     }
 }
 
+/// Where a `cover` crop falls, as CSS `object-position` reads it and as the
+/// canvas route's `anchor` option does (glass-polish-2 item 2): 0 keeps the start
+/// of the axis (the left, the top) and crops the far edge, 1 the opposite, 0.5
+/// crops both evenly. Only the axis the frame overflows is cropped, so `x` is
+/// what decides on a frame wider than its tile and `y` on a taller one. A camera
+/// tile anchors at `y: 0.35` so people's faces stay in frame.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SurfaceAnchor {
+    pub x: f32,
+    pub y: f32,
+}
+
+impl SurfaceAnchor {
+    /// The middle on both axes: what `cover` crops around unless told otherwise.
+    pub const CENTER: Self = Self { x: 0.5, y: 0.5 };
+}
+
+impl Default for SurfaceAnchor {
+    fn default() -> Self {
+        Self::CENTER
+    }
+}
+
+/// The anchor as the webview sends it to `native_render_attach`:
+/// `{ x?: number, y?: number }`, an axis it leaves out staying in the middle.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Deserialize)]
+pub struct AnchorArg {
+    pub x: Option<f64>,
+    pub y: Option<f64>,
+}
+
 /// How a frame sits in its surface, fixed when the surface is attached (the
 /// canvas route's `CanvasRenderer` `fit`, glass-polish-1 item 7).
 /// `Contain` shows the whole frame and letterboxes the rest; `Cover` fills the
-/// surface and crops the overflow evenly on the long axis (camera tiles).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// surface and crops the overflow on the long axis, around its anchor (camera
+/// tiles). The anchor belongs to `Cover` alone: `Contain` crops nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum SurfaceFit {
     #[default]
     Contain,
-    Cover,
+    Cover {
+        anchor: SurfaceAnchor,
+    },
+}
+
+/// Where the fragment shader samples the frame for a tile and a frame shape:
+/// `sample = (uv - 0.5) * scale + center`, where `uv` spans the tile.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct UvWindow {
+    /// How much of the frame the tile spans on each axis. Above 1 it reaches
+    /// outside the frame (the letterbox bars, painted empty); below 1 it crops.
+    pub scale: [f32; 2],
+    /// Where in the frame the tile's middle samples: 0.5 unless a `Cover` crop
+    /// is anchored away from the middle.
+    pub center: [f32; 2],
 }
 
 impl SurfaceFit {
-    /// Read the renderer's `fit` (`contain`, the default, or `cover`). Anything
-    /// else is refused rather than read as the default.
-    pub fn parse(value: Option<&str>) -> Result<Self, String> {
+    /// Read what the webview asked for: the renderer's `fit` (`contain`, the
+    /// default, or `cover`) and, for `cover`, where its crop falls. Anything
+    /// else is refused rather than read as the default: an unknown fit, an
+    /// anchor outside 0 to 1 (or not a number), and an anchor with a fit that
+    /// crops nothing.
+    pub fn parse(value: Option<&str>, anchor: Option<AnchorArg>) -> Result<Self, String> {
         match value {
-            None | Some("contain") => Ok(Self::Contain),
-            Some("cover") => Ok(Self::Cover),
+            None | Some("contain") => match anchor {
+                None => Ok(Self::Contain),
+                Some(_) => Err(
+                    "a native surface anchor needs fit \"cover\": contain crops nothing"
+                        .to_string(),
+                ),
+            },
+            Some("cover") => {
+                let axis = |name: &str, value: Option<f64>| -> Result<f32, String> {
+                    match value {
+                        None => Ok(0.5),
+                        Some(v) if v.is_finite() && (0.0..=1.0).contains(&v) => Ok(v as f32),
+                        Some(v) => Err(format!(
+                            "native surface anchor {name} must be between 0 and 1, got {v}"
+                        )),
+                    }
+                };
+                let anchor = match anchor {
+                    None => SurfaceAnchor::CENTER,
+                    Some(arg) => SurfaceAnchor {
+                        x: axis("x", arg.x)?,
+                        y: axis("y", arg.y)?,
+                    },
+                };
+                Ok(Self::Cover { anchor })
+            }
             Some(other) => Err(format!("unknown native surface fit: {other}")),
         }
     }
 
-    /// The scale the fragment shader applies to texture coordinates about the
-    /// center: `sample = (uv - 0.5) * scale + 0.5`, where `uv` spans the tile.
-    /// A component above 1 reaches outside the frame (the letterbox bars,
-    /// painted empty); below 1 it crops. `Contain` never crops and `Cover`
-    /// never leaves a bar. Degenerate sizes read as square.
-    pub fn uv_scale(self, tile_w: f32, tile_h: f32, source_w: f32, source_h: f32) -> [f32; 2] {
+    /// The window the fragment shader samples through (see [`UvWindow`]).
+    /// `Contain` never crops and `Cover` never leaves a bar. Degenerate sizes
+    /// read as square.
+    pub fn uv_window(self, tile_w: f32, tile_h: f32, source_w: f32, source_h: f32) -> UvWindow {
         let aspect = |w: f32, h: f32| {
             if w > 0.0 && h > 0.0 && w.is_finite() && h.is_finite() {
                 w / h
@@ -124,12 +195,33 @@ impl SurfaceFit {
         let tile = aspect(tile_w, tile_h);
         let source = aspect(source_w, source_h);
         let tile_wider = tile > source;
-        match (self, tile_wider) {
+        let scale = match (self, tile_wider) {
             (Self::Contain, true) => [tile / source, 1.0],
             (Self::Contain, false) => [1.0, source / tile],
-            (Self::Cover, true) => [1.0, source / tile],
-            (Self::Cover, false) => [tile / source, 1.0],
-        }
+            (Self::Cover { .. }, true) => [1.0, source / tile],
+            (Self::Cover { .. }, false) => [tile / source, 1.0],
+        };
+        let center = match self {
+            Self::Contain => [0.5, 0.5],
+            Self::Cover { anchor } => [
+                crop_center(scale[0], anchor.x),
+                crop_center(scale[1], anchor.y),
+            ],
+        };
+        UvWindow { scale, center }
+    }
+}
+
+/// Where the middle of a cropped window falls along one axis. The window
+/// spans `scale` of the frame (< 1 when that axis is cropped) and the room it
+/// has to move in is `1 - scale`: at `anchor` 0 it sits at the start, at 1 at
+/// the end, and at 0.5 it is centered (a center of exactly 0.5). An axis that is
+/// not cropped (`scale` >= 1) has nowhere to move and stays centered.
+fn crop_center(scale: f32, anchor: f32) -> f32 {
+    if scale < 1.0 {
+        anchor * (1.0 - scale) + scale / 2.0
+    } else {
+        0.5
     }
 }
 
@@ -301,12 +393,14 @@ pub struct AttachResponse {
 /// onto the `native-surface` route (spec §3.6 contract S1). Called **instead of**
 /// the frame-channel registration when the route is native-surface. The keyframe
 /// request / visibility / stats plumbing is shared with the existing
-/// subscription bookkeeping. `fit` is `contain` (the default) or `cover`.
+/// subscription bookkeeping. `fit` is `contain` (the default) or `cover`, and
+/// `anchor` (`cover` only) says where its crop falls.
 #[tauri::command]
 pub async fn native_render_attach(
     stream_id: String,
     track_id: String,
     fit: Option<String>,
+    anchor: Option<AnchorArg>,
     app: tauri::AppHandle,
     owner_id: String,
     state: tauri::State<'_, super::MediaState>,
@@ -315,7 +409,7 @@ pub async fn native_render_attach(
     let slot = state.slot_for(&owner_id)?;
     let _transition = slot.owners.transition.lock().await;
     slot.owners.check(&owner_id)?;
-    let fit = SurfaceFit::parse(fit.as_deref())?;
+    let fit = SurfaceFit::parse(fit.as_deref(), anchor)?;
     let app = super::CallEventSink::new(app, owner_id.clone());
     let id = registry().allocate_id();
 
@@ -528,11 +622,11 @@ mod tests {
         assert_eq!(geo(0, 0, 400, 300, 1.0, -5.0).physical_corner_radius(), 0.0);
     }
 
-    /// Where the shader samples the tile's edge and center under a scale.
-    fn sample_at(scale: [f32; 2], uv: [f32; 2]) -> [f32; 2] {
+    /// Where the shader samples the tile's edge and center under a window.
+    fn sample_at(window: UvWindow, uv: [f32; 2]) -> [f32; 2] {
         [
-            (uv[0] - 0.5) * scale[0] + 0.5,
-            (uv[1] - 0.5) * scale[1] + 0.5,
+            (uv[0] - 0.5) * window.scale[0] + window.center[0],
+            (uv[1] - 0.5) * window.scale[1] + window.center[1],
         ]
     }
 
@@ -540,48 +634,190 @@ mod tests {
         (a[0] - b[0]).abs() < 1e-5 && (a[1] - b[1]).abs() < 1e-5
     }
 
+    const COVER: SurfaceFit = SurfaceFit::Cover {
+        anchor: SurfaceAnchor::CENTER,
+    };
+
+    fn cover_at(x: f32, y: f32) -> SurfaceFit {
+        SurfaceFit::Cover {
+            anchor: SurfaceAnchor { x, y },
+        }
+    }
+
     #[test]
     fn the_fit_is_read_strictly() {
-        assert_eq!(SurfaceFit::parse(None).unwrap(), SurfaceFit::Contain);
+        assert_eq!(SurfaceFit::parse(None, None).unwrap(), SurfaceFit::Contain);
         assert_eq!(
-            SurfaceFit::parse(Some("contain")).unwrap(),
+            SurfaceFit::parse(Some("contain"), None).unwrap(),
             SurfaceFit::Contain
         );
-        assert_eq!(SurfaceFit::parse(Some("cover")).unwrap(), SurfaceFit::Cover);
-        assert!(SurfaceFit::parse(Some("fill")).is_err());
-        assert!(SurfaceFit::parse(Some("")).is_err());
+        assert_eq!(SurfaceFit::parse(Some("cover"), None).unwrap(), COVER);
+        assert!(SurfaceFit::parse(Some("fill"), None).is_err());
+        assert!(SurfaceFit::parse(Some(""), None).is_err());
+    }
+
+    #[test]
+    fn the_anchor_is_read_strictly() {
+        let anchor = |x: Option<f64>, y: Option<f64>| Some(AnchorArg { x, y });
+        // An axis it leaves out stays in the middle.
+        assert_eq!(
+            SurfaceFit::parse(Some("cover"), anchor(None, Some(0.35))).unwrap(),
+            cover_at(0.5, 0.35)
+        );
+        assert_eq!(
+            SurfaceFit::parse(Some("cover"), anchor(Some(0.0), Some(1.0))).unwrap(),
+            cover_at(0.0, 1.0)
+        );
+        assert_eq!(
+            SurfaceFit::parse(Some("cover"), anchor(None, None)).unwrap(),
+            COVER
+        );
+        // Outside 0 to 1, or not a number: refused, never clamped into a crop nobody asked for.
+        for bad in [-0.01, 1.01, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(
+                SurfaceFit::parse(Some("cover"), anchor(None, Some(bad))).is_err(),
+                "y {bad}"
+            );
+            assert!(
+                SurfaceFit::parse(Some("cover"), anchor(Some(bad), None)).is_err(),
+                "x {bad}"
+            );
+        }
+        // Contain crops nothing, so an anchor with it is a mistake.
+        assert!(SurfaceFit::parse(Some("contain"), anchor(None, Some(0.35))).is_err());
+        assert!(SurfaceFit::parse(None, anchor(None, Some(0.35))).is_err());
+    }
+
+    #[test]
+    fn the_anchor_arrives_as_the_webview_sends_it() {
+        let arg: AnchorArg = serde_json::from_str(r#"{ "x": 0.5, "y": 0.35 }"#).unwrap();
+        assert_eq!(
+            SurfaceFit::parse(Some("cover"), Some(arg)).unwrap(),
+            cover_at(0.5, 0.35)
+        );
+        let half: AnchorArg = serde_json::from_str(r#"{ "y": 0.2 }"#).unwrap();
+        assert_eq!(half.x, None);
+        assert_eq!(half.y, Some(0.2));
     }
 
     #[test]
     fn contain_letterboxes_and_matches_the_old_shader() {
         // 16:9 in a square: bars above and below, the full width shown.
-        let scale = SurfaceFit::Contain.uv_scale(400.0, 400.0, 1280.0, 720.0);
-        assert!(close(scale, [1.0, 16.0 / 9.0]));
+        let window = SurfaceFit::Contain.uv_window(400.0, 400.0, 1280.0, 720.0);
+        assert!(close(window.scale, [1.0, 16.0 / 9.0]));
+        assert_eq!(window.center, [0.5, 0.5]);
         // The old shader: contentHeight = tile/source, y0 = (1 - h) / 2, and
         // sampleUv.y = (uv.y - y0) / h. The same sample at every row.
         let content_height = 1.0 / (16.0 / 9.0);
         let y0 = (1.0 - content_height) / 2.0;
         for uv_y in [0.0f32, 0.1, 0.25, 0.5, 0.9, 1.0] {
             let old = (uv_y - y0) / content_height;
-            assert!((sample_at(scale, [0.5, uv_y])[1] - old).abs() < 1e-5);
+            assert!((sample_at(window, [0.5, uv_y])[1] - old).abs() < 1e-5);
         }
         // A 4:3 frame in a 2:1 tile: pillarboxed, the full height shown.
-        let wide = SurfaceFit::Contain.uv_scale(200.0, 100.0, 640.0, 480.0);
-        assert!(close(wide, [2.0 / (4.0 / 3.0), 1.0]));
+        let wide = SurfaceFit::Contain.uv_window(200.0, 100.0, 640.0, 480.0);
+        assert!(close(wide.scale, [2.0 / (4.0 / 3.0), 1.0]));
     }
 
     #[test]
     fn cover_fills_and_crops_evenly() {
         // 16:9 in a square: the full height, the sides cropped evenly.
-        let scale = SurfaceFit::Cover.uv_scale(400.0, 400.0, 1280.0, 720.0);
-        assert!(close(scale, [9.0 / 16.0, 1.0]));
-        let left = sample_at(scale, [0.0, 0.0]);
-        let right = sample_at(scale, [1.0, 1.0]);
+        let window = COVER.uv_window(400.0, 400.0, 1280.0, 720.0);
+        assert!(close(window.scale, [9.0 / 16.0, 1.0]));
+        assert_eq!(window.center, [0.5, 0.5]);
+        let left = sample_at(window, [0.0, 0.0]);
+        let right = sample_at(window, [1.0, 1.0]);
         assert!((left[0] - (1.0 - 9.0 / 16.0) / 2.0).abs() < 1e-5);
         assert!((left[0] + right[0] - 1.0).abs() < 1e-5, "cropped evenly");
         // A 4:3 frame in a 2:1 tile: the full width, top and bottom cropped.
-        let wide = SurfaceFit::Cover.uv_scale(200.0, 100.0, 640.0, 480.0);
-        assert!(close(wide, [1.0, (4.0 / 3.0) / 2.0]));
+        let wide = COVER.uv_window(200.0, 100.0, 640.0, 480.0);
+        assert!(close(wide.scale, [1.0, (4.0 / 3.0) / 2.0]));
+    }
+
+    #[test]
+    fn an_anchored_cover_keeps_the_top_of_a_tall_frame() {
+        // A 3:4 portrait camera in a 2:1 tile: the full width, a 37.5% band of the height.
+        let band = 0.75 / 2.0;
+        let centered = COVER.uv_window(400.0, 200.0, 600.0, 800.0);
+        assert!(close(centered.scale, [1.0, band]));
+        assert!(close(centered.center, [0.5, 0.5]));
+        // The camera's anchor: 35% of the room above the band, 65% below.
+        let faces = cover_at(0.5, 0.35).uv_window(400.0, 200.0, 600.0, 800.0);
+        assert_eq!(
+            faces.scale, centered.scale,
+            "the same picture, a different window"
+        );
+        let top = sample_at(faces, [0.5, 0.0])[1];
+        let bottom = sample_at(faces, [0.5, 1.0])[1];
+        assert!(
+            (top - 0.35 * (1.0 - band)).abs() < 1e-5,
+            "35% of the crop is off the top"
+        );
+        assert!(
+            (1.0 - bottom - 0.65 * (1.0 - band)).abs() < 1e-5,
+            "65% is off the bottom"
+        );
+        assert!(
+            (bottom - top - band).abs() < 1e-5,
+            "the band is still the band"
+        );
+        // Higher than the centered crop, so more of the top shows.
+        assert!(top < sample_at(centered, [0.5, 0.0])[1]);
+        // The ends: the very top, the very bottom.
+        let top_end = cover_at(0.5, 0.0).uv_window(400.0, 200.0, 600.0, 800.0);
+        assert!(sample_at(top_end, [0.5, 0.0])[1].abs() < 1e-6);
+        let bottom_end = cover_at(0.5, 1.0).uv_window(400.0, 200.0, 600.0, 800.0);
+        assert!((sample_at(bottom_end, [0.5, 1.0])[1] - 1.0).abs() < 1e-6);
+        // The axis that is not cropped does not move, whatever its anchor says.
+        let sideways = cover_at(0.1, 0.35).uv_window(400.0, 200.0, 600.0, 800.0);
+        assert_eq!(sideways.center[0], 0.5);
+    }
+
+    #[test]
+    fn an_anchored_cover_along_the_width_moves_the_sides() {
+        // 16:9 in a square: the full height, a 9/16 band of the width.
+        let band = 9.0 / 16.0;
+        let window = cover_at(0.0, 0.35).uv_window(400.0, 400.0, 1280.0, 720.0);
+        assert!(close(window.scale, [band, 1.0]));
+        assert!(
+            sample_at(window, [0.0, 0.5])[0].abs() < 1e-6,
+            "left-anchored shows the left edge"
+        );
+        assert_eq!(
+            window.center[1], 0.5,
+            "a vertical anchor does nothing to a frame that overflows sideways"
+        );
+        let right = cover_at(1.0, 0.35).uv_window(400.0, 400.0, 1280.0, 720.0);
+        assert!((sample_at(right, [1.0, 0.5])[0] - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn an_anchor_never_leaves_a_bar() {
+        let sizes = [
+            (320.0, 180.0),
+            (180.0, 320.0),
+            (400.0, 400.0),
+            (1920.0, 1080.0),
+            (640.0, 480.0),
+            (1.0, 1.0),
+        ];
+        let anchors = [0.0f32, 0.2, 0.35, 0.5, 0.8, 1.0];
+        for (tile_w, tile_h) in sizes {
+            for (source_w, source_h) in sizes {
+                for anchor in anchors {
+                    let fit = cover_at(anchor, anchor);
+                    let window = fit.uv_window(tile_w, tile_h, source_w, source_h);
+                    // Both edges of the tile sample inside the frame, on both axes.
+                    for uv in [[0.0f32, 0.0], [1.0, 1.0], [0.0, 1.0], [1.0, 0.0]] {
+                        let at = sample_at(window, uv);
+                        assert!(
+                            at[0] >= -1e-5 && at[0] <= 1.0 + 1e-5 && at[1] >= -1e-5 && at[1] <= 1.0 + 1e-5,
+                            "{tile_w}x{tile_h} tile, {source_w}x{source_h} frame, anchor {anchor}: {at:?}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -596,8 +832,10 @@ mod tests {
         ];
         for (tile_w, tile_h) in sizes {
             for (source_w, source_h) in sizes {
-                let cover = SurfaceFit::Cover.uv_scale(tile_w, tile_h, source_w, source_h);
-                let contain = SurfaceFit::Contain.uv_scale(tile_w, tile_h, source_w, source_h);
+                let cover = COVER.uv_window(tile_w, tile_h, source_w, source_h).scale;
+                let contain = SurfaceFit::Contain
+                    .uv_window(tile_w, tile_h, source_w, source_h)
+                    .scale;
                 // Cover samples inside the frame everywhere (no bar); contain
                 // reaches every edge of it (nothing cropped).
                 assert!(cover[0] <= 1.0 + 1e-6 && cover[1] <= 1.0 + 1e-6);
@@ -608,7 +846,7 @@ mod tests {
             }
         }
         // A frame of no size yet reads as square rather than dividing by zero.
-        assert_eq!(SurfaceFit::Cover.uv_scale(0.0, 0.0, 0.0, 0.0), [1.0, 1.0]);
+        assert_eq!(COVER.uv_window(0.0, 0.0, 0.0, 0.0).scale, [1.0, 1.0]);
     }
 
     #[test]

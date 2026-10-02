@@ -8,6 +8,7 @@ import { ErrorBoundary } from '../../ErrorBoundary';
 import { TogetherNowPlaying, TogetherWatchStage } from '../../voice/together/TogetherStage';
 import { useTogether } from '../../voice/together/useTogether';
 import { useGlassLayout } from '../shell/useGlassLayout';
+import { CallEmpty } from './CallEmpty';
 import type { StageModel } from './stageModel';
 import { StageControls } from './StageControls';
 import { StagePeople } from './StagePeople';
@@ -32,8 +33,8 @@ import { useStageData } from './useStageData';
  * and Close put it away. Closing it never leaves the call.
  *
  * A direct message call is the same, named for the people in it, with no
- * server (no invite, soundboard or Watch together; the server takes screen
- * shares in server voice channels only).
+ * server (no invite, soundboard or Watch together). Its people share their
+ * screens and watch each other's like anyone in a call.
  */
 export function CallStage({ target, mode }: { target: StageTarget; mode: OpenStageMode }) {
   const layout = useGlassLayout();
@@ -68,6 +69,8 @@ export function CallStage({ target, mode }: { target: StageTarget; mode: OpenSta
   );
 
   const notice = callNotice(model);
+  // No camera on: the people themselves are the stage (`CallEmpty`).
+  const noCameras = model.cameras.length === 0;
   const joined = model.relation === 'joined';
   const realVoice = model.relation === 'joined' || model.relation === 'listening';
 
@@ -133,15 +136,17 @@ export function CallStage({ target, mode }: { target: StageTarget; mode: OpenSta
           <ErrorBoundary variant="section" label="Watch together">
             <TogetherWatchStage together={watchTogether} phone={phone} />
           </ErrorBoundary>
+        ) : noCameras ? (
+          <CallEmpty
+            people={model.chips}
+            name={model.label}
+            line={notice ?? ''}
+            realVoice={realVoice}
+            phone={phone}
+            onSwitch={switchTo}
+          />
         ) : (
-          <>
-            {notice && (
-              <p className="glass-stage__call-notice" role="status" data-chips={model.chips.length > 0 ? 'true' : undefined}>
-                {notice}
-              </p>
-            )}
-            {people}
-          </>
+          people
         )}
       </div>
 
@@ -165,7 +170,10 @@ function closeCall(): void {
   useGlassStore.getState().closeStage();
 }
 
-/** What the stage says when there are no cameras to show. Null when there are. */
+/**
+ * What the call with no cameras says under the faces (`CallEmpty`): what is not
+ * happening, or what to do about it. Null while there are cameras to show.
+ */
 export function callNotice(model: StageModel): string | null {
   if (model.cameras.length > 0) return null;
   if (model.relation !== 'joined') {
@@ -173,5 +181,9 @@ export function callNotice(model: StageModel): string | null {
   }
   const self = model.chips.find((person) => person.self);
   if (self?.sharing) return 'You are sharing your screen. Everyone in the call can watch it.';
-  return 'Nobody has a camera on.';
+  const sharing = model.otherSharers;
+  if (sharing.length === 1) return `${sharing[0].name} is sharing their screen`;
+  if (sharing.length === 2) return `${sharing[0].name} and ${sharing[1].name} are sharing their screens`;
+  if (sharing.length > 2) return `${sharing.length} people are sharing their screens`;
+  return 'No one is sharing';
 }

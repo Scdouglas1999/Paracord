@@ -39,6 +39,7 @@ import {
 } from './pillMotion';
 import { PillPreview } from './PillPreview';
 import { PillRoster } from './PillRoster';
+import { useSheetCover } from './sheetCover';
 import { useCallPillTarget } from './useCallPill';
 
 /**
@@ -53,15 +54,24 @@ import { useCallPillTarget } from './useCallPill';
  *
  * The one filled button is Join. Listen never sends (it is receive-only), Watch
  * only opens the stage (it never joins), and Leave is the only way out of a call.
+ *
+ * A sheet covers the conversation's header, and call controls have to stay
+ * reachable, so the sheet draws a pill of its own in its own header
+ * (`placement="sheet"`, from `SheetFrame`). The pill the sheet covers is still
+ * mounted, with its roster and place intact, but is `inert` and hidden from
+ * assistive technology until the sheet goes, so there is one pill to reach.
  */
 
 type Phase = 'compact' | 'expanded' | 'closing';
+
+/** The header a pill sits in: the conversation's, or a sheet's. Its padding is the column's edge. */
+const HEADER_SELECTOR = '.glass-header, .glass-sheet__header';
 
 /** Where the column's left edge is, so the expanded pill is exactly as wide as it. */
 function fitColumn(root: HTMLElement): void {
   const slot = root.parentElement;
   if (!slot) return;
-  const header = slot.closest<HTMLElement>('.glass-header') ?? slot;
+  const header = slot.closest<HTMLElement>(HEADER_SELECTOR) ?? slot;
   const left = header.getBoundingClientRect().left + (Number.parseFloat(getComputedStyle(header).paddingLeft) || 0);
   const width = slot.getBoundingClientRect().right - left;
   if (width > 0) root.style.setProperty('--pill-col-w', `${Math.round(width)}px`);
@@ -75,14 +85,16 @@ function announce(before: PillTarget['relation'], now: PillTarget['relation'], t
   return null;
 }
 
-export function CallPill({ guildId, channelId = null, layout }: CallPillProps) {
+export function CallPill({ guildId, channelId = null, layout, placement = 'header' }: CallPillProps) {
   const target = useCallPillTarget(guildId, channelId);
   const stageOpen = useGlassStore(selectStageOpen);
+  // A sheet over the conversation has its own pill; this one waits under it.
+  const covered = useSheetCover() && placement === 'header';
   // On the row the pill becomes the stage (screens/04): it is not drawn while one
   // is open. On the phone the stream sits above it and the pill stays (screens/07).
   const visible = target !== null && !(stageOpen && layout === 'row');
   if (!visible) return <HiddenPill />;
-  return <PillBody target={target} layout={layout} stageOpen={stageOpen} />;
+  return <PillBody target={target} layout={layout} stageOpen={stageOpen} covered={covered} placement={placement} />;
 }
 
 /** Draws nothing, and clears a stale "expanded" so it does not return with the pill. */
@@ -99,10 +111,15 @@ function PillBody({
   target,
   layout,
   stageOpen,
+  covered,
+  placement,
 }: {
   target: PillTarget;
   layout: CallPillProps['layout'];
   stageOpen: boolean;
+  /** A sheet is over this pill: it keeps its place and state, and nothing else. */
+  covered: boolean;
+  placement: NonNullable<CallPillProps['placement']>;
 }) {
   const bodyId = useId();
   const requested = useGlassStore((state) => state.pillExpanded);
@@ -229,7 +246,7 @@ function PillBody({
   useEffect(() => {
     const slot = rootRef.current?.parentElement;
     if (!slot || stacked || typeof ResizeObserver === 'undefined') return undefined;
-    const header = slot.closest<HTMLElement>('.glass-header') ?? slot;
+    const header = slot.closest<HTMLElement>(HEADER_SELECTOR) ?? slot;
     const observer = new ResizeObserver(() => {
       setSlotWidth(Math.round(slot.clientWidth));
       const root = rootRef.current;
@@ -252,6 +269,9 @@ function PillBody({
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (event.key !== 'Escape' || phase !== 'expanded') return;
     event.preventDefault();
+    // Escape puts the roster away and nothing else: a sheet round the pill must
+    // not take the same keypress and close under it.
+    event.stopPropagation();
     collapseToFaces();
   };
 
@@ -260,7 +280,8 @@ function PillBody({
   if (relation !== seenRelation) {
     setSeenRelation(relation);
     const said = announce(seenRelation, relation, target.title);
-    if (said) setAnnouncement(said);
+    // The pill a sheet draws says it; the covered one would say it twice.
+    if (said && !covered) setAnnouncement(said);
   }
 
   /* ---- What the buttons do ------------------------------------------------- */
@@ -395,7 +416,13 @@ function PillBody({
   const bodyNode = expanded && (
     <div id={bodyId} className="glass-pill__body">
       {streamer && watchLabel && (
-        <PillPreview target={target} streamerId={streamer.userId} label={watchLabel} onWatch={onWatch} />
+        <PillPreview
+          target={target}
+          streamerId={streamer.userId}
+          label={watchLabel}
+          onWatch={onWatch}
+          redundant={canWatch}
+        />
       )}
       <PillRoster
         channelName={target.channelName}
@@ -412,6 +439,9 @@ function PillBody({
       ref={rootRef}
       className="glass-pill"
       aria-label={regionLabel}
+      aria-hidden={covered || undefined}
+      inert={covered}
+      data-placement={placement}
       data-layout={layout}
       data-phase={phase}
       data-collapse={stacked ? undefined : collapse}

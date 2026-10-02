@@ -306,6 +306,35 @@ describe('NativeVideoTile', () => {
     covered.tile.destroy();
   });
 
+  it('sends where a cover crop falls, only for a cover surface, and refuses a bad anchor', async () => {
+    const anchored = makeTile({ trackId: 'camera', fit: 'cover', anchor: { y: 0.35 } });
+    document.elementFromPoint = vi.fn(() => anchored.element) as typeof document.elementFromPoint;
+    await anchored.tile.attach();
+    expect(anchored.invoke).toHaveBeenCalledWith('native_render_attach', {
+      streamId: 's1',
+      trackId: 'camera',
+      fit: 'cover',
+      anchor: { x: 0.5, y: 0.35 },
+    });
+    anchored.tile.destroy();
+
+    // Nothing to send when no anchor was asked for (the native side centers).
+    const plain = makeTile({ trackId: 'camera', fit: 'cover' });
+    document.elementFromPoint = vi.fn(() => plain.element) as typeof document.elementFromPoint;
+    await plain.tile.attach();
+    expect(plain.invoke.mock.calls[0][1]).not.toHaveProperty('anchor');
+    plain.tile.destroy();
+
+    // A contain surface crops nothing: the anchor does not go (the native side refuses one).
+    const contained = makeTile({ trackId: 'screen', anchor: { y: 0.35 } });
+    document.elementFromPoint = vi.fn(() => contained.element) as typeof document.elementFromPoint;
+    await contained.tile.attach();
+    expect(contained.invoke.mock.calls[0][1]).not.toHaveProperty('anchor');
+    contained.tile.destroy();
+
+    expect(() => makeTile({ trackId: 'camera', fit: 'cover', anchor: { y: 2 } })).toThrow(RangeError);
+  });
+
   it('skips a no-op geometry report', async () => {
     const { tile, element, invoke } = makeTile();
     document.elementFromPoint = vi.fn(() => element) as typeof document.elementFromPoint;

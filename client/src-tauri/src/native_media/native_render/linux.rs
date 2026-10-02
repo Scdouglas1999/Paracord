@@ -320,9 +320,10 @@ void main() {
 
 // I420 → RGB with the frame's signaled matrix (contract C1), plus a rounded-rect
 // SDF mask and premultiplied-alpha output so the corners composite cleanly over
-// the webview (spec §3.3). `uUvScale` places the frame in the tile
-// (`SurfaceFit::uv_scale`): contain letterboxes (samples outside the frame are
-// empty), cover crops the overflow evenly.
+// the webview (spec §3.3). `uUvScale` and `uUvCenter` place the frame in the tile
+// (`SurfaceFit::uv_window`): contain letterboxes (samples outside the frame are
+// empty), cover crops the overflow around its anchor (evenly, unless a camera
+// tile anchors it toward the top).
 const FRAGMENT_SHADER: &str = r#"#version 150 core
 in vec2 v_uv;
 out vec4 frag;
@@ -332,9 +333,10 @@ uniform sampler2D texV;
 uniform mat3 yuv2rgb;
 uniform vec2 uSize;
 uniform vec2 uUvScale;
+uniform vec2 uUvCenter;
 uniform float uRadius;
 void main() {
-    vec2 sampleUv = (v_uv - 0.5) * uUvScale + 0.5;
+    vec2 sampleUv = (v_uv - 0.5) * uUvScale + uUvCenter;
     bool insideFrame = all(greaterThanEqual(sampleUv, vec2(0.0)))
         && all(lessThanEqual(sampleUv, vec2(1.0)));
     vec3 rgb = vec3(0.0);
@@ -409,6 +411,7 @@ struct GlRenderer {
     u_mat: GLint,
     u_size: GLint,
     u_uv_scale: GLint,
+    u_uv_center: GLint,
     u_radius: GLint,
 }
 
@@ -479,6 +482,7 @@ impl GlRenderer {
             let u_mat = (gl.glGetUniformLocation)(program, c"yuv2rgb".as_ptr());
             let u_size = (gl.glGetUniformLocation)(program, c"uSize".as_ptr());
             let u_uv_scale = (gl.glGetUniformLocation)(program, c"uUvScale".as_ptr());
+            let u_uv_center = (gl.glGetUniformLocation)(program, c"uUvCenter".as_ptr());
             let u_radius = (gl.glGetUniformLocation)(program, c"uRadius".as_ptr());
 
             Ok(GlRenderer {
@@ -497,6 +501,7 @@ impl GlRenderer {
                 u_mat,
                 u_size,
                 u_uv_scale,
+                u_uv_center,
                 u_radius,
             })
         }
@@ -625,13 +630,14 @@ impl GlRenderer {
             let matrix = yuv_to_rgb_matrix(self.colorspace);
             (gl.glUniformMatrix3fv)(self.u_mat, 1, GL_FALSE, matrix.as_ptr());
             (gl.glUniform2f)(self.u_size, phys_w as f32, phys_h as f32);
-            let [scale_x, scale_y] = fit.uv_scale(
+            let window = fit.uv_window(
                 phys_w as f32,
                 phys_h as f32,
                 self.tex_w as f32,
                 self.tex_h as f32,
             );
-            (gl.glUniform2f)(self.u_uv_scale, scale_x, scale_y);
+            (gl.glUniform2f)(self.u_uv_scale, window.scale[0], window.scale[1]);
+            (gl.glUniform2f)(self.u_uv_center, window.center[0], window.center[1]);
             (gl.glUniform1f)(self.u_radius, radius);
 
             (gl.glBindVertexArray)(self.vao);

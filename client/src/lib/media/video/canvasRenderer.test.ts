@@ -125,13 +125,19 @@ describe('CanvasRenderer fit', () => {
   });
 
   describe('on the 2d backend', () => {
-    function draw(fit: 'contain' | 'cover' | undefined, frameWidth: number, frameHeight: number, canvasSize: [number, number] = [WIDTH, HEIGHT]) {
+    function draw(
+      fit: 'contain' | 'cover' | undefined,
+      frameWidth: number,
+      frameHeight: number,
+      canvasSize: [number, number] = [WIDTH, HEIGHT],
+      anchor?: { x?: number; y?: number },
+    ) {
       const ctx = fake2dContext();
       // Every canvas the renderer makes (its own, and the buffer it blits from) gets the fake.
       vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(((contextId: string) =>
         contextId === '2d' ? (ctx as unknown as CanvasRenderingContext2D) : null) as typeof HTMLCanvasElement.prototype.getContext);
       const el = sizedCanvas(...canvasSize);
-      const renderer = new CanvasRenderer(el, fit === undefined ? undefined : { fit });
+      const renderer = new CanvasRenderer(el, fit === undefined ? undefined : { fit, anchor });
       renderer.renderImageData(pixels(frameWidth, frameHeight));
       flush();
       expect(ctx.drawImage).toHaveBeenCalledTimes(1);
@@ -165,6 +171,67 @@ describe('CanvasRenderer fit', () => {
       // 16:9 in 1:1. The height sets the scale: 178x100, 39px cropped off the left and 39 off the right.
       const { dest } = draw('cover', 160, 90, [100, 100]);
       expect(dest).toEqual({ dx: -39, dy: 0, dw: 178, dh: 100 });
+    });
+
+    it('anchors a tall frame toward its top: the faces stay, the bottom goes first', () => {
+      // A 3:4 portrait camera in a 2:1 tile. The width sets the scale: 200x267 drawn,
+      // 167px to crop. Centered, about 84px goes off each end; anchored at 0.35, 59px
+      // off the top and 108px off the bottom.
+      const centered = draw('cover', 60, 80);
+      expect(centered.dest).toEqual({ dx: 0, dy: -84, dw: 200, dh: 267 });
+      const anchored = draw('cover', 60, 80, [WIDTH, HEIGHT], { y: 0.35 });
+      expect(anchored.dest).toEqual({ dx: 0, dy: -59, dw: 200, dh: 267 });
+      // The picture is the same size; only where the window falls changed.
+      expect(anchored.dest.dh).toBe(centered.dest.dh);
+      expect(anchored.dest.dy).toBeGreaterThan(centered.dest.dy);
+      // Top-anchored shows the very top, bottom-anchored the very bottom.
+      expect(draw('cover', 60, 80, [WIDTH, HEIGHT], { y: 0 }).dest.dy).toBe(0);
+      expect(draw('cover', 60, 80, [WIDTH, HEIGHT], { y: 1 }).dest.dy + 267).toBe(HEIGHT);
+    });
+
+    it('anchors a wide frame along its width, and leaves the other axis alone', () => {
+      // 16:9 in 1:1: 178x100 drawn, 78px to crop off the sides.
+      expect(draw('cover', 160, 90, [100, 100], { x: 0 }).dest).toEqual({ dx: 0, dy: 0, dw: 178, dh: 100 });
+      expect(draw('cover', 160, 90, [100, 100], { x: 1 }).dest).toEqual({ dx: -78, dy: 0, dw: 178, dh: 100 });
+      // A vertical anchor does nothing to a frame that overflows sideways.
+      expect(draw('cover', 160, 90, [100, 100], { y: 0.1 }).dest).toEqual(draw('cover', 160, 90, [100, 100]).dest);
+    });
+
+    it('keeps the middle when told nothing, and an axis that is left out stays in the middle', () => {
+      expect(draw('cover', 60, 80, [WIDTH, HEIGHT], {}).dest).toEqual(draw('cover', 60, 80).dest);
+      expect(draw('cover', 60, 80, [WIDTH, HEIGHT], { y: 0.5 }).dest).toEqual(draw('cover', 60, 80).dest);
+    });
+
+    it('never leaves a bar when anchored, wherever it is anchored', () => {
+      for (const y of [0, 0.2, 0.35, 0.5, 0.8, 1]) {
+        for (const [canvasWidth, canvasHeight] of [[200, 100], [101, 57], [57, 101]] as const) {
+          for (const [frameWidth, frameHeight] of [[80, 60], [160, 90], [60, 80], [90, 160]] as const) {
+            const { dest } = draw('cover', frameWidth, frameHeight, [canvasWidth, canvasHeight], { x: y, y });
+            expect(dest.dx, `y ${y}: ${frameWidth}x${frameHeight} in ${canvasWidth}x${canvasHeight}`).toBeLessThanOrEqual(0);
+            expect(dest.dy).toBeLessThanOrEqual(0);
+            expect(dest.dx + dest.dw).toBeGreaterThanOrEqual(canvasWidth);
+            expect(dest.dy + dest.dh).toBeGreaterThanOrEqual(canvasHeight);
+          }
+        }
+      }
+    });
+
+    it('ignores an anchor under contain, which crops nothing', () => {
+      expect(draw('contain', 80, 60, [WIDTH, HEIGHT], { x: 0, y: 0 }).dest).toEqual(draw('contain', 80, 60).dest);
+      const ctx = fake2dContext();
+      const el = sizedCanvas();
+      mockNoWebgl(el, ctx);
+      expect(new CanvasRenderer(el, { fit: 'contain', anchor: { y: 0.1 } }).anchor).toEqual({ x: 0.5, y: 0.5 });
+    });
+
+    it('refuses an anchor outside 0 to 1, rather than cropping around nothing', () => {
+      const ctx = fake2dContext();
+      const el = sizedCanvas();
+      mockNoWebgl(el, ctx);
+      expect(() => new CanvasRenderer(el, { fit: 'cover', anchor: { y: 1.2 } })).toThrow(RangeError);
+      expect(() => new CanvasRenderer(el, { fit: 'cover', anchor: { x: -0.1 } })).toThrow(RangeError);
+      expect(() => new CanvasRenderer(el, { fit: 'cover', anchor: { y: Number.NaN } })).toThrow(RangeError);
+      expect(new CanvasRenderer(el, { fit: 'cover', anchor: { y: 0.35 } }).anchor).toEqual({ x: 0.5, y: 0.35 });
     });
 
     it('is the same as contain for a frame already the canvas’s shape', () => {
@@ -225,12 +292,17 @@ describe('CanvasRenderer fit', () => {
       return { gl: gl as unknown as WebGLRenderingContext, viewport };
     }
 
-    function draw(fit: 'contain' | 'cover' | undefined, frameWidth: number, frameHeight: number) {
+    function draw(
+      fit: 'contain' | 'cover' | undefined,
+      frameWidth: number,
+      frameHeight: number,
+      anchor?: { x?: number; y?: number },
+    ) {
       const { gl, viewport } = fakeGl();
       const el = sizedCanvas();
       vi.spyOn(el, 'getContext').mockImplementation(((contextId: string) =>
         contextId === 'webgl2' || contextId === 'webgl' ? gl : null) as typeof el.getContext);
-      const renderer = new CanvasRenderer(el, fit === undefined ? undefined : { fit });
+      const renderer = new CanvasRenderer(el, fit === undefined ? undefined : { fit, anchor });
       renderer.drawRgba(new Uint8Array(frameWidth * frameHeight * 4), frameWidth, frameHeight);
       flush();
       renderer.destroy();
@@ -248,6 +320,16 @@ describe('CanvasRenderer fit', () => {
       const { calls } = draw('cover', 80, 60);
       // 200x150 drawn, 25px over the top and 25 over the bottom (GL's origin is the bottom: y = 100 - 150 + 25).
       expect(calls).toEqual([[0, 0, 200, 100], [0, -25, 200, 150]]);
+    });
+
+    it('anchors the crop: a tall frame keeps its top, so the viewport runs further below the canvas', () => {
+      // 200x267 drawn from the 3:4 frame. GL's origin is the bottom, so a picture
+      // pushed up by 59px (anchor 0.35) sits at y = 100 - 267 + 59, and the centered
+      // one (84px up) at y = 100 - 267 + 84.
+      expect(draw('cover', 60, 80).calls[1]).toEqual([0, -83, 200, 267]);
+      expect(draw('cover', 60, 80, { y: 0.35 }).calls[1]).toEqual([0, -108, 200, 267]);
+      expect(draw('cover', 60, 80, { y: 0 }).calls[1]).toEqual([0, -167, 200, 267]);
+      expect(draw('cover', 60, 80, { y: 1 }).calls[1]).toEqual([0, 0, 200, 267]);
     });
 
     it('is the same as contain for a frame already the canvas’s shape', () => {

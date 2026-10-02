@@ -1,12 +1,11 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { ComponentProps } from 'react';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { installWaapiStub, type WaapiStub } from '../../../lib/motion/waapiStub';
 import { useGlassStore, type StageTarget } from '../../../stores/glassStore';
 import { useVoiceStore } from '../../../stores/voiceStore';
-import { PhoneFrame } from './PhoneFrame';
+import { GlassFrame } from './GlassFrame';
 import { usePhoneNavStore } from './phoneNav';
 
 // The window is a phone (the back button and the stage read the frame's layout).
@@ -14,6 +13,8 @@ vi.mock('../../../hooks/useMobile', () => ({
   useMobile: () => true,
   DEFAULT_MOBILE_MAX_WIDTH: 768,
 }));
+// The frame's moves and guard belong to the wide frame and have suites of their own.
+vi.mock('../stage/useStageAudienceGuard', () => ({ useStageAudienceGuard: () => {} }));
 // What the frame owes each slot is a mount, the right props and the right place;
 // every slot has a suite of its own.
 vi.mock('../room', () => ({ RoomBackdrop: () => <div className="glass-room-backdrop" /> }));
@@ -65,15 +66,18 @@ vi.mock('./PhoneStageChrome', () => ({
 
 const LOUNGE: StageTarget = { serverId: 'local', guildId: 'g1', channelId: 'lounge', streamerId: 'vincent' };
 
-function renderFrame(
-  path = '/app/guilds/g1/channels/c1',
-  props: Partial<ComponentProps<typeof PhoneFrame>> = {},
-) {
+interface FrameOptions {
+  stageTarget?: StageTarget | null;
+  stageMode?: 'side' | 'theater' | null;
+}
+
+function renderFrame(path = '/app/guilds/g1/channels/c1', { stageTarget = null, stageMode = null }: FrameOptions = {}) {
+  if (stageTarget && stageMode) useGlassStore.getState().openStage(stageTarget, stageMode);
   return render(
     <MemoryRouter initialEntries={[path]}>
-      <PhoneFrame guildId="g1" channelId="c1" stageTarget={null} stageMode={null} {...props}>
+      <GlassFrame layout="phone" guildId="g1" channelId="c1">
         <div data-testid="page">a page</div>
-      </PhoneFrame>
+      </GlassFrame>
     </MemoryRouter>,
   );
 }
@@ -93,7 +97,7 @@ beforeEach(() => {
 
 afterEach(() => waapi.restore());
 
-describe('PhoneFrame', () => {
+describe('the phone layout of the frame', () => {
   it('draws two screens on the room, with the page in the conversation and the list in places', () => {
     const { container } = renderFrame();
     expect(container.querySelector('.glass-room-backdrop')).not.toBeNull();

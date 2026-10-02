@@ -41,7 +41,7 @@ class MockRenderer {
   destroyed = false;
   cleared = 0;
   rendered: unknown[] = [];
-  constructor(public canvas: HTMLCanvasElement, public options?: { fit?: 'contain' | 'cover' }) {
+  constructor(public canvas: HTMLCanvasElement, public options?: { fit?: 'contain' | 'cover'; anchor?: { x?: number; y?: number } }) {
     renderers.push(this);
   }
   get canvasElement() {
@@ -125,6 +125,21 @@ describe('BrowserMediaEngine video subscription sharing', () => {
     });
     expect(decoders).toHaveLength(1);
     expect(renderers.map((renderer) => renderer.options?.fit)).toEqual(['cover', undefined]);
+    releaseTile();
+    releaseThumbnail();
+  });
+
+  it('gives a cover surface the anchor it asked for, and no anchor to one that did not', () => {
+    const engine = new BrowserMediaEngine();
+    const releaseTile = engine.subscribeVideo('7', canvas(), undefined, {
+      preferredTrackId: 'camera',
+      fit: 'cover',
+      anchor: { x: 0.5, y: 0.35 },
+    });
+    const releaseThumbnail = engine.subscribeVideo('7', canvas(64, 36), undefined, {
+      preferredTrackId: 'camera',
+    });
+    expect(renderers.map((renderer) => renderer.options?.anchor)).toEqual([{ x: 0.5, y: 0.35 }, undefined]);
     releaseTile();
     releaseThumbnail();
   });

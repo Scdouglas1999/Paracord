@@ -599,17 +599,41 @@ describe('expanded', () => {
     expect(useGlassStore.getState().pillExpanded).toBe(false);
   });
 
-  it('the preview is a button that watches, and it is named', () => {
+  it('the preview is a button that watches, for the mouse', () => {
     live();
     useGlassStore.getState().setPillExpanded(true);
     renderPill();
     const preview = region().querySelector('.glass-pill__preview') as HTMLElement;
-    expect(preview).toHaveAccessibleName("Watch Vincent's screen");
     expect(within(preview).getByText("Vincent's screen")).toBeInTheDocument();
     fireEvent.click(preview);
     expect(useGlassStore.getState().stage.streamerId).toBe('vincent');
     // The stage grows out of the pill: the pill is compact again under it.
     expect(useGlassStore.getState().pillExpanded).toBe(false);
+  });
+
+  it("a screen reader hears one Watch button, not the bar's and the preview's with one name", () => {
+    live();
+    useGlassStore.getState().setPillExpanded(true);
+    renderPill();
+    // The bar's Watch button and the preview open the same stage; the preview
+    // is hidden from the accessibility tree and out of the tab order.
+    const preview = region().querySelector('.glass-pill__preview') as HTMLElement;
+    expect(preview).toHaveAttribute('aria-hidden', 'true');
+    expect(preview).toHaveAttribute('tabindex', '-1');
+    expect(within(region()).getAllByRole('button', { name: "Watch Vincent's screen" })).toHaveLength(1);
+    expect(within(region()).getByRole('button', { name: "Watch Vincent's screen" })).toHaveClass('glass-pill__watch');
+  });
+
+  it("keeps the preview's name where the bar has no Watch button to say it (the stage is open)", () => {
+    live();
+    useGlassStore.getState().openStage({ serverId: '__local__', guildId: 'g1', channelId: 'lounge', streamerId: 'vincent' });
+    // Opening the stage puts the roster away; on the phone it can be asked for again.
+    useGlassStore.getState().setPillExpanded(true);
+    renderPill('g1', 'stacked');
+    const preview = region().querySelector('.glass-pill__preview') as HTMLElement;
+    expect(preview).not.toHaveAttribute('aria-hidden');
+    expect(preview).not.toHaveAttribute('tabindex');
+    expect(within(region()).getAllByRole('button', { name: "Watch Vincent's screen" })).toEqual([preview]);
   });
 
   it('has no preview when nobody streams', () => {

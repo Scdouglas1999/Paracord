@@ -16,6 +16,13 @@ import type { PillTarget } from './model';
  * view of this stream, the desktop app's native surface route, or a view that is
  * still connecting) it shows the room's tint, and the label still says whose
  * screen it is.
+ *
+ * It is the second door to an action the bar's Watch button already opens, so a
+ * screen reader hears one button, not two with the same name (glass-g22
+ * checkpoint, "left for others"): while that button is on screen the preview is
+ * `redundant`, hidden from the accessibility tree and out of the tab order, and
+ * stays a big target for the mouse. Where the bar has no Watch button (a phone
+ * with the stage already open) the preview is the only door and keeps its name.
  */
 
 const WIDTH = 512;
@@ -50,9 +57,11 @@ export interface PillPreviewProps {
   /** "Vincent's screen". */
   label: string;
   onWatch: () => void;
+  /** The bar's own Watch button is drawn: this one is only for the mouse. */
+  redundant?: boolean;
 }
 
-export function PillPreview({ target, streamerId, label, onWatch }: PillPreviewProps) {
+export function PillPreview({ target, streamerId, label, onWatch, redundant = false }: PillPreviewProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const watchView = useVoiceStore((state) => state.watchView);
   const ambientView = useVoiceStore((state) => state.ambientView);
@@ -86,6 +95,8 @@ export function PillPreview({ target, streamerId, label, onWatch }: PillPreviewP
       type="button"
       className="glass-pill__preview glass-focusable"
       aria-label={`Watch ${label.replace(/^Your screen$/, 'your screen')}`}
+      aria-hidden={redundant || undefined}
+      tabIndex={redundant ? -1 : undefined}
       onClick={onWatch}
     >
       <canvas ref={canvasRef} aria-hidden="true" />

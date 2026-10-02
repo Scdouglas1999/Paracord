@@ -1,10 +1,18 @@
 import type { OperationContext } from '../operationContext';
+import type { VideoAnchor } from './video/canvasRenderer';
 
 /** Options for `MediaEngine.subscribeVideo`. */
 export interface SubscribeVideoOptions {
   preferredTrackId?: 'camera' | 'screen';
   /** How the picture sits in this surface. Default `contain`. */
   fit?: 'contain' | 'cover';
+  /**
+   * Where a `cover` crop falls, as CSS `object-position` (0 keeps the start of
+   * the axis, 1 the end, 0.5 the middle, the default). Camera tiles anchor at
+   * about a third down so a tall picture keeps its faces. No effect under
+   * `contain`.
+   */
+  anchor?: VideoAnchor;
 }
 
 export interface ScreenShareConfig {
@@ -272,9 +280,10 @@ export interface MediaEngine {
   unregisterTrackSubscription(streamId: string, trackId: string): Promise<void>;
   /**
    * `fit` places the picture in this surface: `contain` (the default)
-   * letterboxes, `cover` fills and crops (camera tiles). It is per surface,
-   * fixed for the life of the subscription, and holds on every route (the
-   * canvas and the desktop's native surface).
+   * letterboxes, `cover` fills and crops (camera tiles), and `anchor` says where
+   * a `cover` crop falls. Both are per surface, fixed for the life of the
+   * subscription, and hold on every route (the canvas and the desktop's native
+   * surface).
    */
   subscribeVideo(
     userId: string,

@@ -8,7 +8,7 @@
  * that box to a native platform surface the decode worker renders into.
  *
  * Lifecycle:
- * - `attach()` invokes `native_render_attach { streamId, trackId, fit } -> { surfaceId }`,
+ * - `attach()` invokes `native_render_attach { streamId, trackId, fit, anchor? } -> { surfaceId }`,
  *   creating the surface (hidden, at a zero rect) and flipping the subscription's
  *   route bookkeeping on the native side.
  * - A single rAF-throttled reporter — fed by a ResizeObserver, an
@@ -21,6 +21,8 @@
  * Raw frames never cross IPC on this route — the native side owns delivery. The
  * only things this file sends are geometry and visibility (spec §0, §2).
  */
+
+import { resolveAnchor, type ResolvedAnchor, type VideoAnchor } from './canvasRenderer';
 
 /** Geometry payload for `native_render_update_geometry` (spec §3.6). x/y/width/
  * height are physical pixels relative to the window's client area; cornerRadius
@@ -72,6 +74,12 @@ export interface NativeVideoTileOptions {
    * at attach.
    */
   fit?: 'contain' | 'cover';
+  /**
+   * Where a `cover` crop falls, as the canvas route's `anchor` (0 keeps the
+   * start of the axis, 1 the end, 0.5 the middle). Sent only with `cover`; the
+   * native side refuses it for `contain`. Fixed at attach.
+   */
+  anchor?: VideoAnchor;
   /** Injectable window for tests; defaults to the element's own view. */
   window?: Window;
 }
@@ -241,6 +249,7 @@ export class NativeVideoTile {
   private readonly onAttached?: (surfaceId: number) => void;
   private readonly occlusion: boolean | 'underlay';
   private readonly fit: 'contain' | 'cover';
+  private readonly anchor: ResolvedAnchor | null;
   private readonly view: Window | null;
   /** The occlusion boundary: the nearest ancestor marked
    * `data-native-surface-boundary` (the stream-tile root wrapping the canvas
@@ -277,6 +286,9 @@ export class NativeVideoTile {
     this.onAttached = options.onAttached;
     this.occlusion = options.occlusion ?? true;
     this.fit = options.fit ?? 'contain';
+    // Read here, so a bad anchor fails at construction and not in the native
+    // command; and only for a fit that crops (the canvas route ignores it too).
+    this.anchor = this.fit === 'cover' && options.anchor ? resolveAnchor(options.anchor) : null;
     this.view =
       options.window ?? this.element.ownerDocument?.defaultView ?? (typeof window !== 'undefined' ? window : null);
     this.boundary =
@@ -296,6 +308,7 @@ export class NativeVideoTile {
       streamId: this.streamId,
       trackId: this.trackId,
       fit: this.fit,
+      ...(this.anchor ? { anchor: this.anchor } : {}),
     })) as { surfaceId?: number } | null;
     const surfaceId = Number(result?.surfaceId);
     if (!Number.isFinite(surfaceId)) {

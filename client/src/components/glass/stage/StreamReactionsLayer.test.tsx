@@ -1,4 +1,4 @@
-import { act, render, renderHook, screen } from '@testing-library/react';
+import { act, render, renderHook, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { StreamReactions as StreamReactionsEvent } from '../../../api/generated/StreamReactions';
@@ -27,7 +27,13 @@ vi.mock('../../../api/files', () => ({ fileApi: { getDownloadTicket: vi.fn() } }
 
 import { useStreamReactionStore } from '../../../stores/streamReactionStore';
 import { useVoiceStore } from '../../../stores/voiceStore';
-import { StreamReactionsLayer, useStreamReactions, type StreamReactionTarget } from './StreamReactionsLayer';
+import {
+  ANNOUNCE_INTERVAL_MS,
+  StreamReactionsLayer,
+  reactionSentence,
+  useStreamReactions,
+  type StreamReactionTarget,
+} from './StreamReactionsLayer';
 
 const TARGET: StreamReactionTarget = { serverId: 'srv', guildId: 'g1', channelId: 'lounge', streamerId: 'vincent' };
 
@@ -83,9 +89,9 @@ afterEach(() => {
 });
 
 describe('StreamReactionsLayer', () => {
-  it('draws nothing until someone reacts, and never takes the pointer', () => {
-    const { container } = render(<StreamReactionsLayer target={TARGET} />);
-    expect(container).toBeEmptyDOMElement();
+  it('draws no bubbles until someone reacts, and never takes the pointer', () => {
+    render(<StreamReactionsLayer target={TARGET} />);
+    expect(screen.queryByTestId('stream-reactions')).toBeNull();
     act(() => useStreamReactionStore.getState().receive('srv', event({})));
     const layer = screen.getByTestId('stream-reactions');
     expect(layer).toHaveAttribute('aria-hidden', 'true');
@@ -145,6 +151,144 @@ describe('StreamReactionsLayer', () => {
     unmount();
     act(() => useStreamReactionStore.getState().receive('srv', event({})));
     expect(useStreamReactionStore.getState().bubbles).toHaveLength(0);
+  });
+});
+
+/** What the polite live region holds right now. */
+const spoken = () => screen.getByTestId('stream-reactions-live').textContent;
+
+describe('StreamReactionsLayer for screen readers', () => {
+  it('keeps a hidden polite live region in the page from the start, apart from the pictures', () => {
+    render(<StreamReactionsLayer target={TARGET} />);
+    const region = screen.getByTestId('stream-reactions-live');
+    expect(region).toHaveAttribute('role', 'status');
+    expect(region).toHaveAttribute('aria-live', 'polite');
+    expect(region).toHaveClass('sr-only');
+    expect(spoken()).toBe('');
+    // The bubbles stay pictures; the region is not inside them.
+    act(() => useStreamReactionStore.getState().receive('srv', event({})));
+    expect(screen.getByTestId('stream-reactions')).toHaveAttribute('aria-hidden', 'true');
+    expect(screen.getByTestId('stream-reactions').contains(region)).toBe(false);
+    expect(region.closest('[aria-hidden="true"]')).toBeNull();
+  });
+
+  it('says who reacted and with what', () => {
+    render(<StreamReactionsLayer target={TARGET} />);
+    act(() => useStreamReactionStore.getState().receive('srv', event({ display_name: 'Brendan' })));
+    expect(spoken()).toBe('Brendan reacted with a flame');
+    act(() => vi.advanceTimersByTime(ANNOUNCE_INTERVAL_MS));
+    act(() => useStreamReactionStore.getState().receive('srv', event({ user_id: 'nick', display_name: 'Nick', kind: 'heart' })));
+    expect(spoken()).toBe('Nick reacted with a heart');
+  });
+
+  it('falls back to the username when there is no display name', () => {
+    render(<StreamReactionsLayer target={TARGET} />);
+    act(() => useStreamReactionStore.getState().receive('srv', event({ display_name: null, username: 'luke_v' })));
+    expect(spoken()).toBe('luke_v reacted with a flame');
+  });
+
+  it('never says your own reaction', () => {
+    render(<StreamReactionsLayer target={TARGET} />);
+    act(() => {
+      useStreamReactionStore.getState().send(TARGET, 'flame');
+      useStreamReactionStore.getState().send(TARGET, 'heart');
+    });
+    expect(document.querySelectorAll('.glass-reactions__bubble[data-own]')).toHaveLength(2);
+    expect(spoken()).toBe('');
+    act(() => vi.advanceTimersByTime(ANNOUNCE_INTERVAL_MS * 3));
+    expect(spoken()).toBe('');
+  });
+
+  it('speaks at most once every two seconds, and merges what arrives meanwhile ("3 reactions")', () => {
+    render(<StreamReactionsLayer target={TARGET} />);
+    const receive = (over: Parameters<typeof event>[0]) => act(() => useStreamReactionStore.getState().receive('srv', event(over)));
+    receive({ user_id: 'a', display_name: 'Ana' });
+    expect(spoken()).toBe('Ana reacted with a flame');
+
+    // Three more inside the interval: nothing new is said yet.
+    act(() => vi.advanceTimersByTime(300));
+    receive({ user_id: 'b', display_name: 'Bo' });
+    act(() => vi.advanceTimersByTime(300));
+    receive({ user_id: 'c', display_name: 'Cy', kind: 'heart' });
+    act(() => vi.advanceTimersByTime(300));
+    receive({ user_id: 'd', display_name: 'Di' });
+    expect(spoken()).toBe('Ana reacted with a flame');
+
+    // When the interval is up they are one line.
+    act(() => vi.advanceTimersByTime(ANNOUNCE_INTERVAL_MS - 900 - 1));
+    expect(spoken()).toBe('Ana reacted with a flame');
+    act(() => vi.advanceTimersByTime(1));
+    expect(spoken()).toBe('3 reactions');
+  });
+
+  it('counts a reaction that carries several taps, and speaks a single late one by name', () => {
+    render(<StreamReactionsLayer target={TARGET} />);
+    act(() => useStreamReactionStore.getState().receive('srv', event({ count: 4 })));
+    expect(spoken()).toBe('4 reactions');
+    act(() => vi.advanceTimersByTime(ANNOUNCE_INTERVAL_MS + 500));
+    act(() => useStreamReactionStore.getState().receive('srv', event({ user_id: 'bo', display_name: 'Bo' })));
+    expect(spoken()).toBe('Bo reacted with a flame');
+  });
+
+  it('counts the taps that merge into a rising bubble when the stream is busy', () => {
+    render(<StreamReactionsLayer target={TARGET} />);
+    // Six bubbles rising makes the stream busy: the seventh joins the youngest.
+    for (let i = 0; i < 6; i++) {
+      act(() => useStreamReactionStore.getState().receive('srv', event({ user_id: `u${i}`, display_name: `P${i}` })));
+    }
+    expect(spoken()).toBe('P0 reacted with a flame');
+    act(() => vi.advanceTimersByTime(100));
+    act(() => useStreamReactionStore.getState().receive('srv', event({ user_id: 'x', display_name: 'X' })));
+    expect(document.querySelectorAll('.glass-reactions__bubble')).toHaveLength(6);
+    expect(document.querySelector('.glass-reactions__count')?.textContent).toBe('2');
+    // The merged tap has no one to name, but it is counted with the rest.
+    act(() => vi.advanceTimersByTime(ANNOUNCE_INTERVAL_MS));
+    expect(spoken()).toBe('6 reactions');
+  });
+
+  it("does not say what was already on screen when it started, nor another stream's", () => {
+    render(<StreamReactionsLayer target={TARGET} />);
+    act(() => useStreamReactionStore.getState().receive('srv', event({ stream_user_id: 'luke' })));
+    expect(spoken()).toBe('');
+    act(() => useStreamReactionStore.getState().receive('srv', event({ display_name: 'Bo' })));
+    expect(spoken()).toBe('Bo reacted with a flame');
+    // A second layer on the same stream starts with that bubble already there.
+    const second = render(<StreamReactionsLayer target={TARGET} />);
+    expect(within(second.container).getByTestId('stream-reactions-live').textContent).toBe('');
+  });
+
+  it('says the same line again as a new line, and clears it after a while', () => {
+    render(<StreamReactionsLayer target={TARGET} />);
+    act(() => useStreamReactionStore.getState().receive('srv', event({ display_name: 'Bo' })));
+    const first = screen.getByTestId('stream-reactions-live').firstElementChild;
+    act(() => vi.advanceTimersByTime(ANNOUNCE_INTERVAL_MS));
+    act(() => useStreamReactionStore.getState().receive('srv', event({ display_name: 'Bo' })));
+    const second = screen.getByTestId('stream-reactions-live').firstElementChild;
+    expect(spoken()).toBe('Bo reacted with a flame');
+    // A new node, so the screen reader hears it again.
+    expect(second).not.toBe(first);
+    act(() => vi.advanceTimersByTime(10_000));
+    expect(spoken()).toBe('');
+  });
+
+  it('stops when it leaves the screen: no timer says anything afterwards', () => {
+    const { unmount } = render(<StreamReactionsLayer target={TARGET} />);
+    act(() => useStreamReactionStore.getState().receive('srv', event({ user_id: 'a' })));
+    act(() => useStreamReactionStore.getState().receive('srv', event({ user_id: 'b' })));
+    unmount();
+    expect(() => act(() => vi.advanceTimersByTime(ANNOUNCE_INTERVAL_MS * 3))).not.toThrow();
+  });
+
+  it('composes the sentence', () => {
+    expect(reactionSentence([{ name: 'Brendan', kind: 'flame', taps: 1 }])).toBe('Brendan reacted with a flame');
+    expect(reactionSentence([{ name: 'Brendan', kind: 'heart', taps: 1 }])).toBe('Brendan reacted with a heart');
+    expect(reactionSentence([{ name: null, kind: 'flame', taps: 1 }])).toBe('1 reaction');
+    expect(
+      reactionSentence([
+        { name: 'A', kind: 'flame', taps: 1 },
+        { name: 'B', kind: 'heart', taps: 2 },
+      ]),
+    ).toBe('3 reactions');
   });
 });
 

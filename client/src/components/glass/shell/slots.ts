@@ -111,6 +111,12 @@ export interface CallPillProps {
   channelId?: string | null;
   /** `row` is the desktop header capsule; `stacked` the phone's two rows (§8). */
   layout: 'row' | 'stacked';
+  /**
+   * Where it is drawn. `header` (the default) is the conversation's; `sheet` is
+   * the one a sheet draws in its own header while it covers the conversation's,
+   * which steps out of the way meanwhile (`pill/sheetCover.ts`).
+   */
+  placement?: 'header' | 'sheet';
 }
 
 /* ---- Stage (G14, G15) -------------------------------------------------------- */

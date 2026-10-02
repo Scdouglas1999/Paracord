@@ -428,12 +428,27 @@ fn create_surface_on_main(app: &tauri::AppHandle, id: u64, fit: SurfaceFit) -> R
         send_void_bool(layer, sel(c"setMasksToBounds:"), YES);
         // The layer letterboxes by default (`ResizeAspect`); cover fills it,
         // and `masksToBounds` crops what overflows.
-        if fit == SurfaceFit::Cover {
+        //
+        // The crop is centered here: `AVLayerVideoGravityResizeAspectFill` has
+        // no anchor, and moving it would mean hosting the display layer as a
+        // sublayer of a clipping view and laying it out from each frame's
+        // dimensions, a rework of this file that cannot be built or run on the
+        // Linux toolchain it is reviewed on. The anchor was read and validated
+        // (`SurfaceFit::parse`); it is not applied on macOS, which says so once
+        // per surface.
+        if let SurfaceFit::Cover { anchor } = fit {
             send_void_id(
                 layer,
                 sel(c"setVideoGravity:"),
                 AVLayerVideoGravityResizeAspectFill,
             );
+            if anchor != super::SurfaceAnchor::CENTER {
+                tracing::info!(
+                    anchor_x = anchor.x,
+                    anchor_y = anchor.y,
+                    "macOS native surface crops around the center: the cover anchor is not applied on this platform"
+                );
+            }
         }
 
         // Add above the WKWebView sibling.

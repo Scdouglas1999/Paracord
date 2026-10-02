@@ -1,22 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-// A surface's `fit` (contain or cover) reaches whatever draws it on the
-// desktop: the canvas renderer on the WebCodecs route, and the native surface
-// on the native-surface route (glass-polish-1 item 7; camera tiles cover).
+// A surface's `fit` (contain or cover) and the `anchor` of a cover crop reach
+// whatever draws it on the desktop: the canvas renderer on the WebCodecs route,
+// and the native surface on the native-surface route (glass-polish-1 item 7;
+// camera tiles cover, glass-polish-2 item 2: around the upper third).
 
 const ipc = vi.hoisted(() => ({
   invoke: vi.fn(),
   listen: vi.fn(),
-  renderers: [] as Array<{ fit?: string }>,
-  tiles: [] as Array<{ fit?: string; trackId: string }>,
+  renderers: [] as Array<{ fit?: string; anchor?: unknown }>,
+  tiles: [] as Array<{ fit?: string; anchor?: unknown; trackId: string }>,
   webCodecs: true,
 }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: ipc.invoke, Channel: class { onmessage = null; } }));
 vi.mock('@tauri-apps/api/event', () => ({ listen: ipc.listen }));
 vi.mock('./video/canvasRenderer', () => ({
   CanvasRenderer: class {
-    constructor(readonly canvasElement: HTMLCanvasElement, options?: { fit?: string }) {
-      ipc.renderers.push({ fit: options?.fit });
+    constructor(readonly canvasElement: HTMLCanvasElement, options?: { fit?: string; anchor?: unknown }) {
+      ipc.renderers.push({ fit: options?.fit, anchor: options?.anchor });
     }
     setRenderingEnabled() {}
     renderFrame(frame: { close(): void }) { frame.close(); }
@@ -25,8 +26,8 @@ vi.mock('./video/canvasRenderer', () => ({
 }));
 vi.mock('./video/nativeVideoTile', () => ({
   NativeVideoTile: class {
-    constructor(options: { fit?: string; trackId: string }) {
-      ipc.tiles.push({ fit: options.fit, trackId: options.trackId });
+    constructor(options: { fit?: string; anchor?: unknown; trackId: string }) {
+      ipc.tiles.push({ fit: options.fit, anchor: options.anchor, trackId: options.trackId });
     }
     attach() { return new Promise(() => {}); }
     destroy() {}
@@ -102,6 +103,31 @@ describe('the fit of a desktop video surface', () => {
     expect(ipc.renderers.map((renderer) => renderer.fit)).toEqual(['cover', undefined]);
     releaseCover();
     releaseDefault();
+  });
+
+  it('hands a cover anchor to the canvas renderer', async () => {
+    const media = await joined();
+    const release = media.subscribeVideo('300', document.createElement('canvas'), undefined, {
+      preferredTrackId: 'camera', fit: 'cover', anchor: { x: 0.5, y: 0.35 },
+    });
+    await flush();
+    expect(ipc.renderers).toEqual([{ fit: 'cover', anchor: { x: 0.5, y: 0.35 } }]);
+    release();
+  });
+
+  it('hands a cover anchor to the native surface on the native-surface route', async () => {
+    ipc.webCodecs = false;
+    try {
+      const media = await joined();
+      const release = media.subscribeVideo('300', document.createElement('canvas'), undefined, {
+        preferredTrackId: 'camera', fit: 'cover', anchor: { x: 0.5, y: 0.35 },
+      });
+      await flush();
+      expect(ipc.tiles).toEqual([{ fit: 'cover', anchor: { x: 0.5, y: 0.35 }, trackId: 'camera' }]);
+      release();
+    } finally {
+      ipc.webCodecs = true;
+    }
   });
 
   it('reaches the native surface on the native-surface route', async () => {

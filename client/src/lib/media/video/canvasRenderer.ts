@@ -119,15 +119,70 @@ void main() {
  *   * `contain` (the default): the whole frame is shown, scaled to fit, with
  *     black bars on the sides or top and bottom where the shapes differ. A
  *     shared screen wants this: every pixel of it is content.
- *   * `cover`: the frame fills the canvas and what overflows is cropped, centered,
- *     so there are no bars. A camera tile wants this: a 4:3 camera in a 16:9 tile
- *     reads as a face filling the tile, not as a picture with bars either side.
+ *   * `cover`: the frame fills the canvas and what overflows is cropped (centered
+ *     unless an `anchor` says otherwise), so there are no bars. A camera tile
+ *     wants this: a 4:3 camera in a 16:9 tile reads as a face filling the tile,
+ *     not as a picture with bars either side.
  */
 export type CanvasFit = 'contain' | 'cover';
+
+/**
+ * Where a `cover` crop falls, as CSS `object-position` reads it: 0 keeps the
+ * start of the axis (the left, the top) and crops the far edge, 1 the opposite,
+ * 0.5 crops both evenly (the default). Only the axis the frame overflows is
+ * cropped, so on a frame wider than its tile `x` decides what is cut off the
+ * sides and `y` does nothing, and the other way round for a taller one. A camera
+ * keeps people's faces in frame by anchoring at about a third down
+ * (`y: 0.35`): a tall picture loses more of its bottom than its top.
+ *
+ * It has no meaning under `contain`, which crops nothing.
+ */
+export interface VideoAnchor {
+  x?: number;
+  y?: number;
+}
+
+/** A resolved anchor: both axes, each in [0, 1]. */
+export interface ResolvedAnchor {
+  x: number;
+  y: number;
+}
+
+/** The middle: what `cover` crops around unless told otherwise. */
+export const CENTER_ANCHOR: ResolvedAnchor = { x: 0.5, y: 0.5 };
+
+/**
+ * Read an anchor, defaulting an axis it leaves out to the middle. A value
+ * outside [0, 1] (or not a number) is a bug in the caller and is refused, not
+ * quietly clamped into a crop nobody asked for.
+ */
+export function resolveAnchor(anchor: VideoAnchor | undefined): ResolvedAnchor {
+  const axis = (name: 'x' | 'y', value: number | undefined): number => {
+    if (value === undefined) return 0.5;
+    if (!Number.isFinite(value) || value < 0 || value > 1) {
+      throw new RangeError(`video anchor ${name} must be between 0 and 1, got ${String(value)}`);
+    }
+    return value;
+  };
+  return { x: axis('x', anchor?.x), y: axis('y', anchor?.y) };
+}
+
+/**
+ * Where a drawn frame starts on one axis of the canvas (a pixel offset, at most
+ * 0 under `cover`, at least 0 under `contain`): `anchor` of the room the
+ * canvas has over (or under) the frame. At 0.5 it is the centering the renderer
+ * always did.
+ */
+export function placeOnAxis(canvasSize: number, drawSize: number, anchor: number): number {
+  // `+ 0` turns the -0 that floor gives a zero from a negative product into 0.
+  return Math.floor((canvasSize - drawSize) * anchor) + 0;
+}
 
 export interface CanvasRendererOptions {
   /** How a frame sits in the canvas. Default `contain`. */
   fit?: CanvasFit;
+  /** Where a `cover` crop falls. Default the middle; ignored under `contain`. */
+  anchor?: VideoAnchor;
 }
 
 /**
@@ -142,6 +197,8 @@ export class CanvasRenderer {
   private readonly mode: 'webgl' | '2d';
   /** How frames sit in the canvas; chosen at construction, like the backend. */
   readonly fit: CanvasFit;
+  /** Where a `cover` crop falls (the middle for `contain`, which crops nothing). */
+  readonly anchor: ResolvedAnchor;
 
   // Shared scheduling state.
   private pendingFrame: VideoFrame | null = null;
@@ -178,6 +235,7 @@ export class CanvasRenderer {
   constructor(canvas: HTMLCanvasElement, options: CanvasRendererOptions = {}) {
     this.canvas = canvas;
     this.fit = options.fit === 'cover' ? 'cover' : 'contain';
+    this.anchor = this.fit === 'cover' ? resolveAnchor(options.anchor) : CENTER_ANCHOR;
 
     const gl = this.tryCreateWebglContext(canvas);
     if (gl) {
@@ -1019,10 +1077,10 @@ export class CanvasRenderer {
     const canvasHeight = Math.max(1, Math.round(cssHeight * ratio));
     // `contain` scales by the tighter axis so the whole frame fits; `cover` by the
     // looser one so the canvas is filled and the rest is cropped. Either way the
-    // frame keeps its shape and is centered: with `cover` the draw rectangle is
-    // larger than the canvas, so drawX/drawY are zero or negative and both backends
-    // clip what falls outside (a 2D drawImage and a GL viewport larger than the
-    // drawing buffer are both cut at the canvas's edge).
+    // frame keeps its shape and is centered (or, with `cover`, anchored): with
+    // `cover` the draw rectangle is larger than the canvas, so drawX/drawY are zero
+    // or negative and both backends clip what falls outside (a 2D drawImage and a
+    // GL viewport larger than the drawing buffer are both cut at the canvas's edge).
     const cover = this.fit === 'cover';
     const scale = cover
       ? Math.max(canvasWidth / frameWidth, canvasHeight / frameHeight)
@@ -1034,8 +1092,10 @@ export class CanvasRenderer {
       drawWidth = Math.max(drawWidth, canvasWidth);
       drawHeight = Math.max(drawHeight, canvasHeight);
     }
-    const drawX = Math.floor((canvasWidth - drawWidth) / 2);
-    const drawY = Math.floor((canvasHeight - drawHeight) / 2);
+    // Centered, or (cover) where the anchor puts the crop; an axis that is not
+    // cropped has no room to move in, so its anchor changes nothing.
+    const drawX = placeOnAxis(canvasWidth, drawWidth, this.anchor.x);
+    const drawY = placeOnAxis(canvasHeight, drawHeight, this.anchor.y);
     return { canvasWidth, canvasHeight, drawX, drawY, drawWidth, drawHeight };
   }
 }

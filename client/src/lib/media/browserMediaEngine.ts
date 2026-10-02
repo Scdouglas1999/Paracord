@@ -1451,10 +1451,10 @@ export class BrowserMediaEngine implements MediaEngine {
     const preferredTrackId = options?.preferredTrackId;
     const subscriptionKey = this.videoSubscriptionKey(userId, preferredTrackId);
 
-    // Each surface has its own renderer, so the fit is per surface even when
-    // several share one subscription (a covered camera tile and a contained
-    // thumbnail of the same camera).
-    const renderer = new CanvasRenderer(canvas, { fit: options?.fit });
+    // Each surface has its own renderer, so the fit (and where a cover crop
+    // falls) is per surface even when several share one subscription (a covered
+    // camera tile and a contained thumbnail of the same camera).
+    const renderer = new CanvasRenderer(canvas, { fit: options?.fit, anchor: options?.anchor });
     const sink: VideoSink = { canvas, renderer, onFrame };
 
     const joined = this.videoSubscriptions.get(subscriptionKey);

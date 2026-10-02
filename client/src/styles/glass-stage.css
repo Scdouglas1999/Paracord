@@ -711,24 +711,6 @@
   width: 100%;
 }
 
-.glass-stage__call-notice {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  margin: 0;
-  padding: 24px;
-  font-size: 15px;
-  line-height: 1.4;
-  text-align: center;
-  color: var(--ink-2);
-  pointer-events: none;
-}
-
-.glass-stage__call-notice[data-chips='true'] {
-  right: calc(var(--stage-chip-w) + var(--stage-gap));
-}
-
 .glass-stage[data-view='call'] .glass-stage__tiles {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
@@ -738,6 +720,243 @@
 .glass-stage[data-view='call'] .glass-stage__tile {
   height: auto;
   min-height: 0;
+}
+
+/* ---- The call with no cameras (stage/CallEmpty.tsx) ----------------------------------
+   Nothing is playing, so the people are the stage: faces large and centered, each
+   with their name; the talker wears an amber ring and a soft glow, with the
+   waveform beside the name; under them, quietly, the call's name and what is not
+   happening. The call's controls stay in their row below. A person who shares is
+   a button that opens their screen, ringed in amber. Sizes come from the
+   component (--call-face): 112px for up to three people, down to 56px for a crowd. */
+/* A flex child of the call's main area, so it keeps the room that area leaves it (a
+   phone's card pads it clear of the chrome drawn over the card). */
+.glass-call-empty {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 36px;
+  min-width: 0;
+  min-height: 0;
+  padding: 24px 32px 40px;
+}
+
+/* The rows share the faces out evenly (the component sets the column count). */
+.glass-call-empty__people {
+  display: grid;
+  grid-template-columns: repeat(var(--call-columns, 5), max-content);
+  align-items: start;
+  justify-content: center;
+  gap: 28px 40px;
+  max-width: 100%;
+}
+
+.glass-call-empty__person {
+  position: relative;
+  width: max(var(--call-face), 104px);
+}
+
+.glass-call-empty__person-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-tile);
+  color: inherit;
+  background: none;
+  text-align: center;
+}
+
+button.glass-call-empty__person-inner {
+  cursor: pointer;
+}
+
+/* The face and its ring: a dark gap, then amber (talking, sharing) or a faint edge.
+   The glow beneath a talker is its own layer, so only its opacity moves. */
+.glass-call-empty__face {
+  position: relative;
+  display: block;
+  flex: 0 0 auto;
+  width: var(--call-face);
+  height: var(--call-face);
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--pill) 92%, transparent),
+    0 0 0 5px color-mix(in srgb, var(--ink-1) 16%, transparent);
+}
+
+.glass-call-empty__person[data-ring='amber'] .glass-call-empty__face {
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--pill) 92%, transparent),
+    0 0 0 5px color-mix(in srgb, var(--amber) 78%, transparent);
+}
+
+.glass-call-empty__face::before {
+  content: '';
+  position: absolute;
+  inset: -8px;
+  border-radius: 50%;
+  pointer-events: none;
+  background-color: transparent;
+  box-shadow: 0 0 44px var(--amber-tint);
+  opacity: 0;
+  transition: opacity var(--glass-ms) var(--glass-ease);
+}
+
+.glass-call-empty__person[data-talking='true'] .glass-call-empty__face::before {
+  opacity: 1;
+}
+
+/* A hover ring over the ring on someone whose screen opens, on its own layer. */
+.glass-call-empty__face::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  pointer-events: none;
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--pill) 92%, transparent),
+    0 0 0 5px color-mix(in srgb, var(--ink-1) 55%, transparent);
+  opacity: 0;
+  transition: opacity var(--glass-ms) var(--glass-ease);
+}
+
+button.glass-call-empty__person-inner:hover .glass-call-empty__face::after {
+  opacity: 1;
+}
+
+.glass-call-empty__mic {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  display: grid;
+  place-items: center;
+  width: max(24px, calc(var(--call-face) * 0.28));
+  height: max(24px, calc(var(--call-face) * 0.28));
+  border-radius: 50%;
+  color: var(--ink-1);
+  background-color: color-mix(in srgb, var(--solid) 95%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pill) 60%, transparent);
+}
+
+.glass-call-empty__who {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.glass-call-empty__person-name {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  max-width: 100%;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.glass-call-empty__person-who {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.glass-call-empty__state {
+  font-size: 13px;
+  line-height: 1.3;
+  color: var(--ink-2);
+}
+
+.glass-call-empty__state[data-tone='amber'] {
+  color: var(--amber-ink);
+}
+
+.glass-call-empty__state[data-tone='ink'] {
+  color: var(--ink-1);
+}
+
+.glass-call-empty__text {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  max-width: 440px;
+  text-align: center;
+}
+
+.glass-call-empty__name {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  color: var(--ink-1);
+}
+
+.glass-call-empty__line {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--ink-3);
+}
+
+/* A phone's stage is a card: smaller faces in one row, close together, and no text
+   (the card's chrome names the call). Past five people a second row of small faces
+   keeps just the names (and the talker's state). */
+.glass-call-empty[data-layout='phone'] {
+  gap: 0;
+  padding: 0;
+}
+
+.glass-call-empty[data-layout='phone'] .glass-call-empty__people {
+  gap: 8px 6px;
+}
+
+.glass-call-empty[data-layout='phone'] .glass-call-empty__person {
+  width: max(var(--call-face), 60px);
+}
+
+.glass-call-empty[data-layout='phone'] .glass-call-empty__person-inner {
+  gap: 6px;
+}
+
+/* The waveform goes under a talker's name, where a 60px column has the room. */
+.glass-call-empty[data-layout='phone'] .glass-call-empty__person-name {
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+}
+
+.glass-call-empty[data-layout='phone'] .glass-call-empty__state {
+  font-size: 11px;
+}
+
+.glass-call-empty[data-layout='phone'] .glass-call-empty__mic {
+  right: -4px;
+  bottom: -4px;
+}
+
+.glass-call-empty[data-layout='phone'][data-count='6'] .glass-call-empty__person:not([data-talking='true']) .glass-call-empty__state,
+.glass-call-empty[data-layout='phone'][data-count='7'] .glass-call-empty__person:not([data-talking='true']) .glass-call-empty__state,
+.glass-call-empty[data-layout='phone'][data-count='8'] .glass-call-empty__person:not([data-talking='true']) .glass-call-empty__state,
+.glass-call-empty[data-layout='phone'][data-count='9'] .glass-call-empty__person:not([data-talking='true']) .glass-call-empty__state,
+.glass-call-empty[data-layout='phone'][data-count='10'] .glass-call-empty__person:not([data-talking='true']) .glass-call-empty__state {
+  display: none;
+}
+
+/* Reduced transparency and the quiet room: the glow is the one soft thing, and it goes. */
+:root[data-reduced-transparency='true'] .glass-call-empty__face::before {
+  box-shadow: none;
 }
 
 /* A stage channel's audience: one text decision instead of the microphone. */

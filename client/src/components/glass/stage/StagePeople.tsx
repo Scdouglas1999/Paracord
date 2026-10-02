@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { MicOff } from 'lucide-react';
 
 import type { MediaEngine } from '../../../lib/media/mediaEngine';
+import type { VideoAnchor } from '../../../lib/media/video/canvasRenderer';
 import { cn } from '../../../lib/utils';
 import { SoundboardBurst } from '../../voice/SoundboardBurst';
 import { Face } from '../places/Lead';
@@ -83,6 +84,18 @@ function describeState(person: StagePerson, watched: boolean): string {
   return parts.join(', ');
 }
 
+/**
+ * Where a camera's crop falls when its picture is taller than its tile: about a
+ * third down, so people's faces stay in frame. A camera is a person sitting
+ * back from a screen; their face is in the upper part of the picture, and
+ * centering a 4:3 or portrait camera in a wide tile cuts it off at the
+ * forehead. The anchor is CSS `object-position`'s: 0.35 crops 35% of what has
+ * to go from the top and 65% from the bottom. A picture wider than its tile is
+ * cropped at the sides, which stay centered. Theater reuses this tile, so its
+ * cameras do the same.
+ */
+export const CAMERA_ANCHOR: Readonly<Required<VideoAnchor>> = { x: 0.5, y: 0.35 };
+
 export function CameraTile({
   person,
   engine,
@@ -113,9 +126,10 @@ export function CameraTile({
         sawFrame = true;
         setHasPicture(true);
       },
-      // A camera fills its tile (cropped evenly), never letterboxed. Theater
-      // reuses this tile, so its cameras fill too.
-      { preferredTrackId: 'camera', fit: 'cover' },
+      // A camera fills its tile, never letterboxed, and where it is cropped
+      // the faces stay (CAMERA_ANCHOR). Theater reuses this tile, so its
+      // cameras do the same.
+      { preferredTrackId: 'camera', fit: 'cover', anchor: CAMERA_ANCHOR },
     );
     return () => {
       unsubscribe();

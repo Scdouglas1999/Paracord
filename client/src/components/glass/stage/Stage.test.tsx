@@ -347,6 +347,7 @@ describe('people', () => {
     expect(call.subscribeVideo).toHaveBeenCalledWith('brendan', expect.any(HTMLCanvasElement), expect.any(Function), {
       preferredTrackId: 'camera',
       fit: 'cover',
+      anchor: { x: 0.5, y: 0.35 },
     });
   });
 
@@ -558,16 +559,38 @@ describe('the call itself (no stream)', () => {
     expect(engine.subscribeVideo).toHaveBeenCalledWith('brendan', expect.any(HTMLCanvasElement), expect.any(Function), {
       preferredTrackId: 'camera',
       fit: 'cover',
+      anchor: { x: 0.5, y: 0.35 },
     });
     fireEvent.click(screen.getByRole('button', { name: "Watch Vincent's screen" }));
     expect(useGlassStore.getState().stage.streamerId).toBe('vincent');
   });
 
-  it('says nobody has a camera on when nobody does', () => {
+  it('with no camera on, the people are the stage: their faces, the call, and that no one is sharing', () => {
     joined();
     useVoiceStore.setState({ channelParticipants: new Map([['lounge', [NICK, voiceState('me')]]]) });
     renderStage(CALL);
-    expect(screen.getByRole('status')).toHaveTextContent('Nobody has a camera on.');
+    expect(screen.getByRole('status')).toHaveTextContent('No one is sharing');
+    const people = screen.getByRole('list', { name: 'People in the call' });
+    expect(people.closest('.glass-call-empty')).not.toBeNull();
+    expect(within(people).getAllByRole('listitem')).toHaveLength(2);
+    // No camera tile, no chips column: they are one calm group, and the controls stay.
+    expect(document.querySelector('.glass-stage__tile')).toBeNull();
+    expect(document.querySelector('.glass-stage__chips')).toBeNull();
+    expect(screen.getByRole('button', { name: /Camera|camera/ })).toBeInTheDocument();
+  });
+
+  it('a camera turning on puts the tiles back', () => {
+    joined();
+    useVoiceStore.setState({ channelParticipants: new Map([['lounge', [NICK, voiceState('me')]]]) });
+    renderStage(CALL);
+    expect(document.querySelector('.glass-call-empty')).not.toBeNull();
+    act(() => {
+      useVoiceStore.setState({
+        channelParticipants: new Map([['lounge', [voiceState('brendan', { self_video: true }), NICK, voiceState('me')]]]),
+      });
+    });
+    expect(document.querySelector('.glass-call-empty')).toBeNull();
+    expect(document.querySelector('.glass-stage__tile')).not.toBeNull();
   });
 });
 
@@ -602,16 +625,38 @@ describe('a direct message call', () => {
   it('is named for the person, with no server, and says who is there by name', () => {
     renderStage(DM);
     expect(screen.getByText('Jeremy', { selector: '.glass-stage__title' })).toBeInTheDocument();
-    expect(screen.getByText('Jeremy', { selector: '.glass-stage__chip-name' })).toBeInTheDocument();
+    expect(screen.getByText('Jeremy', { selector: '.glass-call-empty__person-who' })).toBeInTheDocument();
   });
 
-  it('offers no screen share, invite or soundboard, and leaves through the DM call', () => {
+  it('offers a screen share and its quality, but no invite or soundboard', () => {
     renderStage(DM);
     const row = screen.getByRole('group', { name: 'Call controls' });
-    expect(within(row).queryByRole('button', { name: 'Share your screen' })).toBeNull();
+    const names = within(row).getAllByRole('button').map((b) => b.getAttribute('aria-label') ?? b.textContent);
+    expect(names).toEqual(['Microphone', 'Camera', 'Share your screen', 'More call actions', 'Leave Jeremy']);
     fireEvent.click(screen.getByRole('button', { name: 'More call actions' }));
     const items = within(screen.getByRole('menu', { name: 'More call actions' })).getAllByRole('menuitem').map((item) => item.textContent);
-    expect(items).toEqual(['Microphone and speaker', 'Connection check']);
+    expect(items).toEqual(['Share quality: 720p 30fps', 'Microphone and speaker', 'Connection check']);
+  });
+
+  it("switches to the other person's share and watches it through the DM call", () => {
+    useVoiceStore.setState({
+      channelParticipants: new Map([
+        ['dm-1', [
+          voiceState('jeremy', { channel_id: 'dm-1', guild_id: null as never, display_name: 'Jeremy', self_stream: true, self_stream_started_at: STARTED }),
+          voiceState('me', { channel_id: 'dm-1', guild_id: null as never }),
+        ]],
+      ]),
+    });
+    const { unmount } = renderStage(DM);
+    fireEvent.click(screen.getByRole('button', { name: "Watch Jeremy's screen" }));
+    const target = useGlassStore.getState().stage;
+    expect(target.streamerId).toBe('jeremy');
+    expect(target.guildId).toBeNull();
+    unmount();
+    // The stream's stage watches it under the call's DM key (`voiceStore`'s
+    // 'dm'), never a guild.
+    renderStage({ ...DM, streamerId: 'jeremy' });
+    expect(actions.startWatch).toHaveBeenLastCalledWith({ serverId: '__local__', guildId: 'dm', channelId: 'dm-1', streamerId: 'jeremy' });
   });
 });
 
