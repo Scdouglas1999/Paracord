@@ -85,7 +85,8 @@ pub struct VoiceModeResponse {
     pub can_publish: bool,
 }
 
-/// `POST /api/v2/voice/{channel_id}/view`: start a view session.
+/// `POST /api/v2/voice/{channel_id}/view`: start a view session. In a DM or
+/// group DM call only `watch` exists, for the DM's recipients.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct StartVoiceViewRequest {
     pub kind: VoiceViewKind,
@@ -118,8 +119,9 @@ pub struct VoiceViewMedia {
 /// replaces the old (whose connection the relay closes).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct VoiceViewSession {
+    /// Null for a DM or group DM call.
     #[schemars(length(min = 1), regex(pattern = r"^[0-9]+$"))]
-    pub guild_id: String,
+    pub guild_id: Option<String>,
     #[schemars(length(min = 1), regex(pattern = r"^[0-9]+$"))]
     pub channel_id: String,
     pub kind: VoiceViewKind,
@@ -147,8 +149,9 @@ pub struct VoiceStreamWatchers {
 /// listed has no watchers.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct VoiceWatchers {
+    /// Null for a DM or group DM call (sent to its recipients only).
     #[schemars(length(min = 1), regex(pattern = r"^[0-9]+$"))]
-    pub guild_id: String,
+    pub guild_id: Option<String>,
     #[schemars(length(min = 1), regex(pattern = r"^[0-9]+$"))]
     pub channel_id: String,
     pub streams: Vec<VoiceStreamWatchers>,

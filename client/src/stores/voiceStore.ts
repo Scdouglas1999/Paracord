@@ -111,6 +111,20 @@ let activeRoomListenerCleanup: (() => void) | null = null;
 // and echoed back through the live stream.
 let voiceSuppressedForStream = false;
 let currentCall: CallSession | null = null;
+/**
+ * The DM call channels whose voice states each account (by `accountScopeKey`)
+ * has reported, from READY and from live updates. A DM call's voice states
+ * carry no guild, so this is what lets one account's READY replace its own DM
+ * calls (a call that ended while it was away) without touching another's.
+ */
+const dmCallChannelsByScope = new Map<string, Set<string>>();
+function noteDmCallChannel(scope: AccountScope | undefined, voiceState: VoiceState): void {
+  if (!scope || voiceState.guild_id || !voiceState.channel_id) return;
+  const key = accountScopeKey(scope);
+  let channels = dmCallChannelsByScope.get(key);
+  if (!channels) dmCallChannelsByScope.set(key, (channels = new Set()));
+  channels.add(voiceState.channel_id);
+}
 const roomOwners = new WeakMap<Room, { owner: CallSession; active: boolean }>();
 const callReleasePromises = new WeakMap<CallSession, Promise<void>>();
 
@@ -2096,6 +2110,11 @@ export interface VoiceStoreState {
   handleVoiceStateUpdate: (state: VoiceState, scope?: AccountScope) => void;
   // Load initial voice states from READY payload
   loadVoiceStates: (guildId: string, states: VoiceState[], scope?: AccountScope) => void;
+  /**
+   * READY's `dm_voice_states`: the people in every DM or group DM call this
+   * account is a recipient of. Authoritative for that account's DM calls.
+   */
+  loadDmVoiceStates: (states: VoiceState[], scope: AccountScope) => void;
   // Speaking state from LiveKit
   setSpeakingUsers: (userIds: string[]) => void;
   /**
@@ -2222,6 +2241,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
     // Clear synchronously. A pending release can never erase the next login's call.
     const release = owner ? closeCall(owner) : Promise.resolve();
     resetViewSessions();
+    dmCallChannelsByScope.clear();
     set({ channelParticipants: new Map(), participants: new Map(), speakingUsers: new Set(),
       showSystemAudioPrivacyWarning: false, pttEngaged: false, watchers: new Map(),
       watchView: null, ambientView: null, modeError: null, connectionErrorCode: null });
@@ -2969,6 +2989,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
 
   handleVoiceStateUpdate: (voiceState, scope) => {
     if (currentCall && (!scope || accountScopeKey(scope) !== currentCall.context.key)) return;
+    noteDmCallChannel(scope, voiceState);
     const owner = currentCall;
     const previous = get().participants.get(voiceState.user_id);
     if (!voiceState.channel_id && voiceState.session_id && previous?.session_id && previous.session_id !== voiceState.session_id) return;
@@ -3124,6 +3145,48 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
         channelParticipants.set(localVoiceState.channel_id, existing);
         participants.set(localVoiceState.user_id, localVoiceState);
       }
+      return { channelParticipants, participants, voiceSnapshotSeq: prev.voiceSnapshotSeq + 1 };
+    }),
+
+  loadDmVoiceStates: (states, scope) =>
+    set((prev) => {
+      if (currentCall && accountScopeKey(scope) !== currentCall.context.key) return prev;
+      const key = accountScopeKey(scope);
+      const myId = scope.userId;
+      const incoming = states.filter((vs) => !!vs.channel_id && !vs.guild_id);
+      const known = dmCallChannelsByScope.get(key) ?? new Set<string>();
+      const replaced = new Set([...known, ...incoming.map((vs) => vs.channel_id!)]);
+      // This client's own DM call is what its call says, never READY's row
+      // (as `loadVoiceStates` does for a server's).
+      const localDmChannel = prev.connected && prev.guildId === 'dm' ? prev.channelId : null;
+      const channelParticipants = new Map(prev.channelParticipants);
+      const participants = new Map(prev.participants);
+      for (const channelId of replaced) {
+        const members = channelParticipants.get(channelId) ?? [];
+        const kept = channelId === localDmChannel ? members.filter((m) => m.user_id === myId) : [];
+        for (const member of members) {
+          if (kept.includes(member)) continue;
+          if (participants.get(member.user_id)?.channel_id === channelId) participants.delete(member.user_id);
+        }
+        if (kept.length) channelParticipants.set(channelId, kept);
+        else channelParticipants.delete(channelId);
+      }
+      for (const vs of incoming) {
+        if (vs.user_id === myId) continue;
+        const channelId = vs.channel_id!;
+        // A person is in one call at a time: drop them from wherever else they were listed.
+        for (const [otherId, members] of channelParticipants) {
+          if (otherId === channelId) continue;
+          const filtered = members.filter((m) => m.user_id !== vs.user_id);
+          if (filtered.length === members.length) continue;
+          if (filtered.length) channelParticipants.set(otherId, filtered);
+          else channelParticipants.delete(otherId);
+        }
+        const members = (channelParticipants.get(channelId) ?? []).filter((m) => m.user_id !== vs.user_id);
+        channelParticipants.set(channelId, [...members, vs]);
+        participants.set(vs.user_id, vs);
+      }
+      dmCallChannelsByScope.set(key, new Set(incoming.map((vs) => vs.channel_id!)));
       return { channelParticipants, participants, voiceSnapshotSeq: prev.voiceSnapshotSeq + 1 };
     }),
 

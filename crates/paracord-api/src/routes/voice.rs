@@ -7,6 +7,7 @@ use axum::{
 };
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use paracord_contracts::voice as wire;
+use paracord_core::voice_events::is_dm_call_channel;
 use paracord_core::AppState;
 use paracord_federation::client::{FederationMediaRelayRequest, FederationMediaTokenRequest};
 use paracord_models::permissions::Permissions;
@@ -121,11 +122,6 @@ async fn ensure_listen_in_allowed(
     Ok(())
 }
 
-/// The wire form of a stream start time (RFC 3339), or null.
-fn stream_started_at_wire(value: Option<chrono::DateTime<chrono::Utc>>) -> Value {
-    value.map_or(Value::Null, |value| Value::String(value.to_rfc3339()))
-}
-
 /// A `VOICE_STATE_UPDATE` for a member who is in `row.channel_id`, built from
 /// the stored row so every field (mode, stream start time, flags) is the one
 /// the database holds.
@@ -133,24 +129,44 @@ pub(crate) fn voice_state_payload(
     row: &paracord_db::voice_states::VoiceStateRow,
     user: Option<&paracord_db::users::UserRow>,
 ) -> Value {
-    json!({
-        "user_id": row.user_id.to_string(),
-        "channel_id": row.channel_id.to_string(),
-        "guild_id": row.guild_id().map(|id| id.to_string()),
-        "session_id": &row.session_id,
-        "self_mute": row.self_mute,
-        "self_deaf": row.self_deaf,
-        "self_stream": row.self_stream,
-        "self_video": row.self_video,
-        "suppress": row.suppress,
-        "request_to_speak_at": row.request_to_speak_at.map(|value| value.to_rfc3339()),
-        "mute": false,
-        "deaf": false,
-        "mode": row.mode.as_str(),
-        "self_stream_started_at": stream_started_at_wire(row.self_stream_started_at),
-        "username": user.map(|u| u.username.as_str()),
-        "avatar_hash": user.and_then(|u| u.avatar_hash.as_deref()),
-    })
+    paracord_core::voice_events::call_voice_state_payload(row, user)
+}
+
+/// The guild of the call in `channel`: `Some` for a server voice or stage
+/// channel, `None` for a DM or group DM call. Any other channel is refused
+/// with `refusal`.
+fn call_guild_of(
+    channel: &paracord_db::channels::ChannelRow,
+    refusal: &str,
+) -> Result<Option<i64>, ApiError> {
+    if is_dm_call_channel(channel) {
+        return Ok(None);
+    }
+    if channel.channel_type != 2 && channel.channel_type != 13 {
+        return Err(ApiError::BadRequest(refusal.into()));
+    }
+    channel
+        .guild_id()
+        .map(Some)
+        .ok_or_else(|| ApiError::BadRequest("Voice is only supported in guild channels".into()))
+}
+
+/// Announce a member's stored voice state to everyone who may see the call:
+/// the guild for a server channel, the recipients for a DM call.
+async fn announce_call_voice_state(
+    state: &AppState,
+    row: &paracord_db::voice_states::VoiceStateRow,
+    user: Option<&paracord_db::users::UserRow>,
+) -> Result<(), ApiError> {
+    paracord_core::voice_events::dispatch_call_event(
+        state,
+        "VOICE_STATE_UPDATE",
+        voice_state_payload(row, user),
+        row.guild_id(),
+        row.channel_id,
+    )
+    .await
+    .map_err(|error| ApiError::Internal(error.into()))
 }
 
 pub fn livekit_url_candidates_pub(headers: &HeaderMap, fallback: &str) -> Vec<String> {
@@ -1093,14 +1109,14 @@ fn held_flags(row: &paracord_db::voice_states::VoiceStateRow) -> HeldVoiceFlags 
 async fn record_stream_flag(
     state: &AppState,
     user_id: i64,
-    guild_id: i64,
+    guild_id: Option<i64>,
     held: &HeldVoiceFlags,
     streaming: bool,
 ) -> Result<paracord_db::voice_states::VoiceStateRow, ApiError> {
     paracord_db::voice_states::update_voice_state(
         &state.db,
         user_id,
-        Some(guild_id),
+        guild_id,
         held.self_mute,
         held.self_deaf,
         streaming,
@@ -1134,45 +1150,52 @@ pub async fn start_stream(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
 
-    if channel.channel_type != 2 && channel.channel_type != 13 {
-        return Err(ApiError::BadRequest("Not a voice channel".into()));
-    }
-
-    let guild_id = channel.guild_id().ok_or(ApiError::BadRequest(
-        "Streaming is only supported in guild channels".into(),
-    ))?;
+    // A server voice or stage channel, or a DM or group DM call.
+    let guild_id = call_guild_of(&channel, "Not a voice channel")?;
     require_stream_receipt(
         &state,
         auth.user_id,
-        Some(guild_id),
+        guild_id,
         channel_id,
         query.session_id.as_deref(),
     )
     .await?;
-    paracord_core::permissions::ensure_guild_member(&state.db, guild_id, auth.user_id).await?;
-    let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
-        .ok_or(ApiError::NotFound)?;
-    let perms = paracord_core::permissions::compute_channel_permissions(
-        &state.db,
-        guild_id,
-        channel_id,
-        guild.owner_id,
-        auth.user_id,
-    )
-    .await?;
-    paracord_core::permissions::require_permission(perms, Permissions::VIEW_CHANNEL)?;
-    paracord_core::permissions::require_permission(perms, Permissions::CONNECT)?;
-    if !perms.contains(Permissions::STREAM) {
-        tracing::warn!(
-            "start_stream forbidden: missing STREAM permission (user_id={}, guild_id={}, channel_id={}, perms={})",
-            auth.user_id,
+    if let Some(guild_id) = guild_id {
+        paracord_core::permissions::ensure_guild_member(&state.db, guild_id, auth.user_id).await?;
+        let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+            .ok_or(ApiError::NotFound)?;
+        let perms = paracord_core::permissions::compute_channel_permissions(
+            &state.db,
             guild_id,
             channel_id,
-            perms.bits()
-        );
-        return Err(ApiError::Forbidden);
+            guild.owner_id,
+            auth.user_id,
+        )
+        .await?;
+        paracord_core::permissions::require_permission(perms, Permissions::VIEW_CHANNEL)?;
+        paracord_core::permissions::require_permission(perms, Permissions::CONNECT)?;
+        if !perms.contains(Permissions::STREAM) {
+            tracing::warn!(
+                "start_stream forbidden: missing STREAM permission (user_id={}, guild_id={}, channel_id={}, perms={})",
+                auth.user_id,
+                guild_id,
+                channel_id,
+                perms.bits()
+            );
+            return Err(ApiError::Forbidden);
+        }
+    } else {
+        // A DM call: only its recipients may share into it, and never across
+        // a block in a 1:1 DM (the same rule as a DM call's join).
+        crate::routes::channels::ensure_channel_permissions(
+            &state,
+            &channel,
+            auth.user_id,
+            &[Permissions::CONNECT, Permissions::STREAM],
+        )
+        .await?;
     }
 
     let user = paracord_db::users::get_user_by_id(&state.db, auth.user_id)
@@ -1183,7 +1206,7 @@ pub async fn start_stream(
     // deafen and camera stay as they are, or everyone else sees a muted
     // streamer as unmuted until their next change. Only someone in the call
     // can stream into it, and a listener never sends.
-    let current = current_voice_state(&state, channel_id, auth.user_id, Some(guild_id))
+    let current = current_voice_state(&state, channel_id, auth.user_id, guild_id)
         .await?
         .ok_or_else(|| ApiError::Conflict("Join the voice channel before streaming".into()))?;
     if current.mode.is_listen() {
@@ -1202,8 +1225,9 @@ pub async fn start_stream(
     }
     let stream_title = body.as_ref().and_then(|b| b.title.as_deref());
 
+    // A DM call is never mirrored to another server.
     let federation_service = crate::routes::federation::build_federation_service();
-    if federation_service.is_enabled() {
+    if let Some(guild_id) = guild_id.filter(|_| federation_service.is_enabled()) {
         let outbound = crate::routes::federation::resolve_outbound_context(
             &state,
             &federation_service,
@@ -1240,9 +1264,14 @@ pub async fn start_stream(
                 match client.relay_media_action(target, &payload).await {
                     Ok(remote) => {
                         if let (Some(token), Some(room_name)) = (remote.token, remote.room_name) {
-                            let row =
-                                record_stream_flag(&state, auth.user_id, guild_id, &held, true)
-                                    .await?;
+                            let row = record_stream_flag(
+                                &state,
+                                auth.user_id,
+                                Some(guild_id),
+                                &held,
+                                true,
+                            )
+                            .await?;
                             state.event_bus.dispatch(
                                 "VOICE_STATE_UPDATE",
                                 voice_state_payload(&row, Some(&user)),
@@ -1302,11 +1331,7 @@ pub async fn start_stream(
     if state.config.native_media_enabled && !requesting_livekit_fallback {
         let row = record_stream_flag(&state, auth.user_id, guild_id, &held, true).await?;
 
-        state.event_bus.dispatch(
-            "VOICE_STATE_UPDATE",
-            voice_state_payload(&row, Some(&user)),
-            Some(guild_id),
-        );
+        announce_call_voice_state(&state, &row, Some(&user)).await?;
 
         tracing::info!(
             "Native media stream started for user={} channel={}",
@@ -1330,7 +1355,8 @@ pub async fn start_stream(
         .voice
         .start_stream(
             channel_id,
-            guild_id,
+            // A DM call's LiveKit room is keyed under guild 0 (`join_dm_voice`).
+            guild_id.unwrap_or(0),
             auth.user_id,
             &user.username,
             stream_title,
@@ -1338,14 +1364,10 @@ pub async fn start_stream(
         .await
         .map_err(ApiError::Internal)?;
 
-    // Persist stream state in DB and notify all guild members.
+    // Persist stream state in DB and tell everyone who can see the call.
     let row = record_stream_flag(&state, auth.user_id, guild_id, &held, true).await?;
 
-    state.event_bus.dispatch(
-        "VOICE_STATE_UPDATE",
-        voice_state_payload(&row, Some(&user)),
-        Some(guild_id),
-    );
+    announce_call_voice_state(&state, &row, Some(&user)).await?;
 
     let url_candidates = livekit_url_candidates(&headers, &state.config.livekit_public_url);
     let livekit_url = url_candidates
@@ -1374,11 +1396,7 @@ pub async fn stop_stream(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
 
-    if channel.channel_type != 2 && channel.channel_type != 13 {
-        return Err(ApiError::BadRequest("Not a voice channel".into()));
-    }
-
-    let guild_id = channel.guild_id();
+    let guild_id = call_guild_of(&channel, "Not a voice channel")?;
     require_stream_receipt(
         &state,
         auth.user_id,
@@ -1407,6 +1425,13 @@ pub async fn stop_stream(
         )
         .await?;
         paracord_core::permissions::require_permission(perms, Permissions::VIEW_CHANNEL)?;
+    } else if !paracord_db::dms::is_dm_recipient(&state.db, channel_id, auth.user_id)
+        .await
+        .map_err(|error| ApiError::Internal(error.into()))?
+    {
+        // A DM call: only its recipients. Stopping is never refused for a
+        // block, so a share always ends.
+        return Err(ApiError::Forbidden);
     }
 
     if let Some(guild_id) = guild_id {
@@ -1464,25 +1489,19 @@ pub async fn stop_stream(
 
     // Someone not in this channel has no stream here to stop, and announcing
     // one would place them in a channel they are not in.
-    let (Some(gid), Some(current)) = (
-        guild_id,
-        current_voice_state(&state, channel_id, auth.user_id, guild_id).await?,
-    ) else {
+    let Some(current) = current_voice_state(&state, channel_id, auth.user_id, guild_id).await?
+    else {
         return Ok(StatusCode::NO_CONTENT);
     };
     let held = held_flags(&current);
-    let row = record_stream_flag(&state, auth.user_id, gid, &held, false).await?;
+    let row = record_stream_flag(&state, auth.user_id, guild_id, &held, false).await?;
 
-    // Notify all guild members that the stream ended.
+    // Tell everyone who can see the call that the stream ended.
     let user = paracord_db::users::get_user_by_id(&state.db, auth.user_id)
         .await
         .ok()
         .flatten();
-    state.event_bus.dispatch(
-        "VOICE_STATE_UPDATE",
-        voice_state_payload(&row, user.as_ref()),
-        guild_id,
-    );
+    announce_call_voice_state(&state, &row, user.as_ref()).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -1936,13 +1955,16 @@ fn view_kind_from_wire(kind: wire::VoiceViewKind) -> ViewKind {
     }
 }
 
+/// `room_guild` is the relay's room key: the guild, or `0` for a DM call
+/// (sent as a null `guild_id`).
 fn watchers_payload(
-    guild_id: i64,
+    room_guild: i64,
     channel_id: i64,
     counts: &std::collections::BTreeMap<i64, u32>,
 ) -> wire::VoiceWatchers {
     wire::VoiceWatchers {
-        guild_id: guild_id.to_string(),
+        guild_id: paracord_core::voice_events::call_guild(Some(room_guild))
+            .map(|id| id.to_string()),
         channel_id: channel_id.to_string(),
         streams: counts
             .iter()
@@ -1996,12 +2018,16 @@ fn ensure_view_housekeeping(state: &AppState) {
                     continue;
                 }
                 // Guild-scoped with a `channel_id`: both transports deliver it
-                // only to sessions that may view this channel.
-                state.event_bus.dispatch(
+                // only to sessions that may view this channel. A DM call's
+                // counts go to its recipients.
+                paracord_core::voice_events::dispatch_call_event_logged(
+                    &state,
                     paracord_models::gateway::EVENT_VOICE_WATCHERS_UPDATE,
                     json!(watchers_payload(guild_id, channel_id, &counts)),
                     Some(guild_id),
-                );
+                    channel_id,
+                )
+                .await;
                 if counts.is_empty() {
                     announced.remove(&key);
                 } else {
@@ -2066,6 +2092,8 @@ pub async fn revoke_views_without_access(state: &AppState) -> usize {
 
 /// Whether `user_id` may still hold `view`: the channel exists in the view's
 /// server, and the viewer has VIEW_CHANNEL there (and CONNECT, for a watch).
+/// A DM call's view (room guild `0`) needs the viewer to still be one of the
+/// DM's recipients, with no block between them in a 1:1 DM.
 async fn view_still_allowed(
     state: &AppState,
     user_id: i64,
@@ -2075,6 +2103,23 @@ async fn view_still_allowed(
     else {
         return Ok(false);
     };
+    if paracord_core::voice_events::call_guild(Some(view.guild_id)).is_none() {
+        if !is_dm_call_channel(&channel) || !matches!(view.target.kind, ViewKind::Watch) {
+            return Ok(false);
+        }
+        return match crate::routes::channels::ensure_channel_permissions(
+            state,
+            &channel,
+            user_id,
+            &[Permissions::CONNECT],
+        )
+        .await
+        {
+            Ok(()) => Ok(true),
+            Err(ApiError::Forbidden) => Ok(false),
+            Err(error) => Err(anyhow::anyhow!("checking a DM viewer: {error}")),
+        };
+    }
     if channel.guild_id() != Some(view.guild_id) {
         return Ok(false);
     }
@@ -2097,22 +2142,51 @@ async fn view_still_allowed(
     Ok(perms.contains(needed))
 }
 
-/// The channel, guild and permissions a view route acts under.
+/// Where a view route acts.
+enum ViewPlace {
+    /// A server voice or stage channel, with the caller's permissions there
+    /// (VIEW_CHANNEL already checked).
+    Server { guild_id: i64, perms: Permissions },
+    /// A DM or group DM call; the caller is one of its recipients.
+    Direct,
+}
+
+impl ViewPlace {
+    /// The guild of the call, `None` for a DM call.
+    fn guild_id(&self) -> Option<i64> {
+        match self {
+            Self::Server { guild_id, .. } => Some(*guild_id),
+            Self::Direct => None,
+        }
+    }
+
+    /// The relay's key for the call's room: the guild, or `0` for a DM call
+    /// (the room `join_dm_voice` admits members to).
+    fn room_guild(&self) -> i64 {
+        self.guild_id().unwrap_or(0)
+    }
+}
+
+/// The channel and place a view route acts under. A server channel needs
+/// VIEW_CHANNEL; a DM call needs the caller to be one of its recipients.
 async fn view_channel_context(
     state: &AppState,
     user_id: i64,
     channel_id: i64,
-) -> Result<(paracord_db::channels::ChannelRow, i64, Permissions), ApiError> {
+) -> Result<(paracord_db::channels::ChannelRow, ViewPlace), ApiError> {
     let channel = paracord_db::channels::get_channel(&state.db, channel_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
-    if channel.channel_type != 2 && channel.channel_type != 13 {
-        return Err(ApiError::BadRequest("Not a voice channel".into()));
-    }
-    let guild_id = channel.guild_id().ok_or(ApiError::BadRequest(
-        "Voice is only supported in guild channels".into(),
-    ))?;
+    let Some(guild_id) = call_guild_of(&channel, "Not a voice channel")? else {
+        if !paracord_db::dms::is_dm_recipient(&state.db, channel_id, user_id)
+            .await
+            .map_err(|error| ApiError::Internal(error.into()))?
+        {
+            return Err(ApiError::Forbidden);
+        }
+        return Ok((channel, ViewPlace::Direct));
+    };
     paracord_core::permissions::ensure_guild_member(&state.db, guild_id, user_id).await?;
     let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
         .await
@@ -2127,15 +2201,17 @@ async fn view_channel_context(
     )
     .await?;
     paracord_core::permissions::require_permission(perms, Permissions::VIEW_CHANNEL)?;
-    Ok((channel, guild_id, perms))
+    Ok((channel, ViewPlace::Server { guild_id, perms }))
 }
 
 /// `POST /api/v2/voice/{channel_id}/view`: watch a stream without joining the
 /// call (`watch`: the stream's video and its own audio, counted), or light the
 /// room with it (`ambient`: lowest layer, capped frame rate, not counted).
 ///
-/// Needs VIEW_CHANNEL, and CONNECT for `watch`. The streamer must be sharing
-/// in this channel (409 otherwise). A caller already in this channel's call
+/// Needs VIEW_CHANNEL, and CONNECT for `watch`. In a DM or group DM call only
+/// the DM's recipients may watch (never across a block in a 1:1 DM), and
+/// there is no `ambient` view: the room light is for servers (400). The
+/// streamer must be sharing in this channel (409 otherwise). A caller already in this channel's call
 /// watches through it (`via_membership`); anyone else gets a separate view
 /// session with its own media credentials, replacing any view session the
 /// account already holds. Never creates a voice state and never shows the
@@ -2153,11 +2229,32 @@ pub async fn start_voice_view(
             "Watching without joining needs native media, which this server has not enabled".into(),
         )
     })?;
-    let (_, guild_id, perms) = view_channel_context(&state, auth.user_id, channel_id).await?;
+    let (channel, place) = view_channel_context(&state, auth.user_id, channel_id).await?;
     let kind = view_kind_from_wire(body.kind);
-    if matches!(kind, ViewKind::Watch) {
-        paracord_core::permissions::require_permission(perms, Permissions::CONNECT)?;
+    match &place {
+        ViewPlace::Server { perms, .. } => {
+            if matches!(kind, ViewKind::Watch) {
+                paracord_core::permissions::require_permission(*perms, Permissions::CONNECT)?;
+            }
+        }
+        ViewPlace::Direct => {
+            if matches!(kind, ViewKind::Ambient) {
+                return Err(ApiError::BadRequest(
+                    "The room light is for server channels; a DM call has none".into(),
+                ));
+            }
+            crate::routes::channels::ensure_channel_permissions(
+                &state,
+                &channel,
+                auth.user_id,
+                &[Permissions::CONNECT],
+            )
+            .await?;
+        }
     }
+    let guild_id = place.guild_id();
+    let room_guild = place.room_guild();
+    let guild_wire = guild_id.map(|id| id.to_string());
     let streamer_id: i64 = body
         .user_id
         .parse()
@@ -2167,7 +2264,7 @@ pub async fn start_voice_view(
             "Your own stream is already on your screen".into(),
         ));
     }
-    let streaming = current_voice_state(&state, channel_id, streamer_id, Some(guild_id))
+    let streaming = current_voice_state(&state, channel_id, streamer_id, guild_id)
         .await?
         .is_some_and(|row| row.self_stream);
     if !streaming {
@@ -2182,13 +2279,12 @@ pub async fn start_voice_view(
     ensure_view_housekeeping(&state);
 
     // Already in this call (joined or listening): the view rides the call.
-    if let Some(own) = current_voice_state(&state, channel_id, auth.user_id, Some(guild_id)).await?
-    {
+    if let Some(own) = current_voice_state(&state, channel_id, auth.user_id, guild_id).await? {
         if let Some(publisher) = target.counted_publisher() {
             native
                 .rooms
                 .set_watching(
-                    guild_id,
+                    room_guild,
                     channel_id,
                     auth.user_id,
                     &own.session_id,
@@ -2202,7 +2298,7 @@ pub async fn start_voice_view(
                 })?;
         }
         return Ok(Json(wire::VoiceViewSession {
-            guild_id: guild_id.to_string(),
+            guild_id: guild_wire,
             channel_id: channel_id.to_string(),
             kind: body.kind,
             user_id: streamer_id.to_string(),
@@ -2216,7 +2312,7 @@ pub async fn start_voice_view(
     let replaced = native
         .rooms
         .join_view(
-            guild_id,
+            room_guild,
             channel_id,
             MediaParticipant::viewer(auth.user_id, session_id.clone(), target),
         )
@@ -2239,7 +2335,7 @@ pub async fn start_voice_view(
 
     let (media_endpoint, media_endpoint_candidates) =
         native_media_endpoints(&headers, state.config.native_media_port);
-    let room_name = format!("{}:{}", guild_id, channel_id);
+    let room_name = format!("{}:{}", room_guild, channel_id);
     let issued_at = chrono::Utc::now().timestamp();
     // The same claims a call token carries, plus `view`: the claim that makes
     // the media endpoint admit this receipt as a view session (and only as
@@ -2274,7 +2370,7 @@ pub async fn start_voice_view(
         "voice: view session issued"
     );
     Ok(Json(wire::VoiceViewSession {
-        guild_id: guild_id.to_string(),
+        guild_id: guild_wire,
         channel_id: channel_id.to_string(),
         kind: body.kind,
         user_id: streamer_id.to_string(),
@@ -2309,9 +2405,16 @@ pub async fn stop_voice_view(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
-    let Some(guild_id) = channel.guild_id() else {
+    // A server voice or stage channel, or a DM call (whose relay room is keyed
+    // under guild 0). Any other channel has no view to stop.
+    let guild_id = if is_dm_call_channel(&channel) {
+        None
+    } else if let Some(guild_id) = channel.guild_id() {
+        Some(guild_id)
+    } else {
         return Ok(StatusCode::NO_CONTENT);
     };
+    let room_guild = guild_id.unwrap_or(0);
     let expected = query.session_id.as_deref();
 
     if let Some(view) = native
@@ -2327,7 +2430,7 @@ pub async fn stop_voice_view(
             .relay_forwarder
             .close_view_connection(auth.user_id, &view.session_id);
     }
-    if let Some(own) = current_voice_state(&state, channel_id, auth.user_id, Some(guild_id))
+    if let Some(own) = current_voice_state(&state, channel_id, auth.user_id, guild_id)
         .await?
         .filter(|own| expected.is_none_or(|expected| expected == own.session_id))
     {
@@ -2335,26 +2438,28 @@ pub async fn stop_voice_view(
         let _ =
             native
                 .rooms
-                .set_watching(guild_id, channel_id, auth.user_id, &own.session_id, None);
+                .set_watching(room_guild, channel_id, auth.user_id, &own.session_id, None);
     }
     Ok(StatusCode::NO_CONTENT)
 }
 
 /// `GET /api/v2/voice/{channel_id}/watchers`: the channel's watcher counts
 /// now (the same snapshot `VOICE_WATCHERS_UPDATE` carries). Needs
-/// VIEW_CHANNEL. Empty when nobody watches (or native media is off).
+/// VIEW_CHANNEL (a DM call: one of its recipients). Empty when nobody watches
+/// (or native media is off).
 pub async fn get_voice_watchers(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(channel_id): Path<i64>,
 ) -> Result<Json<wire::VoiceWatchers>, ApiError> {
-    let (_, guild_id, _) = view_channel_context(&state, auth.user_id, channel_id).await?;
+    let (_, place) = view_channel_context(&state, auth.user_id, channel_id).await?;
+    let room_guild = place.room_guild();
     let counts = state
         .native_media
         .as_ref()
-        .map(|native| native.rooms.watcher_counts(guild_id, channel_id))
+        .map(|native| native.rooms.watcher_counts(room_guild, channel_id))
         .unwrap_or_default();
-    Ok(Json(watchers_payload(guild_id, channel_id, &counts)))
+    Ok(Json(watchers_payload(room_guild, channel_id, &counts)))
 }
 
 #[cfg(test)]

@@ -23,7 +23,10 @@ export type VoiceViewKind = 'watch' | 'ambient';
  */
 export interface VoiceViewSession {
   channel_id: string;
-  guild_id: string;
+  /**
+   * Null for a DM or group DM call.
+   */
+  guild_id: string | null;
   kind: VoiceViewKind;
   media: VoiceViewMedia | null;
   session_id: string | null;

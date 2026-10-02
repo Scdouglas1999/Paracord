@@ -6801,7 +6801,7 @@ function validate64(data, { instancePath = "", parentData, parentDataProperty, r
 }
 validate64.evaluated = { "props": { "avatar_hash": true, "channel_id": true, "deaf": true, "guild_id": true, "mode": true, "mute": true, "request_to_speak_at": true, "self_deaf": true, "self_mute": true, "self_stream": true, "self_stream_started_at": true, "self_video": true, "session_id": true, "speaking": true, "suppress": true, "user_id": true, "username": true }, "dynamicProps": false, "dynamicItems": false };
 var isVoiceViewSession = validate65;
-var schema103 = { "$defs": { "VoiceViewKind": { "description": "What a view session receives.\n\n- `watch`: the chosen stream's video and its own audio (never the voices).\n  Counted in the channel's watcher counts, so others see \"2 watching\".\n- `ambient`: the stream's lowest simulcast layer, keyframes only, at most\n  one frame a second, video only. Not counted and not shown to anybody.", "enum": ["watch", "ambient"], "type": "string" }, "VoiceViewMedia": { "description": "How to connect a view session's media (the same native endpoint a call\nuses; the token admits only this view).", "properties": { "cert_hash": { "type": ["string", "null"] }, "media_endpoint": { "minLength": 1, "type": "string" }, "media_endpoint_candidates": { "items": { "type": "string" }, "type": "array" }, "media_token": { "minLength": 1, "type": "string" }, "room_name": { "minLength": 1, "type": "string" } }, "required": ["media_endpoint", "media_endpoint_candidates", "media_token", "cert_hash", "room_name"], "type": "object" } }, "$id": "urn:paracord:contract:VoiceViewSession", "$schema": "https://json-schema.org/draft/2020-12/schema", "description": "Response of `POST /api/v2/voice/{channel_id}/view`.\n\nWhen the caller is already in this channel's call (joined or listening),\nthe view rides that call: `via_membership` is true, `session_id` and\n`media` are null, and the caller subscribes to the stream through its call\nconnection. Otherwise it is a separate view session with its own receipt\nand media credentials; an account holds one at a time, and a new one\nreplaces the old (whose connection the relay closes).", "properties": { "channel_id": { "minLength": 1, "pattern": "^[0-9]+$", "type": "string" }, "guild_id": { "minLength": 1, "pattern": "^[0-9]+$", "type": "string" }, "kind": { "$ref": "#/$defs/VoiceViewKind" }, "media": { "anyOf": [{ "$ref": "#/$defs/VoiceViewMedia" }, { "type": "null" }] }, "session_id": { "type": ["string", "null"] }, "user_id": { "description": "The streamer being viewed.", "minLength": 1, "pattern": "^[0-9]+$", "type": "string" }, "via_membership": { "type": "boolean" } }, "required": ["guild_id", "channel_id", "kind", "user_id", "via_membership", "session_id", "media"], "title": "VoiceViewSession", "type": "object" };
+var schema103 = { "$defs": { "VoiceViewKind": { "description": "What a view session receives.\n\n- `watch`: the chosen stream's video and its own audio (never the voices).\n  Counted in the channel's watcher counts, so others see \"2 watching\".\n- `ambient`: the stream's lowest simulcast layer, keyframes only, at most\n  one frame a second, video only. Not counted and not shown to anybody.", "enum": ["watch", "ambient"], "type": "string" }, "VoiceViewMedia": { "description": "How to connect a view session's media (the same native endpoint a call\nuses; the token admits only this view).", "properties": { "cert_hash": { "type": ["string", "null"] }, "media_endpoint": { "minLength": 1, "type": "string" }, "media_endpoint_candidates": { "items": { "type": "string" }, "type": "array" }, "media_token": { "minLength": 1, "type": "string" }, "room_name": { "minLength": 1, "type": "string" } }, "required": ["media_endpoint", "media_endpoint_candidates", "media_token", "cert_hash", "room_name"], "type": "object" } }, "$id": "urn:paracord:contract:VoiceViewSession", "$schema": "https://json-schema.org/draft/2020-12/schema", "description": "Response of `POST /api/v2/voice/{channel_id}/view`.\n\nWhen the caller is already in this channel's call (joined or listening),\nthe view rides that call: `via_membership` is true, `session_id` and\n`media` are null, and the caller subscribes to the stream through its call\nconnection. Otherwise it is a separate view session with its own receipt\nand media credentials; an account holds one at a time, and a new one\nreplaces the old (whose connection the relay closes).", "properties": { "channel_id": { "minLength": 1, "pattern": "^[0-9]+$", "type": "string" }, "guild_id": { "description": "Null for a DM or group DM call.", "minLength": 1, "pattern": "^[0-9]+$", "type": ["string", "null"] }, "kind": { "$ref": "#/$defs/VoiceViewKind" }, "media": { "anyOf": [{ "$ref": "#/$defs/VoiceViewMedia" }, { "type": "null" }] }, "session_id": { "type": ["string", "null"] }, "user_id": { "description": "The streamer being viewed.", "minLength": 1, "pattern": "^[0-9]+$", "type": "string" }, "via_membership": { "type": "boolean" } }, "required": ["guild_id", "channel_id", "kind", "user_id", "via_membership", "session_id", "media"], "title": "VoiceViewSession", "type": "object" };
 var schema104 = { "description": "What a view session receives.\n\n- `watch`: the chosen stream's video and its own audio (never the voices).\n  Counted in the channel's watcher counts, so others see \"2 watching\".\n- `ambient`: the stream's lowest simulcast layer, keyframes only, at most\n  one frame a second, video only. Not counted and not shown to anybody.", "enum": ["watch", "ambient"], "type": "string" };
 var schema105 = { "description": "How to connect a view session's media (the same native endpoint a call\nuses; the token admits only this view).", "properties": { "cert_hash": { "type": ["string", "null"] }, "media_endpoint": { "minLength": 1, "type": "string" }, "media_endpoint_candidates": { "items": { "type": "string" }, "type": "array" }, "media_token": { "minLength": 1, "type": "string" }, "room_name": { "minLength": 1, "type": "string" } }, "required": ["media_endpoint", "media_endpoint_candidates", "media_token", "cert_hash", "room_name"], "type": "object" };
 function validate65(data, { instancePath = "", parentData, parentDataProperty, rootData = data, dynamicAnchors = {} } = {}) {
@@ -6849,6 +6849,10 @@ function validate65(data, { instancePath = "", parentData, parentDataProperty, r
           if (data.guild_id !== void 0) {
             let data1 = data.guild_id;
             const _errs3 = errors;
+            if (typeof data1 !== "string" && data1 !== null) {
+              validate65.errors = [{ instancePath: instancePath + "/guild_id", schemaPath: "#/properties/guild_id/type", keyword: "type", params: { type: schema103.properties.guild_id.type }, message: "must be string,null" }];
+              return false;
+            }
             if (errors === _errs3) {
               if (typeof data1 === "string") {
                 if (func1(data1) < 1) {
@@ -6860,9 +6864,6 @@ function validate65(data, { instancePath = "", parentData, parentDataProperty, r
                     return false;
                   }
                 }
-              } else {
-                validate65.errors = [{ instancePath: instancePath + "/guild_id", schemaPath: "#/properties/guild_id/type", keyword: "type", params: { type: "string" }, message: "must be string" }];
-                return false;
               }
             }
             var valid0 = _errs3 === errors;
@@ -7171,6 +7172,7 @@ function validate65(data, { instancePath = "", parentData, parentDataProperty, r
 }
 validate65.evaluated = { "props": { "channel_id": true, "guild_id": true, "kind": true, "media": true, "session_id": true, "user_id": true, "via_membership": true }, "dynamicProps": false, "dynamicItems": false };
 var isVoiceWatchers = validate66;
+var schema106 = { "$defs": { "VoiceStreamWatchers": { "description": "One stream's watcher count.", "properties": { "user_id": { "description": "The streamer.", "minLength": 1, "pattern": "^[0-9]+$", "type": "string" }, "watchers": { "format": "uint32", "maximum": 4294967295, "minimum": 1, "type": "integer" } }, "required": ["user_id", "watchers"], "type": "object" } }, "$id": "urn:paracord:contract:VoiceWatchers", "$schema": "https://json-schema.org/draft/2020-12/schema", "description": "Watcher counts for one voice channel: `GET\n/api/v2/voice/{channel_id}/watchers` and the `VOICE_WATCHERS_UPDATE`\ngateway event. A complete snapshot for the channel: a stream that is not\nlisted has no watchers.", "properties": { "channel_id": { "minLength": 1, "pattern": "^[0-9]+$", "type": "string" }, "guild_id": { "description": "Null for a DM or group DM call (sent to its recipients only).", "minLength": 1, "pattern": "^[0-9]+$", "type": ["string", "null"] }, "streams": { "items": { "$ref": "#/$defs/VoiceStreamWatchers" }, "type": "array" } }, "required": ["guild_id", "channel_id", "streams"], "title": "VoiceWatchers", "type": "object" };
 function validate66(data, { instancePath = "", parentData, parentDataProperty, rootData = data, dynamicAnchors = {} } = {}) {
   ;
   let vErrors = null;
@@ -7216,6 +7218,10 @@ function validate66(data, { instancePath = "", parentData, parentDataProperty, r
           if (data.guild_id !== void 0) {
             let data1 = data.guild_id;
             const _errs3 = errors;
+            if (typeof data1 !== "string" && data1 !== null) {
+              validate66.errors = [{ instancePath: instancePath + "/guild_id", schemaPath: "#/properties/guild_id/type", keyword: "type", params: { type: schema106.properties.guild_id.type }, message: "must be string,null" }];
+              return false;
+            }
             if (errors === _errs3) {
               if (typeof data1 === "string") {
                 if (func1(data1) < 1) {
@@ -7227,9 +7233,6 @@ function validate66(data, { instancePath = "", parentData, parentDataProperty, r
                     return false;
                   }
                 }
-              } else {
-                validate66.errors = [{ instancePath: instancePath + "/guild_id", schemaPath: "#/properties/guild_id/type", keyword: "type", params: { type: "string" }, message: "must be string" }];
-                return false;
               }
             }
             var valid0 = _errs3 === errors;

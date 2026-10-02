@@ -543,6 +543,42 @@ describe('the Glass voice-state fields', () => {
   });
 });
 
+describe('DM call voice states', () => {
+  const dmState = (userId: string, channelId: string, over: Record<string, unknown> = {}) => ({
+    user_id: userId, channel_id: channelId, guild_id: null as unknown as undefined, session_id: `r${userId}`,
+    mode: 'joined' as const, self_stream: false, self_stream_started_at: null,
+    self_mute: false, self_deaf: false, self_video: false, mute: false, deaf: false, suppress: false, ...over,
+  });
+
+  it("follows the other person's mute and camera from live updates", () => {
+    useVoiceStore.getState().handleVoiceStateUpdate(dmState('2', 'dm-1'), SCOPE);
+    useVoiceStore.getState().handleVoiceStateUpdate(dmState('2', 'dm-1', { self_mute: true, self_video: true }), SCOPE);
+    const jeremy = useVoiceStore.getState().channelParticipants.get('dm-1')?.find((m) => m.user_id === '2');
+    expect(jeremy).toMatchObject({ self_mute: true, self_video: true });
+  });
+
+  it("READY lists an ongoing DM call, skips this account's own row, and retires a call that ended meanwhile", () => {
+    useVoiceStore.getState().handleVoiceStateUpdate(dmState('3', 'dm-old'), SCOPE);
+    useVoiceStore.getState().loadDmVoiceStates([
+      dmState('2', 'dm-1', { self_stream: true, self_stream_started_at: '2026-10-01T20:00:00Z', self_video: true }),
+      dmState('1', 'dm-1'),
+    ], SCOPE);
+    const state = useVoiceStore.getState();
+    expect(state.channelParticipants.get('dm-1')?.map((m) => m.user_id)).toEqual(['2']);
+    expect(state.participants.get('2')).toMatchObject({ self_stream: true, self_video: true });
+    expect(state.participants.has('1')).toBe(false);
+    // The call in dm-old ended while this client was away: READY no longer lists it.
+    expect(state.channelParticipants.has('dm-old')).toBe(false);
+    expect(state.participants.has('3')).toBe(false);
+  });
+
+  it("another account's READY leaves this account's DM calls alone", () => {
+    useVoiceStore.getState().handleVoiceStateUpdate(dmState('2', 'dm-1'), SCOPE);
+    useVoiceStore.getState().loadDmVoiceStates([], { serverId: 'B', userId: '9' });
+    expect(useVoiceStore.getState().channelParticipants.get('dm-1')?.map((m) => m.user_id)).toEqual(['2']);
+  });
+});
+
 describe('viewers in the relay roster', () => {
   it('are told apart by the engine from the relay\'s mark: the store only hears about members', async () => {
     const [call] = queueEngines(1);

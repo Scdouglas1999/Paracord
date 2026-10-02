@@ -155,8 +155,8 @@ export function StageControls({ target, model, fit }: StageControlsProps) {
     });
   }
   if (canInvite) moreItems.push({ id: 'invite', label: 'Invite people', icon: <UserPlus size={18} />, onSelect: () => setDialog('invite') });
-  // What the next share sends; the server takes shares in server voice channels only.
-  if (!model.dm && !model.audience && !share.sharing) {
+  // What the next share sends (a server voice channel or a DM call).
+  if (!model.audience && !share.sharing) {
     moreItems.push({
       id: 'quality',
       label: `Share quality: ${shareQualityLabel(shareQuality)}`,
@@ -308,21 +308,19 @@ export function StageControls({ target, model, fit }: StageControlsProps) {
                 {/* One glyph; on and off is the fill (aria-pressed), as in screens/04. */}
                 <Video size={19} strokeWidth={1.7} aria-hidden="true" />
               </GlassButton>
-              {/* The server takes screen shares in server voice channels only. */}
-              {!model.dm && (
-                <GlassButton
-                  variant="icon"
-                  size="md"
-                  className="glass-stage__ctl"
-                  aria-label={share.sharing ? 'Stop sharing your screen' : 'Share your screen'}
-                  pressed={share.sharing}
-                  aria-busy={share.starting || undefined}
-                  title={share.sharing ? 'Stop sharing your screen' : 'Share your screen'}
-                  onClick={share.toggle}
-                >
-                  {share.sharing ? <MonitorOff size={19} strokeWidth={1.7} aria-hidden="true" /> : <MonitorUp size={19} strokeWidth={1.7} aria-hidden="true" />}
-                </GlassButton>
-              )}
+              {/* Server voice channels and DM calls alike (docs/design/glass-fix-dm-calls.md). */}
+              <GlassButton
+                variant="icon"
+                size="md"
+                className="glass-stage__ctl"
+                aria-label={share.sharing ? 'Stop sharing your screen' : 'Share your screen'}
+                pressed={share.sharing}
+                aria-busy={share.starting || undefined}
+                title={share.sharing ? 'Stop sharing your screen' : 'Share your screen'}
+                onClick={share.toggle}
+              >
+                {share.sharing ? <MonitorOff size={19} strokeWidth={1.7} aria-hidden="true" /> : <MonitorUp size={19} strokeWidth={1.7} aria-hidden="true" />}
+              </GlassButton>
             </>
           )}
           {divider}

@@ -169,8 +169,9 @@ async fn release_orphaned_native_voice_state_inner(state: &AppState, user_id: i6
         .flatten();
     // A leave carries a null `channel_id`, so `prior_channel_id` is what keeps
     // the gateway's per-channel VIEW_CHANNEL filter able to scope it — the same
-    // shape `leave_voice` dispatches.
-    state.event_bus.dispatch(
+    // shape `leave_voice` dispatches. A DM call's leave goes to its recipients.
+    crate::voice_events::dispatch_call_event_logged(
+        state,
         "VOICE_STATE_UPDATE",
         json!({
             "user_id": user_id.to_string(),
@@ -188,7 +189,9 @@ async fn release_orphaned_native_voice_state_inner(state: &AppState, user_id: i6
             "avatar_hash": user.as_ref().and_then(|u| u.avatar_hash.as_deref()),
         }),
         claim.guild_id(),
-    );
+        claim.channel_id,
+    )
+    .await;
 
     tracing::info!(
         user_id,

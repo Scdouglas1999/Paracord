@@ -818,4 +818,24 @@ describe('voice: watcher counts and the Glass voice-state fields', () => {
     expect(participants.get('sean')?.mode).toBe('listen');
     expect(participants.get('vincent')?.self_stream_started_at).toBe('2026-09-30T20:30:00Z');
   });
+
+  it("files a DM call's watcher counts (no guild) and READY's DM call voice states", async () => {
+    useAuthStore.setState({ user: { id: 'viewer' } as User });
+    const scope = getServerAccountScope(SERVER)!;
+    dispatchGatewayEvent(SERVER, GatewayEvents.VOICE_WATCHERS_UPDATE, {
+      guild_id: null, channel_id: 'dm-1', streams: [{ user_id: 'jeremy', watchers: 1 }],
+    } as never);
+    expect(selectWatcherCount(useVoiceStore.getState(), scope, 'dm-1', 'jeremy')).toBe(1);
+    await dispatchGatewayEvent(SERVER, GatewayEvents.READY, {
+      guilds: [],
+      dm_voice_states: [{
+        user_id: 'jeremy', channel_id: 'dm-1', guild_id: null, session_id: 'r9', mode: 'joined',
+        self_stream: true, self_stream_started_at: '2026-10-01T20:00:00Z', self_mute: true, self_deaf: false,
+        self_video: true, mute: false, deaf: false, suppress: false,
+      }],
+    } as never);
+    expect(useVoiceStore.getState().channelParticipants.get('dm-1')?.[0]).toMatchObject({
+      user_id: 'jeremy', self_mute: true, self_video: true, self_stream: true,
+    });
+  });
 });

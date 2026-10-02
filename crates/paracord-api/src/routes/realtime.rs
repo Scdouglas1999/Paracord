@@ -7,6 +7,7 @@ use chrono::Utc;
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use futures_util::stream;
+use paracord_core::voice_events::DmCallFlagsError;
 use paracord_core::AppState;
 use paracord_models::gateway::{EVENT_CHANNEL_DELETE, EVENT_CHANNEL_UPDATE};
 use paracord_models::permissions::Permissions;
@@ -1394,6 +1395,15 @@ async fn build_ready_payload(
         guilds_json.push(guild_json);
     }
 
+    // The people in every DM or group DM call this user is a recipient of, so
+    // a fresh page sees an ongoing DM call's mute, camera and share as they are.
+    let dm_voice_states: Vec<Value> =
+        paracord_db::voice_states::get_dm_call_voice_states_for_recipient(&state.db, user_id)
+            .await?
+            .iter()
+            .map(paracord_core::voice_events::ready_dm_voice_state)
+            .collect();
+
     Ok(json!({
         // Carry the connection's resume point so the client's cursor tracks the
         // sequence it is actually caught up to. Hardcoding 1 here would drive the
@@ -1406,6 +1416,7 @@ async fn build_ready_payload(
         "d": {
             "user": user_json,
             "guilds": guilds_json,
+            "dm_voice_states": dm_voice_states,
             "session_id": session_id,
             "database_history_epoch": &state.database_history_epoch,
             "recovery_required": true,
@@ -1985,11 +1996,45 @@ pub async fn post_command(
             let self_deaf = payload.self_deaf.unwrap_or(false);
             let self_video = payload.self_video.unwrap_or(false);
 
-            if let Some(channel_id) = channel_id {
-                let channel = paracord_db::channels::get_channel(&state.db, channel_id)
-                    .await
-                    .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
-                    .ok_or(ApiError::NotFound)?;
+            let channel = match channel_id {
+                Some(channel_id) => Some(
+                    paracord_db::channels::get_channel(&state.db, channel_id)
+                        .await
+                        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+                        .ok_or(ApiError::NotFound)?,
+                ),
+                None => None,
+            };
+            if let Some(channel) = channel
+                .as_ref()
+                .filter(|channel| paracord_core::voice_events::is_dm_call_channel(channel))
+            {
+                // A DM or group DM call: the member's own flags, announced to
+                // the DM's recipients. Joining a DM call is its own route.
+                if requested_guild_id.is_some() {
+                    return Err(ApiError::BadRequest("guild_id/channel_id mismatch".into()));
+                }
+                paracord_core::voice_events::update_dm_call_flags(
+                    &state,
+                    auth.user_id,
+                    channel,
+                    payload.session_id.as_deref(),
+                    self_mute,
+                    self_deaf,
+                    self_video,
+                )
+                .await
+                .map_err(|error| match error {
+                    DmCallFlagsError::NotRecipient => ApiError::Forbidden,
+                    DmCallFlagsError::NotInCall => {
+                        ApiError::Conflict("Join the call before changing its state".into())
+                    }
+                    DmCallFlagsError::SessionChanged => {
+                        ApiError::Conflict("Voice session changed".into())
+                    }
+                    DmCallFlagsError::Db(error) => ApiError::Internal(error.into()),
+                })?;
+            } else if let (Some(channel_id), Some(channel)) = (channel_id, channel) {
                 if channel.channel_type != 2 && channel.channel_type != 13 {
                     return Err(ApiError::BadRequest("Not a voice channel".into()));
                 }
@@ -2177,7 +2222,9 @@ pub async fn post_command(
                         .await
                         .ok()
                         .flatten();
-                    state.event_bus.dispatch(
+                    // A DM call's leave goes to its recipients, never to everyone.
+                    paracord_core::voice_events::dispatch_call_event(
+                        &state,
                         "VOICE_STATE_UPDATE",
                         json!({
                             "user_id": auth.user_id.to_string(),
@@ -2195,7 +2242,10 @@ pub async fn post_command(
                             "avatar_hash": user.as_ref().and_then(|u| u.avatar_hash.as_deref()),
                         }),
                         existing_state.guild_id(),
-                    );
+                        existing_state.channel_id,
+                    )
+                    .await
+                    .map_err(|error| ApiError::Internal(error.into()))?;
                 }
             }
         }

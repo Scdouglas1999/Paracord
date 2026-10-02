@@ -1683,3 +1683,220 @@ async fn voice_speaking_op_reports_the_senders_own_edges() {
     drop(tx);
     handle.await.unwrap();
 }
+
+// ── DM calls (docs/design/glass-fix-dm-calls.md) ────────────────────────────
+
+/// Frames until `sentinel` arrives; panics if it never does.
+async fn frames_until(rx: &mut UnboundedReceiver<Message>, sentinel: &str) -> Vec<Value> {
+    let mut frames = Vec::new();
+    loop {
+        let frame = next_text(rx, 2000)
+            .await
+            .unwrap_or_else(|| panic!("{sentinel} never arrived; got {frames:?}"));
+        if frame["t"] == sentinel {
+            return frames;
+        }
+        frames.push(frame);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dm_call_voice_state_updates_reach_only_the_dms_recipients() {
+    let env = build_env().await;
+    let (jeremy, _) = make_user_token(&env).await;
+    let (sean, _) = make_user_token(&env).await;
+    let (outsider, _) = make_user_token(&env).await;
+    let dm_id = sid();
+    paracord_db::dms::create_dm_channel(&env.db, dm_id, jeremy, sean)
+        .await
+        .unwrap();
+    paracord_db::voice_states::upsert_voice_state(&env.db, jeremy, None, dm_id, "dm-call")
+        .await
+        .unwrap();
+
+    let (jeremy_handle, jeremy_tx, _jeremy_rx) = spawn_session(
+        Session::new(jeremy, vec![], Default::default()),
+        env.state.clone(),
+    );
+    let (sean_handle, sean_tx, mut sean_rx) = spawn_session(
+        Session::new(sean, vec![], Default::default()),
+        env.state.clone(),
+    );
+    let (outsider_handle, outsider_tx, mut outsider_rx) = spawn_session(
+        Session::new(outsider, vec![], Default::default()),
+        env.state.clone(),
+    );
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    // Jeremy mutes and turns his camera on in the DM call (it used to be
+    // dropped here for want of a guild).
+    jeremy_tx
+        .send(Ok(Message::Text(
+            json!({"op": 4, "d": {
+                "guild_id": Value::Null, "channel_id": dm_id.to_string(), "session_id": "dm-call",
+                "self_mute": true, "self_deaf": false, "self_video": true,
+            }})
+            .to_string()
+            .into(),
+        )))
+        .unwrap();
+    let update = loop {
+        let frame = next_text(&mut sean_rx, 2000)
+            .await
+            .expect("Sean hears about Jeremy's DM call state");
+        if frame["t"] == "VOICE_STATE_UPDATE" {
+            break frame["d"].clone();
+        }
+    };
+    assert_eq!(update["user_id"], jeremy.to_string());
+    assert_eq!(update["channel_id"], dm_id.to_string());
+    assert_eq!(update["guild_id"], Value::Null);
+    assert_eq!(update["self_mute"], true);
+    assert_eq!(update["self_video"], true);
+    assert_eq!(update["session_id"], "dm-call");
+    let row = paracord_db::voice_states::get_user_voice_state(&env.db, jeremy, None)
+        .await
+        .unwrap()
+        .expect("Jeremy is still in the call");
+    assert!(row.self_mute && row.self_video);
+
+    // A stale receipt changes nothing.
+    jeremy_tx
+        .send(Ok(Message::Text(
+            json!({"op": 4, "d": {
+                "guild_id": Value::Null, "channel_id": dm_id.to_string(), "session_id": "older-call",
+                "self_mute": false, "self_video": false,
+            }})
+            .to_string()
+            .into(),
+        )))
+        .unwrap();
+    // Somebody outside the DM cannot announce themselves into its call.
+    outsider_tx
+        .send(Ok(Message::Text(
+            json!({"op": 4, "d": {
+                "guild_id": Value::Null, "channel_id": dm_id.to_string(), "self_mute": true,
+            }})
+            .to_string()
+            .into(),
+        )))
+        .unwrap();
+
+    // Leaving is announced to the DM only.
+    jeremy_tx
+        .send(Ok(Message::Text(
+            json!({"op": 4, "d": {
+                "guild_id": Value::Null, "channel_id": Value::Null, "session_id": "dm-call",
+            }})
+            .to_string()
+            .into(),
+        )))
+        .unwrap();
+    let leave = loop {
+        let frame = next_text(&mut sean_rx, 2000)
+            .await
+            .expect("Sean hears Jeremy leave");
+        if frame["t"] == "VOICE_STATE_UPDATE" {
+            break frame["d"].clone();
+        }
+    };
+    assert_eq!(leave["channel_id"], Value::Null, "{leave}");
+    assert_eq!(leave["prior_channel_id"], dm_id.to_string());
+    assert!(
+        paracord_db::voice_states::get_user_voice_state(&env.db, jeremy, None)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // The outsider heard none of it.
+    env.state
+        .event_bus
+        .dispatch_to_users("SENTINEL", json!({}), vec![outsider]);
+    let heard = frames_until(&mut outsider_rx, "SENTINEL").await;
+    assert!(
+        heard.iter().all(|frame| frame["t"] != "VOICE_STATE_UPDATE"),
+        "the outsider was told about a DM call: {heard:?}"
+    );
+
+    drop(jeremy_tx);
+    drop(sean_tx);
+    drop(outsider_tx);
+    let _ = jeremy_handle.await;
+    let _ = sean_handle.await;
+    let _ = outsider_handle.await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ready_lists_the_people_in_a_recipients_dm_calls() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message as ClientMessage;
+
+    let env = build_env().await;
+    let (jeremy, _) = make_user_token(&env).await;
+    let (sean, sean_token) = make_user_token(&env).await;
+    let (_, outsider_token) = make_user_token(&env).await;
+    let dm_id = sid();
+    paracord_db::dms::create_dm_channel(&env.db, dm_id, jeremy, sean)
+        .await
+        .unwrap();
+    paracord_db::voice_states::upsert_voice_state(&env.db, jeremy, None, dm_id, "dm-call")
+        .await
+        .unwrap();
+    paracord_db::voice_states::update_voice_state(&env.db, jeremy, None, true, false, false, true)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let router = paracord_ws::gateway_router().with_state(env.state.clone());
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+        .unwrap();
+    });
+    let url = format!("ws://{address}/gateway");
+    async fn ready_for(url: &str, token: &str) -> Value {
+        let (mut socket, _) = tokio_tungstenite::connect_async(url).await.unwrap();
+        let _hello = timeout(Duration::from_secs(5), socket.next())
+            .await
+            .unwrap();
+        socket
+            .send(ClientMessage::Text(
+                json!({"op": OP_IDENTIFY, "d": {"token": token}})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        let ready = timeout(Duration::from_secs(5), socket.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let ready: Value = serde_json::from_str(ready.to_text().unwrap()).unwrap();
+        assert_eq!(ready["t"], "READY");
+        let _ = socket.close(None).await;
+        ready
+    }
+
+    let ready = ready_for(&url, &sean_token).await;
+    let states = ready["d"]["dm_voice_states"]
+        .as_array()
+        .expect("READY carries dm_voice_states");
+    assert_eq!(states.len(), 1, "{ready}");
+    assert_eq!(states[0]["user_id"], jeremy.to_string());
+    assert_eq!(states[0]["channel_id"], dm_id.to_string());
+    assert_eq!(states[0]["guild_id"], Value::Null);
+    assert_eq!(states[0]["self_mute"], true);
+    assert_eq!(states[0]["self_video"], true);
+    assert_eq!(states[0]["mode"], "joined");
+
+    let ready = ready_for(&url, &outsider_token).await;
+    assert_eq!(ready["d"]["dm_voice_states"], json!([]), "{ready}");
+    server.abort();
+}

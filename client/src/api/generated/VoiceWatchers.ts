@@ -9,7 +9,10 @@
  */
 export interface VoiceWatchers {
   channel_id: string;
-  guild_id: string;
+  /**
+   * Null for a DM or group DM call (sent to its recipients only).
+   */
+  guild_id: string | null;
   streams: VoiceStreamWatchers[];
   [k: string]: unknown | undefined;
 }

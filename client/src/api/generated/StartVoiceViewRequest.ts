@@ -12,7 +12,8 @@
 export type VoiceViewKind = 'watch' | 'ambient';
 
 /**
- * `POST /api/v2/voice/{channel_id}/view`: start a view session.
+ * `POST /api/v2/voice/{channel_id}/view`: start a view session. In a DM or
+ * group DM call only `watch` exists, for the DM's recipients.
  */
 export interface StartVoiceViewRequest {
   kind: VoiceViewKind;

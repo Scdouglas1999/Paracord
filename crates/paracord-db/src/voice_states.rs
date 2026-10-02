@@ -412,6 +412,28 @@ pub async fn get_space_voice_states(
     Ok(rows)
 }
 
+/// The voice states of every DM or group DM call `user_id` is a recipient of
+/// (the people in those calls, the caller included), for READY. A DM call has
+/// no space (`space_id` NULL; `0` on some older rows).
+pub async fn get_dm_call_voice_states_for_recipient(
+    pool: &DbPool,
+    user_id: i64,
+) -> Result<Vec<VoiceStateWithUser>, DbError> {
+    let sql = format!(
+        "SELECT {}, u.username, u.avatar_hash
+         FROM voice_states vs
+         JOIN users u ON u.id = vs.user_id
+         JOIN dm_recipients r ON r.channel_id = vs.channel_id AND r.user_id = $1
+         WHERE COALESCE(vs.space_id, 0) = 0",
+        voice_state_columns("vs")
+    );
+    let rows = sqlx::query_as::<_, VoiceStateWithUser>(&sql)
+        .bind(user_id)
+        .fetch_all(pool)
+        .await?;
+    Ok(rows)
+}
+
 /// Record a member's flags and return the row as stored.
 ///
 /// `self_stream_started_at` follows `self_stream`: it is stamped with the

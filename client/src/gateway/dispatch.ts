@@ -80,6 +80,8 @@ type GatewayDispatchData = Omit<
   InteractionCallbackPayload & {
     user?: User;
     guilds?: ReadyGuildPayload[];
+    /** READY: the people in this account's DM and group DM calls. */
+    dm_voice_states?: VoiceState[];
     ids?: string[];
     message_id?: string;
     channel_activity?: unknown;
@@ -232,6 +234,14 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
           }
         }
       });
+
+      // Ongoing DM calls, so a fresh client sees their mute, camera and share
+      // as they are (the live updates go to the DM's recipients only).
+      if (data.dm_voice_states !== undefined && !Array.isArray(data.dm_voice_states)) {
+        warnDispatchParseFailure('READY', 'dm_voice_states is not an array');
+      } else if (memberScope && data.dm_voice_states) {
+        useVoiceStore.getState().loadDmVoiceStates(data.dm_voice_states, memberScope);
+      }
 
       const selected = useGuildStore.getState().selectedGuild;
       const selectedGuildId = memberScope && selected && selected.scope.serverId === serverId && selected.scope.userId === memberScope.userId ? selected.id : null;

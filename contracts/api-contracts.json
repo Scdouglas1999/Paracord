@@ -1835,7 +1835,7 @@
       },
       "$id": "urn:paracord:contract:StartVoiceViewRequest",
       "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "description": "`POST /api/v2/voice/{channel_id}/view`: start a view session.",
+      "description": "`POST /api/v2/voice/{channel_id}/view`: start a view session. In a DM or\ngroup DM call only `watch` exists, for the DM's recipients.",
       "properties": {
         "kind": {
           "$ref": "#/$defs/VoiceViewKind"
@@ -2568,9 +2568,13 @@
           "type": "string"
         },
         "guild_id": {
+          "description": "Null for a DM or group DM call.",
           "minLength": 1,
           "pattern": "^[0-9]+$",
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "kind": {
           "$ref": "#/$defs/VoiceViewKind"
@@ -2648,9 +2652,13 @@
           "type": "string"
         },
         "guild_id": {
+          "description": "Null for a DM or group DM call (sent to its recipients only).",
           "minLength": 1,
           "pattern": "^[0-9]+$",
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "streams": {
           "items": {

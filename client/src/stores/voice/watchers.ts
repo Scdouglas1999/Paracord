@@ -24,7 +24,8 @@ export function isVoiceWatchersUpdate(data: unknown): data is VoiceWatchers {
   return (
     !!value
     && typeof value.channel_id === 'string' && !!value.channel_id
-    && typeof value.guild_id === 'string' && !!value.guild_id
+    // Null for a DM call (sent to its recipients only).
+    && (value.guild_id === null || (typeof value.guild_id === 'string' && !!value.guild_id))
     && Array.isArray(value.streams)
     && value.streams.every(
       (stream) => !!stream && typeof stream.user_id === 'string'

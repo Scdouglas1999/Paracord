@@ -10,6 +10,10 @@ describe('watcher counts', () => {
     expect(isVoiceWatchersUpdate({ guild_id: 'g', channel_id: 'c' })).toBe(false);
     expect(isVoiceWatchersUpdate({ guild_id: 'g', channel_id: 'c', streams: [{ user_id: 'v', watchers: -1 }] })).toBe(false);
     expect(isVoiceWatchersUpdate({ guild_id: 'g', channel_id: '', streams: [] })).toBe(false);
+    // A DM call's counts have no guild; an absent or empty one is still refused.
+    expect(isVoiceWatchersUpdate({ guild_id: null, channel_id: 'dm', streams: [{ user_id: 'v', watchers: 1 }] })).toBe(true);
+    expect(isVoiceWatchersUpdate({ channel_id: 'dm', streams: [] })).toBe(false);
+    expect(isVoiceWatchersUpdate({ guild_id: '', channel_id: 'dm', streams: [] })).toBe(false);
   });
 
   it('replaces a channel’s counts with each snapshot: a streamer not listed has none', () => {

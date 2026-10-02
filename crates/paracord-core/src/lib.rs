@@ -31,6 +31,7 @@ pub mod sports;
 pub mod together;
 pub mod user;
 pub mod voice_cleanup;
+pub mod voice_events;
 pub mod voice_speaking;
 
 use dashmap::{DashMap, DashSet};

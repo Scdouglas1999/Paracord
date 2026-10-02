@@ -1579,6 +1579,35 @@ pub async fn handle_connection(
             }
         };
 
+        // The people in every DM or group DM call this user is a recipient
+        // of, so a fresh client sees an ongoing DM call's mute, camera and
+        // share as they are. A failed read refuses READY like the guilds do.
+        let dm_voice_states: Vec<Value> =
+            match paracord_db::voice_states::get_dm_call_voice_states_for_recipient(
+                &state.db,
+                session.user_id,
+            )
+            .await
+            {
+                Ok(rows) => rows
+                    .iter()
+                    .map(paracord_core::voice_events::ready_dm_voice_state)
+                    .collect(),
+                Err(error) => {
+                    tracing::warn!(user_id = session.user_id, %error, "gateway READY DM voice snapshot failed");
+                    let _ = send_ws_close_logged(
+                        &mut sender,
+                        1011,
+                        "Unable to load server state",
+                        Some(session.user_id),
+                        Some(session.session_id.as_str()),
+                        "ready_snapshot_failed",
+                    )
+                    .await;
+                    return;
+                }
+            };
+
         // Consume a sequence number for READY so it doesn't collide with the
         // first dispatched event.  READY becomes s=1, the first real event s=2,
         // keeping every dispatched sequence unique and monotonic (otherwise the
@@ -1591,6 +1620,7 @@ pub async fn handle_connection(
             "d": {
                 "user": user_json,
                 "guilds": guilds_json,
+                "dm_voice_states": dm_voice_states,
                 "session_id": &session.session_id,
                 "database_history_epoch": &state.database_history_epoch,
                 "recovery_required": true,
@@ -1775,7 +1805,9 @@ pub async fn handle_connection(
                             let _ = state_clone.voice.cleanup_room(voice_state.channel_id).await;
                         }
                     }
-                    state_clone.event_bus.dispatch(
+                    // A DM call's leave goes to its recipients only.
+                    paracord_core::voice_events::dispatch_call_event_logged(
+                        &state_clone,
                         EVENT_VOICE_STATE_UPDATE,
                         json!({
                             "user_id": session_user_id.to_string(),
@@ -1793,7 +1825,9 @@ pub async fn handle_connection(
                             "avatar_hash": dc_user.as_ref().and_then(|u| u.avatar_hash.as_deref()),
                         }),
                         voice_state.guild_id(),
-                    );
+                        voice_state.channel_id,
+                    )
+                    .await;
                 }
             });
         }
@@ -3259,7 +3293,9 @@ async fn handle_client_message(
                                 Some(&existing_state.session_id),
                             );
                         }
-                        state.event_bus.dispatch(
+                        // A DM call's leave goes to its recipients only.
+                        paracord_core::voice_events::dispatch_call_event_logged(
+                            state,
                             EVENT_VOICE_STATE_UPDATE,
                             json!({
                                 "user_id": session.user_id.to_string(),
@@ -3277,7 +3313,9 @@ async fn handle_client_message(
                                 "avatar_hash": vs_user.as_ref().and_then(|u| u.avatar_hash.as_deref()),
                             }),
                             existing_state.guild_id(),
-                        );
+                            existing_state.channel_id,
+                        )
+                        .await;
                     }
                 } else if let Some(channel_id_str) = d.get("channel_id").and_then(|v| v.as_str()) {
                     if let Ok(channel_id) = channel_id_str.parse::<i64>() {
@@ -3288,6 +3326,34 @@ async fn handle_client_message(
                         let Some(channel) = channel else {
                             return;
                         };
+                        if paracord_core::voice_events::is_dm_call_channel(&channel) {
+                            // A DM or group DM call: the member's own flags,
+                            // announced to the DM's recipients (never dropped
+                            // for want of a guild, and never sent to anyone
+                            // else). Joining a DM call is its own REST route.
+                            if requested_guild_id.is_some() {
+                                return;
+                            }
+                            if let Err(error) = paracord_core::voice_events::update_dm_call_flags(
+                                state,
+                                session.user_id,
+                                &channel,
+                                expected_session,
+                                self_mute,
+                                self_deaf,
+                                self_video,
+                            )
+                            .await
+                            {
+                                tracing::debug!(
+                                    user_id = session.user_id,
+                                    channel_id,
+                                    %error,
+                                    "DM call voice state update not applied"
+                                );
+                            }
+                            return;
+                        }
                         if channel.channel_type != 2 {
                             return;
                         }
