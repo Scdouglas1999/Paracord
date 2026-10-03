@@ -33,18 +33,8 @@
   border-radius: inherit;
   color: var(--ink-1);
   background-color: var(--solid);
+  background-image: var(--surface-grain);
   outline: none;
-}
-
-/* The faint room glow in the far corner, as on every pane. */
-.glass-sheet::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  border-radius: inherit;
-  pointer-events: none;
-  background: radial-gradient(420px 340px at 100% 40%, var(--glow), transparent 70%);
 }
 
 .glass-sheet > * {
