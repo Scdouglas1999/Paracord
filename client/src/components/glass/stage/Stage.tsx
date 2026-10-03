@@ -104,7 +104,13 @@ function StreamStage({ target, mode }: { target: StreamStageTarget; mode: OpenSt
     const root = rootRef.current;
     if (!root || phone) return;
     const measure = () => {
-      const { width, height } = root.getBoundingClientRect();
+      // The layout size, not the painted box: a stage move (FLIP) may already
+      // have scaled the stage when this runs, and a scaled measurement sticks,
+      // because ResizeObserver does not fire for a transform. WebKitGTK measured
+      // mid-move and left the stream and the people row about 1% too big, with
+      // the controls pushed out of the pane (WP-G23).
+      const width = root.offsetWidth;
+      const height = root.offsetHeight;
       if (!(width > 0) || !(height > 0)) return;
       if (theater) {
         // The capsule sits on what is visible of the stream: left of the chat, right of places.

@@ -1,5 +1,5 @@
 import { useCurrentChannelStore, useChannelActions } from '../../hooks/useChannels';
-import { entityScopeKey as memberScopeKey, type AccountScope } from '../../lib/serverScope';
+import { accountScopeKey, entityScopeKey as memberScopeKey, type AccountScope } from '../../lib/serverScope';
 import { useCurrentUser, useCurrentAccountScope } from '../../hooks/useCurrentUser';
 import { memo, useRef, useEffect, useLayoutEffect, useMemo, useState, useReducer, useCallback, useSyncExternalStore, type CSSProperties, type MouseEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
@@ -1317,10 +1317,14 @@ function OwnedMessageList({
 
   const readStateWriteRef = useRef<AbortController | null>(null);
   const readStateRetryRef = useRef(0);
+  const pendingReadSnapshotRef = useRef<{ messageId: string } | null>(null);
   useEffect(() => {
     lastReadStateMessageIdRef.current = null;
     readStateRetryRef.current = 0;
-    return () => { readStateWriteRef.current?.abort(); };
+    return () => {
+      readStateWriteRef.current?.abort();
+      pendingReadSnapshotRef.current = null;
+    };
   }, [memberScope, channelId]);
 
   const markLatestRead = useCallback(() => {
@@ -1329,35 +1333,61 @@ function OwnedMessageList({
     const scope = memberScope;
     if (!scope) return;
 
-    // Before the position moves, remember where it was: that is where "new"
-    // starts for the catch-up divider. Once per conversation opened; a channel
-    // never read has no position and so nothing to catch up on.
-    if (!catchUpCapturedRef.current) {
-      catchUpCapturedRef.current = true;
-      const readUpTo = useReadStateStore.getState().getReadState(scope, channelId)?.last_message_id;
-      if (readUpTo) setCatchUpFrom(readUpTo);
+    const pending = pendingReadSnapshotRef.current;
+    if (pending) {
+      // New arrivals while the initial snapshot loads should move the cursor to
+      // the latest message actually shown, once the old position is captured.
+      pending.messageId = lastMessage.id;
+      return;
     }
-
-    // Update the visible state immediately. Persistence is retried below and the
-    // server enforces a monotonic cursor, so a delayed older request cannot undo it.
-    useReadStateStore.getState().markRead(scope, channelId, lastMessage.id);
-    readStateWriteRef.current?.abort();
-    const writeController = new AbortController();
-    readStateWriteRef.current = writeController;
-    useReadStateStore.getState().saveReadPosition(scope, channelId, lastMessage.id, { delayMs: 300, signal: writeController.signal }).then(() => {
-        lastReadStateMessageIdRef.current = lastMessage.id;
-        readStateRetryRef.current = 0;
-      }).catch((error) => {
-        if (writeController.signal.aborted) return;
-        // Do not permanently dedupe a failed write. Keep the optimistic cursor,
-        // retry on the next near-bottom signal, and make the failure observable.
-        lastReadStateMessageIdRef.current = null;
-        readStateRetryRef.current += 1;
-        if (readStateRetryRef.current >= 3) {
-          toast.error(`Failed to save read position: ${extractApiError(error)}`);
+    const writeRead = (messageId: string) => {
+      if (!catchUpCapturedRef.current) {
+        catchUpCapturedRef.current = true;
+        const readUpTo = useReadStateStore.getState().getReadState(scope, channelId)?.last_message_id;
+        if (readUpTo) setCatchUpFrom(readUpTo);
+      }
+      // Update the visible state immediately. Persistence is retried below and the
+      // server enforces a monotonic cursor, so a delayed older request cannot undo it.
+      useReadStateStore.getState().markRead(scope, channelId, messageId);
+      readStateWriteRef.current?.abort();
+      const writeController = new AbortController();
+      readStateWriteRef.current = writeController;
+      useReadStateStore.getState().saveReadPosition(scope, channelId, messageId, { delayMs: 300, signal: writeController.signal }).then(() => {
+          lastReadStateMessageIdRef.current = messageId;
           readStateRetryRef.current = 0;
-        }
+        }).catch((error) => {
+          if (writeController.signal.aborted) return;
+          // Do not permanently dedupe a failed write. Keep the optimistic cursor,
+          // retry on the next near-bottom signal, and make the failure observable.
+          lastReadStateMessageIdRef.current = null;
+          readStateRetryRef.current += 1;
+          if (readStateRetryRef.current >= 3) {
+            toast.error(`Failed to save read position: ${extractApiError(error)}`);
+            readStateRetryRef.current = 0;
+          }
+        });
+    };
+
+    const reads = useReadStateStore.getState();
+    const key = accountScopeKey(scope);
+    if (!catchUpCapturedRef.current && !reads.getReadState(scope, channelId)?.last_message_id
+      && (!reads.byAccount?.[key] || reads.loading?.[key])) {
+      // Missing is not the same as never read. Let the account snapshot settle
+      // before our optimistic write can overwrite its original cursor.
+      const snapshot = { messageId: lastMessage.id };
+      pendingReadSnapshotRef.current = snapshot;
+      void reads.refresh(scope).then(() => {
+        if (pendingReadSnapshotRef.current !== snapshot) return;
+        pendingReadSnapshotRef.current = null;
+        writeRead(snapshot.messageId);
+      }).catch(() => {
+        // Keep unread state intact on failure; the next near-bottom signal can
+        // retry. A successful empty snapshot proceeds normally above.
+        if (pendingReadSnapshotRef.current === snapshot) pendingReadSnapshotRef.current = null;
       });
+      return;
+    }
+    writeRead(lastMessage.id);
   }, [messages, channelId, memberScope]);
 
   // Virtualizer

@@ -87,6 +87,25 @@ describe('useUnreadMessageCounts', () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
+  it('retries the newest tail when it changes during an in-flight count', async () => {
+    vi.useFakeTimers();
+    let finish!: (value: { data: ReturnType<typeof messages> }) => void;
+    request.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+    request.mockResolvedValue({ data: messages(4) });
+    const { result, rerender } = renderHook(({ targets }) => useUnreadMessageCounts(targets), {
+      initialProps: { targets: [target()] },
+    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(request).toHaveBeenCalledTimes(1);
+    rerender({ targets: [target({ tail: '14' })] });
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(request).toHaveBeenCalledTimes(1);
+    await act(async () => { finish({ data: messages(3) }); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(result.current.get(KEY)).toBe(4);
+  });
+
   it('leaves a burst of messages as one request', async () => {
     request.mockResolvedValue({ data: messages(5) });
     const { result, rerender } = renderHook(({ targets }) => useUnreadMessageCounts(targets), { initialProps: { targets: [target()] } });

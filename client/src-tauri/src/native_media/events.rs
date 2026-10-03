@@ -526,6 +526,14 @@ pub fn note_decrypt_result(app: &super::CallEventSink, ssrc: u32, success: bool)
     // Emit exactly once at the threshold crossing so a persistently-failing SSRC
     // does not spam an event every datagram.
     if *count == DECRYPT_FAILURE_ALERT_THRESHOLD {
+        // No renderer listens for the event below, so without this line a
+        // stream that never decrypts (a key that never arrived) is a picture
+        // that never comes, with nothing in any log to say why.
+        tracing::warn!(
+            ssrc,
+            consecutive_failures = *count,
+            "media packets from this ssrc keep failing to decrypt: no usable key for it"
+        );
         let _ = app.emit(
             "media_decrypt_failing",
             serde_json::json!({

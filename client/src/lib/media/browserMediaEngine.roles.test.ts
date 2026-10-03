@@ -129,6 +129,10 @@ interface Internals {
   freshLocalTrackKey?: (trackId: 'camera' | 'screen' | 'screen-audio') => Promise<void>;
   handleStreamControlMessage(message: Record<string, unknown>): void;
   materializeRemoteParticipant(userId: string): Promise<void>;
+  announceAudioSenderKey(recipients: string[]): Promise<void>;
+  announcePublishedTrackKeysForRecipients(recipients: string[]): Promise<void>;
+  rotateAndAnnounceLocalSenderKeys(recipients: string[]): Promise<void>;
+  rotateAndAnnounceViewableTrackKeys(recipients: string[]): Promise<void>;
   publishedTracks: Map<string, unknown>;
 }
 
@@ -147,6 +151,20 @@ async function publisher() {
   const sent: Array<Record<string, unknown>> = [];
   internals.transport = { sendStreamControl: async (m) => { sent.push(m as Record<string, unknown>); }, disconnect: async () => {} };
   vi.spyOn(internals, 'materializeRemoteParticipant').mockResolvedValue(undefined);
+  // Observe the real WebCrypto work. A wall-clock delay does not establish that
+  // all wrapping/rotation has completed when the full suite loads the machine.
+  const keyWork = [
+    vi.spyOn(internals, 'announceAudioSenderKey'),
+    vi.spyOn(internals, 'announcePublishedTrackKeysForRecipients'),
+    vi.spyOn(internals, 'rotateAndAnnounceLocalSenderKeys'),
+    vi.spyOn(internals, 'rotateAndAnnounceViewableTrackKeys'),
+  ];
+  const settleKeys = async () => {
+    await Promise.all(keyWork.flatMap((spy) => spy.mock.results.map((result) => {
+      if (result.type === 'throw') throw result.value;
+      return result.value;
+    })));
+  };
   await internals.senderKeys.generateKey();
   // Our own screen share (video and its own audio) and camera, so stream keys
   // have something to announce. Each track starts capturing with a key of its
@@ -172,10 +190,8 @@ async function publisher() {
   engine.onParticipantLeave((id) => leaves.push(id));
   const lost = vi.fn();
   engine.onTransportLost(lost);
-  return { engine, internals, sent, joins, leaves, lost };
+  return { engine, internals, sent, joins, leaves, lost, settleKeys };
 }
-
-const settle = () => new Promise((resolve) => setTimeout(resolve, 40));
 
 function entry(userId: string, sessionId: string, keyring: MediaKeyring, kind?: 'member' | 'viewer') {
   return { userId, sessionId, videoCapabilities: [], mediaPublicKey: keyring.publicKey, ...(kind ? { kind } : {}) };
@@ -204,13 +220,13 @@ async function withMemberAndViewer() {
     type: 'session_state',
     participants: [entry('300', 'r-300', brendan, 'member')],
   });
-  await settle();
+  await p.settleKeys();
   const afterRoster = p.sent.length;
   p.internals.handleStreamControlMessage({
     type: 'session_participant_join',
     participant: entry('400', 'view-400', sean, 'viewer'),
   });
-  await settle();
+  await p.settleKeys();
   return { ...p, brendan, sean, afterRoster };
 }
 
@@ -252,7 +268,7 @@ describe('a publisher with a viewer in its roster (the relay marks it)', () => {
 
     p.sent.length = 0;
     p.internals.handleStreamControlMessage({ type: 'session_participant_leave', user_id: '400', session_id: 'view-400' });
-    await settle();
+    await p.settleKeys();
     expect(p.leaves).toEqual([]);
     expect(p.internals.senderKeys.currentEpoch).toBe(voiceEpoch);
     expect(Array.from(await p.internals.senderKeys.exportKey())).toEqual(voiceKey);
@@ -271,7 +287,7 @@ describe('a publisher with a viewer in its roster (the relay marks it)', () => {
     const cameraEpoch = p.internals.trackSenders?.get(`${CAMERA_STREAM}:camera`)?.currentEpoch ?? 0;
     p.sent.length = 0;
     p.internals.handleStreamControlMessage({ type: 'session_participant_leave', user_id: '300', session_id: 'r-300' });
-    await settle();
+    await p.settleKeys();
     expect(p.leaves).toEqual(['300']);
     expect(p.internals.senderKeys.currentEpoch).toBe(voiceEpoch + 1);
     expect(p.internals.trackSenders?.get(`${CAMERA_STREAM}:camera`)?.currentEpoch).toBe(cameraEpoch + 1);
@@ -293,7 +309,7 @@ describe('a publisher with a viewer in its roster (the relay marks it)', () => {
       type: 'session_participant_join',
       participant: entry('600', 'r-600', nick, 'member'),
     });
-    await settle();
+    await p.settleKeys();
     expect(p.joins).toEqual(['300', '600']);
     expect(p.internals.senderKeys.currentEpoch).toBe(voiceEpoch + 1);
     expect(p.sent.filter((m) => m.type === 'key_announce').map(recipientsOf)).toEqual([['300', '600']]);
@@ -310,7 +326,7 @@ describe('a publisher with a viewer in its roster (the relay marks it)', () => {
       type: 'session_participant_join',
       participant: entry('300', 'view-300', p.brendan, 'viewer'),
     });
-    await settle();
+    await p.settleKeys();
     expect(p.leaves).toEqual(['300']);
     expect(p.internals.senderKeys.currentEpoch).toBe(voiceEpoch + 1);
     for (const message of p.sent.filter((m) => m.type === 'key_announce')) {
@@ -318,7 +334,7 @@ describe('a publisher with a viewer in its roster (the relay marks it)', () => {
     }
     // The old call's leave, arriving late, removes nothing.
     p.internals.handleStreamControlMessage({ type: 'session_participant_leave', user_id: '300', session_id: 'r-300' });
-    await settle();
+    await p.settleKeys();
     expect(p.leaves).toEqual(['300']);
     await p.engine.disconnect();
   });
@@ -333,7 +349,7 @@ describe('a publisher with a viewer in its roster (the relay marks it)', () => {
         { ...entry('700', 'r-700', MediaKeyring.create()), kind: 'lurker' },
       ],
     });
-    await settle();
+    await p.settleKeys();
     expect(p.joins).toEqual(['300']);
     for (const message of p.sent.filter((m) => m.type === 'key_announce' || m.type === 'stream_key_announce')) {
       expect(recipientsOf(message)).not.toContain('700');

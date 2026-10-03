@@ -44,7 +44,12 @@ export function TopBarOverlay({
 }: TopBarOverlayProps) {
   useEffect(() => {
     if (!open || typeof window === 'undefined') return;
-    const dispatch = () => window.dispatchEvent(new Event('paracord:native-underlay-repaint'));
+    const dispatch = () => {
+      // The delayed closing repaint may outlive the page's window.
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('paracord:native-underlay-repaint'));
+      }
+    };
     const raf = window.requestAnimationFrame(dispatch);
     dispatch();
     return () => {

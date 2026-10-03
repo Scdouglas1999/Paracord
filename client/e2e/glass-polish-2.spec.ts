@@ -56,6 +56,21 @@ async function shoot(page: Page, name: string) {
   await page.screenshot({ path: path.join(OUT_DIR, `${name}.png`), fullPage: false });
 }
 
+/** No Glass layout move still playing (stageTransition.ts names its animations `glass-morph:*`). */
+async function settled(page: Page) {
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () =>
+            document.getAnimations().filter((a) => a.id.startsWith('glass-morph:') && a.playState === 'running').length
+            + document.querySelectorAll('.glass-morph > *').length,
+        ),
+      { timeout: 5_000 },
+    )
+    .toBe(0);
+}
+
 async function box(locator: Locator) {
   const b = await locator.boundingBox();
   if (!b) throw new Error('no box');
@@ -563,6 +578,8 @@ test('the call with nobody on camera: the faces, the call, and that no one is sh
   await expect(row.getByRole('button', { name: 'Leave Lounge' })).toBeVisible();
 
   // Centered in the space the stage gives the people: the faces and the text as one group.
+  // "Show the call" plays the 650ms pill-to-stage move on transforms: measure once it settled.
+  await settled(page);
   const main = await box(stage.locator('.glass-stage__call-main'));
   const people = await box(stage.locator('.glass-call-empty__people'));
   const text = await box(stage.locator('.glass-call-empty__text'));

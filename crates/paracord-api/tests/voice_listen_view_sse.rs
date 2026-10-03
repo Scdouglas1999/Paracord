@@ -86,8 +86,10 @@ async fn sse_ready_and_voice_state_commands_carry_mode_and_stream_start() {
         &ctx.app,
         &owner,
         &format!("/api/v1/guilds/{guild_id}/channels"),
-        Some(json!({ "name": "Lounge", "channel_type": 2, "parent_id": Value::Null,
-                     "required_role_ids": Value::Null })),
+        Some(
+            json!({ "name": "Lounge", "channel_type": 2, "parent_id": Value::Null,
+                     "required_role_ids": Value::Null }),
+        ),
     )
     .await;
     let channel_id = channel["id"].as_str().unwrap().to_string();

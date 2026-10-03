@@ -4763,15 +4763,15 @@ async fn handle_webtransport_connection(
                             }
                         };
                         room_id = match admitted {
-                                Some(room_id) => room_id,
-                                None => {
-                                    tracing::warn!(
+                            Some(room_id) => room_id,
+                            None => {
+                                tracing::warn!(
                                 user_id,
                                 "WebTransport: media token no longer matches active voice state"
                             );
-                                    return;
-                                }
-                            };
+                                return;
+                            }
+                        };
 
                         if !is_media_session_active(&db, user_id, auth_session_id).await {
                             tracing::warn!(

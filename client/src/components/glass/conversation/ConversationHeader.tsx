@@ -97,6 +97,7 @@ function OwnedConversationHeader({ subject }: { subject: ConversationSubject }) 
 
   // The title's menu opens under the title and hands focus to what it opened.
   const titleRef = useRef<HTMLButtonElement>(null);
+  const headingRef = useRef<HTMLDivElement>(null);
   const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
   const restoreFocus = useRef(true);
   const openMenu = () => {
@@ -150,7 +151,7 @@ function OwnedConversationHeader({ subject }: { subject: ConversationSubject }) 
           it opens the places overlay; wide: nothing (places is a pane). */}
       <PlacesToggle className={phone ? 'glass-header__btn glass-header__nav' : 'glass-header__places'} />
 
-      <div className="glass-header__heading">
+      <div ref={headingRef} className="glass-header__heading">
         <h1 className="glass-header__name">
           <button
             ref={titleRef}
@@ -234,6 +235,8 @@ function OwnedConversationHeader({ subject }: { subject: ConversationSubject }) 
 
       <ContextMenu
         label="Channel actions"
+        anchorRef={headingRef}
+        anchorAlign="start"
         open={menuPosition != null}
         position={menuPosition ?? undefined}
         items={menuItems}

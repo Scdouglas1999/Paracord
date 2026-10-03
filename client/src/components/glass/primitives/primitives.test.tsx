@@ -110,6 +110,18 @@ describe('Waveform', () => {
     expect(container.querySelector('.glass-wave')).not.toHaveAttribute('data-live-level');
   });
 
+  it('ticks every bar in 50ms steps on one grid (WebKitGTK copies every animated frame)', () => {
+    const { container } = render(<Waveform />);
+    for (const bar of bars(container)) {
+      const duration = Number.parseFloat(bar.style.animationDuration);
+      const delay = Number.parseFloat(bar.style.animationDelay);
+      const steps = Number(/^steps\((\d+), jump-none\)$/.exec(bar.style.animationTimingFunction)?.[1]);
+      // Each half of the loop is `steps` steps of 50ms, and the delay is whole steps.
+      expect((duration / 2) / steps).toBeCloseTo(0.05, 5);
+      expect(Math.abs(delay / 0.05 - Math.round(delay / 0.05))).toBeLessThan(1e-6);
+    }
+  });
+
   it('follows a real voice level instead of looping', () => {
     const { container, rerender } = render(<Waveform level={0} />);
     const root = container.querySelector('.glass-wave')!;

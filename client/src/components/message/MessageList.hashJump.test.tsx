@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => ({
   readStateStoreState: {
     markRead: vi.fn(),
     saveReadPosition: vi.fn().mockResolvedValue(undefined),
+    refresh: vi.fn().mockResolvedValue(undefined),
     // Where the reader had read up to (the catch-up divider); nowhere by default.
     getReadState: vi.fn((): { last_message_id: string } | undefined => undefined),
   },

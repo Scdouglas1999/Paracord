@@ -2131,11 +2131,78 @@ export class TauriMediaEngine implements MediaEngine {
           }, 1000);
           own(() => clearInterval(stallTimer));
           } else if (nativeSurfaceAvailable && headless) {
-            // A tap cannot sample a track the native side presents on a
-            // surface: no frame ever reaches the webview on that route. The
-            // route is reported, not switched (WP-G8 samples it natively).
-            this.settleRoute(subscriptionKey, 'native-surface');
-            subscription = { renderer, stop: () => {} };
+            // A tap cannot receive frames of a track the native side decodes:
+            // none ever reaches the webview on that route. The route is
+            // reported, not switched; the room samples it natively instead
+            // (`lib/room/nativeSample.ts`). With no surface showing the track
+            // (the room's ambient view), something has to decode it for the
+            // sampler to read: a sampler surface with no toolkit window
+            // (`native_render_attach_sampler`), fed by the relay subscription
+            // below at the layer the 1x1 viewport selects (the lowest).
+            let samplerSurfaceId: number | null = null;
+            let samplerStopped = false;
+            const detachSampler = () => {
+              samplerStopped = true;
+              if (samplerSurfaceId === null) return;
+              const surfaceId = samplerSurfaceId;
+              samplerSurfaceId = null;
+              void this.invokeCleanup('native_render_detach', { surfaceId }).catch(() => {});
+            };
+            own(detachSampler);
+            subscription = {
+              renderer,
+              streamId,
+              trackId,
+              activeLayer: selectedLayer?.layerId,
+              stop: detachSampler,
+            };
+            notifyNativeVisibility = (visible: boolean) => {
+              void this.invokeOwned('media_set_stream_visibility', { streamId, trackId, visible }).catch(() => {});
+            };
+            await this.registerTrackSubscription({
+              streamId,
+              trackId,
+              requestedLayer: selectedLayer?.layerId,
+              viewport,
+            }).catch((error) => {
+              logVoiceDiagnostic('[media] failed to register native track subscription', {
+                userId,
+                streamId,
+                trackId,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            });
+            try {
+              const attached = (await this.invokeOwned('native_render_attach_sampler', { streamId, trackId })) as {
+                surfaceId?: number;
+              } | null;
+              if (typeof attached?.surfaceId !== 'number') {
+                throw new Error('native_render_attach_sampler did not return a surfaceId');
+              }
+              samplerSurfaceId = attached.surfaceId;
+              // Stopped while the attach was in flight: let the late surface go.
+              if (samplerStopped) detachSampler();
+            } catch (err) {
+              // Loud, and the room says it is waiting (spec §3.7): never a
+              // raw-IPC or other quiet fallback.
+              console.error('[media] native_render_attach_sampler failed; the room cannot sample this stream', {
+                userId,
+                streamId,
+                trackId,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            }
+            // Released during the setup above: `release` found nothing to
+            // unregister, and the generic check below only stops the subscription.
+            // A visible surface may already have replaced this sampler while
+            // attach was pending. Its relay subscription belongs to it now.
+            if (disposed) {
+              if (!this.videoSubscriptionReleases.has(subscriptionKey)) {
+                void this.unregisterTrackSubscription(streamId, trackId).catch(() => {});
+              }
+            } else {
+              this.settleRoute(subscriptionKey, 'native-surface');
+            }
           } else if (nativeSurfaceAvailable) {
             // native-surface route (spec §2/§3.6): the functional WebCodecs
             // probe failed for this codec, so the native side decodes and
@@ -2177,11 +2244,17 @@ export class TauriMediaEngine implements MediaEngine {
                 // if destroyed. Do not throw away that cleanup receipt here.
                 return this.invokeCleanup(command, args);
               },
-              // Underlay: never blank the GL surface for DOM overlays. Stage
-              // chrome and body portals paint above the hole; solid CSS keeps
-              // them readable. (Re-enable `'underlay'` only with center-only
-              // sampling — see nativeVideoTile — and never for inset-0 backdrops.)
-              occlusion: nativeRenderUnderlay ? false : true,
+              // Underlay: stage chrome and body portals paint above the hole
+              // (solid CSS keeps them readable) and never blank the GL surface.
+              // Only a marked occluder over the tile's center hides it
+              // (`'underlay'`: center-only sampling of [data-native-overlay-occlude],
+              // dialogs and menus; see nativeVideoTile). That is how a stage
+              // move hides the surface under its shield and has it report the
+              // settled box when the shield comes off (stageTransition.ts).
+              // With sampling off, the surface stayed where the move's first
+              // frames put it: 18px off the stream box after pill to stage
+              // (WP-G23).
+              occlusion: nativeRenderUnderlay ? 'underlay' : true,
               onAttached: () => {
                 // No per-frame IPC signal exists on this route: a created
                 // surface is the "track is live" edge, so reveal the tile

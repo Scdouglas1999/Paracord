@@ -150,6 +150,25 @@ function estimateRoc(refRoc: number, refSeq: number, seq: number): number {
   return bestRoc;
 }
 
+/**
+ * Rollover counters a receiver tries ahead of what it can estimate when a
+ * stream's packets stop opening. Mirrors `ROC_SEARCH_LIMIT` in
+ * crates/paracord-codec/src/crypto.rs: a sender's ROC counts its sequence wraps
+ * since its key began, and the estimate from the last opened packet only covers
+ * one wrap either side. A receiver that starts on a key mid-way (a viewer
+ * arriving, or a switch to a simulcast layer whose SSRC it has not seen under
+ * this key) has nothing to estimate from, and one moved away from an SSRC and
+ * back holds a stale reference; both froze for good once the key was a few
+ * minutes old (WP-G23). AES-GCM authenticates only the right counter.
+ */
+const ROC_SEARCH_LIMIT = 1024;
+/**
+ * A stream with no opened packet is searched on its first failure, one that
+ * has opened before after this many failures in a row, and either again every
+ * this-many-th failure while it stays closed.
+ */
+const ROC_SEARCH_EVERY = 64;
+
 export class SenderKeyManager {
   private localKey: CryptoKey | null = null;
   private localEpoch = 0;
@@ -162,6 +181,10 @@ export class SenderKeyManager {
   private sendRocState: Map<string, RocState> = new Map();
   private recvRocState: Map<string, RocState> = new Map();
   private recvReplay: Map<string, ReplayWindow> = new Map();
+  // Failed first packets of a stream with no verified reference yet (paces the
+  // rollover-counter search), and the streams being searched right now.
+  private recvFailuresSinceOpen: Map<string, number> = new Map();
+  private recvSearching: Set<string> = new Set();
   private participantIds: Set<string> = new Set();
   private onKeyDistribution: KeyDistributionCallback | null = null;
   private onKeyRotation: KeyRotationCallback | null = null;
@@ -286,6 +309,9 @@ export class SenderKeyManager {
         this.recvReplay.delete(key);
       }
     }
+    for (const key of this.recvFailuresSinceOpen.keys()) {
+      if (key.startsWith(prefix)) this.recvFailuresSinceOpen.delete(key);
+    }
   }
 
   /** Get the set of current participant IDs. */
@@ -356,21 +382,53 @@ export class SenderKeyManager {
     const seq = sequence & 0xffff;
     const stateKey = `${ssrc}:${epoch}`;
     const ref = this.recvRocState.get(stateKey);
-    const roc = ref ? estimateRoc(ref.roc, ref.seq, seq) : 0;
-    const index = roc * 0x1_0000 + seq;
-    if (this.recvReplay.get(stateKey)?.containsOrExpired(index)) {
-      throw new Error('Media packet is a replay or is outside the receive window');
+    const estimated = ref ? estimateRoc(ref.roc, ref.seq, seq) : 0;
+    // A stale ROC can make a fresh packet look replayed. Authenticate first,
+    // then apply the replay window to the verified full packet index below.
+    const open = (roc: number) =>
+      crypto.subtle.decrypt(
+        {
+          name: 'AES-GCM',
+          iv: this.buildNonce(ssrc, epoch, seq, roc).buffer as ArrayBuffer,
+          additionalData: toArrayBuffer(header),
+        },
+        peerKey,
+        toArrayBuffer(payload),
+      );
+    let roc = estimated;
+    let plaintext: ArrayBuffer;
+    try {
+      plaintext = await open(roc);
+    } catch (error) {
+      // The sender's counter may be past what the estimate covers (see
+      // ROC_SEARCH_LIMIT): search ahead of it, paced, one search at a time.
+      if (this.recvSearching.has(stateKey)) throw error;
+      const failures = (this.recvFailuresSinceOpen.get(stateKey) ?? 0) + 1;
+      this.recvFailuresSinceOpen.set(stateKey, failures);
+      const search = ref ? failures % ROC_SEARCH_EVERY === 0 : (failures - 1) % ROC_SEARCH_EVERY === 0;
+      if (!search) throw error;
+      // The estimate authenticates only one candidate, not all three. Include
+      // the reference ROC and its successor when recovering a stale anchor.
+      const first = ref ? ref.roc : 1;
+      this.recvSearching.add(stateKey);
+      let found: { roc: number; plaintext: ArrayBuffer } | null = null;
+      try {
+        const last = Math.min(0xffff_ffff, first + ROC_SEARCH_LIMIT - 1);
+        for (let candidate = first; candidate <= last && !found; candidate += 1) {
+          if (candidate === estimated) continue;
+          try {
+            found = { roc: candidate, plaintext: await open(candidate) };
+          } catch {
+            /* not this counter */
+          }
+        }
+      } finally {
+        this.recvSearching.delete(stateKey);
+      }
+      if (!found) throw error;
+      ({ roc, plaintext } = found);
     }
-    const iv = this.buildNonce(ssrc, epoch, seq, roc);
-    const plaintext = await crypto.subtle.decrypt(
-      {
-        name: 'AES-GCM',
-        iv: iv.buffer as ArrayBuffer,
-        additionalData: toArrayBuffer(header),
-      },
-      peerKey,
-      toArrayBuffer(payload),
-    );
+    const index = roc * 0x1_0000 + seq;
     // Only advance the reference window on a verified decrypt, and only when
     // this packet's 48-bit index is newer than the current reference.
     // WebCrypto yields: another decrypt can finish or the peer can leave while
@@ -391,6 +449,7 @@ export class SenderKeyManager {
     if (!current || index > current.roc * 0x1_0000 + current.seq) {
       this.recvRocState.set(stateKey, { roc, seq });
     }
+    this.recvFailuresSinceOpen.delete(stateKey);
     return new Uint8Array(plaintext);
   }
 
@@ -400,6 +459,7 @@ export class SenderKeyManager {
     if (this.peerKeys.get(stateKey) !== key) {
       this.recvRocState.delete(stateKey);
       this.recvReplay.delete(stateKey);
+      this.recvFailuresSinceOpen.delete(stateKey);
       this.peerRawKeys.delete(stateKey);
     }
     this.peerKeys.set(stateKey, key);

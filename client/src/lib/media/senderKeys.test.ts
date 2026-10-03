@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { SenderKeyManager } from './senderKeys';
 
 function hex(bytes: Uint8Array): string {
@@ -162,10 +162,9 @@ describe('SenderKeyManager sequence-wrap (ROC increment) roundtrip', () => {
     const ctLast = await mgr.encrypt(VECTOR_HEADER, beforeWrap, VECTOR_EPOCH, 0xffff, VECTOR_SSRC);
     const ctWrap = await mgr.encrypt(VECTOR_HEADER, afterWrap, VECTOR_EPOCH, 0, VECTOR_SSRC);
 
-    // The post-wrap frame at seq=0 must decrypt only when the receiver has
-    // observed the pre-wrap frame (so its ROC window is anchored at ROC 0,
-    // seq 65535 and it estimates ROC 1 for seq 0). A fresh receiver that has
-    // never seen the pre-wrap frame estimates ROC 0 and fails authentication —
+    // A fresh receiver that never saw the pre-wrap frame (a viewer handed the
+    // key after the wrap) does not open the post-wrap frame at ROC 0; it finds
+    // ROC 1 by searching (WP-G23). The nonce it opened it with carries ROC 1 —
     // proving the ROC bytes actually feed the GCM nonce.
     const freshReceiver = new SenderKeyManager();
     freshReceiver.setPeerKey(
@@ -173,9 +172,22 @@ describe('SenderKeyManager sequence-wrap (ROC increment) roundtrip', () => {
       VECTOR_EPOCH,
       (mgr as unknown as { localKey: CryptoKey }).localKey,
     );
-    await expect(
-      freshReceiver.decrypt(VECTOR_HEADER, ctWrap, VECTOR_EPOCH, 0, VECTOR_SSRC),
-    ).rejects.toBeTruthy();
+    const ivs: Uint8Array[] = [];
+    const realDecrypt = crypto.subtle.decrypt.bind(crypto.subtle);
+    const spy = vi.spyOn(crypto.subtle, 'decrypt').mockImplementation(async (algo: any, key: any, data: any) => {
+      const result = await realDecrypt(algo, key, data);
+      ivs.push(new Uint8Array(algo.iv));
+      return result;
+    });
+    try {
+      const pt = await freshReceiver.decrypt(VECTOR_HEADER, ctWrap, VECTOR_EPOCH, 0, VECTOR_SSRC);
+      expect(new TextDecoder().decode(pt)).toBe('after-wrap');
+    } finally {
+      spy.mockRestore();
+    }
+    // Only the successful call is recorded; bytes 7..11 are the ROC.
+    expect(ivs).toHaveLength(1);
+    expect(Array.from(ivs[0].subarray(7, 11))).toEqual([0, 0, 0, 1]);
 
     // In-order receiver: decrypt the pre-wrap frame first to anchor the window.
     const orderedReceiver = new SenderKeyManager();
@@ -273,5 +285,106 @@ describe('SenderKeyManager sequence-wrap (ROC increment) roundtrip', () => {
         await receiver.decrypt(VECTOR_HEADER, ct11, VECTOR_EPOCH, 11, VECTOR_SSRC),
       ),
     ).toBe('eleven');
+  });
+});
+
+describe('a receiver that starts on a key the sender has used for a while (WP-G23)', () => {
+  /** Fast-forward a sender as if it had already sent `roc` wraps' worth of packets. */
+  function fastForward(sender: SenderKeyManager, ssrc: number, epoch: number, roc: number, seq: number) {
+    (sender as unknown as { sendRocState: Map<string, { roc: number; seq: number }> }).sendRocState.set(`${ssrc}:${epoch}`, { roc, seq });
+  }
+
+  it('finds the counter on the first packet and keeps decrypting across the next wrap', async () => {
+    const ssrc = 0x5c12ee01;
+    const epoch = 3;
+    const sender = await managerWithVectorKey(ssrc, epoch);
+    fastForward(sender, ssrc, epoch, 2, 65_530);
+    const seqs = [65_531, 65_532, 65_535, 0, 1, 2];
+    const frames: { seq: number; ct: Uint8Array }[] = [];
+    for (const seq of seqs) {
+      frames.push({ seq, ct: await sender.encrypt(VECTOR_HEADER, new Uint8Array([seq & 0xff]), epoch, seq, ssrc) });
+    }
+    const viewer = new SenderKeyManager();
+    viewer.setPeerKey(ssrc, epoch, (sender as unknown as { localKey: CryptoKey }).localKey);
+    for (const frame of frames) {
+      expect(Array.from(await viewer.decrypt(VECTOR_HEADER, frame.ct, epoch, frame.seq, ssrc))).toEqual([frame.seq & 0xff]);
+    }
+    // The replay window still holds.
+    await expect(viewer.decrypt(VECTOR_HEADER, frames[0].ct, epoch, frames[0].seq, ssrc)).rejects.toBeTruthy();
+  });
+
+  it('finds an SSRC again after the relay had it elsewhere for a few wraps', async () => {
+    const ssrc = 0x35120317;
+    const epoch = 1;
+    const sender = await managerWithVectorKey(ssrc, epoch);
+    const viewer = new SenderKeyManager();
+    viewer.setPeerKey(ssrc, epoch, (sender as unknown as { localKey: CryptoKey }).localKey);
+    for (let seq = 1; seq <= 3; seq += 1) {
+      const ct = await sender.encrypt(VECTOR_HEADER, new Uint8Array([seq]), epoch, seq, ssrc);
+      await viewer.decrypt(VECTOR_HEADER, ct, epoch, seq, ssrc);
+    }
+    // Three wraps later the viewer is back on this SSRC; its reference says ROC 0.
+    fastForward(sender, ssrc, epoch, 3, 10);
+    const opened: boolean[] = [];
+    for (let seq = 11; seq < 11 + 70; seq += 1) {
+      const ct = await sender.encrypt(VECTOR_HEADER, new Uint8Array([seq & 0xff]), epoch, seq, ssrc);
+      opened.push(await viewer.decrypt(VECTOR_HEADER, ct, epoch, seq, ssrc).then(() => true, () => false));
+    }
+    // One bad packet is not a lost counter: the 64th failure in a row searches.
+    expect(opened.slice(0, 63).every((ok) => !ok)).toBe(true);
+    expect(opened.slice(63).every((ok) => ok)).toBe(true);
+  });
+
+  it.each([
+    { name: 'one missed wrap', anchorRoc: 0, anchorSeq: 1000, resumedRoc: 1, resumedSeq: 2000 },
+    { name: 'a stale sequence within the current ROC', anchorRoc: 1, anchorSeq: 1000, resumedRoc: 1, resumedSeq: 50000 },
+    { name: 'fresh sequences overlapping old replay slots', anchorRoc: 0, anchorSeq: 20000, resumedRoc: 3, resumedSeq: 10000 },
+  ])('recovers $name while still rejecting authenticated replays', async ({ anchorRoc, anchorSeq, resumedRoc, resumedSeq }) => {
+    const ssrc = 0x35120318;
+    const epoch = 1;
+    const sender = await managerWithVectorKey(ssrc, epoch);
+    const viewer = new SenderKeyManager();
+    viewer.setPeerKey(ssrc, epoch, (sender as unknown as { localKey: CryptoKey }).localKey);
+    // Populate receive slots which will overlap the returning stream's sequences.
+    if (resumedSeq < anchorSeq) {
+      for (let seq = resumedSeq; seq < resumedSeq + 70; seq += 1) {
+        const ct = await sender.encrypt(VECTOR_HEADER, new Uint8Array([1]), epoch, seq, ssrc);
+        await viewer.decrypt(VECTOR_HEADER, ct, epoch, seq, ssrc);
+      }
+    }
+    fastForward(sender, ssrc, epoch, anchorRoc, anchorSeq - 1);
+    const anchorCt = await sender.encrypt(VECTOR_HEADER, new Uint8Array([1]), epoch, anchorSeq, ssrc);
+    await viewer.decrypt(VECTOR_HEADER, anchorCt, epoch, anchorSeq, ssrc);
+    fastForward(sender, ssrc, epoch, resumedRoc, resumedSeq - 1);
+    const opened: boolean[] = [];
+    let lastCt: Uint8Array = new Uint8Array();
+    for (let seq = resumedSeq; seq < resumedSeq + 70; seq += 1) {
+      lastCt = await sender.encrypt(VECTOR_HEADER, new Uint8Array([2]), epoch, seq, ssrc);
+      opened.push(await viewer.decrypt(VECTOR_HEADER, lastCt, epoch, seq, ssrc).then(() => true, () => false));
+    }
+    expect(opened.slice(0, 63).every((ok) => !ok)).toBe(true);
+    expect(opened.slice(63).every((ok) => ok)).toBe(true);
+    await expect(viewer.decrypt(VECTOR_HEADER, lastCt, epoch, resumedSeq + 69, ssrc)).rejects.toThrow('replay');
+    await expect(viewer.decrypt(VECTOR_HEADER, anchorCt, epoch, anchorSeq, ssrc)).rejects.toThrow();
+  });
+
+  it('searches a stream that never opens only on its first failure and every 64th after', async () => {
+    const ssrc = 0x0badc0de;
+    const epoch = 1;
+    const sender = await managerWithVectorKey(ssrc, epoch);
+    const wrongKey = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 128 }, false, ['decrypt']);
+    const viewer = new SenderKeyManager();
+    viewer.setPeerKey(ssrc, epoch, wrongKey);
+    const decrypt = vi.spyOn(crypto.subtle, 'decrypt');
+    try {
+      for (let seq = 1; seq <= 65; seq += 1) {
+        const ct = await sender.encrypt(VECTOR_HEADER, new Uint8Array([1]), epoch, seq, ssrc);
+        await expect(viewer.decrypt(VECTOR_HEADER, ct, epoch, seq, ssrc)).rejects.toBeTruthy();
+      }
+      // Two searches (packets 1 and 65) of 1 + 1024 tries, and 63 single tries.
+      expect(decrypt).toHaveBeenCalledTimes(2 * 1025 + 63);
+    } finally {
+      decrypt.mockRestore();
+    }
   });
 });

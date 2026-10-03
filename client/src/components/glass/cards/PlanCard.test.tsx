@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { GuildEventResult, GuildEventView } from './useGuildEvent';
 import { EventPlanCard } from './EventPlanCard';
@@ -65,6 +65,15 @@ function show(over: Partial<GuildEventView> = {}, result: Partial<GuildEventResu
 
 beforeEach(() => {
   mocks.me = { id: '42', avatar_hash: null };
+  // The time line reads the wall clock ("Today at", "Tonight at", "Tomorrow at"):
+  // pin it to the afternoon so an event three hours out is always today.
+  // Only Date is faked; timers stay real for Testing Library.
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date(2026, 8, 30, 14, 0, 0));
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('PlanCard', () => {

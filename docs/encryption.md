@@ -269,6 +269,9 @@ Two kinds of connection can receive media from a call:
   server) receives video only, at a low, capped rate. A viewer never receives the voices or
   anyone's camera.
 
+In a DM or group DM call, only the DM's recipients can be members or viewers (and a DM call
+has no ambient view); the rules below apply to it unchanged.
+
 The relay marks every entry in a call's roster `member` or `viewer`. It sets the marker
 from how the connection was admitted, so no client has to guess from voice states. A
 client reading a marker it does not know refuses the entry instead of treating it as a

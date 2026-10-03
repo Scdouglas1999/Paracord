@@ -133,6 +133,14 @@ function request(target: UnreadTarget, delay: number) {
           setTimeout(notify, RETRY_MS);
         } finally {
           inflight.delete(key);
+          const latest = wanted.get(key);
+          if (latest && (latest.cursor !== cursor || latest.tail !== target.tail)) {
+            // A newer ask may have reached the queue while this request was
+            // running. Its job stood down; release it and wake the subscribers
+            // so the latest cursor/tail is fetched instead of staying a dot.
+            wanted.delete(key);
+            notify();
+          }
         }
       });
       pump();

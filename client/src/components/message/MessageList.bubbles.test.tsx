@@ -41,6 +41,7 @@ const mocks = vi.hoisted(() => ({
   readStateStoreState: {
     markRead: vi.fn(),
     saveReadPosition: vi.fn().mockResolvedValue(undefined),
+    refresh: vi.fn().mockResolvedValue(undefined),
     // Where the reader had read up to (the catch-up divider); nowhere by default.
     getReadState: vi.fn((): { last_message_id: string } | undefined => undefined),
   },
@@ -255,6 +256,8 @@ function rowOf(text: string): HTMLElement {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.readStateStoreState.getReadState.mockReturnValue(undefined);
+  mocks.readStateStoreState.refresh.mockResolvedValue(undefined);
   nextId = 1;
   mocks.useMessagesReturn.messages = [];
   mocks.typingByChannel = {};
@@ -541,6 +544,38 @@ describe('the catch-up divider (§3.2)', () => {
     expect(mocks.readStateStoreState.markRead).toHaveBeenCalled();
     expect(mocks.readStateStoreState.getReadState.mock.invocationCallOrder[0])
       .toBeLessThan(mocks.readStateStoreState.markRead.mock.invocationCallOrder[0]);
+  });
+
+  it('waits for a late account snapshot before capturing and advancing the cursor', async () => {
+    let finish!: () => void;
+    mocks.readStateStoreState.refresh.mockReturnValueOnce(new Promise<void>((resolve) => { finish = resolve; }));
+    mocks.useMessagesReturn.messages = [
+      message('brendan', todayAt(0), { id: '1001', content: 'read' }),
+      message('nick', todayAt(9), { id: '1002', content: 'unread' }),
+    ];
+    renderList();
+    expect(mocks.readStateStoreState.refresh).toHaveBeenCalledWith(SCOPE);
+    expect(mocks.readStateStoreState.markRead).not.toHaveBeenCalled();
+    await act(async () => { readUpTo('1001'); finish(); });
+    expect(await screen.findByTestId('catch-up-divider')).toHaveTextContent('1 new');
+    expect(mocks.readStateStoreState.markRead).toHaveBeenCalledWith(SCOPE, 'ch1', '1002');
+  });
+
+  it('advances normally when the initial snapshot is legitimately empty', async () => {
+    mocks.useMessagesReturn.messages = [message('nick', todayAt(9), { id: '1002', content: 'first visit' })];
+    renderList();
+    await waitFor(() => expect(mocks.readStateStoreState.markRead).toHaveBeenCalledWith(SCOPE, 'ch1', '1002'));
+    expect(screen.queryByTestId('catch-up-divider')).toBeNull();
+  });
+
+  it('does not mark a conversation read after leaving while its snapshot loads', async () => {
+    let finish!: () => void;
+    mocks.readStateStoreState.refresh.mockReturnValueOnce(new Promise<void>((resolve) => { finish = resolve; }));
+    mocks.useMessagesReturn.messages = [message('nick', todayAt(9), { id: '1002', content: 'unread' })];
+    const view = renderList();
+    view.unmount();
+    await act(async () => { readUpTo('1001'); finish(); });
+    expect(mocks.readStateStoreState.markRead).not.toHaveBeenCalled();
   });
 
   it('goes away on Mark read', async () => {

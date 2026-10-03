@@ -236,8 +236,8 @@ test('a DM call: the pill, then the call on the stage, named for the person (des
   await expect(stage.locator('.glass-stage__title')).toHaveText(/^brendan$/i);
   await expect(stage.locator('.glass-stage__tile')).toContainText(/brendan/i);
   const row = stage.getByRole('group', { name: 'Call controls' });
-  // The server takes screen shares in server voice channels only.
-  await expect(row.getByRole('button', { name: 'Share your screen' })).toHaveCount(0);
+  // A DM call takes screen shares too (docs/design/glass-fix-dm-calls.md).
+  await expect(row.getByRole('button', { name: 'Share your screen' })).toBeVisible();
   await expect(row.getByRole('button', { name: 'Leave Brendan' })).toBeVisible();
   await shoot(page, 'calls-dm-call-stage-desktop');
 });

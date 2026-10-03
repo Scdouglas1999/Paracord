@@ -73,6 +73,9 @@ export function StageControls({ target, model, fit }: StageControlsProps) {
 
   // The call itself (no stream) has nothing to react to and nothing to clip.
   const stream = model.view === 'stream' && isStreamTarget(target) ? target : null;
+  // A DM call's stream has no reactions (the server takes them only in server
+  // voice channels), so its stage draws no flame or heart; Clip stays.
+  const reactable = stream !== null && stream.guildId !== null;
   const reactions = useStreamReactions(stream);
   const clip = useClip(stream ? { ...stream, streamerName: model.streamerName } : null);
   const share = useShareScreen();
@@ -139,7 +142,7 @@ export function StageControls({ target, model, fit }: StageControlsProps) {
   const together = useTogether();
 
   const moreItems: MoreItem[] = [];
-  if (stream && fit >= 2) {
+  if (reactable && fit >= 2) {
     moreItems.push(
       { id: 'fire', label: 'React with fire', icon: <FlameGlyph size={18} />, onSelect: () => react('fire') },
       { id: 'heart', label: 'React with a heart', icon: <Heart size={18} />, onSelect: () => react('heart') },
@@ -182,7 +185,7 @@ export function StageControls({ target, model, fit }: StageControlsProps) {
 
   /* ---- The row ------------------------------------------------------------------ */
   const reactionTitle = reactions.available ? undefined : reactions.unavailableReason ?? undefined;
-  const reactionButtons = stream && fit < 2 && (
+  const reactionButtons = reactable && fit < 2 && (
     <>
       <GlassButton
         variant="icon"
@@ -358,7 +361,7 @@ export function StageControls({ target, model, fit }: StageControlsProps) {
         <>
           {reactionButtons}
           {clipButton}
-          {stream && fit >= 2 && (
+          {reactable && fit >= 2 && (
             <GlassButton
               ref={moreRef}
               variant="icon"

@@ -3,8 +3,8 @@
    `source/GlassV14Phone.dc.html`; WP-G20).
 
    Below 768px the frame is not two panes: places is a screen of its own, and the
-   conversation is a screen in front of it (components/glass/shell/PhoneFrame.tsx,
-   phoneNav.ts). There is no server rail and no bottom bar, and nothing pretends
+   conversation is a screen in front of it (components/glass/shell/GlassFrame.tsx's
+   phone layout, usePhoneFrame.ts, phoneNav.ts). There is no server rail and no bottom bar, and nothing pretends
    to be the status bar: the frame draws to the window's edges and pads itself
    with the device's safe areas (`--safe-top`, `--safe-bottom`, `--safe-left`,
    `--safe-right`, from tokens.css).
@@ -66,7 +66,7 @@
 }
 
 /* The screen behind: the conversation waits off to the right, places steps back and
-   fades. Both are inert (PhoneFrame), so neither can be reached. */
+   fades. Both are inert (GlassFrame's phone layout), so neither can be reached. */
 .glass-phone__screen--conversation:not([data-active]) {
   transform: translateX(100%);
   pointer-events: none;
@@ -204,10 +204,6 @@
   align-content: center;
   justify-content: center;
   margin: 0;
-}
-
-.glass-stage[data-view='call'][data-layout='phone'] .glass-stage__call-notice {
-  display: none;
 }
 
 /* What the phone draws over the stream: back, clip "30s", full screen, the name

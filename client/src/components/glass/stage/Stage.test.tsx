@@ -283,6 +283,39 @@ describe('the watch', () => {
   });
 });
 
+describe('geometry', () => {
+  it('sizes the stream and the people row from the layout box, not a mid-move painted box', () => {
+    // A stage move (FLIP) can have the stage scaled when the layout effect
+    // measures it; WebKitGTK did, and the scaled size stuck (WP-G23).
+    const offsetWidth = vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('glass-stage') ? 972 : 0;
+    });
+    const offsetHeight = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('glass-stage') ? 868 : 0;
+    });
+    const rect = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      // Scaled 1.007 x 1.41, as a move's first frame paints it.
+      return this.classList.contains('glass-stage')
+        ? ({ x: 0, y: 0, left: 0, top: 0, width: 979, height: 1224, right: 979, bottom: 1224 } as DOMRect)
+        : ({ x: 0, y: 0, left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0 } as DOMRect);
+    });
+    try {
+      useVoiceStore.setState({ channelParticipants: new Map([['lounge', [VINCENT, BRENDAN, NICK]]]) });
+      renderStage();
+      const stream = document.querySelector<HTMLElement>('.glass-stage__stream');
+      const row = document.querySelector<HTMLElement>('.glass-stage__row');
+      // 972 wide less 2 x 12 is 948 at 16:9 (533); 868 tall less insets, controls and gaps leaves 223.
+      expect(stream?.style.width).toBe('948px');
+      expect(stream?.style.height).toBe('533px');
+      expect(row?.style.height).toBe('223px');
+    } finally {
+      offsetWidth.mockRestore();
+      offsetHeight.mockRestore();
+      rect.mockRestore();
+    }
+  });
+});
+
 describe('keyboard', () => {
   it('Esc stops watching', () => {
     renderStage();
@@ -657,6 +690,25 @@ describe('a direct message call', () => {
     // 'dm'), never a guild.
     renderStage({ ...DM, streamerId: 'jeremy' });
     expect(actions.startWatch).toHaveBeenLastCalledWith({ serverId: '__local__', guildId: 'dm', channelId: 'dm-1', streamerId: 'jeremy' });
+  });
+
+  it("a DM stream's stage has Clip but no flame or heart (DMs have no stream reactions)", () => {
+    useVoiceStore.setState({
+      channelParticipants: new Map([
+        ['dm-1', [
+          voiceState('jeremy', { channel_id: 'dm-1', guild_id: null as never, display_name: 'Jeremy', self_stream: true, self_stream_started_at: STARTED }),
+          voiceState('me', { channel_id: 'dm-1', guild_id: null as never }),
+        ]],
+      ]),
+    });
+    renderStage({ ...DM, streamerId: 'jeremy' });
+    const row = screen.getByRole('group', { name: 'Call controls' });
+    const names = within(row).getAllByRole('button').map((b) => b.getAttribute('aria-label') ?? b.textContent);
+    expect(names).toEqual(['Microphone', 'Camera', 'Share your screen', 'Clip', 'More call actions', 'Leave Jeremy']);
+    fireEvent.click(screen.getByRole('button', { name: 'More call actions' }));
+    const items = within(screen.getByRole('menu', { name: 'More call actions' })).getAllByRole('menuitem').map((item) => item.textContent);
+    expect(items).not.toContain('React with fire');
+    expect(items).not.toContain('React with a heart');
   });
 });
 

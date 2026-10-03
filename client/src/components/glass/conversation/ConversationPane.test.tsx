@@ -275,6 +275,17 @@ describe('the header of a channel', () => {
     expect(screen.queryByRole('menu', { name: 'Channel actions' })).not.toBeInTheDocument();
   });
 
+  it('keeps the title menu usable while the conversation finishes scrolling', async () => {
+    const user = userEvent.setup();
+    renderPane();
+    await user.click(screen.getByRole('button', { name: 'General' }));
+    fireEvent.scroll(document);
+    expect(screen.getByRole('menu', { name: 'Channel actions' })).toBeInTheDocument();
+    await user.click(screen.getByRole('menuitem', { name: 'Pinned messages' }));
+    expect(useGlassStore.getState().sheet).toBe('channel');
+    expect(useSheetPages.getState().channelPage).toBe('pins');
+  });
+
   it('offers follows only in an announcement channel', async () => {
     const user = userEvent.setup();
     renderPane({ ...CHANNEL, channelId: 'ann', channelName: 'Announcements' });

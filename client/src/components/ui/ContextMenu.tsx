@@ -26,6 +26,7 @@ export interface ContextMenuItem {
 interface ContextMenuProps {
   label?: string;
   anchorRef?: RefObject<HTMLElement | null>;
+  anchorAlign?: 'start' | 'end';
   items: ContextMenuItem[];
   /**
    * Menu visibility (default true). Drive it rather than unmounting so the
@@ -38,7 +39,7 @@ interface ContextMenuProps {
   onClose: () => void;
 }
 
-export function ContextMenu({ items, position, open = true, onClose, label = 'Context menu', anchorRef }: ContextMenuProps) {
+export function ContextMenu({ items, position, open = true, onClose, label = 'Context menu', anchorRef, anchorAlign = 'end' }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   const [focusedIndex, setFocusedIndex] = useState(-1);
   const { mounted, exiting, scenery } = usePresence(open);
@@ -69,7 +70,7 @@ export function ContextMenu({ items, position, open = true, onClose, label = 'Co
       menu.style.maxHeight = `${Math.max(0, height - 16)}px`;
       menu.style.maxWidth = `${Math.max(0, width - 16)}px`;
       const anchorRect = anchorRef?.current?.getBoundingClientRect();
-      const targetX = anchorRect ? anchorRect.right - menu.offsetWidth : anchor.x;
+      const targetX = anchorRect ? (anchorAlign === 'start' ? anchorRect.left : anchorRect.right - menu.offsetWidth) : anchor.x;
       const targetY = anchorRect ? anchorRect.bottom + 6 : anchor.y;
       const x = Math.max(left + 8, Math.min(targetX, left + width - menu.offsetWidth - 8));
       const y = Math.max(top + 8, Math.min(targetY, top + height - menu.offsetHeight - 8));
@@ -92,7 +93,7 @@ export function ContextMenu({ items, position, open = true, onClose, label = 'Co
   // `mounted` is a dependency because the menu node only exists while mounted:
   // a menu reopened at the same anchor is a new node that has to be measured
   // again, or it keeps the position of the last time it opened.
-  }, [anchor.x, anchor.y, anchorRef, mounted]);
+  }, [anchor.x, anchor.y, anchorRef, anchorAlign, mounted]);
 
   useLayoutEffect(() => {
     const menu = menuRef.current;
@@ -191,7 +192,7 @@ export function ContextMenu({ items, position, open = true, onClose, label = 'Co
           // Grow out of the point that opened it: under a button, from the
           // corner that sits beneath it; at the pointer, from the pointer.
           '--pc-origin': anchorRef
-            ? '100% 0%'
+            ? (anchorAlign === 'start' ? '0% 0%' : '100% 0%')
             : `${Math.max(0, anchor.x - adjustedPosition.x)}px ${Math.max(0, anchor.y - adjustedPosition.y)}px`,
         } as React.CSSProperties
       }

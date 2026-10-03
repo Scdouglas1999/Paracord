@@ -10,6 +10,11 @@ checkpoint and was checked against the tree on that date (the working tree
 carries uncommitted edits from G22 and other packages). Items may close as those
 land. Items that an earlier package left and a later one finished are not listed.
 
+The later completion pass, including the read-state races, channel menu,
+native sampler handoff and media counter recovery, is recorded in
+[Glass completion, 2026-10-03](glass-completion-2026-10-03.md). Its validation
+and deployment record supersedes the earlier status statements below.
+
 ## What Glass is
 
 Glass is Paracord's interface: two floating panes on a room backdrop, a places
@@ -69,7 +74,7 @@ app and WebKitGTK performance) has not run; see "Desktop and WebKitGTK" below.
 | Path | What is there |
 |---|---|
 | `components/glass/primitives/` | `Glyph`, `Waveform`, `GlassButton` and `JoinButton`, `Kicker`, `InstrumentText`, `Pane`, `GlassChip`, `GlassShowcase` (G0) |
-| `components/glass/shell/` | `GlassFrame`, `PlacesOverlay`, `PlacesToggle`, `useGlassLayout`, `slots.ts` (slot prop types); phone: `PhoneFrame`, `PhonePlaces`, `PhoneStageChrome`, `phoneNav`, `phoneMotion` (G7, G20) |
+| `components/glass/shell/` | `GlassFrame`, `PlacesOverlay`, `PlacesToggle`, `useGlassLayout`, `slots.ts` (slot prop types); phone: `GlassFrame`'s phone layout with `usePhoneFrame`, `PhonePlaces`, `PhoneStageChrome`, `phoneNav`, `phoneMotion` (G7, G20) |
 | `components/glass/room/` | `RoomBackdrop`, `useRoomSource`; the engine is in `lib/room/` (G8) |
 | `components/glass/places/` | `PlacesPanel`, `ServerRow`, `ServerTitle`, `ServerMenu`, `PlaceRows` (text, quiet, live, glyph and event rows), `ComingUp`, `HomePlaces`, `AddonRows`, `Lead`, `model.ts`, `rows.ts`, `usePlacesData`, `useUnreadMessageCounts` (G9) |
 | `components/glass/conversation/` | `ConversationPane`, `ConversationHeader`, `HeaderAvatar`, `useChannelMenu`, `useDmCall`, `sheetBridge` (G11) |

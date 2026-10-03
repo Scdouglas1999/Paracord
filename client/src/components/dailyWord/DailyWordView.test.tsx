@@ -106,16 +106,21 @@ describe('DailyWordView', () => {
     vi.mocked(dailyWordApi.guess).mockImplementation(() =>
       ok(today({ guesses: [{ word: 'crane', states: ['absent', 'present', 'absent', 'absent', 'correct'] }] })));
     await renderView();
+    // Drive the reveal animation explicitly: its 940 ms duration leaves only
+    // 60 ms of the default waitFor timeout for a busy test worker to render.
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'], now: NOW });
     type('crane');
     await act(async () => {
       fireEvent.keyDown(window, { key: 'Enter' });
     });
     expect(dailyWordApi.guess).toHaveBeenCalledWith('crane');
-    await screen.findByRole('group', {
+    expect(screen.getByRole('group', {
       name: 'CRANE: C not in the word, R in the word, A not in the word, N not in the word, E in place',
+    })).toBeInTheDocument();
+    await act(async () => {
+      await vi.runOnlyPendingTimersAsync();
     });
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'E, in place' })).toHaveAttribute('data-state', 'correct'));
+    expect(screen.getByRole('button', { name: 'E, in place' })).toHaveAttribute('data-state', 'correct');
     expect(screen.getByRole('button', { name: 'R, in the word' })).toHaveAttribute('data-state', 'present');
   });
 

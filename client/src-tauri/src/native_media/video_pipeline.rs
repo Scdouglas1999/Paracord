@@ -46,6 +46,65 @@ const REORDER_HOLD: Duration = Duration::from_millis(50);
 /// keyframe request so a re-shown tile does not paint a frozen old picture.
 #[cfg(feature = "vpx")]
 const VISIBILITY_STALE_AFTER: Duration = Duration::from_secs(2);
+/// How far behind the newest frame id a frame may be and still count as late
+/// (reordered or lost) rather than as a new numbering.
+///
+/// The browser publisher numbers a frame by its 16-bit packet sequence
+/// (`browserMediaEngine.ts`, `& 0xffff`), so its frame ids wrap to 0 every
+/// 65,536 packets: a few minutes of a screen share. A publisher that restarts
+/// starts again from 0 as well. Either way the next frame id is far *below* the
+/// last one, and comparing plainly (`id <= last`) dropped every frame after the
+/// wrap as stale, and culled every keyframe until the count climbed back past
+/// the old high-water mark: a desktop viewer's picture froze for minutes at a
+/// time (WP-G23). Real reordering and loss are a handful of frames, so a jump
+/// back of half the 16-bit range or more is a new numbering.
+#[cfg(feature = "vpx")]
+const FRAME_ID_RENUMBER_GAP: u64 = 1 << 15;
+
+/// Whether `frame_id`, at or below `reference`, starts a new numbering (a wrap
+/// or a restarted publisher) rather than being a late frame.
+#[cfg(feature = "vpx")]
+fn frame_id_renumbered(reference: u64, frame_id: u64) -> bool {
+    frame_id <= reference && reference - frame_id >= FRAME_ID_RENUMBER_GAP
+}
+
+/// What the reorder stage does with an arriving frame, given the last frame id
+/// it delivered.
+#[cfg(feature = "vpx")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReorderAdmission {
+    /// Buffer it in frame-id order.
+    Accept,
+    /// A keyframe: a resync point. Drop what is buffered older than it and
+    /// continue from it.
+    Resync,
+    /// A new numbering (see [`FRAME_ID_RENUMBER_GAP`]): everything buffered
+    /// belongs to the old one; drop it all and continue from this frame. The
+    /// decoder's state is unaffected by a renumbering, so a delta still decodes.
+    Renumber,
+    /// Older than a frame already delivered: lost, drop it.
+    Stale,
+}
+
+#[cfg(feature = "vpx")]
+fn admit_reordered_frame(
+    last_delivered: Option<u64>,
+    frame_id: u64,
+    is_keyframe: bool,
+) -> ReorderAdmission {
+    if let Some(last) = last_delivered {
+        if frame_id_renumbered(last, frame_id) {
+            return ReorderAdmission::Renumber;
+        }
+    }
+    if is_keyframe {
+        return ReorderAdmission::Resync;
+    }
+    if last_delivered.is_some_and(|last| frame_id <= last) {
+        return ReorderAdmission::Stale;
+    }
+    ReorderAdmission::Accept
+}
 
 #[cfg(feature = "vpx")]
 const FALLBACK_MAX_DATAGRAM_SIZE: usize = 1200;
@@ -632,18 +691,27 @@ fn spawn_decode_worker(track_key: String, sink: KeyframeSink) -> DecodeWorker {
                 _ = worker_shutdown.notified() => break,
                 msg = rx.recv() => {
                     let Some(frame) = msg else { break };
-                    if frame.encoded.is_keyframe {
-                        // A keyframe is a self-contained resync point. Accept it
-                        // even when a slower (reliable) stream path let later
-                        // deltas overtake it and advance last_delivered past it:
-                        // drop anything older and rebase onto the keyframe so it
-                        // and every following frame still decode. This is what
-                        // turns a loss-delayed keyframe from a permanent stall
-                        // (the keyframe-request death spiral) into a recovery.
-                        reorder.retain(|&fid, _| fid > frame.frame_id);
-                        last_delivered = frame.frame_id.checked_sub(1);
-                    } else if last_delivered.is_some_and(|last| frame.frame_id <= last) {
-                        continue; // older than something already delivered: loss.
+                    match admit_reordered_frame(last_delivered, frame.frame_id, frame.encoded.is_keyframe) {
+                        ReorderAdmission::Accept => {}
+                        ReorderAdmission::Resync => {
+                            // A keyframe is a self-contained resync point. Accept it
+                            // even when a slower (reliable) stream path let later
+                            // deltas overtake it and advance last_delivered past it:
+                            // drop anything older and rebase onto the keyframe so it
+                            // and every following frame still decode. This is what
+                            // turns a loss-delayed keyframe from a permanent stall
+                            // (the keyframe-request death spiral) into a recovery.
+                            reorder.retain(|&fid, _| fid > frame.frame_id);
+                            last_delivered = frame.frame_id.checked_sub(1);
+                        }
+                        ReorderAdmission::Renumber => {
+                            // The frame ids wrapped (or the publisher restarted):
+                            // everything held is from before, and plain ordering
+                            // would call every frame from now on stale.
+                            reorder.clear();
+                            last_delivered = frame.frame_id.checked_sub(1);
+                        }
+                        ReorderAdmission::Stale => continue, // older than something already delivered: loss.
                     }
                     reorder.insert(frame.frame_id, (Instant::now(), frame));
                     drain_reorder(&track_key, &sink, &worker_duk, &mut keyframe_failures, &mut reorder, &mut last_delivered, false).await;
@@ -3823,7 +3891,13 @@ fn stream_frame_is_newest(track_key: &str, frame_id: u64) -> bool {
         Err(_) => return true,
     };
     match state.remote_track_stream_high_water.get(track_key) {
-        Some(&high_water) if frame_id <= high_water => false,
+        // A frame id far below the mark is a new numbering (a wrap or a
+        // restarted publisher), not a stale keyframe: take it as the new mark.
+        Some(&high_water)
+            if frame_id <= high_water && !frame_id_renumbered(high_water, frame_id) =>
+        {
+            false
+        }
         _ => {
             state
                 .remote_track_stream_high_water
@@ -5164,6 +5238,55 @@ mod tests {
         if let Ok(mut state) = video_dispatch_state().lock() {
             state.remote_track_stream_high_water.remove(&track_key);
         }
+    }
+
+    #[test]
+    fn stream_keyframe_after_a_frame_id_wrap_is_accepted() {
+        // The browser publisher's frame ids are its 16-bit packet sequence: a
+        // keyframe after the wrap has a small id below the high-water mark.
+        let track_key = make_track_key("stream:wrap-test:screen", "screen");
+        assert!(stream_frame_is_newest(&track_key, 65_400));
+        assert!(
+            stream_frame_is_newest(&track_key, 120),
+            "a keyframe after the 16-bit wrap is a new numbering, not a stale keyframe"
+        );
+        assert!(
+            !stream_frame_is_newest(&track_key, 100),
+            "and the mark follows it: an older keyframe of the new numbering is still culled"
+        );
+        assert!(stream_frame_is_newest(&track_key, 300));
+        if let Ok(mut state) = video_dispatch_state().lock() {
+            state.remote_track_stream_high_water.remove(&track_key);
+        }
+    }
+
+    #[test]
+    fn reorder_admission_keeps_order_and_survives_a_wrap() {
+        use ReorderAdmission::*;
+        // Nothing delivered yet: anything goes.
+        assert_eq!(admit_reordered_frame(None, 7, false), Accept);
+        assert_eq!(admit_reordered_frame(None, 7, true), Resync);
+        // Ordinary flow, late frames and loss.
+        assert_eq!(admit_reordered_frame(Some(100), 104, false), Accept);
+        assert_eq!(admit_reordered_frame(Some(100), 100, false), Stale);
+        assert_eq!(admit_reordered_frame(Some(100), 90, false), Stale);
+        // A loss-delayed keyframe still resyncs (the existing recovery).
+        assert_eq!(admit_reordered_frame(Some(100), 90, true), Resync);
+        // The 16-bit wrap of a browser publisher: the next delta and the next
+        // keyframe both start the new numbering instead of being dropped.
+        assert_eq!(admit_reordered_frame(Some(65_530), 3, false), Renumber);
+        assert_eq!(admit_reordered_frame(Some(65_530), 3, true), Renumber);
+        // A native publisher's u64 ids that restarted from zero.
+        assert_eq!(admit_reordered_frame(Some(5_000_000), 0, false), Renumber);
+        // Half the 16-bit range back is the boundary.
+        assert_eq!(
+            admit_reordered_frame(Some(40_000), 40_000 - (1 << 15) + 1, false),
+            Stale
+        );
+        assert_eq!(
+            admit_reordered_frame(Some(40_000), 40_000 - (1 << 15), false),
+            Renumber
+        );
     }
 
     #[tokio::test]

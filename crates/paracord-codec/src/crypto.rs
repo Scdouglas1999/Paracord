@@ -335,7 +335,34 @@ impl Default for FrameEncryptor {
 pub struct FrameDecryptor {
     ring: KeyRing,
     replay: HashMap<(u32, u8), ReplayWindow>,
+    /// Consecutive packets of a `(ssrc, epoch)` that did not open; paces the
+    /// rollover-counter search (see [`ROC_SEARCH_LIMIT`]).
+    failures_since_open: HashMap<(u32, u8), u32>,
 }
+
+/// How many rollover counters a decryptor tries ahead of what it can estimate,
+/// when a stream's packets stop opening.
+///
+/// A sender's ROC counts the wraps of its 16-bit sequence since its key began,
+/// and a receiver estimates it from the last packet it opened, which only works
+/// within one wrap of that packet. Two receivers lose track (WP-G23):
+/// - one that starts on a key mid-way, with nothing to estimate from: a viewer
+///   arriving at a stream (a viewer's arrival rotates nothing; it is sent the
+///   current key), or anyone the relay switches to a simulcast layer whose SSRC
+///   it has not seen under this key. Both engines assumed 0.
+/// - one whose last packet of an SSRC is more than a wrap old: the relay moved
+///   it to another layer for a while and back (side by side to theater).
+///
+/// Either way every packet failed once the key was a few minutes old, and
+/// nothing recovered until the key rotated: the picture froze for good. AES-GCM
+/// authenticates the right counter and no wrong one, so trying the next ones is
+/// safe; 1024 wraps is days of a stream on one key.
+const ROC_SEARCH_LIMIT: u32 = 1024;
+/// A stream with no opened packet yet is searched on its first failure, one
+/// that has opened before after this many failures in a row (one bad packet is
+/// not a lost counter), and either again every this-many-th failure while it
+/// stays closed, so a key that is wrong, not old, costs a small, bounded amount.
+const ROC_SEARCH_EVERY: u32 = 64;
 
 // Half the sequence space, matching the ROC estimator's reordering horizon.
 // A circular bitmap uses 4 KiB per active stream and admits reordered packets
@@ -389,6 +416,7 @@ impl FrameDecryptor {
         Self {
             ring: KeyRing::new(),
             replay: HashMap::new(),
+            failures_since_open: HashMap::new(),
         }
     }
 
@@ -398,6 +426,8 @@ impl FrameDecryptor {
             self.replay.retain(|&(stream, key_epoch), _| {
                 key_epoch != epoch || (stream != 0 && self.ring.keys.contains_key(&(stream, epoch)))
             });
+            self.failures_since_open
+                .retain(|&(_, key_epoch), _| key_epoch != epoch);
         }
     }
 
@@ -405,6 +435,7 @@ impl FrameDecryptor {
     pub fn set_peer_key(&mut self, ssrc: u32, epoch: u8, key: &[u8; KEY_SIZE]) {
         if self.ring.set(ssrc, epoch, key) {
             self.replay.remove(&(ssrc, epoch));
+            self.failures_since_open.remove(&(ssrc, epoch));
         }
     }
 
@@ -412,12 +443,15 @@ impl FrameDecryptor {
     pub fn remove_key(&mut self, epoch: u8) {
         self.ring.remove(0, epoch);
         self.replay.retain(|(_, key_epoch), _| *key_epoch != epoch);
+        self.failures_since_open
+            .retain(|&(_, key_epoch), _| key_epoch != epoch);
     }
 
     /// Remove the key for a specific sender SSRC + epoch.
     pub fn remove_peer_key(&mut self, ssrc: u32, epoch: u8) {
         self.ring.remove(ssrc, epoch);
         self.replay.remove(&(ssrc, epoch));
+        self.failures_since_open.remove(&(ssrc, epoch));
     }
 
     /// Decrypt a media frame payload.
@@ -447,11 +481,49 @@ impl FrameDecryptor {
         }
 
         // Estimate the ROC for this sequence relative to the highest index seen.
-        let roc = match self.ring.roc_state.get(&(ssrc, epoch)) {
-            Some(&(ref_roc, ref_seq)) => estimate_roc(ref_roc, ref_seq, sequence),
+        let anchored = self.ring.roc_state.get(&(ssrc, epoch)).copied();
+        let estimated = match anchored {
+            Some((ref_roc, ref_seq)) => estimate_roc(ref_roc, ref_seq, sequence),
             None => 0,
         };
 
+        // A stale ROC can make a fresh packet look replayed. Authenticate first,
+        // then apply the replay window to the verified full packet index below.
+        let cipher = self.ring.cipher(ssrc, epoch)?;
+        let open = |roc: u32| {
+            let nonce_bytes = build_nonce(ssrc, epoch, roc, sequence);
+            cipher.decrypt(
+                Nonce::from_slice(&nonce_bytes),
+                aes_gcm::aead::Payload {
+                    msg: ciphertext,
+                    aad: header_bytes,
+                },
+            )
+        };
+
+        let (roc, plaintext) = match open(estimated) {
+            Ok(plaintext) => (estimated, plaintext),
+            // The sender's counter may be past what the estimate covers (see
+            // ROC_SEARCH_LIMIT): search ahead of it, paced.
+            Err(_) => {
+                let failures = self.failures_since_open.entry((ssrc, epoch)).or_insert(0);
+                *failures = failures.saturating_add(1);
+                let (search, first) = match anchored {
+                    None => ((*failures - 1).is_multiple_of(ROC_SEARCH_EVERY), 1),
+                    // The estimate authenticates only one candidate, not all
+                    // three. Include the reference ROC and its successor.
+                    Some((ref_roc, _)) => (failures.is_multiple_of(ROC_SEARCH_EVERY), ref_roc),
+                };
+                let found = if search {
+                    (first..=first.saturating_add(ROC_SEARCH_LIMIT - 1))
+                        .filter(|&roc| roc != estimated)
+                        .find_map(|roc| open(roc).ok().map(|plaintext| (roc, plaintext)))
+                } else {
+                    None
+                };
+                found.ok_or(CryptoError::DecryptionFailed)?
+            }
+        };
         let index = ((roc as u64) << 16) | sequence as u64;
         if self
             .replay
@@ -460,21 +532,7 @@ impl FrameDecryptor {
         {
             return Err(CryptoError::ReplayDetected);
         }
-
-        let cipher = self.ring.cipher(ssrc, epoch)?;
-
-        let nonce_bytes = build_nonce(ssrc, epoch, roc, sequence);
-        let nonce = Nonce::from_slice(&nonce_bytes);
-
-        let plaintext = cipher
-            .decrypt(
-                nonce,
-                aes_gcm::aead::Payload {
-                    msg: ciphertext,
-                    aad: header_bytes,
-                },
-            )
-            .map_err(|_| CryptoError::DecryptionFailed)?;
+        self.failures_since_open.remove(&(ssrc, epoch));
 
         // Only advance the reference index on a successful (authenticated)
         // decrypt, and only when this packet's index is newer than the current
@@ -960,6 +1018,163 @@ mod tests {
         assert_eq!(estimate_roc(0, 65534, 0), 1);
         // But at ROC 0 we never estimate below 0.
         assert_eq!(estimate_roc(0, 0, 65535), 0);
+    }
+
+    /// Encrypt `count` packets from `start`, wrapping the 16-bit sequence.
+    fn sealed_run(
+        encryptor: &mut FrameEncryptor,
+        ssrc: u32,
+        epoch: u8,
+        start: u32,
+        count: u32,
+    ) -> Vec<(u16, Vec<u8>)> {
+        let header = test_header();
+        (start..start + count)
+            .map(|n| {
+                let seq = (n % 65_536) as u16;
+                let ct = encryptor
+                    .encrypt(&header, ssrc, epoch, seq, &n.to_be_bytes())
+                    .unwrap();
+                (seq, ct)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_receiver_that_joins_after_the_senders_sequence_wrapped_still_decrypts() {
+        // The sender has used this key for two and a half wraps (ROC 2) when a
+        // viewer is handed it, or when the relay switches a receiver to a layer
+        // whose SSRC it has not seen under this key. It has no reference.
+        let key = test_key();
+        let header = test_header();
+        let (ssrc, epoch) = (0x5C12_EE01, 3);
+        let mut encryptor = FrameEncryptor::new();
+        encryptor.set_key(epoch, &key);
+        let earlier = sealed_run(&mut encryptor, ssrc, epoch, 0, 65_536 * 2 + 30_000);
+        drop(earlier);
+        let later = sealed_run(&mut encryptor, ssrc, epoch, 65_536 * 2 + 30_000, 40_000);
+
+        let mut late_viewer = FrameDecryptor::new();
+        late_viewer.set_key(epoch, &key);
+        // Every packet opens, across the next wrap too (ROC 2 → 3).
+        for (n, (seq, ct)) in later.iter().enumerate() {
+            let expected = (65_536 * 2 + 30_000 + n as u32).to_be_bytes();
+            assert_eq!(
+                late_viewer.decrypt(&header, ssrc, epoch, *seq, ct).unwrap(),
+                expected,
+                "packet {n}"
+            );
+        }
+        // And the replay window holds: the first packet again is refused.
+        let (seq, ct) = &later[0];
+        assert!(late_viewer.decrypt(&header, ssrc, epoch, *seq, ct).is_err());
+    }
+
+    #[test]
+    fn a_receiver_whose_last_packet_of_an_ssrc_is_wraps_old_finds_it_again() {
+        // The relay had this receiver on another layer for a few wraps (side by
+        // side), then moves it back to this SSRC (theater): its reference for
+        // the SSRC says ROC 0, the sender is at ROC 3.
+        let key = test_key();
+        let header = test_header();
+        let (ssrc, epoch) = (0x3512_0317, 1);
+        let mut encryptor = FrameEncryptor::new();
+        encryptor.set_key(epoch, &key);
+        let first = sealed_run(&mut encryptor, ssrc, epoch, 0, 10);
+        let _gap = sealed_run(&mut encryptor, ssrc, epoch, 10, 65_536 * 3);
+        let back = sealed_run(&mut encryptor, ssrc, epoch, 10 + 65_536 * 3, 200);
+
+        let mut receiver = FrameDecryptor::new();
+        receiver.set_key(epoch, &key);
+        for (seq, ct) in &first {
+            receiver.decrypt(&header, ssrc, epoch, *seq, ct).unwrap();
+        }
+        // The first packets back fail (one bad packet is not a lost counter);
+        // the 64th in a row searches ahead, and from then on every one opens.
+        let opened: Vec<bool> = back
+            .iter()
+            .map(|(seq, ct)| receiver.decrypt(&header, ssrc, epoch, *seq, ct).is_ok())
+            .collect();
+        let every = ROC_SEARCH_EVERY as usize;
+        assert!(opened[..every - 1].iter().all(|ok| !ok));
+        assert!(opened[every - 1..].iter().all(|ok| *ok));
+    }
+
+    #[test]
+    fn stale_roc_recovery_covers_adjacent_counters_and_old_replay_slots() {
+        let header = test_header();
+        let (ssrc, epoch) = (0x3512_0318, 1);
+        for (anchor_roc, anchor_seq, resumed_roc, resumed_seq) in [
+            (0, 1000, 1, 2000),   // one missed wrap
+            (1, 1000, 1, 50000),  // estimator chooses the previous ROC
+            (0, 20000, 3, 10000), // fresh packets overlap old replay slots
+        ] {
+            let mut sender = FrameEncryptor::new();
+            let mut receiver = FrameDecryptor::new();
+            sender.set_key(epoch, &test_key());
+            receiver.set_key(epoch, &test_key());
+            if resumed_seq < anchor_seq {
+                for seq in resumed_seq..resumed_seq + 70 {
+                    let ct = sender.encrypt(&header, ssrc, epoch, seq, &[1]).unwrap();
+                    receiver.decrypt(&header, ssrc, epoch, seq, &ct).unwrap();
+                }
+            }
+            sender
+                .ring
+                .roc_state
+                .insert((ssrc, epoch), (anchor_roc, anchor_seq - 1));
+            let anchor_ct = sender
+                .encrypt(&header, ssrc, epoch, anchor_seq, &[1])
+                .unwrap();
+            receiver
+                .decrypt(&header, ssrc, epoch, anchor_seq, &anchor_ct)
+                .unwrap();
+            sender
+                .ring
+                .roc_state
+                .insert((ssrc, epoch), (resumed_roc, resumed_seq - 1));
+            let mut last_ct = Vec::new();
+            for offset in 0..70 {
+                let seq = resumed_seq + offset;
+                last_ct = sender.encrypt(&header, ssrc, epoch, seq, &[2]).unwrap();
+                let opened = receiver.decrypt(&header, ssrc, epoch, seq, &last_ct);
+                assert_eq!(
+                    opened.is_ok(),
+                    offset >= 63,
+                    "anchor ROC {anchor_roc}, resumed ROC {resumed_roc}, seq {seq}"
+                );
+            }
+            assert!(matches!(
+                receiver.decrypt(&header, ssrc, epoch, resumed_seq + 69, &last_ct),
+                Err(CryptoError::ReplayDetected)
+            ));
+            assert!(receiver
+                .decrypt(&header, ssrc, epoch, anchor_seq, &anchor_ct)
+                .is_err());
+        }
+    }
+
+    #[test]
+    fn a_wrong_key_is_searched_only_now_and_then() {
+        // Packets under a key this receiver does not hold the right copy of never
+        // open; the counter search runs on the first and then every
+        // ROC_SEARCH_EVERY-th, and none of them is accepted.
+        let header = test_header();
+        let (ssrc, epoch) = (0x0BAD_C0DE, 1);
+        let mut encryptor = FrameEncryptor::new();
+        encryptor.set_key(epoch, &test_key());
+        let mut decryptor = FrameDecryptor::new();
+        decryptor.set_key(epoch, &[0x42; KEY_SIZE]);
+        for (seq, ct) in sealed_run(&mut encryptor, ssrc, epoch, 0, 200) {
+            assert!(decryptor.decrypt(&header, ssrc, epoch, seq, &ct).is_err());
+        }
+        assert_eq!(
+            decryptor.failures_since_open.get(&(ssrc, epoch)),
+            Some(&200)
+        );
+        // A new key for the stream starts the pace over.
+        decryptor.set_key(epoch, &test_key());
+        assert!(decryptor.failures_since_open.is_empty());
     }
 
     #[test]

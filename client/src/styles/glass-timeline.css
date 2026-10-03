@@ -580,20 +580,24 @@ button.glass-msg__name:hover {
   box-shadow: var(--sh-content);
 }
 
+/* The dots tick in 60ms steps on one grid (0.48s rises and falls in 8 steps;
+   the delays are whole steps), so the three change on the same frames: about 16
+   pictures a second instead of 60. Every animated frame costs the Linux desktop
+   a whole-window copy (WP-G23, as the waveform in glass.css). */
 .glass-tl-typing > span {
   width: 6px;
   height: 6px;
   border-radius: 50%;
   background-color: color-mix(in srgb, var(--ink-1) 80%, transparent);
-  animation: glass-tl-dot 1.2s ease-in-out infinite;
+  animation: glass-tl-dot 1.2s steps(8, jump-none) infinite;
 }
 
 .glass-tl-typing > span:nth-child(2) {
-  animation-delay: 0.15s;
+  animation-delay: 0.12s;
 }
 
 .glass-tl-typing > span:nth-child(3) {
-  animation-delay: 0.3s;
+  animation-delay: 0.24s;
 }
 
 @keyframes glass-tl-dot {
