@@ -532,6 +532,10 @@
   /* A fine, colorless tooth over the made cover, so its gradients never band. */
   --cover-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .55 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E");
   --cover-grain-opacity: 0.09;
+  /* Static, cached grain rather than animated noise or a full-screen filter.
+     A few intensity levels break up dark gradient contours without making
+     the material visibly grainy. Keep the texture behind content, at a few levels of opacity. */
+  --surface-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .025 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E");
 
   /* ---- §1.1 Surfaces — the Lantern names, mapped onto Glass --------------- */
   /* The street: app base behind everything. */
@@ -853,6 +857,9 @@
   --glass-n-street: #000000;
   --glass-n-well: #000000;
   --glass-n-sel: #33363a;
+
+  /* Texture must not soften high-contrast edges or lift its black ground. */
+  --surface-grain: none;
 
   /* Two steps only: full ink, and one secondary. */
   --ink-1: #ffffff;

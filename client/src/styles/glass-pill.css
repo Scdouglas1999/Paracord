@@ -19,8 +19,9 @@
 
 .glass-pill {
   --pill-ring: var(--pill);
-  /* A faint amber glow beneath the capsule (§5), and a hairline round it. */
-  --pill-glow: color-mix(in srgb, var(--amber-tint) 80%, transparent);
+  /* A warm rim and a close, centered halo locate the light on the capsule. */
+  --pill-glow: color-mix(in srgb, var(--amber-tint) 70%, transparent);
+  --pill-halo-edge: color-mix(in srgb, var(--amber) 16%, transparent);
   --pill-edge: color-mix(in srgb, var(--glass-hair) 50%, transparent);
   --pill-drop: color-mix(in srgb, var(--pill) 45%, transparent);
   --pill-radius: 26px;
@@ -81,12 +82,14 @@
   box-shadow: inset 0 0 0 1px var(--pill-edge);
 }
 
-/* The soft shadow and the faint amber glow beneath (§5) are their own layer:
-   during the move it only scales, so a 50px blur is never repainted per frame. */
+/* The warm light has no vertical offset. The small dark shadow only supplies
+   depth; neither layer paints a broad pool below the control. During a move
+   this layer scales with the capsule rather than repainting its blur. */
 .glass-pill__glow {
   box-shadow:
-    0 18px 50px var(--pill-drop),
-    0 12px 44px var(--pill-glow);
+    0 0 0 1px var(--pill-halo-edge),
+    0 0 16px 1px var(--pill-glow),
+    0 3px 10px var(--pill-drop);
 }
 
 /* The phone's pill is a little more see-through, over the stream (screens/07). */
@@ -340,7 +343,7 @@
   color: var(--ink-1);
   /* Until a frame arrives: the room's tint. */
   background-color: var(--bub);
-  background-image: radial-gradient(70% 90% at 62% 60%, var(--glow), transparent 75%);
+  /* A quiet placeholder until there is an actual frame to light it. */
   box-shadow: 0 0 0 1px var(--pill-edge);
   cursor: pointer;
 }

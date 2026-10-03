@@ -124,6 +124,7 @@
 .glass-frame[data-layout='phone'] .glass-frame__conversation:has(.glass-conversation) {
   border-radius: 0;
   background-color: transparent;
+  background-image: none;
   box-shadow: none;
   outline: none;
 }

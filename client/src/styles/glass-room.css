@@ -28,6 +28,16 @@
   background-color: var(--street);
 }
 
+/* Dither after the tiny ambient canvases have been scaled to screen size.
+   Noise in the 32x18 source would scale into blotches instead of fine grain. */
+.glass-room-backdrop::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: var(--surface-grain);
+  pointer-events: none;
+}
+
 .glass-room-backdrop__layer {
   position: absolute;
   inset: 0;
@@ -51,6 +61,7 @@
 /* Linux native video under the webview: the backdrop goes transparent with
    the ancestor chain (layout.css) and its canvases step aside, so the hole the
    video shows through is not covered. */
-html[data-native-underlay] .glass-room-backdrop__layer {
+html[data-native-underlay] .glass-room-backdrop__layer,
+html[data-native-underlay] .glass-room-backdrop::after {
   visibility: hidden;
 }

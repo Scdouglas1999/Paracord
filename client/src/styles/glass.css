@@ -114,14 +114,12 @@
   background-color: var(--solid);
 }
 
-/* A faint radial of the room in the pane's far corner. */
-.glass-pane--glow::after {
-  content: '';
-  position: absolute;
-  inset: -1px;
-  border-radius: inherit;
-  pointer-events: none;
-  background: radial-gradient(420px 340px at 100% 40%, var(--glow), transparent 70%);
+/* The panel is one quiet material, not a spotlight behind its contents.
+   Its rim is supplied by --sh-pane. A static, fine grain breaks up 8-bit
+   gradient steps from ambient light showing through the translucent surface. */
+.glass-pane--glow {
+  /* A background layer keeps the grain off text, avatars and shared media. */
+  background-image: var(--surface-grain);
 }
 
 /* Reduced transparency: panes become fully opaque. The switch is written by the

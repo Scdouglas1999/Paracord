@@ -12,6 +12,14 @@ Home keeps a named list of joined servers even without activity and offers
 Join, Create, and Friends actions when empty. On phones, Home opens its page;
 the messages index continues to open the places list.
 
+Lighting refinement (2026-10-03, owner feedback): panes keep their slate tint
+and fine edge reflection, without the repeated right-side radial spotlight.
+Static monochrome grain on the panels and ambient backdrop softens dark
+8-bit gradient contours; high contrast omits the texture. The call pill has
+a close, centered amber halo and rim instead of a displaced pool of light.
+These refinements supersede the decorative pane glow and below-pill halo
+in the original reference renders.
+
 Reference material (in `output/design-reference/glass/`, gitignored):
 
 | File | Shows |
