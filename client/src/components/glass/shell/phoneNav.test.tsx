@@ -43,9 +43,9 @@ beforeEach(() => {
 });
 
 describe('the phone routes', () => {
-  it('knows which pages are the list itself: Home and the messages index', () => {
-    expect(isPlacesRoute('/app')).toBe(true);
-    expect(isPlacesRoute('/app/')).toBe(true);
+  it('knows which pages are the list itself: the messages index', () => {
+    expect(isPlacesRoute('/app')).toBe(false);
+    expect(isPlacesRoute('/app/')).toBe(false);
     expect(isPlacesRoute('/app/dms')).toBe(true);
     expect(isPlacesRoute('/app/dms/')).toBe(true);
     expect(isPlacesRoute('/app/dms/123')).toBe(false);
@@ -76,8 +76,8 @@ describe('usePhoneNavigation', () => {
     expect(usePhoneNavStore.getState().screen).toBe('conversation');
   });
 
-  it('opens Home and the messages index on places: they would only draw the list again', () => {
-    renderAt('/app');
+  it('opens the messages index on places', () => {
+    renderAt('/app/dms');
     expect(usePhoneNavStore.getState().screen).toBe('places');
   });
 
@@ -88,12 +88,12 @@ describe('usePhoneNavigation', () => {
 
   it('forgets its screen when the window stops being a phone', () => {
     const view = renderAt('/app');
-    expect(usePhoneNavStore.getState().screen).toBe('places');
+    expect(usePhoneNavStore.getState().screen).toBe('conversation');
     view.rerenderEnabled(false);
     expect(usePhoneNavStore.getState().screen).toBeNull();
   });
 
-  it('shows places when you arrive on Home or the messages index from somewhere else', () => {
+  it('shows places for the messages index and the welcome page for Home', () => {
     const view = renderAt('/app/guilds/g1/channels/c1');
     expect(usePhoneNavStore.getState().screen).toBe('conversation');
 
@@ -102,7 +102,7 @@ describe('usePhoneNavigation', () => {
 
     act(() => usePhoneNavStore.getState().showConversation());
     act(() => view.getByRole('link', { name: 'home' }).click());
-    expect(usePhoneNavStore.getState().screen).toBe('places');
+    expect(usePhoneNavStore.getState().screen).toBe('conversation');
   });
 
   it('leaves the screen alone for any other navigation: the list decides what a tap on a row means', () => {
@@ -135,7 +135,7 @@ describe('usePhoneNavigation', () => {
   it('is reset with the session', async () => {
     const { resetSessionStores } = await import('../../../stores/sessionReset');
     renderAt('/app');
-    expect(usePhoneNavStore.getState().screen).toBe('places');
+    expect(usePhoneNavStore.getState().screen).toBe('conversation');
     await resetSessionStores();
     expect(usePhoneNavStore.getState().screen).toBeNull();
   });

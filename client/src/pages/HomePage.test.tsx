@@ -95,7 +95,7 @@ const unified = vi.hoisted(() => ({
   needsYouOverflowCount: 0,
 }));
 const stores = vi.hoisted(() => ({
-  guilds: [] as Array<{ id: string; key: string; scope: { serverId: string; userId: string } }>,
+  guilds: [] as Array<{ name?: string; description?: string; id: string; key: string; scope: { serverId: string; userId: string } }>,
   channelErrors: {} as Record<string, string>,
   /** Whether the stores already hold this account's rooms and members. */
   loaded: true,
@@ -105,6 +105,7 @@ const stores = vi.hoisted(() => ({
   acceptFriend: vi.fn(),
   joinChannel: vi.fn(),
   activateGuild: vi.fn(),
+  guildLandingPath: vi.fn(async () => "/app/guilds/guild-1/channels/text-1"),
   activateChannel: vi.fn(),
 }));
 
@@ -123,7 +124,7 @@ vi.mock('../hooks/useMutedGuilds', () => ({ useMutedGuilds: () => ({ mutedGuildK
 vi.mock('../hooks/useAvailableAccountScopes', () => ({ useAvailableAccountScopes: () => [] }));
 vi.mock('../hooks/useGuilds', () => ({ useAvailableGuilds: () => stores.guilds }));
 vi.mock('../hooks/useVoice', () => ({ useVoice: () => ({ joinChannel: stores.joinChannel }) }));
-vi.mock('../lib/guildNavigation', () => ({ activateGuild: (...a: unknown[]) => stores.activateGuild(...a) }));
+vi.mock('../lib/guildNavigation', () => ({ guildLandingPath: stores.guildLandingPath, activateGuild: (...a: unknown[]) => stores.activateGuild(...a) }));
 vi.mock('../lib/channelNavigation', () => ({ activateChannel: (...a: unknown[]) => stores.activateChannel(...a) }));
 vi.mock('../lib/operationContext', () => ({
   captureScopedOperation: () => ({
@@ -133,7 +134,7 @@ vi.mock('../lib/operationContext', () => ({
   }),
 }));
 vi.mock('../components/guild/CreateGuildModal', () => ({
-  CreateGuildModal: () => <div>Add a server dialog</div>,
+  CreateGuildModal: ({ initialTab }: { initialTab: string }) => <div>{initialTab} server dialog</div>,
 }));
 vi.mock('../stores/channelStore', () => {
   const state = {
@@ -201,6 +202,7 @@ function tree() {
   return (
     <MemoryRouter initialEntries={['/app']}>
       <Routes>
+        <Route path="/app/friends" element={<div>Friends route</div>} />
         <Route path="/app" element={<HomePage />} />
         <Route path="/app/guilds/:guildId" element={<div>Server route</div>} />
         <Route path="/app/guilds/:guildId/channels/:channelId" element={<div>Room route</div>} />
@@ -312,22 +314,28 @@ describe('Home, what needs you, who is here and what is live', () => {
     expect(await screen.findByText('Room route')).toBeInTheDocument();
   });
 
-  it('draws no card for a server: the places panel already lists them', () => {
-    lights.buildings = [litBuilding(), quietBuilding()];
+  it('keeps quiet servers visible and opens their landing channel', async () => {
+    stores.guilds = [{ id: 'guild-1', key: 'k1', scope: SCOPE, name: 'Kestrel Robotics' }];
     renderHome();
-    expect(screen.queryByRole('region', { name: 'Your servers' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('article', { name: 'Kestrel Robotics' })).not.toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Your servers' })).toBeInTheDocument();
+    expect(screen.getByText('Make yourself at home.')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Open Kestrel Robotics' }));
+    expect(stores.guildLandingPath).toHaveBeenCalledWith(stores.guilds[0]);
+    expect(await screen.findByText('Room route')).toBeInTheDocument();
   });
 
-  it('offers a way in only when you are in no server, and opens the join-or-create dialog', async () => {
-    const { unmount } = renderHome();
-    await userEvent.click(screen.getByRole('button', { name: 'Add a server' }));
-    expect(screen.getByText('Add a server dialog')).toBeInTheDocument();
-    unmount();
+  it.each([['Join with an invite', 'join'], ['Create a server', 'create']])(
+    'opens the right dialog from %s', async (label, tab) => {
+      renderHome();
+      await userEvent.click(screen.getByRole('button', { name: label }));
+      expect(screen.getByText(`${tab} server dialog`)).toBeInTheDocument();
+    },
+  );
 
-    stores.guilds = [{ id: 'guild-1', key: 'k1', scope: SCOPE }];
+  it('opens Friends from the welcome page', async () => {
     renderHome();
-    expect(screen.queryByRole('button', { name: 'Add a server' })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Find friends' }));
+    expect(screen.getByText('Friends route')).toBeInTheDocument();
   });
 
   it('loads the rooms and people of every server it has not got, once', () => {
@@ -420,9 +428,10 @@ describe('For you and Pick up', () => {
     expect(screen.queryByText(/Nothing new for you/)).not.toBeInTheDocument();
   });
 
-  it('says nothing is waiting only once it knows', () => {
+  it('welcomes new users without stacking empty activity sections', () => {
     renderHome();
-    expect(screen.getByText('Nothing new for you right now.')).toBeInTheDocument();
+    expect(screen.getByText('A place for your people.')).toBeInTheDocument();
+    expect(screen.queryByText('Nothing new for you right now.')).not.toBeInTheDocument();
     expect(screen.queryByText(/No data|It's quiet/)).not.toBeInTheDocument();
   });
 

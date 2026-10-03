@@ -108,7 +108,7 @@ export function HomePlaces({
           onOpen={() => onOpenConversation(entry)}
         />
       ))}
-      {entries.length === 0 && <p className="glass-places__empty">No conversations yet.</p>}
+      {entries.length === 0 && <p className="glass-places__empty">Your direct messages will appear here.</p>}
     </>
   );
 }

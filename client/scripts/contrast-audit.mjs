@@ -7,7 +7,7 @@
  * and the room controller (WP-G8) writes that triplet from whatever is live in
  * the current server. So this script resolves the real tokens, for BOTH
  * themes, and sweeps the room over the two reference tints (spec §2.1), the
- * neutral room, and a hue x saturation x value grid over exactly the clamp box
+ * default room, and a hue x saturation x value grid over exactly the clamp box
  * the room controller enforces (read from `src/lib/room/color.ts`).
  * At every one of those it requires:
  *
@@ -399,7 +399,7 @@ const hsvToRgb = (h, sat, v) => {
    value ROOM_CLAMP.valueMin..valueMax. The edges are read from that file, so
    the audit sweeps exactly what the room can write and the two cannot drift:
    every 15 degrees of hue at the box's low, middle and high saturation and
-   value, plus the neutral room (ROOM_NEUTRAL) and the two reference samples,
+   value, plus the default room (ROOM_DEFAULT) and the two reference samples,
    which must lie inside the box too. */
 const roomColorSource = fs.readFileSync(path.join(path.dirname(tokensPath), '..', 'lib', 'room', 'color.ts'), 'utf8');
 const readRoomNumber = (name) => {
@@ -412,8 +412,8 @@ const CLAMP = {
   valueMin: readRoomNumber('valueMin'),
   valueMax: readRoomNumber('valueMax'),
 };
-const neutralMatch = roomColorSource.match(/ROOM_NEUTRAL: Rgb = \[(\d+), (\d+), (\d+)\]/);
-if (!neutralMatch) throw new Error('[contrast] ROOM_NEUTRAL not found in src/lib/room/color.ts');
+const defaultMatch = roomColorSource.match(/ROOM_DEFAULT: Rgb = \[(\d+), (\d+), (\d+)\]/);
+if (!defaultMatch) throw new Error('[contrast] ROOM_DEFAULT not found in src/lib/room/color.ts');
 const rgbToHsv = (triplet) => {
   const [r, g, b] = triplet.split(',').map((c) => Number(c) / 255);
   const max = Math.max(r, g, b);
@@ -424,7 +424,7 @@ const rgbToHsv = (triplet) => {
 const namedTints = {
   'warm (spec §2.1)': extractBlocks('.glass-tint-warm')['--room-rgb'],
   'cool (spec §2.1)': extractBlocks('.glass-tint-cool')['--room-rgb'],
-  'neutral room': neutralMatch.slice(1, 4).join(', '),
+  'default room': defaultMatch.slice(1, 4).join(', '),
 };
 for (const [name, triplet] of Object.entries(namedTints)) {
   const { s, v } = rgbToHsv(triplet);

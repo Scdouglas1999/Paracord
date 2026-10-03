@@ -372,7 +372,8 @@
    `transparent`).
    ============================================================================= */
 :root {
-  --room-rgb: 222, 109, 35;
+  /* Match ROOM_DEFAULT until actual room content supplies a tint. */
+  --room-rgb: 82, 143, 219;
 }
 
 .glass-tint-warm {
@@ -444,11 +445,11 @@
   --amber-tint: rgba(255, 170, 80, 0.2);
   /* Listen when on: amber on glass. */
   --amber-on: rgba(255, 194, 126, 0.28);
-  /* White means it's for you. Join is the one filled button. */
-  --join: #f4f6f6;
+  /* White means it's for you. Soft blue gives the primary action a quiet accent. */
+  --join: #c7daed;
   --join-ink: #101314;
-  --join-hover: #ffffff;
-  --join-press: #e8e3d8;
+  --join-hover: #d9e7f5;
+  --join-press: #b8cee4;
   /* Chips: plain unread count, inline event, reactions biting media. */
   --chip-count: #3a3b40;
   --chip-event: #45464b;

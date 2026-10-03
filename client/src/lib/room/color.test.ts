@@ -7,7 +7,7 @@ import {
   hsvToRgb,
   insideClampBox,
   ROOM_CLAMP,
-  ROOM_NEUTRAL,
+  ROOM_DEFAULT,
   roomColorFromAverage,
   rgbToHsv,
   type Rgb,
@@ -21,11 +21,11 @@ describe('room color', () => {
     }
   });
 
-  it('keeps both reference samples and the neutral room inside the clamp box', () => {
+  it('keeps both reference samples and the default room inside the clamp box', () => {
     expect(insideClampBox([222, 109, 35])).toBe(true);
     expect(insideClampBox([80, 158, 255])).toBe(true);
-    expect(insideClampBox(ROOM_NEUTRAL)).toBe(true);
-    expect(rgbToHsv(ROOM_NEUTRAL).s).toBe(0);
+    expect(insideClampBox(ROOM_DEFAULT)).toBe(true);
+    expect(rgbToHsv(ROOM_DEFAULT).s).toBeLessThan(0.7);
   });
 
   it('never lets any frame average out of the box', () => {

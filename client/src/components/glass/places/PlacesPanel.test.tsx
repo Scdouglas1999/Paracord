@@ -617,7 +617,7 @@ describe('PlacesPanel: Home', () => {
 
   it('says there is nothing yet, rather than showing an empty list', () => {
     renderPanel('/app');
-    expect(screen.getByText('No conversations yet.')).toBeInTheDocument();
+    expect(screen.getByText('Your direct messages will appear here.')).toBeInTheDocument();
   });
 
   it('marks the open conversation', () => {

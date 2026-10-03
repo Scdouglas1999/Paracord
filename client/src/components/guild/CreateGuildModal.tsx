@@ -41,6 +41,7 @@ interface GuildTemplate {
 }
 
 interface CreateGuildModalProps {
+  initialTab?: Tab;
   onClose: () => void;
 }
 
@@ -52,11 +53,11 @@ const TABS: { value: Tab; label: string }[] = [
   { value: 'template', label: 'Template' },
 ];
 
-export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
+export function CreateGuildModal({ onClose, initialTab = 'create' }: CreateGuildModalProps) {
   const guildScope = useCurrentAccountScope();
   const user = useCurrentUser();
   const navigate = useNavigate();
-  const [tab, setTab] = useState<Tab>('create');
+  const [tab, setTab] = useState<Tab>(initialTab);
   const [serverName, setServerName] = useState(`${user?.username || 'My'}'s server`);
   const [inviteCode, setInviteCode] = useState('');
   const [iconPreview, setIconPreview] = useState<string | null>(null);

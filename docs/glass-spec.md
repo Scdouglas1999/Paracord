@@ -4,6 +4,14 @@ This is the contract for the "Glass" redesign, approved on 2026-09-29 after
 fourteen rounds of design review. Where this document and the reference
 renders disagree, the renders win on look and this document wins on behavior.
 
+Default appearance update (2026-10-03, owner feedback): quiet pages use a muted
+slate blue room tint (`82, 143, 219`) and soft blue primary actions (`#c7daed`,
+hover `#d9e7f5`, press `#b8cee4`). This supersedes the amber fallback and cream
+primary controls below; the warm/cool content-derived reference samples remain.
+Home keeps a named list of joined servers even without activity and offers
+Join, Create, and Friends actions when empty. On phones, Home opens its page;
+the messages index continues to open the places list.
+
 Reference material (in `output/design-reference/glass/`, gitignored):
 
 | File | Shows |

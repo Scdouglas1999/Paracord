@@ -1,10 +1,12 @@
 import { useFreshRelationships } from '../hooks/useFreshRelationships';
 import { useCallback, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
-import { Plus } from 'lucide-react';
+import { ArrowRight, Plus } from 'lucide-react';
 
 import { Button } from '../components/ui';
-import { EmptyState } from '../components/ui/Feedback';
+import { PageRow } from '../components/home/PageRow';
+import { guildLandingPath } from '../lib/guildNavigation';
+import type { ScopedGuild } from '../lib/guildScope';
 import { GlassPage, PageBar, PageScroll, PageSection } from '../components/home/GlassPage';
 import { HomeAroundNow } from '../components/home/HomeAroundNow';
 import { HomeComingUp } from '../components/home/HomeComingUp';
@@ -72,7 +74,7 @@ export function HomePage() {
   const fetchChannels = useChannelStore((state) => state.fetchChannels);
   const acceptFriend = useRelationshipStore((state) => state.acceptFriend);
 
-  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [modalTab, setModalTab] = useState<'create' | 'join' | null>(null);
 
   useFreshRelationships();
 
@@ -145,6 +147,14 @@ export function HomePage() {
   // ---- actions ----------------------------------------------------------
   const { joinChannel } = useVoice();
 
+  const openGuild = async (guild: ScopedGuild) => {
+    try {
+      navigate(await guildLandingPath(guild));
+    } catch (error) {
+      toast.error(`Could not open ${guild.name}: ${extractApiError(error)}`);
+    }
+  };
+
   const openRoom = useCallback(
     (building: BuildingLight, room: RoomLight) => {
       try {
@@ -210,41 +220,66 @@ export function HomePage() {
   const line =
     activityStatus === 'loading' && waiting === 0
       ? 'Checking for new messages…'
+      : activityStatus === 'error' && waiting === 0
+        ? 'Activity is temporarily unavailable'
       : [
-          waiting > 0 ? `${waiting} for you` : 'Nothing needs you',
+          waiting > 0 ? `${waiting} for you` : liveRooms.length > 0 ? 'Nothing needs you' : 'Your people, in one place',
           liveRooms.length > 0 ? `${liveRooms.length} live` : null,
         ]
           .filter(Boolean)
           .join(', ');
 
   const aroundShown = people.length > 0 || lightsOn > 0;
+  const quietHome = activityStatus === 'ready' && waiting === 0 && liveRooms.length === 0
+    && !aroundShown && events.length === 0 && pickUp.length === 0;
 
   return (
     <GlassPage label="Home">
       <PageBar title={homeGreeting(new Date(nowMs), user?.display_name || user?.username)} line={line} />
 
       <PageScroll>
-        {guilds.length === 0 && (
-          <EmptyState
-            title="You are not in a server yet"
-            description="Join one with an invite, or start your own. Direct messages and friends are already on the left."
-            action={
-              <Button onClick={() => setShowCreateModal(true)}>
-                <Plus size={16} aria-hidden />
-                Add a server
-              </Button>
-            }
-          />
+        {(quietHome || guilds.length === 0) && (
+          <section className="glass-home-welcome" aria-label="Welcome">
+            <p className="glass-home-welcome__eyebrow">Welcome home</p>
+            <h2>{guilds.length === 0 ? 'A place for your people.' : 'Make yourself at home.'}</h2>
+            <p>{guilds.length === 0
+              ? 'Bring a few friends together. Join their server with an invite, or create a server of your own.'
+              : 'Your servers are ready when you are. Open one to say hello, or catch up with a friend.'}</p>
+            <div className="glass-home-welcome__actions">
+              <Button onClick={() => setModalTab('join')}>Join with an invite</Button>
+              <Button variant="secondary" onClick={() => setModalTab('create')}>Create a server</Button>
+              <Button variant="ghost" onClick={() => navigate('/app/friends')}>Find friends <ArrowRight size={16} aria-hidden /></Button>
+            </div>
+          </section>
         )}
 
-        <HomeNeedsYou
+        {guilds.length > 0 && (
+          <PageSection kicker="Your servers" count={guilds.length} aside={
+            <Button variant="ghost" size="sm" onClick={() => setModalTab('join')}>
+              <Plus size={14} aria-hidden /> Add a server
+            </Button>
+          }>
+            {guilds.map((guild) => (
+              <PageRow key={guild.key}
+                lead={<span className="glass-home-server-icon" aria-hidden>{(guild.name || 'S').slice(0, 2).toUpperCase()}</span>}
+                title={guild.name}
+                line={guild.description || 'Open your server'}
+                aside={<ArrowRight size={16} aria-hidden />}
+                label={`Open ${guild.name}`}
+                onOpen={() => void openGuild(guild)}
+              />
+            ))}
+          </PageSection>
+        )}
+
+        {!quietHome && <HomeNeedsYou
           entries={attention}
           requests={requests}
           status={activityStatus}
           onOpen={openConversation}
           onAccept={acceptRequest}
           onRefresh={refreshActivity}
-        />
+        />}
 
         <HomeLiveNow rooms={liveRooms} nowMs={nowMs} onOpenRoom={openRoom} onJoinRoom={joinRoom} />
 
@@ -269,7 +304,7 @@ export function HomePage() {
         <HomePickUp entries={pickUp} litRooms={litRooms} onOpen={openConversation} />
       </PageScroll>
 
-      {showCreateModal && <CreateGuildModal onClose={() => setShowCreateModal(false)} />}
+      {modalTab && <CreateGuildModal initialTab={modalTab} onClose={() => setModalTab(null)} />}
     </GlassPage>
   );
 }

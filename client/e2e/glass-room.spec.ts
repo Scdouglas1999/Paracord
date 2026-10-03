@@ -181,7 +181,7 @@ test('the budget: --room-rgb at most 4 writes a second, nothing else written on 
   expect(result.paints / result.seconds).toBeLessThanOrEqual(4.2);
 });
 
-test('Home rests on the neutral room and stops lighting', async ({ page }) => {
+test('Home rests on the default room and stops lighting', async ({ page }) => {
   await open(page, route(GAME_NIGHT_ID, CH.general));
   await waitLit(page, 'stream-ambient');
   await page.getByRole('button', { name: /^Home and direct messages/ }).click();
@@ -190,8 +190,8 @@ test('Home rests on the neutral room and stops lighting', async ({ page }) => {
   // Most of the ease is over in under two seconds; the last few channel units
   // land when it settles, about three and a half seconds after a full swing.
   await page.waitForTimeout(5_000);
-  expect(await roomRgb(page)).toEqual([209, 209, 209]);
-  await shot(page, 'room-home-neutral');
+  expect(await roomRgb(page)).toEqual([82, 143, 219]);
+  await shot(page, 'room-home-default');
 });
 
 test('reduced transparency keeps the room but takes the blur away', async ({ page }) => {

@@ -1716,3 +1716,48 @@ a.glass-prow__main {
     gap: 8px;
   }
 }
+
+/* Home remains useful before the first conversation or while servers are quiet. */
+.glass-home-welcome {
+  padding: 24px 0 32px;
+  margin-bottom: 28px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.glass-home-welcome__eyebrow {
+  color: var(--ink-3);
+  font-size: 12px;
+  margin: 0 0 14px;
+}
+.glass-home-welcome h2 {
+  color: var(--ink-1);
+  font-size: clamp(24px, 3vw, 32px);
+  font-weight: 600;
+  letter-spacing: -0.035em;
+  line-height: 1.2;
+  margin: 0 0 12px;
+}
+.glass-home-welcome > p:not(.glass-home-welcome__eyebrow) {
+  color: var(--ink-2);
+  font-size: 14px;
+  line-height: 1.65;
+  max-width: 48ch;
+  margin: 0;
+}
+.glass-home-welcome__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 24px;
+}
+.glass-home-server-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 44px;
+  height: 44px;
+  border-radius: 14px;
+  background: var(--raise);
+  color: var(--ink-2);
+  font-size: 15px;
+  font-weight: 600;
+}

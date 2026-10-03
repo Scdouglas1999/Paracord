@@ -240,7 +240,7 @@ function HomeBody({
     unread > 0 ? `${unread} unread` : null,
     requests > 0 ? (requests === 1 ? '1 request' : `${requests} requests`) : null,
   ].filter(Boolean);
-  const line = waiting.length > 0 ? waiting.join(', ') : directs.length > 0 ? 'All caught up' : 'Nothing yet';
+  const line = waiting.length > 0 ? waiting.join(', ') : directs.length > 0 ? 'All caught up' : 'Your conversations';
 
   return (
     <div className="glass-places" data-presentation={presentation} data-mode="home">

@@ -59,10 +59,10 @@ export const ROOM_SATURATION_GAIN = 2.4;
 
 /**
  * The room with nothing to light it (Home, DMs, a server with no banner or
- * icon): a light neutral gray inside the box, so the surfaces keep the same
- * lightness as a lit room and simply lose their tint.
+ * icon): a muted slate blue inside the box, giving quiet pages a little color
+ * without changing the lightness or contrast of a lit room.
  */
-export const ROOM_NEUTRAL: Rgb = [209, 209, 209];
+export const ROOM_DEFAULT: Rgb = [82, 143, 219];
 
 const clamp01 = (value: number) => (value < 0 ? 0 : value > 1 ? 1 : value);
 

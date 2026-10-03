@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { FrameAnalyzer } from './analyzeFrame';
-import { insideClampBox, ROOM_NEUTRAL, roomColorFromAverage, type Rgb } from './color';
+import { insideClampBox, ROOM_DEFAULT, roomColorFromAverage, type Rgb } from './color';
 import type { FrameSource } from './frameSource';
 import { ROOM_GRID_HEIGHT, ROOM_GRID_WIDTH } from './pixels';
 import {
@@ -75,6 +75,21 @@ function fakeLayers() {
 describe('room controller', () => {
   afterEach(() => {
     document.documentElement.removeAttribute('style');
+  });
+
+  it('starts with the default tint when Home has no room source and stays idle on repeated selection', () => {
+    const clock = createManualClock();
+    const { layers, log } = fakeLayers();
+    const writer = createRoomTokenWriter(document.documentElement, clock);
+    const controller = createRoomController({ layers, writer, analyze, clock });
+    controller.setSource(null);
+    expect(writer.written).toEqual(ROOM_DEFAULT);
+    controller.setSource(null);
+    clock.advance(5_000);
+    expect(writer.writes).toBe(1);
+    expect(log.paints).toEqual([0, 0]);
+    expect(controller.phase).toBe('idle');
+    controller.dispose();
   });
 
   it('keeps to its budget with a busy stream: no per-frame style writes, token and paints at most 4 Hz', () => {
@@ -169,7 +184,7 @@ describe('room controller', () => {
     controller.dispose();
   });
 
-  it('lets the old light go and rests on the neutral room when the new source never delivers', () => {
+  it('lets the old light go and rests on the default room when the new source never delivers', () => {
     const clock = createManualClock();
     const { layers, log } = fakeLayers();
     const element = document.createElement('div');
@@ -185,11 +200,11 @@ describe('room controller', () => {
     clock.advance(ROOM_HOLD_MS + 5_000);
     expect(log.lit).toEqual([false, false]);
     expect(controller.phase).toBe('waiting');
-    expect(writer.written).toEqual(ROOM_NEUTRAL);
+    expect(writer.written).toEqual(ROOM_DEFAULT);
     controller.dispose();
   });
 
-  it('goes neutral with nothing to light it, and asks for no frames while hidden', () => {
+  it('uses the default tint with nothing to light it, and asks for no frames while hidden', () => {
     const clock = createManualClock();
     const { layers, log } = fakeLayers();
     const writer = createRoomTokenWriter(document.createElement('div'), clock);
@@ -209,7 +224,7 @@ describe('room controller', () => {
     expect(stream.subscribers).toBe(0);
     expect(log.lit).toEqual([false, false]);
     clock.advance(5_000);
-    expect(writer.written).toEqual(ROOM_NEUTRAL);
+    expect(writer.written).toEqual(ROOM_DEFAULT);
     expect(controller.phase).toBe('idle');
     controller.dispose();
   });

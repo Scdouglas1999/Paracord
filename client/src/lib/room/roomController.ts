@@ -26,7 +26,7 @@ import {
   clampRoomColor,
   easeFactor,
   easeRgb,
-  ROOM_NEUTRAL,
+  ROOM_DEFAULT,
   type Rgb,
 } from './color';
 import type { FrameAnalyzer } from './analyzeFrame';
@@ -83,7 +83,7 @@ export interface RoomControllerOptions {
 }
 
 export interface RoomController {
-  /** Point the room at a source, or at nothing (the neutral room). */
+  /** Point the room at a source, or at nothing (the default room). */
   setSource(request: RoomSourceRequest | null): void;
   /** The window was hidden or shown: a hidden room asks for no frames and paints nothing. */
   setVisible(visible: boolean): void;
@@ -138,7 +138,7 @@ export function createRoomController(options: RoomControllerOptions): RoomContro
   /** Fires when a new source has not delivered within ROOM_HOLD_MS. */
   let deadline: unknown = null;
   let tokenCurrent: Rgb | null = null;
-  let tokenTarget: Rgb = ROOM_NEUTRAL;
+  let tokenTarget: Rgb = ROOM_DEFAULT;
   let visible = true;
   let tickTimer: unknown = null;
   let lastTickAt = 0;
@@ -288,7 +288,7 @@ export function createRoomController(options: RoomControllerOptions): RoomContro
   return {
     setSource(request) {
       if (disposed) return;
-      if ((request?.key ?? null) === (active?.request.key ?? null)) return;
+      if ((request?.key ?? null) === (active?.request.key ?? null) && (request || tokenCurrent !== null)) return;
       const previous = active;
       unsubscribe(previous);
       clearDeadline();
@@ -298,7 +298,7 @@ export function createRoomController(options: RoomControllerOptions): RoomContro
       if (!request) {
         if (previous) layers[previous.layer].setLit(false);
         active = null;
-        setTokenTarget(ROOM_NEUTRAL);
+        setTokenTarget(ROOM_DEFAULT);
         announce('idle');
         return;
       }
@@ -313,9 +313,9 @@ export function createRoomController(options: RoomControllerOptions): RoomContro
         deadline = null;
         if (active !== next || next.current) return;
         // Nothing yet: let the old light go rather than keep another source's
-        // room on, and rest the surfaces on the neutral room meanwhile.
+        // room on, and rest the surfaces on the default tint meanwhile.
         releaseHold();
-        setTokenTarget(ROOM_NEUTRAL);
+        setTokenTarget(ROOM_DEFAULT);
       }, ROOM_HOLD_MS);
       announce('waiting');
       subscribe(next);

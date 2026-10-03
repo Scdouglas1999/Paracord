@@ -40,15 +40,15 @@ describe('Glass tokens', () => {
     expect(decl('--ink-3')).toBe('rgba(240, 243, 243, 0.64)');
   });
 
-  it('holds the fixed colors of §2.1', () => {
+  it('holds the fixed colors and the restrained blue primary accent', () => {
     expect(decl('--own-bub')).toBe('#ecebe6');
     expect(decl('--own-ink')).toBe('#141516');
     expect(decl('--mention-chip')).toBe('#f3f5f5');
     expect(decl('--mention-ink')).toBe('#111214');
     expect(decl('--amber')).toBe('#ffc27e');
     expect(decl('--amber-ink')).toBe('#ffd6a8');
-    expect(decl('--join')).toBe('#f4f6f6');
-    expect(decl('--join-press')).toBe('#e8e3d8');
+    expect(decl('--join')).toBe('#c7daed');
+    expect(decl('--join-press')).toBe('#b8cee4');
   });
 
   it('holds the shape and depth of §2.4 and the 120ms timing of §9', () => {

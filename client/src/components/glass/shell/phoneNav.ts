@@ -50,12 +50,11 @@ export function usePhoneScreen(): PhoneScreen {
 /* ---- Routes ------------------------------------------------------------------ */
 
 /**
- * Pages whose content IS the list on a phone. `/app` is Home (its places are your
- * messages) and `/app/dms` is the messages index, which would only draw the list
- * a second time under the list.
+ * The messages index repeats the places list. Home has its own welcome and
+ * server entries, so it opens on its routed page, including on a phone.
  */
 export function isPlacesRoute(pathname: string): boolean {
-  return /^\/app\/?$/.test(pathname) || /^\/app\/dms\/?$/.test(pathname);
+  return /^\/app\/dms\/?$/.test(pathname);
 }
 
 /** A channel or a message: the page draws the conversation pane, with its own header and call pill. */
@@ -67,10 +66,10 @@ export function isConversationRoute(pathname: string): boolean {
  * Drives the phone's navigation (docs/design/glass-g20-checkpoint.md). Called
  * once by the app shell, with whether the window is a phone.
  *
- *   - The first screen is decided before the first paint: Home and the messages
- *     index open on places (they would only repeat it), everything else, a
+ *   - The first screen is decided before the first paint: The messages
+ *     index opens on places; everything else, including Home and a
  *     deep link, a reload in a channel, opens on its page.
- *   - Arriving on Home or the messages index while somewhere else shows places.
+ *   - Arriving on the messages index shows places; Home shows its welcome page.
  *   - The conversation header's old drawer button and Ctrl+B still ask for the
  *     navigation by opening the drawer (`sidebarCollapsed` false). The drawer
  *     is gone; the request is taken here, turned into the places screen, and
@@ -95,6 +94,7 @@ export function usePhoneNavigation(enabled: boolean): void {
   useEffect(() => {
     if (!enabled) return;
     if (isPlacesRoute(pathname)) usePhoneNavStore.getState().showPlaces();
+    else if (/^\/app\/?$/.test(pathname)) usePhoneNavStore.getState().showConversation();
   }, [enabled, pathname]);
 
   useEffect(() => {
