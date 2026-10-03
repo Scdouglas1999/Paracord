@@ -19,7 +19,7 @@ Continues Claude's `design/glass` worktree at `d5b7f74a`, including its pending 
 - Production TypeScript/Vite build and Linux Tauri release build, with default VP9 support enabled.
 - Windows GNU release cross-build executes on the Windows server host.
 - Server integration tests: 22 passed across channel previews, listen/view, realtime listen/view and stream reactions.
-- Sender key tests: 17 passed; Rust crypto tests: 30 passed.
+- Sender key tests: 17 passed; Rust crypto tests: 30 passed; native VP9 pipeline tests: 15 passed.
 - Four read-state/menu suites: 101 passed; native sampler/underlay: 6 passed.
 - Initial complete client unit run: 4,204 passed, four assertions failed and one delayed-window error. The read-count test was being updated during that run; the other failures were fixed asynchronous timing assumptions. All four affected suites then passed together (34 tests), without the window error.
 - All 15 polish browser cases passed across the initial run and focused reruns. Under heavy host load, several initial runs timed out at the app's loading screen; focused reruns passed. Camera framing, expanded Watch access, reactions, menu operation, sheets, phone resizing and empty calls were exercised.
