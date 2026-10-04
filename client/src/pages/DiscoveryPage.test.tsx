@@ -131,7 +131,7 @@ describe('DiscoveryPage', () => {
 
     const dialog = screen.getByRole('dialog', { name: 'Launch Guild' });
     expect(dialog).toHaveTextContent('Public launch planning.');
-    expect(dialog).toHaveTextContent('Joining adds this server to your sidebar');
+    expect(dialog).toHaveTextContent('Joining adds this server to your dock');
     expect(apiClient.put).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole('button', { name: 'Join Launch Guild' }));
@@ -144,13 +144,16 @@ describe('DiscoveryPage', () => {
     expect(await screen.findByText('Guild channel route')).toBeInTheDocument();
   });
 
-  it('has an accessible back action and lets the user dismiss a preview without joining', async () => {
+  it('is a page in main under the large title, and lets the user dismiss a preview without joining', async () => {
     const user = userEvent.setup();
 
     renderDiscoveryPage();
 
-    expect(await screen.findByRole('button', { name: 'Back to home' })).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Preview' }));
+    // Home is retired: the page is a large-title page like the others, not a screen with a way back to Home.
+    expect(await screen.findByRole('heading', { level: 1, name: 'Discover' })).toBeInTheDocument();
+    expect(screen.getByText('1 public community to explore')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Back to home' })).toBeNull();
+    await user.click(await screen.findByRole('button', { name: 'Preview' }));
     await user.click(screen.getByRole('button', { name: 'Not now' }));
     expect(screen.queryByRole('dialog', { name: 'Launch Guild' })).not.toBeInTheDocument();
     expect(apiClient.put).not.toHaveBeenCalled();

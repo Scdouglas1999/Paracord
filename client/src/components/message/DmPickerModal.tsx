@@ -1,69 +1,75 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
-import { Check, Search, User, UserPlus, Users } from 'lucide-react';
-import { useChannelStore } from '../../stores/channelStore';
-import { useRelationshipStore } from '../../stores/relationshipStore';
+
+import { extractApiError } from '../../api/client';
+import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
 import { activateChannel } from '../../lib/channelNavigation';
 import type { ScopedChannel } from '../../lib/channelScope';
-import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
-import { extractApiError } from '../../api/client';
-import { cn } from '../../lib/utils';
-import { Button } from '../ui/Button';
-import { EmptyState } from '../ui/Feedback';
-import { Modal, ModalTitle } from '../ui/Modal';
-import { Input } from '../ui/Input';
-import type { Channel } from '../../types/index';
 import { displayName } from '../../lib/displayName';
-
+import { useChannelStore } from '../../stores/channelStore';
+import { useRelationshipStore } from '../../stores/relationshipStore';
+import type { Channel } from '../../types/index';
+import { IxGlyph } from '../ix/glyphs';
+import { Avatar } from '../ix/identity';
+import { Segmented, segmentedIds } from '../ix/people/Segmented';
+import { CreamButton } from '../ix/primitives';
+import { Modal } from '../ui/Modal';
 
 export interface DmPickerModalProps {
   open: boolean;
   onClose: () => void;
   /** Fired with the created/opened channel after a DM or group DM is started. */
   onCreated?: (channel: Channel) => void;
+  /** Which half it opens on: a person (default), or a group ("Start a group"). */
+  initialMode?: 'direct' | 'group';
 }
 
+type Mode = 'direct' | 'group';
+
 /**
- * Standalone DM-picker dialog lifted out of the former Home DM list. Lists the
- * viewer's friends, and on selection opens (or creates) a DM via `dmApi.create`,
- * updates `channelStore`, navigates to `/app/dms/:id`, fires `onCreated`, then
- * closes. A group-DM sub-mode is preserved from the original picker.
- *
- * Reuses the lantern-stage-spec §8 dialog recipe (`ui/Modal`: bg --bg-accent, --radius-plate,
- * --border-strong, --shadow-plate, 240ms enter + focus trap), Button and EmptyState.
- * Consumed by HomePage and the sidebar search "new DM" affordance.
+ * New message (docs/index-spec.md §6.6, §6.12): the People menu's "New message" and
+ * "Start a group", the Messages label's "+", and the switcher's command. A dialog with
+ * your friends; choosing one opens (or creates) the conversation with `channelStore`,
+ * navigates to `/app/dms/:id`, fires `onCreated` and closes. The Group half takes several
+ * and a name, and one cream "Create group conversation".
  */
-export function DmPickerModal({ open, onClose, onCreated }: DmPickerModalProps) {
+export function DmPickerModal({ open, onClose, onCreated, initialMode = 'direct' }: DmPickerModalProps) {
   const navigate = useNavigate();
   const scope = useCurrentAccountScope();
   const relationships = useRelationshipStore((s) => s.relationships);
   const fetchRelationships = useRelationshipStore((s) => s.fetchRelationships);
+  const titleId = useId();
+  const searchRef = useRef<HTMLInputElement>(null);
 
-  const [groupMode, setGroupMode] = useState(false);
+  const [mode, setMode] = useState<Mode>(initialMode);
   const [groupSelected, setGroupSelected] = useState<string[]>([]);
   const [groupName, setGroupName] = useState('');
   const [query, setQuery] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const groupMode = mode === 'group';
 
-  // Each open starts fresh and refreshes the friend list.
+  // Each open starts fresh (on the half it was asked for) and refreshes the friend list.
   useEffect(() => {
     if (!open) return;
-    setGroupMode(false);
+    setMode(initialMode);
     setGroupSelected([]);
     setGroupName('');
     setQuery('');
     setError(null);
     setSubmitting(false);
     void fetchRelationships();
-  }, [open, fetchRelationships]);
+    searchRef.current?.focus();
+  }, [open, initialMode, fetchRelationships]);
 
   const friends = relationships.filter((r) => r.type === 1);
   const filteredFriends = friends.filter((relationship) => {
     const normalized = query.trim().toLocaleLowerCase();
     if (!normalized) return true;
-    return displayName(relationship.user).toLocaleLowerCase().includes(normalized)
-      || relationship.user.username.toLocaleLowerCase().includes(normalized);
+    return (
+      displayName(relationship.user).toLocaleLowerCase().includes(normalized) ||
+      relationship.user.username.toLocaleLowerCase().includes(normalized)
+    );
   });
 
   const commitChannel = (channel: ScopedChannel) => {
@@ -104,139 +110,96 @@ export function DmPickerModal({ open, onClose, onCreated }: DmPickerModalProps) 
   };
 
   const toggleGroupMember = (userId: string) => {
-    setGroupSelected((prev) =>
-      prev.includes(userId) ? prev.filter((id) => id !== userId) : [...prev, userId],
-    );
+    setGroupSelected((prev) => (prev.includes(userId) ? prev.filter((id) => id !== userId) : [...prev, userId]));
   };
 
+  const ids = segmentedIds('ix-newmsg', mode);
+
   return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      labeledBy="dm-picker-title"
-      size="sm"
-      placement="center"
-      panelClassName="flex max-h-[70vh] flex-col"
-    >
-      <div className="panel-divider border-b px-5 py-4">
-        <ModalTitle id="dm-picker-title">New message</ModalTitle>
-        <p className="mt-1 text-meta text-text-secondary">
+    <Modal open={open} onClose={onClose} labeledBy={titleId} panelClassName="ix-dialog-panel ix-newmsg" manageFocus>
+      <div className="ix-newmsg__head">
+        <h2 id={titleId} className="ix-dialog__title">
+          New message
+        </h2>
+        <p className="ix-dialog__body">
           {groupMode ? 'Choose the friends this conversation is for.' : 'Choose a friend to start or reopen a conversation.'}
         </p>
-        <div role="tablist" aria-label="Message type" className="pc-well mt-3 grid grid-cols-2 gap-1 p-1">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={!groupMode}
-            className={cn(
-              'pc-focusable flex h-[var(--h-control)] items-center justify-center gap-1.5 rounded-[var(--radius-chip)] text-label transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]',
-              !groupMode
-                ? 'bg-bg-raised font-semibold text-text-primary shadow-[var(--shadow-raised)]'
-                : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary',
-            )}
-            onClick={() => {
-              setGroupMode(false);
-              setError(null);
-            }}
-          >
-            <User size={14} /> Direct
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={groupMode}
-            className={cn(
-              'pc-focusable flex h-[var(--h-control)] items-center justify-center gap-1.5 rounded-[var(--radius-chip)] text-label transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]',
-              groupMode
-                ? 'bg-bg-raised font-semibold text-text-primary shadow-[var(--shadow-raised)]'
-                : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary',
-            )}
-            onClick={() => {
-              setGroupMode(true);
-              setError(null);
-            }}
-          >
-            <Users size={14} /> Group
-          </button>
-        </div>
-      </div>
-
-      <div className="border-b border-border-subtle px-5 py-3">
-        <div className="relative">
-          <Search size={15} aria-hidden className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
-          <Input
+        <Segmented
+          label="Message type"
+          idBase="ix-newmsg"
+          items={[
+            { value: 'direct', label: 'Direct' },
+            { value: 'group', label: 'Group' },
+          ]}
+          value={mode}
+          onChange={(next) => {
+            setMode(next);
+            setError(null);
+          }}
+        />
+        <label className="ix-newmsg__search">
+          <IxGlyph name="search" size={15} />
+          <input
+            ref={searchRef}
             type="search"
             aria-label="Search friends"
             placeholder="Search friends"
-            className="pl-9"
             value={query}
+            autoComplete="off"
+            spellCheck={false}
             onChange={(event) => setQuery(event.target.value)}
           />
-        </div>
+        </label>
         {groupMode && (
           <input
             type="text"
+            className="ix-field ix-newmsg__name"
             placeholder="Group name (optional)"
             aria-label="Group name"
-            className="pc-well mt-2.5 h-[var(--h-control-phone)] w-full px-3 text-label text-text-primary outline-none placeholder:text-text-faint focus-visible:shadow-[var(--shadow-well),var(--focus-ring)]"
             value={groupName}
             onChange={(e) => setGroupName(e.target.value)}
           />
         )}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-3 scrollbar-thin">
+      <div className="ix-newmsg__list" role="tabpanel" id={ids.panel} aria-labelledby={ids.tab}>
         {friends.length === 0 ? (
-          <EmptyState
-            className="px-2"
-            icon={<UserPlus size={20} />}
-            title="No friends to message yet"
-            description="Add a friend first — you can only DM people you're friends with."
-          />
+          <p className="ix-newmsg__empty">
+            <strong>No friends to message yet</strong>
+            Add a friend first: you can only message people you&rsquo;re friends with.
+          </p>
         ) : filteredFriends.length === 0 ? (
-          <EmptyState
-            className="px-2"
-            icon={<Search size={20} />}
-            title="No friends found"
-            description={`No friends match “${query.trim()}”.`}
-          />
+          <p className="ix-newmsg__empty">
+            <strong>No friends found</strong>
+            No friends match &ldquo;{query.trim()}&rdquo;.
+          </p>
         ) : (
           filteredFriends.map((rel) => {
             const selected = groupSelected.includes(rel.user.id);
+            const name = displayName(rel.user);
             return (
               <button
                 key={rel.id}
                 type="button"
                 aria-pressed={groupMode ? selected : undefined}
-                className={cn(
-                  'pc-focusable group w-full rounded-[var(--radius-control)] px-3 py-2 text-left text-label font-medium transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle',
-                  groupMode && selected && 'bg-bg-raised shadow-[var(--shadow-raised)]',
-                )}
+                className="ix-newmsg__person"
+                data-selected={groupMode && selected ? '' : undefined}
                 onClick={() => {
                   if (groupMode) toggleGroupMember(rel.user.id);
                   else void startDm(rel.user.id);
                 }}
               >
-                <div className="flex items-center gap-2.5">
-                  {groupMode && (
-                    <div
-                      className={cn(
-                        'flex h-4 w-4 shrink-0 items-center justify-center rounded-window border',
-                        selected ? 'border-accent-primary bg-accent-primary text-text-on-accent' : 'border-border-subtle',
-                      )}
-                    >
-                      {selected && <Check size={12} strokeWidth={3} aria-hidden />}
-                    </div>
-                  )}
-                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-bg-mod-strong text-meta font-semibold text-text-secondary">
-                    {displayName(rel.user).charAt(0).toUpperCase()}
+                {groupMode && (
+                  <span className="ix-newmsg__check" data-on={selected ? '' : undefined} aria-hidden="true">
+                    {selected && <IxGlyph name="check" size={12} />}
                   </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-label text-text-primary">{displayName(rel.user)}</span>
-                    <span className="block truncate text-meta font-normal text-text-muted">@{rel.user.username}</span>
-                  </span>
-                  {!groupMode && <span className="text-meta font-medium text-accent-primary opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">Message</span>}
-                </div>
+                )}
+                <Avatar userId={rel.user.id} name={name} avatar={rel.user.avatar_hash ?? null} size={32} ring="var(--ix-card)" />
+                <span className="ix-newmsg__who">
+                  <span className="ix-newmsg__name-text">{name}</span>
+                  <span className="ix-newmsg__user">@{rel.user.username}</span>
+                </span>
+                {!groupMode && <span className="ix-newmsg__go">Message</span>}
               </button>
             );
           })
@@ -244,23 +207,20 @@ export function DmPickerModal({ open, onClose, onCreated }: DmPickerModalProps) 
       </div>
 
       {error && (
-        <div
-          role="alert"
-          className="mx-3 mb-3 rounded-[var(--radius-well)] bg-danger-well px-3.5 py-2.5 text-label font-medium leading-relaxed text-accent-danger shadow-[var(--shadow-well)]"
-        >
+        <p role="alert" className="ix-dialog__error ix-newmsg__error">
           {error}
-        </div>
+        </p>
       )}
 
       {groupMode && (
-        <div className="border-t border-border-subtle p-3">
-          <div className="mb-2 flex items-center justify-between px-1 text-meta text-text-muted">
+        <div className="ix-newmsg__foot">
+          <div className="ix-newmsg__count">
             <span>{groupSelected.length === 0 ? 'Select at least one friend' : `${groupSelected.length} friend${groupSelected.length === 1 ? '' : 's'} selected`}</span>
             <span>{groupSelected.length + 1} total</span>
           </div>
-          <Button className="w-full" disabled={groupSelected.length === 0} loading={submitting} onClick={() => void createGroup()}>
-            Create group conversation
-          </Button>
+          <CreamButton disabled={groupSelected.length === 0 || submitting} onClick={() => void createGroup()}>
+            {submitting ? 'Creating…' : 'Create group conversation'}
+          </CreamButton>
         </div>
       )}
     </Modal>

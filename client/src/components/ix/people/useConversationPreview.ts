@@ -1,41 +1,44 @@
-import { messagePreviewText } from '../../lib/markdown';
+import { messagePreviewText } from '../../../lib/markdown';
 import { useEffect, useState, useSyncExternalStore } from 'react';
 
-import type { ConversationEntry } from '../../lib/attention/conversationModel';
+import type { ConversationEntry } from '../../../lib/attention/conversationModel';
 import {
   getDatabaseHistoryEpoch,
   requestHistoryReconciliation,
   subscribeDatabaseHistory,
-} from '../../lib/databaseHistory';
-import { captureScopedOperation } from '../../lib/operationContext';
-import { fetchGuildRoles } from '../../lib/permissionDataCache';
-import { accountScopeKey, type AccountScope } from '../../lib/serverScope';
-import { useReadStateStore } from '../../stores/readStateStore';
-import type { Message } from '../../types';
+} from '../../../lib/databaseHistory';
+import { captureScopedOperation } from '../../../lib/operationContext';
+import { fetchGuildRoles } from '../../../lib/permissionDataCache';
+import { accountScopeKey, type AccountScope } from '../../../lib/serverScope';
+import { useReadStateStore } from '../../../stores/readStateStore';
+import type { Message } from '../../../types';
 
-interface HomeMessagePreview {
+export interface ConversationPreview {
   author: string | null;
   authorId: string | null;
   avatar: string | null;
   text: string;
   messageId?: string;
+  /** The message itself, for a row that words it its own way (media, polls, system lines). */
+  message?: Message;
 }
 
-interface PreviewState extends HomeMessagePreview {
+interface PreviewState extends ConversationPreview {
   revision: string;
   failed?: boolean;
 }
 
-/** Home only formats server messages. It never decrypts a DM or advances its ratchet. */
+/** A preview only formats server messages. It never decrypts a DM or advances its ratchet. */
 function previewOf(
   message: Message,
   userId: string,
   roleNames?: ReadonlyMap<string, string>,
-): HomeMessagePreview {
+): ConversationPreview {
   const identity = {
     authorId: message.author?.id ?? null,
     avatar: message.author?.avatar_hash ?? null,
     messageId: message.id,
+    message,
   };
   if (message.e2ee) {
     return {
@@ -45,7 +48,7 @@ function previewOf(
     };
   }
   const author = message.author?.display_name || message.author?.username || null;
-  // Plain words: no code fences, no markup, and a mention is a name. Home has no
+  // Plain words: no code fences, no markup, and a mention is a name. A preview has no
   // member list to hand, so the one name it is sure of is the reader's own.
   const content = messagePreviewText(message.content ?? '', new Map([[userId, 'you']]), roleNames);
   const text = content || (message.poll
@@ -56,7 +59,7 @@ function previewOf(
   return { ...identity, author, text };
 }
 
-function emptyPreview(text: string): HomeMessagePreview {
+function emptyPreview(text: string): ConversationPreview {
   return { author: null, authorId: null, avatar: null, text };
 }
 
@@ -66,7 +69,7 @@ function emptyPreview(text: string): HomeMessagePreview {
  * local state is invalidated on activity, edits/deletions, permission changes,
  * or an account change; it is never persisted or shared under a bare channel ID.
  */
-export function useHomeMessagePreview(entry: ConversationEntry, mode: 'attention' | 'latest') {
+export function useConversationPreview(entry: ConversationEntry, mode: 'attention' | 'latest', enabled = true) {
   const scopeKey = accountScopeKey(entry.scope);
   const after = useReadStateStore((state) => mode === 'attention'
     ? state.byAccount[scopeKey]?.[entry.channelId]?.last_message_id ?? '0'
@@ -103,7 +106,7 @@ export function useHomeMessagePreview(entry: ConversationEntry, mode: 'attention
   const { serverId, userId } = entry.scope;
 
   useEffect(() => {
-    if (!entry.lastActivityId || historyUnavailable) return;
+    if (!enabled || !entry.lastActivityId || historyUnavailable) return;
     let disposed = false;
     let context: ReturnType<typeof captureScopedOperation> | undefined;
     const invalidateCapabilities = (event: Event) => {
@@ -197,7 +200,7 @@ export function useHomeMessagePreview(entry: ConversationEntry, mode: 'attention
       context?.dispose();
       window.removeEventListener('paracord:conversation-capabilities-changed', invalidateCapabilities);
     };
-  }, [entry.channelId, entry.guildId, entry.lastActivityId, serverId, userId, revision, kind, after, historyUnavailable]);
+  }, [enabled, entry.channelId, entry.guildId, entry.lastActivityId, serverId, userId, revision, kind, after, historyUnavailable]);
 
   const fresh = preview?.revision === revision && !preview.failed ? preview : null;
   const roleFailure = preview?.revision === revision && preview.failed && preview.text.startsWith('Could not load roles')

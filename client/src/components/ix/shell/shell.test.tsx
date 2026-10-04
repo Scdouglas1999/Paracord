@@ -43,10 +43,12 @@ describe('places', () => {
     expect(placeOfPath('/app/guilds/123/channels/9')).toEqual(serverPlace('123'));
     expect(placeOfPath('/app/guilds/123')).toEqual(serverPlace('123'));
     expect(placeOfPath('/app/guilds/123/settings')).toEqual(serverPlace('123'));
-    expect(placeOfPath('/app')).toEqual(PEOPLE_PLACE);
+    // Home is retired: `/app` only redirects, so it belongs to no place (the sidebar keeps the last).
+    expect(placeOfPath('/app')).toBeNull();
     expect(placeOfPath('/app/dms')).toEqual(PEOPLE_PLACE);
     expect(placeOfPath('/app/dms/77')).toEqual(PEOPLE_PLACE);
     expect(placeOfPath('/app/friends')).toEqual(PEOPLE_PLACE);
+    expect(placeOfPath('/app/inbox')).toEqual(PEOPLE_PLACE);
     expect(placeOfPath('/app/admin')).toBeNull();
     expect(placeOfPath('/app/discovery')).toBeNull();
   });

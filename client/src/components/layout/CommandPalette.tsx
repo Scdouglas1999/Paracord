@@ -12,6 +12,7 @@ import { Settings, Shield, Bot, UserPlus, Users, MessagesSquare, MessageSquarePl
 import { Kbd } from '../ui/Kbd';
 import { DmPickerModal } from '../message/DmPickerModal';
 import { useUIStore } from '../../stores/uiStore';
+import { useRelationshipStore } from '../../stores/relationshipStore';
 import { useGuildStore } from '../../stores/guildStore';
 import { useChannelStore } from '../../stores/channelStore';
 import { useMemberStore } from '../../stores/memberStore';
@@ -26,6 +27,7 @@ import { Avatar, ServerMark } from '../ix/identity';
 import { openProfileCard, type ProfileSubject } from '../ix/menus/hostStore';
 import { MENU_EXIT_MS, useExitPresence } from '../ix/sheets/useExitPresence';
 import { openSearchWith } from '../glass/sheets/sheetStore';
+import { useCurrentPlace } from '../ix/shell';
 import { arrangeSwitcher, searchRowLabel, type SwitcherCandidate } from './switcherModel';
 
 /**
@@ -72,8 +74,12 @@ export function CommandPalette() {
   const navigate = useNavigate();
   const { guildId: routeGuildId, channelId: routeChannelId } = useParams();
   const selectedGuildId = useSelectedGuildId();
-  // The server the switcher is scoped to: the route's, else the one selected.
-  const scopeGuildId = routeGuildId ?? selectedGuildId ?? null;
+  // In People the switcher is scoped to people (§6.6: the sidebar's "Search people"): your conversations,
+  // then your friends. In a server it is that server's, the route's, else the one selected.
+  const place = useCurrentPlace();
+  const peopleScope = place.kind === 'people' && !routeGuildId;
+  const scopeGuildId = peopleScope ? null : (routeGuildId ?? selectedGuildId ?? null);
+  const relationships = useRelationshipStore((s) => s.relationships);
   const members = useMemberStore((s) => (scope && scopeGuildId ? s.members.get(entityScopeKey(scope, scopeGuildId)) : undefined));
   const phone = useMobile();
 
@@ -200,6 +206,25 @@ export function CommandPalette() {
       });
     });
 
+    // Your friends, in People (found by typing and listed when nothing is): a friend you already have a
+    // conversation with is under Direct messages, so they are not listed twice.
+    if (peopleScope) {
+      const talking = new Set(availableChannels.filter((channel) => !channel.guild_id && channel.recipient).map((channel) => channel.recipient?.id));
+      relationships.filter((entry) => entry.type === 1 && !talking.has(entry.user.id)).forEach(({ user: friend }) => {
+        const name = displayName(friend);
+        items.push({
+          id: `person-${friend.id}`,
+          category: 'people',
+          label: name,
+          sublabel: friend.username !== name ? `@${friend.username}` : undefined,
+          icon: <Avatar userId={friend.id} name={name} avatar={friend.avatar_hash ?? null} size={24} />,
+          action: () => undefined,
+          profile: friend,
+          keywords: `${friend.username} ${friend.display_name ?? ''} person friend`,
+        });
+      });
+    }
+
     availableChannels.filter((channel) => !channel.guild_id).forEach((dm) => {
       const serverId = dm.scope.serverId;
       const recipientName = dm.recipient ? displayName(dm.recipient) : (dm.name || 'Direct message');
@@ -227,7 +252,7 @@ export function CommandPalette() {
     command('action-new-message', 'New message', 'Start a direct or group message', <MessageSquarePlus size={16} strokeWidth={1.7} />,
       () => setDmPickerOpen(true), 'new message dm direct compose start conversation group');
     command('action-add-friend', 'Add a friend', 'Send a friend request', <UserPlus size={16} strokeWidth={1.7} />,
-      () => navigate('/app/friends'), 'add friend request invite people');
+      () => navigate('/app/friends', { state: { addFriend: true } }), 'add friend request invite people');
     command('action-all-conversations', 'All conversations', 'Open your direct messages', <MessagesSquare size={16} strokeWidth={1.7} />,
       () => navigate('/app/dms'), 'all conversations direct messages dms inbox people');
     command('action-friends', 'Friends', 'Online, pending, and blocked', <Users size={16} strokeWidth={1.7} />,
@@ -242,9 +267,9 @@ export function CommandPalette() {
     }
 
     return items;
-  }, [guilds, channelsByGuild, availableChannels, members, user, navigate, selectGuild, scopeGuildId]);
+  }, [guilds, channelsByGuild, availableChannels, members, user, navigate, selectGuild, scopeGuildId, peopleScope, relationships]);
 
-  const groups = useMemo(() => arrangeSwitcher(candidates, query), [candidates, query]);
+  const groups = useMemo(() => arrangeSwitcher(candidates, query, peopleScope ? 'people' : 'server'), [candidates, query, peopleScope]);
 
   // The last row: search the messages, with the words carried over.
   const searchItem = useMemo((): PaletteItem | null => {
@@ -396,7 +421,7 @@ export function CommandPalette() {
                 autoComplete="off"
                 spellCheck={false}
                 className="ix-switcher__input"
-                placeholder={searchGuild ? 'Jump to a channel or person' : 'Jump to a conversation or server'}
+                placeholder={searchGuild ? 'Jump to a channel or person' : peopleScope ? 'Find a person or conversation' : 'Jump to a conversation or server'}
                 value={query}
                 onChange={(e) => {
                   setQuery(e.target.value);

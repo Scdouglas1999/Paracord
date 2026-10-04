@@ -44,5 +44,7 @@ describe('EmptyPage (docs/index-spec.md §6.8)', () => {
   it('is a block inside a page when inline (the Events page with no events), not main’s whole height', () => {
     render(<EmptyPage inline title="No events" />);
     expect(screen.getByTestId('ix-empty')).toHaveAttribute('data-inline', 'true');
+    // The page's large title is its h1: the notice inside it is an h2.
+    expect(screen.getByRole('heading', { level: 2, name: 'No events' })).toHaveClass('ix-empty__title');
   });
 });

@@ -87,6 +87,24 @@ describe('DmPickerModal', () => {
     expect(screen.getByRole('tab', { name: 'Direct' })).toHaveAttribute('aria-selected', 'true');
   });
 
+  it('opens on the Group half when asked ("Start a group"), and on Direct otherwise', () => {
+    mockRelationshipState.relationships = [friend('u1', 'Ada')];
+    renderPicker({ initialMode: 'group' });
+    expect(screen.getByRole('tab', { name: 'Group' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('textbox', { name: 'Group name' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create group conversation' })).toBeDisabled();
+  });
+
+  it('is the New message dialog: one cream button, only in the group half', async () => {
+    const user = userEvent.setup();
+    mockRelationshipState.relationships = [friend('u1', 'Ada')];
+    renderPicker();
+    expect(screen.getByRole('dialog', { name: 'New message' })).toBeInTheDocument();
+    expect(document.querySelector('.ix-cream')).toBeNull();
+    await user.click(screen.getByRole('tab', { name: 'Group' }));
+    expect(document.querySelectorAll('.ix-cream')).toHaveLength(1);
+  });
+
   it('filters friends and explains an empty search result', async () => {
     const user = userEvent.setup();
     mockRelationshipState.relationships = [friend('u1', 'Ada'), friend('u2', 'Grace')];

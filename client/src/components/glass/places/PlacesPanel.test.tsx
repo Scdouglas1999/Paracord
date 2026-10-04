@@ -77,8 +77,8 @@ vi.mock('../../../hooks/useSportsBoard', () => ({
 }));
 vi.mock('../../../hooks/useDailyWord', () => ({ useDailyWordSettings: () => ({ enabled: false }) }));
 vi.mock('../../../hooks/useGameServers', () => ({ useGameServers: () => ({ servers: [] }) }));
-vi.mock('../../home/useHomeMessagePreview', () => ({
-  useHomeMessagePreview: () => ({
+vi.mock('../../ix/people/useConversationPreview', () => ({
+  useConversationPreview: () => ({
     preview: { author: 'Brendan', authorId: 'brendan', avatar: null, text: 'you around for the run?' },
     text: 'you around for the run?',
     failed: false,

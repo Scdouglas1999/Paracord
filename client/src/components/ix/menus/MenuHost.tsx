@@ -38,6 +38,7 @@ export function MenuHost() {
   const createChannel = useMenuHostStore((state) => state.createChannel);
   const invite = useMenuHostStore((state) => state.invite);
   const dmPicker = useMenuHostStore((state) => state.dmPicker);
+  const dmPickerMode = useMenuHostStore((state) => state.dmPickerMode);
   const sheet = useGlassStore((state) => state.sheet);
   const accountPage = useSheetPages((state) => state.accountPage);
 
@@ -73,7 +74,7 @@ export function MenuHost() {
       />
       {createChannel && <CreateChannelDialog key={`${createChannel.guildId}:${createChannel.kind}`} request={createChannel} />}
       {invite && <InviteModal guildName={invite.guildName} channelId={invite.channelId} onClose={closeInvite} />}
-      {dmPicker && <DmPickerModal open onClose={closeDmPicker} />}
+      {dmPicker && <DmPickerModal open onClose={closeDmPicker} initialMode={dmPickerMode} />}
     </>
   );
 }

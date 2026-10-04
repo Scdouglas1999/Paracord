@@ -4,6 +4,7 @@ import {
   matchRank,
   searchRowLabel,
   SWITCHER_ORDER,
+  SWITCHER_ORDER_PEOPLE,
   type SwitcherCandidate,
 } from './switcherModel';
 
@@ -60,6 +61,26 @@ describe('arrangeSwitcher: the current server first', () => {
     const many = Array.from({ length: 20 }, (_, i) => c(`c${i}`, 'channels', `chan-${i}`));
     expect(arrangeSwitcher(many, '')[0].items).toHaveLength(10);
     expect(arrangeSwitcher(many, 'chan')[0].items).toHaveLength(8);
+  });
+});
+
+describe('arrangeSwitcher: scoped to people (§6.6)', () => {
+  it('with nothing typed, lists conversations, then friends, then servers', () => {
+    const groups = arrangeSwitcher(sample, '', 'people');
+    expect(groups.map((group) => group.category)).toEqual(['dms', 'people', 'servers']);
+  });
+
+  it('once something is typed, adds the channels of other servers and the commands after the places', () => {
+    const matching = [
+      c('dm-neil', 'dms', 'Neil'),
+      c('person-nell', 'people', 'Nell'),
+      c('srv-nest', 'servers', 'Nest'),
+      c('else-news', 'elsewhere', 'news', { sublabel: 'Fuel' }),
+      c('cmd-new', 'commands', 'New message'),
+    ];
+    const categories = arrangeSwitcher(matching, 'ne', 'people').map((group) => group.category);
+    expect(categories).toEqual(['dms', 'people', 'servers', 'elsewhere', 'commands']);
+    expect(categories).toEqual(SWITCHER_ORDER_PEOPLE.filter((category) => categories.includes(category)));
   });
 });
 

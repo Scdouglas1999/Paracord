@@ -30,6 +30,24 @@ export const SWITCHER_ORDER: readonly SwitcherCategory[] = [
   'commands',
 ];
 
+/**
+ * The same groups in People (§6.6: the sidebar's "Search people" opens the switcher
+ * scoped to people): your conversations first, then your friends, then the servers, and
+ * what is in them only when you type.
+ */
+export const SWITCHER_ORDER_PEOPLE: readonly SwitcherCategory[] = [
+  'dms',
+  'people',
+  'servers',
+  'channels',
+  'rooms',
+  'elsewhere',
+  'commands',
+];
+
+/** Which place the switcher is scoped to first: the current server, or People. */
+export type SwitcherScope = 'server' | 'people';
+
 export const SWITCHER_LABEL: Record<SwitcherCategory, string> = {
   channels: 'Channels',
   rooms: 'Voice channels',
@@ -47,6 +65,17 @@ const CAP_EMPTY: Record<SwitcherCategory, number> = {
   people: 0,
   servers: 6,
   dms: 5,
+  elsewhere: 0,
+  commands: 0,
+};
+
+/** In People the conversations and the friends are what is listed before anything is typed. */
+const CAP_EMPTY_PEOPLE: Record<SwitcherCategory, number> = {
+  channels: 0,
+  rooms: 0,
+  people: 6,
+  servers: 6,
+  dms: 8,
   elsewhere: 0,
   commands: 0,
 };
@@ -87,11 +116,15 @@ export function matchRank(candidate: SwitcherCandidate, query: string): number {
 }
 
 /** Filter, rank within each group, cap and order the groups. Empty groups are left out. */
-export function arrangeSwitcher<T extends SwitcherCandidate>(candidates: readonly T[], query: string): SwitcherGroup<T>[] {
+export function arrangeSwitcher<T extends SwitcherCandidate>(
+  candidates: readonly T[],
+  query: string,
+  scope: SwitcherScope = 'server',
+): SwitcherGroup<T>[] {
   const typed = query.trim().length > 0;
-  const caps = typed ? CAP_TYPED : CAP_EMPTY;
+  const caps = typed ? CAP_TYPED : scope === 'people' ? CAP_EMPTY_PEOPLE : CAP_EMPTY;
   const groups: SwitcherGroup<T>[] = [];
-  for (const category of SWITCHER_ORDER) {
+  for (const category of scope === 'people' ? SWITCHER_ORDER_PEOPLE : SWITCHER_ORDER) {
     const ranked = candidates
       .filter((candidate) => candidate.category === category)
       .map((candidate, index) => ({ candidate, index, rank: matchRank(candidate, query) }))

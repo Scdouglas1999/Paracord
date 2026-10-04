@@ -30,13 +30,16 @@ export function samePlace(a: Place | null | undefined, b: Place | null | undefin
  * developers, discovery, templates, bot authorize): those keep the place you
  * came from.
  *
- *   /app/guilds/:guildId/...          the server
- *   /app, /app/dms[/:id], /app/friends People
+ *   /app/guilds/:guildId/...                 the server
+ *   /app/dms[/:id], /app/friends, /app/inbox  People
+ *
+ * `/app` itself belongs to none: Home is retired and `/app` only redirects to the last
+ * place (IX-14), so while it does the sidebar keeps the place it had.
  */
 export function placeOfPath(pathname: string): Place | null {
   const server = /^\/app\/guilds\/([^/]+)/.exec(pathname);
   if (server) return serverPlace(decodeURIComponent(server[1]));
-  if (/^\/app\/?$/.test(pathname) || /^\/app\/(dms|friends)(\/|$)/.test(pathname)) return PEOPLE_PLACE;
+  if (/^\/app\/(dms|friends|inbox)(\/|$)/.test(pathname)) return PEOPLE_PLACE;
   return null;
 }
 

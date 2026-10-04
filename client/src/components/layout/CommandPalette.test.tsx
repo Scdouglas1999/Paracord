@@ -6,6 +6,7 @@ import { entityScopeKey } from '../../lib/serverScope';
 import { useChannelStore } from '../../stores/channelStore';
 import { useGlassStore } from '../../stores/glassStore';
 import { useMemberStore } from '../../stores/memberStore';
+import { useRelationshipStore } from '../../stores/relationshipStore';
 import { useUIStore } from '../../stores/uiStore';
 import { useMenuHostStore } from '../ix/menus/hostStore';
 import { useSheetPages } from '../glass/sheets/sheetStore';
@@ -185,6 +186,42 @@ describe('the quick switcher: access', () => {
   });
 });
 
+describe('the quick switcher: scoped to people (docs/index-spec.md §6.6)', () => {
+  async function openInPeople() {
+    useRelationshipStore.setState({
+      relationships: [
+        { id: 'r1', type: 1, user: person('u2', 'Jeremy') },
+        { id: 'r2', type: 1, user: person('u3', 'Nick') },
+        { id: 'r3', type: 1, user: person('u4', 'Maya') },
+        { id: 'r4', type: 3, user: person('u5', 'Brendan') },
+      ],
+    } as never);
+    const user = userEvent.setup();
+    renderPalette('/app/dms/d1');
+    screen.getByRole('button', { name: 'Open palette' }).focus();
+    await user.keyboard('{Control>}k{/Control}');
+    await screen.findByRole('dialog', { name: 'Quick switcher' });
+    return user;
+  }
+
+  it('lists your conversations first, then your friends, then the servers; no channels until you type', async () => {
+    await openInPeople();
+    expect(groupNames()).toEqual(['Direct messages', 'People', 'Servers']);
+    expect(field()).toHaveAttribute('placeholder', 'Find a person or conversation');
+    // Every server is a server here (none is "current"), and a channel is found only by typing.
+    expect(within(screen.getByRole('group', { name: 'Servers' })).getAllByRole('option')).toHaveLength(2);
+    // A friend you already talk to is under Direct messages, not listed twice; a request is not a friend.
+    const people = within(screen.getByRole('group', { name: 'People' })).getAllByRole('option');
+    expect(people.map((row) => row.textContent)).toEqual([expect.stringContaining('Nick'), expect.stringContaining('Maya')]);
+  });
+
+  it('finds channels of any server by typing', async () => {
+    const user = await openInPeople();
+    await user.type(field(), 'lounge');
+    expect(within(screen.getByRole('group', { name: 'In other servers' })).getByRole('option', { name: /lounge/ })).toBeInTheDocument();
+  });
+});
+
 describe('the quick switcher: scope and order (docs/index-spec.md §4.2)', () => {
   it('lists the current server first (channels, rooms), then other servers and direct messages', async () => {
     await openWithKeyboard();
@@ -267,7 +304,7 @@ describe('the quick switcher: commands', () => {
   it('routes "Add a friend" to the friends page', async () => {
     const user = await openAndType('add a friend');
     await user.click(screen.getByRole('option', { name: /Add a friend/ }));
-    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/app/friends'));
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/app/friends', { state: { addFriend: true } }));
   });
 
   it('routes "All conversations" to the DM index', async () => {

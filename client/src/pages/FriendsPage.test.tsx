@@ -5,15 +5,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { dmApi } from '../api/dms';
 import { FriendsPage } from './FriendsPage';
 
-vi.mock('../components/user/UserProfile', () => ({
-  UserProfilePopup: ({ user, onClose }: { user: { username: string } | null; onClose: () => void }) =>
-    user === null ? null : (
-      <div data-testid="friend-profile">
-        Profile for {user.username}
-        <button type="button" onClick={onClose}>Close profile</button>
-      </div>
-    ),
-}));
+// The profile card is the menu host's (IX-9): a row asks for it and the host draws it.
+const openProfileCard = vi.hoisted(() => vi.fn());
+vi.mock('../components/ix/menus', () => ({ openProfileCard }));
 
 const testData = vi.hoisted(() => ({
   friend: {
@@ -179,6 +173,7 @@ describe('FriendsPage', () => {
     expect(screen.getByRole('region', { name: 'Online' })).toHaveTextContent(/Online\s*1/);
     // The tab, the kicker and the online friend's line: the same word, from one place.
     expect(screen.getAllByText('Online')).toHaveLength(3);
+    expect(screen.getByRole('heading', { level: 1, name: 'Friends' })).toBeInTheDocument();
     expect(screen.queryByText(/lights (on|off)/i)).not.toBeInTheDocument();
   });
 
@@ -188,17 +183,14 @@ describe('FriendsPage', () => {
 
     expect(screen.getByRole('button', { name: 'Message Grace' })).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Open profile for Grace' }));
-    expect(screen.getByTestId('friend-profile')).toHaveTextContent('Profile for Grace');
-
-    await user.click(screen.getByRole('button', { name: 'Close profile' }));
-    expect(screen.queryByTestId('friend-profile')).not.toBeInTheDocument();
+    expect(openProfileCard).toHaveBeenCalledWith(testData.friend, expect.objectContaining({ x: expect.any(Number), y: expect.any(Number) }));
   });
 
   it('surfaces Add friend as a header primary action, not a filter tab', async () => {
     const user = userEvent.setup();
     renderFriendsPage();
 
-    // The add flow is a prominent header button, not one of the filter pills.
+    // The add flow is the page's one cream button, not one of the filter tabs.
     const addButton = screen.getByRole('button', { name: /^add friend$/i });
     expect(addButton).toHaveAttribute('aria-expanded', 'false');
     // The input is hidden until the primary action is invoked.
@@ -306,8 +298,8 @@ describe('FriendsPage', () => {
       const cy = rows[0];
       expect(cy).toHaveTextContent('Away');
       expect(cy).toHaveTextContent('In Lounge, Game Night');
-      expect(cy.querySelector('.glass-prow__voice')).not.toBeNull();
-      expect(cy.querySelector('.glass-presence')).toHaveAttribute('data-live');
+      expect(cy.querySelector('.ix-fr__voice')).not.toBeNull();
+      expect(cy.closest('li')).toHaveAttribute('data-live');
     });
 
     it('says what somebody is doing, in their words first', async () => {
@@ -335,8 +327,9 @@ describe('FriendsPage', () => {
         </MemoryRouter>,
       );
       await user.click(screen.getByRole('tab', { name: /^All/ }));
-      const statuses = [...container.querySelectorAll('.glass-presence')].map((mark) => mark.getAttribute('data-status'));
-      expect(statuses).toEqual(['online', 'idle', 'dnd', 'offline']);
+      // A dot per person who is here (ink, ink-3, a hollow ring); an offline friend has none.
+      const dots = [...container.querySelectorAll('.ix-fr__row')].map((row) => row.querySelector('[data-presence]')?.getAttribute('data-presence') ?? null);
+      expect(dots).toEqual(['online', 'idle', 'dnd', null]);
       const offline = screen.getByRole('button', { name: 'Open profile for Dot' }).closest('li');
       expect(offline).toHaveAttribute('data-offline');
       expect(screen.getByRole('button', { name: 'Open profile for Dot' })).toHaveTextContent('Offline');
@@ -353,12 +346,12 @@ describe('FriendsPage', () => {
         </MemoryRouter>,
       );
       await user.click(screen.getByRole('tab', { name: /^Blocked/ }));
-      expect(container.querySelector('.glass-presence')).toBeNull();
+      expect(container.querySelector('[data-presence]')).toBeNull();
       await user.click(screen.getByRole('button', { name: 'Unblock Xan' }));
       expect(mockRelationshipState.removeFriend).toHaveBeenCalledWith('x');
     });
 
-    it('keeps the add-friend submit as the page’s one filled button', async () => {
+    it('keeps Add friend as the page’s one cream button, with the form open too', async () => {
       const user = userEvent.setup();
       const { container } = render(
         <MemoryRouter initialEntries={['/app/friends']}>
@@ -368,9 +361,9 @@ describe('FriendsPage', () => {
         </MemoryRouter>,
       );
       await user.click(screen.getByRole('button', { name: /^add friend$/i }));
-      expect(screen.getByRole('button', { name: /^add friend$/i })).toHaveClass('bg-[var(--glass-fill)]');
-      expect(container.querySelectorAll('.bg-accent-primary')).toHaveLength(1);
-      expect(screen.getByRole('button', { name: /send friend request/i })).toHaveClass('bg-accent-primary');
+      expect(screen.getByRole('button', { name: /^add friend$/i })).toHaveClass('ix-cream');
+      expect(container.querySelectorAll('.ix-cream')).toHaveLength(1);
+      expect(screen.getByRole('button', { name: /send friend request/i })).not.toHaveClass('ix-cream');
     });
   });
 

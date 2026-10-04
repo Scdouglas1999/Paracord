@@ -1,37 +1,33 @@
-import { useFreshRelationships } from '../hooks/useFreshRelationships';
-import { useCurrentAccountScope } from '../hooks/useCurrentUser';
-import { useBuildingLights } from '../hooks/useLights';
-import { useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
-import { MessageSquare, X, Search, Check, UserPlus, UserRoundPlus, Inbox, Ban, ArrowUpRight } from 'lucide-react';
-import { useNavigate } from 'react-router';
-import { useRelationshipStore } from '../stores/relationshipStore';
-import { usePresenceStore } from '../stores/presenceStore';
-import { useServerListStore } from '../stores/serverListStore';
-import type { Relationship } from '../api/relationships';
-import { activateChannel } from '../lib/channelNavigation';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useLocation, useNavigate } from 'react-router';
+
 import { extractApiError } from '../api/client';
-import { useChannelStore } from '../stores/channelStore';
-import { EmptyState } from '../components/ui/Feedback';
-import { Button } from '../components/ui/Button';
-import { IconButton } from '../components/ui/IconButton';
-import { Input } from '../components/ui/Input';
-import { SearchWell } from '../components/ui/TextField';
-import { Tabs } from '../components/ui/Tabs';
-import { displayName } from '../lib/displayName';
+import type { Relationship } from '../api/relationships';
+import { IxGlyph } from '../components/ix/glyphs';
+import { Avatar } from '../components/ix/identity';
+import { openProfileCard } from '../components/ix/menus';
+import { EmptyPage, LargeTitlePage } from '../components/ix/page';
+import { Segmented, segmentedIds } from '../components/ix/people/Segmented';
+import { Control, CreamButton, SectionLabel, WideControl } from '../components/ix/primitives';
+import { useBuildingLights } from '../hooks/useLights';
+import { useCurrentAccountScope } from '../hooks/useCurrentUser';
+import { useFreshRelationships } from '../hooks/useFreshRelationships';
 import { statusLine } from '../lib/activityDisplay';
+import { activateChannel } from '../lib/channelNavigation';
+import { displayName } from '../lib/displayName';
 import { presenceLabel } from '../lib/presence';
+import { usePresenceStore } from '../stores/presenceStore';
+import { useRelationshipStore } from '../stores/relationshipStore';
+import { useServerListStore } from '../stores/serverListStore';
+import { useChannelStore } from '../stores/channelStore';
 import type { Presence } from '../types';
-import { UserProfilePopup } from '../components/user/UserProfile';
-import { GlassPage, PageBar, PageScroll, PageSection } from '../components/home/GlassPage';
-import { PagePerson, PageRow } from '../components/home/PageRow';
 
 type FriendsTab = 'online' | 'all' | 'requests' | 'blocked';
 
 /**
  * The words for a person's presence live in `lib/presence` and nowhere else
  * (docs/lantern-stage-spec.md §1.5, §6.9). A page that keeps its own copy of
- * them drifts from the account plate two hundred pixels away.
+ * them drifts from the account menu a few hundred pixels away.
  */
 
 /** Live first, then here, away, do not disturb, offline: the order a row is worth a glance. */
@@ -53,16 +49,15 @@ function detailOf(presence: Presence | undefined): string | null {
 }
 
 /**
- * The line under a friend's name: the word for their presence, then where they
- * are (amber: live) or what they are doing. Presence on the face is ink, never a
- * colored dot (docs/design/glass-plan.md §1.3).
+ * The line under a friend's name: the word for their presence, then where they are
+ * (amber: live) or what they are doing.
  */
 function FriendLine({ status, voice, detail }: { status: string; voice: VoicePlace | undefined; detail: string | null }) {
   return (
     <>
       {presenceLabel(status)}
       {voice ? (
-        <span className="glass-prow__voice">
+        <span className="ix-fr__voice">
           {' · '}In {voice.room}
           {voice.place ? `, ${voice.place}` : ''}
         </span>
@@ -73,17 +68,30 @@ function FriendLine({ status, voice, detail }: { status: string; voice: VoicePla
   );
 }
 
+/**
+ * Friends (docs/index-spec.md §6.6, §8.1): a page in main under the large title, a
+ * segmented control Online / All / Requests / Blocked, and **Add friend**, the page's
+ * one cream button. A row opens the person's profile card; Message and Remove sit beside
+ * it, and a request has its own decisions.
+ */
 export function FriendsPage() {
+  const location = useLocation();
+  // The People menu's "Add friend" and the switcher's "Add a friend" arrive with the form asked for; a
+  // fresh arrival is a fresh page (the key), so the form is open from the first render.
+  const asked = (location.state as { addFriend?: boolean } | null)?.addFriend === true;
+  return <FriendsView key={location.key} openAdd={asked} />;
+}
+
+function FriendsView({ openAdd }: { openAdd: boolean }) {
   const navigate = useNavigate();
   const channelScope = useCurrentAccountScope();
   const [activeTab, setActiveTab] = useState<FriendsTab>('online');
-  const [showAddFriend, setShowAddFriend] = useState(false);
+  const [showAddFriend, setShowAddFriend] = useState(openAdd);
   const [addFriendInput, setAddFriendInput] = useState('');
   const [addFriendStatus, setAddFriendStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [relationshipError, setRelationshipError] = useState<string | null>(null);
   const [pendingActions, setPendingActions] = useState<Set<string>>(() => new Set());
   const [searchQuery, setSearchQuery] = useState('');
-  const [profile, setProfile] = useState<{ user: Relationship['user']; position: { x: number; y: number } } | null>(null);
   const addInputRef = useRef<HTMLInputElement>(null);
   const relationships = useRelationshipStore((s) => s.relationships);
   const presences = usePresenceStore((s) => s.presences);
@@ -100,18 +108,15 @@ export function FriendsPage() {
   const pendingOutgoing = useMemo(() => relationships.filter((r) => r.type === 4), [relationships]);
   const requestCount = pendingIncoming.length + pendingOutgoing.length;
   const onlineCount = useMemo(
-    () =>
-      friends.filter(
-        (r) => (getPresence(r.user.id, scope)?.status || 'offline') !== 'offline'
-      ).length,
+    () => friends.filter((r) => (getPresence(r.user.id, scope)?.status || 'offline') !== 'offline').length,
     // `getPresence` is a stable store action, so it never signals a change on
     // its own; `presences` is the value it actually reads and is what must
     // invalidate this memo. The linter cannot see through the store accessor.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [friends, presences, getPresence, scope]
+    [friends, presences, getPresence, scope],
   );
 
-  // Who is in a voice room right now, and which: the amber on a friend's row.
+  // Who is in a voice channel right now, and which: the amber on a friend's row.
   const inVoice = useMemo(() => {
     const map = new Map<string, VoicePlace>();
     for (const building of buildings) {
@@ -143,9 +148,13 @@ export function FriendsPage() {
     requestAnimationFrame(() => addInputRef.current?.focus());
   };
 
+  useEffect(() => {
+    if (openAdd) requestAnimationFrame(() => addInputRef.current?.focus());
+  }, [openAdd]);
+
   const openProfile = (user: Relationship['user'], anchor: HTMLElement) => {
     const rect = anchor.getBoundingClientRect();
-    setProfile({ user, position: { x: rect.right, y: rect.top } });
+    openProfileCard(user, { x: rect.right, y: rect.top });
   };
 
   const handleAddFriend = async () => {
@@ -160,9 +169,7 @@ export function FriendsPage() {
       await useRelationshipStore.getState().fetchRelationships();
       const after = useRelationshipStore.getState().relationships;
       const matched = after.find(
-        (r) =>
-          r.user.username.toLowerCase() === identifier.toLowerCase()
-          || r.user.id === identifier,
+        (r) => r.user.username.toLowerCase() === identifier.toLowerCase() || r.user.id === identifier,
       );
       const newlyAdded = matched && !before.some((r) => r.user.id === matched.user.id && r.type === matched.type);
       if (!matched || !newlyAdded) {
@@ -249,28 +256,19 @@ export function FriendsPage() {
   const filteredList = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     const matches = q
-      ? friendListSource.filter((r) =>
-          r.user.username.toLowerCase().includes(q) || displayName(r.user).toLowerCase().includes(q),
-        )
+      ? friendListSource.filter((r) => r.user.username.toLowerCase().includes(q) || displayName(r.user).toLowerCase().includes(q))
       : friendListSource;
     if (activeTab === 'blocked') return matches;
-    // The people worth a glance first: in a voice room, here, away, then the rest.
-    const rank = (r: Relationship) =>
-      inVoice.has(r.user.id) ? -1 : rankOf(getPresence(r.user.id, scope)?.status || 'offline');
-    return [...matches].sort(
-      (a, b) => rank(a) - rank(b) || displayName(a.user).localeCompare(displayName(b.user)),
-    );
+    // The people worth a glance first: in a voice channel, here, away, then the rest.
+    const rank = (r: Relationship) => (inVoice.has(r.user.id) ? -1 : rankOf(getPresence(r.user.id, scope)?.status || 'offline'));
+    return [...matches].sort((a, b) => rank(a) - rank(b) || displayName(a.user).localeCompare(displayName(b.user)));
     // `presences` is what `getPresence` reads (see `onlineCount`).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [friendListSource, searchQuery, activeTab, inVoice, presences, getPresence, scope]);
 
   const sectionLabel = activeTab === 'all' ? 'All' : activeTab === 'blocked' ? 'Blocked' : 'Online';
   const searchPlaceholder =
-    activeTab === 'all'
-      ? 'Search your friends'
-      : activeTab === 'blocked'
-        ? 'Search blocked people'
-        : 'Search who is online';
+    activeTab === 'all' ? 'Search your friends' : activeTab === 'blocked' ? 'Search blocked people' : 'Search who is online';
 
   const line =
     friends.length === 0
@@ -282,32 +280,28 @@ export function FriendsPage() {
             : null,
         ]
           .filter(Boolean)
-          .join(', ');
+          .join(' · ');
 
   const tabs = [
-    { value: 'online' as const, label: 'Online', meta: onlineCount > 0 ? onlineCount : undefined },
-    { value: 'all' as const, label: 'All', meta: friends.length > 0 ? friends.length : undefined },
-    { value: 'requests' as const, label: 'Requests', meta: requestCount > 0 ? requestCount : undefined },
-    { value: 'blocked' as const, label: 'Blocked', meta: blocked.length > 0 ? blocked.length : undefined },
+    { value: 'online' as const, label: 'Online', count: onlineCount },
+    { value: 'all' as const, label: 'All', count: friends.length },
+    { value: 'requests' as const, label: 'Requests', count: requestCount },
+    { value: 'blocked' as const, label: 'Blocked', count: blocked.length },
   ];
+  const ids = segmentedIds('ix-friends', activeTab);
 
   /** One person's row: the body opens their card; message and remove sit beside it. */
-  const personRow = (
-    rel: Relationship,
-    actions: React.ReactNode,
-    options: { blocked?: boolean; subtitle?: string } = {},
-  ) => {
+  const personRow = (rel: Relationship, actions: ReactNode, options: { blocked?: boolean; subtitle?: string } = {}) => {
     const name = displayName(rel.user);
-    const face = { userId: rel.user.id, name, avatar: rel.user.avatar_hash ?? null };
+    const avatar = rel.user.avatar_hash ?? null;
     // A request has no presence to show yet: just who and why.
     if (options.subtitle !== undefined) {
       return (
-        <PageRow
+        <FriendRow
           key={rel.id}
-          lead={<PagePerson face={face} />}
-          title={name}
+          lead={<Avatar userId={rel.user.id} name={name} avatar={avatar} size={40} ring="var(--ix-main)" />}
+          name={name}
           line={options.subtitle}
-          label={`Open profile for ${name}`}
           onOpen={(anchor) => openProfile(rel.user, anchor)}
           actions={actions}
         />
@@ -317,99 +311,97 @@ export function FriendsPage() {
     const status = presence?.status || 'offline';
     const voice = inVoice.get(rel.user.id);
     return (
-      <PageRow
+      <FriendRow
         key={rel.id}
         offline={!options.blocked && status === 'offline'}
-        lead={<PagePerson face={face} status={options.blocked ? null : status} live={Boolean(voice)} />}
-        title={name}
-        line={
-          options.blocked ? 'Blocked' : <FriendLine status={status} voice={voice} detail={detailOf(presence)} />
+        lead={
+          <Avatar
+            userId={rel.user.id}
+            name={name}
+            avatar={avatar}
+            size={40}
+            ring="var(--ix-main)"
+            presence={options.blocked ? null : status}
+          />
         }
-        label={`Open profile for ${name}`}
+        name={name}
+        line={options.blocked ? 'Blocked' : <FriendLine status={status} voice={voice} detail={detailOf(presence)} />}
         onOpen={(anchor) => openProfile(rel.user, anchor)}
         actions={actions}
+        live={Boolean(voice)}
       />
     );
   };
 
   return (
-    <GlassPage label="Friends">
-      <PageBar
-        title="Friends"
-        line={line}
-        actions={
-          <Button
-            variant="glass"
-            onClick={() => (showAddFriend ? setShowAddFriend(false) : openAddFriend())}
-            aria-expanded={showAddFriend}
-          >
-            <UserPlus size={16} aria-hidden />
-            Add friend
-          </Button>
-        }
-      />
+    <LargeTitlePage title="Friends" subtitle={line} data-testid="ix-friends" className="ix-sp ix-fr">
+      <div className="ix-fr__bar">
+        <Segmented
+          label="Show"
+          idBase="ix-friends"
+          items={tabs}
+          value={activeTab}
+          onChange={(next) => {
+            setActiveTab(next);
+            setSearchQuery('');
+          }}
+        />
+        <CreamButton
+          size="sm"
+          aria-expanded={showAddFriend}
+          onClick={() => (showAddFriend ? setShowAddFriend(false) : openAddFriend())}
+        >
+          Add friend
+        </CreamButton>
+      </div>
 
-      <PageScroll>
-        <div className="glass-toolbar">
-          <Tabs
-            label="Show"
-            items={tabs}
-            value={activeTab}
-            onChange={(next) => {
-              setActiveTab(next);
-              setSearchQuery('');
-            }}
-            size="sm"
-          />
-        </div>
-
-        {showAddFriend && (
-          <section aria-label="Add a friend" className="glass-card glass-add">
-            <h2 className="glass-card__title">Add a friend</h2>
-            <p className="glass-card__text">
-              Send a request with someone's exact username, or their numeric user ID if you have it.
-            </p>
-            <div className="glass-add__form">
-              <label htmlFor="friend-identifier" className="sr-only">
-                Username or user ID
-              </label>
-              <Input
-                id="friend-identifier"
-                ref={addInputRef}
-                type="text"
-                value={addFriendInput}
-                onChange={(e) => setAddFriendInput(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') void handleAddFriend(); }}
-                placeholder="Username or user ID"
-                className="glass-toolbar__grow"
-              />
-              <Button
-                onClick={() => void handleAddFriend()}
-                disabled={!addFriendInput.trim() || isActionPending('add')}
-              >
-                {isActionPending('add') ? 'Sending...' : 'Send friend request'}
-              </Button>
-            </div>
-            {addFriendStatus && (
-              <div
-                role={addFriendStatus.type === 'error' ? 'alert' : 'status'}
-                className="glass-note"
-                data-tone={addFriendStatus.type === 'error' ? 'danger' : undefined}
-              >
-                {addFriendStatus.type === 'success' ? <Check size={16} aria-hidden /> : <X size={16} aria-hidden />}
-                <span>{addFriendStatus.message}</span>
-              </div>
-            )}
-          </section>
-        )}
-
-        {relationshipError && (
-          <div role="alert" className="glass-note glass-toolbar" data-tone="danger">
-            <X size={16} aria-hidden />
-            <span>{relationshipError}</span>
+      {showAddFriend && (
+        <section aria-label="Add a friend" className="ix-fr__add">
+          <h2 className="ix-fr__add-title">Add a friend</h2>
+          <p className="ix-fr__add-text">Send a request with someone&rsquo;s exact username, or their numeric user ID if you have it.</p>
+          <div className="ix-fr__add-form">
+            <label htmlFor="friend-identifier" className="sr-only">
+              Username or user ID
+            </label>
+            <input
+              id="friend-identifier"
+              ref={addInputRef}
+              type="text"
+              className="ix-field"
+              value={addFriendInput}
+              onChange={(e) => setAddFriendInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void handleAddFriend();
+              }}
+              placeholder="Username or user ID"
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <WideControl onClick={() => void handleAddFriend()} disabled={!addFriendInput.trim() || isActionPending('add')}>
+              {isActionPending('add') ? 'Sending...' : 'Send friend request'}
+            </WideControl>
           </div>
-        )}
+          {addFriendStatus && (
+            <p
+              role={addFriendStatus.type === 'error' ? 'alert' : 'status'}
+              className="ix-fr__note"
+              data-tone={addFriendStatus.type === 'error' ? 'danger' : undefined}
+            >
+              <IxGlyph name={addFriendStatus.type === 'success' ? 'check' : 'x'} size={16} />
+              <span>{addFriendStatus.message}</span>
+            </p>
+          )}
+        </section>
+      )}
 
+      {relationshipError && (
+        <p role="alert" className="ix-fr__note" data-tone="danger">
+          <IxGlyph name="x" size={16} />
+          <span>{relationshipError}</span>
+        </p>
+      )}
+
+      <div role="tabpanel" id={ids.panel} aria-labelledby={ids.tab} className="ix-fr__panel">
         {activeTab === 'requests' ? (
           <RequestsView
             incoming={pendingIncoming}
@@ -423,87 +415,113 @@ export function FriendsPage() {
         ) : (
           <>
             {searchable && (
-              <div className="glass-toolbar">
-                <SearchWell
+              <label className="ix-psearch">
+                <IxGlyph name="search" size={15} />
+                <input
                   id="friends-search"
-                  label="Search friends"
+                  type="search"
+                  aria-label="Search friends"
                   placeholder={searchPlaceholder}
-                  icon={<Search size={16} aria-hidden />}
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="glass-toolbar__grow"
+                  autoComplete="off"
+                  spellCheck={false}
                 />
-              </div>
+              </label>
             )}
 
             {filteredList.length === 0 ? (
-              <FriendsEmptyState
-                tab={activeTab}
-                searching={searchQuery.trim().length > 0}
-                onAdd={openAddFriend}
-                onClearSearch={() => setSearchQuery('')}
-              />
+              <FriendsEmptyState tab={activeTab} searching={searchQuery.trim().length > 0} onAdd={openAddFriend} onClearSearch={() => setSearchQuery('')} />
             ) : (
-              <PageSection kicker={sectionLabel} count={filteredList.length}>
+              <FriendsSection label={sectionLabel} count={filteredList.length}>
                 {filteredList.map((rel) => {
                   const isFriend = rel.type === 1;
                   const name = displayName(rel.user);
                   return personRow(
                     rel,
                     <>
-                      {isFriend && (
-                        <IconButton
-                          label={`Message ${name}`}
-                          tone="raised"
-                          onClick={() => void handleMessageFriend(rel.user.id)}
-                          disabled={isActionPending(`message:${rel.user.id}`)}
-                        >
-                          <MessageSquare size={16} aria-hidden />
-                        </IconButton>
-                      )}
                       {rel.type === 2 ? (
-                        <Button
-                          variant="ghost"
-                          size="sm"
+                        <WideControl
                           aria-label={`Unblock ${name}`}
                           onClick={() => void handleRemoveFriend(rel.user.id)}
                           disabled={isActionPending(`remove:${rel.user.id}`)}
                         >
                           Unblock
-                        </Button>
+                        </WideControl>
                       ) : (
-                        <IconButton
+                        <Control
                           label={`Remove ${name}`}
-                          className="glass-prow__reveal"
+                          className="ix-fr__reveal"
                           onClick={() => void handleRemoveFriend(rel.user.id)}
                           disabled={isActionPending(`remove:${rel.user.id}`)}
                         >
-                          <X size={16} aria-hidden />
-                        </IconButton>
+                          <IxGlyph name="x" size={16} />
+                        </Control>
+                      )}
+                      {isFriend && (
+                        <Control
+                          label={`Message ${name}`}
+                          onClick={() => void handleMessageFriend(rel.user.id)}
+                          disabled={isActionPending(`message:${rel.user.id}`)}
+                        >
+                          <IxGlyph name="hello" size={16} />
+                        </Control>
                       )}
                     </>,
                     { blocked: rel.type === 2 },
                   );
                 })}
-              </PageSection>
+              </FriendsSection>
             )}
           </>
         )}
-      </PageScroll>
-      {createPortal(
-        <UserProfilePopup
-          user={profile?.user ?? null}
-          position={profile?.position ?? null}
-          onClose={() => setProfile(null)}
-        />,
-        document.body,
-      )}
-    </GlassPage>
+      </div>
+    </LargeTitlePage>
   );
 }
 
-// Incoming / Outgoing request sections (§ task 1 — visible sections with counts +
-// accept/decline affordances). Each carries its own header + count.
+/* ---- Parts ------------------------------------------------------------------------- */
+
+function FriendsSection({ label, count, children }: { label: string; count: number; children: ReactNode }) {
+  const id = `ix-fr-${label.toLowerCase()}`;
+  return (
+    <section aria-labelledby={id} className="ix-fr__section">
+      <SectionLabel as="h2" count={count}>
+        {/* The region is named by the label alone, not "Online1". */}
+        <span id={id}>{label}</span>
+      </SectionLabel>
+      <ul className="ix-fr__list">{children}</ul>
+    </section>
+  );
+}
+
+interface FriendRowProps {
+  lead: ReactNode;
+  name: string;
+  line: ReactNode;
+  onOpen: (anchor: HTMLElement) => void;
+  actions: ReactNode;
+  offline?: boolean;
+  live?: boolean;
+}
+
+/** The row's body is one control (it opens the card) and the decisions beside it are siblings, never children of it. */
+function FriendRow({ lead, name, line, onOpen, actions, offline, live }: FriendRowProps) {
+  return (
+    <li className="ix-fr__row" data-offline={offline ? '' : undefined} data-live={live ? '' : undefined}>
+      <button type="button" className="ix-fr__body" aria-label={`Open profile for ${name}`} onClick={(event) => onOpen(event.currentTarget)}>
+        {lead}
+        <span className="ix-fr__text">
+          <span className="ix-fr__name">{name}</span>
+          <span className="ix-fr__line">{line}</span>
+        </span>
+      </button>
+      <div className="ix-fr__actions">{actions}</div>
+    </li>
+  );
+}
+
+// Incoming / Outgoing request sections: each carries its own header and count.
 function RequestsView({
   incoming,
   outgoing,
@@ -519,18 +537,19 @@ function RequestsView({
   onDecline: (userId: string) => void;
   onAdd: () => void;
   isPending: (key: string) => boolean;
-  row: (rel: Relationship, actions: React.ReactNode, options?: { blocked?: boolean; subtitle?: string }) => React.ReactNode;
+  row: (rel: Relationship, actions: ReactNode, options?: { blocked?: boolean; subtitle?: string }) => ReactNode;
 }) {
   if (incoming.length === 0 && outgoing.length === 0) {
     return (
-      <EmptyState
-        icon={<Inbox size={20} />}
+      <EmptyPage
+        inline
+        glyph="invite"
         title="No pending requests"
-        description="Friend requests you've sent or received collect here. Send one and we'll let you know the moment it's accepted."
+        line="Friend requests you've sent or received collect here. Send one and you'll see the moment it's accepted."
         action={
-          <Button variant="glass" size="sm" onClick={onAdd}>
+          <WideControl onClick={onAdd} className="ix-fr__empty-action">
             Send a request
-          </Button>
+          </WideControl>
         }
       />
     );
@@ -539,54 +558,49 @@ function RequestsView({
   return (
     <>
       {incoming.length > 0 && (
-        <PageSection kicker="Incoming" count={incoming.length}>
+        <FriendsSection label="Incoming" count={incoming.length}>
           {incoming.map((rel) =>
             row(
               rel,
               <>
-                <Button
-                  variant="glass"
-                  size="sm"
+                <WideControl
+                  className="ix-fr__accept"
                   aria-label={`Accept friend request from ${displayName(rel.user)}`}
                   onClick={() => onAccept(rel.user.id)}
                   disabled={isPending(`accept:${rel.user.id}`)}
                 >
                   Accept
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
+                </WideControl>
+                <WideControl
                   aria-label={`Decline friend request from ${displayName(rel.user)}`}
                   onClick={() => onDecline(rel.user.id)}
                   disabled={isPending(`remove:${rel.user.id}`)}
                 >
                   Decline
-                </Button>
+                </WideControl>
               </>,
               { subtitle: 'Wants to be your friend' },
             ),
           )}
-        </PageSection>
+        </FriendsSection>
       )}
 
       {outgoing.length > 0 && (
-        <PageSection kicker="Outgoing" count={outgoing.length}>
+        <FriendsSection label="Outgoing" count={outgoing.length}>
           {outgoing.map((rel) =>
             row(
               rel,
-              <Button
-                variant="ghost"
-                size="sm"
+              <WideControl
                 aria-label={`Cancel friend request to ${displayName(rel.user)}`}
                 onClick={() => onDecline(rel.user.id)}
                 disabled={isPending(`remove:${rel.user.id}`)}
               >
                 Cancel
-              </Button>,
+              </WideControl>,
               { subtitle: 'Request sent, waiting to hear back' },
             ),
           )}
-        </PageSection>
+        </FriendsSection>
       )}
     </>
   );
@@ -603,17 +617,20 @@ function FriendsEmptyState({
   onAdd: () => void;
   onClearSearch: () => void;
 }) {
+  const quiet = (label: string, onClick: () => void) => (
+    <WideControl onClick={onClick} className="ix-fr__empty-action">
+      {label}
+    </WideControl>
+  );
+
   if (searching) {
     return (
-      <EmptyState
-        icon={<Search size={20} />}
+      <EmptyPage
+        inline
+        glyph="search"
         title="No matches"
-        description="No one in this list matches your search. Check the spelling, or clear the filter to see everyone again."
-        action={
-          <Button variant="glass" size="sm" onClick={onClearSearch}>
-            Clear search
-          </Button>
-        }
+        line="No one in this list matches your search. Check the spelling, or clear the search to see everyone again."
+        action={quiet('Clear search', onClearSearch)}
       />
     );
   }
@@ -621,50 +638,42 @@ function FriendsEmptyState({
   switch (tab) {
     case 'online':
       return (
-        <EmptyState
-          icon={<UserRoundPlus size={20} />}
+        <EmptyPage
+          inline
+          glyph="people"
           title="None of your friends are online"
-          description="They'll show up here the moment one of them is. In the meantime, add a few more people with the Add friend button up top."
-          action={
-            <Button size="sm" onClick={onAdd}>
-              Add a friend
-            </Button>
-          }
+          line="They'll show up here the moment one of them is. In the meantime, add a few more people."
+          action={quiet('Add a friend', onAdd)}
         />
       );
     case 'all':
       return (
-        <EmptyState
-          icon={<UserRoundPlus size={20} />}
+        <EmptyPage
+          inline
+          glyph="people"
           title="Your friends list is empty"
-          description="Add people by their username with the Add friend button up top to start DMs, share servers, and see when they're around. All it takes is their handle."
-          action={
-            <Button size="sm" onClick={onAdd}>
-              Add your first friend
-            </Button>
-          }
+          line="Add people by their username to start messages, share servers and see when they're around."
+          action={quiet('Add your first friend', onAdd)}
         />
       );
     case 'blocked':
       return (
-        <EmptyState
-          icon={<Ban size={20} />}
+        <EmptyPage
+          inline
+          glyph="x"
           title="You haven't blocked anyone"
-          description="People you block won't be able to message you or add you as a friend. Anyone you block will appear here so you can undo it later."
+          line="People you block can't message you or add you as a friend. Anyone you block shows up here so you can undo it later."
         />
       );
     case 'requests':
     default:
       return (
-        <EmptyState
-          icon={<ArrowUpRight size={20} />}
+        <EmptyPage
+          inline
+          glyph="invite"
           title="No requests waiting"
-          description="Nobody has asked to be friends, and you have no invitations out. Send one with the Add friend button up top — you only need their handle."
-          action={
-            <Button size="sm" onClick={onAdd}>
-              Add a friend
-            </Button>
-          }
+          line="Nobody has asked to be friends, and you have no requests out. Send one: you only need their username."
+          action={quiet('Add a friend', onAdd)}
         />
       );
   }

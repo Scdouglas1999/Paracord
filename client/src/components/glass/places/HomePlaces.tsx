@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 
-import { useHomeMessagePreview } from '../../home/useHomeMessagePreview';
+import { useConversationPreview } from '../../ix/people/useConversationPreview';
 import { snowflakeTime } from '../../../hooks/useChannelPreviews';
 import type { ConversationEntry } from '../../../lib/attention/conversationModel';
 import { dmCompanions } from '../../../lib/dmTitle';
@@ -134,7 +134,7 @@ function DirectRow({
     const status = state.getPresence(entry.userId, entry.serverId)?.status;
     return status === 'online';
   });
-  const { preview, failed } = useHomeMessagePreview(entry, 'latest');
+  const { preview, failed } = useConversationPreview(entry, 'latest');
 
   const row = useMemo<TextRowModel>(() => {
     const companions = dmCompanions(channel, entry.scope.userId);

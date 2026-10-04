@@ -1,1 +1,981 @@
-/* IX-14: the People place (§6.6). Created empty by IX-1; the owner fills it. */
+/* =============================================================================
+   IX-14: People (docs/index-spec.md §3.1, §4.1, §6.6, §8.1, §8.6). Owner: IX-14.
+
+     1. the People sidebar     header, search, Friends and Inbox rows, Messages (DM rows)
+     2. a segmented control    the filter of Friends, Inbox and New message
+     3. page chrome            the search well and the bar the pages share
+     4. Friends
+     5. Inbox
+     6. Discover
+     7. New message            the dialog
+     8. the redirect
+
+   The sidebar reuses IX-5's recipes (`.ix-sh`, `.ix-search`, `.ix-section-label`, `.ix-ch`,
+   `.ix-sel`, `.ix-sb__*`, in ix-sidebar.css) and only adds what People has and a server does
+   not: a 38px face in a row, and rows that are all one height. Only colors and transform/opacity
+   ever change (the motion lint), and only on an event: nothing here moves at rest.
+   ============================================================================= */
+
+/* ---- 1. The People sidebar ----------------------------------------------------------------- */
+
+/* Every row in People is one height (the selection is one element moved by a translate, so its height
+   is fixed): the 38px face plus the row's 8px padding. A server's rows are 51. */
+.ix-sb--people {
+  --ix-ch-h: 54px;
+}
+
+.ix-sb--people .ix-ch {
+  align-content: center;
+}
+
+/* The unread dot sits at the row's middle, not at the name's line. */
+.ix-sb--people .ix-ch__dot {
+  top: 24px;
+}
+
+/* Your face where a server has its mark. */
+.ix-ph__who {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  gap: 12px;
+  min-width: 0;
+}
+
+.ix-ph__blank {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--ix-fill);
+}
+
+/* "Search people": the prototype's field, words only (no glyph, no key hint). */
+.ix-search--plain .ix-search__text {
+  flex: 1 1 auto;
+}
+
+/* A conversation: the face, then the name over the line, the time and the count at the right. */
+.ix-dm {
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+  grid-template-rows: 18px 16px;
+  column-gap: 12px;
+}
+
+.ix-dm__lead {
+  position: relative;
+  grid-column: 1;
+  grid-row: 1 / span 2;
+  align-self: center;
+  width: 38px;
+  height: 38px;
+}
+
+.ix-dm .ix-ch__name {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.ix-dm .ix-ch__time {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+.ix-dm .ix-ch__line {
+  grid-column: 2 / -1;
+  grid-row: 2;
+}
+
+/* A mention: the count takes the last column under the time and the line gives it room. */
+.ix-ch.ix-dm[data-mentions='true'] .ix-ch__line {
+  grid-column: 2;
+}
+
+.ix-dm .ix-ch__mention {
+  grid-column: 3;
+  grid-row: 2;
+}
+
+/* A group: two overlapped 26px faces on the 38px diagonal; the near one bites the other. */
+.ix-dm__face {
+  position: absolute;
+  display: block;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+}
+
+.ix-dm__face--a {
+  top: 0;
+  left: 0;
+}
+
+.ix-dm__face--b {
+  right: 0;
+  bottom: 0;
+  box-shadow: 0 0 0 2px var(--ix-side-end);
+}
+
+/* ---- 2. A segmented control ----------------------------------------------------------------- */
+.ix-seg {
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, auto);
+  gap: 2px;
+  padding: 3px;
+  border-radius: 12px;
+  background: var(--ix-fill);
+}
+
+.ix-seg__tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 9px;
+  background: none;
+  color: var(--ix-ink-2);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color 120ms var(--ix-ease),
+    color 120ms var(--ix-ease);
+}
+
+.ix-seg__tab:hover {
+  color: var(--ix-ink);
+}
+
+.ix-seg__tab[aria-selected='true'] {
+  background: var(--ix-fill-2);
+  color: var(--ix-ink);
+}
+
+.ix-seg__tab:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+.ix-seg__count {
+  color: var(--ix-ink-3);
+  font-size: 11.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.ix-seg__tab[aria-selected='true'] .ix-seg__count {
+  color: var(--ix-ink-2);
+}
+
+/* ---- 3. Page chrome ------------------------------------------------------------------------- */
+
+/* The row a People page opens with: the segmented control at the left, the page's one action at the right. */
+.ix-fr__bar,
+.ix-ib__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+/* The search well a page carries over its list. */
+.ix-psearch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 14px;
+  border-radius: 12px;
+  background: var(--ix-fill-field);
+  box-shadow: inset 0 0 0 1px var(--ix-edge-lit);
+  color: var(--ix-ink-3);
+  transition: background-color 120ms var(--ix-ease);
+}
+
+.ix-psearch input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ix-ink);
+  font: inherit;
+  font-size: 14.5px;
+  outline: none;
+}
+
+.ix-psearch input::placeholder {
+  color: var(--ix-ink-3);
+}
+
+.ix-psearch:focus-within {
+  background: var(--ix-fill);
+  box-shadow: inset 0 0 0 1px var(--ix-edge-open);
+}
+
+.ix-psearch:has(input:focus-visible) {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+/* ---- 4. Friends (§6.6, §8.1) ------------------------------------------------------------------ */
+.ix-fr__panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.ix-fr__section {
+  display: flex;
+  flex-direction: column;
+}
+
+.ix-fr__list,
+.ix-ib__list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ix-fr__row,
+.ix-ib__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 6px;
+  border-radius: 14px;
+  transition: background-color 120ms var(--ix-ease);
+}
+
+.ix-fr__row:hover,
+.ix-fr__row:focus-within,
+.ix-ib__row:hover,
+.ix-ib__row:focus-within {
+  background-color: var(--ix-wash-hover);
+}
+
+/* The body is one control that opens the person's card; the decisions beside it are siblings. */
+.ix-fr__body,
+.ix-ib__body {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  gap: 12px;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 11px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ix-fr__body:focus-visible,
+.ix-ib__body:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+.ix-fr__text,
+.ix-ib__text {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  gap: 1px;
+  min-width: 0;
+}
+
+.ix-fr__name {
+  overflow: hidden;
+  color: var(--ix-ink);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ix-fr__line {
+  overflow: hidden;
+  color: var(--ix-ink-3);
+  font-size: 13px;
+  line-height: 17px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* In a voice channel: the one amber word. */
+.ix-fr__voice {
+  color: var(--ix-amber);
+}
+
+/* Offline steps back: the face and the name dim, the line stays readable. */
+.ix-fr__row[data-offline] .ix-av {
+  opacity: 0.6;
+}
+
+.ix-fr__row[data-offline] .ix-fr__name {
+  color: var(--ix-ink-2);
+}
+
+.ix-fr__actions,
+.ix-ib__actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+}
+
+.ix-fr__actions .ix-ctl--wide,
+.ix-ib__actions .ix-ctl--wide {
+  flex: none;
+  padding: 0 14px;
+}
+
+/* Remove shows with the row's hover or focus; it is a real control either way. */
+.ix-fr__reveal {
+  opacity: 0;
+  transition:
+    opacity 120ms var(--ix-ease),
+    background-color 120ms var(--ix-ease),
+    color 120ms var(--ix-ease);
+}
+
+.ix-fr__row:hover .ix-fr__reveal,
+.ix-fr__row:focus-within .ix-fr__reveal {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .ix-fr__reveal {
+    opacity: 1;
+  }
+}
+
+/* Add a friend: a card under the bar. */
+.ix-fr__add {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 16px;
+  border-radius: 18px;
+  background: var(--ix-fill-card);
+  box-shadow: inset 0 0 0 1px var(--ix-edge-lit);
+}
+
+.ix-fr__add-title {
+  margin: 0;
+  color: var(--ix-ink);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.ix-fr__add-text {
+  margin: 0;
+  color: var(--ix-ink-3);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.ix-fr__add-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.ix-fr__add-form .ix-field {
+  flex: 1 1 220px;
+  width: auto;
+  height: 40px;
+}
+
+.ix-fr__add-form .ix-ctl--wide {
+  flex: none;
+  height: 40px;
+  padding: 0 16px;
+}
+
+.ix-fr__note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--ix-fill);
+  color: var(--ix-ink-2);
+  font-size: 13.5px;
+  line-height: 1.4;
+}
+
+.ix-fr__note[data-tone='danger'] {
+  background: var(--ix-danger-fill);
+  color: var(--ix-danger-ink);
+}
+
+/* A notice inside a page (`EmptyPage inline`): a block in the flow with its own air, not the pane's
+   whole height. (IX-10 left `inline` unstyled; the People pages are its first callers.) */
+.ix-empty[data-inline] {
+  flex: none;
+  min-height: auto;
+  padding: 44px 16px 28px;
+}
+
+/* An empty list inside the page: a quiet action, never a second cream. */
+.ix-fr__empty-action,
+.ix-dc__retry {
+  flex: none;
+  padding: 0 18px;
+}
+
+/* ---- 5. Inbox (§6.6) --------------------------------------------------------------------------- */
+.ix-ib__panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.ix-ib__lead {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
+  background: var(--ix-fill);
+  color: var(--ix-ink-2);
+}
+
+/* A face or a mark is its own tile. */
+.ix-ib__lead:has(.ix-av, .ix-sq) {
+  background: none;
+}
+
+.ix-ib__head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ix-ib__name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ix-ink);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ix-ib__where {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ix-ink-3);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ix-ib__when {
+  margin-left: auto;
+  flex: none;
+  color: var(--ix-ink-3);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.ix-ib__line {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--ix-ink-2);
+  font-size: 13.5px;
+  line-height: 18px;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+/* A mention: the white count, as in the sidebar. */
+.ix-ib__badge {
+  flex: none;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 9px;
+  background: var(--ix-ink);
+  color: var(--ix-mention-ink);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.ix-ib__status {
+  margin: 8px 6px;
+  color: var(--ix-ink-3);
+  font-size: 14px;
+}
+
+.ix-ib__status[data-tone='danger'] {
+  color: var(--ix-danger-ink);
+}
+
+/* Mark all read: a quiet control at the bar's right. */
+.ix-ib__markall {
+  flex: none;
+  padding: 0 14px;
+}
+
+/* ---- 6. Discover (§6.1, §8.1) ------------------------------------------------------------------ */
+.ix-dc__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.ix-dc__chip {
+  background: var(--ix-fill);
+  color: var(--ix-ink-2);
+  font-size: 13px;
+  font-weight: 600;
+  transition:
+    background-color 120ms var(--ix-ease),
+    color 120ms var(--ix-ease);
+}
+
+.ix-dc__chip:hover {
+  background: var(--ix-fill-ctl);
+  color: var(--ix-ink);
+}
+
+.ix-dc__chip[aria-pressed='true'] {
+  background: var(--ix-fill-2);
+  color: var(--ix-ink);
+}
+
+.ix-dc__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+  margin: 16px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* A community: a card of the event family. */
+.ix-dc__card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  padding: 16px;
+  border-radius: 20px;
+  background: var(--ix-card);
+  box-shadow: var(--ix-shadow-event);
+}
+
+.ix-dc__head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.ix-dc__name {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--ix-ink);
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ix-dc__about {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  color: var(--ix-ink-2);
+  font-size: 13.5px;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+}
+
+.ix-dc__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ix-dc__tags li {
+  padding: 3px 8px;
+  border-radius: 7px;
+  background: var(--ix-fill);
+  color: var(--ix-ink-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.ix-dc__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: auto;
+  padding-top: 4px;
+}
+
+.ix-dc__facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  margin: 0;
+  color: var(--ix-ink-3);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ix-dc__online {
+  color: var(--ix-amber);
+}
+
+.ix-dc__open {
+  flex: none;
+  padding: 0 16px;
+}
+
+/* Loading: static shapes of the cards, never a shimmer. */
+.ix-dc__card--skeleton {
+  min-height: 168px;
+}
+
+.ix-dc__bone {
+  display: block;
+  border-radius: 8px;
+  background: var(--ix-fill);
+}
+
+.ix-dc__bone--mark {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+}
+
+.ix-dc__bone--title {
+  width: 55%;
+  height: 16px;
+}
+
+.ix-dc__bone--line {
+  width: 90%;
+  height: 12px;
+}
+
+.ix-dc__bone--short {
+  width: 65%;
+}
+
+/* The preview before joining. */
+.ix-dc__preview-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.ix-dc__preview-title {
+  min-width: 0;
+}
+
+.ix-dc__origin {
+  margin: 2px 0 0;
+  color: var(--ix-ink-3);
+  font-size: 13px;
+}
+
+.ix-dc__preview-about {
+  margin: 0;
+  color: var(--ix-ink-2);
+  font-size: 14.5px;
+  line-height: 1.5;
+}
+
+.ix-dc__stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.ix-dc__stats div {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--ix-fill);
+}
+
+.ix-dc__stats dt {
+  color: var(--ix-ink-3);
+  font-size: 12px;
+}
+
+.ix-dc__stats dd {
+  margin: 2px 0 0;
+  color: var(--ix-ink);
+  font-size: 14.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.ix-dc__note {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: var(--ix-fill);
+  color: var(--ix-ink-2);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.ix-dc__note strong {
+  color: var(--ix-ink);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* ---- 7. New message (§6.6, §6.12) ------------------------------------------------------------- */
+.ix-dialog-panel.ix-newmsg {
+  display: flex;
+  flex-direction: column;
+  max-height: min(640px, 82dvh);
+}
+
+.ix-newmsg__head {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  gap: 12px;
+  padding: 22px 22px 12px;
+}
+
+.ix-newmsg__head .ix-dialog__body {
+  margin-top: -8px;
+}
+
+.ix-newmsg__head .ix-seg {
+  display: grid;
+  grid-auto-columns: 1fr;
+}
+
+.ix-newmsg__search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 14px;
+  border-radius: 12px;
+  background: var(--ix-fill-field);
+  box-shadow: inset 0 0 0 1px var(--ix-edge-lit);
+  color: var(--ix-ink-3);
+}
+
+.ix-newmsg__search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ix-ink);
+  font: inherit;
+  font-size: 14.5px;
+  outline: none;
+}
+
+.ix-newmsg__search input::placeholder {
+  color: var(--ix-ink-3);
+}
+
+.ix-newmsg__search:has(input:focus-visible) {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+.ix-newmsg__name {
+  height: 40px;
+}
+
+.ix-newmsg__list {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  gap: 2px;
+  min-height: 120px;
+  padding: 0 12px 12px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.ix-newmsg__person {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 120ms var(--ix-ease);
+}
+
+.ix-newmsg__person:hover,
+.ix-newmsg__person[data-selected] {
+  background: var(--ix-fill);
+}
+
+.ix-newmsg__person:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: -2px;
+}
+
+.ix-newmsg__who {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ix-newmsg__name-text,
+.ix-newmsg__user {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ix-newmsg__name-text {
+  color: var(--ix-ink);
+  font-size: 14.5px;
+  font-weight: 600;
+}
+
+.ix-newmsg__user {
+  color: var(--ix-ink-3);
+  font-size: 12.5px;
+}
+
+.ix-newmsg__go {
+  flex: none;
+  color: var(--ix-ink-2);
+  font-size: 13px;
+  font-weight: 600;
+  opacity: 0;
+  transition: opacity 120ms var(--ix-ease);
+}
+
+.ix-newmsg__person:hover .ix-newmsg__go,
+.ix-newmsg__person:focus-visible .ix-newmsg__go {
+  opacity: 1;
+}
+
+.ix-newmsg__check {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 1.5px var(--ix-edge-strong);
+  color: var(--ix-cream-ink);
+}
+
+.ix-newmsg__check[data-on] {
+  background: var(--ix-cream);
+  box-shadow: none;
+}
+
+.ix-newmsg__empty {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 28px 12px;
+  color: var(--ix-ink-3);
+  font-size: 14px;
+  line-height: 1.45;
+  text-align: center;
+}
+
+.ix-newmsg__empty strong {
+  color: var(--ix-ink);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.ix-newmsg__error {
+  flex: none;
+  margin: 0 22px 12px;
+}
+
+.ix-newmsg__foot {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 22px 18px;
+  box-shadow: inset 0 1px 0 var(--ix-line);
+}
+
+.ix-newmsg__foot .ix-cream {
+  align-self: stretch;
+}
+
+.ix-newmsg__count {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--ix-ink-3);
+  font-size: 12.5px;
+}
+
+/* ---- 8. The redirect ------------------------------------------------------------------------ */
+/* `/app` and `/app/dms` draw nothing while they find where you were; main stays the window's ground. */
+.ix-redirect {
+  flex: 1 1 auto;
+  min-height: 0;
+}

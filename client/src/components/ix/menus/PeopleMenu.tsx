@@ -9,8 +9,8 @@ import { modHint } from './menuUtils';
 
 /**
  * The People menu (docs/index-spec.md §4.1, §6.6): "..." in the People header.
- * New message, Start a group (both open the DM picker; its Group toggle makes it
- * a group), Add friend (the Friends page), and Settings.
+ * New message and Start a group (the DM picker, on its Direct or its Group half), Add
+ * friend (the Friends page with its form open), and Settings.
  *
  * HOW TO OPEN IT (IX-14's People header): `openPeopleMenu(anchor)` from
  * `components/ix/menus`, the "..." button as `{ element, align: 'end' }`.
@@ -36,9 +36,10 @@ export function buildPeopleMenu(actions: PeopleMenuActions): IxMenuEntry[] {
 export function PeopleMenuView({ anchor }: { anchor: MenuAnchor }) {
   const navigate = useNavigate();
   const entries = buildPeopleMenu({
-    newMessage: openDmPicker,
-    startGroup: openDmPicker,
-    addFriend: () => navigate('/app/friends'),
+    newMessage: () => openDmPicker('direct'),
+    startGroup: () => openDmPicker('group'),
+    // The Friends page with its add form already open.
+    addFriend: () => navigate('/app/friends', { state: { addFriend: true } }),
     settings: () => useUIStore.getState().setUserSettingsOpen(true),
   });
   return <IxMenu open onClose={closeMenu} anchor={anchor} label="People menu" width={240} entries={entries} testId="ix-people-menu" />;

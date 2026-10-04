@@ -52,6 +52,8 @@ export interface InviteRequest {
   channelId: string;
 }
 
+export type DmPickerMode = 'direct' | 'group';
+
 export type OpenMenu =
   | { kind: 'server'; server: ServerRef; anchor: MenuAnchor }
   | { kind: 'channel'; request: ChannelMenuRequest; anchor: MenuAnchor }
@@ -65,12 +67,14 @@ interface HostState {
   createChannel: CreateChannelRequest | null;
   invite: InviteRequest | null;
   dmPicker: boolean;
+  /** Which half the New message picker opens on. */
+  dmPickerMode: DmPickerMode;
   setMenu: (menu: OpenMenu) => void;
   setHelp: (open: boolean) => void;
   setProfile: (profile: HostState['profile']) => void;
   setCreateChannel: (request: CreateChannelRequest | null) => void;
   setInvite: (request: InviteRequest | null) => void;
-  setDmPicker: (open: boolean) => void;
+  setDmPicker: (open: boolean, mode?: DmPickerMode) => void;
   reset: () => void;
 }
 
@@ -81,13 +85,14 @@ export const useMenuHostStore = create<HostState>()((set) => ({
   createChannel: null,
   invite: null,
   dmPicker: false,
+  dmPickerMode: 'direct',
   setMenu: (menu) => set({ menu }),
   setHelp: (help) => set({ help }),
   setProfile: (profile) => set({ profile }),
   setCreateChannel: (createChannel) => set({ createChannel }),
   setInvite: (invite) => set({ invite }),
-  setDmPicker: (dmPicker) => set({ dmPicker }),
-  reset: () => set({ menu: null, help: false, profile: null, createChannel: null, invite: null, dmPicker: false }),
+  setDmPicker: (dmPicker, mode) => set((state) => ({ dmPicker, dmPickerMode: mode ?? state.dmPickerMode })),
+  reset: () => set({ menu: null, help: false, profile: null, createChannel: null, invite: null, dmPicker: false, dmPickerMode: 'direct' }),
 }));
 
 registerSessionReset('ix-menu-host', () => useMenuHostStore.getState().reset());
@@ -150,9 +155,9 @@ export function closeInvite(): void {
   useMenuHostStore.getState().setInvite(null);
 }
 
-/** Open the New message / group picker (the People menu). */
-export function openDmPicker(): void {
-  useMenuHostStore.getState().setDmPicker(true);
+/** Open the New message picker (the People menu, the Messages label's "+"): `direct`, or `group` for Start a group. */
+export function openDmPicker(mode: DmPickerMode = 'direct'): void {
+  useMenuHostStore.getState().setDmPicker(true, mode);
 }
 
 export function closeDmPicker(): void {

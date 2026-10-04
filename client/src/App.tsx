@@ -11,10 +11,11 @@ import { AccountUnlockPage } from './pages/AccountUnlockPage';
 import { AccountRecoverPage } from './pages/AccountRecoverPage';
 import { TermsPage } from './pages/TermsPage';
 import { PrivacyPage } from './pages/PrivacyPage';
+// `/app` and `/app/dms` are not pages (docs/index-spec.md §8.1): they open where you were.
+import { LastPlaceRedirect } from './components/ix/people/LastPlaceRedirect';
 
 // Lazy-loaded route surfaces keep the initial auth/server bootstrap bundle small.
 const AppShell = lazy(() => import('./pages/AppShell').then(m => ({ default: m.AppShell })));
-const HomePage = lazy(() => import('./pages/HomePage').then(m => ({ default: m.HomePage })));
 const GuildHomePage = lazy(() => import('./pages/GuildHomePage').then(m => ({ default: m.GuildHomePage })));
 const GuildPage = lazy(() => import('./pages/GuildPage').then(m => ({ default: m.GuildPage })));
 const GuildSettingsPage = lazy(() => import('./pages/GuildSettingsPage').then(m => ({ default: m.GuildSettingsPage })));
@@ -25,6 +26,7 @@ const GuildEventsPage = lazy(() => import('./pages/GuildEventsPage').then(m => (
 const GuildGameServersPage = lazy(() => import('./pages/GuildGameServersPage').then(m => ({ default: m.GuildGameServersPage })));
 const DMPage = lazy(() => import('./pages/DMPage').then(m => ({ default: m.DMPage })));
 const FriendsPage = lazy(() => import('./pages/FriendsPage').then(m => ({ default: m.FriendsPage })));
+const InboxPage = lazy(() => import('./components/ix/people/InboxPage').then(m => ({ default: m.InboxPage })));
 const InvitePage = lazy(() => import('./pages/InvitePage').then(m => ({ default: m.InvitePage })));
 const BotAuthorizePage = lazy(() => import('./pages/BotAuthorizePage').then(m => ({ default: m.BotAuthorizePage })));
 const AdminPage = lazy(() => import('./pages/AdminPage').then(m => ({ default: m.AdminPage })));
@@ -496,7 +498,7 @@ export default function App() {
           </ProtectedRoute>
         }
       >
-        <Route index element={lazyRoute(<HomePage />)} />
+        <Route index element={route(<LastPlaceRedirect mode="app" />)} />
         <Route path="guilds/:guildId" element={lazyRoute(<GuildHomePage />)} />
         <Route path="guilds/:guildId/settings" element={lazyRoute(<GuildSettingsPage />)} />
         <Route path="guilds/:guildId/sports" element={lazyRoute(<GuildSportsPage />)} />
@@ -505,9 +507,10 @@ export default function App() {
         <Route path="guilds/:guildId/events" element={lazyRoute(<GuildEventsPage />)} />
         <Route path="guilds/:guildId/game-servers" element={lazyRoute(<GuildGameServersPage />)} />
         <Route path="guilds/:guildId/channels/:channelId" element={lazyRoute(<GuildPage />)} />
-        <Route path="dms" element={lazyRoute(<DMPage />)} />
+        <Route path="dms" element={route(<LastPlaceRedirect mode="dms" />)} />
         <Route path="dms/:channelId" element={lazyRoute(<DMPage />)} />
         <Route path="friends" element={lazyRoute(<FriendsPage />)} />
+        <Route path="inbox" element={lazyRoute(<InboxPage />)} />
         <Route path="admin" element={lazyRoute(<AdminPage />)} />
         <Route path="discovery" element={lazyRoute(<DiscoveryPage />)} />
         <Route path="templates" element={lazyRoute(<TemplateGalleryPage />)} />

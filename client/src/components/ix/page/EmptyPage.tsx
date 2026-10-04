@@ -45,6 +45,8 @@ export function EmptyPage({
   'aria-label': ariaLabel,
   'data-testid': testId = 'ix-empty',
 }: EmptyPageProps) {
+  // Inside a page the large title is the h1; the notice under it is a section heading, not a second h1.
+  const Title = inline ? 'h2' : 'h1';
   return (
     <section
       className={cn('ix-empty', className)}
@@ -59,7 +61,7 @@ export function EmptyPage({
           <IxGlyph name={glyph} size={30} />
         </span>
       )}
-      <h1 className="ix-empty__title">{title}</h1>
+      <Title className="ix-empty__title">{title}</Title>
       {line && <p className="ix-empty__line">{line}</p>}
       {action && <div className="ix-empty__action">{action}</div>}
     </section>

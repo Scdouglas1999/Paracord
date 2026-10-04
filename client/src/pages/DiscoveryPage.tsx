@@ -1,22 +1,19 @@
 import { useCurrentAccountScope } from '../hooks/useCurrentUser';
 import { guildLandingPath } from '../lib/guildNavigation';
 import { useCurrentGuilds } from '../hooks/useGuilds';
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import axios from 'axios';
 import { useNavigate } from 'react-router';
-import { ArrowLeft, CalendarDays, Compass, Globe2, Search, Server, Users } from 'lucide-react';
 import { extractApiError } from '../api/client';
 import { getApi } from '../api/activeClient';
 import { useGuildStore } from '../stores/guildStore';
 import { toast } from '../stores/toastStore';
 import { cn } from '../lib/utils';
-import { safeStoredImageDataUrl } from '../lib/security';
-import { getGuildColor } from '../lib/colors';
-import { EmptyState } from '../components/ui/Feedback';
-import { Button } from '../components/ui/Button';
-import { Input } from '../components/ui/Input';
-import { Skeleton, SkeletonSwap } from '../components/ui/Skeleton';
-import { Modal, ModalBody, ModalFooter, ModalHeader, ModalTitle } from '../components/ui/Modal';
+import { IxGlyph } from '../components/ix/glyphs';
+import { ServerMark } from '../components/ix/identity';
+import { EmptyPage, LargeTitlePage } from '../components/ix/page';
+import { CreamButton, ToolChip, WideControl } from '../components/ix/primitives';
+import { Modal } from '../components/ui/Modal';
 
 interface DiscoverableGuild {
   id: string;
@@ -144,207 +141,124 @@ export function DiscoveryPage() {
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-bg-plate">
-      {/* Solid header — search + category pills, no gradient hero (kill-list #1) */}
-      <header className="shrink-0 border-b border-border-subtle bg-bg-raised px-4 py-4 sm:px-6">
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            aria-label="Back to home"
-            onClick={() => navigate('/app')}
-            className="flex h-9 w-9 items-center justify-center rounded-chip text-text-secondary outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
-          >
-            <ArrowLeft size={18} />
-          </button>
-          <span className="flex h-10 w-10 items-center justify-center rounded-well bg-accent-tint text-accent-primary">
-            <Compass size={19} />
-          </span>
-          <div className="min-w-0">
-            <h1 className="font-display text-heading text-text-primary">Discover servers</h1>
-            <p className="text-meta text-text-muted">
-              {total} public {total === 1 ? 'community' : 'communities'} to explore
-            </p>
-          </div>
-        </div>
+    <LargeTitlePage
+      title="Discover"
+      subtitle={`${total} public ${total === 1 ? 'community' : 'communities'} to explore`}
+      data-testid="ix-discover"
+      className="ix-sp ix-dc"
+    >
+      <label className="ix-psearch" htmlFor="discovery-search">
+        <IxGlyph name="search" size={15} />
+        <span className="sr-only">Search public servers</span>
+        <input
+          id="discovery-search"
+          type="search"
+          placeholder="Search by name or topic"
+          value={search}
+          autoComplete="off"
+          spellCheck={false}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+      </label>
 
-        <div className="relative mt-4">
-          <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
-          <label htmlFor="discovery-search" className="sr-only">
-            Search public servers
-          </label>
-          <Input
-            id="discovery-search"
-            type="text"
-            placeholder="Search by name or topic..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="pl-9"
-          />
-        </div>
+      {/* §9: the chips are quiet fills with a 44px hit area on a coarse pointer (`pc-touch`). */}
+      <div className="ix-dc__chips" role="group" aria-label="Topics">
+        <CategoryChip active={selectedTag === null} onClick={() => setSelectedTag(null)}>
+          All
+        </CategoryChip>
+        {CATEGORIES.map((cat) => (
+          <CategoryChip key={cat} active={selectedTag === cat} onClick={() => setSelectedTag(selectedTag === cat ? null : cat)}>
+            {cat}
+          </CategoryChip>
+        ))}
+      </div>
 
-        {/* §9: the chips are 28px of ink and carry a 44px hit area (`pc-touch`).
-            A wrapping row is the one case that cannot borrow space the way a lone
-            control can — with an 8px row gap the second row's hit area reaches up
-            into the first row's and steals its lower half, so the effective target
-            is 36px, not 44. A 16px row gap makes the 44px bands tile exactly.
-            It costs nothing at desktop width, where the row does not wrap. */}
-        <div className="mt-3 flex flex-wrap gap-x-2 gap-y-4">
-          <CategoryPill active={selectedTag === null} onClick={() => setSelectedTag(null)}>
-            All
-          </CategoryPill>
-          {CATEGORIES.map((cat) => (
-            <CategoryPill
-              key={cat}
-              active={selectedTag === cat}
-              onClick={() => setSelectedTag(selectedTag === cat ? null : cat)}
-            >
-              {cat}
-            </CategoryPill>
+      {loading ? (
+        <ul className="ix-dc__grid" role="status" aria-busy="true" aria-label="Loading public servers">
+          {Array.from({ length: 6 }, (_, i) => (
+            <li key={i} className="ix-dc__card ix-dc__card--skeleton" aria-hidden="true">
+              <span className="ix-dc__bone ix-dc__bone--mark" />
+              <span className="ix-dc__bone ix-dc__bone--title" />
+              <span className="ix-dc__bone ix-dc__bone--line" />
+              <span className="ix-dc__bone ix-dc__bone--line ix-dc__bone--short" />
+            </li>
           ))}
-        </div>
-      </header>
-
-      <SkeletonSwap busy={loading} className="min-h-0 flex-1 overflow-y-auto p-4 scrollbar-thin sm:p-6">
-        {loading ? (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {Array.from({ length: 6 }, (_, i) => (
-              <div key={i} className="overflow-hidden rounded-well border border-border-subtle bg-bg-raised shadow-[var(--shadow-chip)]">
-                <Skeleton height={64} borderRadius={0} />
-                <div className="flex flex-col gap-2.5 p-4">
-                  <Skeleton width="55%" height={16} />
-                  <Skeleton width="90%" height={12} />
-                  <Skeleton width="70%" height={12} />
-                  <div className="mt-2 flex items-center justify-between">
-                    <Skeleton width={90} height={12} />
-                    <Skeleton width={64} height={28} />
-                  </div>
+        </ul>
+      ) : loadError ? (
+        <EmptyPage
+          inline
+          role="alert"
+          glyph="x"
+          title="We couldn't reach discovery"
+          line={loadError}
+          action={
+            <WideControl onClick={() => void fetchDiscovery(search, selectedTag)} className="ix-dc__retry">
+              Retry
+            </WideControl>
+          }
+        />
+      ) : guilds.length === 0 ? (
+        <EmptyPage
+          inline
+          glyph="search"
+          title={filtersActive ? 'No servers match your filters' : 'No public servers yet'}
+          line={
+            filtersActive
+              ? 'Nothing here matches your search and topic. Clear the filters, or try a different topic.'
+              : "There aren't any public communities listed right now. Check back soon, or start your own server for people to find."
+          }
+          action={
+            filtersActive ? (
+              <WideControl onClick={clearFilters} className="ix-dc__retry">
+                Clear filters
+              </WideControl>
+            ) : undefined
+          }
+        />
+      ) : (
+        <ul className="ix-dc__grid">
+          {guilds.map((guild) => {
+            const isMember = myGuildIds.has(guild.id);
+            const isJoining = joiningId === guild.id;
+            return (
+              <li key={guild.id} className="ix-dc__card" data-testid="ix-discover-card">
+                <div className="ix-dc__head">
+                  <ServerMark guildId={guild.id} name={guild.name} icon={guild.icon_hash} size={44} />
+                  <h3 className="ix-dc__name">{guild.name}</h3>
                 </div>
-              </div>
-            ))}
-          </div>
-        ) : loadError ? (
-          <div role="alert">
-            <EmptyState
-              icon={<Compass size={20} />}
-              title="We couldn't reach discovery"
-              description={loadError}
-              action={
-                <Button variant="secondary" size="sm" onClick={() => void fetchDiscovery(search, selectedTag)}>
-                  Retry
-                </Button>
-              }
-            />
-          </div>
-        ) : guilds.length === 0 ? (
-          <EmptyState
-            icon={<Search size={20} />}
-            title={filtersActive ? 'No servers match your filters' : 'No public servers yet'}
-            description={
-              filtersActive
-                ? 'Nothing here matches your search and category. Widen the net by clearing filters, or try a different topic.'
-                : "There aren't any public communities listed right now. Check back soon, or spin up your own server for people to find."
-            }
-            action={
-              filtersActive ? (
-                <Button variant="secondary" size="sm" onClick={clearFilters}>
-                  Clear filters
-                </Button>
-              ) : undefined
-            }
-          />
-        ) : (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {guilds.map((guild) => {
-              const isMember = myGuildIds.has(guild.id);
-              const isJoining = joiningId === guild.id;
-              const iconSrc = safeStoredImageDataUrl(guild.icon_hash);
-              const bannerColor = getGuildColor(guild.id);
-
-              return (
-                <div
-                  key={guild.id}
-                  className="group flex flex-col overflow-hidden rounded-well border border-border-subtle bg-bg-raised shadow-[var(--shadow-chip)] transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:border-border-strong"
-                >
-                  {/* Framed solid banner (no gradient wash — kill-list #2) */}
-                  <div
-                    className="relative h-16 w-full"
-                    style={{ backgroundColor: `color-mix(in srgb, ${bannerColor} 26%, var(--bg-well))` }}
+                {guild.description && <p className="ix-dc__about">{guild.description}</p>}
+                {guild.tags.length > 0 && (
+                  <ul className="ix-dc__tags" aria-label="Topics">
+                    {guild.tags.slice(0, 3).map((tag) => (
+                      <li key={tag}>{tag}</li>
+                    ))}
+                  </ul>
+                )}
+                <div className="ix-dc__foot">
+                  <p className="ix-dc__facts">
+                    <span>{guild.member_count} members</span>
+                    <span className="ix-dc__online">{guild.online_count} online</span>
+                  </p>
+                  <WideControl
+                    className="ix-dc__open"
+                    disabled={isJoining}
+                    onClick={() => {
+                      if (isMember) {
+                        void handleJoin(guild);
+                        return;
+                      }
+                      setJoinError(null);
+                      setSelectedGuild(guild);
+                    }}
                   >
-                    <div className="absolute -bottom-5 left-4">
-                      <div
-                        className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-well"
-                        style={{
-                          boxShadow: '0 0 0 3px var(--bg-secondary)',
-                          backgroundColor: iconSrc ? 'transparent' : bannerColor,
-                        }}
-                      >
-                        {iconSrc ? (
-                          <img src={iconSrc} alt={guild.name} className="h-full w-full object-cover" />
-                        ) : (
-                          <span className="text-label font-bold text-white">
-                            {guild.name.split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase()}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex flex-1 flex-col px-4 pb-4 pt-7">
-                    <h3 className="truncate text-heading text-text-primary">{guild.name}</h3>
-                    {guild.description && (
-                      <p className="mt-1 line-clamp-2 text-meta leading-relaxed text-text-secondary">
-                        {guild.description}
-                      </p>
-                    )}
-
-                    {guild.tags.length > 0 && (
-                      <div className="mt-2.5 flex flex-wrap gap-1.5">
-                        {guild.tags.slice(0, 3).map((tag) => (
-                          <span
-                            key={tag}
-                            className="rounded-window bg-bg-mod-strong px-1.5 py-0.5 text-meta font-semibold text-text-secondary"
-                          >
-                            {tag}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-
-                    <div className="mt-auto flex items-center justify-between pt-4">
-                      <div className="flex items-center gap-3 text-meta tabular-nums text-text-muted">
-                        <span className="inline-flex items-center gap-1">
-                          <Users size={13} />
-                          {guild.member_count}
-                        </span>
-                        <span className="inline-flex items-center gap-1 text-light-amber">
-                          <span className="h-1.5 w-1.5 rounded-full bg-light-amber" />
-                          {guild.online_count} online
-                        </span>
-                      </div>
-
-                      <Button
-                        variant={isMember ? 'secondary' : 'default'}
-                        size="sm"
-                        onClick={() => {
-                          if (isMember) {
-                            void handleJoin(guild);
-                            return;
-                          }
-                          setJoinError(null);
-                          setSelectedGuild(guild);
-                        }}
-                        disabled={isJoining}
-                      >
-                        {isJoining ? 'Opening…' : isMember ? 'Visit' : 'Preview'}
-                      </Button>
-                    </div>
-                  </div>
+                    {isJoining ? 'Opening…' : isMember ? 'Visit' : 'Preview'}
+                  </WideControl>
                 </div>
-              );
-            })}
-          </div>
-        )}
-      </SkeletonSwap>
+              </li>
+            );
+          })}
+        </ul>
+      )}
 
       <DiscoveryPreview
         guild={selectedGuild}
@@ -357,7 +271,7 @@ export function DiscoveryPage() {
         }}
         onJoin={(guild) => { void handleJoin(guild); }}
       />
-    </div>
+    </LargeTitlePage>
   );
 }
 
@@ -374,136 +288,101 @@ function DiscoveryPreview({
   onClose: () => void;
   onJoin: (guild: DiscoverableGuild) => void;
 }) {
+  const titleId = useId();
+  const descriptionId = useId();
   if (!guild) return null;
-  const iconSrc = safeStoredImageDataUrl(guild.icon_hash);
-  const bannerColor = getGuildColor(guild.id);
   const createdLabel = Number.isNaN(Date.parse(guild.created_at))
     ? null
     : new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' }).format(new Date(guild.created_at));
-  const titleId = 'discovery-preview-title';
-  const descriptionId = 'discovery-preview-description';
 
   return (
     <Modal
       open
       onClose={onClose}
-      size="md"
       labeledBy={titleId}
       describedBy={descriptionId}
-      showCloseButton
+      panelClassName="ix-dialog-panel ix-dc__preview"
       closeOnBackdrop={!joining}
     >
-      <div className="h-24" style={{ backgroundColor: `color-mix(in srgb, ${bannerColor} 30%, var(--bg-well))` }} />
-      <ModalHeader className="relative pb-1 pt-0">
-        <div
-          className="-mt-7 flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-plate text-title font-bold text-white"
-          style={{ boxShadow: '0 0 0 4px var(--bg-secondary)', backgroundColor: iconSrc ? 'transparent' : bannerColor }}
-        >
-          {iconSrc ? (
-            <img src={iconSrc} alt="" className="h-full w-full object-cover" />
-          ) : (
-            guild.name.split(' ').map((word) => word[0]).join('').slice(0, 2).toUpperCase()
-          )}
-        </div>
-        <div className="min-w-0 pt-3">
-          <ModalTitle id={titleId} className="truncate">{guild.name}</ModalTitle>
-          <div className="mt-1 inline-flex items-center gap-1.5 text-meta text-text-muted">
-            {guild.federated ? <Server size={13} /> : <Globe2 size={13} />}
-            {guild.federated ? `From ${guild.origin_server || guild.origin_domain || 'a trusted instance'}` : 'Public server on this instance'}
+      <div className="ix-dialog">
+        <div className="ix-dc__preview-head">
+          <ServerMark guildId={guild.id} name={guild.name} icon={guild.icon_hash} size={56} />
+          <div className="ix-dc__preview-title">
+            <h2 id={titleId} className="ix-dialog__title">
+              {guild.name}
+            </h2>
+            <p className="ix-dc__origin">
+              {guild.federated ? `From ${guild.origin_server || guild.origin_domain || 'a trusted instance'}` : 'Public server on this instance'}
+            </p>
           </div>
         </div>
-      </ModalHeader>
 
-      <ModalBody className="space-y-5 pb-5 pt-3">
-        <p id={descriptionId} className="text-body leading-relaxed text-text-secondary">
+        <p id={descriptionId} className="ix-dc__preview-about">
           {guild.description?.trim() || 'This community has not added a description yet.'}
         </p>
 
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-          <PreviewFact icon={<Users size={15} />} label="Members" value={guild.member_count.toLocaleString()} />
-          <PreviewFact icon={<span className="h-2 w-2 rounded-full bg-light-amber" />} label="Online now" value={guild.online_count.toLocaleString()} />
-          {createdLabel && <PreviewFact icon={<CalendarDays size={15} />} label="Established" value={createdLabel} className="col-span-2 sm:col-span-1" />}
-        </div>
+        <dl className="ix-dc__stats">
+          <div>
+            <dt>Members</dt>
+            <dd>{guild.member_count.toLocaleString()}</dd>
+          </div>
+          <div>
+            <dt>Online now</dt>
+            <dd>{guild.online_count.toLocaleString()}</dd>
+          </div>
+          {createdLabel && (
+            <div>
+              <dt>Established</dt>
+              <dd>{createdLabel}</dd>
+            </div>
+          )}
+        </dl>
 
         {guild.tags.length > 0 && (
-          <div>
-            <div className="text-section text-text-muted">Topics</div>
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              {guild.tags.map((tag) => (
-                <span key={tag} className="rounded-window bg-bg-mod-strong px-2 py-1 text-meta font-semibold text-text-secondary">{tag}</span>
-              ))}
-            </div>
-          </div>
+          <ul className="ix-dc__tags" aria-label="Topics">
+            {guild.tags.map((tag) => (
+              <li key={tag}>{tag}</li>
+            ))}
+          </ul>
         )}
 
-        <div className="rounded-well border border-border-subtle bg-bg-well px-3.5 py-3">
-          <div className="text-label font-semibold text-text-primary">
-            {guild.federated ? 'Remote community' : 'Ready to join?'}
-          </div>
-          <p className="mt-1 text-meta leading-relaxed text-text-secondary">
-            {guild.federated
-              ? 'This listing comes from a trusted federated instance. Cross-instance joining is not available from Discovery yet.'
-              : 'Joining adds this server to your sidebar and makes your member profile visible to the community. You can leave later.'}
-          </p>
-        </div>
+        <p className="ix-dc__note">
+          <strong>{guild.federated ? 'Remote community' : 'Ready to join?'}</strong>
+          {guild.federated
+            ? 'This listing comes from a trusted federated instance. Cross-instance joining is not available from Discovery yet.'
+            : 'Joining adds this server to your dock and makes your member profile visible to the community. You can leave later.'}
+        </p>
 
         {error && (
-          <div role="alert" className="rounded-well border border-accent-danger/35 bg-danger-tint px-3.5 py-2.5 text-label text-accent-danger">
+          <p role="alert" className="ix-dialog__error">
             {error}
-          </div>
+          </p>
         )}
-      </ModalBody>
 
-      <ModalFooter className="border-t border-border-subtle">
-        <Button variant="secondary" disabled={joining} onClick={onClose}>
-          {guild.federated ? 'Close' : 'Not now'}
-        </Button>
-        {!guild.federated && (
-          <Button loading={joining} disabled={joining} onClick={() => onJoin(guild)}>
-            {joining ? 'Joining server…' : `Join ${guild.name}`}
-          </Button>
-        )}
-      </ModalFooter>
+        <div className="ix-dialog__actions">
+          <button type="button" className="ix-dialog__cancel" disabled={joining} onClick={onClose}>
+            {guild.federated ? 'Close' : 'Not now'}
+          </button>
+          {!guild.federated && (
+            <CreamButton disabled={joining} onClick={() => onJoin(guild)}>
+              {joining ? 'Joining server…' : `Join ${guild.name}`}
+            </CreamButton>
+          )}
+        </div>
+      </div>
     </Modal>
   );
 }
 
-function PreviewFact({ icon, label, value, className }: { icon: ReactNode; label: string; value: string; className?: string }) {
+function CategoryChip({ active, onClick, children }: { active: boolean; onClick: () => void; children: string }) {
   return (
-    <div className={cn('rounded-well border border-border-subtle bg-bg-well px-3 py-2.5', className)}>
-      <div className="flex items-center gap-1.5 text-meta text-text-muted">{icon}{label}</div>
-      <div className="mt-1 text-label font-semibold tabular-nums text-text-primary">{value}</div>
-    </div>
-  );
-}
-
-function CategoryPill({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
+    <ToolChip
+      // pc-touch (§9): the chip stays a quiet 28px tile; the hit area is 44px on a coarse pointer.
+      className={cn('pc-touch ix-dc__chip')}
       aria-pressed={active}
-      className={cn(
-        // pc-touch (§9): the chip stays 28px so the category row reads as a row
-        // of filters rather than a row of buttons; the *hit area* is 44px on a
-        // coarse pointer. The identical chip on Friends already does this — this
-        // one was the copy that got missed, and it is four targets deep in the
-        // one surface a phone user browses with a thumb.
-        'pc-touch inline-flex h-7 items-center rounded-full px-3 text-meta font-semibold outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
-        active
-          ? 'bg-accent-tint text-accent-primary'
-          : 'bg-bg-mod-subtle text-text-secondary hover:bg-bg-mod-strong hover:text-text-primary',
-      )}
+      onClick={onClick}
     >
       {children}
-    </button>
+    </ToolChip>
   );
 }
