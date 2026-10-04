@@ -516,10 +516,9 @@ describe('server settings, from the channel menu', () => {
 });
 
 describe('the compact frame', () => {
-  it('keeps the button that opens places first in the row', () => {
+  it('has no button to open places: the Index frame keeps the sidebar as a column (IX-4)', () => {
     mockLayout.value = 'compact';
-    const { container } = renderPane();
-    const row = container.querySelector('.glass-header')!;
-    expect(row.firstElementChild).toHaveAttribute('aria-label', 'Show places');
+    renderPane();
+    expect(screen.queryByRole('button', { name: 'Show places' })).not.toBeInTheDocument();
   });
 });

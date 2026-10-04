@@ -12,7 +12,8 @@ import { CommandPalette } from '../components/layout/CommandPalette';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
 import { TogetherHost } from '../components/voice/together/TogetherHost';
 import { MotionDirector } from '../components/motion/MotionDirector';
-import { GlassFrame, useGlassLayout, usePhoneNavigation, usePhoneNavStore } from '../components/glass/shell';
+import { useGlassLayout, usePhoneNavigation, usePhoneNavStore } from '../components/glass/shell';
+import { IxFrame } from '../components/ix/shell/IxFrame';
 import { useGlassStore } from '../stores/glassStore';
 import { useUIStore } from '../stores/uiStore';
 import { useKeyboardNavigation } from '../hooks/useKeyboardNavigation';
@@ -24,27 +25,23 @@ import { InteractionModal } from '../components/message/InteractionModal';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 
 /**
- * AppShell — the Glass frame (docs/glass-spec.md §3; WP-G7).
+ * AppShell — the Index frame (docs/index-spec.md §3; IX-4).
  *
- * The room lights the window and two panes float on it, 16px from the edges
- * and from each other, radius 28, full height:
+ * Two flush columns on the ground, separated by a hairline:
  *
- *   [ places 316 ]  [ <main> conversation: <Outlet/> ]  ( [ sheet ] )
+ *   [ sidebar 316: pinned card, place panes, dock ]  [ <main> toolbar + <Outlet/> ]
  *
- * Geometry lives in `GlassFrame` (components/glass/shell) and follows
- * `glassStore` (stage side by side / theater, browse, hidden chat, the places
- * overlay below 860px). What fills each pane is a slot (`slots.ts`); today the
- * slots render the existing components, and each later package replaces one.
+ * Geometry lives in `IxFrame` (components/ix/shell): the columns, the window
+ * tint, the place slide, the toolbar, and the hosts of the call view and the
+ * sheets. What fills each host is a slot (`components/ix/shell/slots.ts`).
  *
  * This component keeps the app-level concerns the frame does not own: route
  * navigation for non-React callers, keyboard shortcuts, the settings dialogs,
  * the command palette, the confirm and interaction hosts, the skip link, and
- * the phone's navigation: on a phone the frame is two screens (places, then the
- * conversation) and this decides the first one, takes the edge swipe back and
- * turns the old drawer requests into the places screen (`usePhoneNavigation`).
- * There is no bottom bar: Home and messages are the server row's first circle,
- * search and members are the conversation header's, Friends is a row in Home,
- * and settings are the account menu behind your face on the places screen.
+ * the phone's navigation: on a phone the frame is two screens (the sidebar,
+ * then main pushed over it) and this decides the first one, takes the edge
+ * swipe back and turns the old drawer requests into the root screen
+ * (`usePhoneNavigation`).
  *
  * Overlay motion is the shared §5.1 set: drawers ease in from their edge on
  * ease-out and leave on ease-in, dialogs rise on pc-enter, backdrops fade — all
@@ -171,7 +168,7 @@ export function AppShell() {
           Skip to content
         </a>
 
-        <GlassFrame layout={layout} guildId={guildId ?? null} channelId={channelId ?? null}>
+        <IxFrame guildId={guildId ?? null} channelId={channelId ?? null}>
           {/* Switching channels (or anywhere else) crossfades the page in
               with a 4px rise — never a slide (§5.2). */}
           <div
@@ -180,7 +177,7 @@ export function AppShell() {
           >
             <Outlet />
           </div>
-        </GlassFrame>
+        </IxFrame>
 
         <CommandPalette />
         <ConfirmDialog />

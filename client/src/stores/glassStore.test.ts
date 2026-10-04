@@ -10,7 +10,7 @@ beforeEach(() => {
 describe('glassStore', () => {
   it('starts in the conversation with nothing open', () => {
     const s = useGlassStore.getState();
-    expect(s.stage).toEqual({ mode: 'none', serverId: null, guildId: null, channelId: null, streamerId: null });
+    expect(s.stage).toEqual({ mode: 'none', chat: false, serverId: null, guildId: null, channelId: null, streamerId: null });
     expect(selectStageOpen(s)).toBe(false);
     expect(s.browseOpen).toBe(false);
     expect(s.chatHidden).toBe(false);
@@ -23,7 +23,7 @@ describe('glassStore', () => {
     useGlassStore.getState().setPillExpanded(true);
     useGlassStore.getState().openStage(LOUNGE);
     const s = useGlassStore.getState();
-    expect(s.stage).toEqual({ mode: 'side', ...LOUNGE });
+    expect(s.stage).toEqual({ mode: 'side', chat: false, ...LOUNGE });
     expect(s.pillExpanded).toBe(false);
     expect(selectStageOpen(s)).toBe(true);
   });
@@ -41,7 +41,7 @@ describe('glassStore', () => {
     store.toggleChatHidden();
     store.openStage({ ...LOUNGE, streamerId: 'brendan' });
     const s = useGlassStore.getState();
-    expect(s.stage).toEqual({ mode: 'theater', ...LOUNGE, streamerId: 'brendan' });
+    expect(s.stage).toEqual({ mode: 'theater', chat: false, ...LOUNGE, streamerId: 'brendan' });
     expect(s.chatHidden).toBe(false);
   });
 
@@ -55,6 +55,24 @@ describe('glassStore', () => {
     expect(s.stage.streamerId).toBeNull();
     expect(s.browseOpen).toBe(false);
     expect(s.chatHidden).toBe(false);
+  });
+
+  it('H turns the call view\'s chat column on and off; a fresh view starts without it, a stream switch keeps it', () => {
+    const store = useGlassStore.getState();
+    store.toggleChat();
+    expect(useGlassStore.getState().stage.chat).toBe(false);
+    store.openStage(LOUNGE);
+    store.toggleChat();
+    expect(useGlassStore.getState().stage.chat).toBe(true);
+    store.openStage({ ...LOUNGE, streamerId: 'brendan' });
+    expect(useGlassStore.getState().stage.chat).toBe(true);
+    store.toggleChat();
+    expect(useGlassStore.getState().stage.chat).toBe(false);
+    store.toggleChat();
+    store.closeStage();
+    expect(useGlassStore.getState().stage.chat).toBe(false);
+    store.openStage(LOUNGE);
+    expect(useGlassStore.getState().stage.chat).toBe(false);
   });
 
   it('ignores stage-only actions while no stage is open', () => {

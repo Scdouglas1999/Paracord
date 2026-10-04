@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import { Link, MemoryRouter, Route, Routes } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -7,29 +7,41 @@ import { useUIStore } from '../stores/uiStore';
 import { useVoiceStore } from '../stores/voiceStore';
 import { useGlassStore } from '../stores/glassStore';
 import { usePhoneNavStore } from '../components/glass/shell';
+import { useIxPlaceStore } from '../components/ix/shell';
 import { useMobile } from '../hooks/useMobile';
 import { useSwipeGesture } from '../hooks/useSwipeGesture';
 
 const fetchRelationshipsMock = vi.hoisted(() => vi.fn());
+const toggleSheetMock = vi.hoisted(() => vi.fn());
 
-// Heavy children are stubbed — this suite asserts the frame wiring (which surfaces
-// mount, and under which conditions), not the internals of the sidebar/panels.
-vi.mock('../components/glass/places', () => ({ PlacesPanel: () => <div data-testid="places-panel" /> }));
-// The phone's places screen holds your face (the account menu) above the panel.
-vi.mock('../components/glass/conversation/HeaderAvatar', () => ({
-  HeaderAvatar: () => <button type="button">Your profile</button>,
+// The slots have their own suites; this one asserts the frame wiring: which
+// hosts exist, where each slot mounts, with what, and what is inert when.
+vi.mock('../components/ix/sidebar', () => ({
+  SidebarSlot: ({ place, leaving }: { place: { kind: string; guildId?: string }; leaving?: boolean }) => (
+    <div data-testid="sidebar-slot" data-place={place.kind === 'people' ? 'people' : place.guildId} data-leaving={String(Boolean(leaving))} />
+  ),
 }));
-// What the phone draws over the stream has its own suite.
-vi.mock('../components/glass/shell/PhoneStageChrome', () => ({
-  PhoneStageChrome: () => <div data-testid="phone-stage-chrome" />,
+vi.mock('../components/ix/dock', () => ({ DockSlot: () => <div data-testid="dock-slot" /> }));
+vi.mock('../components/ix/card', () => ({
+  CardSlot: ({ position, place }: { position: string; place: { kind: string; guildId?: string } }) => (
+    <div data-testid={`card-slot-${position}`} data-place={place.kind === 'people' ? 'people' : place.guildId} />
+  ),
 }));
-// The sheets slot renders through a portal into the conversation pane; what the
-// shell owes it is a mount after the pane and the route's ids (its own suite
-// holds what it does with them).
+// The sheets slot mounts the Glass sheets until IX-9; the toolbar opens them through sheetStore.
 vi.mock('../components/glass/sheets', () => ({
   Sheets: ({ guildId, channelId, layout }: { guildId: string | null; channelId: string | null; layout: string }) => (
     <div data-testid="sheets-slot" data-guild={guildId ?? ''} data-channel={channelId ?? ''} data-layout={layout} />
   ),
+  toggleSheet: toggleSheetMock,
+}));
+// The call slot mounts the Glass stage until IX-13.
+vi.mock('../components/glass/stage', () => ({
+  Stage: ({ target, mode }: { target: { streamerId: string }; mode: string }) => (
+    <div data-testid="stage-slot" data-mode={mode}>{target.streamerId}</div>
+  ),
+}));
+vi.mock('../components/glass/shell/PhoneStageChrome', () => ({
+  PhoneStageChrome: () => <div data-testid="phone-stage-chrome" />,
 }));
 vi.mock('../components/layout/CommandPalette', () => ({
   CommandPalette: () => <div data-testid="command-palette" />,
@@ -45,12 +57,6 @@ vi.mock('./SettingsPage', () => ({
 }));
 vi.mock('./GuildSettingsPage', () => ({
   GuildSettingsPage: () => <div data-testid="guild-settings-page" />,
-}));
-// The stage slot (WP-G14) has its own suite; the shell only has to mount it with the target and mode.
-vi.mock('../components/glass/stage', () => ({
-  Stage: ({ target, mode }: { target: { streamerId: string }; mode: string }) => (
-    <div data-testid="stage-slot" data-mode={mode}>{target.streamerId}</div>
-  ),
 }));
 vi.mock('../components/motion/MotionDirector', () => ({ MotionDirector: () => null }));
 vi.mock('../components/voice/together/TogetherHost', () => ({ TogetherHost: () => null }));
@@ -79,39 +85,49 @@ function usePhoneWindow() {
   mockedUseMobile.mockReturnValue(true);
 }
 
-/** The compact frame: under the 860px places breakpoint, above a phone. */
-function useCompactWindow() {
-  mockedUseMobile.mockImplementation((maxWidth?: number) => maxWidth === 860);
+/** 768-1023: the sidebar narrows to 280; there is no overlay and no third mode. */
+function useNarrowWindow() {
+  mockedUseMobile.mockImplementation((maxWidth?: number) => maxWidth === 1024 || maxWidth === 860);
 }
 
-/** Which screen the phone frame says is in front. */
-const frameScreen = (container: HTMLElement) =>
-  container.querySelector('.glass-frame')?.getAttribute('data-screen');
+const frameOf = (container: HTMLElement) => container.querySelector('.ix-frame');
+const frameScreen = (container: HTMLElement) => frameOf(container)?.getAttribute('data-screen');
+const sidebarOf = () => screen.getByTestId('ix-sidebar');
 
 const LOUNGE = { serverId: 'local', guildId: 'g1', channelId: 'lounge', streamerId: 'vincent' };
 
-function renderShell(initialPath = '/app') {
-  return render(
-    <MemoryRouter initialEntries={[initialPath]}>
-      <Routes>
-        <Route path="/app" element={<AppShell />}>
-          <Route index element={<div data-testid="outlet-content">home body</div>} />
-          <Route path="dms" element={<div data-testid="outlet-content">messages</div>} />
-          <Route path="dms/:channelId" element={<div data-testid="outlet-content">dm body</div>} />
-          <Route path="friends" element={<div data-testid="outlet-content">friends body</div>} />
-          <Route
-            path="guilds/:guildId/channels/:channelId"
-            element={<div data-testid="outlet-content">chat body</div>}
-          />
-        </Route>
-      </Routes>
-    </MemoryRouter>,
+function shellRoutes() {
+  return (
+    <Routes>
+      <Route path="/app" element={<AppShell />}>
+        <Route index element={<div data-testid="outlet-content">home body</div>} />
+        <Route path="dms" element={<div data-testid="outlet-content">messages</div>} />
+        <Route path="dms/:channelId" element={<div data-testid="outlet-content">dm body</div>} />
+        <Route path="friends" element={<div data-testid="outlet-content">friends body</div>} />
+        <Route path="admin" element={<div data-testid="outlet-content">admin body</div>} />
+        <Route
+          path="guilds/:guildId/channels/:channelId"
+          element={
+            <div data-testid="outlet-content">
+              chat body <Link to="/app/guilds/g1/channels/c2">open clips</Link>{' '}
+              <Link to="/app/guilds/g2/channels/c9">go to g2</Link> <Link to="/app/admin">open admin</Link>
+            </div>
+          }
+        />
+      </Route>
+    </Routes>
   );
+}
+
+function renderShell(initialPath = '/app') {
+  return render(<MemoryRouter initialEntries={[initialPath]}>{shellRoutes()}</MemoryRouter>);
 }
 
 beforeEach(() => {
   fetchRelationshipsMock.mockReset();
   fetchRelationshipsMock.mockResolvedValue(undefined);
+  toggleSheetMock.mockReset();
+  mockedUseMobile.mockReset();
   mockedUseMobile.mockReturnValue(false);
   useUIStore.setState({
     contextPanelMode: null,
@@ -122,229 +138,200 @@ beforeEach(() => {
   useVoiceStore.setState({ connected: false, channelId: null, callId: null, callPhase: 'idle' });
   useGlassStore.getState().reset();
   usePhoneNavStore.getState().setScreen(null);
+  useIxPlaceStore.setState({ last: { kind: 'people' } });
   mockedSwipe.mockClear();
 });
 
 describe('AppShell', () => {
-  it('floats the places pane and the conversation pane on the room, with the page in the conversation', () => {
-    const { container } = renderShell();
-    expect(container.querySelector('.glass-room-backdrop')).not.toBeNull();
-
-    const frame = container.querySelector('.glass-frame');
+  it('is two flush columns: the sidebar with its pinned card, panes and dock, and main with the toolbar and the page', () => {
+    const { container } = renderShell('/app/guilds/g1/channels/c1');
+    const frame = frameOf(container);
     expect(frame).toHaveAttribute('data-layout', 'wide');
     expect(frame).toHaveAttribute('data-stage', 'none');
+    // The native underlay contract: the shell root and the frame clear for the video.
+    expect(container.firstElementChild).toHaveAttribute('data-native-underlay-clear');
+    expect(frame).toHaveAttribute('data-native-underlay-clear');
 
-    const places = container.querySelector('.glass-frame__places');
-    expect(places).toHaveClass('glass-pane');
-    expect(places).toContainElement(screen.getByTestId('places-panel'));
+    const sidebar = sidebarOf();
+    expect(sidebar.tagName).toBe('NAV');
+    expect(sidebar.querySelector('.ix-side__pinned')).toContainElement(screen.getByTestId('card-slot-pinned'));
+    expect(screen.getByTestId('card-slot-pinned')).toHaveAttribute('data-place', 'g1');
+    // One pane, for the route's server.
+    const panes = sidebar.querySelectorAll('.ix-pane');
+    expect(panes).toHaveLength(1);
+    expect(panes[0]).toContainElement(screen.getByTestId('sidebar-slot'));
+    expect(screen.getByTestId('sidebar-slot')).toHaveAttribute('data-place', 'g1');
+    expect(sidebar.querySelector('.ix-side__dock')).toContainElement(screen.getByTestId('dock-slot'));
+    // The window tint: one layer behind each column, at rest.
+    expect(sidebar.querySelectorAll('[data-ix-tint="side"]')).toHaveLength(1);
 
     const main = screen.getByRole('main');
     expect(main).toHaveAttribute('id', 'main-content');
-    expect(main).toHaveClass('glass-pane', 'glass-frame__conversation');
+    expect(main).toContainElement(screen.getByTestId('ix-toolbar'));
     expect(main).toContainElement(screen.getByTestId('outlet-content'));
-    expect(screen.getByTestId('outlet-content')).toHaveTextContent('home body');
+    expect(main.querySelectorAll('[data-ix-tint="main"]')).toHaveLength(1);
+    // Today's pages do not register with the toolbar: they start below it.
+    expect(main).toHaveAttribute('data-page', 'legacy');
+    expect(main).not.toHaveAttribute('inert');
+    expect(sidebar).not.toHaveAttribute('inert');
 
     // Persistent chrome is always mounted.
     expect(screen.getByRole('link', { name: 'Skip to content' })).toHaveAttribute('href', '#main-content');
     expect(screen.getByTestId('command-palette')).toBeInTheDocument();
     expect(screen.getByTestId('confirm-dialog')).toBeInTheDocument();
     expect(screen.getByTestId('interaction-modal-host')).toBeInTheDocument();
-    // The phone's screens are not part of the wide frame, and places is a pane
-    // there, so there is nothing to open it with.
-    expect(container.querySelector('.glass-phone__screen')).toBeNull();
+  });
+
+  it('retires room light, the Glass panes and the compact overlay', () => {
+    const { container } = renderShell('/app/guilds/g1/channels/c1');
+    expect(container.querySelector('.glass-room-backdrop')).toBeNull();
+    expect(container.querySelector('.glass-frame')).toBeNull();
+    expect(container.querySelector('.glass-morph')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Show places' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Back to places' })).not.toBeInTheDocument();
   });
 
-  it('keeps places out of the compact frame and opens it as an overlay that a route change closes', async () => {
-    useCompactWindow();
-    const { container } = render(
-      <MemoryRouter initialEntries={['/app/guilds/g1/channels/c1']}>
-        <Routes>
-          <Route path="/app" element={<AppShell />}>
-            <Route path="dms/:channelId" element={<div data-testid="outlet-content">dm body</div>} />
-            <Route
-              path="guilds/:guildId/channels/:channelId"
-              element={<Link to="/app/dms/d1">open a DM</Link>}
-            />
-          </Route>
-        </Routes>
-      </MemoryRouter>,
-    );
-    expect(container.querySelector('.glass-frame')).toHaveAttribute('data-layout', 'compact');
-    expect(container.querySelector('.glass-frame__places')).toBeNull();
+  it('under 1024px narrows the sidebar and keeps it a column: no overlay, no third mode', () => {
+    useNarrowWindow();
+    const { container } = renderShell('/app/guilds/g1/channels/c1');
+    expect(frameOf(container)).toHaveAttribute('data-layout', 'narrow');
+    expect(sidebarOf()).toContainElement(screen.getByTestId('sidebar-slot'));
     expect(screen.queryByRole('dialog', { name: 'Places' })).not.toBeInTheDocument();
-
-    // A page without a conversation header still gets the places button.
-    act(() => screen.getByRole('button', { name: 'Show places' }).click());
-    expect(useGlassStore.getState().placesOverlayOpen).toBe(true);
-    const overlay = screen.getByRole('dialog', { name: 'Places' });
-    expect(overlay).toContainElement(screen.getByTestId('places-panel'));
-
-    // Picking somewhere to go closes the overlay.
-    act(() => screen.getByRole('link', { name: 'open a DM' }).click());
-    expect(screen.getByTestId('outlet-content')).toHaveTextContent('dm body');
-    await waitFor(() => expect(useGlassStore.getState().placesOverlayOpen).toBe(false));
+    expect(screen.queryByRole('button', { name: 'Show places' })).not.toBeInTheDocument();
   });
 
-  it('closes the places overlay when the window grows past the compact frame', async () => {
-    useCompactWindow();
-    const view = renderShell();
-    act(() => useGlassStore.getState().setPlacesOverlayOpen(true));
-    expect(useGlassStore.getState().placesOverlayOpen).toBe(true);
+  it('shows the route\'s place, and keeps the last one on a route that belongs to none', () => {
+    renderShell('/app/guilds/g1/channels/c1');
+    expect(screen.getByTestId('sidebar-slot')).toHaveAttribute('data-place', 'g1');
 
-    mockedUseMobile.mockImplementation(() => false);
-    view.rerender(
-      <MemoryRouter initialEntries={['/app']}>
-        <Routes>
-          <Route path="/app" element={<AppShell />}>
-            <Route index element={<div data-testid="outlet-content">home body</div>} />
-          </Route>
-        </Routes>
-      </MemoryRouter>,
-    );
-    await waitFor(() => expect(useGlassStore.getState().placesOverlayOpen).toBe(false));
+    act(() => screen.getByRole('link', { name: 'open admin' }).click());
+    expect(screen.getByTestId('outlet-content')).toHaveTextContent('admin body');
+    expect(screen.getByTestId('sidebar-slot')).toHaveAttribute('data-place', 'g1');
   });
 
-  it('puts the stage beside the conversation, and steps the conversation aside while browsing', () => {
-    const { container } = renderShell('/app/guilds/g1/channels/c1');
-    act(() => useGlassStore.getState().openStage(LOUNGE));
-
-    const frame = container.querySelector('.glass-frame');
-    expect(frame).toHaveAttribute('data-stage', 'side');
-    expect(screen.getByRole('region', { name: 'Stage' })).toContainElement(screen.getByTestId('stage-slot'));
-    expect(screen.getByTestId('stage-slot')).toHaveTextContent('vincent');
-    expect(screen.getByTestId('stage-slot')).toHaveAttribute('data-mode', 'side');
-    // Side by side: no places pane, the conversation stays and keeps working.
-    expect(container.querySelector('.glass-frame__places')).toBeNull();
-    expect(screen.getByRole('main')).not.toHaveAttribute('inert');
-
-    act(() => useGlassStore.getState().toggleBrowse());
-    expect(container.querySelector('.glass-frame__places')).toHaveAttribute('data-presentation', 'browse');
-    const main = container.querySelector('#main-content');
-    expect(main).toHaveAttribute('data-away', 'true');
-    expect(main).toHaveAttribute('inert');
-    // Still mounted: a draft or a scroll position survives browsing.
-    expect(screen.getByTestId('outlet-content')).toBeInTheDocument();
-
-    act(() => useGlassStore.getState().closeStage());
-    expect(screen.queryByRole('region', { name: 'Stage' })).not.toBeInTheDocument();
-    expect(container.querySelector('.glass-frame__places')).toHaveAttribute('data-presentation', 'pane');
-    expect(screen.getByRole('main')).not.toHaveAttribute('inert');
+  it('DMs and Friends are the People place', () => {
+    renderShell('/app/dms/d1');
+    expect(screen.getByTestId('sidebar-slot')).toHaveAttribute('data-place', 'people');
+    expect(sidebarOf()).toHaveAttribute('aria-label', 'People');
   });
 
-  it('hides the conversation in theater only when the chat is hidden', () => {
-    const { container } = renderShell('/app/guilds/g1/channels/c1');
-    act(() => useGlassStore.getState().openStage(LOUNGE, 'theater'));
-    expect(container.querySelector('.glass-frame')).toHaveAttribute('data-stage', 'theater');
-    expect(screen.getByRole('main')).not.toHaveAttribute('inert');
+  it('switching place replaces the pane (the slide itself is SidebarPanes\' suite); a channel in the same place keeps it', () => {
+    renderShell('/app/guilds/g1/channels/c1');
+    const pane = sidebarOf().querySelector('.ix-pane');
+    act(() => screen.getByRole('link', { name: 'open clips' }).click());
+    expect(sidebarOf().querySelector('.ix-pane')).toBe(pane);
 
-    act(() => useGlassStore.getState().toggleChatHidden());
-    expect(container.querySelector('#main-content')).toHaveAttribute('inert');
-    expect(container.querySelector('.glass-frame')).toHaveAttribute('data-chat-hidden', 'true');
+    act(() => screen.getByRole('link', { name: 'go to g2' }).click());
+    // jsdom plays no animation, so the slide settles at once: one pane, the new place.
+    const panes = sidebarOf().querySelectorAll('.ix-pane');
+    expect(panes).toHaveLength(1);
+    expect(panes[0]).toHaveAttribute('data-place', 'g2');
+    expect(screen.getByTestId('card-slot-pinned')).toHaveAttribute('data-place', 'g2');
   });
 
-  it('theater browsing floats places and puts the chat aside; a pick closes it and brings the chat back', async () => {
-    const { container } = render(
-      <MemoryRouter initialEntries={['/app/guilds/g1/channels/c1']}>
-        <Routes>
-          <Route path="/app" element={<AppShell />}>
-            <Route
-              path="guilds/:guildId/channels/:channelId"
-              element={<Link to="/app/guilds/g1/channels/c2">open Clips</Link>}
-            />
-          </Route>
-        </Routes>
-      </MemoryRouter>,
-    );
-    act(() => useGlassStore.getState().openStage(LOUNGE, 'theater'));
-    act(() => useGlassStore.getState().toggleChatHidden());
-    act(() => useGlassStore.getState().toggleBrowse());
-    expect(container.querySelector('.glass-frame__places')).toHaveAttribute('data-presentation', 'browse');
-    expect(container.querySelector('#main-content')).toHaveAttribute('data-away', 'true');
-
-    act(() => screen.getByRole('link', { name: 'open Clips' }).click());
-    await waitFor(() => expect(useGlassStore.getState().browseOpen).toBe(false));
-    expect(useGlassStore.getState().chatHidden).toBe(false);
-    expect(useGlassStore.getState().stage.mode).toBe('theater');
-    expect(container.querySelector('.glass-frame__places')).toBeNull();
-    expect(container.querySelector('#main-content')).not.toHaveAttribute('data-away');
-  });
-
-  it('frames the moves: two empty morph layers around the frame, hidden from assistive tech', () => {
-    const { container } = renderShell('/app/guilds/g1/channels/c1');
-    const layers = container.querySelectorAll('.glass-morph');
-    expect(layers).toHaveLength(2);
-    for (const layer of layers) {
-      expect(layer).toHaveAttribute('aria-hidden', 'true');
-      expect(layer).toBeEmptyDOMElement();
-    }
-  });
-
-  it('mounts the sheets slot after the conversation pane, with the route it is over', () => {
-    const { container } = renderShell('/app/guilds/g1/channels/c1');
-
+  it('mounts the sheets slot inside main with the route it is over, beside the sheet host', () => {
+    renderShell('/app/guilds/g1/channels/c1');
+    const main = screen.getByRole('main');
     const slot = screen.getByTestId('sheets-slot');
+    expect(main).toContainElement(slot);
     expect(slot).toHaveAttribute('data-guild', 'g1');
     expect(slot).toHaveAttribute('data-channel', 'c1');
     expect(slot).toHaveAttribute('data-layout', 'wide');
-    // A sibling after the pane, not inside it: the slot portals into the pane itself.
-    expect(container.querySelector('#main-content')).not.toContainElement(slot);
-    expect(container.querySelector('#main-content')?.compareDocumentPosition(slot)).toBe(
-      Node.DOCUMENT_POSITION_FOLLOWING,
-    );
+    const host = main.querySelector('#ix-sheet-host');
+    expect(host).toHaveClass('ix-sheet-host');
+    expect(host).not.toHaveAttribute('data-sheet');
+    act(() => useGlassStore.getState().openSheet('search'));
+    expect(host).toHaveAttribute('data-sheet', 'search');
+  });
+
+  it('the toolbar opens message search, the people sheet and the account menu', () => {
+    renderShell('/app/guilds/g1/channels/c1');
+    const toolbar = screen.getByTestId('ix-toolbar');
+    act(() => (toolbar.querySelector('[aria-label="Search messages"]') as HTMLButtonElement).click());
+    expect(toggleSheetMock).toHaveBeenLastCalledWith('search');
+    act(() => (toolbar.querySelector('[aria-label="Members"]') as HTMLButtonElement).click());
+    expect(toggleSheetMock).toHaveBeenLastCalledWith('people');
+  });
+
+  it('puts the call over main at inset 10 and makes main inert; theater covers the sidebar too', () => {
+    const { container } = renderShell('/app/guilds/g1/channels/c1');
+    const host = container.querySelector('#ix-call-host');
+    expect(host).toBeEmptyDOMElement();
+
+    act(() => useGlassStore.getState().openStage(LOUNGE));
+    expect(frameOf(container)).toHaveAttribute('data-stage', 'side');
+    const surface = screen.getByRole('region', { name: 'Call' });
+    expect(host).toContainElement(surface);
+    expect(surface).toHaveClass('ix-inset-surface');
+    expect(surface).toContainElement(screen.getByTestId('stage-slot'));
+    expect(screen.getByTestId('stage-slot')).toHaveTextContent('vincent');
+    expect(screen.getByRole('main', { hidden: true })).toHaveAttribute('inert');
+    expect(sidebarOf()).not.toHaveAttribute('inert');
+    // Still mounted under it: a draft or a scroll position survives the call view.
+    expect(screen.getByTestId('outlet-content')).toBeInTheDocument();
+
+    act(() => useGlassStore.getState().setStageMode('theater'));
+    expect(frameOf(container)).toHaveAttribute('data-stage', 'theater');
+    expect(sidebarOf()).toHaveAttribute('inert');
+
+    act(() => useGlassStore.getState().closeStage());
+    expect(host).toBeEmptyDOMElement();
+    expect(screen.getByRole('main')).not.toHaveAttribute('inert');
+    expect(sidebarOf()).not.toHaveAttribute('inert');
   });
 
   describe('on a phone', () => {
     beforeEach(usePhoneWindow);
 
-    it('is two screens on the room, not two panes, with no bottom bar and no drawer', () => {
+    it('is two screens: the sidebar is the root, main is pushed over it', () => {
       const { container } = renderShell('/app/guilds/g1/channels/c1');
-      const frame = container.querySelector('.glass-frame');
+      const frame = frameOf(container);
       expect(frame).toHaveAttribute('data-layout', 'phone');
-      expect(container.querySelector('.glass-room-backdrop')).not.toBeNull();
-      expect(container.querySelector('.glass-phone__screen--places')).toContainElement(screen.getByTestId('places-panel'));
-      expect(container.querySelector('.glass-phone__screen--conversation')).toContainElement(screen.getByRole('main'));
-      expect(screen.getByRole('main')).toContainElement(screen.getByTestId('outlet-content'));
-      // The morph layers are the desktop's: a phone has no moves.
-      expect(container.querySelectorAll('.glass-morph')).toHaveLength(0);
-      expect(screen.queryByRole('navigation', { name: 'Main navigation' })).not.toBeInTheDocument();
-      expect(screen.queryByRole('dialog', { name: 'Navigation' })).not.toBeInTheDocument();
-      expect(container.querySelector('.glass-frame__places')).toBeInTheDocument();
-    });
-
-    it('opens a deep link on its conversation, with places behind it', () => {
-      const { container } = renderShell('/app/guilds/g1/channels/c1');
+      // A deep link opens on its page, with the sidebar behind it.
       expect(frameScreen(container)).toBe('conversation');
-      expect(container.querySelector('.glass-phone__screen--places')).toHaveAttribute('inert');
+      expect(screen.getByRole('main')).toHaveAttribute('data-active', 'true');
+      expect(sidebarOf()).toHaveAttribute('inert');
+      expect(sidebarOf()).not.toHaveAttribute('data-active');
+      expect(sidebarOf()).toContainElement(screen.getByTestId('dock-slot'));
+      expect(screen.getByRole('main')).toHaveAttribute('tabindex', '-1');
     });
 
-    it('opens the messages index on places, which is the list of your messages', () => {
+    it('opens the messages index on the root', () => {
       const { container } = renderShell('/app/dms');
       expect(frameScreen(container)).toBe('places');
-      expect(container.querySelector('.glass-phone__screen--conversation')).toHaveAttribute('inert');
+      expect(screen.getByRole('main', { hidden: true })).toHaveAttribute('inert');
     });
 
-    it('keeps the old drawer flag collapsed, and turns a request to open it into the places screen', () => {
+    it('a pick in the same place pushes main; a move to another place stays on the root', () => {
+      const { container } = renderShell('/app/guilds/g1/channels/c1');
+      act(() => usePhoneNavStore.getState().showPlaces());
+      act(() => screen.getByRole('link', { name: 'open clips', hidden: true }).click());
+      expect(frameScreen(container)).toBe('conversation');
+
+      act(() => usePhoneNavStore.getState().showPlaces());
+      act(() => screen.getByRole('link', { name: 'go to g2', hidden: true }).click());
+      expect(frameScreen(container)).toBe('places');
+      expect(screen.getByTestId('sidebar-slot')).toHaveAttribute('data-place', 'g2');
+    });
+
+    it('the toolbar\'s back goes to the root', () => {
+      const { container } = renderShell('/app/friends');
+      act(() => usePhoneNavStore.getState().showConversation());
+      act(() => screen.getByRole('button', { name: 'Back to the sidebar' }).click());
+      expect(frameScreen(container)).toBe('places');
+    });
+
+    it('keeps the old drawer flag collapsed, and turns a request to open it into the root screen', () => {
       useUIStore.setState({ sidebarCollapsed: false });
       const { container } = renderShell('/app/guilds/g1/channels/c1');
       expect(useUIStore.getState().sidebarCollapsed).toBe(true);
       expect(frameScreen(container)).toBe('conversation');
 
-      // The conversation header's button and Ctrl+B.
       act(() => useUIStore.getState().setSidebarCollapsed(false));
       expect(frameScreen(container)).toBe('places');
       expect(useUIStore.getState().sidebarCollapsed).toBe(true);
     });
 
-    it('gives a page with no conversation header the way back', () => {
-      renderShell('/app/friends');
-      act(() => usePhoneNavStore.getState().showConversation());
-      act(() => screen.getByRole('button', { name: 'Back to places' }).click());
-      expect(usePhoneNavStore.getState().screen).toBe('places');
-    });
-
-    it('turns the edge swipe on for a conversation, and off for everything that owns the edge', () => {
+    it('turns the edge swipe on for a pushed page, and off for everything that owns the edge', () => {
       renderShell('/app/guilds/g1/channels/c1');
       const enabled = () => mockedSwipe.mock.calls.at(-1)?.[1];
       expect(enabled()).toBe(true);
@@ -361,60 +348,36 @@ describe('AppShell', () => {
 
       act(() => useGlassStore.getState().openStage(LOUNGE, 'theater'));
       expect(enabled()).toBe(false);
-      act(() => useGlassStore.getState().setStageMode('side'));
+      act(() => useGlassStore.getState().closeStage());
       expect(enabled()).toBe(true);
 
       act(() => useUIStore.setState({ userSettingsOpen: true }));
       expect(enabled()).toBe(false);
     });
 
-    it('the swipe goes back to places', () => {
+    it('the swipe goes back to the root', () => {
       const { container } = renderShell('/app/guilds/g1/channels/c1');
       const handlers = mockedSwipe.mock.calls.at(-1)?.[0];
       act(() => handlers?.onSwipeRight?.());
       expect(frameScreen(container)).toBe('places');
     });
 
-    it('stacks the stream above the conversation; full screen puts the conversation out of reach', () => {
-      const { container } = renderShell('/app/guilds/g1/channels/c1');
+    it('draws the call over the whole screen with the phone\'s chrome; both screens go inert under it', () => {
+      renderShell('/app/guilds/g1/channels/c1');
       act(() => useGlassStore.getState().openStage(LOUNGE));
-      const stage = screen.getByRole('region', { name: 'Stage' });
-      expect(stage).toContainElement(screen.getByTestId('stage-slot'));
-      expect(stage).toContainElement(screen.getByTestId('phone-stage-chrome'));
-      expect(container.querySelector('.glass-phone__screen--conversation')).toContainElement(stage);
-      expect(screen.getByRole('main')).not.toHaveAttribute('inert');
-
-      act(() => useGlassStore.getState().setStageMode('theater'));
-      expect(screen.getByRole('main')).toHaveAttribute('inert');
+      const surface = screen.getByRole('region', { name: 'Call' });
+      expect(surface).toContainElement(screen.getByTestId('stage-slot'));
+      expect(surface).toContainElement(screen.getByTestId('phone-stage-chrome'));
+      expect(screen.getByRole('main', { hidden: true })).toHaveAttribute('inert');
+      expect(sidebarOf()).toHaveAttribute('inert');
     });
 
-    it('shows a call on the places screen, where the old on-air dock was out of reach of the drawer', () => {
-      useVoiceStore.setState({ callId: 'call-1', callPhase: 'connected', channelId: 'lounge' });
-      const { container } = renderShell('/app/dms');
-      expect(container.querySelector('.glass-phone__call')).not.toBeNull();
-    });
-
-    it('opens Home on its welcome page, not on places', () => {
-      const { container } = renderShell('/app');
-      expect(frameScreen(container)).toBe('conversation');
-    });
-
-    it('the skip link brings the conversation in when places is in front', () => {
+    it('the skip link brings main in when the root is in front', () => {
       renderShell('/app/dms');
       expect(usePhoneNavStore.getState().screen).toBe('places');
       act(() => screen.getByRole('link', { name: 'Skip to content' }).click());
       expect(usePhoneNavStore.getState().screen).toBe('conversation');
     });
-  });
-
-  it('never draws the phone\'s call surface on desktop: the places pane and the conversation header carry the call', () => {
-    mockedUseMobile.mockReturnValue(false);
-    useVoiceStore.setState({ connected: true, channelId: '999', callId: 'call-1', callPhase: 'connected' });
-
-    const { container } = renderShell('/app');
-
-    expect(container.querySelector('.glass-phone__call')).toBeNull();
-    expect(container.querySelector('.glass-phone__screen')).toBeNull();
   });
 
   it('opens the user and guild settings overlays from uiStore flags', () => {
@@ -423,15 +386,7 @@ describe('AppShell', () => {
     expect(screen.getByTestId('settings-page')).toBeInTheDocument();
 
     act(() => useUIStore.setState({ userSettingsOpen: false, guildSettingsId: 'g1' }));
-    rerender(
-      <MemoryRouter initialEntries={['/app']}>
-        <Routes>
-          <Route path="/app" element={<AppShell />}>
-            <Route index element={<div data-testid="outlet-content">home body</div>} />
-          </Route>
-        </Routes>
-      </MemoryRouter>,
-    );
+    rerender(<MemoryRouter initialEntries={['/app']}>{shellRoutes()}</MemoryRouter>);
     expect(screen.getByTestId('guild-settings-page')).toBeInTheDocument();
   });
 });

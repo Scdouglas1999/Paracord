@@ -17,6 +17,8 @@ import { registerSessionReset } from './sessionReset';
  *   - `stage.mode === 'none'` exactly when `stage` has no target.
  *   - `browseOpen` and `chatHidden` are only ever true while a stage is open.
  *   - `chatHidden` is only ever true in theater (H hides the chat there only).
+ *   - `stage.chat` (the Index call view's chat column, IX-4) is false while no
+ *     stage is open.
  *   - Watching never joins a call and closing the stage never leaves one: this
  *     store holds no media state and calls nothing in `voiceStore`.
  */
@@ -61,6 +63,13 @@ export function stageTargetOf(stage: StageState): StageTarget | null {
 
 export interface StageState {
   mode: StageMode;
+  /**
+   * H in the Index call view (docs/index-spec.md §7.1, §7.2): the room's own
+   * chat as a column inside the call surface. Off when a call view opens; kept
+   * when switching streams inside an open one; false whenever nothing is open.
+   * (Glass's `chatHidden` is the old theater-only inverse; it goes in M2.)
+   */
+  chat: boolean;
   serverId: string | null;
   guildId: string | null;
   channelId: string | null;
@@ -94,6 +103,8 @@ export interface GlassState {
   toggleBrowse: () => void;
   setBrowseOpen: (open: boolean) => void;
   toggleChatHidden: () => void;
+  /** H in the Index call view: the chat column on or off. Ignored while no stage is open. */
+  toggleChat: () => void;
   setChatHidden: (hidden: boolean) => void;
   setPillExpanded: (expanded: boolean) => void;
   setPlacesOverlayOpen: (open: boolean) => void;
@@ -102,7 +113,14 @@ export interface GlassState {
   reset: () => void;
 }
 
-const NO_STAGE: StageState = { mode: 'none', serverId: null, guildId: null, channelId: null, streamerId: null };
+const NO_STAGE: StageState = {
+  mode: 'none',
+  chat: false,
+  serverId: null,
+  guildId: null,
+  channelId: null,
+  streamerId: null,
+};
 
 type GlassData = Pick<
   GlassState,
@@ -130,6 +148,8 @@ export const useGlassStore = create<GlassState>()((set, get) => ({
     set({
       stage: {
         mode: nextMode,
+        // A fresh view opens without the chat column; switching streams keeps it.
+        chat: opening ? false : current.chat,
         serverId: target.serverId,
         guildId: target.guildId,
         channelId: target.channelId,
@@ -168,6 +188,12 @@ export const useGlassStore = create<GlassState>()((set, get) => ({
   toggleChatHidden: () => {
     if (get().stage.mode !== 'theater') return;
     set((s) => ({ chatHidden: !s.chatHidden }));
+  },
+
+  toggleChat: () => {
+    const { stage } = get();
+    if (stage.mode === 'none') return;
+    set({ stage: { ...stage, chat: !stage.chat } });
   },
 
   setChatHidden: (hidden) => {

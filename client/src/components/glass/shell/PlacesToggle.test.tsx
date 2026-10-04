@@ -26,13 +26,10 @@ describe('PlacesToggle', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it('opens the places overlay on the compact frame', () => {
+  it('is nothing on the old compact width either: the Index frame has no places overlay', () => {
     mockedUseMobile.mockImplementation((maxWidth?: number) => maxWidth === 860);
-    render(<PlacesToggle />);
-    const button = screen.getByRole('button', { name: 'Show places' });
-    expect(button).toHaveAttribute('aria-expanded', 'false');
-    fireEvent.click(button);
-    expect(useGlassStore.getState().placesOverlayOpen).toBe(true);
+    const { container } = render(<PlacesToggle />);
+    expect(container).toBeEmptyDOMElement();
   });
 
   it('is the back button to the places screen on a phone', () => {

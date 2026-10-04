@@ -1,1 +1,522 @@
-/* IX-4: the frame, tint layers, toolbar and slots (docs/index-spec.md §3). Created empty by IX-1; the owner fills it. */
+/* IX-4: the Index frame (docs/index-spec.md §3, §3.1, §4.9, §5.1, §5.9, §5.14, §9).
+   Owner: IX-4. The frame owns geometry only: columns, hosts, insets, what is
+   tinted. What fills a host is its slot's (components/ix/shell/slots.ts).
+
+   Only transform, opacity and colors move here (the motion lint). */
+
+/* ---- The frame: two flush columns, no gutters ------------------------------ */
+.ix-frame {
+  /* Geometry the slots and pages may read. */
+  --ix-side-w: 316px;
+  --ix-toolbar-h: 58px;
+  /* The conversation column: at most 920 of content, 48 of side padding (32
+     under 1024px), centered in main (§3 "Conversation column"). */
+  --ix-col-max: 920px;
+  --ix-col-pad: 48px;
+  /* Overlays inside main (call, sheets) share one inset and one radius (§1.6). */
+  --ix-inset: 10px;
+  --ix-inset-radius: 24px;
+
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: var(--ix-side-w) minmax(0, 1fr);
+  background: var(--ix-ground);
+  color: var(--ix-ink);
+}
+
+.ix-frame[data-layout='narrow'] {
+  --ix-side-w: 280px;
+  --ix-col-pad: 32px;
+}
+
+/* ---- Window tint (§2.2): layers behind each column -------------------------- */
+.ix-tint {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+
+/* ---- Sidebar ---------------------------------------------------------------- */
+.ix-side {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  /* Theater dims it beneath the call (§5.9). */
+  transition: opacity 600ms var(--ix-spring);
+}
+
+/* The right hairline (§3): drawn above the tint layers, which cover the column. */
+.ix-side::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 3;
+  width: 1px;
+  background: var(--ix-edge-side);
+  pointer-events: none;
+}
+
+/* The pinned card (CardSlot position="pinned"): above the panes, never slides.
+   Empty (no call elsewhere) it takes no room at all. */
+.ix-side__pinned {
+  position: relative;
+  z-index: 2;
+  flex: none;
+  padding: 16px 12px 0;
+}
+
+.ix-side__pinned:empty {
+  display: none;
+}
+
+.ix-panes {
+  position: relative;
+  z-index: 1;
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+/* A pane (§3.1 "Sidebar pane"): the scroller, hidden scrollbar (wheel and keys
+   still scroll), children never shrink. Two exist only while the place slides. */
+.ix-pane {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 16px 12px 8px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+
+.ix-pane::-webkit-scrollbar {
+  display: none;
+}
+
+.ix-pane > * {
+  flex-shrink: 0;
+}
+
+/* Under a pinned card the header sits 18px below it (the card's own bottom, then
+   the header's 4px top padding; the prototype's s4). */
+.ix-side:has(> .ix-side__pinned:not(:empty)) .ix-pane {
+  padding-top: 14px;
+}
+
+.ix-pane[data-leaving] {
+  pointer-events: none;
+}
+
+.ix-side__dock {
+  position: relative;
+  z-index: 1;
+  flex: none;
+}
+
+/* ---- Main ------------------------------------------------------------------- */
+.ix-main {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  container: ix-main / inline-size;
+}
+
+.ix-main:focus {
+  outline: none;
+}
+
+.ix-main__content {
+  position: relative;
+  z-index: 1;
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* A page that did not register with the toolbar (a Glass page, until IX-10 and
+   IX-15 replace it) does not lay itself out under the toolbar: it starts below. */
+.ix-main[data-page='legacy'] > .ix-main__content {
+  padding-top: var(--ix-toolbar-h);
+}
+
+/* ---- Toolbar (§4.9, §3.1 "Main toolbar") ------------------------------------- */
+.ix-toolbar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: var(--ix-toolbar-h);
+  padding: 0 20px 0 40px;
+  background-color: transparent;
+  transition: background-color 300ms var(--ix-ease);
+}
+
+.ix-toolbar::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  background: var(--ix-line);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 300ms var(--ix-ease);
+}
+
+.ix-toolbar[data-folded='true'] {
+  background-color: var(--ix-toolbar-fold);
+}
+
+.ix-toolbar[data-folded='true']::after {
+  opacity: 1;
+}
+
+:root[data-reduced-transparency='true'] .ix-toolbar[data-folded='true'] {
+  background-color: var(--ix-main);
+}
+
+.ix-toolbar__spacer {
+  flex: 1 1 auto;
+}
+
+/* The folded title: 15/600, enters from 6px below with a fade (§5.14). */
+.ix-toolbar__title {
+  min-width: 0;
+  max-width: 50%;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ix-ink);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  opacity: 0;
+  transform: translateY(6px);
+  pointer-events: none;
+  transition:
+    opacity 250ms var(--ix-ease),
+    transform 350ms var(--ix-spring);
+}
+
+.ix-toolbar[data-folded='true'] .ix-toolbar__title {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+
+button.ix-toolbar__title {
+  cursor: pointer;
+  border-radius: 8px;
+}
+
+.ix-tool {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background-color: transparent;
+  color: var(--ix-ink-2);
+  cursor: pointer;
+  transition: background-color 120ms var(--ix-ease);
+}
+
+.ix-tool:hover {
+  background-color: var(--ix-fill);
+}
+
+/* The chevron glyph points down; the back chevron points left. */
+.ix-toolbar__back .ix-glyph {
+  transform: rotate(90deg);
+}
+
+.ix-toolbar__back {
+  margin-left: -14px;
+}
+
+.ix-toolbar__me {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  cursor: pointer;
+}
+
+.ix-tool:focus-visible,
+.ix-toolbar__me:focus-visible,
+button.ix-toolbar__title:focus-visible,
+.ix-large-title__button:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+/* ---- Pages: the column and the large title (§3, §3.1, §6.1) ----------------- */
+.ix-column {
+  width: 100%;
+  max-width: calc(var(--ix-col-max) + 2 * var(--ix-col-pad));
+  margin-inline: auto;
+  padding-inline: var(--ix-col-pad);
+}
+
+.ix-page {
+  position: relative;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-top: var(--ix-toolbar-h);
+  scrollbar-width: none;
+}
+
+.ix-page::-webkit-scrollbar {
+  display: none;
+}
+
+.ix-page__body {
+  padding-bottom: 32px;
+}
+
+.ix-large-title {
+  padding-top: 8px;
+  transform-origin: 0 50%;
+}
+
+.ix-large-title__h {
+  margin: 0;
+  color: var(--ix-ink);
+  font-size: 36px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  /* The prototype's: the font's own line gap. */
+  line-height: normal;
+}
+
+.ix-large-title__button {
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ix-large-title__sub {
+  margin: 4px 0 0;
+  line-height: normal;
+  color: var(--ix-ink-3);
+  font-size: 14px;
+}
+
+/* ---- Sheets host (§6.1): inside main on its right ----------------------------- */
+.ix-sheet-host {
+  position: absolute;
+  top: var(--ix-inset);
+  right: var(--ix-inset);
+  bottom: var(--ix-inset);
+  z-index: 5;
+  width: 400px;
+  max-width: calc(100% - 2 * var(--ix-inset));
+  border-radius: var(--ix-inset-radius);
+  pointer-events: none;
+}
+
+.ix-sheet-host[data-sheet='search'] {
+  width: 480px;
+}
+
+.ix-sheet-host > * {
+  pointer-events: auto;
+}
+
+@container ix-main (max-width: 759px) {
+  .ix-sheet-host,
+  .ix-sheet-host[data-sheet='search'] {
+    left: var(--ix-inset);
+    width: auto;
+  }
+}
+
+/* ---- Call host (§3.1 "Call surface", §5.9) ------------------------------------
+   Geometry only: over main at inset 10, or over the window in theater. The
+   surface (`.ix-inset-surface`) is the slot's, so its own moves (§5.8) carry
+   its paint with it. */
+.ix-call-host {
+  position: absolute;
+  top: var(--ix-inset);
+  right: var(--ix-inset);
+  bottom: var(--ix-inset);
+  left: calc(var(--ix-side-w) + var(--ix-inset));
+  z-index: 6;
+  pointer-events: none;
+}
+
+.ix-frame[data-stage='theater'] .ix-call-host {
+  left: var(--ix-inset);
+}
+
+.ix-call-host > * {
+  pointer-events: auto;
+}
+
+.ix-frame[data-stage='theater'] > .ix-side {
+  opacity: 0.4;
+}
+
+.ix-inset-surface {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: var(--ix-inset-radius);
+  background: var(--ix-call);
+  box-shadow: var(--ix-shadow-call);
+  color: var(--ix-ink);
+}
+
+/* ---- Phone (§9): the sidebar is the root screen, main is pushed over it ------
+   The resting states; the move between them is phoneMotion's (Web Animations
+   from one resting state to the other). IX-16 finishes the phone. */
+.ix-frame[data-layout='phone'] {
+  display: block;
+}
+
+.ix-frame[data-layout='phone'] > .ix-side,
+.ix-frame[data-layout='phone'] > .ix-main {
+  position: absolute;
+  inset: 0;
+  padding-top: var(--safe-top, 0px);
+}
+
+.ix-frame[data-layout='phone'] > .ix-side {
+  padding-bottom: var(--safe-bottom, 0px);
+}
+
+.ix-frame[data-layout='phone'] > .ix-side::after {
+  display: none;
+}
+
+.ix-frame[data-layout='phone'] > .ix-main:not([data-active]) {
+  transform: translateX(100%);
+  pointer-events: none;
+}
+
+.ix-frame[data-layout='phone'] > .ix-side:not([data-active]) {
+  transform: translateX(-22%);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.ix-frame[data-layout='phone'] .ix-call-host {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+}
+
+.ix-frame[data-layout='phone'] .ix-call-host .ix-inset-surface {
+  border-radius: 0;
+}
+
+/* ---- STUB styles: the dock stub (components/ix/dock/stub.tsx). IX-6 deletes
+   this block with the stub. ---------------------------------------------------- */
+.ix-dock-stub {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px 14px;
+  box-shadow: 0 -1px 0 var(--ix-edge-side);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.ix-dock-stub__item {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  border: 0;
+  border-radius: 14px;
+  background: none;
+  color: var(--ix-ink-3);
+  cursor: pointer;
+}
+
+.ix-dock-stub__item:not([data-current]) > * {
+  opacity: 0.82;
+}
+
+.ix-dock-stub__item[data-current] > * {
+  transform: scale(1.08);
+}
+
+.ix-dock-stub__item[data-current]::after {
+  content: '';
+  position: absolute;
+  left: 13px;
+  bottom: -7px;
+  width: 16px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--ix-ink);
+}
+
+.ix-dock-stub__item:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+.ix-dock-stub__sep {
+  flex: none;
+  width: 1px;
+  height: 24px;
+  margin: 0 2px;
+  background: var(--ix-line);
+}
+
+.ix-dock-stub__add > span {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+  box-shadow: inset 0 0 0 1.5px var(--ix-edge-strong);
+}
