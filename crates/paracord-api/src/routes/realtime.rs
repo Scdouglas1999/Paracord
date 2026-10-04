@@ -1357,6 +1357,8 @@ async fn build_ready_payload(
                     "self_stream_started_at": vs
                         .self_stream_started_at
                         .map(|value| value.to_rfc3339()),
+                    // When the member entered the channel, for "live 12 min".
+                    "joined_at": vs.joined_at.to_rfc3339(),
                     "username": &vs.username,
                     "avatar_hash": &vs.avatar_hash,
                     // Talking right now, so a fresh page shows a current
@@ -1387,6 +1389,7 @@ async fn build_ready_payload(
                 ApiError::Internal(anyhow::anyhow!("invalid guild member count"))
             })?,
             created_at: guild.created_at.to_rfc3339(),
+            hue: guild.hue.map(u32::from),
         });
         guild_json["channels"] = json!([]);
         guild_json["voice_states"] = json!(voice_states_json);
@@ -2177,6 +2180,7 @@ pub async fn post_command(
                         "self_stream_started_at": stored
                             .self_stream_started_at
                             .map(|value| value.to_rfc3339()),
+                        "joined_at": stored.joined_at.to_rfc3339(),
                         "username": user.as_ref().map(|u| u.username.as_str()),
                         "avatar_hash": user.as_ref().and_then(|u| u.avatar_hash.as_deref()),
                     }),

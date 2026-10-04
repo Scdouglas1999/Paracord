@@ -99,6 +99,7 @@ pub fn ready_dm_voice_state(vs: &paracord_db::voice_states::VoiceStateWithUser) 
         "deaf": false,
         "mode": vs.mode.as_str(),
         "self_stream_started_at": vs.self_stream_started_at.map(|value| value.to_rfc3339()),
+        "joined_at": vs.joined_at.to_rfc3339(),
         "username": &vs.username,
         "avatar_hash": &vs.avatar_hash,
     })
@@ -126,6 +127,7 @@ pub fn call_voice_state_payload(
         "deaf": false,
         "mode": row.mode.as_str(),
         "self_stream_started_at": row.self_stream_started_at.map(|value| value.to_rfc3339()),
+        "joined_at": row.joined_at.to_rfc3339(),
         "username": user.map(|u| u.username.as_str()),
         "display_name": user.and_then(|u| u.display_name.as_deref()),
         "avatar_hash": user.and_then(|u| u.avatar_hash.as_deref()),

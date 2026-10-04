@@ -187,7 +187,7 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
       if (data.guilds !== undefined && !Array.isArray(data.guilds)) warnDispatchParseFailure('READY', 'guild list is not an array');
       (Array.isArray(data.guilds) ? data.guilds : []).forEach((g) => {
         // Invalid metadata cannot overwrite a confirmed REST projection. The
-        // generated guard shares the six-field core used by both transports.
+        // generated guard shares the seven-field core used by both transports.
         const core: unknown = g;
         if (!isReadyGuildCore(core)) { warnDispatchParseFailure('READY', 'guild core contract mismatch'); return; }
         if (!Number.isFinite(Date.parse(core.created_at))) { warnDispatchParseFailure('READY', 'guild invalid created_at'); return; }
@@ -203,6 +203,7 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
           icon_hash: core.icon_hash,
           created_at: core.created_at,
           member_count: core.member_count,
+          hue: core.hue,
         };
         if (memberScope) useGuildStore.getState().addGuild(normalizedGuild, memberScope);
 

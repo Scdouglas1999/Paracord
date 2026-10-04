@@ -15,6 +15,14 @@ export interface VoiceStateSnapshot {
    */
   guild_id: string | null;
   /**
+   * When the member entered this channel (RFC 3339), for "live 12 min" on a
+   * room: the room started at the earliest `joined_at` among its members.
+   * Stamped on every join and listen join, kept while the member stays in
+   * the channel, reset by a move. Null only on a status announcement whose
+   * stored row could not be read.
+   */
+  joined_at: string | null;
+  /**
    * `listen` shows as "Listening in" on the roster.
    */
   mode: 'joined' | 'listen';

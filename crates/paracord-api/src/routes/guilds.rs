@@ -184,6 +184,7 @@ pub(crate) fn guild_summary(
             .map(serde_json::from_str)
             .transpose()
             .map_err(|e| ApiError::Internal(anyhow::anyhow!("Invalid stored bot settings: {e}")))?,
+        hue: guild.hue.map(u32::from),
     })
 }
 
@@ -413,6 +414,20 @@ pub async fn update_guild(
         serde_json::to_string(&hub).unwrap_or_else(|_| "{}".to_string())
     });
 
+    // The server color: `null` clears it, a number must be on the wheel.
+    let hue = body
+        .hue
+        .map(|hue| {
+            hue.map(|value| {
+                u16::try_from(value)
+                    .ok()
+                    .filter(|value| *value <= paracord_db::guilds::MAX_HUE)
+                    .ok_or_else(|| ApiError::BadRequest("hue must be between 0 and 359".into()))
+            })
+            .transpose()
+        })
+        .transpose()?;
+
     let bot_settings_str = body
         .bot_settings
         .as_ref()
@@ -437,6 +452,7 @@ pub async fn update_guild(
         visibility.as_deref(),
         discovery_tags.as_deref(),
         allowed_roles.as_deref(),
+        hue,
     )
     .await?;
 
@@ -457,6 +473,7 @@ pub async fn update_guild(
         Some(json!({
             "name": updated.name,
             "description": updated.description,
+            "hue": updated.hue,
         })),
     )
     .await;

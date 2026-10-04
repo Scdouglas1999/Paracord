@@ -24,6 +24,11 @@ export interface GuildDetail {
    */
   feature_flags: number;
   hub_settings: HubSettings | null;
+  /**
+   * The server's color as a hue, 0-359. Null when unset; clients then
+   * derive one from the id.
+   */
+  hue: number | null;
   icon_hash: string | null;
   id: string;
   member_count: number;

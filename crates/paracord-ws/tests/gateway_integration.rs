@@ -1895,8 +1895,83 @@ async fn ready_lists_the_people_in_a_recipients_dm_calls() {
     assert_eq!(states[0]["self_mute"], true);
     assert_eq!(states[0]["self_video"], true);
     assert_eq!(states[0]["mode"], "joined");
+    assert!(states[0]["joined_at"].is_string(), "{ready}");
 
     let ready = ready_for(&url, &outsider_token).await;
     assert_eq!(ready["d"]["dm_voice_states"], json!([]), "{ready}");
+    server.abort();
+}
+
+/// Index (docs/index-spec.md §11): READY's guild core carries the server color
+/// and every voice state carries when its member joined the channel.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ready_carries_the_server_hue_and_voice_joined_at() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message as ClientMessage;
+
+    let env = build_env().await;
+    let (owner, owner_token) = make_user_token(&env).await;
+    let guild_id = make_guild(&env, owner).await;
+    paracord_db::guilds::set_space_hue(&env.db, guild_id.into(), Some(214))
+        .await
+        .unwrap();
+    let lounge = sid();
+    paracord_db::channels::create_channel(&env.db, lounge, guild_id, "Lounge", 2, 0, None, None)
+        .await
+        .unwrap();
+    paracord_db::voice_states::upsert_voice_state(&env.db, owner, Some(guild_id), lounge, "call")
+        .await
+        .unwrap();
+    let joined_at = paracord_db::voice_states::get_user_voice_state(&env.db, owner, Some(guild_id))
+        .await
+        .unwrap()
+        .unwrap()
+        .joined_at;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let router = paracord_ws::gateway_router().with_state(env.state.clone());
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+        .unwrap();
+    });
+    let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/gateway"))
+        .await
+        .unwrap();
+    let _hello = timeout(Duration::from_secs(5), socket.next())
+        .await
+        .unwrap();
+    socket
+        .send(ClientMessage::Text(
+            json!({"op": OP_IDENTIFY, "d": {"token": owner_token}})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    let ready = timeout(Duration::from_secs(5), socket.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let ready: Value = serde_json::from_str(ready.to_text().unwrap()).unwrap();
+    assert_eq!(ready["t"], "READY");
+    let guild = ready["d"]["guilds"]
+        .as_array()
+        .and_then(|guilds| guilds.iter().find(|g| g["id"] == guild_id.to_string()))
+        .unwrap_or_else(|| panic!("READY lists the server: {ready}"));
+    serde_json::from_value::<paracord_contracts::guild::ReadyGuildCore>(guild.clone())
+        .unwrap_or_else(|error| panic!("READY guild core ({error}): {guild}"));
+    assert_eq!(guild["hue"], 214, "{guild}");
+    let state = &guild["voice_states"][0];
+    serde_json::from_value::<paracord_contracts::voice::VoiceStateSnapshot>(state.clone())
+        .unwrap_or_else(|error| panic!("READY voice state ({error}): {state}"));
+    assert_eq!(state["joined_at"], joined_at.to_rfc3339(), "{guild}");
+
+    let _ = socket.close(None).await;
     server.abort();
 }

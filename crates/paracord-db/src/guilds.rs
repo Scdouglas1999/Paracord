@@ -24,6 +24,9 @@ pub struct SpaceRow {
     pub created_at: DateTime<Utc>,
     pub hub_settings: Option<String>,
     pub bot_settings: Option<String>,
+    /// The server's color, 0-359 (`spaces.hue`, Index). `None` when unset;
+    /// clients then derive one from the id.
+    pub hue: Option<u16>,
 }
 
 impl SpaceRow {
@@ -57,9 +60,26 @@ impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for SpaceRow {
             created_at: datetime_from_db_text(&created_at_raw)?,
             hub_settings: row.try_get("hub_settings").unwrap_or(None),
             bot_settings: row.try_get("bot_settings").unwrap_or(None),
+            hue: hue_from_row(row)?,
         })
     }
 }
+
+/// `spaces.hue` as stored. The column's CHECK keeps it in 0-359; a value
+/// outside that range is a corrupt row and fails the read.
+fn hue_from_row(row: &sqlx::any::AnyRow) -> Result<Option<u16>, sqlx::Error> {
+    row.try_get::<Option<i32>, _>("hue")?
+        .map(|raw| {
+            u16::try_from(raw)
+                .ok()
+                .filter(|hue| *hue <= MAX_HUE)
+                .ok_or_else(|| sqlx::Error::Protocol(format!("invalid spaces.hue {raw}")))
+        })
+        .transpose()
+}
+
+/// The largest hue a server can carry (`spaces.hue` is 0-359).
+pub const MAX_HUE: u16 = 359;
 
 // Backward compat alias
 pub type GuildRow = SpaceRow;
@@ -75,7 +95,7 @@ pub async fn create_space(
     let row = sqlx::query_as::<_, SpaceRow>(
         "INSERT INTO spaces (id, name, owner_id, icon_hash, visibility)
          VALUES ($1, $2, $3, $4, 'private')
-         RETURNING id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, discovery_tags, created_at, hub_settings, bot_settings"
+         RETURNING id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, discovery_tags, created_at, hub_settings, bot_settings, hue"
     )
     .bind(id)
     .bind(name)
@@ -107,7 +127,7 @@ pub async fn create_guild(
 /// Core implementation using newtype ID.
 pub async fn get_space(pool: &DbPool, id: GuildId) -> Result<Option<SpaceRow>, DbError> {
     let row = sqlx::query_as::<_, SpaceRow>(
-        "SELECT id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, discovery_tags, created_at, hub_settings, bot_settings
+        "SELECT id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, discovery_tags, created_at, hub_settings, bot_settings, hue
          FROM spaces WHERE id = $1"
     )
     .bind(id)
@@ -140,7 +160,7 @@ pub async fn update_space(
              bot_settings = COALESCE($6, bot_settings),
              updated_at = $7
          WHERE id = $1
-         RETURNING id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, discovery_tags, created_at, hub_settings, bot_settings"
+         RETURNING id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, discovery_tags, created_at, hub_settings, bot_settings, hue"
     )
     .bind(id)
     .bind(name)
@@ -196,7 +216,7 @@ pub async fn update_space_visibility(
              allowed_roles = COALESCE($4, allowed_roles),
              updated_at = $5
          WHERE id = $1
-         RETURNING id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, discovery_tags, created_at, hub_settings, bot_settings"
+         RETURNING id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, discovery_tags, created_at, hub_settings, bot_settings, hue"
     )
     .bind(id)
     .bind(visibility)
@@ -224,7 +244,7 @@ pub async fn delete_guild(pool: &DbPool, id: i64) -> Result<(), DbError> {
 
 pub async fn list_all_spaces(pool: &DbPool) -> Result<Vec<SpaceRow>, DbError> {
     let rows = sqlx::query_as::<_, SpaceRow>(
-        "SELECT id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, discovery_tags, created_at, hub_settings, bot_settings
+        "SELECT id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, discovery_tags, created_at, hub_settings, bot_settings, hue
          FROM spaces
          ORDER BY created_at ASC"
     )
@@ -237,7 +257,7 @@ pub async fn list_all_spaces(pool: &DbPool) -> Result<Vec<SpaceRow>, DbError> {
 pub async fn get_user_guilds(pool: &DbPool, user_id: UserId) -> Result<Vec<SpaceRow>, DbError> {
     let rows = sqlx::query_as::<_, SpaceRow>(
         "SELECT s.id, s.name, s.description, s.icon_hash, s.banner_hash, s.owner_id, s.features,
-                s.system_channel_id, s.vanity_url_code, s.visibility, s.allowed_roles, s.discovery_tags, s.created_at, s.hub_settings, s.bot_settings
+                s.system_channel_id, s.vanity_url_code, s.visibility, s.allowed_roles, s.discovery_tags, s.created_at, s.hub_settings, s.bot_settings, s.hue
          FROM spaces s
          INNER JOIN members m ON m.guild_id = s.id
          WHERE m.user_id = $1
@@ -311,7 +331,7 @@ pub async fn set_guild_banner_hash(
     let row = sqlx::query_as::<_, SpaceRow>(
         "UPDATE spaces SET banner_hash = $2, updated_at = $3
          WHERE id = $1
-         RETURNING id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, discovery_tags, created_at, hub_settings, bot_settings",
+         RETURNING id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, discovery_tags, created_at, hub_settings, bot_settings, hue",
     )
     .bind(id)
     .bind(banner_hash)
@@ -367,7 +387,7 @@ pub async fn update_vanity_url(
         "UPDATE spaces
          SET vanity_url_code = $2, updated_at = $3
          WHERE id = $1
-         RETURNING id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, discovery_tags, created_at, hub_settings, bot_settings"
+         RETURNING id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, discovery_tags, created_at, hub_settings, bot_settings, hue"
     )
     .bind(guild_id)
     .bind(code)
@@ -383,7 +403,7 @@ pub async fn get_guild_by_vanity_code(
     code: &str,
 ) -> Result<Option<SpaceRow>, DbError> {
     let row = sqlx::query_as::<_, SpaceRow>(
-        "SELECT id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, discovery_tags, created_at, hub_settings, bot_settings
+        "SELECT id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, discovery_tags, created_at, hub_settings, bot_settings, hue
          FROM spaces WHERE vanity_url_code = $1"
     )
     .bind(code)
@@ -416,10 +436,30 @@ pub async fn transfer_ownership(
     let row = sqlx::query_as::<_, SpaceRow>(
         "UPDATE spaces SET owner_id = $2, updated_at = $3
          WHERE id = $1
-         RETURNING id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, discovery_tags, created_at, hub_settings, bot_settings"
+         RETURNING id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, discovery_tags, created_at, hub_settings, bot_settings, hue"
     )
     .bind(space_id)
     .bind(new_owner_id)
+    .bind(datetime_to_db_text(Utc::now()))
+    .fetch_one(pool)
+    .await?;
+    Ok(row)
+}
+
+/// Set (`Some`) or clear (`None`) the server's color and return the row.
+/// The caller validates the range; the column's CHECK rejects anything else.
+pub async fn set_space_hue(
+    pool: &DbPool,
+    id: GuildId,
+    hue: Option<u16>,
+) -> Result<SpaceRow, DbError> {
+    let row = sqlx::query_as::<_, SpaceRow>(
+        "UPDATE spaces SET hue = $2, updated_at = $3
+         WHERE id = $1
+         RETURNING id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, discovery_tags, created_at, hub_settings, bot_settings, hue",
+    )
+    .bind(id)
+    .bind(hue.map(i32::from))
     .bind(datetime_to_db_text(Utc::now()))
     .fetch_one(pool)
     .await?;

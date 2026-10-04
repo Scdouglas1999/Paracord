@@ -50,6 +50,12 @@ pub struct VoiceStateSnapshot {
     /// When the member's current stream started (RFC 3339), for "LIVE 42 MIN".
     /// Non-null exactly while `self_stream` is true.
     pub self_stream_started_at: Option<String>,
+    /// When the member entered this channel (RFC 3339), for "live 12 min" on a
+    /// room: the room started at the earliest `joined_at` among its members.
+    /// Stamped on every join and listen join, kept while the member stays in
+    /// the channel, reset by a move. Null only on a status announcement whose
+    /// stored row could not be read.
+    pub joined_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_to_speak_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

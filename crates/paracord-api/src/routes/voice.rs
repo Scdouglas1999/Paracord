@@ -496,6 +496,7 @@ pub struct LiveKitParticipant {
 
 /// Commit durable native membership before discarding a previous room. On a
 /// failed room admission/DB commit the old DB row and participant survive.
+/// Returns the membership's `joined_at` as stored.
 pub(crate) async fn commit_native_membership(
     state: &AppState,
     user_id: i64,
@@ -504,7 +505,7 @@ pub(crate) async fn commit_native_membership(
     session_id: &str,
     suppress: bool,
     can_publish: bool,
-) -> Result<(), ApiError> {
+) -> Result<chrono::DateTime<chrono::Utc>, ApiError> {
     commit_native_membership_with_mode(
         state,
         user_id,
@@ -530,7 +531,7 @@ pub(crate) async fn commit_native_membership_with_mode(
     suppress: bool,
     can_publish: bool,
     mode: VoiceMode,
-) -> Result<(), ApiError> {
+) -> Result<chrono::DateTime<chrono::Utc>, ApiError> {
     debug_assert!(!(mode.is_listen() && can_publish));
     let transaction = paracord_db::voice_states::begin_voice_state_transition_with_mode(
         &state.db, user_id, guild_id, channel_id, session_id, suppress, mode,
@@ -560,19 +561,21 @@ pub(crate) async fn commit_native_membership_with_mode(
                 other => ApiError::Internal(other.into()),
             })?;
     }
-    if let Err(error) = transaction.commit().await {
-        if let Some(native) = native {
-            native.rooms.restore_participant_if_session(
-                guild_id.unwrap_or(0),
-                channel_id,
-                user_id,
-                session_id,
-                previous,
-            );
+    match transaction.commit().await {
+        Ok(joined_at) => Ok(joined_at),
+        Err(error) => {
+            if let Some(native) = native {
+                native.rooms.restore_participant_if_session(
+                    guild_id.unwrap_or(0),
+                    channel_id,
+                    user_id,
+                    session_id,
+                    previous,
+                );
+            }
+            Err(ApiError::Internal(error.into()))
         }
-        return Err(ApiError::Internal(error.into()));
     }
-    Ok(())
 }
 
 pub(crate) async fn release_previous_memberships(
@@ -779,7 +782,7 @@ async fn join_voice_inner(
                 );
                 match client.request_media_token(target, &payload).await {
                     Ok(remote) => {
-                        paracord_db::voice_states::begin_voice_state_transition(
+                        let joined_at = paracord_db::voice_states::begin_voice_state_transition(
                             &state.db,
                             auth.user_id,
                             channel.guild_id(),
@@ -811,6 +814,7 @@ async fn join_voice_inner(
                                 "deaf": false,
                                 "mode": VoiceMode::Joined.as_str(),
                                 "self_stream_started_at": Value::Null,
+                                "joined_at": joined_at.to_rfc3339(),
                                 "username": &user.username,
                                 "avatar_hash": user.avatar_hash,
                             }),
@@ -868,7 +872,7 @@ async fn join_voice_inner(
     let requesting_livekit_fallback = query.fallback.as_deref() == Some("livekit");
     if state.config.native_media_enabled && !requesting_livekit_fallback {
         let session_id = uuid::Uuid::new_v4().to_string();
-        commit_native_membership_with_mode(
+        let joined_at = commit_native_membership_with_mode(
             &state,
             auth.user_id,
             channel.guild_id(),
@@ -898,6 +902,7 @@ async fn join_voice_inner(
                 "deaf": false,
                 "mode": mode.as_str(),
                 "self_stream_started_at": Value::Null,
+                "joined_at": joined_at.to_rfc3339(),
                 "username": &user.username,
                 "avatar_hash": user.avatar_hash,
             }),
@@ -981,7 +986,7 @@ async fn join_voice_inner(
         .await
         .map_err(ApiError::Internal)?;
 
-    paracord_db::voice_states::begin_voice_state_transition_with_mode(
+    let joined_at = paracord_db::voice_states::begin_voice_state_transition_with_mode(
         &state.db,
         auth.user_id,
         channel.guild_id(),
@@ -1021,6 +1026,7 @@ async fn join_voice_inner(
             "deaf": false,
             "mode": mode.as_str(),
             "self_stream_started_at": Value::Null,
+            "joined_at": joined_at.to_rfc3339(),
             "username": &user.username,
             "avatar_hash": user.avatar_hash,
         }),

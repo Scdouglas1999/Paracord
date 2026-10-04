@@ -259,7 +259,13 @@ mod tests {
         let schemas = schemas();
         let snapshot = &schemas["schemas"]["VoiceStateSnapshot"];
         let required = snapshot["required"].as_array().unwrap();
-        for name in ["mode", "self_stream_started_at", "user_id", "channel_id"] {
+        for name in [
+            "mode",
+            "self_stream_started_at",
+            "joined_at",
+            "user_id",
+            "channel_id",
+        ] {
             assert!(required.contains(&json!(name)), "missing: {name}");
         }
         for name in ["session_id", "username", "speaking", "request_to_speak_at"] {
@@ -273,6 +279,7 @@ mod tests {
             "self_mute": false, "self_deaf": false, "self_stream": true,
             "self_video": false, "suppress": false, "mute": false, "deaf": false,
             "mode": "listen", "self_stream_started_at": "2026-09-29T12:00:00+00:00",
+            "joined_at": "2026-09-29T11:48:00+00:00",
             "username": "sean", "avatar_hash": null
         }))
         .is_ok());
@@ -347,7 +354,7 @@ mod tests {
     }
 
     #[test]
-    fn ready_guild_core_is_a_distinct_six_field_contract() {
+    fn ready_guild_core_is_a_distinct_seven_field_contract() {
         let schemas = schemas();
         let core = &schemas["schemas"]["ReadyGuildCore"];
         let properties = core["properties"].as_object().unwrap();
@@ -357,6 +364,7 @@ mod tests {
             names,
             [
                 "created_at",
+                "hue",
                 "icon_hash",
                 "id",
                 "member_count",
@@ -396,9 +404,40 @@ mod tests {
             "name": "Space",
             "icon_hash": null,
             "created_at": "2026-09-12T12:00:00+00:00",
-            "member_count": 2
+            "member_count": 2,
+            "hue": null
         }))
         .is_ok());
+    }
+
+    #[test]
+    fn hue_is_a_present_nullable_wheel_angle_and_a_clearable_patch() {
+        let schemas = schemas();
+        for name in ["GuildSummary", "GuildDetail", "ReadyGuildCore"] {
+            let schema = &schemas["schemas"][name];
+            let hue = &schema["properties"]["hue"];
+            assert_eq!(hue["type"], json!(["integer", "null"]), "{name}");
+            assert_eq!(hue["minimum"], json!(0), "{name}");
+            assert_eq!(hue["maximum"], json!(359), "{name}");
+            assert!(
+                schema["required"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!("hue")),
+                "{name} always carries hue"
+            );
+        }
+        let request = &schemas["schemas"]["UpdateGuildRequest"];
+        assert!(!request["required"]
+            .as_array()
+            .is_some_and(|required| required.contains(&json!("hue"))));
+        let absent: guild::UpdateGuildRequest = serde_json::from_value(json!({})).unwrap();
+        assert_eq!(absent.hue, None, "absent leaves the hue unchanged");
+        let cleared: guild::UpdateGuildRequest =
+            serde_json::from_value(json!({ "hue": null })).unwrap();
+        assert_eq!(cleared.hue, Some(None), "null clears it");
+        let set: guild::UpdateGuildRequest = serde_json::from_value(json!({ "hue": 214 })).unwrap();
+        assert_eq!(set.hue, Some(Some(214)));
     }
 
     #[test]

@@ -23,6 +23,10 @@ pub struct GuildSummary {
     pub discovery_tags: Vec<String>,
     pub hub_settings: Option<HubSettings>,
     pub bot_settings: Option<BTreeMap<String, GuildBotConfig>>,
+    /// The server's color as a hue, 0-359. Null when unset; clients then
+    /// derive one from the id.
+    #[schemars(range(min = 0, max = 359))]
+    pub hue: Option<u32>,
 }
 
 /// Full settings returned by the space detail and mutation endpoints.
@@ -53,6 +57,10 @@ pub struct ReadyGuildCore {
     pub created_at: String,
     #[schemars(range(min = 0, max = 4294967295u64))]
     pub member_count: u32,
+    /// The server's color as a hue, 0-359; null when unset (see
+    /// `GuildSummary::hue`).
+    #[schemars(range(min = 0, max = 359))]
+    pub hue: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
@@ -81,6 +89,18 @@ pub struct UpdateGuildRequest {
     pub visibility: Option<String>,
     pub discovery_tags: Option<Vec<String>>,
     pub allowed_roles: Option<Vec<String>>,
+    /// The server's color as a hue, 0-359 (Manage Server). `null` clears it;
+    /// omit the field to leave it unchanged. Out of range is a 400.
+    #[serde(default, deserialize_with = "deserialize_clearable_hue")]
+    #[schemars(range(min = 0, max = 359))]
+    pub hue: Option<Option<i32>>,
+}
+
+fn deserialize_clearable_hue<'de, D>(deserializer: D) -> Result<Option<Option<i32>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Some(Option::<i32>::deserialize(deserializer)?))
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]

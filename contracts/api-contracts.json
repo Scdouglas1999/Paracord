@@ -664,6 +664,16 @@
             }
           ]
         },
+        "hue": {
+          "description": "The server's color as a hue, 0-359. Null when unset; clients then\nderive one from the id.",
+          "format": "uint32",
+          "maximum": 359,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "icon_hash": {
           "type": [
             "string",
@@ -715,6 +725,7 @@
         "discovery_tags",
         "hub_settings",
         "bot_settings",
+        "hue",
         "system_channel_id",
         "vanity_url_code",
         "feature_flags"
@@ -1025,6 +1036,16 @@
             }
           ]
         },
+        "hue": {
+          "description": "The server's color as a hue, 0-359. Null when unset; clients then\nderive one from the id.",
+          "format": "uint32",
+          "maximum": 359,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "icon_hash": {
           "type": [
             "string",
@@ -1063,7 +1084,8 @@
         "allowed_roles",
         "discovery_tags",
         "hub_settings",
-        "bot_settings"
+        "bot_settings",
+        "hue"
       ],
       "title": "GuildSummary",
       "type": "object"
@@ -1132,6 +1154,16 @@
                 }
               ]
             },
+            "hue": {
+              "description": "The server's color as a hue, 0-359. Null when unset; clients then\nderive one from the id.",
+              "format": "uint32",
+              "maximum": 359,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "icon_hash": {
               "type": [
                 "string",
@@ -1170,7 +1202,8 @@
             "allowed_roles",
             "discovery_tags",
             "hub_settings",
-            "bot_settings"
+            "bot_settings",
+            "hue"
           ],
           "type": "object"
         },
@@ -1648,6 +1681,16 @@
           "minLength": 1,
           "type": "string"
         },
+        "hue": {
+          "description": "The server's color as a hue, 0-359; null when unset (see\n`GuildSummary::hue`).",
+          "format": "uint32",
+          "maximum": 359,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "icon_hash": {
           "type": [
             "string",
@@ -1682,7 +1725,8 @@
         "name",
         "icon_hash",
         "created_at",
-        "member_count"
+        "member_count",
+        "hue"
       ],
       "title": "ReadyGuildCore",
       "type": "object"
@@ -2072,6 +2116,17 @@
             }
           ]
         },
+        "hue": {
+          "default": null,
+          "description": "The server's color as a hue, 0-359 (Manage Server). `null` clears it;\nomit the field to leave it unchanged. Out of range is a 400.",
+          "format": "int32",
+          "maximum": 359,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "icon": {
           "type": [
             "string",
@@ -2432,6 +2487,13 @@
             "null"
           ]
         },
+        "joined_at": {
+          "description": "When the member entered this channel (RFC 3339), for \"live 12 min\" on a\nroom: the room started at the earliest `joined_at` among its members.\nStamped on every join and listen join, kept while the member stays in\nthe channel, reset by a move. Null only on a status announcement whose\nstored row could not be read.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "mode": {
           "$ref": "#/$defs/VoiceMode",
           "description": "`listen` shows as \"Listening in\" on the roster."
@@ -2505,7 +2567,8 @@
         "mute",
         "deaf",
         "mode",
-        "self_stream_started_at"
+        "self_stream_started_at",
+        "joined_at"
       ],
       "title": "VoiceStateSnapshot",
       "type": "object"

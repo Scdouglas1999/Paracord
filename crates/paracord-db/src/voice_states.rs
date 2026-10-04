@@ -6,8 +6,8 @@ use sqlx::Row;
 /// Every column a [`VoiceStateRow`] reads, optionally qualified by a table
 /// alias. Booleans go through `CASE` (the `Any` driver cannot decode SQLite's
 /// bool type info); `request_to_speak_at` is a native timestamp on PostgreSQL
-/// and is read as text; `mode` and `self_stream_started_at` are TEXT on both
-/// engines.
+/// and is read as text; `mode`, `self_stream_started_at` and `joined_at` are
+/// TEXT on both engines.
 fn voice_state_columns(alias: &str) -> String {
     let a = if alias.is_empty() {
         String::new()
@@ -23,7 +23,8 @@ fn voice_state_columns(alias: &str) -> String {
          CASE WHEN {a}suppress THEN 1 ELSE 0 END AS suppress,
          CAST({a}request_to_speak_at AS TEXT) AS request_to_speak_at,
          {a}mode AS mode,
-         {a}self_stream_started_at AS self_stream_started_at"
+         {a}self_stream_started_at AS self_stream_started_at,
+         {a}joined_at AS joined_at"
     )
 }
 
@@ -39,6 +40,14 @@ fn stream_started_at_from_row(
     row.try_get::<Option<String>, _>("self_stream_started_at")?
         .map(|value| datetime_from_db_text(&value))
         .transpose()
+}
+
+/// `joined_at` as stored. Every write stamps it and the Index migration
+/// backfilled older rows, so a NULL is a corrupt row and fails the read.
+fn joined_at_from_row(row: &sqlx::any::AnyRow) -> Result<DateTime<Utc>, sqlx::Error> {
+    let raw: Option<String> = row.try_get("joined_at")?;
+    let raw = raw.ok_or_else(|| sqlx::Error::Protocol("voice_states.joined_at is NULL".into()))?;
+    datetime_from_db_text(&raw)
 }
 
 #[derive(Debug, Clone)]
@@ -57,6 +66,9 @@ pub struct VoiceStateRow {
     pub mode: VoiceMode,
     /// When the current stream started; `Some` exactly while `self_stream`.
     pub self_stream_started_at: Option<DateTime<Utc>>,
+    /// When the member entered this channel; a move to another channel
+    /// resets it.
+    pub joined_at: DateTime<Utc>,
 }
 
 impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for VoiceStateRow {
@@ -78,6 +90,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for VoiceStateRow {
             request_to_speak_at,
             mode: mode_from_row(row)?,
             self_stream_started_at: stream_started_at_from_row(row)?,
+            joined_at: joined_at_from_row(row)?,
         })
     }
 }
@@ -108,7 +121,8 @@ impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for VoiceSessionRow {
 /// receipt, `OP_MEDIA_CONNECT`). A new row, or a move to another channel, is a
 /// full membership; a repeat in the same channel keeps the member's mode, so a
 /// status update without a receipt never turns a listener into a publisher on
-/// the roster.
+/// the roster. `joined_at` follows the same rule: stamped on a new row or a
+/// move, kept on a repeat in the same channel.
 pub async fn upsert_voice_state(
     pool: &DbPool,
     user_id: i64,
@@ -117,12 +131,18 @@ pub async fn upsert_voice_state(
     session_id: &str,
 ) -> Result<(), DbError> {
     sqlx::query(
-        "INSERT INTO voice_states (user_id, space_id, channel_id, session_id, mode)
-         VALUES ($1, $2, $3, $4, 'joined')
+        "INSERT INTO voice_states (user_id, space_id, channel_id, session_id, mode, joined_at)
+         VALUES ($1, $2, $3, $4, 'joined', $5)
          ON CONFLICT (user_id) DO UPDATE SET
              space_id = $2,
              channel_id = $3,
              session_id = $4,
+             joined_at = CASE
+                 WHEN voice_states.channel_id = $3
+                  AND COALESCE(voice_states.space_id, 0) = COALESCE($2, 0)
+                 THEN voice_states.joined_at
+                 ELSE $5
+             END,
              request_to_speak_at = CASE
                  WHEN voice_states.channel_id = $3
                   AND COALESCE(voice_states.space_id, 0) = COALESCE($2, 0)
@@ -140,9 +160,27 @@ pub async fn upsert_voice_state(
     .bind(space_id)
     .bind(channel_id)
     .bind(session_id)
+    .bind(datetime_to_db_text(Utc::now()))
     .execute(pool)
     .await?;
     Ok(())
+}
+
+/// A membership write staged by [`begin_voice_state_transition`]: the open
+/// transaction and the member's `joined_at` as it will be stored, so the
+/// caller can announce it without reading the row back.
+pub struct VoiceStateTransition<'a> {
+    transaction: sqlx::Transaction<'a, sqlx::Any>,
+    joined_at: DateTime<Utc>,
+}
+
+impl VoiceStateTransition<'_> {
+    /// Commit the membership and return its `joined_at`: now for a new
+    /// membership or a move, the earlier time for a repeat in the same channel.
+    pub async fn commit(self) -> Result<DateTime<Utc>, sqlx::Error> {
+        self.transaction.commit().await?;
+        Ok(self.joined_at)
+    }
 }
 
 /// Stage both membership and stage-suppression state. The caller publishes
@@ -157,7 +195,7 @@ pub async fn begin_voice_state_transition<'a>(
     channel_id: i64,
     session_id: &str,
     suppress: bool,
-) -> Result<sqlx::Transaction<'a, sqlx::Any>, DbError> {
+) -> Result<VoiceStateTransition<'a>, DbError> {
     begin_voice_state_transition_with_mode(
         pool,
         user_id,
@@ -173,6 +211,9 @@ pub async fn begin_voice_state_transition<'a>(
 /// [`begin_voice_state_transition`] with an explicit [`VoiceMode`]. A listener
 /// never sends, so entering `listen` also clears any stream or camera flag the
 /// row carried from an earlier full membership.
+///
+/// `joined_at` is stamped on a new row or a move to another channel and kept on
+/// a repeat in the same channel (a listener who joins fully, or a rejoin).
 pub async fn begin_voice_state_transition_with_mode<'a>(
     pool: &'a DbPool,
     user_id: i64,
@@ -181,30 +222,39 @@ pub async fn begin_voice_state_transition_with_mode<'a>(
     session_id: &str,
     suppress: bool,
     mode: VoiceMode,
-) -> Result<sqlx::Transaction<'a, sqlx::Any>, DbError> {
+) -> Result<VoiceStateTransition<'a>, DbError> {
     let mut transaction = pool.begin().await?;
-    sqlx::query(
-        "INSERT INTO voice_states (user_id, space_id, channel_id, session_id, mode)
-         VALUES ($1, $2, $3, $4, $5)
+    let joined_at_raw: String = sqlx::query_scalar(
+        "INSERT INTO voice_states (user_id, space_id, channel_id, session_id, mode, joined_at)
+         VALUES ($1, $2, $3, $4, $5, $6)
          ON CONFLICT (user_id) DO UPDATE SET
              space_id = $2,
              channel_id = $3,
              session_id = $4,
              mode = $5,
+             joined_at = CASE
+                 WHEN voice_states.channel_id = $3
+                  AND COALESCE(voice_states.space_id, 0) = COALESCE($2, 0)
+                 THEN voice_states.joined_at
+                 ELSE $6
+             END,
              request_to_speak_at = CASE
                  WHEN voice_states.channel_id = $3
                   AND COALESCE(voice_states.space_id, 0) = COALESCE($2, 0)
                  THEN voice_states.request_to_speak_at
                  ELSE NULL
-             END",
+             END
+         RETURNING joined_at",
     )
     .bind(user_id)
     .bind(space_id)
     .bind(channel_id)
     .bind(session_id)
     .bind(mode.as_str())
-    .execute(&mut *transaction)
+    .bind(datetime_to_db_text(Utc::now()))
+    .fetch_one(&mut *transaction)
     .await?;
+    let joined_at = datetime_from_db_text(&joined_at_raw)?;
     sqlx::query("UPDATE voice_states SET suppress = $1 WHERE user_id = $2 AND session_id = $3")
         .bind(suppress)
         .bind(user_id)
@@ -222,7 +272,10 @@ pub async fn begin_voice_state_transition_with_mode<'a>(
         .execute(&mut *transaction)
         .await?;
     }
-    Ok(transaction)
+    Ok(VoiceStateTransition {
+        transaction,
+        joined_at,
+    })
 }
 
 pub async fn get_channel_voice_states(
@@ -350,6 +403,7 @@ pub struct VoiceStateWithUser {
     pub request_to_speak_at: Option<DateTime<Utc>>,
     pub mode: VoiceMode,
     pub self_stream_started_at: Option<DateTime<Utc>>,
+    pub joined_at: DateTime<Utc>,
     pub username: String,
     pub avatar_hash: Option<String>,
 }
@@ -373,6 +427,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for VoiceStateWithUser {
             request_to_speak_at,
             mode: mode_from_row(row)?,
             self_stream_started_at: stream_started_at_from_row(row)?,
+            joined_at: joined_at_from_row(row)?,
             username: row.try_get("username")?,
             avatar_hash: row.try_get("avatar_hash")?,
         })

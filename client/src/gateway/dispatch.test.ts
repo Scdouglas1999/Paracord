@@ -83,15 +83,16 @@ describe('dispatch READY normalization', () => {
   beforeAll(async () => {
     await loadValidators();
   });
-  const readyCore = { id: 'g1', owner_id: 'owner-1', name: 'Updated', member_count: 0, icon_hash: null, created_at: '2026-01-01T00:00:00Z' };
+  const readyCore = { id: 'g1', owner_id: 'owner-1', name: 'Updated', member_count: 0, icon_hash: null, created_at: '2026-01-01T00:00:00Z', hue: null };
   it('adds a guild with a valid owner_id', () => {
     useAuthStore.setState({ user: { id: 'viewer', username: 'viewer' } as User });
     dispatchGatewayEvent(SERVER, GatewayEvents.READY, {
-      guilds: [{ id: 'g1', owner_id: 'owner-1', name: 'Guild One', member_count: 3, icon_hash: null, created_at: '2026-01-01T00:00:00Z', channels: [] }],
+      guilds: [{ id: 'g1', owner_id: 'owner-1', name: 'Guild One', member_count: 3, icon_hash: null, created_at: '2026-01-01T00:00:00Z', hue: 214, channels: [] }],
     });
     const guilds = useGuildStore.getState().guilds;
     expect(guilds).toHaveLength(1);
     expect(guilds[0].owner_id).toBe('owner-1');
+    expect(guilds[0].hue).toBe(214);
   });
 
   it('skips (does not default) a guild missing owner_id and logs a warning', () => {
@@ -123,7 +124,7 @@ describe('dispatch READY normalization', () => {
           id: 'g1',
           owner_id: 'o1',
           name: 'G',
-          member_count: 3, icon_hash: null, created_at: '2026-01-01T00:00:00Z',
+          member_count: 3, icon_hash: null, created_at: '2026-01-01T00:00:00Z', hue: null,
           channels: [
             { id: 'c1', name: 'general', type: 0 },
             { name: 'broken' } as never,
@@ -136,7 +137,7 @@ describe('dispatch READY normalization', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('channel missing id'));
     warn.mockRestore();
   });
-  it.each(['id', 'owner_id', 'name', 'member_count', 'icon_hash', 'created_at'] as const)('preserves confirmed guild metadata when READY omits %s', async field => {
+  it.each(['id', 'owner_id', 'name', 'member_count', 'icon_hash', 'created_at', 'hue'] as const)('preserves confirmed guild metadata when READY omits %s', async field => {
     useAuthStore.setState({ user: { id: 'viewer' } as User });
     const scope = { serverId: SERVER, userId: 'viewer' };
     useGuildStore.getState().addGuild({ ...readyCore, name: 'Confirmed', member_count: 9, default_channel_id: 'confirmed-channel', description: 'Confirmed detail' }, scope);

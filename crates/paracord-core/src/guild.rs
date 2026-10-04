@@ -161,12 +161,21 @@ pub async fn update_guild(
     visibility: Option<&str>,
     discovery_tags: Option<&str>,
     allowed_roles: Option<&str>,
+    hue: Option<Option<u16>>,
 ) -> Result<paracord_db::guilds::GuildRow, CoreError> {
     // Length-check before the permission read: an over-long body is rejected
     // without spending a pool connection on it.
     ensure_within_len(icon_hash, MAX_ICON_LEN, "icon")?;
     ensure_within_len(hub_settings, MAX_SETTINGS_LEN, "hub_settings")?;
     ensure_within_len(bot_settings, MAX_SETTINGS_LEN, "bot_settings")?;
+    if hue
+        .flatten()
+        .is_some_and(|value| value > paracord_db::guilds::MAX_HUE)
+    {
+        return Err(CoreError::BadRequest(
+            "hue must be between 0 and 359".into(),
+        ));
+    }
 
     let guild = paracord_db::guilds::get_guild(pool, guild_id)
         .await?
@@ -209,6 +218,10 @@ pub async fn update_guild(
             next_allowed_roles,
         )
         .await?;
+    }
+    // `Some(None)` clears the server color; `None` leaves it as it is.
+    if let Some(hue) = hue {
+        updated = paracord_db::guilds::set_space_hue(pool, guild_id.into(), hue).await?;
     }
     Ok(updated)
 }

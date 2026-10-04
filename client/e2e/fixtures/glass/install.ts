@@ -243,6 +243,7 @@ function readyFrame(quiet: boolean, icons: ReadonlyMap<string, string>) {
         icon_hash: icons.get(guild.id) ?? null,
         member_count: guild.member_count,
         created_at: SCENE_NOW_ISO,
+        hue: null,
         channels: CHANNELS.filter((c) => c.guild_id === guild.id).map(channelRecord),
         voice_states:
           guild.id === GAME_NIGHT_ID && !quiet

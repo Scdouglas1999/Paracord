@@ -8,7 +8,7 @@ export function guildDetailFixture(overrides: Partial<GuildDetail> = {}): GuildD
     description: null, icon_hash: null, created_at: '2026-09-12T12:00:00+00:00',
     visibility: 'private', allowed_roles: [], discovery_tags: [],
     hub_settings: null, bot_settings: null, banner_hash: null,
-    system_channel_id: null, vanity_url_code: null, feature_flags: 0,
+    system_channel_id: null, vanity_url_code: null, feature_flags: 0, hue: null,
     ...overrides,
   };
 }

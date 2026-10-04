@@ -11,6 +11,7 @@ const readyGuild = {
   icon_hash: 'a1b2c3d4',
   created_at: '2026-09-12T12:00:00+00:00',
   member_count: 2,
+  hue: null as number | null,
 };
 
 type CoreField = keyof typeof readyGuild;
@@ -21,7 +22,7 @@ function without(field: CoreField) {
 }
 
 describe('gateway READY guild core contract', () => {
-  it('accepts the six-field payload with per-dispatch gateway extensions', () => {
+  it('accepts the seven-field payload with per-dispatch gateway extensions', () => {
     const payload = {
       ...readyGuild,
       channels: [{ id: '7001', name: 'general' }],
@@ -33,7 +34,7 @@ describe('gateway READY guild core contract', () => {
     expect(isReadyGuildCore(readyGuild)).toBe(true);
   });
 
-  it.each(['id', 'owner_id', 'name', 'icon_hash', 'created_at', 'member_count'] as const)(
+  it.each(['id', 'owner_id', 'name', 'icon_hash', 'created_at', 'member_count', 'hue'] as const)(
     'rejects a guild missing required field %s',
     field => {
       expect(isReadyGuildCore(without(field))).toBe(false);
@@ -44,6 +45,11 @@ describe('gateway READY guild core contract', () => {
     expect(isReadyGuildCore({ ...readyGuild, icon_hash: null })).toBe(true);
     expect(isReadyGuildCore({ ...readyGuild, icon_hash: 42 })).toBe(false);
     expect(isReadyGuildCore({ ...readyGuild, icon_hash: undefined })).toBe(false);
+  });
+
+  it('accepts a server color on the wheel or null, and nothing else', () => {
+    for (const hue of [0, 214, 359, null]) expect(isReadyGuildCore({ ...readyGuild, hue })).toBe(true);
+    for (const hue of [-1, 360, 1.5, '214', undefined]) expect(isReadyGuildCore({ ...readyGuild, hue })).toBe(false);
   });
 
   it.each([null, '2', -1, 1.5, 4294967296])('rejects member_count %s', member_count => {

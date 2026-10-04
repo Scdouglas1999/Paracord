@@ -1967,6 +1967,9 @@ async fn build_ready_guilds(
                             "self_stream_started_at": vs
                                 .self_stream_started_at
                                 .map(|value| value.to_rfc3339()),
+                            // When the member entered the channel, for
+                            // "live 12 min".
+                            "joined_at": vs.joined_at.to_rfc3339(),
                             "username": &vs.username,
                             "avatar_hash": &vs.avatar_hash,
                             // Talking right now (see `voice_speaking`).
@@ -2008,6 +2011,7 @@ async fn build_ready_guilds(
                         )
                     })?,
                     created_at: g.created_at.to_rfc3339(),
+                    hue: g.hue.map(u32::from),
                 });
                 guild_json["channels"] = json!([]);
                 guild_json["voice_states"] = json!(voice_states_json);
@@ -2032,6 +2036,7 @@ fn ready_guilds_from_rows(
             owner_id: g.owner_id,
             icon_hash: g.icon_hash.clone(),
             created_at: g.created_at,
+            hue: g.hue,
         })
         .collect()
 }
@@ -3518,6 +3523,10 @@ async fn handle_client_message(
                             .and_then(|row| row.self_stream_started_at)
                             .filter(|_| current_self_stream)
                             .map(|value| value.to_rfc3339());
+                        let joined_at = stored
+                            .as_ref()
+                            .or(same_channel_row)
+                            .map(|row| row.joined_at.to_rfc3339());
 
                         state.event_bus.dispatch(
                             EVENT_VOICE_STATE_UPDATE,
@@ -3534,6 +3543,7 @@ async fn handle_client_message(
                                 "deaf": false,
                                 "mode": mode.as_str(),
                                 "self_stream_started_at": stream_started_at,
+                                "joined_at": joined_at,
                                 "username": vs_user.as_ref().map(|u| u.username.as_str()),
                                 "avatar_hash": vs_user.as_ref().and_then(|u| u.avatar_hash.as_deref()),
                             }),

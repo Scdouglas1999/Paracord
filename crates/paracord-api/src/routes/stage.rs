@@ -151,6 +151,7 @@ async fn dispatch_stage_voice_state(
             "self_stream_started_at": voice_state
                 .self_stream_started_at
                 .map(|value| value.to_rfc3339()),
+            "joined_at": voice_state.joined_at.to_rfc3339(),
             "username": user.as_ref().map(|u| u.username.as_str()),
             "avatar_hash": user.as_ref().and_then(|u| u.avatar_hash.as_deref()),
         }),

@@ -2099,9 +2099,10 @@ mod tests {
         crate::users::create_user(pool, user_id, "author", 1, "author@example.com", "hash")
             .await
             .unwrap();
-        crate::guilds::create_guild(pool, guild_id, "Test Guild", user_id, None)
-            .await
-            .unwrap();
+        // Raw SQL, not `guilds::create_guild`: the migration tests call this on a
+        // schema that predates later `spaces` columns (Index's `hue`).
+        sqlx::query("INSERT INTO spaces (id, name, owner_id, visibility) VALUES ($1, 'Test Guild', $2, 'private')")
+            .bind(guild_id).bind(user_id).execute(pool).await.unwrap();
         sqlx::query("INSERT INTO channels (id, space_id, name, channel_type, position) VALUES ($1, $2, 'general', 0, 0)")
             .bind(channel_id).bind(guild_id).execute(pool).await.unwrap();
         (user_id, guild_id, channel_id)

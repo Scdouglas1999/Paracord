@@ -9,6 +9,11 @@ export interface UpdateGuildRequest {
   description?: string | null;
   discovery_tags?: string[] | null;
   hub_settings?: HubSettings | null;
+  /**
+   * The server's color as a hue, 0-359 (Manage Server). `null` clears it;
+   * omit the field to leave it unchanged. Out of range is a 400.
+   */
+  hue?: number | null;
   icon?: string | null;
   name?: string | null;
   visibility?: string | null;

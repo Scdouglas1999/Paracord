@@ -13,7 +13,7 @@ const guild = {
   allowed_roles: [], discovery_tags: [],
   hub_settings: { welcome_text: 'Hello', future_setting: { nested: true } },
   bot_settings: { welcome: { enabled: true, custom_message: 'Hello' } },
-  banner_hash: null, system_channel_id: null, vanity_url_code: null, feature_flags: 0,
+  banner_hash: null, system_channel_id: null, vanity_url_code: null, feature_flags: 0, hue: 214,
   future_field: 'preserved',
 };
 function response(data: unknown): AxiosResponse<unknown> {
@@ -42,6 +42,8 @@ describe('Rust-derived wire validation', () => {
     { ...guild, hub_settings: { welcome_text: 42 } },
     { ...guild, visibility: 'unknown' },
     { ...guild, owner_id: 123 },
+    { ...guild, hue: undefined },
+    { ...guild, hue: 360 },
   ])('rejects incompatible data without exposing it in diagnostics', async invalid => {
     const data = { ...invalid, private_fixture_marker: 'DO_NOT_LOG_USER_CONTENT' };
     const failure = await responseContract(Promise.resolve(response(data)), isGuildDetail, 'GuildDetail').catch(error => error);

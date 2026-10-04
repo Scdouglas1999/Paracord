@@ -491,7 +491,7 @@ pub async fn join_dm_voice(
     if state.config.native_media_enabled && !requesting_livekit_fallback {
         let session_id = uuid::Uuid::new_v4().to_string();
         let room_name = format!("0:{}", channel_id);
-        super::voice::commit_native_membership(
+        let joined_at = super::voice::commit_native_membership(
             &state,
             auth.user_id,
             None,
@@ -545,6 +545,7 @@ pub async fn join_dm_voice(
                 "deaf": false,
                 "mode": paracord_models::voice::VoiceMode::Joined.as_str(),
                 "self_stream_started_at": Value::Null,
+                "joined_at": joined_at.to_rfc3339(),
                 "username": &user.username,
                 "display_name": &user.display_name,
                 "avatar_hash": user.avatar_hash,
@@ -587,7 +588,7 @@ pub async fn join_dm_voice(
         .await
         .map_err(ApiError::Internal)?;
 
-    paracord_db::voice_states::begin_voice_state_transition(
+    let joined_at = paracord_db::voice_states::begin_voice_state_transition(
         &state.db,
         auth.user_id,
         None,
@@ -626,6 +627,7 @@ pub async fn join_dm_voice(
             "deaf": false,
             "mode": paracord_models::voice::VoiceMode::Joined.as_str(),
             "self_stream_started_at": Value::Null,
+            "joined_at": joined_at.to_rfc3339(),
             "username": &user.username,
             "display_name": &user.display_name,
             "avatar_hash": user.avatar_hash,

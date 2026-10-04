@@ -16,6 +16,8 @@ pub struct ReadyGuild {
     pub owner_id: i64,
     pub icon_hash: Option<String>,
     pub created_at: DateTime<Utc>,
+    /// The server's color, 0-359 (`spaces.hue`); `None` when unset.
+    pub hue: Option<u16>,
 }
 
 pub struct Session {

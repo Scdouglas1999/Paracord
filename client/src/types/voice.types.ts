@@ -35,4 +35,11 @@ export interface VoiceState {
    * client never invents one.
    */
   self_stream_started_at?: string | null;
+  /**
+   * When this member entered the channel (RFC 3339), for "live 12 min" on a
+   * room: the room started at the earliest `joined_at` among its members.
+   * Stamped by the server on every join and listen join, kept while the member
+   * stays in the channel, reset by a move (docs/index-spec.md §11).
+   */
+  joined_at?: string | null;
 }

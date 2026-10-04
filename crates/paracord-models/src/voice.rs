@@ -55,6 +55,9 @@ pub struct VoiceState {
     /// When the current stream started (RFC 3339), set while `self_stream`.
     #[serde(default)]
     pub self_stream_started_at: Option<String>,
+    /// When the member entered this channel (RFC 3339); a move resets it.
+    #[serde(default)]
+    pub joined_at: Option<String>,
 }
 
 #[cfg(test)]
