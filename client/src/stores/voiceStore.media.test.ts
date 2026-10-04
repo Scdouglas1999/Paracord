@@ -269,6 +269,43 @@ describe('watch', () => {
     expect(useVoiceStore.getState().connected).toBe(true);
   });
 
+  it('previews your own stream through the call without a rejected viewer request or audio loopback', async () => {
+    const [call] = queueEngines(1);
+    await useVoiceStore.getState().joinChannel('lounge', 'guild');
+    fixture.startView.mockRejectedValue({ response: { status: 400, data: {
+      code: 'BAD_REQUEST', message: 'Your own stream is already on your screen',
+    } } });
+    await expect(useVoiceStore.getState().startWatch({ ...WATCH, streamerId: '1' })).resolves.toBeUndefined();
+    expect(useVoiceStore.getState().watchView).toMatchObject({ phase: 'live', route: 'call', engine: call.engine });
+    expect(fixture.startView).not.toHaveBeenCalled();
+    expect(call.mock.subscribeScreenShareAudio).not.toHaveBeenCalled();
+    await useVoiceStore.getState().stopWatch();
+    await flush();
+    expect(fixture.stopView).not.toHaveBeenCalled();
+    expect(call.mock.disconnect).not.toHaveBeenCalled();
+    expect(useVoiceStore.getState().connected).toBe(true);
+  });
+
+  it('ends a self-preview when leaving instead of opening a viewer session', async () => {
+    queueEngines(1);
+    await useVoiceStore.getState().joinChannel('lounge', 'guild');
+    await useVoiceStore.getState().startWatch({ ...WATCH, streamerId: '1' });
+    await useVoiceStore.getState().leaveChannel();
+    await flush();
+    expect(useVoiceStore.getState().watchView).toMatchObject({ phase: 'ended', engine: null });
+    expect(fixture.startView).not.toHaveBeenCalled();
+    expect(fixture.stopView).not.toHaveBeenCalled();
+  });
+
+  it('does not attach a self-preview to another instance with the same user and channel IDs', async () => {
+    queueEngines(1);
+    await useVoiceStore.getState().joinChannel('lounge', 'guild');
+    await expect(useVoiceStore.getState().startWatch({ ...WATCH, serverId: 'B', streamerId: '1' }))
+      .rejects.toThrow('Your stream preview is only available in the call you are sharing from.');
+    expect(fixture.startView).not.toHaveBeenCalled();
+    expect(useVoiceStore.getState().watchView?.engine).toBeNull();
+  });
+
   it('rides the call when in it: no second connection, counted by the server, stopping never leaves', async () => {
     const [call] = queueEngines(1);
     await useVoiceStore.getState().joinChannel('lounge', 'guild');

@@ -18,7 +18,8 @@
  *   Joining a call in the channel you are watching carries the watch over
  *   (the relay moves it to the membership); leaving it moves the watch back
  *   onto a session of its own. Watching never joins the call and stopping
- *   never leaves it.
+ *   never leaves it. A self-preview rides the local call without a server
+ *   viewer registration or audio playback, and ends when that call ends.
  * - **No automatic retry.** A view the relay superseded, ended or revoked (its
  *   viewer may no longer see the channel), one that did
  *   not connect within {@link VIEW_CONNECT_DEADLINE_MS}, or one refused by the
@@ -192,6 +193,11 @@ class ViewOwner {
     };
   }
 
+  /** The publisher previews locally; it is never registered as its own viewer. */
+  get isSelfPreview(): boolean {
+    return this.kind === 'watch' && this.target.streamerId === this.target.scope.userId;
+  }
+
   get current(): boolean {
     return !this.signal.aborted && !this.context.signal.aborted;
   }
@@ -294,7 +300,7 @@ function stopReceipt(owner: ViewOwner): string | null {
 function stopOnServer(owner: ViewOwner): void {
   const receipt = stopReceipt(owner);
   // An ambient view that rides a call or a watch was never registered.
-  const registered = owner.route === 'session' || (owner.route === 'call' && owner.kind === 'watch');
+  const registered = !owner.isSelfPreview && (owner.route === 'session' || (owner.route === 'call' && owner.kind === 'watch'));
   if (!receipt || !registered) { owner.disposeContext(); return; }
   void createCallVoiceApi(owner.context).stopView(owner.target.channelId, receipt)
     .catch((error) => console.warn('[voice] Stopping a view failed:', error))
@@ -356,6 +362,13 @@ async function attemptWatch(owner: ViewOwner): Promise<void> {
   const attempt = ++owner.attempt;
   const { channelId, streamerId } = owner.target;
   try {
+    if (owner.isSelfPreview) {
+      if (!h.callIn(owner.target.scope, channelId)) {
+        throw new Error('Your stream preview is only available in the call you are sharing from.');
+      }
+      await rideCall(owner, h, attempt);
+      return;
+    }
     const { data } = await createCallVoiceApi(owner.context).startView(channelId, 'watch', streamerId);
     owner.assertCurrent(attempt);
     if (data.via_membership) await rideCall(owner, h, attempt);
@@ -443,7 +456,8 @@ async function connectSession(owner: ViewOwner, data: VoiceViewSession, h: ViewH
 function attach(owner: ViewOwner, engine: MediaEngine): void {
   owner.engine = engine;
   releaseAudio(owner);
-  if (owner.kind === 'watch') {
+  if (owner.kind === 'watch' && !owner.isSelfPreview) {
+    // A self-preview must never play captured audio back into its own capture.
     // Watch = the stream's video AND its own audio (owner decision, plan §8).
     const h = requireHost();
     const { streamerId } = owner.target;
@@ -544,7 +558,14 @@ export function onCallClosed(call: CallSession): void {
     owner.engine = null;
     owner.call = null;
     owner.route = null;
-    publish(owner, { phase: 'connecting', route: null, engine: null, sessionId: null });
+    // Leaving ends the publisher's local preview; it cannot become a remote
+    // view of itself after the call's media engine has been released.
+    if (owner.isSelfPreview) {
+      owner.finished = true;
+      publish(owner, { phase: 'ended', endReason: 'ended', route: null, engine: null, sessionId: null });
+    } else {
+      publish(owner, { phase: 'connecting', route: null, engine: null, sessionId: null });
+    }
   }
   reconcileAmbient();
   void h.callReleased(call).catch(() => {}).then(() => {
