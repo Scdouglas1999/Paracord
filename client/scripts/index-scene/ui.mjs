@@ -195,6 +195,19 @@ export async function leaveRoom(session) {
 
 /** Switch the microphone on or off (a toggle whose state is `aria-pressed`). */
 export async function setMic(session, on) {
+  // The Index room card's mic is named for what it does ("Mute" / "Unmute") and
+  // carries its state in `data-muted`, not `aria-pressed`.
+  const cardMic = session.page.locator('[data-testid="ix-card-mic"]').first();
+  if (await cardMic.isVisible().catch(() => false)) {
+    const want = on ? 'false' : 'true';
+    if ((await cardMic.getAttribute('data-muted')) !== want) await cardMic.click({ timeout: 5000 });
+    const deadline = Date.now() + 15_000;
+    while ((await cardMic.getAttribute('data-muted').catch(() => null)) !== want) {
+      if (Date.now() > deadline) throw new Error(`the card's microphone did not turn ${on ? 'on' : 'off'} within 15s`);
+      await session.page.waitForTimeout(300);
+    }
+    return;
+  }
   await setToggle(session.page, [...INDEX_NAMES.microphone, ...CONTROLS.microphone], on, { timeoutMs: 15_000 });
 }
 

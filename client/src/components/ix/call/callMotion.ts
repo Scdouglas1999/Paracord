@@ -186,7 +186,9 @@ export function ghostOf(surface: HTMLElement): HTMLElement {
   ghost.setAttribute('inert', '');
   ghost.removeAttribute('aria-label');
   ghost.removeAttribute('role');
-  const strip = ['id', 'data-testid', 'data-native-surface-boundary', 'data-native-underlay-clear', 'data-motion-speaking'];
+  // `data-underlay` too: a tile whose hole was open would copy as a clear box
+  // with a hidden canvas, and show the page beneath it for the whole shrink.
+  const strip = ['id', 'data-testid', 'data-native-surface-boundary', 'data-native-underlay-clear', 'data-motion-speaking', 'data-underlay'];
   for (const node of [ghost, ...ghost.querySelectorAll<HTMLElement>('*')]) {
     for (const name of strip) node.removeAttribute(name);
   }
@@ -197,6 +199,12 @@ export function ghostOf(surface: HTMLElement): HTMLElement {
   from.forEach((canvas, index) => {
     const copy = to[index];
     if (!copy || canvas.width === 0 || canvas.height === 0) return;
+    // A native tile's canvas is hidden while its hole is open, but it holds the
+    // tile's poster (the latest still): the copy shows it.
+    if (canvas.dataset.poster === 'true') {
+      copy.style.visibility = 'visible';
+      copy.style.opacity = '1';
+    }
     try {
       copy.getContext('2d')?.drawImage(canvas, 0, 0);
     } catch {

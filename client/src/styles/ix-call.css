@@ -840,7 +840,8 @@ html[data-native-underlay] .ix-call-pop {
    posters), so nothing beneath shows through either. */
 html[data-native-underlay]:not([data-native-moving]) .ix-frame:not([data-stage='none']) > .ix-main > :not(.ix-tint),
 html[data-native-underlay]:not([data-native-moving]) .ix-frame[data-stage='theater'] > .ix-side > :not(.ix-tint),
-html[data-native-underlay]:not([data-native-moving]) .ix-frame[data-layout='phone']:not([data-stage='none']) > .ix-side > :not(.ix-tint) {
+html[data-native-underlay]:not([data-native-moving]) .ix-frame[data-layout='phone']:not([data-stage='none']) > .ix-side > :not(.ix-tint),
+html[data-native-underlay]:not([data-native-moving]) .ix-frame[data-stage='theater'] > .ix-side::after {
   visibility: hidden;
 }
 
