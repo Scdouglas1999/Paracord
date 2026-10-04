@@ -7,9 +7,9 @@ import { useCurrentMessageStore } from '../../../hooks/useMessageStore';
 import type { Message } from '../../../types';
 import { useFocusTrap } from '../../../hooks/useFocusTrap';
 import { displayName } from '../../../lib/displayName';
-import { Face } from '../../glass/places/Lead';
 import { SheetAlert, SheetEmpty } from '../../glass/sheets/SheetParts';
 import { whenLabel } from '../../glass/sheets/whenLabel';
+import { Avatar } from '../../ix/identity';
 import { TopBarOverlay } from './TopBarOverlay';
 
 interface PinnedMessagesOverlayProps {
@@ -29,8 +29,9 @@ interface PinnedMessagesOverlayProps {
 }
 
 /**
- * Pinned messages, as solid cards: who, when and what, one press to jump to the
- * message, and (for people who may) a quiet unpin on hover and focus.
+ * Pinned messages, as cards (the action card's wash and hairline, docs/index-spec.md
+ * §3.1): who, when and what, one press to jump to the message, and (for people
+ * who may) a quiet unpin on hover and focus. The page inside the channel sheet.
  */
 export function PinnedMessagesOverlay({
   open,
@@ -67,8 +68,10 @@ export function PinnedMessagesOverlay({
                   aria-label={`Jump to pinned message from ${name}`}
                 >
                   <span className="glass-sheet-card__head">
-                    <Face
-                      face={{ userId: msg.author.id, name, avatar: msg.author.avatar_hash ?? msg.author.avatar ?? null }}
+                    <Avatar
+                      userId={msg.author.id}
+                      name={name}
+                      avatar={msg.author.avatar_hash ?? msg.author.avatar ?? null}
                       size={28}
                     />
                     <span className="glass-sheet-card__author">{name}</span>

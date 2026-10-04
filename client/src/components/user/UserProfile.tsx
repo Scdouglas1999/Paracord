@@ -1,8 +1,9 @@
 import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
 import { useSelectedGuildId } from '../../hooks/useGuilds';
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router';
-import { MessageSquare, UserPlus, Ban, Users, CalendarDays, Link2, ShieldCheck, ShieldAlert, ShieldQuestion, QrCode, Copy, Flag, BadgeCheck, StickyNote, UserCheck, UserX, UserMinus } from 'lucide-react';
+import { Ban, CalendarDays, Link2, ShieldCheck, ShieldAlert, ShieldQuestion, QrCode, Copy, Flag, BadgeCheck, UserX, UserMinus } from 'lucide-react';
 import { isAdmin, type User } from '../../types/index';
 import { extractApiError } from '../../api/client';
 import { activateChannel } from '../../lib/channelNavigation';
@@ -20,13 +21,16 @@ import { displayActivity } from '../../lib/activityDisplay';
 import { ActivityCard } from './PresenceActivity';
 import { roleColorToHex } from '../../lib/colors';
 import { parseMarkdown } from '../../lib/markdown';
-import { safeExternalUrl, safeStoredImageDataUrl } from '../../lib/security';
+import { safeExternalUrl } from '../../lib/security';
 import { resolveBannerUrl } from '../../lib/userAvatar';
 import { accentCssColor } from './bannerCrop';
 import { ResourceImage } from '../ui/ResourceImage';
 import { useDownloadTicket } from '../../hooks/useDownloadTicket';
 import { presenceLight } from '../../lib/presence';
-import { Face } from '../glass/places/Lead';
+import { IxGlyph } from '../ix/glyphs';
+import { Avatar, ServerMark } from '../ix/identity';
+import { IxMenu, type IxMenuEntry } from '../ix/menus/IxMenu';
+import { Control, CreamButton, WideControl } from '../ix/primitives';
 import { usePresence, type Presence } from '../../lib/motion';
 import { cn } from '../../lib/utils';
 import {
@@ -68,16 +72,9 @@ function formatDate(dateStr: string): string {
   }
 }
 
-// The §9 focus ring (2px white, offset 2) on a control that has no recipe of its own.
-const FOCUS_RING = 'focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]';
-
-// A category label: the Glass kicker (12/700, uppercase), muted for hierarchy.
+// A section label: sentence case, 12.5/600, the tertiary ink (docs/index-spec.md §2.4).
 function SectionLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="glass-kicker mb-2" style={{ color: 'var(--text-muted)' }}>
-      {children}
-    </div>
-  );
+  return <div className="ix-profile__label">{children}</div>;
 }
 
 /**
@@ -102,7 +99,9 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
     setLast({ user, position });
   }
   if (!mounted || last === null) return null;
-  return (
+  // Portaled to the window: main is a layout container, and a fixed card inside
+  // one is placed and clipped by main, not by the window the position is in.
+  return createPortal(
     <UserProfileCard
       user={last.user}
       position={last.position}
@@ -110,7 +109,8 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
       roles={roles}
       exiting={exiting}
       scenery={scenery}
-    />
+    />,
+    document.body,
   );
 }
 
@@ -142,8 +142,8 @@ function UserProfileCard({
     window.addEventListener('keydown', dismiss);
     return () => window.removeEventListener('keydown', dismiss);
   }, [onClose]);
-  const popupWidth = Math.min(21.5 * 16, window.innerWidth - 16);
-  const estimatedHeight = Math.min(32.5 * 16, window.innerHeight - 16);
+  const popupWidth = Math.min(340, window.innerWidth - 16);
+  const estimatedHeight = Math.min(520, window.innerHeight - 16);
   const fitsLeft = position.x - popupWidth - 16 > 0;
   const left = fitsLeft
     ? Math.max(8, position.x - popupWidth - 12)
@@ -496,418 +496,359 @@ function UserProfileCard({
     toast.success(`Verified ${user.username}'s identity key.`);
   };
 
+  // The "..." control, in state: the menu is placed under it once it exists.
+  const [moreEl, setMoreEl] = useState<HTMLButtonElement | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  const handleCopyId = () => {
+    void writeClipboardText(user.id)
+      .then(() => toast.success('User ID copied.'))
+      .catch((err) => toast.error(`Failed to copy user ID: ${err instanceof Error ? err.message : String(err)}`));
+  };
+
+  // Call: open (or create) the direct message, go to it, and start the voice
+  // call there. The voice store is loaded when it is needed, not with the card.
+  const handleCall = async () => {
+    try {
+      setActionError(null);
+      if (!channelScope) throw new Error('Sign in to this instance before calling.');
+      const data = await useChannelStore.getState().createDm(user.id, channelScope);
+      activateChannel(data);
+      const { useVoiceStore } = await import('../../stores/voiceStore');
+      onClose();
+      navigate(`/app/dms/${data.id}`);
+      await useVoiceStore.getState().joinChannel(data.id, 'dm');
+      const voice = useVoiceStore.getState();
+      if (voice.connectionError && voice.connectionErrorChannelId === data.id) {
+        toast.error(`Could not start voice call: ${voice.connectionError}`);
+      }
+    } catch (err) {
+      setActionError(`Could not start a call: ${extractApiError(err)}`);
+    }
+  };
+
+  const hasBanner = Boolean(bannerSrc || accent);
+  const menuEntries: IxMenuEntry[] = [];
+  if (!isBotUser && relationshipType === 1) {
+    menuEntries.push({
+      type: 'item',
+      id: 'remove-friend',
+      label: 'Remove friend',
+      icon: <UserMinus size={16} strokeWidth={1.7} />,
+      onSelect: () => void handleRemoveRelationship(`Removed ${user.username} from friends.`),
+    });
+  }
+  if (!isBotUser && relationshipType === 3) {
+    menuEntries.push({
+      type: 'item',
+      id: 'decline-request',
+      label: 'Decline request',
+      icon: <UserX size={16} strokeWidth={1.7} />,
+      onSelect: () => void handleRemoveRelationship(`Declined friend request from ${user.username}.`),
+    });
+  }
+  if (!isBotUser && relationshipType === 4) {
+    menuEntries.push({
+      type: 'item',
+      id: 'cancel-request',
+      label: 'Cancel friend request',
+      icon: <UserX size={16} strokeWidth={1.7} />,
+      onSelect: () => void handleRemoveRelationship(`Canceled friend request to ${user.username}.`),
+    });
+  }
+  if (identityFingerprint) {
+    menuEntries.push({
+      type: 'item',
+      id: 'verify-keys',
+      label: 'Verify keys',
+      icon: <QrCode size={16} strokeWidth={1.7} />,
+      onSelect: () => setShowIdentityVerifyModal(true),
+    });
+  }
+  menuEntries.push({
+    type: 'item',
+    id: 'copy-id',
+    label: 'Copy user ID',
+    icon: <Copy size={16} strokeWidth={1.7} />,
+    onSelect: () => handleCopyId(),
+  });
+  if (relationshipType !== 2 || (!isBotUser && activeGuildId)) menuEntries.push({ type: 'separator', id: 'sep-danger' });
+  if (relationshipType !== 2) {
+    menuEntries.push({
+      type: 'item',
+      id: 'block',
+      label: 'Block',
+      icon: <Ban size={16} strokeWidth={1.7} />,
+      danger: true,
+      onSelect: () => void handleBlock(),
+    });
+  }
+  if (!isBotUser && activeGuildId) {
+    menuEntries.push({
+      type: 'item',
+      id: 'report',
+      label: 'Report',
+      icon: <Flag size={16} strokeWidth={1.7} />,
+      danger: true,
+      onSelect: () => { setShowReportDialog(true); setActionError(null); },
+    });
+  }
+
   return (
     <>
-      {/* The click-away catcher is not a surface — it leaves with the close,
-          so nothing swallows a click while the card is still sliding out. */}
-      {!exiting && <div className="fixed inset-0 z-50" onClick={onClose} />}
-      {/* §5.1: the card slides in from the edge it was opened against — from
-          the anchor's side — and slides back out that way on --ease-in. */}
+      {/* The click-away catcher is not a surface: it leaves with the close,
+          so nothing swallows a click while the card is still leaving. */}
+      {!exiting && <div className="ix-profile-scrim" onMouseDown={onClose} />}
+      {/* §5.17: a popover scales from .97 and fades from the side it opened against. */}
       <div
-        className={cn(
-          'pc-dialog pc-dialog-opaque fixed z-50 w-[min(21.5rem,calc(100vw-1rem))] overflow-hidden',
-          fitsLeft
-            ? exiting ? 'pc-drawer-out-right' : 'pc-drawer-in-right'
-            : exiting ? 'pc-drawer-out-left' : 'pc-drawer-in-left',
-        )}
+        role="dialog"
+        aria-label={`${displayName}, profile`}
+        data-testid="ix-profile-card"
+        data-native-overlay-occlude=""
+        className={cn('ix-profile', exiting ? 'is-leaving' : 'is-entering')}
         style={{
           left,
           top,
           maxHeight,
-          overflowY: 'auto',
-        }}
+          '--ix-profile-origin': fitsLeft ? '100% 0%' : '0% 0%',
+        } as CSSProperties}
         {...scenery}
       >
-        {/* The banner at the 3:1 its owner cropped it to, fading into the card;
-            without one, a shorter strip of their accent color. */}
-        <div
-          className={cn('relative shrink-0', bannerSrc ? 'aspect-[3/1]' : 'h-20')}
-          style={{ background: accent ?? 'var(--accent-tint-strong)' }}
-        >
-          {bannerSrc && (
-            <ResourceImage src={bannerSrc} alt="" draggable={false} className="h-full w-full object-cover" />
-          )}
-          <div
-            className="pointer-events-none absolute inset-x-0 bottom-0 h-12"
-            style={{ background: 'linear-gradient(to bottom, transparent, var(--bg-floating))' }}
-          />
-        </div>
-
-        {/* Identity header — avatar overlaps the banner */}
-        <div className="px-5 pb-4">
-          <div className="relative -mt-9 mb-3 w-max">
-            {/* The ring is the card's own color, so the face bites the banner and the mark bites the face. */}
-            <span
-              className="glass-person"
-              style={{ width: 72, height: 72, '--face-ring': 'var(--bg-floating)' } as CSSProperties}
-              title={`Status: ${statusLight.label}`}
-            >
-              <Face face={face} size={72} style={{ boxShadow: '0 0 0 4px var(--bg-floating)' }} />
-              <span
-                className="glass-presence"
-                data-status={isStreaming ? 'online' : status}
-                data-live={isStreaming ? '' : undefined}
-                aria-hidden
-              />
-            </span>
-            <span className="sr-only">{statusLight.label}</span>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <h2 className="pc-display glass-title-channel leading-none" style={{ color: 'var(--text-primary)' }}>
-              {displayName}
-            </h2>
-            {isBotUser && (
-              <span
-                className="inline-flex items-center rounded-[var(--r-chip)] px-1.5 py-0.5 text-[11px] font-bold"
-                style={{ background: 'var(--chip-count)', color: 'var(--text-primary)' }}
-              >
-                Bot
-              </span>
+        {/* The banner at the 3:1 its owner cropped it to; without one, nothing. */}
+        {hasBanner && (
+          <div className="ix-profile__banner" style={accent ? { background: accent } : undefined}>
+            {bannerSrc && (
+              <ResourceImage src={bannerSrc} alt="" draggable={false} className="ix-profile__banner-img" />
             )}
+          </div>
+        )}
+
+        <div className="ix-profile__head" data-banner={hasBanner ? '' : undefined}>
+          {/* The ring is the card's own color, so the face bites the banner. */}
+          <span className="ix-profile__avatar" title={`Status: ${statusLight.label}`}>
+            <Avatar
+              userId={face.userId}
+              name={face.name}
+              avatar={face.avatar}
+              size={76}
+              presence={isStreaming ? 'online' : status}
+              ring="var(--ix-pop-solid)"
+            />
+          </span>
+          <span className="sr-only">{statusLight.label}</span>
+
+          <div className="ix-profile__name-row">
+            <h2 className="ix-profile__name">{displayName}</h2>
+            {isBotUser && <span className="ix-profile__badge">Bot</span>}
             {isStaffUser && (
-              <span
-                className="inline-flex items-center gap-1 rounded-[var(--r-chip)] px-1.5 py-0.5 text-[11px] font-bold"
-                style={{ background: 'var(--chip-count)', color: 'var(--text-primary)' }}
-              >
-                <BadgeCheck size={11} />
+              <span className="ix-profile__badge">
+                <BadgeCheck size={12} strokeWidth={1.7} />
                 Staff
               </span>
             )}
           </div>
 
-          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
-            <span className="text-[15px]" style={{ color: 'var(--text-secondary)' }}>
-              @{user.username}
-            </span>
-            {pronouns && (
-              <span className="text-meta" style={{ color: 'var(--text-muted)' }}>
-                · {pronouns}
-              </span>
-            )}
+          <div className="ix-profile__sub">
+            <span>@{user.username}</span>
+            {pronouns && <span>· {pronouns}</span>}
           </div>
 
           {customStatus && (
-            <div className="mt-2 text-meta text-text-secondary" data-testid="profile-custom-status">
+            <div className="ix-profile__status" data-testid="profile-custom-status">
               {customStatus}
             </div>
           )}
         </div>
 
-        {/* The popout has room for both: the custom status sits under the
-            name, and what they are doing gets its own section. */}
+        {/* The custom status sits under the name, and what they are doing gets its own section. */}
         {activityView && (
-          <div className="px-5 pb-4" data-testid="profile-activity">
+          <section className="ix-profile__section" data-testid="profile-activity">
             <SectionLabel>{activityView.verb}</SectionLabel>
             <ActivityCard view={activityView} />
-          </div>
+          </section>
         )}
 
         {bio && (
-          <div className="px-5 pb-4">
+          <section className="ix-profile__section">
             <SectionLabel>About</SectionLabel>
-            <div className="pc-well px-3.5 py-3 text-[15px] text-text-secondary">
-              {parseMarkdown(bio)}
-            </div>
-          </div>
-        )}
-
-        {identityFingerprint && (
-          <div className="px-5 pb-4">
-            <SectionLabel>Identity verification</SectionLabel>
-            <div className="rounded-[var(--r-row)] px-3.5 py-3" style={{ background: 'var(--bg-well)' }}>
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                {/* Trust is said in words and an icon, in ink: no green, no yellow. */}
-                <div className="inline-flex items-center gap-1.5 text-[13px] font-semibold">
-                  {identityTrust === 'verified' ? (
-                    <>
-                      <ShieldCheck size={14} className="text-text-primary" />
-                      <span className="text-text-primary">Verified</span>
-                    </>
-                  ) : identityTrust === 'unknown' ? (
-                    <>
-                      <ShieldQuestion size={14} className="text-text-muted" />
-                      <span className="text-text-secondary">Unknown until you unlock encryption</span>
-                    </>
-                  ) : (
-                    <>
-                      <ShieldAlert size={14} className="text-text-primary" />
-                      <span className="text-text-primary">Not verified</span>
-                    </>
-                  )}
-                </div>
-                <Button variant="glass" size="sm" onClick={() => setShowIdentityVerifyModal(true)}>
-                  <QrCode size={13} />
-                  Verify
-                </Button>
-              </div>
-              <div
-                className="mt-2 break-all rounded-[var(--r-chip)] px-2 py-1.5 font-code text-[12px]"
-                style={{ background: 'var(--bg-raised)', color: 'var(--text-secondary)' }}
-              >
-                {identityFingerprint}
-              </div>
-              {identityRotationWarning && (
-                <div
-                  className="mt-2 rounded-[var(--r-chip)] px-2 py-1.5 text-[13px]"
-                  style={{ background: 'var(--danger-tint)', color: 'var(--accent-danger)' }}
-                >
-                  {identityRotationWarning}
-                </div>
-              )}
-              {identityTrust !== 'verified' && (
-                <Button variant="glass" size="sm" className="mt-2" onClick={() => void handleMarkIdentityVerified()}>
-                  <ShieldCheck size={13} />
-                  Mark verified
-                </Button>
-              )}
-            </div>
-          </div>
-        )}
-
-        {createdAt && (
-          <div className="px-5 pb-4">
-            <SectionLabel>Member since</SectionLabel>
-            <div className="flex items-center gap-2 text-[13px]" style={{ color: 'var(--text-secondary)' }}>
-              <CalendarDays size={14} style={{ color: 'var(--text-muted)' }} />
-              <span className="glass-instrument">{formatDate(createdAt)}</span>
-            </div>
-          </div>
+            <div className="ix-profile__about">{parseMarkdown(bio)}</div>
+          </section>
         )}
 
         {displayRoles.length > 0 && (
-          <div className="px-5 pb-4">
+          <section className="ix-profile__section">
             <SectionLabel>Roles</SectionLabel>
-            <div className="flex flex-wrap gap-1.5">
+            <div className="ix-profile__chips">
               {displayRoles.map((role) => (
-                <span
-                  key={role.id}
-                  className="inline-flex items-center gap-1.5 rounded-[var(--r-chip)] px-2 py-0.5 text-[13px] font-medium"
-                  style={{ background: 'var(--chip-count)', color: 'var(--text-primary)' }}
-                >
-                  <span className="h-2 w-2 rounded-full" style={{ backgroundColor: roleColorToHex(role.color) }} />
+                <span key={role.id} className="ix-profile__chip">
+                  <span className="ix-profile__role-dot" style={{ backgroundColor: roleColorToHex(role.color) }} />
                   {role.name}
                 </span>
               ))}
             </div>
-          </div>
+          </section>
         )}
 
         {mutualGuilds.length > 0 && (
-          <div className="px-5 pb-4">
-            <SectionLabel>Mutual servers — {mutualGuilds.length}</SectionLabel>
-            <div className="flex flex-col">
-              {mutualGuilds.slice(0, 5).map((guild) => (
-                <div
-                  key={guild.id}
-                  className="flex items-center gap-2.5 rounded-[10px] px-1.5 py-1.5 transition-colors duration-[var(--glass-ms)] hover:bg-[var(--wash-hover)]"
-                  title={guild.name}
-                >
-                  <div
-                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-bold"
-                    style={{ background: 'var(--glass-fill)', color: 'var(--text-primary)' }}
-                  >
-                    {guild.name.charAt(0).toUpperCase()}
-                  </div>
-                  <span className="truncate text-meta" style={{ color: 'var(--text-secondary)' }}>
-                    {guild.name}
-                  </span>
-                </div>
-              ))}
-              {mutualGuilds.length > 5 && (
-                <span className="px-1.5 pt-1 text-meta" style={{ color: 'var(--text-muted)' }}>
-                  +{mutualGuilds.length - 5} more
+          <section className="ix-profile__section">
+            <SectionLabel>Mutual servers · {mutualGuilds.length}</SectionLabel>
+            <div className="ix-profile__marks">
+              {mutualGuilds.slice(0, 8).map((guild) => (
+                <span key={guild.id} className="ix-profile__mark" title={guild.name}>
+                  <ServerMark guildId={guild.id} name={guild.name} icon={guild.icon_url} size={24} label={guild.name} />
                 </span>
-              )}
+              ))}
+              {mutualGuilds.length > 8 && <span className="ix-profile__more">+{mutualGuilds.length - 8}</span>}
             </div>
-          </div>
+          </section>
         )}
 
         {mutualFriends.length > 0 && (
-          <div className="px-5 pb-4">
-            <SectionLabel>
-              <span className="inline-flex items-center gap-1.5">
-                <Users size={12} />
-                Mutual Friends — {mutualFriends.length}
-              </span>
-            </SectionLabel>
-            <div className="flex flex-col">
-              {mutualFriends.slice(0, 5).map((friend) => {
-                const friendAvatar = safeStoredImageDataUrl(friend.avatar_hash);
-                return (
-                  <div
-                    key={friend.id}
-                    className="flex items-center gap-2.5 rounded-[10px] px-1.5 py-1.5 transition-colors duration-[var(--glass-ms)] hover:bg-[var(--wash-hover)]"
-                    title={friend.username}
-                  >
-                    {friendAvatar ? (
-                      <img src={friendAvatar} alt="" className="h-6 w-6 shrink-0 rounded-full object-cover" />
-                    ) : (
-                      <div
-                        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-bold"
-                        style={{ background: 'var(--glass-fill)', color: 'var(--text-primary)' }}
-                      >
-                        {friend.username.charAt(0).toUpperCase()}
-                      </div>
-                    )}
-                    <span className="truncate text-meta" style={{ color: 'var(--text-secondary)' }}>
-                      {friend.username}
-                    </span>
-                  </div>
-                );
-              })}
-              {mutualFriends.length > 5 && (
-                <span className="px-1.5 pt-1 text-meta" style={{ color: 'var(--text-muted)' }}>
-                  +{mutualFriends.length - 5} more
+          <section className="ix-profile__section">
+            <SectionLabel>Mutual friends · {mutualFriends.length}</SectionLabel>
+            <div className="ix-profile__marks">
+              {mutualFriends.slice(0, 8).map((friend) => (
+                <span key={friend.id} className="ix-profile__mark" title={friend.username}>
+                  <Avatar userId={friend.id} name={friend.username} avatar={friend.avatar_hash} size={24} label={friend.username} />
                 </span>
-              )}
+              ))}
+              {mutualFriends.length > 8 && <span className="ix-profile__more">+{mutualFriends.length - 8}</span>}
             </div>
-          </div>
+          </section>
         )}
 
         {linkedAccounts.length > 0 && (
-          <div className="px-5 pb-4">
+          <section className="ix-profile__section">
             <SectionLabel>Linked accounts</SectionLabel>
-            <div className="flex flex-col gap-1">
+            <div className="ix-profile__links">
               {linkedAccounts.map((account) => (
                 <a
                   key={`${account.label}-${account.url}`}
                   href={account.url}
                   target="_blank"
                   rel="noreferrer"
-                  className={`flex items-center justify-between gap-2 rounded-[10px] px-2 py-1.5 text-[13px] text-text-secondary transition-colors duration-[var(--glass-ms)] hover:bg-[var(--wash-hover)] hover:text-text-primary ${FOCUS_RING}`}
+                  className="ix-profile__link"
                 >
                   <span className="truncate">{account.label}</span>
-                  <Link2 size={12} className="shrink-0" style={{ color: 'var(--text-muted)' }} />
+                  <Link2 size={13} strokeWidth={1.7} className="shrink-0" aria-hidden />
                 </a>
               ))}
             </div>
-          </div>
+          </section>
         )}
 
-        <div className="px-5 pb-4">
-          <SectionLabel>
-            <span className="inline-flex items-center gap-1.5">
-              <StickyNote size={12} />
-              Note
-            </span>
-          </SectionLabel>
+        {/* Key verification stays on the card (§6.9); "Verify keys" in the menu opens the same dialog. */}
+        {identityFingerprint && (
+          <section className="ix-profile__section">
+            <SectionLabel>Identity verification</SectionLabel>
+            <div className="ix-profile__identity">
+              <div className="ix-profile__trust">
+                {/* Trust is said in words and a glyph, in ink: no green, no yellow. */}
+                {identityTrust === 'verified' ? (
+                  <>
+                    <ShieldCheck size={14} strokeWidth={1.7} />
+                    <span>Verified</span>
+                  </>
+                ) : identityTrust === 'unknown' ? (
+                  <>
+                    <ShieldQuestion size={14} strokeWidth={1.7} />
+                    <span className="ix-profile__trust-dim">Unknown until you unlock encryption</span>
+                  </>
+                ) : (
+                  <>
+                    <ShieldAlert size={14} strokeWidth={1.7} />
+                    <span>Not verified</span>
+                  </>
+                )}
+                <button type="button" className="ix-profile__verify" onClick={() => setShowIdentityVerifyModal(true)}>
+                  <QrCode size={13} strokeWidth={1.7} />
+                  Verify
+                </button>
+              </div>
+              <div className="ix-profile__fingerprint">{identityFingerprint}</div>
+              {identityRotationWarning && <div className="ix-profile__warn">{identityRotationWarning}</div>}
+              {identityTrust !== 'verified' && (
+                <button type="button" className="ix-profile__verify ix-profile__verify--block" onClick={() => void handleMarkIdentityVerified()}>
+                  <ShieldCheck size={13} strokeWidth={1.7} />
+                  Mark verified
+                </button>
+              )}
+            </div>
+          </section>
+        )}
+
+        {createdAt && (
+          <section className="ix-profile__section">
+            <SectionLabel>Member since</SectionLabel>
+            <div className="ix-profile__since">
+              <CalendarDays size={14} strokeWidth={1.7} aria-hidden />
+              <span>{formatDate(createdAt)}</span>
+            </div>
+          </section>
+        )}
+
+        <section className="ix-profile__section">
+          <SectionLabel>Note</SectionLabel>
           <input
             type="text"
-            placeholder="Add a private note — only you can see this"
-            className={`pc-well h-10 w-full rounded-[var(--r-ctl)] px-3 text-[15px] text-text-primary placeholder:text-[var(--ink-placeholder)] ${FOCUS_RING}`}
+            placeholder="Add a private note, only you can see this"
+            aria-label="Private note"
+            className="ix-field ix-profile__note"
             value={note}
             onChange={(e) => setNote(e.target.value)}
           />
-        </div>
+        </section>
 
-        {/* Actions: Message is THE primary action (cream); the rest are glass; Block
-            and Report take the one danger ink. */}
-        <div className="flex flex-col gap-2 px-5 pb-5 pt-1">
-          <Button className="w-full" onClick={() => void handleMessage()}>
-            <MessageSquare size={16} />
+        {/* Message is THE action (cream, one per surface); the rest are quiet controls. */}
+        <div className="ix-profile__actions">
+          <CreamButton grow onClick={() => void handleMessage()}>
+            <IxGlyph name="hello" size={16} />
             Message
-          </Button>
-          <div className="flex items-center gap-2">
-            {!isBotUser && relationshipType === 1 && (
-              <Button
-                variant="glass"
-                className="flex-1"
-                aria-label={`Remove ${user.username} as a friend`}
-                onClick={() => void handleRemoveRelationship(`Removed ${user.username} from friends.`)}
-              >
-                <UserMinus size={16} />
-                Remove friend
-              </Button>
-            )}
-            {!isBotUser && relationshipType === 2 && (
-              <Button
-                variant="glass"
-                className="flex-1"
-                aria-label={`Unblock ${user.username}`}
-                onClick={() => void handleRemoveRelationship(`Unblocked ${user.username}.`)}
-              >
-                <UserCheck size={16} />
-                Unblock
-              </Button>
-            )}
-            {!isBotUser && relationshipType === 3 && (
-              <>
-                <Button
-                  variant="glass"
-                  className="flex-1"
-                  aria-label={`Accept friend request from ${user.username}`}
-                  onClick={() => void handleAcceptFriend()}
-                >
-                  <UserCheck size={16} />
-                  Accept
-                </Button>
-                <Button
-                  variant="glass"
-                  size="icon"
-                  aria-label={`Decline friend request from ${user.username}`}
-                  onClick={() => void handleRemoveRelationship(`Declined friend request from ${user.username}.`)}
-                >
-                  <UserX size={16} />
-                </Button>
-              </>
-            )}
-            {!isBotUser && relationshipType === 4 && (
-              <Button
-                variant="glass"
-                className="flex-1"
-                aria-label={`Cancel friend request to ${user.username}`}
-                onClick={() => void handleRemoveRelationship(`Canceled friend request to ${user.username}.`)}
-              >
-                <UserX size={16} />
-                Cancel request
-              </Button>
-            )}
-            {!isBotUser && relationshipType == null && (
-              <Button
-                variant="glass"
-                className="flex-1"
-                aria-label={`Add ${user.username} as a friend`}
-                onClick={() => void handleAddFriend()}
-              >
-                <UserPlus size={16} />
-                Add friend
-              </Button>
-            )}
-            {relationshipType !== 2 && (
-              <Button
-                variant="danger"
-                className={isBotUser || relationshipType != null && relationshipType !== 1 ? 'flex-1' : ''}
-                aria-label={`Block ${user.username}`}
-                onClick={() => void handleBlock()}
-              >
-                <Ban size={16} />
-                Block
-              </Button>
-            )}
-            {!isBotUser && activeGuildId && (
-              <Button
-                variant="danger"
-                size="icon"
-                title="Report user"
-                aria-label={`Report ${user.username}`}
-                onClick={() => { setShowReportDialog(true); setActionError(null); }}
-              >
-                <Flag size={16} />
-              </Button>
-            )}
-          </div>
+          </CreamButton>
+          {!isBotUser && relationshipType === null && (
+            <WideControl aria-label={`Add ${user.username} as a friend`} onClick={() => void handleAddFriend()}>
+              Add friend
+            </WideControl>
+          )}
+          {!isBotUser && relationshipType === 3 && (
+            <WideControl aria-label={`Accept friend request from ${user.username}`} onClick={() => void handleAcceptFriend()}>
+              Accept
+            </WideControl>
+          )}
+          {relationshipType === 2 && (
+            <WideControl aria-label={`Unblock ${user.username}`} onClick={() => void handleRemoveRelationship(`Unblocked ${user.username}.`)}>
+              Unblock
+            </WideControl>
+          )}
+          {!isBotUser && relationshipType !== 2 && (
+            <Control label={`Call ${user.username}`} onClick={() => void handleCall()}>
+              <IxGlyph name="phone" size={16} />
+            </Control>
+          )}
+          <Control
+            ref={setMoreEl}
+            label="More actions"
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            onClick={() => setMenuOpen((open) => !open)}
+          >
+            <IxGlyph name="dots" size={16} />
+          </Control>
         </div>
         {actionError && !showReportDialog && (
-          <div
-            className="px-5 pb-5 text-meta font-medium"
-            style={{ color: 'var(--accent-danger)' }}
-            role="alert"
-          >
+          <div className="ix-profile__error" role="alert">
             {actionError}
           </div>
         )}
       </div>
+      <IxMenu
+        open={menuOpen}
+        onClose={() => setMenuOpen(false)}
+        anchor={moreEl ? { element: moreEl, align: 'end' } : null}
+        label={`${displayName} actions`}
+        width={220}
+        entries={menuEntries}
+      />
       {showReportDialog && (
         <Modal
           open
@@ -1008,7 +949,7 @@ function UserProfileCard({
             <div className="glass-kicker mb-2 text-text-muted">Verify from scanned payload</div>
             <input
               type="text"
-              className={`pc-well mb-4 h-10 w-full rounded-[var(--r-ctl)] px-3 text-[15px] text-text-primary placeholder:text-[var(--ink-placeholder)] ${FOCUS_RING}`}
+              className="ix-field mb-4"
               placeholder="Paste scanned payload JSON"
               value={identityVerifyPayload}
               onChange={(e) => setIdentityVerifyPayload(e.target.value)}

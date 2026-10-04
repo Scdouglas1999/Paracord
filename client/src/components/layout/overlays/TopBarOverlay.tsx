@@ -24,10 +24,10 @@ interface TopBarOverlayProps {
 }
 
 /**
- * What the conversation header's dialogs render in (catch-up summary, channel
- * follows, inbox, keyboard shortcuts): a sheet over the conversation pane, the
- * same solid page the search, pins and threads sheets are (WP-G18), instead of a
- * dialog floating over it.
+ * What a few overlays still render in (the pinned messages dialog, the inbox): a
+ * sheet in main's sheet host (docs/index-spec.md §6.1), the same page the search,
+ * pins and threads sheets are, instead of a dialog floating over the page. Help
+ * is a dialog now (`HelpOverlay`) and the inbox becomes People's page (IX-14).
  *
  * Consumers own their focus trap and Escape through `dialogRef` (their hooks
  * live beside their state), so the frame does not run one (`manageFocus`).

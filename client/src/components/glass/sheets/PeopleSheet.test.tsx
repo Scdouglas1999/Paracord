@@ -8,6 +8,7 @@ import { useChannelStore } from '../../../stores/channelStore';
 import { useMemberStore } from '../../../stores/memberStore';
 import { usePresenceStore } from '../../../stores/presenceStore';
 import type { Channel, Member } from '../../../types';
+import { useMenuHostStore } from '../../ix/menus/hostStore';
 import { PeopleSheet } from './PeopleSheet';
 
 /**
@@ -17,6 +18,8 @@ import { PeopleSheet } from './PeopleSheet';
  */
 
 vi.mock('../../../hooks/useMobile', () => ({ useMobile: () => false }));
+// An avatar subscribes to the download ticket, which mints one over the network.
+vi.mock('../../../hooks/useDownloadTicket', () => ({ useDownloadTicket: () => null }));
 
 const rooms = vi.hoisted(() => ({
   value: [] as Array<{ name: string; occupants: Array<{ person: { userId: string } }> }>,
@@ -27,9 +30,12 @@ vi.mock('../../layout/GroupDmMembersPanel', () => ({
   GroupDmMembersPanel: ({ channelId }: { channelId: string }) => <div data-testid="group-people" data-channel={channelId} />,
 }));
 
-vi.mock('../../user/UserProfile', () => ({
-  UserProfilePopup: ({ user }: { user: { username: string } | null }) =>
-    user ? <div role="dialog" aria-label={`Profile of ${user.username}`} /> : null,
+// The roles that name the sections after "Here now" (docs/index-spec.md §8.6).
+const roles = vi.hoisted(() => ({
+  value: [] as Array<{ id: string; name: string; hoist: boolean; position: number }>,
+}));
+vi.mock('../../../lib/permissionDataCache', () => ({
+  fetchGuildRoles: () => Promise.resolve(roles.value),
 }));
 
 const SCOPE = { serverId: '__local__', userId: 'me' };
@@ -83,6 +89,8 @@ function renderSheet(props: { guildId?: string | null; channelId?: string | null
 
 beforeEach(() => {
   rooms.value = [];
+  roles.value = [];
+  useMenuHostStore.getState().reset();
   usePresenceStore.getState().reset();
   useAuthStore.setState({ token: 'token', user: person('me', 'Sean') as never });
   useChannelStore.getState().reset();
@@ -147,15 +155,40 @@ describe('a server\'s members', () => {
 
   it('draws presence as ink, and never only as ink: the word is in the row', () => {
     renderSheet();
-    const marks = document.querySelectorAll('.glass-sheet-presence');
-    expect([...marks].map((mark) => mark.getAttribute('data-status'))).toEqual(
-      expect.arrayContaining(['online', 'idle', 'dnd', 'offline']),
+    // The Index dots (index-spec §2.3): online, idle and do not disturb; offline draws none.
+    const marks = document.querySelectorAll('.ix-presence');
+    expect([...marks].map((mark) => mark.getAttribute('data-presence'))).toEqual(
+      expect.arrayContaining(['online', 'idle', 'dnd']),
     );
+    expect(marks).toHaveLength(5);
     // The mark is decoration for a screen reader (its word is the row's second line).
     for (const mark of marks) expect(mark.closest('[aria-hidden="true"]')).not.toBeNull();
   });
 
-  it('opens someone\'s profile from their row', async () => {
+  it('puts everyone else under the highest hoisted role they hold, then Offline', async () => {
+    roles.value = [
+      { id: 'r-all', name: '@everyone', hoist: false, position: 0 },
+      { id: 'r-mod', name: 'Moderators', hoist: true, position: 3 },
+      { id: 'r-vip', name: 'Regulars', hoist: true, position: 1 },
+    ];
+    setMembers([
+      member('me', 'Sean'),
+      { ...member('u5', 'Eric'), roles: ['r-vip'] },
+      { ...member('u8', 'Maud'), roles: ['r-vip', 'r-mod'] },
+      member('u7', 'Zed'),
+    ]);
+    setPresence('me', 'online');
+    renderSheet();
+    // Eric and Maud are away: Maud holds the higher role, so she is under Moderators.
+    expect(await screen.findByRole('region', { name: 'Moderators' })).toBeInTheDocument();
+    expect(within(screen.getByRole('region', { name: 'Moderators' })).getByText('Maud')).toBeInTheDocument();
+    expect(within(screen.getByRole('region', { name: 'Regulars' })).getByText('Eric')).toBeInTheDocument();
+    expect(within(screen.getByRole('region', { name: 'Offline' })).getByText('Zed')).toBeInTheDocument();
+    const order = screen.getAllByRole('region').map((region) => region.getAttribute('aria-label'));
+    expect(order).toEqual(['Here now', 'Moderators', 'Regulars', 'Offline']);
+  });
+
+  it('opens someone\'s profile card from their row', async () => {
     const user = userEvent.setup();
     renderSheet();
     const row = screen.getByRole('button', { name: /^Vincent/ });
@@ -163,7 +196,8 @@ describe('a server\'s members', () => {
     expect(row).toHaveAccessibleName(/^Vincent,\s*Online$/);
     expect(row).toHaveAttribute('aria-haspopup', 'dialog');
     await user.click(row);
-    expect(screen.getByRole('dialog', { name: 'Profile of vincent' })).toBeInTheDocument();
+    // The card is the menu host's (components/ix/menus), opened beside the row.
+    expect(useMenuHostStore.getState().profile?.user.username).toBe('vincent');
   });
 
   it('says it is loading before the roster arrives, and does not pretend the server is empty', () => {
@@ -227,6 +261,6 @@ describe('a direct message', () => {
     const mine = within(sheet).getByText(/Sean.*\(you\)/);
     expect(mine).toBeInTheDocument();
     // "(you)" is said beside the name; the face still draws just the initial.
-    expect(mine.closest('li')?.querySelector('.glass-face')?.textContent).toBe('S');
+    expect(mine.closest('li')?.querySelector('.ix-av')?.textContent).toBe('S');
   });
 });

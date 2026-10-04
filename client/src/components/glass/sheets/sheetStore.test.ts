@@ -6,6 +6,7 @@ import {
   openChannelSheet,
   openForContextMode,
   openReminders,
+  openSearchWith,
   restoreSheetTrigger,
   toggleChannelSheet,
   toggleSheet,
@@ -104,6 +105,30 @@ describe('the account sheet', () => {
   });
 });
 
+describe('openSearchWith (the quick switcher\'s last row)', () => {
+  it('opens the search sheet with the words in the seed, taken after the open resets the pages', () => {
+    openSearchWith('guns');
+    expect(useGlassStore.getState().sheet).toBe('search');
+    expect(useSheetPages.getState().searchSeed).toBe('guns');
+  });
+
+  it('seeds nothing for empty words, and does not close a search that is already open', () => {
+    toggleSheet('search');
+    openSearchWith('   ');
+    expect(useGlassStore.getState().sheet).toBe('search');
+    expect(useSheetPages.getState().searchSeed).toBeNull();
+    openSearchWith('run');
+    expect(useGlassStore.getState().sheet).toBe('search');
+    expect(useSheetPages.getState().searchSeed).toBe('run');
+  });
+
+  it('is forgotten when the sheet changes', () => {
+    openSearchWith('guns');
+    toggleSheet('people');
+    expect(useSheetPages.getState().searchSeed).toBeNull();
+  });
+});
+
 describe('a request made the old way (uiStore.contextPanelMode)', () => {
   it.each([
     ['search', 'search', null],
@@ -134,7 +159,7 @@ describe('restoreSheetTrigger', () => {
 
   it('falls back to the header control for the sheet when nothing was focused (Safari does not focus a button on click)', () => {
     document.body.innerHTML =
-      '<div class="glass-header__tools"><button aria-label="Members">M</button></div>';
+      '<div class="ix-toolbar"><button aria-label="Members">M</button></div>';
     toggleSheet('people');
     closeSheets();
     restoreSheetTrigger('people');

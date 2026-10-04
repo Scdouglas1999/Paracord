@@ -4,32 +4,61 @@ import { entityScopeKey } from '../../lib/serverScope';
 import { useAvailableChannels } from '../../hooks/useChannels';
 import { activateGuild } from '../../lib/guildNavigation';
 import { useAvailableGuilds, useSelectedGuildId } from '../../hooks/useGuilds';
-import { useCurrentUser } from '../../hooks/useCurrentUser';
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { useCurrentAccountScope, useCurrentUser } from '../../hooks/useCurrentUser';
+import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback, type CSSProperties, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate, useParams } from 'react-router';
-import { Search, Hash, Volume2, Settings, Home, Shield, MessageCircle, ArrowRight, Bot, UserPlus, Users, MessagesSquare, MessageSquarePlus } from 'lucide-react';
+import { Settings, Shield, Bot, UserPlus, Users, MessagesSquare, MessageSquarePlus } from 'lucide-react';
 import { Kbd } from '../ui/Kbd';
-import { Modal } from '../ui/Modal';
 import { DmPickerModal } from '../message/DmPickerModal';
 import { useUIStore } from '../../stores/uiStore';
 import { useGuildStore } from '../../stores/guildStore';
 import { useChannelStore } from '../../stores/channelStore';
+import { useMemberStore } from '../../stores/memberStore';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
+import { useMobile } from '../../hooks/useMobile';
 import { canAccessGuildSettingsSync } from '../../lib/guildSettingsAccess';
 import { isAdmin } from '../../types';
 import { cn } from '../../lib/utils';
 import { displayName } from '../../lib/displayName';
+import { IxGlyph } from '../ix/glyphs';
+import { Avatar, ServerMark } from '../ix/identity';
+import { openProfileCard, type ProfileSubject } from '../ix/menus/hostStore';
+import { MENU_EXIT_MS, useExitPresence } from '../ix/sheets/useExitPresence';
+import { openSearchWith } from '../glass/sheets/sheetStore';
+import { arrangeSwitcher, searchRowLabel, type SwitcherCandidate } from './switcherModel';
 
-interface PaletteItem {
-  id: string;
-  label: string;
-  sublabel?: string;
-  icon: React.ReactNode;
+/**
+ * The quick switcher (docs/index-spec.md §4.2, §6.3; Ctrl K / ⌘K and the sidebar's
+ * search field): a near-solid panel 420 wide, radius 16, anchored over the
+ * sidebar's top where the search field is (full screen on a phone). It is scoped
+ * to the current server first (its channels, rooms and people), then the other
+ * servers and direct messages; commands (New message, Add a friend, Settings, ...)
+ * are listed after the places, only when what is typed matches them; and the last
+ * row, always, is "Search messages in <server> for ..." which opens the message
+ * search sheet with the words carried over. Typing filters, arrows move, Enter
+ * opens, Esc closes. The ordering lives in `switcherModel.ts`.
+ *
+ * It is a dialog named "Quick switcher": the shared focus trap owns Tab and
+ * Escape and puts focus back on what had it.
+ */
+
+interface PaletteItem extends SwitcherCandidate {
+  icon: ReactNode;
   action: () => void;
-  category: string;
-  keywords?: string;
+  /** A person: choosing the row opens their profile card beside the panel instead of running `action`. */
+  profile?: ProfileSubject;
 }
 
+/** Where the panel sits: over the sidebar's search field, else the sidebar's top. */
+function panelAnchor(): { left: number; top: number } {
+  if (typeof document === 'undefined') return { left: 12, top: 14 };
+  const field = document.querySelector<HTMLElement>('[data-testid="ix-search-field"]');
+  const rect = field?.getBoundingClientRect();
+  if (rect && rect.width > 0) return { left: Math.max(8, rect.left), top: Math.max(8, rect.top - 7) };
+  const side = document.querySelector<HTMLElement>('[data-testid="ix-sidebar"]')?.getBoundingClientRect();
+  return { left: Math.max(8, (side?.left ?? 0) + 12), top: 14 };
+}
 
 export function CommandPalette() {
   const open = useUIStore((s) => s.commandPaletteOpen);
@@ -39,19 +68,25 @@ export function CommandPalette() {
   const availableChannels = useAvailableChannels();
   const selectGuild = useGuildStore((s) => s.selectGuild);
   const user = useCurrentUser();
+  const scope = useCurrentAccountScope();
   const navigate = useNavigate();
-  const { guildId: routeGuildId } = useParams();
+  const { guildId: routeGuildId, channelId: routeChannelId } = useParams();
   const selectedGuildId = useSelectedGuildId();
-  const searchGuildId = routeGuildId ?? selectedGuildId ?? null;
+  // The server the switcher is scoped to: the route's, else the one selected.
+  const scopeGuildId = routeGuildId ?? selectedGuildId ?? null;
+  const members = useMemberStore((s) => (scope && scopeGuildId ? s.members.get(entityScopeKey(scope, scopeGuildId)) : undefined));
+  const phone = useMobile();
 
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [dmPickerOpen, setDmPickerOpen] = useState(false);
+  const [anchor, setAnchor] = useState(() => panelAnchor());
   const inputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const wasOpenRef = useRef(false);
+  const { mounted, exiting } = useExitPresence(open, MENU_EXIT_MS);
 
   const handleClose = useCallback(() => {
     setOpen(false);
@@ -61,240 +96,173 @@ export function CommandPalette() {
     }
   }, [setOpen]);
 
-  // Reset state on open
-  useEffect(() => {
+  // Reset state on open, and measure where the sidebar's search field is.
+  useLayoutEffect(() => {
     if (open && !wasOpenRef.current) {
       if (document.activeElement instanceof HTMLElement && !panelRef.current?.contains(document.activeElement)) {
         returnFocusRef.current = document.activeElement;
       }
-      if (query !== '') setQuery('');
-      if (selectedIndex !== 0) setSelectedIndex(0);
+      setQuery('');
+      setSelectedIndex(0);
+      setAnchor(panelAnchor());
     }
     wasOpenRef.current = open;
-  }, [open, query, selectedIndex]);
+  }, [open]);
 
   useFocusTrap(panelRef, open, handleClose);
 
-  // Build palette items from all available navigation targets
-  const allItems = useMemo((): PaletteItem[] => {
+  const searchGuild = useMemo(() => guilds.find((guild) => guild.id === scopeGuildId) ?? null, [guilds, scopeGuildId]);
+  // Message search needs a conversation or a server on the page to search.
+  const canSearchMessages = Boolean(routeGuildId || routeChannelId);
+
+  // Everything the switcher can go to or do.
+  const candidates = useMemo((): PaletteItem[] => {
     const items: PaletteItem[] = [];
 
-    if (searchGuildId) {
-      items.push({
-        id: 'search-this-server',
-        label: 'Search this server',
-        sublabel: 'Find messages in this server',
-        icon: <Search size={16} />,
-        action: () => {
-          if (routeGuildId === searchGuildId) {
-            useUIStore.getState().setContextPanelMode('search');
-          } else {
-            navigate(`/app/guilds/${searchGuildId}`, { state: { openSearch: true } });
-          }
-        },
-        category: 'Actions',
-        keywords: 'search server messages find',
-      });
-    }
-
-    // Social action commands — everything social reachable from ⌘K (do not
-    // duplicate the "Friends" destination with the Home nav item below, which now
-    // lands on the App Home rather than the friends page).
-    items.push({
-      id: 'action-new-message',
-      label: 'New message',
-      sublabel: 'Start a direct or group DM',
-      icon: <MessageSquarePlus size={16} />,
-      action: () => setDmPickerOpen(true),
-      category: 'Actions',
-      keywords: 'new message dm direct compose start conversation group',
-    });
-
-    items.push({
-      id: 'action-add-friend',
-      label: 'Add a friend',
-      sublabel: 'Send a friend request',
-      icon: <UserPlus size={16} />,
-      action: () => navigate('/app/friends'),
-      category: 'Actions',
-      keywords: 'add friend request invite people',
-    });
-
-    items.push({
-      id: 'action-all-conversations',
-      label: 'All conversations',
-      sublabel: 'Open your direct messages',
-      icon: <MessagesSquare size={16} />,
-      action: () => navigate('/app/dms'),
-      category: 'Actions',
-      keywords: 'all conversations direct messages dms inbox',
-    });
-
-    items.push({
-      id: 'action-friends',
-      label: 'Friends',
-      sublabel: 'Online, pending, and blocked',
-      icon: <Users size={16} />,
-      action: () => navigate('/app/friends'),
-      category: 'Actions',
-      keywords: 'friends online pending requests blocked',
-    });
-
-    // Navigation items
-    items.push({
-      id: 'nav-home',
-      label: 'Go to home',
-      sublabel: 'Calls, friends around, and recent DMs',
-      icon: <Home size={16} />,
-      action: () => {
-        selectGuild(null);
-        navigate('/app');
-      },
-      category: 'Navigation',
-      keywords: 'home overview happening now',
-    });
-
-    items.push({
-      id: 'nav-settings',
-      label: 'User settings',
-      sublabel: 'Account, appearance, notifications',
-      icon: <Settings size={16} />,
-      action: () => useUIStore.getState().setUserSettingsOpen(true),
-      category: 'Navigation',
-      keywords: 'settings preferences account profile',
-    });
-
-    items.push({
-      id: 'nav-developers',
-      label: 'Developer portal',
-      sublabel: 'Bot applications and API access',
-      icon: <Bot size={16} />,
-      action: () => navigate('/app/developers'),
-      category: 'Navigation',
-      keywords: 'developer portal bots applications api',
-    });
-
-    if (user && isAdmin(user.flags)) {
-      items.push({
-        id: 'nav-admin',
-        label: 'Admin dashboard',
-        sublabel: 'Instance administration',
-        icon: <Shield size={16} />,
-        action: () => navigate('/app/admin'),
-        category: 'Navigation',
-        keywords: 'admin dashboard administration server instance',
-      });
-    }
-
-    // Guild channels
     guilds.forEach((guild) => {
-      const guildChannels = channelsByGuild[entityScopeKey(guild.scope, guild.id)] || [];
+      const key = entityScopeKey(guild.scope, guild.id);
+      const guildChannels = channelsByGuild[key] || [];
+      const current = guild.id === scopeGuildId;
+      const markOf = <ServerMark guildId={guild.id} name={guild.name} icon={guild.icon_hash ?? guild.icon ?? null} hue={guild.hue ?? null} size={24} />;
+
       guildChannels.forEach((channel) => {
         if (channel.type === 4) return; // Skip categories
-
-        const isVoice = channel.type === 2 || channel.channel_type === 2;
-        items.push({
-          id: `channel-${guild.key}-${channel.id}`,
-          label: channel.name || 'unknown',
-          sublabel: guild.name,
-          icon: isVoice ? <Volume2 size={16} /> : <Hash size={16} />,
-          action: () => {
-            activateGuild(guild);
-            activateChannel(channel);
-            navigate(`/app/guilds/${guild.id}/channels/${channel.id}`);
-          },
-          category: 'Channels',
-          keywords: `${channel.name} ${guild.name} channel ${isVoice ? 'voice' : 'text'}`,
-        });
+        const type = channel.type ?? channel.channel_type;
+        const isRoom = type === 2 || type === 13;
+        const here = () => {
+          activateGuild(guild);
+          activateChannel(channel);
+          navigate(`/app/guilds/${guild.id}/channels/${channel.id}`);
+        };
+        if (current) {
+          items.push({
+            id: `${isRoom ? 'room' : 'channel'}-${guild.key}-${channel.id}`,
+            category: isRoom ? 'rooms' : 'channels',
+            label: channel.name || 'unknown',
+            sublabel: isRoom ? 'Room' : undefined,
+            icon: <IxGlyph name={isRoom ? (type === 13 ? 'stage' : 'speaker') : 'hello'} size={16} />,
+            action: here,
+            keywords: `${channel.name} ${guild.name} ${isRoom ? 'room voice' : 'channel text'}`,
+          });
+        } else if (!isRoom) {
+          items.push({
+            id: `elsewhere-${guild.key}-${channel.id}`,
+            category: 'elsewhere',
+            label: channel.name || 'unknown',
+            sublabel: guild.name,
+            icon: <IxGlyph name="hello" size={16} />,
+            action: here,
+            keywords: `${channel.name} ${guild.name} channel`,
+          });
+        }
       });
 
-      // Space settings — only when the viewer can open them (not instance admin).
+      // Server settings: only when the viewer can open them (not instance admin).
       if (canAccessGuildSettingsSync(guild.id, guild.scope)) {
         items.push({
           id: `guild-settings-${guild.id}`,
+          category: 'commands',
           label: 'Server settings',
           sublabel: guild.name,
-          icon: <Settings size={16} />,
+          icon: <Settings size={16} strokeWidth={1.7} />,
           action: () => { activateGuild(guild); useUIStore.getState().setGuildSettingsId(guild.id); },
-          category: 'Navigation',
           keywords: `${guild.name} server settings admin manage`,
         });
       }
 
-      // Guild itself (navigate to first channel)
+      if (!current) {
+        items.push({
+          id: `guild-${guild.key}`,
+          category: 'servers',
+          label: guild.name,
+          sublabel: `${guildChannels.filter((c) => c.type !== 4).length} channels`,
+          icon: markOf,
+          action: async () => {
+            navigate(await guildLandingPath(guild));
+          },
+          keywords: `${guild.name} server community`,
+        });
+      }
+    });
+
+    // The people of the current server (found by typing).
+    (members ?? []).forEach((member) => {
+      const name = displayName(member.user, member.nick);
       items.push({
-        id: `guild-${guild.key}`,
-        label: guild.name,
-        sublabel: `${(guildChannels.filter(c => c.type !== 4)).length} channels`,
-        icon: (
-          <div className="flex h-5 w-5 items-center justify-center rounded-[6px] bg-[var(--glass-fill)] text-[11px] font-bold text-text-primary">
-            {guild.name.charAt(0).toUpperCase()}
-          </div>
-        ),
-        action: async () => {
-          navigate(await guildLandingPath(guild));
-        },
-        category: 'Servers',
-        keywords: `${guild.name} server community`,
+        id: `person-${member.user.id}`,
+        category: 'people',
+        label: name,
+        sublabel: member.user.username !== name ? `@${member.user.username}` : undefined,
+        icon: <Avatar userId={member.user.id} name={name} avatar={member.user.avatar_hash ?? member.user.avatar ?? null} size={24} />,
+        action: () => undefined,
+        profile: member.user,
+        keywords: `${member.user.username} ${member.user.display_name ?? ''} ${member.nick ?? ''} person member`,
       });
     });
 
-    availableChannels.filter(channel => !channel.guild_id).forEach(dm => {
+    availableChannels.filter((channel) => !channel.guild_id).forEach((dm) => {
       const serverId = dm.scope.serverId;
-      const recipientName = dm.recipient ? displayName(dm.recipient) : 'Direct message';
+      const recipientName = dm.recipient ? displayName(dm.recipient) : (dm.name || 'Direct message');
       items.push({
         id: `dm-${serverId}-${dm.id}`,
+        category: 'dms',
         label: recipientName,
-        sublabel: 'Direct message',
-        icon: <MessageCircle size={16} />,
+        sublabel: dm.recipient ? undefined : 'Group',
+        icon: dm.recipient
+          ? <Avatar userId={dm.recipient.id} name={recipientName} avatar={dm.recipient.avatar_hash ?? null} size={24} />
+          : <IxGlyph name="people" size={16} />,
         action: () => {
           activateChannel(dm);
           selectGuild(null);
           navigate(`/app/dms/${dm.id}`);
         },
-        category: 'Direct messages',
         keywords: `${recipientName} dm direct message`,
       });
     });
 
+    // Commands: listed after the places, and only when the typed words match them.
+    const command = (id: string, label: string, sublabel: string, icon: ReactNode, action: () => void, keywords: string) =>
+      items.push({ id, category: 'commands', label, sublabel, icon, action, keywords });
+
+    command('action-new-message', 'New message', 'Start a direct or group message', <MessageSquarePlus size={16} strokeWidth={1.7} />,
+      () => setDmPickerOpen(true), 'new message dm direct compose start conversation group');
+    command('action-add-friend', 'Add a friend', 'Send a friend request', <UserPlus size={16} strokeWidth={1.7} />,
+      () => navigate('/app/friends'), 'add friend request invite people');
+    command('action-all-conversations', 'All conversations', 'Open your direct messages', <MessagesSquare size={16} strokeWidth={1.7} />,
+      () => navigate('/app/dms'), 'all conversations direct messages dms inbox people');
+    command('action-friends', 'Friends', 'Online, pending, and blocked', <Users size={16} strokeWidth={1.7} />,
+      () => navigate('/app/friends'), 'friends online pending requests blocked');
+    command('nav-settings', 'User settings', 'Account, appearance, notifications', <Settings size={16} strokeWidth={1.7} />,
+      () => useUIStore.getState().setUserSettingsOpen(true), 'settings preferences account profile');
+    command('nav-developers', 'Developer portal', 'Bot applications and API access', <Bot size={16} strokeWidth={1.7} />,
+      () => navigate('/app/developers'), 'developer portal bots applications api');
+    if (user && isAdmin(user.flags)) {
+      command('nav-admin', 'Admin dashboard', 'Instance administration', <Shield size={16} strokeWidth={1.7} />,
+        () => navigate('/app/admin'), 'admin dashboard administration server instance');
+    }
+
     return items;
-  }, [guilds, channelsByGuild, availableChannels, user, navigate, selectGuild, setDmPickerOpen, searchGuildId, routeGuildId]);
+  }, [guilds, channelsByGuild, availableChannels, members, user, navigate, selectGuild, scopeGuildId]);
 
-  // Filter items based on query
-  const filteredItems = useMemo(() => {
-    if (!query.trim()) return allItems;
-    const q = query.toLowerCase().trim();
-    return allItems.filter((item) => {
-      const searchText = `${item.label} ${item.sublabel || ''} ${item.keywords || ''}`.toLowerCase();
-      return searchText.includes(q);
-    });
-  }, [allItems, query]);
+  const groups = useMemo(() => arrangeSwitcher(candidates, query), [candidates, query]);
 
-  // Group filtered items by category
-  const groupedItems = useMemo(() => {
-    const groups: { category: string; items: PaletteItem[] }[] = [];
-    const categoryOrder = ['Actions', 'Navigation', 'Channels', 'Servers', 'Direct messages'];
-    const categoryMap = new Map<string, PaletteItem[]>();
+  // The last row: search the messages, with the words carried over.
+  const searchItem = useMemo((): PaletteItem | null => {
+    if (!canSearchMessages) return null;
+    return {
+      id: 'search-messages',
+      category: 'commands',
+      label: searchRowLabel(searchGuild?.name ?? null, query),
+      icon: <IxGlyph name="search" size={16} />,
+      action: () => openSearchWith(query),
+    };
+  }, [canSearchMessages, searchGuild, query]);
 
-    filteredItems.forEach((item) => {
-      if (!categoryMap.has(item.category)) {
-        categoryMap.set(item.category, []);
-      }
-      categoryMap.get(item.category)!.push(item);
-    });
-
-    categoryOrder.forEach((cat) => {
-      const items = categoryMap.get(cat);
-      if (items && items.length > 0) {
-        groups.push({ category: cat, items });
-      }
-    });
-
-    return groups;
-  }, [filteredItems]);
-
-  // Flat list for keyboard navigation
-  const flatItems = useMemo(() => groupedItems.flatMap((g) => g.items), [groupedItems]);
+  // Flat list for keyboard navigation: the groups in order, then the search row.
+  const flatItems = useMemo(
+    () => [...groups.flatMap((g) => g.items), ...(searchItem ? [searchItem] : [])],
+    [groups, searchItem],
+  );
 
   // Clamp selected index
   useEffect(() => {
@@ -307,16 +275,20 @@ export function CommandPalette() {
   useEffect(() => {
     if (!listRef.current) return;
     const selected = listRef.current.querySelector(`[data-index="${selectedIndex}"]`);
-    if (selected) {
+    if (selected && typeof selected.scrollIntoView === 'function') {
       selected.scrollIntoView({ block: 'nearest' });
     }
   }, [selectedIndex]);
 
   const handleSelect = useCallback((item: PaletteItem) => {
+    // A person's card opens at the panel's top left (over the sidebar), measured before it closes.
+    const rect = panelRef.current?.getBoundingClientRect();
+    const corner = { x: rect?.left ?? 0, y: rect?.top ?? 0 };
     handleClose();
-    // Use requestAnimationFrame to run navigation after the palette closes
+    // Run after the switcher closes so what the choice opens takes focus.
     requestAnimationFrame(() => {
-      item.action();
+      if (item.profile) openProfileCard(item.profile, corner);
+      else item.action();
     });
   }, [handleClose]);
 
@@ -359,132 +331,116 @@ export function CommandPalette() {
   }, [open, setOpen]);
 
   let flatIndex = 0;
-  const activeItemId = flatItems[selectedIndex]?.id;
+  const activeItem = flatItems[selectedIndex];
+  const renderRow = (item: PaletteItem) => {
+    const currentIndex = flatIndex++;
+    const isSelected = currentIndex === selectedIndex;
+    return (
+      <button
+        key={item.id}
+        id={`command-item-${item.id}`}
+        role="option"
+        aria-selected={isSelected}
+        data-index={currentIndex}
+        tabIndex={-1}
+        onClick={() => handleSelect(item)}
+        onMouseEnter={() => setSelectedIndex(currentIndex)}
+        className="ix-switcher__row"
+      >
+        <span className="ix-switcher__icon">{item.icon}</span>
+        <span className="ix-switcher__label">{item.label}</span>
+        {item.sublabel && <span className="ix-switcher__sub">{item.sublabel}</span>}
+        {isSelected && <Kbd aria-hidden>↵</Kbd>}
+      </button>
+    );
+  };
+
+  const style = phone
+    ? undefined
+    : ({ left: anchor.left, top: anchor.top } as CSSProperties);
 
   return (
     <>
-    <Modal
-      open={open}
-      onClose={handleClose}
-      panelRef={panelRef}
-      manageFocus={false}
-      onKeyDown={handleKeyDown}
-      labeledBy="command-palette-title"
-      placement="top"
-      size="md"
-      // Glass over the dimmed app: near-solid black, the heavier blur, radius 24.
-      panelClassName="pc-sheet"
-    >
-      <h2 id="command-palette-title" className="sr-only">Command palette</h2>
-      {/* Search input, then a hairline: the palette is one glass control */}
-      <div className="flex items-center gap-3 border-b border-border-subtle px-4 py-3.5">
-        <Search size={18} className="shrink-0 text-text-muted" />
-        <input
-          ref={inputRef}
-          autoFocus
-          aria-controls="command-palette-list"
-          aria-activedescendant={activeItemId ? `command-item-${activeItemId}` : undefined}
-          aria-label="Search command palette"
-          className="pc-focusable flex-1 rounded-[var(--r-chip)] bg-transparent px-1 py-0.5 text-[17px] text-text-primary outline-none placeholder:text-[var(--ink-placeholder)]"
-          placeholder="Jump to a channel, server, or setting…"
-          value={query}
-          onChange={(e) => {
-            setQuery(e.target.value);
-            setSelectedIndex(0);
+      {mounted && typeof document !== 'undefined' && createPortal(
+        <div
+          className={cn('ix-switcher-scrim', exiting && 'is-leaving')}
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) handleClose();
           }}
-        />
-        <Kbd>Esc</Kbd>
-      </div>
+        >
+          <div
+            ref={panelRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Quick switcher"
+            tabIndex={-1}
+            data-testid="ix-switcher"
+            data-native-overlay-occlude=""
+            className={cn('ix-switcher', exiting ? 'is-leaving' : 'is-entering')}
+            data-layout={phone ? 'phone' : 'popover'}
+            style={style}
+            onKeyDown={handleKeyDown}
+            {...(exiting ? { 'aria-hidden': true as const, inert: true as const } : null)}
+          >
+            <div className="ix-switcher__field">
+              <IxGlyph name="search" size={16} />
+              <input
+                ref={inputRef}
+                autoFocus
+                role="combobox"
+                aria-expanded="true"
+                aria-autocomplete="list"
+                aria-controls="command-palette-list"
+                aria-activedescendant={activeItem ? `command-item-${activeItem.id}` : undefined}
+                aria-label="Search the quick switcher"
+                autoComplete="off"
+                spellCheck={false}
+                className="ix-switcher__input"
+                placeholder={searchGuild ? 'Jump to a channel, room or person' : 'Jump to a conversation or server'}
+                value={query}
+                onChange={(e) => {
+                  setQuery(e.target.value);
+                  setSelectedIndex(0);
+                }}
+              />
+              <Kbd>Esc</Kbd>
+            </div>
 
-      {/* Results */}
-      <div
-        ref={listRef}
-        id="command-palette-list"
-        role="listbox"
-        aria-label="Command palette results"
-        className="max-h-[420px] overflow-y-auto p-2 scrollbar-thin"
-      >
-        {groupedItems.length > 0 ? (
-          groupedItems.map((group) => (
-            <div key={group.category} className="mb-1.5 last:mb-0">
-              <div className="glass-kicker px-3 pb-1 pt-3 text-text-muted first:pt-1">
-                {group.category}
+            <div
+              ref={listRef}
+              id="command-palette-list"
+              role="listbox"
+              aria-label="Quick switcher results"
+              className="ix-switcher__list"
+            >
+              {groups.map((group) => (
+                <div key={group.category} role="group" aria-label={group.label} className="ix-switcher__group">
+                  <div className="ix-switcher__label-row" role="presentation">{group.label}</div>
+                  {group.items.map(renderRow)}
+                </div>
+              ))}
+              {groups.length === 0 && query.trim() !== '' && (
+                <div className="ix-switcher__none">
+                  <div className="ix-switcher__none-title">Nothing matches “{query.trim()}”</div>
+                  <p>Try a channel, a person, a server or a command.</p>
+                </div>
+              )}
+            </div>
+
+            {searchItem && (
+              <div className="ix-switcher__foot" role="presentation">
+                {renderRow(searchItem)}
               </div>
-              {group.items.map((item) => {
-                const currentIndex = flatIndex++;
-                const isSelected = currentIndex === selectedIndex;
-                return (
-                  <button
-                    key={item.id}
-                    id={`command-item-${item.id}`}
-                    role="option"
-                    aria-selected={isSelected}
-                    data-index={currentIndex}
-                    tabIndex={-1}
-                    onClick={() => handleSelect(item)}
-                    onMouseEnter={() => setSelectedIndex(currentIndex)}
-                    className={cn(
-                      'flex w-full items-center gap-3 rounded-[12px] px-3 py-2.5 text-left transition-colors duration-[var(--glass-ms)] ease-[var(--glass-ease)] active:bg-[var(--wash-press)]',
-                      isSelected
-                        ? 'bg-[var(--sel)] text-text-primary'
-                        : 'text-text-secondary hover:bg-[var(--wash-hover)]'
-                    )}
-                  >
-                    <span className={cn(
-                      'flex h-5 w-5 shrink-0 items-center justify-center transition-colors',
-                      isSelected ? 'text-text-primary' : 'text-text-muted'
-                    )}>
-                      {item.icon}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[15px] font-semibold">{item.label}</span>
-                      {item.sublabel && (
-                        <span className="block truncate text-[13px] text-text-muted">{item.sublabel}</span>
-                      )}
-                    </span>
-                    {isSelected ? (
-                      <Kbd>↵</Kbd>
-                    ) : (
-                      <ArrowRight size={14} className="shrink-0 text-text-muted opacity-0" aria-hidden />
-                    )}
-                  </button>
-                );
-              })}
+            )}
+            <div className="sr-only" role="status" aria-live="polite">
+              {flatItems.length} result{flatItems.length === 1 ? '' : 's'}
             </div>
-          ))
-        ) : (
-          <div className="px-3 py-8">
-            <div className="text-[15px] font-semibold text-text-primary">
-              Nothing matches “{query.trim()}”
-            </div>
-            <p className="mt-1 text-[13px] text-text-secondary">
-              Try a command name, a channel, or a server you belong to.
-            </p>
           </div>
-        )}
-      </div>
-
-      {/* Footer hints */}
-      <div className="flex items-center justify-between border-t border-border-subtle px-4 py-2">
-        <div className="flex items-center gap-3 text-[13px] text-text-muted">
-          <span className="flex items-center gap-1">
-            <Kbd>&uarr;</Kbd>
-            <Kbd>&darr;</Kbd>
-            navigate
-          </span>
-          <span className="flex items-center gap-1">
-            <Kbd>&crarr;</Kbd>
-            select
-          </span>
-        </div>
-        <div className="glass-instrument text-meta tabular-nums text-text-muted">
-          {flatItems.length} result{flatItems.length !== 1 ? 's' : ''}
-        </div>
-      </div>
-    </Modal>
-    {/* "New message" opens the shared DM picker directly — reusing the extracted
-        DmPickerModal rather than a bespoke ⌘K flow (layout-spec §2). */}
-    <DmPickerModal open={dmPickerOpen} onClose={() => setDmPickerOpen(false)} />
+        </div>,
+        document.body,
+      )}
+      {/* "New message" opens the shared DM picker directly (layout-spec §2). */}
+      <DmPickerModal open={dmPickerOpen} onClose={() => setDmPickerOpen(false)} />
     </>
   );
 }

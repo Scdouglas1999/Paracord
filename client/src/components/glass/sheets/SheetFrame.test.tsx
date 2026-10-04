@@ -2,12 +2,14 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { IX_SHEET_HOST_ID } from '../../ix/shell/slots';
 import { SheetFrame } from './SheetFrame';
 
 /**
- * The sheet frame: a modal page that covers the conversation pane. Geometry is
- * CSS (checked against the running app in e2e/glass-sheets.spec.ts); this holds
- * what a sheet must do for a keyboard and a screen reader.
+ * The sheet frame: a modal page that opens in the sheet host on main's right
+ * (docs/index-spec.md §6.1). Geometry is CSS (the frame's host, checked against
+ * the running app in e2e/index-sheets.spec.ts); this holds what a sheet must do
+ * for a keyboard and a screen reader.
  */
 
 const mobile = vi.hoisted(() => ({ value: false }));
@@ -59,28 +61,45 @@ describe('SheetFrame', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
-  it('covers the conversation pane when there is one, and the window when there is not', () => {
-    const pane = document.createElement('main');
-    pane.id = 'main-content';
-    document.body.appendChild(pane);
+  it('opens in the sheet host inside main when there is one, and in the window when there is not', () => {
+    const host = document.createElement('div');
+    host.id = IX_SHEET_HOST_ID;
+    document.body.appendChild(host);
     const { unmount } = render(<Host />);
-    expect(pane).toContainElement(screen.getByRole('dialog'));
+    expect(host).toContainElement(screen.getByRole('dialog'));
     expect(screen.getByRole('dialog')).toHaveAttribute('data-host', 'pane');
+    expect(screen.getByRole('dialog')).toHaveClass('ix-sheet');
     unmount();
-    pane.remove();
+    host.remove();
 
     render(<Host />);
     expect(screen.getByRole('dialog')).toHaveAttribute('data-host', 'window');
   });
 
-  it('is the whole screen on a phone, even with a pane on the page', () => {
+  it('is the whole screen on a phone, even with a host on the page', () => {
     mobile.value = true;
-    const pane = document.createElement('main');
-    pane.id = 'main-content';
-    document.body.appendChild(pane);
+    const host = document.createElement('div');
+    host.id = IX_SHEET_HOST_ID;
+    document.body.appendChild(host);
     render(<Host />);
-    expect(pane).not.toContainElement(screen.getByRole('dialog'));
+    expect(host).not.toContainElement(screen.getByRole('dialog'));
     expect(screen.getByRole('dialog')).toHaveAttribute('data-host', 'window');
+  });
+
+  it('draws no call pill: the call lives in the sidebar card', () => {
+    render(<Host />);
+    expect(screen.getByRole('dialog').querySelector('[class*="pill"]')).toBeNull();
+  });
+
+  it('closes on its own beat: it stays for the 250ms leave, out of the accessibility tree', async () => {
+    const user = userEvent.setup();
+    render(<Host />);
+    await user.click(screen.getByRole('button', { name: 'Close the sheet' }));
+    // Still mounted while it plays its leave, but scenery: hidden and inert.
+    const leaving = document.querySelector('.ix-sheet');
+    expect(leaving).toHaveClass('is-leaving');
+    expect(leaving).toHaveAttribute('aria-hidden', 'true');
+    await vi.waitFor(() => expect(document.querySelector('.ix-sheet')).toBeNull(), { timeout: 1500 });
   });
 
   it('puts focus on the field it names, not on the first control', () => {

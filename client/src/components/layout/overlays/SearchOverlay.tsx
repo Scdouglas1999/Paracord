@@ -51,7 +51,8 @@ import { entityScopeKey } from '../../../lib/serverScope';
 import { cn } from '../../../lib/utils';
 import { useMemberStore } from '../../../stores/memberStore';
 import type { Message } from '../../../types';
-import { Face } from '../../glass/places/Lead';
+import { useSheetPages } from '../../glass/sheets/sheetStore';
+import { Avatar } from '../../ix/identity';
 import { SheetFrame } from '../../glass/sheets/SheetFrame';
 import { whenLabel } from '../../glass/sheets/whenLabel';
 import { ResourceImage } from '../../ui/ResourceImage';
@@ -421,6 +422,15 @@ export function SearchOverlay({
     }
   }, [catalogMembers, catalogChannels]);
 
+  // Words the quick switcher handed over ("Search messages in Fuel for ...") start
+  // the field; a filter written in them (`from:`) becomes a chip as it would typed.
+  const seed = useSheetPages((state) => state.searchSeed);
+  useEffect(() => {
+    if (!open || seed === null) return;
+    commitDraft(seed.endsWith(' ') ? seed : `${seed} `);
+    useSheetPages.getState().setSearchSeed(null);
+  }, [open, seed, commitDraft]);
+
   // A `from:yara` typed before the member list arrived resolves once it does;
   // move it out of the field then, so it is never searched as plain text.
   useEffect(() => {
@@ -622,7 +632,7 @@ export function SearchOverlay({
             className="glass-search__option"
           >
             {person ? (
-              <Face face={{ userId: person.id, name: person.label, avatar: person.avatar ?? null }} size={24} />
+              <Avatar userId={person.id} name={person.label} avatar={person.avatar ?? null} size={24} />
             ) : (
               <span className="glass-search__option-icon">
                 <Icon size={16} aria-hidden />
@@ -791,12 +801,10 @@ export function SearchOverlay({
                       className={cn('glass-sheet-row glass-search__hit glass-focusable', animate && 'pc-search-row')}
                       style={animate ? { animationDelay: `calc(var(--stagger-light) * ${index})` } : undefined}
                     >
-                      <Face
-                        face={{
-                          userId: author?.id ?? hit.message.id,
-                          name: authorName,
-                          avatar: author?.avatar_hash ?? author?.avatar ?? null,
-                        }}
+                      <Avatar
+                        userId={author?.id ?? hit.message.id}
+                        name={authorName}
+                        avatar={author?.avatar_hash ?? author?.avatar ?? null}
                         size={36}
                       />
                       <span className="glass-sheet-row__text">

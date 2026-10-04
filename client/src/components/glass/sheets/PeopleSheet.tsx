@@ -5,32 +5,33 @@ import { useCurrentAccountScope, useCurrentUser } from '../../../hooks/useCurren
 import { useRoomLights } from '../../../hooks/useLights';
 import { statusLine } from '../../../lib/activityDisplay';
 import { displayName } from '../../../lib/displayName';
+import { fetchGuildRoles } from '../../../lib/permissionDataCache';
 import { presenceLabel } from '../../../lib/presence';
 import { entityScopeKey } from '../../../lib/serverScope';
 import { useMemberStore } from '../../../stores/memberStore';
 import { usePresenceStore } from '../../../stores/presenceStore';
-import type { Member, Presence, User } from '../../../types';
+import type { Member, Presence, Role, User } from '../../../types';
+import { openProfileCard } from '../../ix/menus/hostStore';
 import { GroupDmMembersPanel } from '../../layout/GroupDmMembersPanel';
-import { UserProfilePopup } from '../../user/UserProfile';
 import { GlassButton } from '../primitives';
+import { groupPeople, pageSections, type PeopleEntry } from './peopleGroups';
 import { PersonRow, type PersonStatus } from './PersonRow';
 import { SheetFrame } from './SheetFrame';
 import { SheetEmpty, SheetKicker, SheetStatus } from './SheetParts';
 
 /**
- * The people sheet (docs/glass-spec.md §3.2: "search, people and your avatar sit
- * at the pane's right edge"; WP-G18). What "people" means depends on where you
- * are:
+ * The people sheet (docs/index-spec.md §6.1, §8.6: the toolbar's members button;
+ * WP IX-9, formerly WP-G18). What "people" means depends on where you are:
  *
- *   a server channel   the server's members, here now first, each with their
- *                      presence, what they are doing (an activity or the words
- *                      they set) and the voice channel they are in
+ *   a server channel   the server's members: here now first (with their presence,
+ *                      what they are doing, and "In Lounge" for a voice room),
+ *                      then everyone else under the highest hoisted role each
+ *                      holds, then Offline
  *   a group message    who it is addressed to, and where you add and remove them
  *   a direct message   you and them
  *
- * It is a list, not a docked roster (the spec removes the member list from the
- * chrome): you ask for it, it slides over the conversation, and Escape puts it
- * away.
+ * It is a list, not a docked roster: you ask for it, it opens on main's right,
+ * and Escape puts it away. A row opens that person's profile card.
  */
 
 const PAGE = 120;
@@ -47,14 +48,6 @@ interface PersonLite {
   display_name?: string | null;
   avatar_hash?: string | null;
   avatar?: string;
-}
-
-interface Entry {
-  user: User;
-  name: string;
-  status: PersonStatus;
-  detail: string;
-  room: string | null;
 }
 
 export interface PeopleSheetProps {
@@ -149,7 +142,7 @@ function DirectPeople({ open, onClose, channelId }: { open: boolean; onClose: ()
   );
 }
 
-/** A server's members: here now first, then everyone else. */
+/** A server's members: here now first, then by role, then Offline. */
 function ServerPeople({ open, onClose, guildId }: { open: boolean; onClose: () => void; guildId: string }) {
   const scope = useCurrentAccountScope();
   const memberKey = scope ? entityScopeKey(scope, guildId) : null;
@@ -158,11 +151,28 @@ function ServerPeople({ open, onClose, guildId }: { open: boolean; onClose: () =
   const presences = usePresenceStore((s) => s.presences);
   const rooms = useRoomLights(guildId);
   const [limit, setLimit] = useState(PAGE);
-  const [profile, setProfile] = useState<{ user: User; position: { x: number; y: number } } | null>(null);
+  const [roles, setRoles] = useState<Role[] | null>(null);
 
   useEffect(() => {
     if (!open || !scope) return;
     void useMemberStore.getState().fetchMembers(guildId, scope);
+  }, [open, guildId, scope]);
+
+  // The roles name the sections after "Here now". Without them (not loaded, or
+  // the request failed) everyone who is away is simply under Offline.
+  useEffect(() => {
+    if (!open || !scope) return undefined;
+    let canceled = false;
+    fetchGuildRoles(guildId, scope)
+      .then((data) => {
+        if (!canceled) setRoles(data);
+      })
+      .catch(() => {
+        if (!canceled) setRoles(null);
+      });
+    return () => {
+      canceled = true;
+    };
   }, [open, guildId, scope]);
 
   // Who is in which voice room (a live room, so an amber line).
@@ -174,8 +184,8 @@ function ServerPeople({ open, onClose, guildId }: { open: boolean; onClose: () =
     return map;
   }, [rooms]);
 
-  const { here, away } = useMemo(() => {
-    const entries: Entry[] = (members ?? []).map((member: Member) => {
+  const sections = useMemo(() => {
+    const entries: PeopleEntry[] = (members ?? []).map((member: Member) => {
       const presence = usePresenceStore.getState().getPresence(member.user.id, scope?.serverId);
       const status = statusOf(presence);
       const room = roomOf.get(member.user.id) ?? null;
@@ -183,28 +193,32 @@ function ServerPeople({ open, onClose, guildId }: { open: boolean; onClose: () =
       const detail = line
         ? line.type === 'custom' ? line.text : line.activity.line
         : presenceLabel(status);
-      return { user: member.user, name: displayName(member.user, member.nick), status, detail, room };
+      return {
+        user: member.user,
+        name: displayName(member.user, member.nick),
+        status,
+        detail,
+        room,
+        roleIds: member.roles ?? [],
+      };
     });
-    const byName = (a: Entry, b: Entry) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
-    return {
-      here: entries.filter((entry) => entry.status !== 'offline' || entry.room).sort(byName),
-      away: entries.filter((entry) => entry.status === 'offline' && !entry.room).sort(byName),
-    };
+    return groupPeople(entries, roles);
     // `presences` is the invalidation: the lookup goes through the store's index.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [members, scope?.serverId, roomOf, presences]);
+  }, [members, scope?.serverId, roomOf, presences, roles]);
 
-  const total = here.length + away.length;
-  const shownHere = here.slice(0, limit);
-  const shownAway = away.slice(0, Math.max(0, limit - here.length));
-  const hidden = total - shownHere.length - shownAway.length;
+  const total = sections.reduce((count, section) => count + section.entries.length, 0);
+  const hereCount = sections.find((section) => section.id === 'here')?.entries.length ?? 0;
+  // A page at a time, across the sections in order.
+  const { shown, hidden } = pageSections(sections, limit);
 
   const openProfile = (user: User) => (event: React.MouseEvent<HTMLButtonElement>) => {
+    // Beside the sheet, over the conversation: the card opens to the row's left.
     const rect = event.currentTarget.getBoundingClientRect();
-    setProfile({ user, position: { x: rect.right, y: rect.top } });
+    openProfileCard(user, { x: rect.left, y: rect.top });
   };
 
-  const renderRow = (entry: Entry) => (
+  const renderRow = (entry: PeopleEntry) => (
     <PersonRow
       key={entry.user.id}
       userId={entry.user.id}
@@ -224,7 +238,7 @@ function ServerPeople({ open, onClose, guildId }: { open: boolean; onClose: () =
       kind="people"
       label="Members"
       title="Members"
-      subtitle={loaded ? `${here.length} here now, ${total} in all` : undefined}
+      subtitle={loaded ? `${hereCount} here now, ${total} in all` : undefined}
       closeLabel="Close members"
     >
       {!loaded && total === 0 ? (
@@ -235,22 +249,14 @@ function ServerPeople({ open, onClose, guildId }: { open: boolean; onClose: () =
         </SheetEmpty>
       ) : (
         <>
-          {shownHere.length > 0 && (
-            <section aria-label="Here now">
+          {shown.map((section) => (
+            <section key={section.id} aria-label={section.label}>
               <SheetKicker>
-                Here now <span className="glass-instrument">{here.length}</span>
+                {section.label} <span className="glass-instrument">{section.total}</span>
               </SheetKicker>
-              <ul className="glass-sheet-list glass-people-grid">{shownHere.map(renderRow)}</ul>
+              <ul className="glass-sheet-list glass-people-grid">{section.entries.map(renderRow)}</ul>
             </section>
-          )}
-          {shownAway.length > 0 && (
-            <section aria-label="Offline">
-              <SheetKicker>
-                Offline <span className="glass-instrument">{away.length}</span>
-              </SheetKicker>
-              <ul className="glass-sheet-list glass-people-grid">{shownAway.map(renderRow)}</ul>
-            </section>
-          )}
+          ))}
           {hidden > 0 && (
             <div className="glass-sheet-more">
               <GlassButton variant="glass" onClick={() => setLimit((current) => current + PAGE)}>
@@ -260,11 +266,6 @@ function ServerPeople({ open, onClose, guildId }: { open: boolean; onClose: () =
           )}
         </>
       )}
-      <UserProfilePopup
-        user={profile?.user ?? null}
-        position={profile?.position ?? null}
-        onClose={() => setProfile(null)}
-      />
     </SheetFrame>
   );
 }

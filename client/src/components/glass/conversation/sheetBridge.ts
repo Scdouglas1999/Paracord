@@ -3,7 +3,9 @@ import type { ContextPanelMode } from '../../../stores/uiStore';
 import { toggleChannelSheet, toggleSheet, type ChannelSheetPage } from '../sheets';
 
 /**
- * The header's door to the sheets (WP-G11; store-only since WP-G18).
+ * The Glass header's door to the sheets (WP-G11; store-only since WP-G18). Still
+ * used by the Glass `ConversationHeader` and `HeaderAvatar` until IX-15 replaces
+ * them; the Index toolbar and menus call `components/glass/sheets` directly.
  *
  * The Sheets slot (`components/glass/sheets`) renders whatever
  * `glassStore.sheet` names, so a header button only has to say which: search,

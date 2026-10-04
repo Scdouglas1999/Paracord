@@ -368,7 +368,7 @@ describe('presence and activity are plain words', () => {
 
   it('calls the status you set on yourself Online, and invisible stays invisible', () => {
     // The status you set is the account menu's (behind your face).
-    const menu = copyOf('components/glass/sheets/AccountMenu.tsx');
+    const menu = copyOf('components/ix/menus/AccountMenu.tsx');
     expect(menu).toContain('Online');
     expect(menu).toContain('Invisible');
     expect(copyOf('lib/presence.ts')).toContain('Online');

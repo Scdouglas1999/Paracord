@@ -4,7 +4,8 @@ import { registerSessionReset } from '../../../stores/sessionReset';
 import type { ContextPanelMode } from '../../../stores/uiStore';
 
 /**
- * Which page of a sheet is showing (docs/glass-spec.md §3; WP-G18).
+ * Which page of a sheet is showing (docs/index-spec.md §6.1, §6.5; WP IX-9;
+ * formerly docs/glass-spec.md §3, WP-G18).
  *
  * `glassStore.sheet` says WHICH sheet is open (`search`, `people`, `channel`,
  * `account`, `server`). Two of them have pages, and the store contract in
@@ -51,14 +52,17 @@ interface SheetPageState {
   threadId: string | null;
   /** The account sheet's page; null is the menu. */
   accountPage: AccountSheetPage | null;
+  /** Words for the message search to start with (the quick switcher's last row); taken once. */
+  searchSeed: string | null;
   setChannelPage: (page: ChannelSheetPage | null) => void;
   pushThread: (threadId: string) => void;
   popThread: () => void;
   setAccountPage: (page: AccountSheetPage | null) => void;
+  setSearchSeed: (seed: string | null) => void;
   reset: () => void;
 }
 
-const EMPTY = { channelPage: null, threadId: null, accountPage: null } as const;
+const EMPTY = { channelPage: null, threadId: null, accountPage: null, searchSeed: null } as const;
 
 export const useSheetPages = create<SheetPageState>()((set) => ({
   ...EMPTY,
@@ -66,6 +70,7 @@ export const useSheetPages = create<SheetPageState>()((set) => ({
   pushThread: (threadId) => set({ threadId }),
   popThread: () => set({ threadId: null }),
   setAccountPage: (accountPage) => set({ accountPage }),
+  setSearchSeed: (searchSeed) => set({ searchSeed }),
   reset: () => set({ ...EMPTY }),
 }));
 
@@ -89,11 +94,11 @@ function rememberTrigger(): void {
  * or never took focus (Safari does not focus a button on click).
  */
 const TRIGGER_FALLBACK: Record<GlassSheet, string> = {
-  search: '.glass-header__tools [aria-label="Search messages"]',
-  people: '.glass-header__tools [aria-label="Members"], .glass-header__tools [aria-label="People in this message"]',
-  account: '.glass-header__avatar',
-  channel: '.glass-header__title',
-  server: '.glass-server-title',
+  search: '.ix-toolbar [aria-label="Search messages"]',
+  people: '.ix-toolbar [aria-label="Members"], .ix-toolbar [aria-label="People in this message"]',
+  account: '[data-ix-account-anchor]',
+  channel: '.ix-toolbar__title, [data-testid="ix-title"]',
+  server: '[data-testid="ix-sidebar-header"]',
 };
 
 /** Hand focus back to what opened the sheet; falls back to the header control that does. */
@@ -162,6 +167,20 @@ export function openChannelSheet(page: ChannelSheetPage | null): void {
     glass.openSheet('channel');
   }
   useSheetPages.getState().setChannelPage(page);
+}
+
+/**
+ * Open the message search, with words already in its field (the quick switcher's
+ * "Search messages in Fuel for ..." row). The seed is set after the sheet opens:
+ * a sheet change resets the pages, so an earlier seed would be wiped.
+ */
+export function openSearchWith(query: string): void {
+  const glass = useGlassStore.getState();
+  if (glass.sheet !== 'search') {
+    rememberTrigger();
+    glass.openSheet('search');
+  }
+  useSheetPages.getState().setSearchSeed(query.trim() === '' ? null : query);
 }
 
 /** Open the reminders page of the account sheet (the account menu's row). */

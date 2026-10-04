@@ -1,48 +1,35 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import {
-  Bell,
-  HelpCircle,
-  Image as ImageIcon,
-  Inbox,
-  MessagesSquare,
-  Pin,
-  Settings,
-  Share2,
-  Sparkles,
-  TrendingUp,
-} from 'lucide-react';
+import { useEffect, useMemo, type ReactNode } from 'react';
 import { extractApiError } from '../../../api/client';
+import { writeClipboardText } from '../../../lib/clipboard';
 import { useCurrentChannelStore } from '../../../hooks/useChannels';
 import { useCurrentAccountScope } from '../../../hooks/useCurrentUser';
 import { useMutedGuilds } from '../../../hooks/useMutedGuilds';
 import { usePermissions } from '../../../hooks/usePermissions';
 import { useCurrentReadStates } from '../../../hooks/useReadStates';
 import { isMessageUnread } from '../../../hooks/useUnreadCounts';
-import { canAccessGuildSettings } from '../../../lib/guildSettingsAccess';
+import { hasPermission, Permissions } from '../../../types';
 import { entityScopeKey } from '../../../lib/serverScope';
+import { toast } from '../../../stores/toastStore';
 import { useReadStateStore } from '../../../stores/readStateStore';
 import { useUIStore } from '../../../stores/uiStore';
 import type { ReadState } from '../../../types';
 import type { ConversationSubject } from '../shell/slots';
 import type { ContextMenuItem } from '../../ui/ContextMenu';
-import { HelpOverlay } from '../../layout/overlays/HelpOverlay';
-import { InboxOverlay } from '../../layout/overlays/InboxOverlay';
-import { closeSheets } from '../sheets';
-import { toggleContextPanel } from './sheetBridge';
+import { buildChannelMenu, channelLink } from '../../ix/menus/ChannelMenu';
+import type { IxMenuEntry } from '../../ix/menus/IxMenu';
+import { openChannelSheet } from '../sheets';
 
 /**
- * The channel menu behind the conversation title (docs/glass-spec.md §3.2,
- * WP-G11), with the dialogs its rows open.
+ * The Glass header's channel menu, now a thin adapter over the Index channel menu
+ * model (components/ix/menus/ChannelMenu.tsx, docs/index-spec.md §6.5).
  *
- * INTERIM (WP-G11 → WP-G18): these are the actions the Lantern header's
- * "More" menu carried, moved here unchanged so nothing in the product becomes
- * unreachable when the header is replaced. WP-G18 builds the real channel menu
- * (`glassStore.sheet === 'channel'`) and takes this hook, its dialogs and the
- * shared overlays over. Search and people are not here: they have their own
- * header buttons.
- *
- * Counts on pins and threads (a Lantern header nicety) are not carried; the
- * Glass header has no room for them and the panels list their own contents.
+ * INTERIM (IX-9 → IX-15): the Glass `ConversationHeader` still renders its title
+ * menu with the shared `ContextMenu`, so it takes its rows from the same
+ * `buildChannelMenu` that feeds the Index popover: one list, no drift. IX-15
+ * replaces the header with the large title that calls `openChannelMenu`, and
+ * deletes this file. Inbox and Keyboard shortcuts are no longer in this menu
+ * (Inbox is People's page, the shortcuts are the account menu's); `dialogs` is
+ * kept so the header's call site still type-checks, and renders nothing.
  */
 
 export interface ChannelMenuInput {
@@ -53,9 +40,9 @@ export interface ChannelMenuInput {
 
 export interface ChannelMenu {
   items: ContextMenuItem[];
-  /** The dialogs the rows open. Render once, anywhere in the header. */
+  /** Kept for the header's call site; the dialogs it once rendered moved out. */
   dialogs: ReactNode;
-  /** Unread conversations and mentions elsewhere (the inbox row's caption). */
+  /** Unread conversations and mentions elsewhere (the title's description). */
   attention: { unread: number; mentions: number };
 }
 
@@ -66,6 +53,27 @@ export function attentionCaption(unread: number, mentions: number): string {
     : unread > 0
       ? conversations
       : 'No unread conversations';
+}
+
+/** A menu model as the shared `ContextMenu`'s rows. */
+export function toContextItems(entries: IxMenuEntry[]): ContextMenuItem[] {
+  const items: ContextMenuItem[] = [];
+  for (const entry of entries) {
+    if (entry.type === 'separator') items.push({ label: '', action: () => {}, divider: true });
+    else if (entry.type === 'item') {
+      items.push({
+        label: entry.label,
+        icon: entry.icon,
+        description: entry.description,
+        disabled: entry.disabled,
+        danger: entry.danger,
+        shortcut: entry.hint,
+        selected: entry.checked,
+        action: entry.onSelect,
+      });
+    }
+  }
+  return items;
 }
 
 export function useChannelMenu({ subject, summary }: ChannelMenuInput): ChannelMenu {
@@ -79,39 +87,12 @@ export function useChannelMenu({ subject, summary }: ChannelMenuInput): ChannelM
   const isAnnouncement = selectedChannel?.type === 5 || selectedChannel?.channel_type === 5;
 
   const { permissions, isAdmin } = usePermissions(isDM ? null : (guildId ?? null));
-  const canOpenServerSettings = !isDM && Boolean(guildId) && canAccessGuildSettings(permissions, isAdmin);
+  const canEdit = !isDM && Boolean(guildId) && (isAdmin || hasPermission(permissions, Permissions.MANAGE_CHANNELS));
 
   const readScope = useCurrentAccountScope();
   const readStateRecord = useCurrentReadStates();
   const readStates = useMemo(() => Object.values(readStateRecord), [readStateRecord]);
   const { mutedGuildKeys } = useMutedGuilds();
-
-  const [showInbox, setShowInbox] = useState(false);
-  const [inboxError, setInboxError] = useState<string | null>(null);
-  const [showHelp, setShowHelp] = useState(false);
-
-  const closeSurfaces = useCallback(() => {
-    setShowInbox(false);
-    setShowHelp(false);
-  }, []);
-
-  // One secondary surface at a time: a dialog replaces an open sheet, so one
-  // Escape closes exactly one visible layer.
-  const prepareSurface = useCallback(() => {
-    closeSurfaces();
-    closeSheets();
-  }, [closeSurfaces]);
-
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      if (!(showInbox || showHelp)) return;
-      event.preventDefault();
-      closeSurfaces();
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [closeSurfaces, showHelp, showInbox]);
 
   // Read state lives in the shared store, kept live by dispatch and mark-read
   // call sites; pull an authoritative snapshot once on mount.
@@ -142,72 +123,22 @@ export function useChannelMenu({ subject, summary }: ChannelMenuInput): ChannelM
   }, [readStates, allChannels, mutedGuildKeys, channelId, readScope]);
   const mentions = unreadItems.reduce((total, item) => total + item.state.mention_count, 0);
 
-  const openInbox = async () => {
-    prepareSurface();
-    setInboxError(null);
-    try {
-      if (!readScope) throw new Error('Sign in to this instance before opening the inbox.');
-      await useReadStateStore.getState().refresh(readScope);
-    } catch (err) {
-      setInboxError(`Failed to load inbox: ${extractApiError(err)}`);
-    }
-    setShowInbox(true);
-  };
-
-  const panel = (mode: Parameters<typeof toggleContextPanel>[0]) => () => {
-    closeSurfaces();
-    toggleContextPanel(mode);
-  };
-
-  const items: ContextMenuItem[] = [
+  const entries = buildChannelMenu(
+    { isDm: isDM, isAnnouncement, summary, canEdit },
     {
-      label: 'Catch up summary',
-      icon: <Sparkles size={17} />,
-      action: panel('summary'),
-      disabled: !summary.allowed,
-      description: summary.reason ?? undefined,
+      page: (page) => openChannelSheet(page),
+      edit: () => {
+        if (guildId) useUIStore.getState().openGuildSettings(guildId, 'channels', channelId);
+      },
+      copyLink: () => {
+        void writeClipboardText(channelLink(subject.kind === 'channel'
+          ? { kind: 'channel', guildId: subject.guildId, channelId }
+          : { kind: 'dm', channelId }))
+          .then(() => toast.success('Link copied.'))
+          .catch((error) => toast.error(`Could not copy the link: ${extractApiError(error)}`));
+      },
     },
-    { label: 'Pinned messages', icon: <Pin size={17} />, action: panel('pins') },
-    ...(!isDM ? [{ label: 'Threads', icon: <MessagesSquare size={17} />, action: panel('threads') }] : []),
-    ...(isAnnouncement
-      ? [{ label: 'Manage follows', icon: <Share2 size={17} />, action: panel('follows') }]
-      : []),
-    { label: 'Media', icon: <ImageIcon size={17} />, action: panel('media') },
-    ...(!isDM ? [{ label: 'Server leaderboard', icon: <TrendingUp size={17} />, action: panel('leaderboard') }] : []),
-    ...(!isDM ? [{ label: 'Notifications', icon: <Bell size={17} />, action: panel('notifications') }] : []),
-    ...(canOpenServerSettings && guildId
-      ? [{
-          label: 'Server settings',
-          icon: <Settings size={17} />,
-          action: () => {
-            prepareSurface();
-            useUIStore.getState().setGuildSettingsId(guildId);
-          },
-        }]
-      : []),
-    { label: '', action: () => {}, divider: true },
-    {
-      label: 'Inbox',
-      icon: <Inbox size={17} />,
-      action: () => void openInbox(),
-      description: attentionCaption(unreadItems.length, mentions),
-    },
-    { label: 'Keyboard shortcuts', icon: <HelpCircle size={17} />, action: () => { prepareSurface(); setShowHelp(true); } },
-  ];
-
-  const dialogs = (
-    <>
-      <InboxOverlay
-        open={showInbox}
-        onClose={() => setShowInbox(false)}
-        unreadItems={unreadItems}
-        allChannels={allChannels}
-        error={inboxError}
-      />
-
-      <HelpOverlay open={showHelp} onClose={() => setShowHelp(false)} />
-    </>
   );
 
-  return { items, dialogs, attention: { unread: unreadItems.length, mentions } };
+  return { items: toContextItems(entries), dialogs: null, attention: { unread: unreadItems.length, mentions } };
 }

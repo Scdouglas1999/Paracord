@@ -31,9 +31,6 @@ vi.mock('./ChannelSheet', () => ({
 vi.mock('./RemindersSheet', () => ({
   RemindersSheet: (props: { open: boolean }) => <div data-testid="reminders" data-open={String(props.open)} />,
 }));
-vi.mock('./AccountMenu', () => ({
-  AccountMenu: (props: { open: boolean }) => <div data-testid="account" data-open={String(props.open)} />,
-}));
 vi.mock('../../../hooks/useChannels', () => ({
   useCurrentChannelStore: (selector: (view: unknown) => unknown) =>
     selector({ channelsById: { c1: { id: 'c1', name: 'General' }, c2: { id: 'c2', name: 'Clips' } } }),
@@ -85,12 +82,12 @@ beforeEach(() => {
 });
 
 describe('Sheets', () => {
-  it('renders nothing but the account menu\'s closed popover while no sheet is open', () => {
+  it('renders nothing while no sheet is open', () => {
     renderSheets();
     expect(screen.queryByTestId('search')).not.toBeInTheDocument();
     expect(screen.queryByTestId('people')).not.toBeInTheDocument();
     expect(screen.queryByTestId('channel')).not.toBeInTheDocument();
-    expect(isOpen('account')).toBe(false);
+    expect(screen.queryByTestId('reminders')).not.toBeInTheDocument();
   });
 
   it('renders the sheet glassStore names, over the channel it is asked about', () => {
@@ -123,15 +120,14 @@ describe('Sheets', () => {
     expect(screen.getByTestId('channel')).toHaveAttribute('data-page', 'media');
   });
 
-  it('opens the account menu as a menu, and its reminders row as a sheet', () => {
+  it('shows the account menu\'s one page, Reminders, as a sheet; the menu itself is the menu host\'s', () => {
     renderSheets();
     act(() => useGlassStore.getState().openSheet('account'));
-    expect(isOpen('account')).toBe(true);
+    // Nothing here: the account menu is a popover (components/ix/menus), not a sheet.
     expect(screen.queryByTestId('reminders')).not.toBeInTheDocument();
 
     act(() => openReminders());
     expect(isOpen('reminders')).toBe(true);
-    expect(isOpen('account')).toBe(false);
   });
 });
 
@@ -211,7 +207,7 @@ describe('focus', () => {
   it('goes back to the control that opened the sheet, when the sheet closes', async () => {
     renderSheets();
     const opener = document.createElement('button');
-    opener.className = 'glass-header__title';
+    opener.className = 'ix-toolbar__title';
     document.body.appendChild(opener);
     act(() => toggleSheet('channel'));
     act(() => closeSheets());

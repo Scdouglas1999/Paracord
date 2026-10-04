@@ -18,6 +18,7 @@ export {
   closeSheets,
   openChannelSheet,
   openReminders,
+  openSearchWith,
   toggleChannelSheet,
   toggleSheet,
   useSheetPages,

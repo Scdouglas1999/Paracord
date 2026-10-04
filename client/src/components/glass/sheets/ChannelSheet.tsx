@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { channelApi } from '../../../api/channels';
 import { extractApiError } from '../../../api/client';
 import { useCurrentChannelStore } from '../../../hooks/useChannels';
@@ -16,15 +16,15 @@ import { ThreadsPage, threadListParentOf } from './ThreadsPage';
 import { CHANNEL_SHEET_PAGES, useSheetPages, type ChannelSheetPage } from './sheetStore';
 
 /**
- * The channel sheet (docs/design/glass-plan.md §1.3: "Pins, threads list, media
- * gallery, catch-up summary, follows, leaderboard, notification settings ...
- * each opens as a sheet over the column. A thread opens as a pushed
- * conversation"; WP-G18).
+ * The channel sheet (docs/index-spec.md §6.1, §6.5: catch-up summary, pins,
+ * threads, media, follows, leaderboard and notification settings, one page each;
+ * WP IX-9, formerly WP-G18).
  *
- * One frame, several pages. The channel menu in the header opens the page it
- * names; a strip of tabs at the top of the sheet moves between them without
- * going back to the menu. A thread pushed on the Threads page takes over the
- * column (title, timeline, message box) and its back button pops it.
+ * One frame, several pages. The channel menu (the large or folded title) opens
+ * the page it names; a segmented control at the top of the sheet moves between
+ * them without going back to the menu. It scrolls sideways when the pages do not
+ * fit the sheet's width. A thread pushed on the Threads page takes over the
+ * sheet (title, timeline, message box) and its back button pops it.
  */
 
 const PAGE_TITLE: Record<ChannelSheetPage, string> = {
@@ -119,6 +119,7 @@ export function ChannelSheet({ open, onClose, guildId, channelId }: ChannelSheet
   const isAnnouncement = type === 5;
   const guildName = useGuild(guildId)?.name;
 
+  const tabsRef = useRef<HTMLDivElement>(null);
   const pages = pagesFor({ isDm, hasChannel: Boolean(channelId), isAnnouncement });
   // Opened with no page named (`glassStore.openSheet('channel')`): pins, which
   // costs nothing to show (the summary would ask a model).
@@ -142,6 +143,12 @@ export function ChannelSheet({ open, onClose, guildId, channelId }: ChannelSheet
         : channelName;
 
   const title = pushed ? thread?.name || 'Thread' : PAGE_TITLE[page];
+
+  // Keep the page in force in view when the segments overflow the sheet.
+  useEffect(() => {
+    const selected = tabsRef.current?.querySelector<HTMLElement>('[aria-selected="true"]');
+    if (typeof selected?.scrollIntoView === 'function') selected.scrollIntoView({ inline: 'center', block: 'nearest' });
+  }, [page, pushed]);
 
   return (
     <SheetFrame
@@ -169,16 +176,30 @@ export function ChannelSheet({ open, onClose, guildId, channelId }: ChannelSheet
       ) : (
         <>
           {pages.length > 1 && (
-            <div className="glass-sheet__tabs">
+            <div className="ix-sheet__tabs" ref={tabsRef}>
               <div className="glass-sheet-tabs" role="tablist" aria-label="Channel pages">
                 {pages.map((value) => (
                   <button
                     key={value}
+                    id={`channel-sheet-tab-${value}`}
                     type="button"
                     role="tab"
                     aria-selected={page === value}
+                    aria-controls="channel-sheet-page"
+                    data-page={value}
                     className="glass-sheet-tab glass-focusable"
                     onClick={() => setChannelPage(value)}
+                    onKeyDown={(event) => {
+                      // A segmented control moves with the arrow keys and selects as it goes.
+                      const step = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
+                      if (!step) return;
+                      event.preventDefault();
+                      const next = pages[(pages.indexOf(value) + step + pages.length) % pages.length];
+                      setChannelPage(next);
+                      // Every segment is in the DOM already, so focus can follow at once.
+                      document.getElementById(`channel-sheet-tab-${next}`)?.focus();
+                    }}
+                    tabIndex={page === value ? 0 : -1}
                   >
                     {PAGE_TAB[value]}
                   </button>
@@ -186,7 +207,14 @@ export function ChannelSheet({ open, onClose, guildId, channelId }: ChannelSheet
               </div>
             </div>
           )}
-          <div key={page} className="pc-content-in" data-page={page}>
+          <div
+            key={page}
+            id="channel-sheet-page"
+            role={pages.length > 1 ? 'tabpanel' : undefined}
+            aria-labelledby={pages.length > 1 ? `channel-sheet-tab-${page}` : undefined}
+            className="pc-content-in"
+            data-page={page}
+          >
             {page === 'summary' && <SummaryPage key={channelId ?? 'none'} channelId={channelId} />}
             {page === 'pins' && <PinsPage key={channelId ?? 'none'} channelId={channelId} onClose={onClose} />}
             {page === 'threads' && (

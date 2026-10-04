@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -6,6 +6,7 @@ import type { User } from '../../types';
 import { dmApi } from '../../api/dms';
 import { guildApi } from '../../api/guilds';
 import { relationshipApi } from '../../api/relationships';
+import { writeClipboardText } from '../../lib/clipboard';
 import { UserProfilePopup } from './UserProfile';
 
 vi.mock('../../api/client', () => ({
@@ -19,6 +20,11 @@ vi.mock('../../api/client', () => ({
       ?? (err instanceof Error ? err.message : 'Request failed');
   },
 }));
+
+// An avatar subscribes to the download ticket, which mints one over the network.
+vi.mock('../../hooks/useDownloadTicket', () => ({ useDownloadTicket: () => null }));
+
+vi.mock('../../lib/clipboard', () => ({ writeClipboardText: vi.fn().mockResolvedValue(undefined) }));
 
 vi.mock('../../api/dms', () => ({
   dmApi: {
@@ -149,24 +155,31 @@ describe('UserProfilePopup action feedback', () => {
     vi.mocked(guildApi.createReport).mockResolvedValue({ data: {} } as never);
   });
 
-  it('keeps the profile surface within the viewport', () => {
+  it('is a dialog on the window (portaled out of main), 340 wide, inside the viewport', () => {
     const { container } = renderProfile();
 
-    expect(container.querySelector('.pc-drawer-in-right')).toHaveClass(
-      'w-[min(21.5rem,calc(100vw-1rem))]',
-    );
+    // Portaled: main is a layout container, which would place and clip a fixed card.
+    expect(container.querySelector('[data-testid="ix-profile-card"]')).toBeNull();
+    const card = screen.getByRole('dialog', { name: /Grace, profile/ });
+    expect(card.parentElement).toBe(document.body);
+    expect(card).toHaveClass('ix-profile');
+    const left = Number.parseFloat(card.style.left);
+    // Opened at x 400 with room to its left: the card sits left of the point.
+    expect(left).toBeGreaterThanOrEqual(8);
+    expect(left + 340).toBeLessThanOrEqual(window.innerWidth - 8 + 0.5);
   });
 
-  it('draws their face with initials and says how they are here, in words and as ink', () => {
-    const { container } = renderProfile();
+  it('draws their avatar (a letter, no picture) and says how they are here, in words and as ink', () => {
+    renderProfile();
 
-    // A plain Glass face (no photo: initials on their identity color) with the
-    // presence mark beside it; offline is a faint ring, and the words say it too.
-    expect(container.querySelector('.glass-face')).toHaveTextContent('G');
-    expect(container.querySelector('.glass-presence')).toHaveAttribute('data-status', 'offline');
-    expect(container.querySelector('.glass-presence')).not.toHaveAttribute('data-live');
+    // The Index avatar: one letter on their hue, 76px. Offline draws no dot, and the
+    // words say it: the state is never only a mark (§10).
+    const avatar = document.querySelector('.ix-profile__avatar .ix-av');
+    expect(avatar).toHaveTextContent('G');
+    expect(avatar).toHaveStyle({ width: '76px', height: '76px' });
+    expect(document.querySelector('.ix-profile__avatar .ix-presence')).toBeNull();
     expect(screen.getByText('Offline')).toBeInTheDocument();
-    expect(container.querySelector('[title="Status: Offline"]')).not.toBeNull();
+    expect(document.querySelector('[title="Status: Offline"]')).not.toBeNull();
   });
 
   // The card's own height cap used to be an absolute `100dvh - 1rem`, which
@@ -174,16 +187,15 @@ describe('UserProfilePopup action feedback', () => {
   // (every enrolled account's, once the identity fingerprint section renders)
   // hung past the bottom of the window with Block and Report unreachable.
   it('caps its height by the room left below where it opens', () => {
-    const { container } = render(
+    render(
       <MemoryRouter>
         <UserProfilePopup user={targetUser} position={{ x: 400, y: 500 }} onClose={vi.fn()} />
       </MemoryRouter>,
     );
 
-    const card = container.querySelector('.pc-drawer-in-right') as HTMLElement;
+    const card = screen.getByRole('dialog', { name: /Grace, profile/ });
     const top = Number.parseFloat(card.style.top);
     expect(card.style.maxHeight).toBe(`calc(100dvh - ${Math.round(top) + 8}px)`);
-    expect(card.style.overflowY).toBe('auto');
   });
 
   // The click-away catcher is `fixed inset-0` and swallows every pointer event
@@ -199,6 +211,38 @@ describe('UserProfilePopup action feedback', () => {
 
     await user.keyboard('{Escape}');
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it('has Message as the one cream action, with Add friend, Call and More actions beside it', () => {
+    renderProfile();
+    const message = screen.getByRole('button', { name: 'Message' });
+    expect(message).toHaveClass('ix-cream');
+    expect(screen.getByRole('button', { name: 'Add Grace as a friend' })).toHaveClass('ix-ctl--wide');
+    expect(screen.getByRole('button', { name: 'Call Grace' })).toHaveClass('ix-ctl');
+    expect(screen.getByRole('button', { name: 'More actions' })).toHaveAttribute('aria-haspopup', 'menu');
+    // Exactly one cream button on the surface.
+    expect(document.querySelectorAll('.ix-profile .ix-cream')).toHaveLength(1);
+  });
+
+  it('keeps Block, Report, Verify and Copy user ID in the more-actions menu', async () => {
+    const user = userEvent.setup();
+    renderProfile();
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'More actions' }));
+    const menu = await screen.findByRole('menu', { name: 'Grace actions' });
+    expect(within(menu).getByRole('menuitem', { name: 'Copy user ID' })).toBeInTheDocument();
+    expect(within(menu).getByRole('menuitem', { name: 'Block' })).toHaveAttribute('data-danger');
+    expect(within(menu).getByRole('menuitem', { name: 'Report' })).toHaveAttribute('data-danger');
+    // No fingerprint is known for this account, so there is nothing to verify.
+    expect(within(menu).queryByRole('menuitem', { name: 'Verify keys' })).not.toBeInTheDocument();
+  });
+
+  it('copies the user id from the menu', async () => {
+    const user = userEvent.setup();
+    renderProfile();
+    await user.click(screen.getByRole('button', { name: 'More actions' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Copy user ID' }));
+    expect(writeClipboardText).toHaveBeenCalledWith('user-2');
   });
 
   it('shows API detail when starting a DM fails', async () => {
@@ -236,7 +280,8 @@ describe('UserProfilePopup action feedback', () => {
 
     renderProfile();
 
-    await user.click(screen.getByRole('button', { name: 'Block Grace' }));
+    await user.click(screen.getByRole('button', { name: 'More actions' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Block' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Could not block this user: Cannot block this account.',
@@ -249,7 +294,8 @@ describe('UserProfilePopup action feedback', () => {
 
     renderProfile();
 
-    await user.click(screen.getByRole('button', { name: 'Report Grace' }));
+    await user.click(screen.getByRole('button', { name: 'More actions' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Report' }));
     await user.type(screen.getByPlaceholderText('Explain why this user should be reviewed...'), 'spam');
     await user.click(screen.getByRole('button', { name: 'Submit report' }));
 

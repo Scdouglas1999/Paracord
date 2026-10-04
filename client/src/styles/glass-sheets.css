@@ -1,200 +1,21 @@
 /* =============================================================================
-   Sheets (docs/glass-spec.md §1, §2, §3, §5, §9; WP-G18). Components:
-   components/glass/sheets, and the panels a sheet hosts (search, pins, threads,
-   media, leaderboard, people, notifications, reminders, inbox, shortcuts).
+   Sheet content (docs/index-spec.md §6.1; WP IX-9; formerly docs/glass-spec.md
+   §1-§5, WP-G18). The panels a sheet hosts: search, pins, threads, media,
+   leaderboard, people, notifications, reminders, inbox, shortcuts. The frame
+   itself (the page in main, its header, the menus, the switcher) is
+   styles/ix-sheets.css; this file is what goes inside it.
 
-   A sheet is a SOLID pane that slides over the conversation pane, not a third
-   pane: it fills the pane it covers (a portal into `main#main-content`), so the
-   geometry follows the pane in every layout. Content in it is solid and has no
-   outline (rows, cards, tiles); only the things you press are glass (the search
-   field, buttons). Menus are the popover glass (`.pc-floating`, in
-   primitives.css), not styled here.
+   The inks come from the Index ramp (ix-sheets.css redeclares the Glass ramp on
+   the surface), so rows, cards and fields here read `--ink-*` and land on
+   `--ix-ink-*`. Content in a sheet is flat: rows with no outline, cards on a
+   quiet wash and a hairline; only the things you press are controls.
 
    Tokens only: the literal-color lint covers this file. Unlayered, after the
    frame and the conversation, so it beats the Lantern utilities on the panels
    it restyles in place. Only transform and opacity animate (the motion lint);
-   hover and press are background-color changes over --glass-ms; nothing scales
-   on press (§9). Reduced motion is the global `data-motion` switch.
+   hover and press are background-color changes over 120ms; nothing scales on
+   press. Reduced motion is the global `data-motion` switch.
    ============================================================================= */
-
-/* ---- The frame ------------------------------------------------------------- */
-.glass-sheet {
-  /* The message box's bleed past the column, for a conversation inside a sheet. */
-  --glass-composer-bleed: 12px;
-  position: absolute;
-  inset: 0;
-  z-index: 5;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-  /* The pane's own radius: the sheet is the pane, wearing a different page. */
-  border-radius: inherit;
-  color: var(--ink-1);
-  background-color: var(--solid);
-  background-image: var(--surface-grain);
-  outline: none;
-}
-
-.glass-sheet > * {
-  position: relative;
-  z-index: 1;
-}
-
-/* On a phone the sheet is the whole screen, over the bottom bar (§8). */
-.glass-sheet[data-host='window'] {
-  position: fixed;
-  z-index: 55;
-  border-radius: 0;
-  padding-top: env(safe-area-inset-top);
-  padding-bottom: env(safe-area-inset-bottom);
-}
-
-@keyframes glass-sheet-in {
-  from {
-    opacity: 0;
-    transform: translate3d(28px, 0, 0);
-  }
-}
-
-@keyframes glass-sheet-out {
-  to {
-    opacity: 0;
-    transform: translate3d(20px, 0, 0);
-  }
-}
-
-.glass-sheet.is-entering {
-  animation: glass-sheet-in var(--duration-slow) var(--ease-out) backwards;
-}
-
-/* The leave must finish inside usePresence's --duration-exit-slow. */
-.glass-sheet.is-leaving {
-  pointer-events: none;
-  animation: glass-sheet-out var(--duration-exit-slow) var(--ease-in) forwards;
-}
-
-/* ---- Header: 76px, like the conversation's ---------------------------------
-   The title starts on the column's left edge; the close button is anchored to
-   the pane's right edge, 16px in, where the header's search button sat. The
-   flow area stops short of it when the pane is narrower than the column.
-   ----------------------------------------------------------------------------- */
-.glass-sheet__header {
-  position: relative;
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 12px;
-  min-height: var(--glass-header-h);
-  padding-inline-start: var(--glass-column-inset);
-  padding-inline-end: max(var(--glass-column-inset), 68px);
-}
-
-.glass-sheet__heading {
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-}
-
-.glass-sheet__title {
-  margin: 0;
-  overflow: hidden;
-  font-size: 20px;
-  font-weight: 600;
-  line-height: 1.2;
-  letter-spacing: -0.01em;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--ink-1);
-}
-
-.glass-sheet__sub {
-  margin: 0;
-  overflow: hidden;
-  font-size: 13px;
-  line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--ink-2);
-}
-
-.glass-sheet__actions {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 6px;
-}
-
-/* A quiet icon: no fill until you touch it (the header's own recipe). */
-.glass-sheet__btn {
-  display: grid;
-  flex-shrink: 0;
-  width: 40px;
-  height: 40px;
-  place-items: center;
-  border: 0;
-  border-radius: var(--r-ctl);
-  color: var(--ink-2);
-  background-color: transparent;
-  cursor: pointer;
-  transition:
-    background-color var(--glass-ms) var(--glass-ease),
-    color var(--glass-ms) var(--glass-ease);
-}
-
-.glass-sheet__btn:hover:not(:disabled) {
-  color: var(--ink-1);
-  background-color: var(--wash-hover);
-}
-
-.glass-sheet__btn:active:not(:disabled) {
-  color: var(--ink-1);
-  background-color: var(--wash-press);
-}
-
-.glass-sheet__btn:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
-/* The tooltip wraps a control in a box of its own, so the slot is what is placed. */
-.glass-sheet__close-slot {
-  position: absolute;
-  inset-block-start: 50%;
-  inset-inline-end: 16px;
-  margin-block-start: -20px;
-}
-
-/* A back button hangs into the margin, so the title text still starts on the
-   column's edge. */
-.glass-sheet__back-slot {
-  flex: 0 0 auto;
-  margin-inline-start: -8px;
-  margin-inline-end: -4px;
-}
-
-/* ---- Body -------------------------------------------------------------------- */
-.glass-sheet__body {
-  position: relative;
-  display: flex;
-  flex: 1 1 0;
-  flex-direction: column;
-  min-height: 0;
-}
-
-.glass-sheet__body[data-body='scroll'] {
-  overflow-y: auto;
-  padding: 4px var(--glass-column-inset) 32px;
-  scrollbar-width: thin;
-}
-
-/* A conversation inside a sheet owns its scroller and its message box. */
-.glass-sheet__body[data-body='fill'] {
-  overflow: hidden;
-}
 
 /* A page that is not the whole column (a leaderboard, a form) stays readable at
    the column's width without the rows running its full 720px. */
@@ -206,12 +27,29 @@
 /* ---- Type ---------------------------------------------------------------------- */
 .glass-sheet-kicker {
   margin: 0;
-  padding: 20px 12px 8px;
+  padding: 16px 8px 6px;
+  /* A section label is sentence case, never uppercase (§1.5, §2.4). */
+  font-size: 12.5px;
+  font-weight: 600;
+  font-stretch: 100%;
+  line-height: 1.3;
+  letter-spacing: 0;
+  text-transform: none;
   color: var(--ink-3);
 }
 
+/* The count after a label: regular weight, tabular, not the narrow instrument cut. */
+.glass-sheet-kicker .glass-instrument {
+  margin-inline-start: 4px;
+  font-size: inherit;
+  font-stretch: 100%;
+  font-weight: 500;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+
 .glass-sheet-kicker:first-child {
-  padding-top: 8px;
+  padding-top: 6px;
 }
 
 /* Over cards and tiles, which sit flush on the column, the kicker sits nearly
@@ -247,15 +85,15 @@
   align-items: center;
   gap: 12px;
   width: 100%;
-  min-height: 56px;
-  padding: 8px 12px;
+  min-height: 52px;
+  padding: 8px;
   border: 0;
   border-radius: var(--r-row);
   font: inherit;
   text-align: start;
   color: var(--ink-1);
   background-color: transparent;
-  transition: background-color var(--glass-ms) var(--glass-ease);
+  transition: background-color 120ms var(--ix-ease);
 }
 
 button.glass-sheet-row,
@@ -291,9 +129,9 @@ button.glass-sheet-row:active:not(:disabled) {
   width: 40px;
   height: 40px;
   place-items: center;
-  border-radius: var(--r-ctl);
+  border-radius: 12px;
   color: var(--ink-2);
-  background-color: var(--bub);
+  background-color: var(--ix-fill);
 }
 
 .glass-sheet-row__text {
@@ -306,7 +144,7 @@ button.glass-sheet-row:active:not(:disabled) {
 
 .glass-sheet-row__name {
   overflow: hidden;
-  font-size: 15px;
+  font-size: 14.5px;
   font-weight: 600;
   line-height: 1.3;
   text-overflow: ellipsis;
@@ -320,7 +158,7 @@ button.glass-sheet-row:active:not(:disabled) {
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--ink-2);
+  color: var(--ink-3);
 }
 
 .glass-sheet-row__aside {
@@ -344,9 +182,9 @@ button.glass-sheet-row:active:not(:disabled) {
   cursor: pointer;
   opacity: 0;
   transition:
-    opacity var(--glass-ms) var(--glass-ease),
-    background-color var(--glass-ms) var(--glass-ease),
-    color var(--glass-ms) var(--glass-ease);
+    opacity 120ms var(--ix-ease),
+    background-color 120ms var(--ix-ease),
+    color 120ms var(--ix-ease);
 }
 
 .glass-sheet-row:hover .glass-sheet-row__action,
@@ -357,7 +195,7 @@ button.glass-sheet-row:active:not(:disabled) {
 
 .glass-sheet-row__action:hover {
   color: var(--ink-1);
-  background-color: var(--wash-hover);
+  background-color: var(--ix-fill);
 }
 
 .glass-sheet-row__action[data-tone='danger']:hover {
@@ -370,19 +208,19 @@ button.glass-sheet-row:active:not(:disabled) {
   }
 }
 
-/* ---- Cards: a solid step above the sheet ------------------------------------ */
+/* ---- Cards: the action card's wash and hairline (§3.1) ------------------------ */
 .glass-sheet-card {
   position: relative;
   padding: 14px 16px;
   border: 0;
   border-radius: var(--r-bubble);
   color: var(--ink-1);
-  background-color: var(--bub);
-  box-shadow: var(--sh-content);
+  background-color: var(--ix-fill-card);
+  box-shadow: inset 0 0 0 1px var(--ix-edge-lit);
 }
 
 .glass-sheet-card--raise {
-  background-color: var(--raise);
+  background-color: var(--ix-fill-card-hover);
 }
 
 button.glass-sheet-card,
@@ -392,12 +230,12 @@ a.glass-sheet-card {
   font: inherit;
   text-align: start;
   cursor: pointer;
-  transition: background-color var(--glass-ms) var(--glass-ease);
+  transition: background-color 120ms var(--ix-ease);
 }
 
 button.glass-sheet-card:hover,
 a.glass-sheet-card:hover {
-  background-color: var(--raise);
+  background-color: var(--ix-fill-card-hover);
 }
 
 .glass-sheet-cards {
@@ -419,7 +257,7 @@ a.glass-sheet-card:hover {
 .glass-sheet-card__author {
   min-width: 0;
   overflow: hidden;
-  font-size: 15px;
+  font-size: 14.5px;
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -428,14 +266,16 @@ a.glass-sheet-card:hover {
 .glass-sheet-card__when {
   margin-inline-start: auto;
   flex: 0 0 auto;
-  font-size: 13px;
+  font-size: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
   color: var(--ink-3);
 }
 
 .glass-sheet-card__body {
   margin: 6px 0 0;
-  font-size: 15px;
-  line-height: 1.4;
+  font-size: 14.5px;
+  line-height: 1.42;
   overflow-wrap: anywhere;
   color: var(--ink-1);
 }
@@ -459,59 +299,60 @@ a.glass-sheet-card:hover {
   width: 44px;
   height: 44px;
   place-items: center;
-  border-radius: var(--r-ctl);
+  border-radius: 12px;
   color: var(--ink-2);
-  background-color: var(--bub);
+  background-color: var(--ix-fill);
 }
 
 .glass-sheet-empty__title {
   margin: 0;
-  font-size: 17px;
-  font-weight: 600;
-  line-height: 1.25;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.3;
   color: var(--ink-1);
 }
 
 .glass-sheet-empty__text {
   margin: 4px 0 0;
-  font-size: 15px;
+  font-size: 13.5px;
   line-height: 1.4;
-  color: var(--ink-2);
+  color: var(--ink-3);
 }
 
-/* One danger ink, for errors only (plan §8.5). */
+/* One danger ink, for errors only: text on the quiet danger wash, never a red fill (§6.8). */
 .glass-sheet-alert {
   margin: 8px 0;
   padding: 12px 14px;
   border-radius: var(--r-row);
-  font-size: 15px;
+  font-size: 13.5px;
   line-height: 1.4;
-  color: var(--accent-danger);
-  background-color: var(--danger-well);
+  color: var(--ix-danger-ink);
+  background-color: var(--ix-danger-fill);
 }
 
-/* ---- Controls on a sheet: glass ---------------------------------------------- */
+/* ---- Controls on a sheet: the search field, chips and the segmented control ---- */
 .glass-sheet-field {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 48px;
-  padding: 0 14px;
-  border-radius: var(--r-capsule);
+  min-height: 40px;
+  padding: 0 12px;
+  border-radius: 12px;
   color: var(--ink-1);
-  background-color: var(--glass-fill-quiet);
-  box-shadow: var(--glass-edge);
-  transition: background-color var(--glass-ms) var(--glass-ease);
+  background-color: var(--ix-fill-field);
+  box-shadow: inset 0 0 0 1px var(--ix-edge-lit);
+  transition: background-color 120ms var(--ix-ease);
 }
 
 .glass-sheet-field:hover {
-  background-color: var(--glass-fill);
+  background-color: var(--ix-fill);
 }
 
 .glass-sheet-field:focus-within {
-  background-color: var(--glass-fill);
-  outline: var(--glass-focus-width) solid var(--glass-focus-color);
-  outline-offset: var(--glass-focus-offset);
+  background-color: var(--ix-fill);
+  box-shadow: inset 0 0 0 1px var(--ix-edge-open);
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
 }
 
 .glass-sheet-field input {
@@ -522,7 +363,7 @@ a.glass-sheet-card:hover {
   padding: 0;
   border: 0;
   font: inherit;
-  font-size: 15px;
+  font-size: 14px;
   color: var(--ink-1);
   background: transparent;
   outline: none;
@@ -532,22 +373,22 @@ a.glass-sheet-card:hover {
   color: var(--ink-placeholder);
 }
 
-/* A filter or scope chip inside the field: small, solid on glass. */
+/* A filter or scope chip inside the field: a tool chip (radius 8, 12.5/600). */
 .glass-sheet-chip {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
   gap: 4px;
-  height: 28px;
-  padding: 0 10px;
+  height: 26px;
+  padding: 0 9px;
   border: 0;
-  border-radius: 14px;
+  border-radius: 8px;
   font: inherit;
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 600;
   color: var(--ink-1);
-  background-color: var(--glass-fill);
-  transition: background-color var(--glass-ms) var(--glass-ease);
+  background-color: var(--ix-fill-ctl);
+  transition: background-color 120ms var(--ix-ease);
 }
 
 button.glass-sheet-chip {
@@ -555,48 +396,52 @@ button.glass-sheet-chip {
 }
 
 button.glass-sheet-chip:hover {
-  background-color: var(--glass-fill-hover);
+  background-color: var(--ix-fill-ctl-hover);
 }
 
 .glass-sheet-chip--scope {
-  background-color: var(--glass-fill-on);
+  background-color: var(--ix-fill-2);
 }
 
-/* A segmented choice (notification levels, media views). */
+/* A segmented control (the channel sheet's pages, media views, the inbox's filters). */
 .glass-sheet-tabs {
   display: inline-flex;
-  gap: 4px;
-  padding: 4px;
-  border-radius: var(--r-capsule);
-  background-color: var(--glass-fill-quiet);
-  box-shadow: var(--glass-edge);
+  gap: 2px;
+  padding: 3px;
+  border-radius: 12px;
+  background-color: var(--ix-fill);
 }
 
 .glass-sheet-tab {
   flex: 0 0 auto;
-  height: 36px;
-  padding: 0 16px;
+  height: 30px;
+  padding: 0 12px;
   border: 0;
-  border-radius: var(--r-capsule);
+  border-radius: 9px;
   font: inherit;
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--ink-2);
   background-color: transparent;
   cursor: pointer;
   transition:
-    background-color var(--glass-ms) var(--glass-ease),
-    color var(--glass-ms) var(--glass-ease);
+    background-color 120ms var(--ix-ease),
+    color 120ms var(--ix-ease);
 }
 
 .glass-sheet-tab:hover {
   color: var(--ink-1);
-  background-color: var(--wash-hover);
+  background-color: var(--ix-wash-hover);
+}
+
+.glass-sheet-tab:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: -2px;
 }
 
 .glass-sheet-tab[aria-selected='true'] {
   color: var(--ink-1);
-  background-color: var(--glass-fill-on);
+  background-color: var(--ix-fill-ctl-hover);
 }
 
 /* ---- Faces and presence (ink, never color: plan §7) ---------------------------- */
@@ -672,124 +517,22 @@ button.glass-sheet-chip:hover {
 
 .glass-sheet-thread__notice {
   flex: 0 0 auto;
-  margin: 0 var(--glass-column-inset) 8px;
+  margin: 0 12px 8px;
   padding: 10px 14px;
   border-radius: var(--r-row);
   font-size: 13px;
   line-height: 1.4;
   color: var(--ink-2);
-  background-color: var(--raise);
+  background-color: var(--ix-fill-card);
 }
 
-/* The message box sits 20px above the pane's bottom edge, as in the conversation. */
+/* The message box sits 12px above the sheet's bottom edge and 8px in from its sides. */
 .glass-sheet-thread__composer {
   flex: 0 0 auto;
-  padding: 0
-    max(
-      calc(var(--glass-column-pad) - var(--glass-composer-bleed) / 3),
-      calc((100% - var(--glass-column-w)) / 2 - var(--glass-composer-bleed))
-    )
-    20px;
+  padding: 0 8px 12px;
 }
 
-.glass-sheet[data-host='window'] .glass-sheet-thread__composer {
-  padding: 0 8px 10px;
-}
-
-/* ---- The call pill (pill/CallPill.tsx, placement="sheet") --------------------
-   A sheet covers the conversation's header, and the call's controls stay one
-   press away, so the sheet draws the pill itself where the header's was: right
-   aligned to the column, its top 6px under the header's top, taking what the
-   title leaves (the title gives up to 40%, as in the conversation's header) so
-   the pill gives up its labels exactly as it does there. It sits after the close
-   button in the document and before it on screen, and never under it: the close
-   button hangs at the pane's edge, past the column's end where the pill stops.
-   The header lifts above the body so an expanded roster, which grows over the
-   page as the conversation's does, is not painted under the rows.
-   ----------------------------------------------------------------------------- */
-.glass-sheet > .glass-sheet__header {
-  z-index: 2;
-}
-
-.glass-sheet__pill {
-  position: relative;
-  z-index: 3;
-  display: flex;
-  flex: 1 1 0;
-  align-self: flex-start;
-  justify-content: flex-end;
-  min-width: 0;
-  height: 52px;
-  margin-top: 6px;
-}
-
-.glass-sheet__pill:empty {
-  display: none;
-}
-
-.glass-sheet__header:has(.glass-sheet__pill:not(:empty)) .glass-sheet__heading {
-  flex: 0 1 auto;
-  max-width: max(40%, 200px);
-}
-
-/* Search is a field, not a title: it keeps most of the row and the pill the rest. */
-.glass-sheet__header:has(.glass-sheet__pill:not(:empty)) .glass-search__header {
-  flex: 1 1 0;
-}
-
-.glass-sheet[data-sheet='search'] .glass-sheet__pill {
-  flex: 0 1 34%;
-}
-
-/* On a phone the pill is a row above the header, where the conversation has it
-   (two rows, 12px in), so it does not move when the sheet opens. */
-.glass-sheet > .glass-sheet__phone-pill {
-  z-index: 2;
-  order: -1;
-  flex: 0 0 auto;
-  padding: 12px 12px 6px;
-}
-
-.glass-sheet__phone-pill:empty {
-  display: none;
-}
-
-/* ---- Phone (§8): full screen, a 56px header --------------------------------- */
-.glass-sheet[data-host='window'] .glass-sheet__header {
-  min-height: 56px;
-  /* Lined up with what the rows and kickers below start at (12 + 12). */
-  padding-inline-start: 24px;
-  padding-inline-end: 64px;
-}
-
-.glass-sheet[data-host='window'] .glass-sheet__title {
-  font-size: 17px;
-}
-
-.glass-sheet[data-host='window'] .glass-sheet__close-slot {
-  inset-inline-end: 8px;
-}
-
-.glass-sheet[data-host='window'] .glass-sheet__body[data-body='scroll'] {
-  padding-inline: 12px;
-}
-
-/* ---- The channel sheet's page tabs -------------------------------------------- */
-.glass-sheet__tabs {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  display: flex;
-  padding-block: 4px 12px;
-  overflow-x: auto;
-  scrollbar-width: none;
-  background: linear-gradient(var(--solid) 78%, transparent);
-}
-
-.glass-sheet__tabs::-webkit-scrollbar {
-  display: none;
-}
-
+/* ---- Status lines, a checked row, "show more" ---------------------------------- */
 .glass-sheet-status {
   display: flex;
   align-items: center;
@@ -813,22 +556,22 @@ button.glass-sheet-chip:hover {
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
   min-width: 0;
-  padding-block: 14px;
+  padding-block: 9px;
 }
 
 .glass-search__field {
   flex-wrap: wrap;
-  min-height: 48px;
-  padding-block: 6px;
-  border-radius: 24px;
+  min-height: 40px;
+  padding-block: 5px;
+  border-radius: 12px;
   cursor: text;
 }
 
 .glass-search__icon {
   flex: 0 0 auto;
-  color: var(--ink-2);
+  color: var(--ink-3);
 }
 
 .glass-search__menu {
@@ -839,30 +582,34 @@ button.glass-sheet-chip:hover {
 
 .glass-search__menu-title {
   padding: 8px 10px 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
   color: var(--ink-3);
 }
 
 .glass-search__menu-empty {
   padding: 8px 10px;
-  font-size: 15px;
-  color: var(--ink-2);
+  font-size: 13.5px;
+  color: var(--ink-3);
 }
 
 .glass-search__option {
   display: flex;
   align-items: center;
   gap: 10px;
-  min-height: 40px;
+  min-height: 36px;
   padding: 4px 10px;
-  border-radius: 12px;
-  font-size: 15px;
+  border-radius: 10px;
+  font-size: 14px;
   color: var(--ink-2);
   cursor: pointer;
 }
 
 .glass-search__option[aria-selected='true'] {
   color: var(--ink-1);
-  background-color: var(--glass-fill);
+  background-color: var(--ix-fill-2);
 }
 
 .glass-search__option-icon {
@@ -949,8 +696,8 @@ button.glass-sheet-chip:hover {
 
 .glass-search__none-title {
   margin: 0 0 4px;
-  font-size: 17px;
-  font-weight: 600;
+  font-size: 15px;
+  font-weight: 700;
   color: var(--ink-1);
 }
 
@@ -972,7 +719,7 @@ button.glass-sheet-chip:hover {
   padding-block: 10px;
 }
 
-.glass-search__hit > .glass-face {
+.glass-search__hit > .ix-av {
   margin-top: 2px;
 }
 
@@ -986,8 +733,8 @@ button.glass-sheet-chip:hover {
 .glass-search__snippet {
   display: -webkit-box;
   overflow: hidden;
-  font-size: 15px;
-  line-height: 1.4;
+  font-size: 14px;
+  line-height: 1.42;
   white-space: pre-line;
   overflow-wrap: anywhere;
   color: var(--ink-2);
@@ -1004,9 +751,9 @@ button.glass-sheet-chip:hover {
 .glass-search__thumb {
   width: 56px;
   height: 56px;
-  border-radius: 12px;
+  border-radius: 10px;
   object-fit: cover;
-  background-color: var(--bub);
+  background-color: var(--ix-fill);
 }
 
 .glass-search__files {
@@ -1018,16 +765,16 @@ button.glass-sheet-chip:hover {
   color: var(--ink-3);
 }
 
-/* A matched word: a quiet glass wash and the ink, no color and no underline. */
-.glass-sheet mark,
-.glass-sheet .pc-search-mark {
+/* A matched word: a quiet wash and the ink, no color and no underline. */
+.ix-sheet mark,
+.ix-sheet .pc-search-mark {
   border-radius: 4px;
   color: var(--ink-1);
-  background-color: var(--glass-fill-on);
+  background-color: var(--ix-fill-ctl-hover);
   text-decoration: none;
 }
 
-/* ---- Pins, saved messages, reminders: solid cards with a quiet control ---------- */
+/* ---- Pins, saved messages, reminders: cards with a quiet control ----------------- */
 .glass-pin {
   position: relative;
 }
@@ -1084,7 +831,7 @@ button.glass-sheet-chip:hover {
   font-size: 12px;
   text-align: center;
   color: var(--ink-1);
-  background-color: var(--glass-fill);
+  background-color: var(--ix-fill-ctl);
 }
 
 .glass-inbox__where {
@@ -1156,41 +903,6 @@ button.glass-sheet-chip:hover {
   color: var(--ink-2);
 }
 
-/* ---- Keyboard shortcuts ------------------------------------------------------------- */
-.glass-help__list {
-  display: grid;
-  gap: 2px;
-  margin: 0;
-}
-
-.glass-help__row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  min-height: 48px;
-  padding: 6px 12px;
-  border-radius: var(--r-row);
-}
-
-.glass-help__row:hover {
-  background-color: var(--wash-hover);
-}
-
-.glass-help__name {
-  margin: 0;
-  font-weight: 400;
-  color: var(--ink-2);
-}
-
-.glass-help__keys {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 4px;
-  margin: 0;
-}
-
 /* ---- The catch-up summary ------------------------------------------------------------- */
 .glass-summary__meta {
   display: flex;
@@ -1200,26 +912,10 @@ button.glass-sheet-chip:hover {
 }
 
 .glass-summary__text {
-  font-size: 15px;
+  font-size: 14.5px;
   line-height: 1.5;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-}
-
-/* ---- Text a menu's own dialog puts in an overlay sheet -------------------------------------
-   The header's menu hook (components/glass/conversation/useChannelMenu) still
-   renders the summary as preformatted text inside a `TopBarOverlay`. Until it
-   opens the summary page instead, the text reads in the same face and tone. */
-.glass-sheet[data-sheet='overlay'] pre {
-  margin: 0;
-  padding: 14px 16px;
-  border: 0;
-  border-radius: var(--r-bubble);
-  font-family: inherit;
-  font-size: 15px;
-  line-height: 1.5;
-  color: var(--ink-1);
-  background-color: var(--bub);
 }
 
 /* ---- Reminders ---------------------------------------------------------------------- */
@@ -1258,7 +954,7 @@ button.glass-sheet-chip:hover {
 }
 
 .glass-reminder__error {
-  color: var(--accent-danger);
+  color: var(--ix-danger-ink);
 }
 
 .glass-reminder__actions {
@@ -1299,13 +995,12 @@ button.glass-person__open {
 .glass-sheet-live {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  color: var(--amber-ink);
+  gap: 5px;
+  color: var(--ix-amber);
 }
 
-.glass-sheet-live .glass-chip__dot {
+.glass-sheet-live .ix-glyph {
   flex: 0 0 auto;
-  color: var(--amber);
 }
 
 /* People fill the column in two, and fall back to one on a narrow sheet. */
@@ -1392,7 +1087,7 @@ button.glass-person__open {
   justify-content: space-between;
   gap: 8px;
   min-height: 36px;
-  margin: 0 var(--glass-column-inset) 8px;
+  margin: 0 12px 8px;
 }
 
 .glass-sheet-thread__parent {
@@ -1411,8 +1106,8 @@ button.glass-person__open {
   background-color: transparent;
   cursor: pointer;
   transition:
-    background-color var(--glass-ms) var(--glass-ease),
-    color var(--glass-ms) var(--glass-ease);
+    background-color 120ms var(--ix-ease),
+    color 120ms var(--ix-ease);
 }
 
 .glass-sheet-thread__parent:hover:not(:disabled) {
@@ -1430,122 +1125,8 @@ button.glass-person__open {
   padding: 0;
 }
 
-.glass-sheet[data-host='window'] .glass-sheet-thread__bar {
+.ix-sheet[data-host='window'] .glass-sheet-thread__bar {
   margin-inline: 12px;
-}
-
-/* ---- The account menu (a popover: the near-solid glass is `.pc-floating`) ---------------- */
-.glass-account__who {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 10px 4px;
-}
-
-.glass-account__text {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.glass-account__name {
-  overflow: hidden;
-  font-size: 15px;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--ink-1);
-}
-
-.glass-account__caption {
-  overflow: hidden;
-  font-size: 13px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--ink-2);
-}
-
-.glass-account__custom {
-  display: flex;
-  gap: 6px;
-  padding: 0 6px 6px;
-}
-
-.glass-account__field {
-  flex: 1 1 auto;
-  min-width: 0;
-  height: 36px;
-  padding: 0 12px;
-  border: 0;
-  border-radius: var(--r-capsule);
-  font: inherit;
-  font-size: 15px;
-  color: var(--ink-1);
-  background-color: var(--glass-fill-quiet);
-  box-shadow: var(--glass-edge);
-}
-
-.glass-account__field::placeholder {
-  color: var(--ink-placeholder);
-}
-
-.glass-account__field:focus-visible {
-  outline: var(--glass-focus-width) solid var(--glass-focus-color);
-  outline-offset: var(--glass-focus-offset);
-}
-
-.glass-account__set {
-  display: grid;
-  flex: 0 0 auto;
-  width: 36px;
-  height: 36px;
-  place-items: center;
-  border: 0;
-  border-radius: 50%;
-  color: var(--ink-1);
-  background-color: var(--glass-fill);
-  box-shadow: var(--glass-edge);
-  cursor: pointer;
-  transition: background-color var(--glass-ms) var(--glass-ease);
-}
-
-.glass-account__set:hover {
-  background-color: var(--glass-fill-hover);
-}
-
-.glass-account__set:active {
-  background-color: var(--glass-fill-press);
-}
-
-/* The status mark in the menu's rows: the same ink recipe, in the flow. */
-.glass-sheet-presence--inline {
-  position: static;
-  display: block;
-  width: 12px;
-  height: 12px;
-  background-color: var(--ink-1);
-  box-shadow: none;
-}
-
-.glass-sheet-presence--inline[data-status='idle'] {
-  background-color: transparent;
-  box-shadow: inset 0 0 0 2px var(--ink-1);
-}
-
-.glass-sheet-presence--inline[data-status='dnd'] {
-  position: relative;
-  background-color: var(--ink-1);
-}
-
-.glass-sheet-presence--inline[data-status='dnd']::after {
-  background-color: var(--popover);
-  top: 5px;
-  left: 3px;
-}
-
-.glass-sheet-presence--inline[data-status='offline'] {
-  background-color: transparent;
-  box-shadow: inset 0 0 0 2px var(--ink-3);
 }
 
 /* ---- Reduced transparency and high contrast: the sheet was already opaque, so

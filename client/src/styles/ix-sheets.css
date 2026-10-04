@@ -1,1 +1,1208 @@
-/* IX-9: sheets, menus and the quick switcher (§6.1-6.5). Created empty by IX-1; the owner fills it. */
+/* =============================================================================
+   IX-9: sheets, menus, the quick switcher, the help dialog and the profile card
+   (docs/index-spec.md §4.2, §6.1-6.5, §6.9). Components: components/ix/sheets,
+   components/ix/menus, components/glass/sheets, components/layout/CommandPalette,
+   components/layout/overlays, components/user/UserProfile.
+
+   Every color is a token (tokens.css, the Index block) or a hue built from a
+   number; `npm run test:tokens` fails on a literal. Only transform and opacity
+   animate (the motion lint); hover and press are color changes over 120ms.
+
+   Unlayered and imported after the Glass sheets, so a rule here wins a tie with
+   the Glass rule it replaces. Content classes that other components still carry
+   (`glass-sheet-row`, `glass-sheet-kicker`, ...) are restyled in glass-sheets.css;
+   the frame, the menus and the switcher live here.
+   ============================================================================= */
+
+/* ---- The Index inks, for everything that draws inside one of these surfaces ------
+   The hosted panels (media, leaderboard, a thread, reminders, the inbox) and the
+   Tailwind utilities inside them read the Glass ramp through custom properties
+   (`--ink-1`, `--text-secondary`, `--bub` ...). A custom property is substituted
+   where it is declared, so the ramp has to be redeclared on the surface itself
+   for its descendants to inherit the Index values. One list, one place. */
+.ix-sheet,
+.ix-menu,
+.ix-switcher,
+.ix-profile,
+.ix-dialog-panel {
+  --ink-1: var(--ix-ink);
+  --ink-2: var(--ix-ink-2);
+  --ink-3: var(--ix-ink-3);
+  --ink-placeholder: var(--ix-ink-3);
+  --text-primary: var(--ix-ink);
+  --text-body-ink: var(--ix-ink);
+  --text-secondary: var(--ix-ink-2);
+  --text-muted: var(--ix-ink-3);
+  --text-faint: var(--ix-ink-3);
+  --solid: var(--ix-pop-solid);
+  --raise: var(--ix-card);
+  --bub: var(--ix-fill);
+  --sel: var(--ix-fill-2);
+  --bg-well: var(--ix-fill-card);
+  --bg-raised: var(--ix-card);
+  --bg-floating: var(--ix-pop-solid);
+  --wash-hover: var(--ix-wash-hover);
+  --wash-press: var(--ix-fill);
+  --glass-fill: var(--ix-fill-ctl);
+  --glass-fill-hover: var(--ix-fill-ctl-hover);
+  --glass-fill-quiet: var(--ix-fill);
+  --glass-fill-on: var(--ix-fill-2);
+  --border-subtle: var(--ix-line);
+  --r-row: 12px;
+  --r-ctl: 10px;
+  --r-bubble: 18px;
+  --r-tile: 16px;
+}
+
+/* ---- The sheet (§6.1) --------------------------------------------------------------- */
+.ix-sheet {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: var(--ix-inset-radius, 24px);
+  color: var(--ix-ink);
+  background: var(--ix-pop);
+  box-shadow:
+    0 0 0 1px var(--ix-edge-lit),
+    var(--ix-shadow-room);
+  outline: none;
+  /* The message box's bleed past the column, for a conversation inside a sheet. */
+  --glass-composer-bleed: 12px;
+}
+
+/* On a phone, and where there is no host to fill, the sheet is the whole screen. */
+.ix-sheet[data-host='window'] {
+  position: fixed;
+  z-index: 55;
+  border-radius: 0;
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+:root[data-reduced-transparency='true'] .ix-sheet,
+:root[data-reduced-transparency='true'] .ix-menu,
+:root[data-reduced-transparency='true'] .ix-switcher,
+:root[data-reduced-transparency='true'] .ix-profile {
+  background: var(--ix-pop-solid);
+}
+
+@keyframes ix-sheet-in {
+  from {
+    opacity: 0;
+    transform: translate3d(24px, 0, 0);
+  }
+}
+
+@keyframes ix-sheet-out {
+  to {
+    opacity: 0;
+    transform: translate3d(24px, 0, 0);
+  }
+}
+
+@keyframes ix-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes ix-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
+/* In 380ms on the spring, out 250ms on the ease (§5.17). */
+.ix-sheet.is-entering {
+  animation: ix-sheet-in 380ms var(--ix-spring) backwards;
+}
+
+.ix-sheet.is-leaving {
+  pointer-events: none;
+  animation: ix-sheet-out 250ms var(--ix-ease) forwards;
+}
+
+:root[data-motion='reduced'] .ix-sheet.is-entering {
+  animation: ix-fade-in 150ms var(--ix-ease) backwards;
+}
+
+/* ---- Header: 58px, the title 17/700 and a line under it (§6.1) --------------------- */
+.ix-sheet__header {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--ix-toolbar-h, 58px);
+  padding: 0 12px 0 20px;
+}
+
+.ix-sheet__heading {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.ix-sheet__title {
+  margin: 0;
+  overflow: hidden;
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ix-ink);
+}
+
+.ix-sheet__sub {
+  margin: 0;
+  overflow: hidden;
+  font-size: 12.5px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ix-ink-3);
+}
+
+.ix-sheet__actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+}
+
+/* A quiet icon button, the toolbar's recipe: 34x34, radius 10, no fill until touched. */
+.ix-sheet__btn {
+  display: grid;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  color: var(--ix-ink-2);
+  background-color: transparent;
+  cursor: pointer;
+  transition: background-color 120ms var(--ix-ease);
+}
+
+.ix-sheet__btn:hover:not(:disabled) {
+  background-color: var(--ix-fill);
+}
+
+.ix-sheet__btn:active:not(:disabled) {
+  background-color: var(--ix-fill-2);
+}
+
+.ix-sheet__btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.ix-sheet__btn:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+/* The chevron glyph points down; the back chevron points left. */
+.ix-sheet__back {
+  margin-left: -10px;
+  margin-right: -2px;
+}
+
+.ix-sheet__back .ix-glyph {
+  transform: rotate(90deg);
+}
+
+/* ---- Body ------------------------------------------------------------------------------ */
+.ix-sheet__body {
+  position: relative;
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.ix-sheet__body[data-body='scroll'] {
+  overflow-y: auto;
+  padding: 0 12px 24px;
+  scrollbar-width: thin;
+}
+
+/* A conversation inside a sheet owns its scroller and its message box. */
+.ix-sheet__body[data-body='fill'] {
+  overflow: hidden;
+}
+
+.ix-sheet[data-host='window'] .ix-sheet__header {
+  min-height: 56px;
+  padding-inline-start: 24px;
+}
+
+.ix-sheet[data-host='window'] .ix-sheet__body[data-body='scroll'] {
+  padding-inline: 12px;
+}
+
+/* ---- Menus (§6.2-6.5, §5.17) -------------------------------------------------------------
+   A popover over the window: near-solid --ix-pop, radius 14, rows 36 (14/500, glyph 16
+   ink-3), hairline separators. In from scale(.97) + fade, 180ms ease; out 120ms. */
+.ix-menu {
+  position: fixed;
+  z-index: 1100;
+  box-sizing: border-box;
+  max-width: calc(100vw - 16px);
+  padding: 6px;
+  overflow-y: auto;
+  border-radius: 14px;
+  color: var(--ix-ink);
+  background: var(--ix-pop);
+  box-shadow:
+    0 0 0 1px var(--ix-edge-lit),
+    var(--ix-shadow-room);
+  outline: none;
+  transform-origin: var(--ix-menu-origin, 0% 0%);
+  scrollbar-width: thin;
+}
+
+@keyframes ix-pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+
+@keyframes ix-pop-out {
+  to {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+
+.ix-menu.is-entering {
+  animation: ix-pop-in 180ms var(--ix-ease) backwards;
+}
+
+.ix-menu.is-leaving {
+  pointer-events: none;
+  animation: ix-pop-out 120ms var(--ix-ease) forwards;
+}
+
+:root[data-motion='reduced'] .ix-menu.is-entering {
+  animation: ix-fade-in 150ms var(--ix-ease) backwards;
+}
+
+.ix-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 10px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  text-align: start;
+  color: var(--ix-ink);
+  background-color: transparent;
+  cursor: pointer;
+  transition: background-color 120ms var(--ix-ease);
+}
+
+.ix-menu__item:hover:not(:disabled) {
+  background-color: var(--ix-fill);
+}
+
+.ix-menu__item:active:not(:disabled) {
+  background-color: var(--ix-fill-2);
+}
+
+.ix-menu__item:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: -2px;
+}
+
+.ix-menu__item:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.ix-menu__item[data-danger] {
+  color: var(--ix-danger-ink);
+}
+
+.ix-menu__item[data-danger]:hover:not(:disabled) {
+  background-color: var(--ix-danger-fill);
+}
+
+.ix-menu__glyph {
+  display: grid;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  color: var(--ix-ink-3);
+}
+
+.ix-menu__item[data-danger] .ix-menu__glyph {
+  color: inherit;
+}
+
+.ix-menu__text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  padding-block: 2px;
+}
+
+.ix-menu__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.3;
+}
+
+.ix-menu__desc {
+  margin-top: 1px;
+  font-size: 12.5px;
+  font-weight: 400;
+  line-height: 1.35;
+  color: var(--ix-ink-3);
+}
+
+.ix-menu__hint {
+  flex: none;
+  font-size: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--ix-ink-3);
+}
+
+.ix-menu__check {
+  display: grid;
+  flex: none;
+  place-items: center;
+  color: var(--ix-ink);
+}
+
+/* The group's caret points right when closed (the "▸" of "Notifications ▸"), down when open. */
+.ix-menu__caret {
+  display: grid;
+  flex: none;
+  place-items: center;
+  color: var(--ix-ink-3);
+  transform: rotate(-90deg);
+  transition: transform 200ms var(--ix-ease);
+}
+
+.ix-menu__caret[data-open] {
+  transform: none;
+}
+
+.ix-menu__sub {
+  display: flex;
+  flex-direction: column;
+}
+
+.ix-menu__item--nested {
+  padding-inline-start: 36px;
+}
+
+.ix-menu__item--nested .ix-menu__glyph {
+  display: none;
+}
+
+.ix-menu__sep {
+  height: 1px;
+  margin: 5px 6px;
+  background: var(--ix-line);
+}
+
+.ix-menu__label-row {
+  padding: 8px 10px 4px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ix-ink-3);
+}
+
+/* ---- The channel sheet's segmented control (§6.5) ----------------------------------------
+   The pages as one control at the sheet's top. It scrolls sideways when the pages are
+   wider than the sheet; a static fade at each edge says so (a mask, not an animation). */
+.ix-sheet__tabs {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  margin-inline: -12px;
+  padding: 2px 12px 10px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  background: linear-gradient(var(--ix-pop-solid) 78%, transparent);
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, var(--ix-ink) 12px, var(--ix-ink) calc(100% - 12px), transparent 100%);
+  mask-image: linear-gradient(90deg, transparent 0, var(--ix-ink) 12px, var(--ix-ink) calc(100% - 12px), transparent 100%);
+}
+
+.ix-sheet__tabs::-webkit-scrollbar {
+  display: none;
+}
+
+/* ---- The account menu (§6.4) -------------------------------------------------------------- */
+.ix-menu__who {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px 10px;
+}
+
+.ix-menu__who-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.ix-menu__who-name {
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ix-ink);
+}
+
+.ix-menu__who-sub {
+  overflow: hidden;
+  font-size: 13px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ix-ink-3);
+}
+
+.ix-menu__custom {
+  display: flex;
+  gap: 6px;
+  padding: 4px 4px 6px;
+}
+
+.ix-menu__field {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 10px;
+  font-size: 14px;
+}
+
+.ix-menu__set {
+  display: grid;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  color: var(--ix-ink-2);
+  background-color: var(--ix-fill-ctl);
+  cursor: pointer;
+  transition: background-color 120ms var(--ix-ease);
+}
+
+.ix-menu__set:hover {
+  background-color: var(--ix-fill-ctl-hover);
+}
+
+.ix-menu__set:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+/* Invisible has no dot on a face; in a row it is a thin hollow ring. */
+.ix-menu__dot {
+  display: block;
+  box-sizing: border-box;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.ix-menu__dot--invisible {
+  box-shadow: inset 0 0 0 1.5px var(--ix-ink-3);
+}
+
+/* ---- Fields (a dialog's, a menu's) --------------------------------------------------------- */
+.ix-field {
+  box-sizing: border-box;
+  width: 100%;
+  height: 44px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 12px;
+  font: inherit;
+  font-size: 14.5px;
+  color: var(--ix-ink);
+  background-color: var(--ix-fill-field);
+  box-shadow: inset 0 0 0 1px var(--ix-edge-lit);
+  outline: none;
+  transition: background-color 120ms var(--ix-ease);
+}
+
+.ix-field::placeholder {
+  color: var(--ix-ink-3);
+}
+
+.ix-field:focus-visible {
+  background-color: var(--ix-fill);
+  box-shadow: inset 0 0 0 1px var(--ix-edge-open);
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+.ix-field--select {
+  color-scheme: dark;
+}
+
+/* ---- Dialogs (§6.12): centered, max 440, radius 20, the card color --------------------------
+   The shared Modal supplies the scrim, the focus trap and Escape; its panel is restyled here
+   until the dialog restyle (IX-17) moves these values into ui/Modal. */
+.ix-dialog-panel {
+  width: min(440px, calc(100vw - 32px));
+  max-width: 440px;
+  border-radius: 20px;
+  color: var(--ix-ink);
+  background: var(--ix-card);
+  box-shadow: var(--ix-shadow-call);
+}
+
+.ix-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 22px 22px 18px;
+}
+
+.ix-dialog__title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+  color: var(--ix-ink);
+}
+
+.ix-dialog__body {
+  margin: -6px 0 0;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--ix-ink-2);
+}
+
+.ix-dialog__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ix-dialog__label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ix-ink-3);
+}
+
+.ix-dialog__error {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.4;
+  color: var(--ix-danger-ink);
+}
+
+.ix-dialog__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.ix-dialog__cancel {
+  height: 36px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 11px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ix-ink-2);
+  background: transparent;
+  cursor: pointer;
+  transition: background-color 120ms var(--ix-ease);
+}
+
+.ix-dialog__cancel:hover {
+  background-color: var(--ix-fill);
+}
+
+.ix-dialog__cancel:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+/* ---- Help: keyboard shortcuts (§6.4) -------------------------------------------------------- */
+.ix-help__scroll {
+  max-height: min(72dvh, 590px);
+  margin: -4px -10px 0;
+  padding: 0 10px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.ix-help__label {
+  margin: 0;
+  padding: 14px 10px 4px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ix-ink-3);
+}
+
+.ix-help__group:first-child .ix-help__label {
+  padding-top: 6px;
+}
+
+.ix-help__list {
+  display: grid;
+  gap: 1px;
+  margin: 0;
+}
+
+.ix-help__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 34px;
+  padding: 0 10px;
+  border-radius: 10px;
+}
+
+.ix-help__row:hover {
+  background-color: var(--ix-wash-hover);
+}
+
+.ix-help__name {
+  margin: 0;
+  font-size: 14px;
+  color: var(--ix-ink-2);
+}
+
+.ix-help__keys {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+}
+
+/* ---- The quick switcher (§4.2, §6.3) ---------------------------------------------------------
+   A panel 420 wide, radius 16, near-solid, over the sidebar's top where the search field is.
+   No scrim: the conversation stays as it is; a click outside closes it. */
+.ix-switcher-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+}
+
+.ix-switcher-scrim.is-leaving {
+  pointer-events: none;
+}
+
+.ix-switcher {
+  position: fixed;
+  z-index: 1001;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  width: min(420px, calc(100vw - 16px));
+  max-height: calc(100dvh - 24px);
+  overflow: hidden;
+  border-radius: 16px;
+  color: var(--ix-ink);
+  background: var(--ix-pop);
+  box-shadow:
+    0 0 0 1px var(--ix-edge-lit),
+    var(--ix-shadow-room);
+  outline: none;
+  transform-origin: 0% 0%;
+}
+
+.ix-switcher.is-entering {
+  animation: ix-pop-in 180ms var(--ix-ease) backwards;
+}
+
+.ix-switcher.is-leaving {
+  pointer-events: none;
+  animation: ix-pop-out 120ms var(--ix-ease) forwards;
+}
+
+:root[data-motion='reduced'] .ix-switcher.is-entering {
+  animation: ix-fade-in 150ms var(--ix-ease) backwards;
+}
+
+/* A phone gets the whole screen (§9). */
+.ix-switcher[data-layout='phone'] {
+  inset: 0;
+  width: auto;
+  max-height: none;
+  border-radius: 0;
+  padding-top: env(safe-area-inset-top);
+}
+
+.ix-switcher__field {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  height: 48px;
+  padding: 0 12px 0 14px;
+  color: var(--ix-ink-3);
+  border-bottom: 1px solid var(--ix-line);
+}
+
+.ix-switcher__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  font: inherit;
+  font-size: 15px;
+  color: var(--ix-ink);
+  background: transparent;
+  outline: none;
+}
+
+.ix-switcher__input::placeholder {
+  color: var(--ix-ink-3);
+}
+
+.ix-switcher__list {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: 420px;
+  padding: 6px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.ix-switcher[data-layout='phone'] .ix-switcher__list {
+  max-height: none;
+}
+
+.ix-switcher__label-row {
+  padding: 10px 10px 4px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ix-ink-3);
+}
+
+.ix-switcher__group:first-child .ix-switcher__label-row {
+  padding-top: 4px;
+}
+
+.ix-switcher__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 40px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 10px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  text-align: start;
+  color: var(--ix-ink-2);
+  background-color: transparent;
+  cursor: pointer;
+  transition: background-color 120ms var(--ix-ease);
+}
+
+.ix-switcher__row[aria-selected='true'] {
+  color: var(--ix-ink);
+  background-color: var(--ix-fill-2);
+}
+
+.ix-switcher__icon {
+  display: grid;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  color: var(--ix-ink-3);
+}
+
+.ix-switcher__row[aria-selected='true'] .ix-switcher__icon {
+  color: var(--ix-ink-2);
+}
+
+.ix-switcher__label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ix-switcher__sub {
+  flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  font-size: 12.5px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ix-ink-3);
+}
+
+.ix-switcher__foot {
+  flex: none;
+  padding: 6px;
+  border-top: 1px solid var(--ix-line);
+}
+
+.ix-switcher__none {
+  padding: 22px 12px 18px;
+}
+
+.ix-switcher__none-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ix-ink);
+}
+
+.ix-switcher__none p {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--ix-ink-3);
+}
+
+/* ---- The profile card (§6.9) ------------------------------------------------------------------
+   A popover 340 wide, radius 20, near-solid: the banner when there is one (96 tall), the avatar
+   76 overlapping it with a 4px ring in the card's color, the name 20/700, the username and
+   pronouns 13 ink-3, then what they are doing, About, roles as fill chips, mutual servers as 24px
+   marks, and the actions: Message (cream), Call, "...". Key verification stays on it. */
+.ix-profile-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 1050;
+}
+
+.ix-profile {
+  position: fixed;
+  z-index: 1051;
+  box-sizing: border-box;
+  width: min(340px, calc(100vw - 16px));
+  overflow-x: hidden;
+  overflow-y: auto;
+  border-radius: 20px;
+  color: var(--ix-ink);
+  background: var(--ix-pop);
+  box-shadow: var(--ix-shadow-call);
+  scrollbar-width: thin;
+  transform-origin: var(--ix-profile-origin, 0% 0%);
+}
+
+.ix-profile.is-entering {
+  animation: ix-pop-in 180ms var(--ix-ease) backwards;
+}
+
+.ix-profile.is-leaving {
+  pointer-events: none;
+  animation: ix-pop-out 120ms var(--ix-ease) forwards;
+}
+
+:root[data-motion='reduced'] .ix-profile.is-entering {
+  animation: ix-fade-in 150ms var(--ix-ease) backwards;
+}
+
+.ix-profile__banner {
+  position: relative;
+  height: 96px;
+  overflow: hidden;
+  background: var(--ix-fill-2);
+}
+
+.ix-profile__banner-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.ix-profile__head {
+  position: relative;
+  padding: 20px 20px 14px;
+}
+
+.ix-profile__head[data-banner] {
+  padding-top: 0;
+}
+
+.ix-profile__avatar {
+  position: relative;
+  display: block;
+  width: 76px;
+  height: 76px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 4px var(--ix-pop-solid);
+}
+
+.ix-profile__head[data-banner] .ix-profile__avatar {
+  margin-top: -38px;
+}
+
+.ix-profile__name-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  margin-top: 12px;
+}
+
+.ix-profile__name {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  color: var(--ix-ink);
+}
+
+.ix-profile__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 7px;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--ix-ink-2);
+  background-color: var(--ix-fill-ctl);
+}
+
+.ix-profile__sub {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 6px;
+  margin-top: 3px;
+  font-size: 13px;
+  color: var(--ix-ink-3);
+}
+
+.ix-profile__status {
+  margin-top: 8px;
+  font-size: 13.5px;
+  line-height: 1.4;
+  color: var(--ix-ink-2);
+}
+
+.ix-profile__section {
+  padding: 0 20px 14px;
+}
+
+.ix-profile__label {
+  margin-bottom: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ix-ink-3);
+}
+
+.ix-profile__about,
+.ix-profile__identity {
+  padding: 10px 12px;
+  border-radius: 12px;
+  font-size: 14px;
+  line-height: 1.42;
+  color: var(--ix-ink-2);
+  background-color: var(--ix-fill-card);
+  box-shadow: inset 0 0 0 1px var(--ix-edge-lit);
+}
+
+.ix-profile__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ix-profile__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ix-ink);
+  background-color: var(--ix-fill-ctl);
+}
+
+.ix-profile__role-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.ix-profile__marks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.ix-profile__mark {
+  display: grid;
+}
+
+.ix-profile__more {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ix-ink-3);
+}
+
+.ix-profile__links {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ix-profile__link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  font-size: 13px;
+  text-decoration: none;
+  color: var(--ix-ink-2);
+  transition: background-color 120ms var(--ix-ease);
+}
+
+.ix-profile__link:hover {
+  background-color: var(--ix-wash-hover);
+  color: var(--ix-ink);
+}
+
+.ix-profile__link:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+.ix-profile__trust {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ix-ink);
+}
+
+.ix-profile__trust-dim {
+  color: var(--ix-ink-2);
+  font-weight: 500;
+}
+
+.ix-profile__verify {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  margin-inline-start: auto;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ix-ink);
+  background-color: var(--ix-fill-ctl);
+  cursor: pointer;
+  transition: background-color 120ms var(--ix-ease);
+}
+
+.ix-profile__verify:hover {
+  background-color: var(--ix-fill-ctl-hover);
+}
+
+.ix-profile__verify:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+.ix-profile__verify--block {
+  margin-top: 8px;
+  margin-inline-start: 0;
+}
+
+.ix-profile__fingerprint {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  font-family: var(--font-code);
+  font-size: 11.5px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  color: var(--ix-ink-2);
+  background-color: var(--ix-fill);
+}
+
+.ix-profile__warn {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  color: var(--ix-danger-ink);
+  background-color: var(--ix-danger-fill);
+}
+
+.ix-profile__since {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ix-ink-2);
+}
+
+.ix-profile__note {
+  height: 38px;
+  font-size: 13.5px;
+}
+
+.ix-profile__actions {
+  display: flex;
+  gap: 6px;
+  padding: 2px 20px 20px;
+}
+
+.ix-profile__error {
+  padding: 0 20px 18px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ix-danger-ink);
+}

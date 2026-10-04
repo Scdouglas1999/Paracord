@@ -20,6 +20,7 @@ import { useGlassStore } from '../../../stores/glassStore';
 import { useMemberStore } from '../../../stores/memberStore';
 import { useReadStateStore } from '../../../stores/readStateStore';
 import { useServerListStore } from '../../../stores/serverListStore';
+import { useMenuHostStore } from '../../ix/menus/hostStore';
 import { PlacesPanel } from './PlacesPanel';
 import { resetUnreadCounts } from './useUnreadMessageCounts';
 
@@ -264,6 +265,7 @@ beforeEach(() => {
   unreadRequest.mockResolvedValue({ data: [{ id: '1', author: { id: 'them' } }, { id: '2', author: { id: 'them' } }, { id: '3', author: { id: 'them' } }] });
   seedStores();
   useGlassStore.getState().reset();
+  useMenuHostStore.getState().reset();
   messageStore.current = createStore(() => ({ messages: {}, deletedMessageIds: new Set<string>() }));
   previews.value = {
     status: 'ready',
@@ -492,15 +494,17 @@ describe('PlacesPanel: a server', () => {
     expect(screen.getByTestId('create-guild-modal')).toBeInTheDocument();
   });
 
-  it('opens the server menu from the title', async () => {
+  it('opens the server menu from the title', () => {
     renderPanel();
     fireEvent.click(screen.getByRole('button', { name: /^Game Night menu/ }));
-    const menu = await screen.findByRole('menu');
-    expect(within(menu).getByText('Overview')).toBeInTheDocument();
-    expect(within(menu).getByText('Mute server')).toBeInTheDocument();
-    expect(within(menu).getByText('Mark as read')).toBeInTheDocument();
-    // You own this server, so there is no Leave.
-    expect(within(menu).queryByText('Leave server')).toBeNull();
+    // The menu itself is the Index server menu, rendered once by the sheet slot's
+    // menu host (components/ix/menus); the panel only asks for it, at the title.
+    const open = useMenuHostStore.getState().menu;
+    expect(open?.kind).toBe('server');
+    if (open?.kind === 'server') {
+      expect(open.server).toMatchObject({ name: 'Game Night' });
+      expect('element' in open.anchor).toBe(true);
+    }
   });
 
   it('says so when the server is not one of yours, and keeps the row as a way out', () => {

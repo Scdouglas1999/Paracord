@@ -6,24 +6,24 @@ import { useGlassStore, type GlassSheet } from '../../../stores/glassStore';
 import { useUIStore } from '../../../stores/uiStore';
 import { SearchOverlay } from '../../layout/overlays/SearchOverlay';
 import type { SheetsProps } from '../shell/slots';
-import { AccountMenu } from './AccountMenu';
 import { ChannelSheet } from './ChannelSheet';
 import { PeopleSheet } from './PeopleSheet';
 import { RemindersSheet } from './RemindersSheet';
 import { closeSheets, openForContextMode, restoreSheetTrigger, useSheetPages } from './sheetStore';
 
 /**
- * The sheets slot (docs/glass-spec.md §3, §5; docs/design/glass-g7-checkpoint.md;
- * WP-G18). `GlassFrame` mounts it after the conversation pane, and it renders
- * whichever sheet `glassStore.sheet` names as a solid page over that pane:
+ * The sheets (docs/index-spec.md §6.1; WP IX-9; formerly glass-spec §3, §5, WP-G18).
+ * `SheetSlot` (components/ix/sheets) mounts it inside main, and it renders
+ * whichever sheet `glassStore.sheet` names in the sheet host on main's right:
  *
  *   search    the message search
  *   people    a server's members, a group's recipients, or the two of a message
- *   channel   pins, threads (a thread is pushed over the list), media, the
- *             leaderboard and this channel's notifications
- *   account   the account menu, a popover under your face; its Reminders row
- *             opens the reminders sheet
- *   server    (the server menu keeps its own popover and dialogs)
+ *   channel   catch up, pins, threads (a thread is pushed over the list), media,
+ *             follows, the leaderboard and this channel's notifications, with a
+ *             segmented control at the top to move between them
+ *   account   the account menu is a popover (components/ix/menus, mounted by
+ *             `MenuHost`); its Reminders row opens the reminders sheet
+ *   server    (the server menu is a popover of its own)
  *
  * Headers, the channel menu, the server menu and the command palette ask for a
  * sheet through `glassStore.openSheet` (or `sheetStore`'s helpers, for a page).
@@ -32,8 +32,8 @@ import { closeSheets, openForContextMode, restoreSheetTrigger, useSheetPages } f
  *
  * Only one sheet is open at a time. Escape closes it, focus goes into it and
  * comes back to what opened it, and it closes when you move to another
- * conversation (the pane under it changes, so a sheet left over it would hide
- * that). On a phone the sheet is the whole screen.
+ * conversation (the page under it changes, so a sheet left over it would stay
+ * about the old one). On a phone the sheet is the whole screen.
  */
 
 type Shown = 'search' | 'people' | 'channel' | 'reminders' | null;
@@ -133,7 +133,6 @@ export function Sheets({ guildId, channelId, layout }: SheetsProps) {
         <ChannelSheet open={active === 'channel'} onClose={close} guildId={guildId} channelId={channelId} />
       )}
       {shown === 'reminders' && <RemindersSheet open={active === 'reminders'} onClose={close} />}
-      <AccountMenu open={sheet === 'account' && accountPage === null} />
     </>
   );
 }

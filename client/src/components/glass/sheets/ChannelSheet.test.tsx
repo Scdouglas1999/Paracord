@@ -171,6 +171,27 @@ describe('the pages a channel has', () => {
     expect(useGlassStore.getState().sheet).toBe('channel');
   });
 
+  it('is a segmented control: one tab stop, arrow keys move and select, the page is its tabpanel', async () => {
+    const user = userEvent.setup();
+    openChannelSheet('pins');
+    renderSheet();
+    const list = screen.getByRole('tablist', { name: 'Channel pages' });
+    expect(list.parentElement).toHaveClass('ix-sheet__tabs');
+    // One stop in the control: the selected tab; the rest are reached with the arrows.
+    const stops = screen.getAllByRole('tab').filter((tab) => tab.getAttribute('tabindex') === '0');
+    expect(stops.map((tab) => tab.textContent)).toEqual(['Pins']);
+    screen.getByRole('tab', { name: 'Pins' }).focus();
+    await user.keyboard('{ArrowRight}');
+    expect(screen.getByRole('tab', { name: 'Threads' })).toHaveAttribute('aria-selected', 'true');
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'Threads' })).toHaveFocus());
+    await user.keyboard('{ArrowLeft}{ArrowLeft}');
+    expect(screen.getByRole('tab', { name: 'Catch up' })).toHaveAttribute('aria-selected', 'true');
+    // It wraps, and the page under it is the tab's panel.
+    await user.keyboard('{ArrowLeft}');
+    expect(screen.getByRole('tab', { name: 'Notifications' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', 'channel-sheet-tab-notifications');
+  });
+
   it('falls back to a page it has when it is asked for one the channel does not (follows on a text channel)', () => {
     openChannelSheet('follows');
     renderSheet();

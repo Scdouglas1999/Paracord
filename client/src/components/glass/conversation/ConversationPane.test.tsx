@@ -247,19 +247,22 @@ describe('the header of a channel', () => {
     await user.click(title);
     const menu = screen.getByRole('menu', { name: 'Channel actions' });
     const rows = within(menu).getAllByRole('menuitem');
-    expect(rows).toHaveLength(8);
+    // The Index channel menu (index-spec §6.5): pages, then Copy link. Inbox and
+    // the shortcuts moved out (People's page, the account menu).
+    expect(rows).toHaveLength(7);
     for (const name of [
       /^Catch up summary/,
       /^Pinned messages/,
       /^Threads/,
       /^Media/,
-      /^Server leaderboard/,
+      /^Leaderboard/,
       /^Notifications/,
-      /^Inbox/,
-      /^Keyboard shortcuts/,
+      /^Copy link/,
     ]) {
       expect(within(menu).getByRole('menuitem', { name })).toBeInTheDocument();
     }
+    expect(within(menu).queryByRole('menuitem', { name: /^Inbox/ })).not.toBeInTheDocument();
+    expect(within(menu).queryByRole('menuitem', { name: /^Keyboard shortcuts/ })).not.toBeInTheDocument();
     // Search and people have buttons of their own; they are not menu rows.
     expect(within(menu).queryByRole('menuitem', { name: /Search/ })).not.toBeInTheDocument();
   });
@@ -290,7 +293,7 @@ describe('the header of a channel', () => {
     const user = userEvent.setup();
     renderPane({ ...CHANNEL, channelId: 'ann', channelName: 'Announcements' });
     await user.click(screen.getByRole('button', { name: 'Announcements' }));
-    expect(screen.getByRole('menuitem', { name: 'Manage follows' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Follows' })).toBeInTheDocument();
   });
 
   it('explains why a catch-up summary is unavailable instead of hiding it', async () => {
@@ -458,51 +461,29 @@ describe('the phone header (screens/07)', () => {
   });
 });
 
-describe('the inbox, from the channel menu', () => {
-  async function openInbox() {
-    const user = userEvent.setup();
-    renderPane();
-    await user.click(screen.getByRole('button', { name: 'General' }));
-    await user.click(screen.getByRole('menuitem', { name: /^Inbox/ }));
-  }
-
+describe('what is unread elsewhere', () => {
   it('says what is waiting elsewhere in the row, in the singular and the plural', () => {
     expect(attentionCaption(1, 0)).toBe('1 unread conversation');
     expect(attentionCaption(1, 1)).toBe('1 mention in 1 unread conversation');
     expect(attentionCaption(4, 3)).toBe('3 mentions in 4 unread conversations');
     expect(attentionCaption(0, 0)).toBe('No unread conversations');
   });
-
-  it('lists the unread conversations elsewhere, never the one you are reading', async () => {
-    await openInbox();
-    const inbox = await screen.findByRole('dialog', { name: 'Inbox' });
-    // The rows name a channel without the `#`.
-    expect(await within(inbox).findByText('Clips')).toBeInTheDocument();
-    expect(within(inbox).queryByText('General')).not.toBeInTheDocument();
-  });
-
-  it('says so in an alert when the unread state cannot load, instead of pretending all is read', async () => {
-    mockRefreshReadStates.value.mockRejectedValue(new Error('Read-state service unavailable.'));
-    await openInbox();
-    expect(await screen.findByRole('alert')).toHaveTextContent('Failed to load inbox: Read-state service unavailable.');
-    expect(screen.queryByText("You're all caught up")).not.toBeInTheDocument();
-  });
 });
 
-describe('server settings, from the channel menu', () => {
+describe('Edit channel, from the channel menu', () => {
   it('is not offered without management permissions', async () => {
     const user = userEvent.setup();
     renderPane();
     await user.click(screen.getByRole('button', { name: 'General' }));
-    expect(screen.queryByRole('menuitem', { name: 'Server settings' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Edit channel' })).not.toBeInTheDocument();
   });
 
-  it('is offered to a server admin, and opens the settings of that server', async () => {
+  it('is offered to a server admin, and opens the settings of that server on its channels', async () => {
     const user = userEvent.setup();
     mockPermissions.value = { permissions: 0n, isAdmin: true };
     renderPane();
     await user.click(screen.getByRole('button', { name: 'General' }));
-    await user.click(screen.getByRole('menuitem', { name: /^Server settings/ }));
+    await user.click(screen.getByRole('menuitem', { name: /^Edit channel/ }));
     expect(useUIStore.getState().guildSettingsId).toBe('g1');
   });
 
@@ -511,7 +492,7 @@ describe('server settings, from the channel menu', () => {
     mockPermissions.value = { permissions: 0n, isAdmin: true };
     renderPane(DM);
     await user.click(screen.getByRole('button', { name: 'Mara' }));
-    expect(screen.queryByRole('menuitem', { name: 'Server settings' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Edit channel' })).not.toBeInTheDocument();
   });
 });
 
