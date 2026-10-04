@@ -15,7 +15,7 @@ import { CAST, CH, GAME_NIGHT_ID } from './fixtures/glass/scene';
  *      controls stay one press away, clear of the title and the close button.
  *   2. The camera crop anchor: a portrait camera in a wide tile keeps its faces (the real
  *      CanvasRenderer, the options the stage really passes).
- *   3. Reactions for screen readers: a polite live region, at most one line every two seconds.
+ *   3. (Reactions for screen readers: retired with the stream reactions overlay in 1bc00a09.)
  *   4. One Watch button in an expanded pill, not two with one name.
  *   5. A window resized across 768px keeps its open dialogs and sheets.
  *   6. The call with no cameras on.
@@ -229,57 +229,6 @@ test('an expanded pill has one Watch button for a screen reader, and the preview
   // The mouse still gets the big target.
   await pill.locator('.glass-pill__preview').click();
   await expect(stagePane(page)).toBeVisible();
-});
-
-/* ================================================================== 3. Reactions for screen readers */
-
-test('reactions are announced politely, once every two seconds, never your own', async ({ page }) => {
-  await open(page, 'desktop', general);
-  await fakeLoungeMedia(page, { mode: 'joined' });
-  await page.getByRole('main').getByRole('button', { name: "Watch Vincent's screen" }).click();
-  const stage = stagePane(page);
-  await expect(stage).toBeVisible();
-  const live = stage.getByTestId('stream-reactions-live');
-  await expect(live).toHaveAttribute('aria-live', 'polite');
-  await expect(live).toHaveText('');
-
-  const react = (who: string, name: string, kind = 'flame', count = 1) =>
-    page.evaluate(
-      async ({ who: userId, name: display, kind: k, count: n, ids }) => {
-        const store = (await import('/src/stores/streamReactionStore.ts' as string)) as any;
-        const list = (await import('/src/stores/serverListStore.ts' as string)) as any;
-        const scopeModule = (await import('/src/lib/serverScope.ts' as string)) as any;
-        const serverId = list.useServerListStore.getState().activeServerId ?? scopeModule.LOCAL_SERVER_ID;
-        store.useStreamReactionStore.getState().receive(serverId, {
-          guild_id: ids.guild,
-          channel_id: ids.lounge,
-          reactions: [{ user_id: userId, stream_user_id: ids.vincent, kind: k, count: n, nonce: null, username: display.toLowerCase(), display_name: display, avatar_hash: null }],
-        });
-      },
-      { who, name, kind, count, ids: { guild: GAME_NIGHT_ID, lounge: CH.lounge, vincent: CAST.vincent.id } },
-    );
-
-  await react(CAST.brendan.id, 'Brendan');
-  await expect(live).toHaveText('Brendan reacted with a flame');
-  // A burst inside the interval is held, then said once.
-  await react(CAST.nick.id, 'Nick', 'heart');
-  await react(CAST.luke.id, 'Luke');
-  await react(CAST.jeremy.id, 'Jeremy', 'heart');
-  await page.waitForTimeout(600);
-  await expect(live).toHaveText('Brendan reacted with a flame');
-  await expect(live).toHaveText('3 reactions', { timeout: 3000 });
-  // Your own is never said.
-  await page.evaluate(async ({ ids }) => {
-    const store = (await import('/src/stores/streamReactionStore.ts' as string)) as any;
-    const list = (await import('/src/stores/serverListStore.ts' as string)) as any;
-    const scopeModule = (await import('/src/lib/serverScope.ts' as string)) as any;
-    const serverId = list.useServerListStore.getState().activeServerId ?? scopeModule.LOCAL_SERVER_ID;
-    const before = store.useStreamReactionStore.getState().bubbles.length;
-    store.useStreamReactionStore.getState().send({ serverId, channelId: ids.lounge, streamerId: ids.vincent }, 'flame');
-    return before;
-  }, { ids: { lounge: CH.lounge, vincent: CAST.vincent.id } });
-  await page.waitForTimeout(2600);
-  await expect(live).not.toContainText('Sean');
 });
 
 /* ================================================================== 2. The camera crop anchor */

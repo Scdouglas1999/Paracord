@@ -712,39 +712,6 @@ test('theater on a phone, not joined', async ({ page }) => {
   await shoot(page, 'phone-theater-not-joined');
 });
 
-test('a reaction rises about 90px on the card, not the stage\'s 270', async ({ page }) => {
-  await open(page);
-  await fakeMedia(page, { joined: true, watchers: 2 });
-  await watchFromPill(page);
-  await page.evaluate(async (ids) => {
-    const reactions = (await import('/src/stores/streamReactionStore.ts' as string)) as any;
-    const list = (await import('/src/stores/serverListStore.ts' as string)) as any;
-    const scopeModule = (await import('/src/lib/serverScope.ts' as string)) as any;
-    const serverId = list.useServerListStore.getState().activeServerId ?? scopeModule.LOCAL_SERVER_ID;
-    reactions.useStreamReactionStore.getState().receive(serverId, {
-      guild_id: ids.guild,
-      channel_id: ids.lounge,
-      reactions: [
-        { user_id: ids.brendan, stream_user_id: ids.vincent, kind: 'flame', count: 1, nonce: null, username: 'brendan', display_name: 'Brendan', avatar_hash: null },
-      ],
-    });
-  }, IDS);
-  await page.waitForTimeout(700);
-  const bubble = page.locator('.glass-stage[data-layout="phone"] .glass-reactions__bubble');
-  await expect(bubble.first()).toBeAttached();
-  const name = await bubble.first().evaluate((el) => getComputedStyle(el).animationName);
-  expect(name).toBe('glass-phone-reaction-rise');
-  // It rises about 90px (the keyframes say -90px at the end), not the stage's 270.
-  const rise = await page.evaluate(() => {
-    const frames = Array.from(document.styleSheets)
-      .flatMap((sheet) => { try { return Array.from(sheet.cssRules); } catch { return []; } })
-      .find((rule) => rule instanceof CSSKeyframesRule && rule.name === 'glass-phone-reaction-rise') as CSSKeyframesRule | undefined;
-    return frames ? (frames.cssRules[frames.cssRules.length - 1] as CSSKeyframeRule).style.transform : null;
-  });
-  expect(rise).toContain('-90px');
-  await shoot(page, 'phone-reaction');
-});
-
 for (const [name, size] of [
   ['430', { width: 430, height: 932 }],
   ['360', { width: 360, height: 780 }],
