@@ -15,6 +15,7 @@ export interface RecordedAnimation {
   animation: Animation;
   canceled: boolean;
   finished: boolean;
+  paused?: boolean;
 }
 
 export interface WaapiStub {
@@ -54,12 +55,20 @@ export function installWaapiStub(): WaapiStub {
       currentTime: 0,
       effect: {
         getComputedTiming: () => ({ duration: timing.duration ?? 0 }),
+        // Retargeting an animation in flight (the send flight re-aims at its row).
+        setKeyframes(next: Keyframe[]) {
+          record.keyframes = next;
+        },
       },
       finished: finishedPromise,
       finish() {
         record.finished = true;
         animation.playState = 'finished';
         settle();
+      },
+      pause() {
+        record.paused = true;
+        animation.playState = 'paused';
       },
       cancel() {
         record.canceled = true;

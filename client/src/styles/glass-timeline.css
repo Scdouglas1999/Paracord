@@ -748,3 +748,80 @@ button.glass-msg__name:hover {
   color: var(--ink-3);
   text-align: right;
 }
+
+/* ---- The send flight (docs/glass-spec.md §9) ----------------------------------
+   A message floating out of the message box into the conversation. The ghost
+   (`lib/motion/sendFlight.ts`) is a bubble the engine owns in the fixed ghost
+   layer; the row it lands on is a real row of the timeline, held out of sight
+   until the ghost arrives (`data-flight='air'`) and inert while the server has
+   not yet answered for it (`data-flight='held'`, visible: it is already where
+   the delivered row will be, so the swap never moves). Transform, opacity and
+   the words' color are all that animate, and only on the ghost. */
+.glass-msg[data-flight] {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.glass-msg[data-flight='held'] {
+  visibility: visible;
+}
+
+/* "Delivered" has its line reserved while the message is still on its way, so
+   the bubble's landing mark never moves when the server answers. */
+.glass-tl-receipt[data-flight-hold] {
+  visibility: hidden;
+}
+
+.glass-flight {
+  position: fixed;
+  margin: 0;
+  pointer-events: none;
+  will-change: transform;
+}
+
+.glass-flight__body {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  will-change: transform;
+}
+
+.glass-flight__shadow,
+.glass-flight__fill {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+}
+
+/* Airborne only: its own layer, so the shadow is a still picture whose opacity
+   comes up and goes again, never an animated box-shadow. */
+.glass-flight__shadow {
+  box-shadow: var(--sh-flight);
+}
+
+/* The bubble itself, exactly as the delivered row will wear it. */
+.glass-flight__fill {
+  background-color: var(--own-bub);
+  box-shadow: var(--sh-content);
+}
+
+.glass-flight__words {
+  position: absolute;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* A reply's chip, as a picture inside the flying bubble: the inks of an own
+   bubble without its fill, padding or corners (the ghost's fill is its own layer). */
+.glass-flight__chip.glass-msg {
+  position: absolute;
+  display: block;
+  padding: 0;
+}
+
+.glass-flight__chip.glass-msg[data-own] .glass-bubble {
+  padding: 0;
+  background-color: transparent;
+  box-shadow: none;
+}

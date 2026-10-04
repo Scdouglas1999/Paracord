@@ -9,7 +9,7 @@ import { Fragment, useState, useRef, useEffect, useLayoutEffect, useMemo, useCal
 
 // §5.3: one reduced-motion switch for the whole app — lib/motion is the only
 // JavaScript motion engine; the composer's enter/exit surfaces are CSS.
-import { emitMotion, liftOut, useLingering, useReducedMotion } from '../../lib/motion';
+import { emitMotion, fadeIn, ms, pressComposer, readSendOrigin, releaseSend, useLingering, useReducedMotion } from '../../lib/motion';
 import { ArrowUp, BarChart3, Clock3, CornerUpLeft, EyeOff, FileText, Image, Loader2, MinusCircle, Plus, PlusCircle, Smile, Type, X } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { Input, Select } from '../ui/Input';
@@ -17,7 +17,7 @@ import { Button } from '../ui/Button';
 import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu';
 import { useCurrentMessageStoreApi } from '../../hooks/useMessageStore';
 import { useMessageDraft } from '../../hooks/useMessageDraft';
-import { MessagingQueuePanel } from './MessagingQueuePanel';
+import { MessagingQueuePanel, isQuietlyInFlight } from './MessagingQueuePanel';
 import { MessagingRecoveryNotice } from './MessagingRecoveryNotice';
 import { useMemberStore } from '../../stores/memberStore';
 import { useFileUpload } from '../../hooks/useFileUpload';
@@ -401,12 +401,15 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
   const fileInputRef = useRef<HTMLInputElement>(null);
   const composerShellRef = useRef<HTMLDivElement>(null);
   const sendingRef = useRef(false);
-  /* §5.1 "a message has mass" — see `beginSay` below. The lifting words are a
-     DOM node the engine owns, not React state: the send frame is the one frame
-     in this moment that must not be spent re-rendering a 1,600-line composer,
-     and the ghost has nothing to do with the draft anyway. */
-  const liftNode = useRef<HTMLSpanElement | null>(null);
-  const liftTimer = useRef<number | null>(null);
+  /* §5.1 "a message has mass" — see `beginSay` below. The words that fly are a
+     ghost the motion engine owns, not React state: the send frame is the one
+     frame in this moment that must not be spent re-rendering a 1,600-line
+     composer, and the ghost has nothing to do with the draft anyway. */
+  const sendButtonRef = useRef<HTMLButtonElement>(null);
+  const wordsTimer = useRef<number | null>(null);
+  const sayCount = useRef(0);
+  /** Sends the outbox has accepted and the timeline has not yet shown: nonce → the words and when. */
+  const unanswered = useRef(new Map<string, { text: string; at: number }>());
   const { upload, uploading, maxUploadSize } = useFileUpload(channelId);
   const { triggerTyping, stopTyping } = useTyping(channelId);
   const reduceMotion = useReducedMotion();
@@ -638,59 +641,58 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
     setCreatingPoll(false);
   };
 
+  /** The words are gone (the draft cleared) or they are coming back (it failed). */
+  const bringWordsBack = () => {
+    if (wordsTimer.current) window.clearTimeout(wordsTimer.current);
+    wordsTimer.current = null;
+    const textarea = textareaRef.current;
+    if (!textarea || textarea.style.opacity !== '0') return;
+    textarea.style.opacity = '';
+    // A draft that stays (the send failed) is as tall as it was.
+    resizeDraft();
+    fadeIn(textarea, { duration: ms('--duration-normal') });
+  };
+  const endSay = bringWordsBack;
+
   /**
-   * "Say something" — §5.1 "a message has mass".
+   * "Say something" — §5.1 "a message has mass", the send flight
+   * (docs/glass-spec.md §9).
    *
-   * The typed words lift out of the composer along the path they land in the
-   * timeline. `MessageList` picks the gesture
-   * up from the bus and lands the row that arrives from it, so the words
-   * leaving and the row arriving read as one object moving.
+   * The typed words fly out of the composer to where the message lands in the
+   * timeline: `MessageList` hears about it on the motion bus, keeps a stand-in
+   * row for it, and sends a bubble from where the words sit (`origin`) to that
+   * row, so the words leaving and the row arriving are one object moving. Here
+   * is the composer's half: the words hide behind the bubble and the box closes
+   * up around the empty line, the capsule gives one small press, and the send
+   * control releases once.
    *
    * It runs on the SAME frame as the keystroke, before any await: §5.3's
-   * "motion never delays input" is the reason this is not inside the send.
+   * "motion never delays input" is the reason this is not inside the send. The
+   * draft is never touched, so a failed send restores it by doing nothing.
+   *
+   * Under reduced motion there is nothing to fly: §5.1's reduced form is "the
+   * text clears, the row appears" — so `origin` is null, the draft simply stays
+   * put until the server answers and clears it, and no bubble is ever made.
    */
-  const beginSay = (text: string) => {
-    const shell = composerShellRef.current;
+  const beginSay = (text: string): string => {
     const textarea = textareaRef.current;
-    // Under reduced motion there is nothing to lift: §5.1's reduced form is
-    // "the text clears, the row appears" — so the draft simply stays put until
-    // the server answers and clears it, and no ghost is ever made.
-    if (shell && textarea && !reduceMotion) {
-      liftNode.current?.remove();
-      const shellBox = shell.getBoundingClientRect();
-      const textBox = textarea.getBoundingClientRect();
-      const ghost = document.createElement('span');
-      ghost.setAttribute('aria-hidden', 'true');
-      ghost.className = 'glass-composer__ghost';
-      ghost.textContent = text;
-      ghost.style.left = `${textBox.left - shellBox.left}px`;
-      ghost.style.top = `${textBox.top - shellBox.top}px`;
-      ghost.style.width = `${textBox.width}px`;
-      shell.append(ghost);
-      liftNode.current = ghost;
-      const lifting = liftOut(ghost);
-      const drop = () => {
-        ghost.remove();
-        if (liftNode.current === ghost) liftNode.current = null;
-      };
-      if (lifting) lifting.finished.then(drop, drop);
-      else drop();
-      // The real words hide behind the ghost. Visibility only: the draft is
-      // never touched, so a failed send restores it by doing nothing.
+    const nonce = `${channelId}:${Date.now()}:${(sayCount.current += 1)}`;
+    const origin = !reduceMotion && composerShellRef.current ? readSendOrigin(textarea) : null;
+    emitMotion('say:sent', { channelId, nonce, text, replyToId: replyingTo?.id ?? null, origin });
+    if (origin && textarea) {
+      // The real words hide behind the bubble. Visibility only: the draft is
+      // never touched. The box closes up around the empty line, in the same
+      // frame the timeline makes room, so the two glide as one.
       textarea.style.opacity = '0';
-      if (liftTimer.current) window.clearTimeout(liftTimer.current);
+      textarea.style.height = 'auto';
+      pressComposer(composerShellRef.current);
+      releaseSend(sendButtonRef.current);
+      if (wordsTimer.current) window.clearTimeout(wordsTimer.current);
       // A send that neither resolves nor rejects must not leave the draft
       // invisible; the words come back on their own.
-      liftTimer.current = window.setTimeout(() => { textarea.style.opacity = ''; }, 4000);
+      wordsTimer.current = window.setTimeout(() => { bringWordsBack(); }, 4000);
     }
-    emitMotion('say:sent', { channelId, nonce: `${channelId}:${Date.now()}` });
-  };
-
-  /** The words are gone (the draft cleared) or they are coming back (it failed). */
-  const endSay = () => {
-    if (liftTimer.current) window.clearTimeout(liftTimer.current);
-    liftTimer.current = null;
-    if (textareaRef.current) textareaRef.current.style.opacity = '';
+    return nonce;
   };
 
   const handleSubmit = async () => {
@@ -700,7 +702,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
     // or over-long draft or a conversation that will refuse it all take the
     // ordinary path with no motion at all.
     const saying = content.trim();
-    if (
+    const say = (
       !showPollComposer
       && !showScheduleComposer
       && composerAction.allowed
@@ -709,7 +711,28 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
       && saying.length > 0
       && content.length <= MAX_MESSAGE_LENGTH
       && !/^\/\w/.test(saying)
-    ) beginSay(saying);
+    ) ? beginSay(saying) : null;
+    const answer = { accepted: false };
+    try {
+      await submitComposer(answer);
+    } finally {
+      // However the send ended — accepted, refused, or cut short by a check —
+      // the timeline is told, so a bubble in flight is never left hanging.
+      if (say) {
+        if (!answer.accepted) endSay();
+        else {
+          const now = Date.now();
+          for (const [nonce, entry] of unanswered.current) if (now - entry.at > 10_000) unanswered.current.delete(nonce);
+          unanswered.current.set(say, { text: saying, at: now });
+          watchUnanswered();
+        }
+        emitMotion('say:settled', { channelId, nonce: say, ok: answer.accepted });
+      }
+    }
+  };
+
+  /** Everything a send does after the gesture has begun. `answer.accepted` says the outbox took it. */
+  const submitComposer = async (answer: { accepted: boolean }) => {
     let submittedDraft: Awaited<ReturnType<typeof captureDraft>>;
     sendingRef.current = true;
     try { submittedDraft = await captureDraft(); }
@@ -882,6 +905,9 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
           ? { files: stagedFiles, maxCiphertextBytes: maxUploadSize }
           : undefined,
       );
+      // The outbox has it: delivery is its business from here, and the words
+      // are not coming back.
+      answer.accepted = true;
       await clearSubmitted(submittedDraft);
       endSay();
       setStagedFiles(current => current.filter(file => !stagedFiles.includes(file)));
@@ -899,9 +925,43 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
 
   // Leaving the conversation ends the gesture with it.
   useEffect(() => () => {
-    if (liftTimer.current) window.clearTimeout(liftTimer.current);
-    liftNode.current?.remove();
-    liftNode.current = null;
+    if (wordsTimer.current) window.clearTimeout(wordsTimer.current);
+  }, []);
+
+  // A send the outbox took and then could not deliver in good time (refused,
+  // failing, or waiting long enough that the queue card above the composer shows
+  // for it) is held by that card, which keeps the words. The bubble in flight
+  // for it is let go then, so the card and the bubble never both claim it. A send
+  // that is merely on its way keeps its bubble: the card has not shown for it.
+  const queueNow = useRef(runtimeState.queue);
+  useEffect(() => {
+    queueNow.current = runtimeState.queue;
+  }, [runtimeState.queue]);
+  const watchTimer = useRef<number | null>(null);
+  const watchUnanswered = useCallback(() => {
+    if (watchTimer.current !== null) return;
+    const check = () => {
+      const now = Date.now();
+      for (const [nonce, { text, at }] of [...unanswered.current]) {
+        if (now - at > 10_000) { unanswered.current.delete(nonce); continue; }
+        const row = queueNow.current.find((entry) => entry.record.channelId === channelId
+          && (entry.record.draft?.content ?? '').trim() === text);
+        if (!row) continue;
+        const failing = row.record.status === 'failed' || Boolean(row.record.error) || Boolean(row.record.refused);
+        if (!failing && isQuietlyInFlight(row, now)) continue;
+        unanswered.current.delete(nonce);
+        emitMotion('say:settled', { channelId, nonce, ok: false });
+      }
+      if (unanswered.current.size === 0 && watchTimer.current !== null) {
+        window.clearInterval(watchTimer.current);
+        watchTimer.current = null;
+      }
+    };
+    watchTimer.current = window.setInterval(check, 200);
+  }, [channelId]);
+  useEffect(() => () => {
+    if (watchTimer.current !== null) window.clearInterval(watchTimer.current);
+    watchTimer.current = null;
   }, []);
 
   /** Detect @mention query and /slash command query from cursor position */
@@ -1785,6 +1845,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
         )}
 
         <button
+          ref={sendButtonRef}
           type="button"
           onClick={() => void handleSubmit()}
           disabled={sendDisabled}

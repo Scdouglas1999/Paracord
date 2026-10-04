@@ -392,8 +392,12 @@ reviewer rejects motion that has none.
   is ONE staggered sequence, not five. Your own arrival never plays: that is
   the moment below. Occupancy is read from voice membership, which is exact;
   "reading" in a text channel is derived and deliberately out of scope.)*
-- **A message has mass.** Sent text lifts out of the composer along the path it
-  lands in the timeline (220 ms, ease-out); the composer relaxes 0.8% and
+- **A message has mass.** *(Superseded by docs/glass-spec.md §9, "The send
+  flight", which restores the owner's favorite version: the sent words fly out
+  of the message box to the row they land on, 620 ms, on an arc. It is the one
+  gesture exempt from the ceilings in §5.2 below; the lift described here was
+  the quiet pass's clamp of it.)* Sent text lifts out of the composer along the
+  path it lands in the timeline (220 ms, ease-out); the composer relaxes 0.8% and
   springs back; the send control flashes white light for one beat; the channel's
   amber window flickers. Receipts fade in only after the server answers.
   *(WP9a: "after the server answers" is structural here, not a check — this

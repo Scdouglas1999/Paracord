@@ -200,6 +200,8 @@ export interface MessageSeed {
   content: string;
   created_at: string;
   attachments?: Array<{ key: keyof typeof ATTACHMENT }>;
+  /** The message this one answers (a reply). */
+  reference_id?: string;
   reactions?: Array<{ emoji: string; count: number; me: boolean }>;
   poll?: {
     question: string;

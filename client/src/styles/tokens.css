@@ -489,6 +489,10 @@
   --sh-content: 0 1px 2px rgba(0, 0, 0, 0.28);
   --sh-raised: 0 1px 2px rgba(0, 0, 0, 0.28), 0 10px 28px rgba(0, 0, 0, 0.2);
   --sh-pane: 0 40px 90px rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.045);
+  /* A sent message while it is airborne (the send flight, docs/glass-spec.md §9).
+     It sits on its own layer whose opacity comes up with the flight and goes
+     again as the bubble lands; the bubble's resting shadow is `--sh-content`. */
+  --sh-flight: 0 10px 24px rgba(0, 0, 0, 0.35);
 
   /* ---- §9 Focus and motion -------------------------------------------------- */
   --glass-focus-color: rgba(255, 255, 255, 0.85);

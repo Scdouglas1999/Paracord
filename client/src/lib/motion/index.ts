@@ -10,7 +10,7 @@
  *   reducedMotion . the ONE switch (OS setting + user setting + `data-motion`)
  *   spring ........ the critically damped spring a retarget carries velocity on
  *   animate ....... bloom · dim · flicker · settleIn · stagger · press ·
- *                   flash · liftOut · relax
+ *                   flash · relax
  *   sharedElement . "the thing you click becomes the thing you look at"
  *   marks ......... what a surface tells the engine it is holding
  *   lightsOn ...... "lights on" — the building waking up
@@ -24,6 +24,8 @@
  *   presence ...... staying mounted for the exit; settling onto the street
  *   flipList ...... a reordered list travels on the spring, never snaps; a tab
  *                   indicator slides to its mark
+ *   sendFlight .... the message floating out of the composer into the
+ *                   conversation (a protected signature gesture, glass §9)
  *   bus ........... gestures that cross a pane boundary
  *
  * There is no framework here on purpose: Web Animations plus the tokens.
@@ -41,7 +43,6 @@ export {
   flicker,
   ghost,
   ghostOut,
-  liftOut,
   press,
   recede,
   relax,
@@ -102,6 +103,19 @@ export {
 } from './marks';
 export { recedeAround, roomSharedName, walkIntoRoom, walkOutOfRoom, type WalkOptions } from './walk';
 export { emitMotion, onMotion, resetMotionBusForTests, type MotionEvents } from './bus';
+export {
+  RELAX_MS,
+  SEND_FLIGHT,
+  captureRoom,
+  flySend,
+  makeRoom,
+  pressComposer,
+  readSendOrigin,
+  releaseSend,
+  type Flight,
+  type FlightOptions,
+  type SendOrigin,
+} from './sendFlight';
 export { RollingNumber, type RollingNumberProps } from './flipCounter';
 export {
   FLIP_GLYPH_ATTR,

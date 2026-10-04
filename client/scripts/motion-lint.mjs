@@ -25,6 +25,14 @@
  * choice and publishes `data-motion` on <html>; a media query would be a
  * second source of truth that "Full motion" could not override.
  *
+ * The send flight (lib/motion/sendFlight.ts, docs/glass-spec.md §9) is a
+ * protected signature gesture that is exempt from the motion system's distance,
+ * overshoot and duration ceilings (those live in the unit tests of the recipes,
+ * not here; this lint has never had a distance rule). It needs no allowance:
+ * it moves transform and opacity, plus `color` on the flying words and
+ * `background-color` on the send control, and colors are not forbidden above.
+ * Its airborne shadow is a still layer whose opacity animates.
+ *
  * A few places are allowed one, each named below with the reason it cannot be
  * transform/opacity. An allowance that no longer matches anything fails the
  * run too, so the list cannot rot.

@@ -16,7 +16,12 @@ import { motionToken, ms } from './tokens';
  *      awaits `.finished` still resolves and a caller that cancels still can.
  *   3. **Interruptible.** Each returns the `Animation`, and each cancels the
  *      recipe it replaces on that element, so a second send cannot stack a
- *      second lift on the first.
+ *      second press on the first.
+ *
+ * One gesture is deliberately NOT one of these recipes and does not obey the
+ * 8px and 500ms ceilings: the send flight (`sendFlight.ts`), a protected
+ * signature gesture (docs/glass-spec.md §9). It has its own constants, its own
+ * unit tests that pin them, and a named allowance in the motion lint's notes.
  */
 
 /** Something to animate: an element, in a renderer with WAAPI (jsdom has none). */
@@ -239,33 +244,6 @@ export function flash(el: Element | null | undefined): Animation | null {
 }
 
 /**
- * A message leaving the composer: the words lift 8px and fade as the row
- * lands in the timeline — `--duration-exit-slow`, `--ease-out`, transform and
- * opacity only (§5.1).
- */
-export function liftOut(
-  el: Element | null | undefined,
-  options: { distance?: number; duration?: number } = {},
-): Animation | null {
-  if (!animatable(el)) return null;
-  if (prefersReducedMotion()) return landed(el);
-  const distance = Math.min(8, options.distance ?? 8);
-  return run(
-    el,
-    'lift',
-    [
-      { transform: 'translate3d(0, 0, 0)', opacity: 1 },
-      { transform: `translate3d(0, ${-distance}px, 0)`, opacity: 0 },
-    ],
-    {
-      duration: options.duration ?? ms('--duration-exit-slow'),
-      easing: motionToken('--ease-out'),
-      fill: 'forwards',
-    },
-  );
-}
-
-/**
  * New content settling into a surface that stayed put — the channel you
  * switched to, a settings section, another panel mode. A crossfade with a 4px
  * rise over `--duration-slow`, never a slide (§5.2).
@@ -300,11 +278,16 @@ export function fadeIn(el: Element | null | undefined, options: { delay?: number
   });
 }
 
-/** The composer relaxing 0.8% under the send and springing back (§5.1). */
+/**
+ * The composer relaxing 0.8% under the send and springing back (§5.1). It is
+ * one beat of the send flight (`sendFlight.ts`, docs/glass-spec.md §9), which
+ * names its own length, so this is 300ms rather than `--duration-slow`.
+ */
+export const RELAX_MS = 300;
+
 export function relax(el: Element | null | undefined): Animation | null {
   if (!animatable(el)) return null;
   if (prefersReducedMotion()) return landed(el);
-  const duration = ms('--duration-slow');
   return run(
     el,
     'relax',
@@ -313,7 +296,7 @@ export function relax(el: Element | null | undefined): Animation | null {
       { transform: 'scale(0.992)', offset: 0.3 },
       { transform: 'scale(1)', offset: 1 },
     ],
-    { duration, easing: motionToken('--ease-out'), fill: 'none' },
+    { duration: RELAX_MS, easing: motionToken('--ease-out'), fill: 'none' },
   );
 }
 
@@ -418,7 +401,7 @@ export function slideOut(
  *
  * Somebody leaving a room is removed from the strip by the store update that
  * told us they left — by the time React has rendered, the face is not in the
- * document to animate. WP9a hit the same wall with the composer's lifting words
+ * document to animate. WP9a hit the same wall with the composer's sent words
  * and answered it the same way: **the thing that moves is a ghost, not the
  * element**. The ghost is DOM the engine owns outright, so no re-render can
  * wipe it and no component has to hold a leaving person in its state.
@@ -429,7 +412,7 @@ export function slideOut(
  */
 const GHOST_LAYER_ID = 'pc-motion-ghosts';
 
-function ghostLayer(): HTMLElement | null {
+export function ghostLayer(): HTMLElement | null {
   if (typeof document === 'undefined') return null;
   const existing = document.getElementById(GHOST_LAYER_ID);
   if (existing) return existing;

@@ -5,12 +5,13 @@ vi.mock('./messageLight', () => import('../../test/messageLightMock'));
 vi.mock('../../hooks/useLights', () => import('../../test/messageLightMock'));
 vi.mock('../../lib/channelView', () => ({ getAccountChannelView: (_scope: unknown, state: unknown) => state }));
 import { MemoryRouter } from 'react-router';
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { channelApi } from '../../api/channels';
 import { MessageInput, composerPlaceholder, replyPlaceholder } from './MessageInput';
 import { groupEnrollmentReason } from '../../lib/messages/messagingReadiness';
+import { configureMotion, onMotion, resetMotionBusForTests, resetMotionSwitchForTests, type MotionEvents } from '../../lib/motion';
 
 const mockEncryption = vi.hoisted(() => ({ encrypted: false, encryption: 'ready' }));
 const mockActionOverrides = vi.hoisted(() => ({} as Record<string, { supported: boolean; allowed: boolean; reason: string | null }>));
@@ -736,6 +737,133 @@ describe('the Glass message box', () => {
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(screen.queryByLabelText(/Send at/)).not.toBeInTheDocument();
     expect(screen.getByPlaceholderText('Message General')).toBeInTheDocument();
+  });
+});
+
+describe('the send flight, from the message box', () => {
+  const said: Array<MotionEvents['say:sent']> = [];
+  const settled: Array<MotionEvents['say:settled']> = [];
+  let off: Array<() => void> = [];
+
+  beforeEach(() => {
+    said.length = 0;
+    settled.length = 0;
+    resetMotionBusForTests();
+    resetMotionSwitchForTests();
+    configureMotion('full');
+    off = [onMotion('say:sent', (detail) => said.push(detail)), onMotion('say:settled', (detail) => settled.push(detail))];
+    mockEncryption.encrypted = false; mockEncryption.encryption = 'ready';
+    mockMessaging.runtimes.clear();
+    localStorage.clear();
+    mockOwner.serverId = '__local__';
+    mockOwner.userId = 'u1';
+    vi.clearAllMocks();
+    mockSendMessage.mockResolvedValue(undefined);
+    vi.mocked(channelApi.getFeatureSettings).mockImplementation(() => new Promise(() => {}));
+    // jsdom lays nothing out; the words have to sit somewhere for there to be something to fly from.
+    vi.spyOn(HTMLTextAreaElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      left: 120, top: 800, width: 600, height: 36, right: 720, bottom: 836, x: 120, y: 800, toJSON: () => ({}),
+    } as DOMRect);
+  });
+
+  afterEach(() => {
+    for (const stop of off) stop();
+    vi.restoreAllMocks();
+    resetMotionBusForTests();
+    resetMotionSwitchForTests();
+  });
+
+  it('says where the words sit, on the keystroke, before the send is awaited; and hides the words behind the bubble', async () => {
+    let finish: (() => void) | undefined;
+    mockSendMessage.mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const user = userEvent.setup();
+    render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
+    const textarea = screen.getByPlaceholderText('Message general') as HTMLTextAreaElement;
+    await user.type(textarea, 'count me in');
+    await user.keyboard('{Enter}');
+    // The gesture began without waiting for anything.
+    expect(said).toHaveLength(1);
+    expect(said[0]).toMatchObject({ channelId: 'ch1', text: 'count me in', origin: { left: 120, top: 800, width: 600, height: 36 } });
+    expect(said[0].origin?.inset).toBeTypeOf('number');
+    // The real words are hidden, not removed: a failed send restores them by doing nothing.
+    expect(textarea.style.opacity).toBe('0');
+    expect(textarea).toHaveValue('count me in');
+    expect(settled).toHaveLength(0);
+    await waitFor(() => expect(mockSendMessage).toHaveBeenCalled());
+    finish?.();
+    await waitFor(() => expect(settled).toHaveLength(1));
+    // Accepted: the outbox owns delivery, the words are gone and the box is its own again.
+    expect(settled[0]).toMatchObject({ channelId: 'ch1', nonce: said[0].nonce, ok: true });
+    await waitFor(() => expect(textarea).toHaveValue(''));
+    expect(textarea.style.opacity).toBe('');
+  });
+
+  it('gives the words back, and says the send did not go, when the send is refused', async () => {
+    mockSendMessage.mockRejectedValue(new Error('This conversation is unavailable.'));
+    const user = userEvent.setup();
+    render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
+    const textarea = screen.getByPlaceholderText('Message general') as HTMLTextAreaElement;
+    await user.type(textarea, 'no luck');
+    await user.keyboard('{Enter}');
+    await waitFor(() => expect(settled).toHaveLength(1));
+    expect(settled[0]).toMatchObject({ nonce: said[0].nonce, ok: false });
+    expect(textarea).toHaveValue('no luck');
+    expect(textarea.style.opacity).toBe('');
+  });
+
+  it('has no flight under reduced motion: no origin, and the draft stays put until it is answered', async () => {
+    configureMotion('reduced');
+    let finish: (() => void) | undefined;
+    mockSendMessage.mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const user = userEvent.setup();
+    render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
+    const textarea = screen.getByPlaceholderText('Message general') as HTMLTextAreaElement;
+    await user.type(textarea, 'quietly');
+    await user.keyboard('{Enter}');
+    expect(said).toHaveLength(1);
+    expect(said[0].origin).toBeNull();
+    expect(textarea.style.opacity).toBe('');
+    expect(textarea).toHaveValue('quietly');
+    await waitFor(() => expect(mockSendMessage).toHaveBeenCalled());
+    finish?.();
+    await waitFor(() => expect(textarea).toHaveValue(''));
+  });
+
+  it('only plain text flies: a slash command and an empty box never begin it', async () => {
+    const user = userEvent.setup();
+    render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
+    const textarea = screen.getByPlaceholderText('Message general');
+    await user.click(textarea);
+    await user.keyboard('{Enter}');
+    await user.type(textarea, '/roll 2d6');
+    await user.keyboard('{Enter}');
+    expect(said).toHaveLength(0);
+  });
+
+  it('carries the message being replied to, so the stand-in row has room for its chip', async () => {
+    const user = userEvent.setup();
+    render(<MessageInput channelId="ch1" guildId="g1" channelName="general" replyingTo={{ id: 'm9', author: 'Jeremy', content: 'movie night still on?' }} />);
+    const textarea = screen.getByPlaceholderText(/Reply/);
+    await user.type(textarea, 'yes');
+    await user.keyboard('{Enter}');
+    expect(said[0]).toMatchObject({ text: 'yes', replyToId: 'm9' });
+  });
+
+  it('lets the bubble go when the outbox cannot deliver an accepted send, and the card holds the words', async () => {
+    const user = userEvent.setup();
+    render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
+    const textarea = screen.getByPlaceholderText('Message general');
+    await user.type(textarea, 'refused later');
+    await user.keyboard('{Enter}');
+    await waitFor(() => expect(settled).toHaveLength(1));
+    expect(settled[0].ok).toBe(true);
+    // The outbox then reports the send failed: the watch lets go of the bubble.
+    const runtime = [...mockMessaging.runtimes.values()][0];
+    runtime.store.setState({
+      queue: [{ source: 'local', record: { id: 'q1', channelId: 'ch1', status: 'failed', error: 'refused', refused: true, createdAt: new Date().toISOString(), draft: { revision: '1', content: 'refused later' } } }],
+    } as never);
+    await waitFor(() => expect(settled).toHaveLength(2), { timeout: 2_000 });
+    expect(settled[1]).toMatchObject({ nonce: said[0].nonce, ok: false });
   });
 });
 

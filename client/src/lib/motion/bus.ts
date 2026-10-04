@@ -10,10 +10,29 @@
  * a missed animation and nothing else.
  */
 
+import type { SendOrigin } from './sendFlight';
+
 export interface MotionEvents {
-  /** A message left the composer for this channel. */
-  'say:sent': { channelId: string; nonce: string };
-  /** The server answered: this channel's send landed (or did not). */
+  /**
+   * A plain text message is leaving the composer for this channel — emitted on
+   * the keystroke, before anything is awaited. `origin` says where the words
+   * sit (null where nothing may fly: reduced motion), so the timeline can send
+   * a bubble from there to where the row will land (`sendFlight.ts`).
+   */
+  'say:sent': {
+    channelId: string;
+    nonce: string;
+    text: string;
+    /** The message being replied to, so the row it lands on has the room it needs. */
+    replyToId?: string | null;
+    origin: SendOrigin | null;
+  };
+  /**
+   * The composer has finished with this send. `ok` is that it was accepted
+   * (the outbox owns delivery from here); `false` is that it was not — the
+   * draft is restored, or the delivery needs attention — and the bubble in
+   * flight is to be let go of.
+   */
   'say:settled': { channelId: string; nonce: string; ok: boolean };
 }
 

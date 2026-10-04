@@ -44,7 +44,7 @@ import {
 export { SCENE_TIMEZONE, SCENE_NOW_ISO };
 
 const HERE = path.dirname(new URL(import.meta.url).pathname);
-const HISTORY_EPOCH = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+export const HISTORY_EPOCH = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const SELF = userRecord(CAST.sean);
 
 export interface GlassSceneOptions {
@@ -129,7 +129,8 @@ function messageRecord(seed: MessageSeed) {
     tts: false,
     mention_everyone: false,
     pinned: false,
-    type: 0,
+    type: seed.reference_id ? 19 : 0,
+    ...(seed.reference_id ? { reference_id: seed.reference_id } : {}),
     attachments,
     reactions: seed.reactions ?? [],
     ...(poll ? { poll } : {}),
