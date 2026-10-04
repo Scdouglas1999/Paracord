@@ -60,10 +60,12 @@ describe('useGlassKeybinds', () => {
     expect(useGlassStore.getState().browseOpen).toBe(false);
     press('t');
     expect(useGlassStore.getState().stage.mode).toBe('theater');
-    press('h');
+    // Theater opens with the chat hidden (19db3e60); H brings it back and hides it again.
     expect(useGlassStore.getState().chatHidden).toBe(true);
-    press('H');
+    press('h');
     expect(useGlassStore.getState().chatHidden).toBe(false);
+    press('H');
+    expect(useGlassStore.getState().chatHidden).toBe(true);
     press('T');
     expect(useGlassStore.getState().stage.mode).toBe('side');
     expect(onStop).not.toHaveBeenCalled();

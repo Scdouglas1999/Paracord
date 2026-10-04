@@ -237,11 +237,13 @@ describe('AppShell', () => {
     const { container } = renderShell('/app/guilds/g1/channels/c1');
     act(() => useGlassStore.getState().openStage(LOUNGE, 'theater'));
     expect(container.querySelector('.glass-frame')).toHaveAttribute('data-stage', 'theater');
-    expect(screen.getByRole('main')).not.toHaveAttribute('inert');
-
-    act(() => useGlassStore.getState().toggleChatHidden());
+    // Theater opens with the chat hidden (19db3e60).
     expect(container.querySelector('#main-content')).toHaveAttribute('inert');
     expect(container.querySelector('.glass-frame')).toHaveAttribute('data-chat-hidden', 'true');
+
+    act(() => useGlassStore.getState().toggleChatHidden());
+    expect(screen.getByRole('main')).not.toHaveAttribute('inert');
+    expect(container.querySelector('.glass-frame')).not.toHaveAttribute('data-chat-hidden');
   });
 
   it('theater browsing floats places and puts the chat aside; a pick closes it and brings the chat back', async () => {
