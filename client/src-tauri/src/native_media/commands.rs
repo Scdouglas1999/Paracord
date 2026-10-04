@@ -895,6 +895,55 @@ pub async fn screen_share_start(
     .await
 }
 
+/// Change the encoder in place; keep capture consent, source, audio and track IDs.
+#[tauri::command]
+pub async fn screen_share_set_quality(
+    request: StartNativeScreenShareRequest,
+    owner_id: String,
+    state: State<'_, MediaState>,
+) -> Result<(), String> {
+    let _transition = state.calls.transition.lock().await;
+    state.calls.check(&owner_id)?;
+    let mut guard = state.session.lock().await;
+    let session = guard.as_mut().ok_or("no active session")?;
+    #[cfg(feature = "vpx")]
+    {
+        use paracord_codec::video::VideoContentHint;
+        let mut config = session
+            .screen_encoder_config
+            .clone()
+            .ok_or("not sharing a screen")?;
+        config.width = request.max_width.unwrap_or(config.width);
+        config.height = request.max_height.unwrap_or(config.height);
+        config.fps = request.max_frame_rate.unwrap_or(config.fps);
+        config.bitrate_kbps = request
+            .max_bitrate_bps
+            .map(|bps| bps / 1000)
+            .unwrap_or(config.bitrate_kbps);
+        config.content_hint = match request.content_hint.as_deref() {
+            Some("motion") => VideoContentHint::Motion,
+            Some("film") => VideoContentHint::Film,
+            _ => VideoContentHint::Detail,
+        };
+        config.keyframe_interval = config.fps.saturating_mul(10);
+        config.validate().map_err(|error| error.to_string())?;
+        // begin_screen_frame compares the desired ladder on the next frame,
+        // recreates encoders and advertises new TrackLayers. Never rewind PTS
+        // or packet counters: existing viewers retain their ordered stream.
+        session
+            .screen_encode_fps
+            .store(config.fps, Ordering::Relaxed);
+        session.screen_encoder_config = Some(config);
+        session.screen_force_keyframe.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+    #[cfg(not(feature = "vpx"))]
+    {
+        let _ = (session, request);
+        Err("screen sharing requires vpx".into())
+    }
+}
+
 #[tauri::command]
 pub async fn screen_share_stop(
     owner_id: String,

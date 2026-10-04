@@ -20,7 +20,6 @@ import {
 } from './stageModel';
 import { StageControls } from './StageControls';
 import { StagePeople } from './StagePeople';
-import { StreamReactionsLayer } from './StreamReactionsLayer';
 import { StreamSoundButton } from './StreamSound';
 import { StreamSurface } from './StreamSurface';
 import { SurfacingMessages } from './SurfacingMessages';
@@ -261,7 +260,6 @@ function StreamStage({ target, mode }: { target: StreamStageTarget; mode: OpenSt
         {!phone && <span className="glass-stage__scrim" aria-hidden="true" />}
         {overlay}
         <ClipToast target={clipTarget} />
-        <StreamReactionsLayer target={target} />
         {theater && <SurfacingMessages active={chatHidden && !browseOpen} onShowChat={() => setChatHidden(false)} />}
       </StreamSurface>
 

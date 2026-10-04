@@ -691,6 +691,41 @@ mod tests {
     }
 
     #[test]
+    fn lossless_simulcast_keeps_quality_after_an_idle_window() {
+        let est = BandwidthEstimator::new();
+        let mut sequences = paracord_transport::protocol::VideoSequences::default();
+        // Three encoder layers, first moving content then an inactive window.
+        // Deliver EVERY numbered packet, including reliable keyframes.
+        for frame in 0..1200u64 {
+            let now = est.base + Duration::from_millis(frame * 17);
+            for ssrc in [100, 101, 102] {
+                if frame % 120 == 0 {
+                    est.record_ingress_keyframe_at(1, ssrc, sequences.next(ssrc), 6000, now);
+                } else {
+                    let fragments = if frame < 600 { 8 } else { 1 };
+                    for _ in 0..fragments {
+                        est.record_ingress_at(1, ssrc, sequences.next(ssrc), 1000, now);
+                    }
+                }
+            }
+            if frame % 60 == 59 {
+                est.compute_feedback_at(1, now);
+            }
+        }
+        let now = est.base + Duration::from_millis(1199 * 17);
+        let loss = est.windowed_ingress_loss_at(1, now);
+        let budget = est.available_kbps(1);
+        assert_eq!(
+            loss, 0.0,
+            "lossless simulcast reports loss={loss:.2}, budget={budget} kbps"
+        );
+        assert!(
+            budget >= 12_000,
+            "an idle window must not collapse the 1080p budget: {budget}"
+        );
+    }
+
+    #[test]
     fn default_before_any_ingress() {
         let est = BandwidthEstimator::new();
         assert_eq!(est.available_kbps(999), INITIAL_BANDWIDTH_KBPS);

@@ -1086,6 +1086,16 @@ type ScreenCapturePreset = {
   hint: 'detail' | 'motion' | 'film';
 };
 
+const SCREEN_SHARE_PRESETS: Record<string, ScreenCapturePreset> = {
+          '720p30': { width: 1280, height: 720, frameRate: 30, maxBitrate: 5_000_000, hint: 'detail' },
+          '1080p60': { width: 1920, height: 1080, frameRate: 60, maxBitrate: 12_000_000, hint: 'detail' },
+          '1440p60': { width: 2560, height: 1440, frameRate: 60, maxBitrate: 18_000_000, hint: 'detail' },
+          '4k60': { width: 3840, height: 2160, frameRate: 60, maxBitrate: 28_000_000, hint: 'motion' },
+          'movie-50': { width: 3840, height: 2160, frameRate: 60, maxBitrate: 50_000_000, hint: 'film' },
+          'movie-100': { width: 3840, height: 2160, frameRate: 60, maxBitrate: 100_000_000, hint: 'film' },
+        };
+
+
 function clampEvenDimension(value: number): number {
   const rounded = Math.max(2, Math.floor(value));
   return rounded % 2 === 0 ? rounded : rounded - 1;
@@ -2045,6 +2055,7 @@ export interface VoiceStoreState {
   toggleMute: () => Promise<void>;
   toggleDeaf: () => Promise<void>;
   startStream: (qualityPreset?: string, sourceId?: string) => Promise<void>;
+  changeStreamQuality: (qualityPreset: string) => Promise<void>;
   stopStream: () => void;
   toggleVideo: () => Promise<void>;
   /** Enumerate native capture cameras for device selection (native path only;
@@ -2330,6 +2341,21 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
     }
   },
 
+  changeStreamQuality: async (qualityPreset) => {
+    const { selfStream, mediaEngine } = get();
+    if (!selfStream) return;
+    const capture = SCREEN_SHARE_PRESETS[qualityPreset];
+    if (!capture) throw new Error('Unknown stream quality');
+    if (!mediaEngine?.updateScreenShareQuality) {
+      throw new Error('Live quality changes require the desktop media engine. Stop sharing to choose a different quality.');
+    }
+    await mediaEngine.updateScreenShareQuality({
+      audio: true, maxFrameRate: capture.frameRate,
+      maxWidth: capture.width, maxHeight: capture.height,
+      maxBitrateBps: capture.maxBitrate, contentHint: capture.hint,
+    });
+  },
+
   startStream: async (qualityPreset = '1080p60', sourceId?: string) => {
     const owner = currentCall;
     if (!owner?.current) throw new Error('Voice connection is not ready');
@@ -2349,15 +2375,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
         // all-or-nothing, so oversized bitrates increase whole-frame loss
         // without visible quality gain for screen content. The "Movie" presets
         // are explicitly labeled with their bitrate and kept as advertised.
-        const nativePresetMap: Record<string, ScreenCapturePreset> = {
-          '720p30': { width: 1280, height: 720, frameRate: 30, maxBitrate: 5_000_000, hint: 'detail' },
-          '1080p60': { width: 1920, height: 1080, frameRate: 60, maxBitrate: 12_000_000, hint: 'detail' },
-          '1440p60': { width: 2560, height: 1440, frameRate: 60, maxBitrate: 18_000_000, hint: 'detail' },
-          '4k60': { width: 3840, height: 2160, frameRate: 60, maxBitrate: 28_000_000, hint: 'motion' },
-          'movie-50': { width: 3840, height: 2160, frameRate: 60, maxBitrate: 50_000_000, hint: 'film' },
-          'movie-100': { width: 3840, height: 2160, frameRate: 60, maxBitrate: 100_000_000, hint: 'film' },
-        };
-        const capture = nativePresetMap[qualityPreset] ?? nativePresetMap['1080p60'];
+        const capture = SCREEN_SHARE_PRESETS[qualityPreset] ?? SCREEN_SHARE_PRESETS['1080p60'];
 
         // Show the screen picker FIRST — if the user cancels, we don't need
         // to register (and then immediately unregister) with the server.

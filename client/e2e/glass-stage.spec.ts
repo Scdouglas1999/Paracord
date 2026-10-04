@@ -50,9 +50,9 @@ const IDS = {
  * (and taps it for the glow), `stopWatch` clears it, and the watcher count and
  * the stream's start time are what the server would say.
  */
-async function fakeMedia(page: Page, options: { joined: boolean; watchers?: number }) {
+async function fakeMedia(page: Page, options: { joined: boolean; watchers?: number; sharing?: boolean }) {
   await page.evaluate(
-    async ({ ids, joined, watchers }) => {
+    async ({ ids, joined, watchers, sharing }) => {
       const voice = (await import('/src/stores/voiceStore.ts' as string)) as any;
       const list = (await import('/src/stores/serverListStore.ts' as string)) as any;
       const scopeModule = (await import('/src/lib/serverScope.ts' as string)) as any;
@@ -97,8 +97,8 @@ async function fakeMedia(page: Page, options: { joined: boolean; watchers?: numb
         };
       };
 
-      const watchEngine = engineFor({ [`${ids.vincent}:screen`]: 'stream' });
-      const callEngine = engineFor({ [`${ids.brendan}:camera`]: 'camera', [`${ids.vincent}:screen`]: 'stream' });
+      const watchEngine = engineFor({ [`${ids.vincent}:screen`]: 'stream', [`${ids.sean}:screen`]: 'stream' });
+      const callEngine = engineFor({ [`${ids.brendan}:camera`]: 'camera', [`${ids.vincent}:screen`]: 'stream', [`${ids.sean}:screen`]: 'stream' });
 
       store.setState({
         startWatch: async (target: any) => {
@@ -144,7 +144,7 @@ async function fakeMedia(page: Page, options: { joined: boolean; watchers?: numb
         mute: false,
         self_deaf: false,
         self_mute: false,
-        self_stream: false,
+        self_stream: sharing,
         self_video: false,
         suppress: false,
         mode: 'joined',
@@ -175,6 +175,8 @@ async function fakeMedia(page: Page, options: { joined: boolean; watchers?: numb
                 channelId: ids.lounge,
                 guildId: ids.guild,
                 selfMute: false,
+                selfStream: sharing,
+                changeStreamQuality: async (quality: string) => { (window as any).__appliedShareQuality = quality; },
                 mediaEngine: callEngine,
                 participants: new Map(rows.map((s: any) => [s.user_id, s])),
                 speakingUsers: new Set([ids.brendan]),
@@ -191,7 +193,7 @@ async function fakeMedia(page: Page, options: { joined: boolean; watchers?: numb
         setInterval(speak, 250);
       }
     },
-    { ids: IDS, joined: options.joined, watchers: options.watchers ?? 0 },
+    { ids: IDS, joined: options.joined, watchers: options.watchers ?? 0, sharing: options.sharing ?? false },
   );
 }
 
@@ -358,4 +360,33 @@ test('phone: not joined', async ({ page }) => {
   await expect(stagePane(page)).toBeVisible();
   await expect(page.locator('.glass-stage__stream[data-picture="true"]')).toBeVisible();
   await shoot(page, 'stage-06-phone');
+});
+
+
+test('shared screens, preview visibility and quality stay inside the call', async ({ page }) => {
+  await open(page, 'desktop');
+  await fakeMedia(page, { joined: true, sharing: true });
+  await page.evaluate(async (ids) => {
+    const glass = await import('/src/stores/glassStore.ts' as string) as any;
+    const voice = await import('/src/stores/voiceStore.ts' as string) as any;
+    glass.useGlassStore.getState().openStage({ serverId: voice.useVoiceStore.getState().callScope.serverId, guildId: ids.guild, channelId: ids.lounge, streamerId: null });
+  }, IDS);
+  const stage = stagePane(page);
+  await expect(stage.getByRole('group', { name: 'Shared screens' })).toBeVisible();
+  await stage.getByRole('button', { name: 'Watch your stream' }).click();
+  await expect(stage.locator('.glass-stage__stream[data-picture="true"]')).toBeVisible();
+  await expect(stage.getByRole('button', { name: /React with/ })).toHaveCount(0);
+  await stage.getByRole('button', { name: /Change stream quality:/ }).click();
+  await page.getByRole('dialog', { name: 'Share quality' }).getByRole('button', { name: '1080p 60fps' }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__appliedShareQuality)).toBe('1080p60');
+  await stage.getByRole('button', { name: 'Hide your stream preview' }).click();
+  await expect(stage.getByRole('button', { name: 'Watch your stream' })).toBeVisible();
+  await expect(stage.getByRole('button', { name: 'Stop sharing your screen' })).toBeVisible();
+  const bounds = await stage.boundingBox();
+  for (const control of await stage.locator('.glass-stage__controls > button').all()) {
+    const rect = await control.boundingBox();
+    expect(rect!.x).toBeGreaterThanOrEqual(bounds!.x);
+    expect(rect!.x + rect!.width).toBeLessThanOrEqual(bounds!.x + bounds!.width);
+  }
+  await shoot(page, 'stage-call-sharing-controls');
 });

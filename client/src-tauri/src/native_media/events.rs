@@ -1073,8 +1073,7 @@ async fn handle_control_message(
         }
         ControlMessage::BandwidthFeedback { available_kbps } => {
             // The native screen encoder reads this per frame to retarget its
-            // bitrate; the event additionally lets the frontend adjust its
-            // simulcast layer selection.
+            // bitrate. This is an uplink budget, not a viewer's download budget.
             screen_bitrate_feedback_kbps
                 .store(available_kbps, std::sync::atomic::Ordering::Relaxed);
 

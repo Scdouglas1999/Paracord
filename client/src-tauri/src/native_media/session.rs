@@ -274,8 +274,8 @@ pub struct NativeMediaSession {
     /// encryptor to reuse a nonce. It refuses (`SequenceReuse`), which is how a
     /// second screen share in one call came to fail outright. Nothing resets
     /// these; they wrap.
-    pub video_seq: u16,
-    pub screen_seq: u16,
+    pub video_seq: paracord_transport::protocol::VideoSequences,
+    pub screen_seq: paracord_transport::protocol::VideoSequences,
     pub video_timestamp: u32,
     pub screen_timestamp: u32,
     pub video_pts: i64,
@@ -301,6 +301,7 @@ pub struct NativeMediaSession {
     /// `ControlMessage::BandwidthFeedback`, read per frame by the screen
     /// encode path to retarget the encoder under congestion.
     pub screen_bitrate_feedback_kbps: Arc<AtomicU32>,
+    pub screen_encode_fps: Arc<AtomicU32>,
     /// Bitrate currently programmed into the screen encoder, in kbps
     /// (0 = the preset target). Only touched under the session lock.
     #[cfg(feature = "vpx")]
@@ -602,8 +603,8 @@ impl NativeMediaSession {
             video_layer_ssrcs: Vec::new(),
             #[cfg(feature = "vpx")]
             screen_layer_ssrcs: Vec::new(),
-            video_seq: 0,
-            screen_seq: 0,
+            video_seq: Default::default(),
+            screen_seq: Default::default(),
             video_timestamp: 0,
             screen_timestamp: 0,
             video_pts: 0,
@@ -622,6 +623,7 @@ impl NativeMediaSession {
             video_force_keyframe: Arc::new(AtomicBool::new(true)),
             screen_force_keyframe: Arc::new(AtomicBool::new(true)),
             screen_bitrate_feedback_kbps: Arc::new(AtomicU32::new(0)),
+            screen_encode_fps: Arc::new(AtomicU32::new(30)),
             #[cfg(feature = "vpx")]
             screen_applied_bitrate_kbps: 0,
             #[cfg(feature = "vpx")]

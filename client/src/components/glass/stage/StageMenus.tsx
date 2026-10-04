@@ -346,7 +346,7 @@ export function MoreMenu({
 
 /**
  * The quality you send when you share your screen (from the Lantern control
- * bar's chevron menu). Chosen before sharing; the next share uses it.
+ * bar's chevron menu). During a share, updates the active encoder in place.
  */
 export function ShareQualityMenu({
   open,
@@ -361,6 +361,7 @@ export function ShareQualityMenu({
   const coords = useAnchoredOverlayCoords(open, anchorRef, 'above-end', SHARE_PANEL_W, 10);
   const quality = useShareQualityStore((state) => state.quality);
   const setQuality = useShareQualityStore((state) => state.setQuality);
+  const [changing, setChanging] = useState(false);
   const inside = useCallback(
     (target: Node) => Boolean(panelRef.current?.contains(target) || anchorRef.current?.contains(target)),
     [anchorRef],
@@ -385,9 +386,20 @@ export function ShareQualityMenu({
             type="button"
             className="glass-stage-popover__row glass-focusable"
             aria-pressed={quality === option.value}
+            disabled={changing}
             onClick={() => {
-              setQuality(option.value);
-              onClose();
+              if (!useVoiceStore.getState().selfStream) {
+                setQuality(option.value);
+                onClose();
+                return;
+              }
+              setChanging(true);
+              void useVoiceStore.getState().changeStreamQuality(option.value).then(() => {
+                setQuality(option.value);
+                onClose();
+              }).catch((error: unknown) => {
+                toast.error(`Could not change stream quality: ${error instanceof Error ? error.message : String(error)}`);
+              }).finally(() => setChanging(false));
             }}
           >
             <span className="glass-stage-popover__label">{option.label}</span>

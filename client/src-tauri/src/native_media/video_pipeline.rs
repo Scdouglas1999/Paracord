@@ -1799,13 +1799,20 @@ pub fn bind_remote_video_track(
             Some((aw, ah)) => Some((aw.max(w), ah.max(h))),
             None => Some((w, h)),
         });
+    let previous_dims = state.remote_track_max_dimensions.get(&key).copied();
     match max_dims {
         Some(dims) => {
-            state.remote_track_max_dimensions.insert(key, dims);
+            state.remote_track_max_dimensions.insert(key.clone(), dims);
         }
         None => {
             state.remote_track_max_dimensions.remove(&key);
         }
+    }
+    drop(state);
+    if previous_dims != max_dims {
+        // Decoder limits are immutable. Recreate after a negotiated resize so
+        // live quality upgrades can decode, and downgrades retain the tighter cap.
+        drop_track_decoder_instance(&key);
     }
 }
 
@@ -2190,6 +2197,9 @@ pub fn start_screen_share(
         );
         session.screen_encoder = None;
         session.screen_simulcast = None;
+        session
+            .screen_encode_fps
+            .store(config.fps, Ordering::Relaxed);
         session.screen_encoder_config = Some(config);
         session.screen_encoder_codec = Some(codec);
         session.screen_layer_ssrcs = build_track_layer_ssrcs(session.local_user_id, "screen");
@@ -2411,7 +2421,7 @@ pub struct CameraFrameJob {
     fallback_ssrc: u32,
     stream_id: StreamId,
     track_id: TrackId,
-    seq: u16,
+    seq: paracord_transport::protocol::VideoSequences,
     timestamp: u32,
     pts: i64,
     capture_timestamp_us: u64,
@@ -2431,7 +2441,7 @@ pub struct CameraFrameJob {
 pub struct CameraFrameOutcome {
     simulcast: super::session::NativeSimulcastState,
     generation: u64,
-    seq: u16,
+    seq: paracord_transport::protocol::VideoSequences,
     timestamp_step: u32,
     applied_kbps: u32,
     i420_convert_buf: Vec<u8>,
@@ -2600,7 +2610,7 @@ pub async fn begin_camera_frame(
         fallback_ssrc: session.video_ssrc,
         stream_id,
         track_id,
-        seq: session.video_seq,
+        seq: session.video_seq.clone(),
         timestamp: session.video_timestamp,
         pts,
         capture_timestamp_us,
@@ -2734,7 +2744,7 @@ pub fn run_camera_frame(
     let timestamp_step = (90_000u32 / fps).max(1);
     let frame_timestamp = job.timestamp;
     let encoded_count = encoded_frames.len();
-    let mut local_seq = job.seq;
+    let mut local_seq = job.seq.clone();
     let self_view_track_key = make_track_key(&job.stream_id.0, &job.track_id.0);
     let (sv_has_subscriber, sv_prefers_encoded, sv_has_stored, sv_hidden) =
         video_dispatch_snapshot(&self_view_track_key);
@@ -2980,7 +2990,7 @@ pub struct ScreenFrameJob {
     fallback_ssrc: u32,
     stream_id: StreamId,
     track_id: TrackId,
-    seq: u16,
+    seq: paracord_transport::protocol::VideoSequences,
     timestamp: u32,
     pts: i64,
     /// Wire PTS in microseconds derived from the frame's true capture time (L2),
@@ -3002,7 +3012,7 @@ pub struct ScreenFrameJob {
 pub struct ScreenFrameOutcome {
     simulcast: super::session::NativeSimulcastState,
     generation: u64,
-    seq: u16,
+    seq: paracord_transport::protocol::VideoSequences,
     timestamp_step: u32,
     applied_kbps: u32,
     i420_convert_buf: Vec<u8>,
@@ -3180,7 +3190,7 @@ pub async fn begin_screen_frame(
         fallback_ssrc: session.screen_ssrc,
         stream_id,
         track_id,
-        seq: session.screen_seq,
+        seq: session.screen_seq.clone(),
         timestamp: session.screen_timestamp,
         pts,
         capture_timestamp_us,
@@ -3332,10 +3342,9 @@ pub fn run_screen_frame(
     let timestamp_step = (90_000u32 / fps).max(1);
     let frame_timestamp = job.timestamp;
     let encoded_count = encoded_frames.len();
-    // Local seq counter: only the encoder thread (or the sequential wrapper)
-    // ever sends screen datagrams, so this is race-free and written back to the
-    // session in `finish_screen_frame`.
-    let mut local_seq = job.seq;
+    // Per-SSRC counters are shared with the session, so failed or orphaned
+    // encode jobs cannot rewind packet numbering or reuse encryption nonces.
+    let mut local_seq = job.seq.clone();
     // Single dispatch-state snapshot for this frame (N12a): whether a self-view
     // subscriber exists, whether it decodes in the webview, whether a frame is
     // already stored, and whether the tile is hidden. Used to gate the preview
@@ -3913,7 +3922,7 @@ fn send_encoded_video_frame(
     frame_encryptor: &std::sync::Arc<std::sync::Mutex<paracord_codec::crypto::FrameEncryptor>>,
     key_epoch: u8,
     ssrc: u32,
-    seq: &mut u16,
+    seq: &mut paracord_transport::protocol::VideoSequences,
     frame_timestamp: u32,
     max_fragment_payload: usize,
     simulcast_layer: u8,
@@ -3974,7 +3983,7 @@ fn send_encoded_video_frame(
         plaintext.extend_from_slice(fragment);
 
         let mut header = MediaHeader::new(TrackType::Video, ssrc);
-        header.sequence = *seq;
+        header.sequence = seq.next(ssrc);
         header.timestamp = frame_timestamp;
         header.key_epoch = key_epoch;
         header.simulcast_layer = simulcast_layer;
@@ -3987,7 +3996,7 @@ fn send_encoded_video_frame(
         );
 
         let encrypted = encryptor
-            .encrypt(&header_bytes, ssrc, key_epoch, *seq, &plaintext)
+            .encrypt(&header_bytes, ssrc, key_epoch, header.sequence, &plaintext)
             .map_err(|e| format!("video encrypt: {e:?}"))?;
 
         header.payload_length = encrypted.len() as u16;
@@ -4004,8 +4013,6 @@ fn send_encoded_video_frame(
                 .send_datagram(datagram)
                 .map_err(|e| format!("video datagram send: {e}"))?;
         }
-
-        *seq = seq.wrapping_add(1);
     }
     drop(encryptor);
 
@@ -4118,7 +4125,7 @@ fn send_encoded_video_frame_stream(
     frame_encryptor: &std::sync::Arc<std::sync::Mutex<paracord_codec::crypto::FrameEncryptor>>,
     key_epoch: u8,
     ssrc: u32,
-    seq: &mut u16,
+    seq: &mut paracord_transport::protocol::VideoSequences,
     frame_timestamp: u32,
     simulcast_layer: u8,
     codec: VideoCodec,
@@ -4133,7 +4140,7 @@ fn send_encoded_video_frame_stream(
         return Ok(());
     }
 
-    let this_seq = *seq;
+    let this_seq = seq.next(ssrc);
     let message = encode_stream_frame_message(
         frame_encryptor,
         key_epoch,
@@ -4168,7 +4175,6 @@ fn send_encoded_video_frame_stream(
         }
     });
 
-    *seq = seq.wrapping_add(1);
     Ok(())
 }
 
@@ -4348,6 +4354,11 @@ fn sync_published_video_track_metadata(session: &mut NativeMediaSession, is_scre
         && current_track.kind == updated_track.kind
         && current_track.codec == updated_track.codec;
 
+    bind_remote_video_track(
+        &updated_track.stream_id.0,
+        &updated_track.track_id.0,
+        &updated_track.layers,
+    );
     if is_screen {
         session.published_screen_track = Some(updated_track.clone());
     } else {
@@ -4723,6 +4734,35 @@ mod tests {
 
         unbind_remote_video_track("stream:victim", "camera");
         unbind_remote_video_track("stream:attacker", "camera");
+    }
+
+    #[test]
+    fn negotiated_quality_resize_recreates_decoder_with_the_new_cap() {
+        use paracord_codec::video::{decoder::NullDecoder, DecoderConfig};
+        let key = make_track_key("stream:resize-test", "screen");
+        let small = [published_layer(9991, 1280, 720)];
+        bind_remote_video_track("stream:resize-test", "screen", &small);
+        let decoder: Box<dyn paracord_codec::video::decoder::VideoDecoder> = Box::new(
+            NullDecoder::new(DecoderConfig {
+                max_dimensions: Some((1280, 720)),
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        video_decoder_pool()
+            .lock()
+            .unwrap()
+            .insert(key.clone(), Arc::new(Mutex::new(decoder)));
+        bind_remote_video_track("stream:resize-test", "screen", &small);
+        assert!(video_decoder_pool().lock().unwrap().contains_key(&key));
+        bind_remote_video_track(
+            "stream:resize-test",
+            "screen",
+            &[published_layer(9991, 1920, 1080)],
+        );
+        assert_eq!(track_max_dimensions(&key), Some((1920, 1080)));
+        assert!(!video_decoder_pool().lock().unwrap().contains_key(&key));
+        unbind_remote_video_track("stream:resize-test", "screen");
     }
 
     /// Simulcast must keep working: every layer's SSRC belongs to the track, so

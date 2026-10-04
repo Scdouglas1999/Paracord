@@ -94,3 +94,7 @@ windows = { version = "0.61", features = [
 # tree as a transitive cpal dependency, so this adds no new crate.
 [target.'cfg(target_os = "linux")'.dependencies]
 alsa-sys = "0.3"
+
+[[example]]
+name = "stream_quality_probe"
+required-features = ["lavc"]

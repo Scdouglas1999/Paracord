@@ -1,5 +1,5 @@
 import { useCallback, useEffect } from 'react';
-import { PanelLeft, X } from 'lucide-react';
+import { MonitorPlay, PanelLeft, X } from 'lucide-react';
 
 import { useGlassKeybinds } from '../../../hooks/useGlassKeybinds';
 import { useGlassStore, type OpenStageMode, type StageTarget } from '../../../stores/glassStore';
@@ -149,6 +149,19 @@ export function CallStage({ target, mode }: { target: StageTarget; mode: OpenSta
           people
         )}
       </div>
+
+      {[...model.cameras, ...model.chips].some((person) => person.sharing) && (
+        <div className="glass-call-streams" role="group" aria-label="Shared screens">
+          {[...model.cameras, ...model.chips].filter((person) => person.sharing).map((person) => (
+            <button key={person.userId} type="button" className="glass-call-streams__watch glass-focusable"
+              onClick={() => switchTo(person.userId)}
+              aria-label={person.self ? 'Watch your stream' : `Watch ${person.name}’s stream`}>
+              <MonitorPlay size={22} strokeWidth={1.6} aria-hidden="true" />
+              <span><strong>{person.self ? 'Your screen' : `${person.name}’s screen`}</strong><small>{person.self ? 'Show preview' : 'Watch stream'}</small></span>
+            </button>
+          ))}
+        </div>
+      )}
 
       {watchTogether && !phone && <div className="glass-stage__call-row">{people}</div>}
 

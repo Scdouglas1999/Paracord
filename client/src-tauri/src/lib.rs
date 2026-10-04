@@ -1858,6 +1858,7 @@ pub fn run() {
         native_media::commands::screen_share_list_sources,
         native_media::commands::screen_share_source_thumbnail,
         native_media::commands::screen_share_start,
+        native_media::commands::screen_share_set_quality,
         native_media::commands::screen_share_stop,
         native_media::commands::voice_set_screen_audio_enabled,
         native_media::commands::system_audio_grant_state,

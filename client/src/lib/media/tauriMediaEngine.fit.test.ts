@@ -11,6 +11,7 @@ const ipc = vi.hoisted(() => ({
   renderers: [] as Array<{ fit?: string; anchor?: unknown }>,
   tiles: [] as Array<{ fit?: string; anchor?: unknown; trackId: string }>,
   webCodecs: true,
+  handlers: new Map<string, (event: { payload: unknown }) => void>(),
 }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: ipc.invoke, Channel: class { onmessage = null; } }));
 vi.mock('@tauri-apps/api/event', () => ({ listen: ipc.listen }));
@@ -61,6 +62,7 @@ const CAMERA = {
 };
 
 beforeEach(() => {
+  ipc.handlers.clear();
   ipc.renderers.length = 0;
   ipc.tiles.length = 0;
   vi.stubGlobal('IntersectionObserver', class { observe() {} disconnect() {} unobserve() {} });
@@ -73,7 +75,7 @@ beforeEach(() => {
     if (command === 'media_list_published_tracks') return [CAMERA];
     return [];
   });
-  ipc.listen.mockReset().mockImplementation(async () => vi.fn());
+  ipc.listen.mockReset().mockImplementation(async (name: string, handler: (event: { payload: unknown }) => void) => { ipc.handlers.set(name, handler); return vi.fn(); });
 });
 afterEach(async () => {
   await Promise.allSettled(engines.splice(0).map((value) => value.disconnect()));
@@ -144,4 +146,25 @@ describe('the fit of a desktop video surface', () => {
       ipc.webCodecs = true;
     }
   });
+});
+
+it('upload feedback does not downgrade a watched video on a healthy downlink', async () => {
+  const base = ipc.invoke.getMockImplementation()!;
+  ipc.invoke.mockImplementation(async (command: string, ...args: unknown[]) => {
+    if (command === 'media_list_published_tracks') return [{ ...CAMERA, layers: [
+      ...CAMERA.layers, { layerId: 2, ssrc: 33, width: 1920, height: 1080, maxBitrateKbps: 12000, active: true },
+    ] }];
+    return base(command, ...args);
+  });
+  const media = await joined();
+  const canvas = document.createElement('canvas');
+  Object.defineProperties(canvas, { clientWidth: { value: 1920 }, clientHeight: { value: 1080 } });
+  const release = media.subscribeVideo('300', canvas, undefined, { preferredTrackId: 'camera' });
+  await flush();
+  expect(ipc.invoke.mock.calls.some(([name]) => name === 'media_register_track_subscription')).toBe(true);
+  ipc.invoke.mockClear();
+  ipc.handlers.get(`media_bandwidth_feedback:${media.sessionOwnerId}`)?.({ payload: { availableKbps: 512 } });
+  await flush();
+  expect(ipc.invoke.mock.calls.filter(([name]) => name === 'media_register_track_subscription')).toEqual([]);
+  release();
 });

@@ -1093,3 +1093,34 @@ html[data-native-underlay] .glass-stage__sbtn:hover {
 html[data-native-underlay] .glass-stage__sbtn[aria-pressed='true'] {
   background-color: color-mix(in srgb, var(--ink-1) 22%, var(--pill));
 }
+
+/* Shared screens remain discoverable inside the call, including your preview. */
+.glass-call-streams {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  padding: 12px 20px;
+  flex-shrink: 0;
+}
+.glass-call-streams__watch {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 18px;
+  border: 1px solid var(--glass-hair);
+  border-radius: 14px;
+  background: var(--glass-fill-quiet);
+  color: var(--ink-1);
+  text-align: left;
+  cursor: pointer;
+}
+.glass-call-streams__watch:hover { background: var(--glass-fill-hover); }
+.glass-call-streams__watch span { display: grid; gap: 3px; }
+.glass-call-streams__watch strong { font-size: 13px; font-weight: 600; }
+.glass-call-streams__watch small { font-size: 12px; color: var(--ink-2); }
+
+.glass-stage { container-type: inline-size; width: 100%; }
+@container (max-width: 700px) {
+  .glass-stage__quality-label { display: none; }
+}

@@ -334,9 +334,9 @@ pub async fn start_capture(
 
         let capture_options = build_capture_options(
             request.source_id.as_deref(),
-            request.max_frame_rate,
-            request.max_width,
-            request.max_height,
+            60,
+            None,
+            None,
             request.capture_audio,
         )?;
         let [capture_width, capture_height] =
@@ -730,9 +730,9 @@ fn run_capture_loop(
 ) -> Result<(), String> {
     let options = build_capture_options(
         source_id.as_deref(),
-        max_frame_rate,
-        max_width,
-        max_height,
+        60, // Retain source cadence and size so quality can change without a new picker.
+        None,
+        None,
         capture_audio,
     )?;
     let mut capturer =
@@ -755,13 +755,14 @@ fn run_capture_loop(
     // frame, without taking the session lock every iteration. The Arc is created
     // once at session construction and only ever `store`d into, so this clone
     // stays valid across encoder reinits.
-    let encoder_force_keyframe = runtime_handle
+    let (encoder_force_keyframe, encoder_fps) = runtime_handle
         .block_on(async {
-            session_arc
-                .lock()
-                .await
-                .as_ref()
-                .map(|session| session.screen_force_keyframe.clone())
+            session_arc.lock().await.as_ref().map(|session| {
+                (
+                    session.screen_force_keyframe.clone(),
+                    session.screen_encode_fps.clone(),
+                )
+            })
         })
         .ok_or("no active session")?;
     let encoder = thread::spawn(move || -> Result<(), String> {
@@ -787,8 +788,6 @@ fn run_capture_loop(
         // above the requested rate (WGC compositor cadence, damage-driven
         // coalescing), so pace here: the keep-latest slot means we can drop
         // everything but the newest frame and still encode on cadence.
-        let frame_interval =
-            Duration::from_millis((1_000u64 / u64::from(max_frame_rate.max(1))).max(1));
         // Static-screen keepalive: a damage-driven source stops producing frames
         // when nothing changes. Re-encode the retained frame at ~1fps so the
         // periodic-keyframe cadence keeps advancing and a late joiner's keyframe
@@ -806,6 +805,9 @@ fn run_capture_loop(
         let mut pending_fresh = false;
 
         while !encoder_stop.load(Ordering::SeqCst) {
+            let frame_interval = Duration::from_micros(
+                1_000_000 / u64::from(encoder_fps.load(Ordering::Relaxed).max(1)),
+            );
             // Block until a fresh frame arrives or one frame interval elapses.
             // The condvar wakes immediately on a new frame; the timeout bounds
             // the wait so keyframe/keepalive checks still run on a static screen.
@@ -975,8 +977,7 @@ fn run_capture_loop(
     // stop is still observed within ~100ms at low frame rates). Replaces the old
     // 5ms busy-poll (P6): this thread owns the capturer, so it parks on the
     // capture channel instead of spinning.
-    let poll_interval = Duration::from_millis((1_000u64 / u64::from(max_frame_rate.max(1))).max(1))
-        .min(Duration::from_millis(100));
+    let poll_interval = Duration::from_millis(16);
     let result = (|| -> Result<(), String> {
         while !stop_flag.load(Ordering::SeqCst) {
             let mut latest_video: Option<scap::frame::VideoFrame> = None;

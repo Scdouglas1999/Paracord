@@ -939,6 +939,20 @@ export class TauriMediaEngine implements MediaEngine {
     }
   }
 
+  async updateScreenShareQuality(config: ScreenShareConfig): Promise<void> {
+    this.assertOpen();
+    await this.invokeOwned('screen_share_set_quality', {
+      request: {
+        maxFrameRate: config.maxFrameRate,
+        maxWidth: config.maxWidth,
+        maxHeight: config.maxHeight,
+        maxBitrateBps: config.maxBitrateBps,
+        contentHint: config.contentHint,
+        captureAudio: config.audio,
+      },
+    });
+  }
+
   async stopScreenShare(): Promise<void> {
     const actionRevision = ++this.screenRevision;
     this.screenAudioActive = false;
@@ -1265,47 +1279,10 @@ export class TauriMediaEngine implements MediaEngine {
     // C4). The media_stream_audio_pcm JSON event and its WebAudio playback path
     // are intentionally gone — no per-sample JSON round trip through the webview.
 
-    const bandwidthUnlisten = await this.listenOwned('media_bandwidth_feedback', (event) => {
-      const payload = event.payload as { availableKbps?: number } | null;
-      const availableKbps = Number(payload?.availableKbps ?? 0);
-      if (!Number.isFinite(availableKbps) || availableKbps <= 0) return;
-      void this.applyBandwidthFeedback(availableKbps).catch(() => {});
-    });
-    this.unlisteners.push(bandwidthUnlisten);
-  }
-
-  private async applyBandwidthFeedback(availableKbps: number): Promise<void> {
-    for (const [, sub] of this.videoSubscriptions) {
-      if (!sub.streamId || !sub.trackId || !sub.channel) continue;
-      const track = this.publishedTracks.get(`${sub.streamId}:${sub.trackId}`);
-      if (!track?.layers.length) continue;
-      const sortedLayers = [...track.layers].sort(
-        (a, b) => (a.maxBitrateKbps ?? 0) - (b.maxBitrateKbps ?? 0),
-      );
-      let targetLayer = sortedLayers[0]?.layerId ?? 0;
-      for (const layer of sortedLayers) {
-        if ((layer.maxBitrateKbps ?? 0) <= availableKbps) {
-          targetLayer = layer.layerId;
-        }
-      }
-      if (sub.activeLayer === targetLayer) continue;
-      sub.activeLayer = targetLayer;
-      const viewport = rendererCanvasSize(sub.renderer);
-      await this.invokeOwned('media_register_stream_video_subscription', {
-        streamId: sub.streamId,
-        trackId: sub.trackId,
-        ssrc: track.layers.find((layer) => layer.layerId === targetLayer)?.ssrc,
-        preferEncoded: await isWebCodecsDecodeSupported(track.codec ?? 'vp9'),
-        channel: sub.channel,
-      }).catch(() => {});
-      await this.registerTrackSubscription({
-        streamId: sub.streamId,
-        trackId: sub.trackId,
-        requestedLayer: targetLayer,
-        activeLayer: targetLayer,
-        viewport,
-      }).catch(() => {});
-    }
+    // BandwidthFeedback describes this publisher's UPLINK. Native encoders
+    // consume it directly. Playback layers are chosen by the relay from each
+    // viewer's downlink and explicit viewport/quality requests; never lower a
+    // watched stream because this client is sending little (or no) video.
   }
 
   async getStreamCapabilities(): Promise<MediaStreamCapabilities> {

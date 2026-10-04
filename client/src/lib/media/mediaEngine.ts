@@ -207,6 +207,7 @@ export interface MediaEngine {
   setDeaf(deafened: boolean): void;
   enableVideo(enabled: boolean): Promise<void>;
   startScreenShare(config: ScreenShareConfig): Promise<void>;
+  updateScreenShareQuality?(config: ScreenShareConfig): Promise<void>;
   stopScreenShare(): Promise<void>;
   supportsNativeSourcePicker(): boolean;
   listScreenShareSources(): Promise<ScreenShareSource[]>;

@@ -122,3 +122,21 @@ describe('a desktop watch that goes live before the stream audio is published', 
     expect(subscriptions('media_register_track_subscription')).toEqual([`${STREAM}:screen-audio`]);
   });
 });
+
+describe('live desktop sharing quality', () => {
+  it('updates the owned encoder without reopening capture or interrupting audio', async () => {
+    const media = new TauriMediaEngine();
+    engines.push(media);
+    await media.connect('https://media.example/media', token(), 'pin', {
+      id: 'call', role: 'call', signal: new AbortController().signal,
+    });
+    ipc.invoke.mockClear();
+    await media.updateScreenShareQuality({ audio: true, maxWidth: 1920, maxHeight: 1080, maxFrameRate: 60, maxBitrateBps: 12000000, contentHint: 'detail' });
+    expect(ipc.invoke).toHaveBeenCalledWith('screen_share_set_quality', expect.objectContaining({
+      ownerId: media.sessionOwnerId,
+      request: expect.objectContaining({ maxWidth: 1920, maxHeight: 1080, maxFrameRate: 60, maxBitrateBps: 12000000 }),
+    }));
+    expect(ipc.invoke.mock.calls.map(([name]) => name)).not.toContain('screen_share_start');
+    expect(ipc.invoke.mock.calls.map(([name]) => name)).not.toContain('screen_share_stop');
+  });
+});

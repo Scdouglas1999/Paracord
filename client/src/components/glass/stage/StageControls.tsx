@@ -3,7 +3,8 @@ import {
   AudioLines,
   Clapperboard,
   Hand,
-  Heart,
+  Eye,
+  EyeOff,
   Mic,
   MicOff,
   MonitorOff,
@@ -19,7 +20,7 @@ import { usePermissions } from '../../../hooks/usePermissions';
 import { toggleVoiceVideo } from '../../../hooks/useVoice';
 import { useLingering } from '../../../lib/motion';
 import { useClip } from '../../../lib/media/clips/useClip';
-import { isStreamTarget, type StageTarget } from '../../../stores/glassStore';
+import { useGlassStore, isStreamTarget, type StageTarget } from '../../../stores/glassStore';
 import { toast } from '../../../stores/toastStore';
 import { useVoiceStore } from '../../../stores/voiceStore';
 import { hasPermission, Permissions } from '../../../types';
@@ -32,30 +33,13 @@ import { useTogether } from '../../voice/together/useTogether';
 import { VoiceConnectionCheck } from '../../voice/VoiceConnectionCheck';
 import { useJoinMuteStore } from '../pill/muteStore';
 import { joinCall, leaveCall, toggleJoinMute, toggleMic, voiceGuildOf } from '../pill/pillActions';
-import { ClipGlyph, FlameGlyph, GlassButton, JoinButton } from '../primitives';
+import { ClipGlyph, GlassButton, JoinButton } from '../primitives';
 import { DeviceMenu, MoreMenu, ShareQualityMenu, usePushToTalk, type MoreItem } from './StageMenus';
 import type { ControlsFit, StageModel } from './stageModel';
-import { useStreamReactions, type StreamReactionKind } from './StreamReactionsLayer';
 import { shareQualityLabel, useShareQualityStore, useShareScreen } from './useShareScreen';
 import { useStageChannel } from './useStageChannel';
 
-/**
- * The stage's control row, centered at the bottom (docs/glass-spec.md §6.1):
- *
- *   not joined   flame, heart, Clip | mute preference, Join
- *   joined       mic, camera, share | flame, heart, Clip | More, Leave
- *
- * Join (cream) is the one filled button. Leave is a text decision and the only
- * way out of a call; the stage never leaves a call on its own. Deafen lives in
- * the microphone's menu (right-click, Shift+F10 or a long press); More holds
- * the soundboard, Watch together, invite, devices and the connection check
- * (owner decisions, glass-plan §8.4).
- *
- * Flame, heart and Clip call the contracts WP-G17 and WP-G16 fill
- * (`useStreamReactions`, `useClip`). Until they do, each says it is not
- * available yet (`aria-disabled`, the reason as its tooltip and as a toast on
- * a press): nothing pretends to work.
- */
+/** Call controls, screen preview and live sending quality. */
 
 const LONG_PRESS_MS = 520;
 
@@ -71,12 +55,7 @@ export function StageControls({ target, model, fit }: StageControlsProps) {
   const joinMuted = useJoinMuteStore((state) => state.joinMuted);
   const modeSwitching = useVoiceStore((state) => state.modeSwitching);
 
-  // The call itself (no stream) has nothing to react to and nothing to clip.
   const stream = model.view === 'stream' && isStreamTarget(target) ? target : null;
-  // A DM call's stream has no reactions (the server takes them only in server
-  // voice channels), so its stage draws no flame or heart; Clip stays.
-  const reactable = stream !== null && stream.guildId !== null;
-  const reactions = useStreamReactions(stream);
   const clip = useClip(stream ? { ...stream, streamerName: model.streamerName } : null);
   const share = useShareScreen();
   // A stage channel's audience asks to speak instead of opening a microphone.
@@ -85,6 +64,9 @@ export function StageControls({ target, model, fit }: StageControlsProps) {
 
   const micRef = useRef<HTMLButtonElement | null>(null);
   const moreRef = useRef<HTMLButtonElement | null>(null);
+  const qualityRef = useRef<HTMLButtonElement | null>(null);
+  const self = [...model.cameras, ...model.chips].find((person) => person.self);
+  const ownPreview = stream !== null && stream.streamerId === self?.userId;
   const [deviceMenu, setDeviceMenu] = useState<'mic' | 'more' | null>(null);
   const [moreOpen, setMoreOpen] = useState(false);
   const [dialog, setDialog] = useState<'invite' | 'check' | 'together' | 'soundboard' | 'quality' | null>(null);
@@ -95,14 +77,6 @@ export function StageControls({ target, model, fit }: StageControlsProps) {
   const busy = model.busy || modeSwitching;
   const action = { serverId: target.serverId, guildId: voiceGuildOf(target.guildId), channelId: target.channelId, title: model.channelName };
 
-  /* ---- Reactions and Clip (G17, G16) ------------------------------------------ */
-  const react = (kind: StreamReactionKind) => {
-    if (!reactions.available) {
-      toast.info(reactions.unavailableReason ?? 'Reactions are not available.');
-      return;
-    }
-    reactions.send(kind);
-  };
   const onClip = () => {
     if (!clip.available) {
       toast.info(clip.unavailableReason ?? 'Clips are not available.');
@@ -142,12 +116,6 @@ export function StageControls({ target, model, fit }: StageControlsProps) {
   const together = useTogether();
 
   const moreItems: MoreItem[] = [];
-  if (reactable && fit >= 2) {
-    moreItems.push(
-      { id: 'fire', label: 'React with fire', icon: <FlameGlyph size={18} />, onSelect: () => react('fire') },
-      { id: 'heart', label: 'React with a heart', icon: <Heart size={18} />, onSelect: () => react('heart') },
-    );
-  }
   if (canSoundboard) moreItems.push({ id: 'soundboard', label: 'Soundboard', icon: <AudioLines size={18} />, onSelect: () => setDialog('soundboard') });
   if (together) {
     moreItems.push({
@@ -184,33 +152,6 @@ export function StageControls({ target, model, fit }: StageControlsProps) {
   useOverlayDismiss(dialog === 'soundboard', closeSoundboard, insideSoundboard);
 
   /* ---- The row ------------------------------------------------------------------ */
-  const reactionTitle = reactions.available ? undefined : reactions.unavailableReason ?? undefined;
-  const reactionButtons = reactable && fit < 2 && (
-    <>
-      <GlassButton
-        variant="icon"
-        size="md"
-        className="glass-stage__ctl glass-stage__ctl--flame"
-        aria-label="React with fire"
-        aria-disabled={!reactions.available || undefined}
-        title={reactionTitle ?? 'React with fire'}
-        onClick={() => react('fire')}
-      >
-        <FlameGlyph size={19} />
-      </GlassButton>
-      <GlassButton
-        variant="icon"
-        size="md"
-        className="glass-stage__ctl"
-        aria-label="React with a heart"
-        aria-disabled={!reactions.available || undefined}
-        title={reactionTitle ?? 'React with a heart'}
-        onClick={() => react('heart')}
-      >
-        <Heart size={19} strokeWidth={1.8} aria-hidden="true" />
-      </GlassButton>
-    </>
-  );
   const clipButton = stream && (
     <GlassButton
       variant="glass"
@@ -326,10 +267,33 @@ export function StageControls({ target, model, fit }: StageControlsProps) {
               </GlassButton>
             </>
           )}
+          {share.sharing && !model.audience && (
+            <>
+              <GlassButton
+                ref={qualityRef}
+                variant="glass" size="md" className="glass-stage__ctl"
+                aria-label={`Change stream quality: ${shareQualityLabel(shareQuality)}`}
+                aria-haspopup="dialog" aria-expanded={dialog === 'quality'}
+                onClick={() => setDialog('quality')}
+              >
+                <SlidersHorizontal size={18} aria-hidden="true" />
+                <span className="glass-stage__quality-label">{shareQualityLabel(shareQuality)}</span>
+              </GlassButton>
+              {self && (
+                <GlassButton
+                  variant="icon" size="md" className="glass-stage__ctl"
+                  aria-label={ownPreview ? 'Hide your stream preview' : 'Show your stream preview'}
+                  title={ownPreview ? 'Hide preview. Your screen stays shared.' : 'Show your stream preview'}
+                  onClick={() => useGlassStore.getState().openStage({ ...target, streamerId: ownPreview ? null : self.userId })}
+                >
+                  {ownPreview ? <EyeOff size={19} /> : <Eye size={19} />}
+                </GlassButton>
+              )}
+            </>
+          )}
           {divider}
           {stream && (
             <>
-              {reactionButtons}
               {clipButton}
               {divider}
             </>
@@ -359,22 +323,7 @@ export function StageControls({ target, model, fit }: StageControlsProps) {
         </>
       ) : (
         <>
-          {reactionButtons}
           {clipButton}
-          {reactable && fit >= 2 && (
-            <GlassButton
-              ref={moreRef}
-              variant="icon"
-              size="md"
-              className="glass-stage__ctl"
-              aria-label="More call actions"
-              aria-haspopup="menu"
-              aria-expanded={moreOpen}
-              onClick={() => setMoreOpen((open) => !open)}
-            >
-              <MoreHorizontal size={19} aria-hidden="true" />
-            </GlassButton>
-          )}
           {stream && divider}
           <GlassButton
             variant="icon"
@@ -410,7 +359,7 @@ export function StageControls({ target, model, fit }: StageControlsProps) {
       <MoreMenu
         open={moreOpen}
         anchorRef={moreRef}
-        items={joined ? moreItems : moreItems.filter((item) => item.id === 'fire' || item.id === 'heart')}
+        items={moreItems}
         onClose={closeMore}
       />
       <DeviceMenu open={deviceMenu !== null} anchorRef={deviceMenu === 'more' ? moreRef : micRef} onClose={closeDevices} />
@@ -428,7 +377,7 @@ export function StageControls({ target, model, fit }: StageControlsProps) {
         <InviteModal guildName={model.guildName ?? model.place} channelId={target.channelId} onClose={() => setDialog(null)} />
       )}
       <VoiceConnectionCheck open={dialog === 'check'} onClose={() => setDialog(null)} />
-      <ShareQualityMenu open={dialog === 'quality'} anchorRef={moreRef} onClose={() => setDialog(null)} />
+      <ShareQualityMenu open={dialog === 'quality'} anchorRef={share.sharing ? qualityRef : moreRef} onClose={() => setDialog(null)} />
       {share.pickerOpen && !share.sharing && (
         <ScreenSharePickerModal
           sources={share.sources}

@@ -832,3 +832,41 @@ mod tests {
         }
     }
 }
+
+/// Outgoing video packet numbering, retained for the lifetime of a media session.
+/// Clones share counters so encoder reconfiguration cannot rewind a sequence.
+/// Only locally allocated SSRCs belong here (one for each camera/screen layer).
+#[derive(Debug, Clone, Default)]
+pub struct VideoSequences(std::sync::Arc<std::sync::Mutex<std::collections::HashMap<u32, u16>>>);
+
+impl VideoSequences {
+    pub fn next(&mut self, ssrc: u32) -> u16 {
+        // Loss is measured per SSRC. Other simulcast layers must never leave
+        // gaps in this layer, even when their frame rates differ.
+        let mut counters = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        let counter = counters.entry(ssrc).or_default();
+        let sequence = *counter;
+        *counter = sequence.wrapping_add(1);
+        sequence
+    }
+}
+
+#[cfg(test)]
+mod video_sequence_tests {
+    use super::VideoSequences;
+
+    #[test]
+    fn layers_wrap_independently_and_inflight_jobs_cannot_reuse_numbers() {
+        let mut session = VideoSequences::default();
+        let mut job = session.clone();
+        for i in 0..=u16::MAX {
+            assert_eq!(job.next(100), i);
+            if i % 4 == 0 {
+                session.next(101);
+            }
+        }
+        assert_eq!(session.next(100), 0);
+        assert_eq!(job.next(100), 1);
+        assert_eq!(session.next(101), 16384);
+    }
+}

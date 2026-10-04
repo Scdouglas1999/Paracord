@@ -407,7 +407,7 @@ describe('controls', () => {
     renderStage();
     const row = screen.getByRole('group', { name: 'Call controls' });
     const names = within(row).getAllByRole('button').map((b) => b.getAttribute('aria-label') ?? b.textContent);
-    expect(names).toEqual(['React with fire', 'React with a heart', 'Clip', 'Microphone on when you join', 'Join Lounge']);
+    expect(names).toEqual(['Clip', 'Microphone on when you join', 'Join Lounge']);
     expect(row.querySelectorAll('.glass-btn--primary')).toHaveLength(1);
   });
 
@@ -437,8 +437,6 @@ describe('controls', () => {
       'Microphone',
       'Camera',
       'Share your screen',
-      'React with fire',
-      'React with a heart',
       'Clip',
       'More call actions',
       'Leave Lounge',
@@ -529,10 +527,50 @@ describe('controls', () => {
     renderStage();
     const clip = screen.getByRole('button', { name: 'Clip' });
     expect(clip).toHaveAttribute('aria-disabled', 'true');
-    expect(screen.getByRole('button', { name: 'React with fire' })).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.queryByRole('button', { name: 'React with fire' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'React with a heart' })).not.toBeInTheDocument();
     fireEvent.click(clip);
     // WP-G16: no watch is live here, so Clip waits for the stream and says so.
     expect(useToastStore.getState().toasts.at(-1)?.message).toBe("Waiting for Vincent's screen.");
+  });
+});
+
+describe('sharing controls', () => {
+  function sharing() {
+    joined();
+    useVoiceStore.setState({ selfStream: true, channelParticipants: new Map([['lounge', [VINCENT, voiceState('me', { self_stream: true })]]]) });
+  }
+
+  it('offers every screen directly inside the call, including your own', () => {
+    sharing();
+    renderStage({ ...LOUNGE, streamerId: null });
+    const screens = screen.getByRole('group', { name: 'Shared screens' });
+    expect(within(screens).getByRole('button', { name: 'Watch Vincent’s stream' })).toBeInTheDocument();
+    fireEvent.click(within(screens).getByRole('button', { name: 'Watch your stream' }));
+    expect(useGlassStore.getState().stage.streamerId).toBe('me');
+  });
+
+  it('hides your preview without stopping the share or leaving the call', () => {
+    sharing();
+    renderStage({ ...LOUNGE, streamerId: 'me' });
+    fireEvent.click(screen.getByRole('button', { name: 'Hide your stream preview' }));
+    expect(useGlassStore.getState().stage.streamerId).toBeNull();
+    expect(useVoiceStore.getState().selfStream).toBe(true);
+    expect(actions.leaveChannel).not.toHaveBeenCalled();
+  });
+
+  it('applies a quality choice to the active stream before changing its label', async () => {
+    sharing();
+    const originalChange = useVoiceStore.getState().changeStreamQuality;
+    const change = vi.fn().mockResolvedValue(undefined);
+    useVoiceStore.setState({ changeStreamQuality: change });
+    renderStage({ ...LOUNGE, streamerId: null });
+    fireEvent.click(screen.getByRole('button', { name: 'Change stream quality: 720p 30fps' }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Share quality' })).getByRole('button', { name: '1080p 60fps' }));
+    await vi.waitFor(() => expect(change).toHaveBeenCalledWith('1080p60'));
+    await vi.waitFor(() => expect(useShareQualityStore.getState().quality).toBe('1080p60'));
+    useVoiceStore.setState({ changeStreamQuality: originalChange });
+    act(() => useShareQualityStore.setState({ quality: '720p30' }));
   });
 });
 
