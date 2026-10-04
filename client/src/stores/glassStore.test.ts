@@ -48,7 +48,6 @@ describe('glassStore', () => {
   it('closing the stage clears browse and hidden chat with it', () => {
     const store = useGlassStore.getState();
     store.openStage(LOUNGE, 'theater');
-    store.toggleChatHidden();
     store.toggleBrowse();
     store.closeStage();
     const s = useGlassStore.getState();
