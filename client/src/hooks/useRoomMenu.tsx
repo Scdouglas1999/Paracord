@@ -9,6 +9,18 @@ import type { ContextMenuItem } from '../components/ui/ContextMenu';
 import type { RoomLight } from '../lib/attention/light';
 import { useRoomNotifications } from './useRoomNotifications';
 
+/** What a room's menu needs to know of its room: a `RoomLight` has all of it, and so does any channel the sidebar lists. */
+export type RoomMenuTarget = Pick<RoomLight, 'channelId' | 'scope' | 'guildId' | 'name'>;
+
+/** Copy the link to a channel (`/app/guilds/<g>/channels/<c>`) and say so. */
+export function copyChannelLink(target: Pick<RoomMenuTarget, 'channelId' | 'guildId'>): void {
+  const path = `/app/guilds/${target.guildId}/channels/${target.channelId}`;
+  const link = typeof window === 'undefined' ? path : new URL(path, window.location.origin).toString();
+  void writeClipboardText(link)
+    .then(() => toast.success('Link copied.'))
+    .catch((error) => toast.error(`Could not copy the link: ${extractApiError(error)}`));
+}
+
 /**
  * The room menu (docs/lantern-stage-spec.md §7.1, §7.3).
  *
@@ -23,11 +35,11 @@ import { useRoomNotifications } from './useRoomNotifications';
  * two there was no way to mute a room, silence it, or mark it read. One builder,
  * both surfaces — the menu cannot drift between them.
  */
-export function useRoomMenu(): (room: RoomLight) => ContextMenuItem[] {
+export function useRoomMenu(): (room: RoomMenuTarget) => ContextMenuItem[] {
   const roomNotifications = useRoomNotifications();
 
   return useCallback(
-    (room: RoomLight): ContextMenuItem[] => {
+    (room: RoomMenuTarget): ContextMenuItem[] => {
       const reference = { id: room.channelId, scope: room.scope, name: room.name };
       const level = roomNotifications.levelOf(reference);
       const busy = roomNotifications.savingRoom(reference);
@@ -67,14 +79,7 @@ export function useRoomMenu(): (room: RoomLight) => ContextMenuItem[] {
         {
           label: 'Copy link to channel',
           icon: <Link2 size={16} />,
-          action: () => {
-            const path = `/app/guilds/${room.guildId}/channels/${room.channelId}`;
-            const link =
-              typeof window === 'undefined' ? path : new URL(path, window.location.origin).toString();
-            void writeClipboardText(link)
-              .then(() => toast.success('Link copied.'))
-              .catch((error) => toast.error(`Could not copy the link: ${extractApiError(error)}`));
-          },
+          action: () => copyChannelLink(room),
         },
       ];
     },

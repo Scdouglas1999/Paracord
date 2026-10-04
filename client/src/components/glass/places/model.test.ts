@@ -9,9 +9,14 @@ import {
   badgeWords,
   capped,
   clockDigits,
+  clockShort,
+  comingUpLine,
+  dateTile,
   eventLine,
   eventTile,
   formatRowTime,
+  fullWhen,
+  headerLine,
   glyphFor,
   isPlaceChannel,
   isQuietChannel,
@@ -23,6 +28,7 @@ import {
   previewLine,
   previewText,
   serverLine,
+  shortWhen,
   thumbnailOf,
   unreadBadge,
 } from './model';
@@ -214,7 +220,7 @@ describe('previewLine', () => {
     expect(unknown).not.toContain('9999');
   });
 
-  it('names an event that is the whole message, and every event in a message that shares two', () => {
+  it('names an event that is the whole message (when no calendar time is known), and every event in a message that shares two', () => {
     expect(previewLine(preview({ content: '<event:7002>' }), CONTEXT)).toBe('Jeremy: Movie night');
     expect(previewLine(preview({ content: '<event:7002> <event:9999>' }), CONTEXT)).toBe('Jeremy: Movie night an event');
   });
@@ -233,12 +239,30 @@ describe('previewLine', () => {
     expect(line).toContain('spoiler');
   });
 
-  it('reads media with no text as what was shared, without a colon', () => {
+  it('reads media with no text as what was posted, without a colon (the reference: "Nick posted 4 photos")', () => {
     const image = { attachmentId: 'a', contentType: 'image/png', filename: 'x.png', width: 1, height: 1 };
-    expect(previewLine(preview({ content: null, media: image, attachmentCount: 1 }), CONTEXT)).toBe('Jeremy shared a photo');
-    expect(previewLine(preview({ content: null, media: { ...image, contentType: 'video/mp4' }, attachmentCount: 1 }), CONTEXT)).toBe('Jeremy shared a video');
-    expect(previewLine(preview({ content: null, media: { ...image, contentType: 'application/pdf' }, attachmentCount: 1 }), CONTEXT)).toBe('Jeremy shared a file');
-    expect(previewLine(preview({ content: null, media: image, attachmentCount: 12 }), CONTEXT)).toBe('Jeremy shared 12 files');
+    expect(previewLine(preview({ content: null, media: image, attachmentCount: 1 }), CONTEXT)).toBe('Jeremy posted a photo');
+    expect(previewLine(preview({ content: null, media: image, attachmentCount: 4 }), CONTEXT)).toBe('Jeremy posted 4 photos');
+    expect(previewLine(preview({ content: null, media: { ...image, contentType: 'video/mp4' }, attachmentCount: 1 }), CONTEXT)).toBe('Jeremy posted a video');
+    expect(previewLine(preview({ content: null, media: { ...image, contentType: 'audio/ogg' }, attachmentCount: 1 }), CONTEXT)).toBe('Jeremy posted a recording');
+    expect(previewLine(preview({ content: null, media: { ...image, contentType: 'application/pdf' }, attachmentCount: 1 }), CONTEXT)).toBe('Jeremy posted a file');
+    // More than one of something that is not a picture is files; a count of pictures is photos only when the first is one.
+    expect(previewLine(preview({ content: null, media: { ...image, contentType: 'application/pdf' }, attachmentCount: 3 }), CONTEXT)).toBe('Jeremy posted 3 files');
+  });
+
+  it('calls a video a clip only when its name says it is one of the app’s clips', () => {
+    const video = { attachmentId: 'a', contentType: 'video/webm', filename: 'Clip 0m30s from Vincent’s screen.webm', width: 1, height: 1 };
+    expect(previewLine(preview({ content: null, media: video, attachmentCount: 1 }), CONTEXT)).toBe('Jeremy posted a clip');
+    expect(previewLine(preview({ content: null, media: { ...video, filename: 'holiday.webm' }, attachmentCount: 1 }), CONTEXT)).toBe('Jeremy posted a video');
+  });
+
+  it('reads a message that is only a scheduled event as the event and its time ("Movie night · Fri 9 PM")', () => {
+    const friday = new Date(2026, 9, 2, 21, 0);
+    const context = { ...CONTEXT, nowMs: NOW, events: new Map([['7002', { name: 'Movie night', startsAt: friday }]]) };
+    expect(previewLine(preview({ content: '<event:7002>' }), context)).toBe('Movie night · Fri 9 PM');
+    // With text around it, or an event the client does not know, it is the author's line.
+    expect(previewLine(preview({ content: 'come to <event:7002>' }), context)).toBe('Jeremy: come to Movie night');
+    expect(previewLine(preview({ content: '<event:9999>' }), context)).toBe('Jeremy: an event');
   });
 
   it('keeps the text of a message that also has media', () => {
@@ -379,5 +403,55 @@ describe('events', () => {
 
   it('has something to say for an event with nothing else to say', () => {
     expect(eventLine(event(), { nowMs: NOW, selfUserId: null, roomName: null })).toBe('Scheduled');
+  });
+});
+
+
+describe('when things are, in a few words', () => {
+  const friday9 = new Date(2026, 9, 2, 21, 0).getTime();
+
+  it('writes the clock on the hour as "9 PM", and the minutes when there are some', () => {
+    expect(clockShort(friday9)).toBe('9 PM');
+    expect(clockShort(new Date(2026, 9, 2, 21, 30).getTime())).toBe('9:30 PM');
+  });
+
+  it('says Today, a weekday within a week either way, a date beyond it', () => {
+    expect(shortWhen(new Date(2026, 9, 1, 22, 0).getTime(), NOW)).toBe('Today 10 PM');
+    expect(shortWhen(friday9, NOW)).toBe('Fri 9 PM');
+    expect(shortWhen(new Date(2026, 9, 6, 9, 0).getTime(), NOW)).toBe('Tue 9 AM');
+    expect(shortWhen(new Date(2026, 9, 9, 9, 0).getTime(), NOW)).toBe('Oct 9, 9 AM');
+    expect(shortWhen(new Date(2027, 0, 5, 9, 0).getTime(), NOW)).toBe('Jan 5, 2027, 9 AM');
+    expect(shortWhen(new Date(2026, 8, 29, 18, 0).getTime(), NOW)).toBe('Tue 6 PM');
+  });
+
+  it('writes the minutes always in the full form ("Fri 9:00 PM")', () => {
+    expect(fullWhen(friday9, NOW)).toBe('Fri 9:00 PM');
+    expect(fullWhen(new Date(2026, 9, 1, 22, 15).getTime(), NOW)).toBe('Today 10:15 PM');
+  });
+});
+
+describe('the header line', () => {
+  it('is "N members · M here now", singular for one', () => {
+    expect(headerLine({ memberCount: 1, here: 1, rosterKnown: true })).toBe('1 member · 1 here now');
+    expect(headerLine({ memberCount: 12, here: 4, rosterKnown: true })).toBe('12 members · 4 here now');
+    expect(headerLine({ memberCount: 6, here: 0, rosterKnown: true })).toBe('6 members · 0 here now');
+  });
+
+  it('claims nothing about who is here before the roster is known', () => {
+    expect(headerLine({ memberCount: 12, here: 0, rosterKnown: false })).toBe('12 members');
+  });
+});
+
+describe('Coming up', () => {
+  const event = { startsAt: new Date(2026, 9, 2, 21, 0), location: null as string | null };
+
+  it('writes when, then where: the room, else the location, else only when', () => {
+    expect(comingUpLine(event, { nowMs: NOW, roomName: 'Lounge' })).toBe('Fri 9:00 PM · Lounge');
+    expect(comingUpLine({ ...event, location: 'Sean’s place' }, { nowMs: NOW, roomName: null })).toBe('Fri 9:00 PM · Sean’s place');
+    expect(comingUpLine(event, { nowMs: NOW, roomName: null })).toBe('Fri 9:00 PM');
+  });
+
+  it('gives the date tile a weekday and the day of the month', () => {
+    expect(dateTile(event.startsAt)).toEqual({ weekday: 'Fri', day: '2' });
   });
 });

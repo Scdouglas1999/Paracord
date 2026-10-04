@@ -1,25 +1,39 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useLocation, useParams } from 'react-router';
 
-import { useChannelPreviews } from '../../../hooks/useChannelPreviews';
+import { useStore } from 'zustand';
+
+import { previewFromMessage, useChannelPreviews, type ChannelPreviewEntry } from '../../../hooks/useChannelPreviews';
 import { useCurrentAccountScope } from '../../../hooks/useCurrentUser';
 import { useAvailableGuilds } from '../../../hooks/useGuilds';
+import { useCurrentMessageStoreApi } from '../../../hooks/useMessageStore';
 import { useMutedGuilds } from '../../../hooks/useMutedGuilds';
 import { useUnreadCounts } from '../../../hooks/useUnreadCounts';
 import { useUnifiedConversations } from '../../../hooks/useUnifiedConversations';
 import type { BuildingLight, RoomLight } from '../../../lib/attention/light';
 import { accountScopeKey, entityScopeKey } from '../../../lib/serverScope';
 import { displayName } from '../../../lib/displayName';
-import type { Channel } from '../../../types';
+import type { Channel, Message, VoiceState } from '../../../types';
 import { useChannelStore } from '../../../stores/channelStore';
 import { useMemberStore } from '../../../stores/memberStore';
+import { usePresenceStore } from '../../../stores/presenceStore';
 import { useNotificationPreferenceStore } from '../../../stores/notificationPreferenceStore';
+import { ENCRYPTED_DM_PLACEHOLDER } from '../../../stores/messageStore';
 import { EMPTY_READ_STATES, useReadStateStore } from '../../../stores/readStateStore';
 import { useVoiceStore } from '../../../stores/voiceStore';
 import { useUpcomingEvents, type HomeEvent } from '../../rooms/lobby/useUpcomingEvents';
 import type { FaceModel, PreviewContext } from './model';
-import { orderChannels } from './model';
-import { buildChannelRows, attentionOf, type ChannelRowModel } from './rows';
+import { isPlaceChannel, isVoiceChannel, orderChannels } from './model';
+import {
+  attentionOf,
+  buildChannelRows,
+  buildSidebarGroups,
+  buildSidebarRooms,
+  type ChannelRowModel,
+  type RoomOccupant,
+  type SidebarGroup,
+  type SidebarRoom,
+} from './rows';
 import type { ServerCircle } from './ServerRow';
 import { unreadKey, useUnreadMessageCounts, type UnreadTarget } from './useUnreadMessageCounts';
 
@@ -73,6 +87,41 @@ export function useServerCircles(currentGuildId: string | null, buildings: reado
       };
     });
   }, [guilds, buildings, guildUnreads, currentGuildId, scope]);
+}
+
+/* ---- Shared by the Glass panel and the Index sidebar ---------------------------- */
+
+const NO_MUTED = new Set<string>();
+
+/** Read positions, muted channels and whether the whole server is muted, for one account's server. */
+function useChannelAttention(scopeKey: string | null, guildKey: string | null) {
+  const readStates = useReadStateStore((state) => (scopeKey ? state.byAccount[scopeKey] : undefined)) ?? EMPTY_READ_STATES;
+  const roomSettings = useNotificationPreferenceStore((state) => (scopeKey ? state.channelsByAccount[scopeKey] : undefined));
+  const { mutedGuildKeys } = useMutedGuilds();
+  const guildMuted = Boolean(guildKey) && mutedGuildKeys.includes(guildKey as string);
+  const mutedChannelIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const [channelId, setting] of Object.entries(roomSettings ?? {})) {
+      if (setting.muted_now || setting.level === 2) ids.add(channelId);
+    }
+    return ids.size === 0 ? NO_MUTED : ids;
+  }, [roomSettings]);
+  return { readStates, mutedChannelIds, guildMuted };
+}
+
+/** The server's people by id: a face for each, and the name a mention of them reads as. */
+function useServerPeople(guildKey: string | null) {
+  const members = useMemberStore((state) => (guildKey ? state.members.get(guildKey) : undefined));
+  return useMemo(() => {
+    const faces = new Map<string, FaceModel>();
+    const names = new Map<string, string>();
+    for (const member of members ?? []) {
+      const name = displayName(member.user, member.nick);
+      faces.set(member.user.id, { userId: member.user.id, name, avatar: member.user.avatar_hash ?? null });
+      names.set(member.user.id, name);
+    }
+    return { people: faces, memberNames: names, members };
+  }, [members]);
 }
 
 /* ---- One server ---------------------------------------------------------------- */
@@ -129,29 +178,8 @@ export function useServerPlaces(guildId: string, building: BuildingLight | null,
 
   const previews = useChannelPreviews(guildId, scope, channels);
 
-  const readStates = useReadStateStore((state) => (scopeKey ? state.byAccount[scopeKey] : undefined)) ?? EMPTY_READ_STATES;
-  const roomSettings = useNotificationPreferenceStore((state) => (scopeKey ? state.channelsByAccount[scopeKey] : undefined));
-  const { mutedGuildKeys } = useMutedGuilds();
-  const guildMuted = Boolean(guildKey) && mutedGuildKeys.includes(guildKey as string);
-  const mutedChannelIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const [channelId, setting] of Object.entries(roomSettings ?? {})) {
-      if (setting.muted_now || setting.level === 2) ids.add(channelId);
-    }
-    return ids;
-  }, [roomSettings]);
-
-  const members = useMemberStore((state) => (guildKey ? state.members.get(guildKey) : undefined));
-  const { people, memberNames } = useMemo(() => {
-    const faces = new Map<string, FaceModel>();
-    const names = new Map<string, string>();
-    for (const member of members ?? []) {
-      const name = displayName(member.user, member.nick);
-      faces.set(member.user.id, { userId: member.user.id, name, avatar: member.user.avatar_hash ?? null });
-      names.set(member.user.id, name);
-    }
-    return { people: faces, memberNames: names };
-  }, [members]);
+  const { readStates, mutedChannelIds, guildMuted } = useChannelAttention(scopeKey, guildKey);
+  const { people, memberNames } = useServerPeople(guildKey);
 
   const targets = useMemo(
     () => countTargets(channels, readStates, (id) => guildMuted || mutedChannelIds.has(id), scope, selectedChannelId),
@@ -219,6 +247,200 @@ export function useServerPlaces(guildId: string, building: BuildingLight | null,
     channels.length > 0 ? 'ready' : listError ? 'error' : listLoaded ? 'empty' : 'loading';
 
   return { rows, listStatus, listError, channels, rooms, events, eventRoomName, nowMs, selfUserId };
+}
+
+/* ---- The Index sidebar's server ------------------------------------------------- */
+
+/**
+ * A preview whose message is end-to-end encrypted, replaced by what this client
+ * already read of it (`message.e2ee` with its decrypted content in the message
+ * store), when it has (index-spec §4.5). Nothing is decrypted here: the store
+ * only holds text it decrypted for a conversation that was open. An unread one
+ * stays encrypted and the row says "Encrypted".
+ */
+export function withLocalDecryption(
+  previews: ReadonlyMap<string, ChannelPreviewEntry>,
+  messages: Readonly<Record<string, readonly Message[] | undefined>>,
+): ReadonlyMap<string, ChannelPreviewEntry> {
+  let result: Map<string, ChannelPreviewEntry> | null = null;
+  for (const [channelId, entry] of previews) {
+    if (!entry.encrypted) continue;
+    const message = messages[channelId]?.find((candidate) => candidate.id === entry.messageId);
+    const text = message?.content;
+    if (message?.e2ee && typeof text === 'string' && text.trim() && text !== ENCRYPTED_DM_PLACEHOLDER) {
+      result ??= new Map(previews);
+      result.set(channelId, { ...previewFromMessage(message), encrypted: false, content: text });
+    }
+  }
+  return result ?? previews;
+}
+
+export interface ServerSidebar {
+  listStatus: ChannelListStatus;
+  listError: string | null;
+  /** The text-like channels in groups (uncategorized first), with their lines. */
+  groups: SidebarGroup[];
+  /** Every voice and stage channel (the pane leaves out the one the live card shows). */
+  rooms: SidebarRoom[];
+  /**
+   * Who is in the server, for the header's line: how many members the roster
+   * holds, how many of them are online ("here now": online, not idle or
+   * away), and whether the roster has arrived at all (before it has, the
+   * line claims no one is here).
+   */
+  roster: { known: boolean; size: number; here: number };
+  /** Every channel the store holds for the server (categories and threads too). */
+  channels: readonly Channel[];
+  events: HomeEvent[];
+  eventRoomName: (event: HomeEvent) => string | null;
+  nowMs: number;
+  selfUserId: string | null;
+}
+
+/**
+ * Who is in each voice room of one server, from the voice store: the people who
+ * joined (a listener is not in the room), the streamer first, then in the order
+ * they came in. Keyed by channel id; a room nobody is in has no entry.
+ */
+export function roomOccupancy(
+  channels: readonly Channel[],
+  channelParticipants: ReadonlyMap<string, readonly VoiceState[]>,
+  guildId: string,
+  nameOf: (userId: string) => string | undefined,
+): Map<string, RoomOccupant[]> {
+  const byRoom = new Map<string, RoomOccupant[]>();
+  for (const channel of channels) {
+    if (!isVoiceChannel(channel.type)) continue;
+    // One map holds every connected server's rooms, keyed by the bare channel id.
+    const states = (channelParticipants.get(channel.id) ?? []).filter(
+      (state) => state.guild_id === guildId && state.mode !== 'listen',
+    );
+    if (states.length === 0) continue;
+    const ordered = [...states].sort(
+      (a, b) =>
+        Number(b.self_stream) - Number(a.self_stream)
+        || (a.joined_at ?? '').localeCompare(b.joined_at ?? '')
+        || a.user_id.localeCompare(b.user_id, undefined, { numeric: true }),
+    );
+    byRoom.set(
+      channel.id,
+      ordered.map((state) => ({
+        userId: state.user_id,
+        // The member list can lag a join by a beat; the voice state always carries enough to name them.
+        name: nameOf(state.user_id) ?? displayName({ username: state.username ?? '', display_name: state.display_name }),
+        avatar: state.avatar_hash ?? null,
+        sharingScreen: Boolean(state.self_stream),
+      })),
+    );
+  }
+  return byRoom;
+}
+
+/**
+ * Everything the Index sidebar shows for one server (docs/index-spec.md §4.1,
+ * §4.5-4.7), from the stores. `guildId` is the pane's own place, never the
+ * route's, and `selectedChannelId` is the channel to mark as open (null for a
+ * pane that is sliding out, which keeps what it showed).
+ *
+ * Unlike the Glass panel it asks nothing about exact unread counts: an unread
+ * channel is a dot and a mention is the read state's own count.
+ */
+export function useServerSidebar(guildId: string, selectedChannelId: string | null): ServerSidebar {
+  const scope = useCurrentAccountScope();
+  const scopeKey = scope ? accountScopeKey(scope) : null;
+  const guildKey = scope ? entityScopeKey(scope, guildId) : null;
+  const nowMs = useMinuteClock();
+
+  const stored = useChannelStore((state) => (guildKey ? state.channelsByGuild[guildKey] : undefined)) ?? NO_CHANNELS;
+  const listLoaded = useChannelStore((state) => Boolean(guildKey && state.guildChannelsLoaded[guildKey]));
+  const listError = useChannelStore((state) => (guildKey ? state.errors[guildKey] ?? null : null));
+  const membersLoaded = useMemberStore((state) => Boolean(guildKey && state.membersLoaded[guildKey]));
+  const channelNames = useMemo(() => new Map(stored.map((channel) => [channel.id, channel.name ?? ''])), [stored]);
+  // Previews are asked for the text-like channels only; Rooms show who is in them.
+  const textLike = useMemo(
+    () => stored.filter((channel) => isPlaceChannel(channel.type) && !isVoiceChannel(channel.type)),
+    [stored],
+  );
+  const previews = useChannelPreviews(guildId, scope, textLike);
+  const messageStore = useCurrentMessageStoreApi();
+  const messages = useStore(messageStore, (state) => state.messages);
+  const shownPreviews = useMemo(() => withLocalDecryption(previews.previews, messages), [previews.previews, messages]);
+
+  const { readStates, mutedChannelIds, guildMuted } = useChannelAttention(scopeKey, guildKey);
+  const { memberNames, members } = useServerPeople(guildKey);
+
+  // Who is in which room, and who is here now: read from the voice and presence stores directly.
+  // (The Glass light hooks tick once a second while anybody is in a call and follow every typing
+  // event; a sidebar that shows a count and three faces needs neither.)
+  const channelParticipants = useVoiceStore((state) => state.channelParticipants);
+  const presences = usePresenceStore((state) => state.presences);
+  const occupancy = useMemo(
+    () => roomOccupancy(stored, channelParticipants, guildId, (userId) => memberNames.get(userId)),
+    [stored, channelParticipants, guildId, memberNames],
+  );
+  const hereNow = useMemo(() => {
+    void presences;
+    if (!scope) return 0;
+    const getPresence = usePresenceStore.getState().getPresence;
+    let count = 0;
+    for (const member of members ?? []) {
+      const status = getPresence(member.user.id, scope.serverId)?.status;
+      if (status === 'online') count += 1;
+    }
+    return count;
+  }, [members, presences, scope]);
+
+  const { events } = useUpcomingEvents(guildId);
+  const eventNames = useMemo(() => new Map(events.map((event) => [event.id, event.name])), [events]);
+  const eventTimes = useMemo(
+    () => new Map(events.map((event) => [event.id, { name: event.name, startsAt: event.startsAt }])),
+    [events],
+  );
+
+  const selfUserId = scope?.userId ?? null;
+  const context = useMemo<PreviewContext>(
+    () => ({ selfUserId, memberNames, channelNames, eventNames, events: eventTimes, nowMs }),
+    [selfUserId, memberNames, channelNames, eventNames, eventTimes, nowMs],
+  );
+
+  const groups = useMemo(
+    () =>
+      buildSidebarGroups({
+        channels: stored,
+        previews: shownPreviews,
+        previewStatus: previews.status,
+        readStates,
+        mutedChannelIds,
+        guildMuted,
+        context,
+        selectedChannelId,
+        nowMs,
+      }),
+    [stored, shownPreviews, previews.status, readStates, mutedChannelIds, guildMuted, context, selectedChannelId, nowMs],
+  );
+
+  const rooms = useMemo(() => buildSidebarRooms(stored, occupancy), [stored, occupancy]);
+
+  const eventRoomName = useMemo(
+    () => (event: HomeEvent) => (event.channelId ? channelNames.get(event.channelId) || null : null),
+    [channelNames],
+  );
+
+  const hasRows = groups.length > 0 || stored.some((channel) => isVoiceChannel(channel.type));
+  const listStatus: ChannelListStatus = hasRows ? 'ready' : listError ? 'error' : listLoaded ? 'empty' : 'loading';
+
+  return {
+    listStatus,
+    listError,
+    groups,
+    rooms,
+    roster: { known: listLoaded && membersLoaded, size: members?.length ?? 0, here: hereNow },
+    channels: stored,
+    events,
+    eventRoomName,
+    nowMs,
+    selfUserId,
+  };
 }
 
 /* ---- Home ---------------------------------------------------------------------- */

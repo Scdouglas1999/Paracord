@@ -6,6 +6,10 @@
  * in `usePlacesData.ts` feed it and the components draw what it returns, so every
  * rule below is unit-tested without React.
  *
+ * Owned by the Index sidebar (IX-5) from the Index build on: the rows of
+ * `components/ix/sidebar` read their words from here. The Glass panel that also
+ * calls these functions is retired with IX-19.
+ *
  * DECISIONS THIS MODULE HOLDS (also in docs/design/glass-g9-checkpoint.md):
  *
  *   - **Quiet channel**: no message for 7 days AND nothing unread AND no mention.
@@ -22,6 +26,7 @@
  */
 
 import { messageSnippetText } from '../../../lib/markdown';
+import { parseClipFilename } from '../../../lib/media/clips/clipFilename';
 import type { ChannelPreviewEntry } from '../../../hooks/useChannelPreviews';
 import { snowflakeTime } from '../../../hooks/useChannelPreviews';
 import { ChannelType, type Channel } from '../../../types';
@@ -208,6 +213,73 @@ export function clockWords(ms: number): string {
   return plainSpaces(new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(ms));
 }
 
+/** "9 PM" on the hour, "9:30 PM" otherwise: the shortest honest clock. */
+export function clockShort(ms: number): string {
+  const minutes = new Date(ms).getMinutes();
+  return plainSpaces(
+    new Intl.DateTimeFormat(undefined, minutes === 0 ? { hour: 'numeric' } : { hour: 'numeric', minute: '2-digit' }).format(ms),
+  );
+}
+
+function whenWords(whenMs: number, nowMs: number, clock: (ms: number) => string): string {
+  const time = clock(whenMs);
+  const ahead = daysBetween(nowMs, whenMs);
+  if (ahead === 0) return `Today ${time}`;
+  if (Math.abs(ahead) < 7) return `${new Intl.DateTimeFormat(undefined, { weekday: 'short' }).format(whenMs)} ${time}`;
+  const sameYear = new Date(whenMs).getFullYear() === new Date(nowMs).getFullYear();
+  const day = new Intl.DateTimeFormat(
+    undefined,
+    sameYear ? { month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric', year: 'numeric' },
+  ).format(whenMs);
+  return `${day}, ${time}`;
+}
+
+/**
+ * When something is, in a few words: "Today 9 PM", "Fri 9 PM" within a week
+ * either way, "Oct 9, 9 PM" beyond it ("Oct 9, 2027, 9 PM" from another year).
+ * Calendar days in the viewer's zone, not 24-hour spans. A preview's version.
+ */
+export function shortWhen(whenMs: number, nowMs: number): string {
+  return whenWords(whenMs, nowMs, clockShort);
+}
+
+/** The same with the minutes always written ("Fri 9:00 PM"): the Coming up rows' version. */
+export function fullWhen(whenMs: number, nowMs: number): string {
+  return whenWords(whenMs, nowMs, clockWords);
+}
+
+/**
+ * The sidebar header's line (index-spec §4.1): "2 members · 2 here now", where
+ * "here now" counts the members who are online (not idle, not away). Before the
+ * roster is known it says only the count the server itself reports: never a
+ * "here now" it has not seen.
+ */
+export function headerLine(input: { memberCount: number; here: number; rosterKnown: boolean }): string {
+  const members = plural(input.memberCount, 'member', 'members');
+  return input.rosterKnown ? `${members} · ${input.here} here now` : members;
+}
+
+/**
+ * A Coming up row's second line (index-spec §4.7): "Fri 9:00 PM · Lounge", or
+ * the place it names (a location), or just the time.
+ */
+export function comingUpLine(
+  event: Pick<EventLike, 'startsAt' | 'location'>,
+  context: { nowMs: number; roomName: string | null },
+): string {
+  const where = context.roomName ?? event.location;
+  const when = fullWhen(event.startsAt.getTime(), context.nowMs);
+  return where ? `${when} · ${where}` : when;
+}
+
+/** The date tile of a Coming up row: the weekday (shown in capitals by the style) and the day of the month. */
+export function dateTile(startsAt: Date): { weekday: string; day: string } {
+  return {
+    weekday: new Intl.DateTimeFormat(undefined, { weekday: 'short' }).format(startsAt),
+    day: String(startsAt.getDate()),
+  };
+}
+
 /* ---- Previews: the one line under a channel's name --------------------------- */
 
 export interface PreviewContext {
@@ -218,13 +290,28 @@ export interface PreviewContext {
   channelNames: ReadonlyMap<string, string>;
   /** Event id → its name, so `<event:id>` reads as "Movie night". An event the client does not know reads as "an event". */
   eventNames: ReadonlyMap<string, string>;
+  /**
+   * Events the client knows with their start, so a message that is only an
+   * event reads as "Movie night · Fri 9 PM" (index-spec §4.5). Needs `nowMs`.
+   */
+  events?: ReadonlyMap<string, { name: string; startsAt: Date }>;
+  nowMs?: number;
 }
 
+/**
+ * What a message with no text shared, in the words a row uses after "posted":
+ * "a photo", "4 photos", "a clip", "a video", "a recording", "a file", "3 files".
+ * The server's preview names the first attachment's type and the count of all of
+ * them, so more than one picture is counted as photos only when the first is
+ * one; any other set is files.
+ */
 function mediaWords(entry: ChannelPreviewEntry): string | null {
-  if (entry.attachmentCount > 1) return `${entry.attachmentCount} files`;
   const type = entry.media?.contentType ?? '';
+  if (entry.attachmentCount > 1) {
+    return type.startsWith('image/') ? `${entry.attachmentCount} photos` : `${entry.attachmentCount} files`;
+  }
   if (type.startsWith('image/')) return 'a photo';
-  if (type.startsWith('video/')) return 'a video';
+  if (type.startsWith('video/')) return parseClipFilename(entry.media?.filename ?? '') ? 'a clip' : 'a video';
   if (type.startsWith('audio/')) return 'a recording';
   return entry.attachmentCount === 1 ? 'a file' : null;
 }
@@ -258,8 +345,10 @@ export function previewText(
 
 /**
  * The line under a channel's name: "Jeremy: @Sean is movie night still on?".
- * Media with no text reads as what was shared ("Eric shared 12 photos"), with no
- * colon, as the reference does. Returns null when a channel has nothing to say.
+ * Media with no text reads as what was posted ("Nick posted 4 photos"), with no
+ * colon, as the reference does. A message that is only a scheduled event reads
+ * as the event itself ("Movie night · Fri 9 PM"). Returns null when a channel
+ * has nothing to say.
  */
 export function previewLine(entry: ChannelPreviewEntry | null | undefined, context: PreviewContext): string | null {
   if (!entry) return null;
@@ -269,11 +358,16 @@ export function previewLine(entry: ChannelPreviewEntry | null | undefined, conte
     const words = SYSTEM_WORDS[entry.messageType];
     return words ? `${who} ${words}` : 'New activity';
   }
+  const eventOnly = entry.content?.trim().match(/^<event:(\d+)>$/);
+  const sharedEvent = eventOnly ? context.events?.get(eventOnly[1]) : undefined;
+  if (sharedEvent && context.nowMs !== undefined) {
+    return `${sharedEvent.name} · ${shortWhen(sharedEvent.startsAt.getTime(), context.nowMs)}`;
+  }
   const text = entry.content ? previewText(entry.content, context) : '';
   if (entry.messageType === 20) return text ? `${who} started a poll: ${text}` : `${who} started a poll`;
   if (text) return `${who}: ${text}`;
   const shared = mediaWords(entry);
-  if (shared) return `${who} shared ${shared}`;
+  if (shared) return `${who} posted ${shared}`;
   if (entry.hasSticker) return `${who} sent a sticker`;
   return `${who} sent a message`;
 }

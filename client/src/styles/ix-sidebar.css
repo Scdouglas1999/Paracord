@@ -1,1 +1,651 @@
-/* IX-5: the sidebar header, search field, channels, rooms and add-ons (§4.1-4.7). Created empty by IX-1; the owner fills it. */
+/* IX-5: the server sidebar (docs/index-spec.md §3.1 "Sidebar pane", §4.1-4.7, §5.2, §5.3, §5.20).
+   Owner: IX-5. The frame (ix-shell.css) owns the pane: the scroller, padding 16 12 8, a flex
+   column whose children never shrink. Everything here is what the pane holds.
+
+   Only transform, opacity and colors move (the motion lint). Reduced motion (the one switch,
+   `:root[data-motion='reduced']`) trades every move for a 150ms opacity fade.
+
+   Measured against the prototype at 1x (paracord-index.html): header 20-60 at x 18, search 74-108,
+   a label 37 tall, a channel row 51 tall on a 53 pitch, a room row 36. Text that the prototype leaves
+   at `line-height: normal` has the px height it measures to there, so a different font build cannot
+   move a row. */
+
+/* The pane's contents share one hue (the pane's own place, never the route's) and the prototype's
+   `normal` line height. `display: contents` keeps the sections direct flex children of the pane. */
+.ix-sb {
+  display: contents;
+  line-height: normal;
+  /* The app sets tabular numerals on <body> ("every place a number can change"); the prototype
+     keeps proportional digits in running text and asks for tabular only on times and counts. */
+  font-feature-settings: normal;
+  font-variant-numeric: normal;
+}
+
+/* The pane's rule ("children never shrink") reaches only its own child; this wrapper has none of
+   a box, so its sections are the flex items and say it themselves. */
+.ix-sb > * {
+  flex-shrink: 0;
+}
+
+/* ---- Header (§4.1) ----------------------------------------------------------- */
+.ix-sh {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 6px 0;
+}
+
+/* The mark and the name are one button (Overview). Its hover wash reaches 4px past the
+   content on every side without moving it. */
+.ix-sh__main {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  gap: 12px;
+  min-width: 0;
+  margin: -4px 0 -4px -6px;
+  padding: 4px 8px 4px 6px;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  color: var(--ix-ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 120ms var(--ix-ease);
+}
+
+.ix-sh__main:hover {
+  background-color: var(--ix-wash-hover);
+}
+
+.ix-sh__text {
+  min-width: 0;
+}
+
+.ix-sh__name,
+.ix-sh__line {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ix-sh__name {
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 20px;
+  letter-spacing: -0.01em;
+}
+
+.ix-sh__line {
+  margin-top: 1px;
+  color: var(--ix-ink-3);
+  font-size: 12.5px;
+  line-height: 15px;
+}
+
+.ix-sh__more {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  background-color: transparent;
+  color: var(--ix-ink-3);
+  cursor: pointer;
+  transition: background-color 120ms var(--ix-ease);
+}
+
+.ix-sh__more:hover,
+.ix-sh__more[aria-expanded='true'] {
+  background-color: var(--ix-fill);
+}
+
+/* ---- Search field (§4.2) ------------------------------------------------------ */
+.ix-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 34px;
+  margin: 14px 0 4px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 10px;
+  background-color: var(--ix-fill-field);
+  color: var(--ix-ink-3);
+  font-size: 13.5px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 120ms var(--ix-ease);
+}
+
+.ix-search:hover {
+  background-color: var(--ix-fill-btn);
+}
+
+.ix-search__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ix-search kbd {
+  margin-left: auto;
+  padding: 2px 6px;
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 1px var(--ix-line);
+  color: var(--ix-ink-3);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+/* A phone has no Ctrl K to teach. */
+.ix-frame[data-layout='phone'] .ix-search kbd {
+  display: none;
+}
+
+/* ---- The rows' container: one block, so the glide, the collapse and the card above it
+   (IX-7 moves it as a whole) all share the one coordinate space ---------------------- */
+.ix-sb__rows {
+  position: relative;
+}
+
+/* ---- Section labels ------------------------------------------------------------- */
+.ix-sb .ix-section-label {
+  position: relative;
+  line-height: 15px;
+}
+
+.ix-sb__heading {
+  display: flex;
+  align-items: center;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+}
+
+.ix-sb__fold {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 0 0 -2px;
+  padding: 0 2px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+/* The chevron is there on hover and focus only, and turns a quarter when the group closes. */
+.ix-sb__chev {
+  width: 12px;
+  height: 12px;
+  margin-right: -2px;
+  opacity: 0;
+  transition:
+    opacity 120ms var(--ix-ease),
+    transform 200ms var(--ix-spring);
+}
+
+.ix-sb__fold[aria-expanded='false'] .ix-sb__chev {
+  transform: rotate(-90deg);
+}
+
+.ix-sb__fold:hover .ix-sb__chev,
+.ix-sb__fold:focus-visible .ix-sb__chev,
+.ix-sb__fold[aria-expanded='false'] .ix-sb__chev {
+  opacity: 1;
+}
+
+.ix-sb__fold:hover {
+  color: var(--ix-ink-2);
+}
+
+/* "+" : appears with the label's hover or focus, and takes no room (the label stays 37 tall). */
+.ix-sb__add {
+  position: absolute;
+  top: 12px;
+  right: 2px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background-color: transparent;
+  color: var(--ix-ink-3);
+  opacity: 0;
+  cursor: pointer;
+  transition:
+    opacity 120ms var(--ix-ease),
+    background-color 120ms var(--ix-ease);
+}
+
+.ix-sb .ix-section-label:hover .ix-sb__add,
+.ix-sb .ix-section-label:focus-within .ix-sb__add {
+  opacity: 1;
+}
+
+.ix-sb__add:hover {
+  background-color: var(--ix-fill);
+  color: var(--ix-ink-2);
+}
+
+/* ---- Channels (§4.5) -------------------------------------------------------------- */
+.ix-sb__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* The selection (§5.2): one element for the whole container, moved by transform.
+   The hue's recipe is `.ix-hue-selected` (ix-base.css); the row's height is fixed so
+   nothing but a translate is ever needed. */
+.ix-sel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 0;
+  height: var(--ix-ch-h);
+  border-radius: 12px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.ix-sel[data-on='true'] {
+  opacity: 1;
+}
+
+.ix-sb {
+  --ix-ch-h: 51px;
+}
+
+.ix-ch {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: 18px 16px;
+  align-content: start;
+  gap: 1px 10px;
+  box-sizing: border-box;
+  width: 100%;
+  height: var(--ix-ch-h);
+  padding: 8px 10px;
+  border-radius: 12px;
+  color: inherit;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color 120ms var(--ix-ease);
+}
+
+.ix-ch:hover {
+  background-color: var(--ix-wash-hover);
+}
+
+.ix-ch__name {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ix-ink-2);
+  font-size: 14.5px;
+  font-weight: 600;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.ix-ch__name-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ix-ch__kind {
+  flex: none;
+  color: var(--ix-ink-3);
+}
+
+.ix-ch__time {
+  align-self: start;
+  color: var(--ix-ink-3);
+  font-size: 11.5px;
+  line-height: 14px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.ix-ch__line {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  color: var(--ix-ink-3);
+  font-size: 13px;
+  line-height: 16px;
+}
+
+.ix-ch__line-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The unread dot (§5.3): 6px at left -1 / top 15, scaled in by a transition on transform. */
+.ix-ch__dot {
+  position: absolute;
+  top: 15px;
+  left: -1px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: var(--ix-ink);
+  transform: scale(0);
+  transition: transform 450ms var(--ix-spring);
+  pointer-events: none;
+}
+
+.ix-ch[data-unread='true'] .ix-ch__dot {
+  transform: scale(1);
+}
+
+.ix-ch[data-unread='true'] .ix-ch__name,
+.ix-ch[aria-current='page'] .ix-ch__name {
+  color: var(--ix-ink);
+}
+
+.ix-ch[data-unread='true'] .ix-ch__line {
+  color: var(--ix-ink-2);
+}
+
+.ix-ch[data-muted='true'] .ix-ch__name {
+  color: var(--ix-ink-3);
+}
+
+/* Mentions: a white count chip under the time; the line gives it the second column. */
+.ix-ch[data-mentions='true'] .ix-ch__line {
+  grid-column: 1;
+}
+
+.ix-ch__mention {
+  grid-column: 2;
+  grid-row: 2;
+  align-self: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background-color: var(--ix-ink);
+  color: var(--ix-mention-ink);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* An add-on is a channel row without a time: its second line is what is live in it. */
+.ix-ch[data-addon] .ix-ch__name {
+  grid-column: 1 / -1;
+}
+
+/* ---- Rooms (§4.6) ------------------------------------------------------------------ */
+.ix-sb__rooms {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ix-rm {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  box-sizing: border-box;
+  width: 100%;
+  height: 36px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 10px;
+  background-color: transparent;
+  color: var(--ix-ink-3);
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color 120ms var(--ix-ease),
+    color 120ms var(--ix-ease);
+}
+
+.ix-rm:hover {
+  background-color: var(--ix-wash-hover);
+  color: var(--ix-ink-2);
+}
+
+.ix-rm__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ix-rm__tail {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.ix-rm[data-busy='true'] {
+  color: var(--ix-ink-2);
+}
+
+.ix-rm[data-busy='true'] .ix-glyph {
+  color: var(--ix-amber);
+}
+
+/* ---- Coming up (§4.7) ---------------------------------------------------------------- */
+.ix-ev {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  box-sizing: border-box;
+  width: 100%;
+  height: 48px;
+  padding: 6px 10px;
+  border-radius: 12px;
+  color: inherit;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color 120ms var(--ix-ease);
+}
+
+.ix-ev:hover {
+  background-color: var(--ix-wash-hover);
+}
+
+.ix-ev__tile {
+  display: grid;
+  flex: none;
+  place-items: center;
+  align-content: center;
+  width: 32px;
+  height: 36px;
+  border-radius: 9px;
+  background-color: var(--ix-fill);
+  line-height: 1.05;
+  text-align: center;
+}
+
+.ix-ev__weekday {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.ix-ev__day {
+  color: var(--ix-ink);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.ix-ev__text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ix-ev__title {
+  display: block;
+  overflow: hidden;
+  color: var(--ix-ink-2);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ix-ev__line {
+  display: block;
+  overflow: hidden;
+  color: var(--ix-ink-3);
+  font-size: 12.5px;
+  line-height: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ix-ev__live {
+  flex: none;
+  color: var(--ix-amber);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+/* ---- States of the list itself ---------------------------------------------------------- */
+.ix-sb__note {
+  margin: 12px 8px 0;
+  color: var(--ix-ink-3);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.ix-sb__retry {
+  display: inline-block;
+  margin: 8px 8px 0;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 8px;
+  background-color: var(--ix-fill);
+  color: var(--ix-ink);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 120ms var(--ix-ease);
+}
+
+.ix-sb__retry:hover {
+  background-color: var(--ix-fill-2);
+}
+
+/* ---- Game servers: the add-on's popover (until its page exists) --------------------------- */
+.ix-sb__pop {
+  box-sizing: border-box;
+  width: 300px;
+  padding: 12px;
+  border-radius: 14px;
+  background-color: var(--ix-pop);
+  box-shadow: inset 0 0 0 1px var(--ix-edge-lit), var(--ix-shadow-room);
+  color: var(--ix-ink);
+}
+
+:root[data-reduced-transparency='true'] .ix-sb__pop {
+  background-color: var(--ix-main);
+}
+
+.ix-sb__pop-title {
+  margin: 0 0 8px;
+  padding: 0 4px;
+  color: var(--ix-ink-3);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.ix-sb__pop-list {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ix-sb__pop-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px;
+  border-radius: 10px;
+}
+
+.ix-sb__pop-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ix-sb__pop-name {
+  display: block;
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ix-sb__pop-line {
+  display: block;
+  color: var(--ix-ink-3);
+  font-size: 12.5px;
+}
+
+/* ---- Reduced motion: the dot and the chevron fade; nothing travels --------------------------- */
+:root[data-motion='reduced'] .ix-ch__dot {
+  transform: scale(1);
+  opacity: 0;
+  transition: opacity 150ms linear;
+}
+
+:root[data-motion='reduced'] .ix-ch[data-unread='true'] .ix-ch__dot {
+  opacity: 1;
+}
+
+:root[data-motion='reduced'] .ix-sb__chev {
+  transition: opacity 150ms linear;
+}
