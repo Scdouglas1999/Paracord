@@ -1,1 +1,602 @@
-/* IX-6: the dock and the Add a server sheet (§4.8). Created empty by IX-1; the owner fills it. */
+/* IX-6: the dock and the Add a server sheet (docs/index-spec.md §4.8, §5.1, §5.5,
+   §5.15, §6.1; metrics from §3.1 "Dock", checked against the prototype's
+   `.dock` / `.dk` rules). Components: components/ix/dock.
+
+   Every color is a token; only transform and opacity animate (hover and the
+   dots are transforms, color is a 120ms transition, the indicator's glide and
+   the ping are Web Animations in the component). Reduced motion is the one
+   `data-motion` switch: no lifts, no ping, no spring on the mark. */
+
+/* ---- The dock ---------------------------------------------------------------- */
+.ix-dock {
+  /* One size for the item and its mark: the phone dock (IX-16) raises the item to 44. */
+  --ix-dock-item: 42px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px 14px;
+  box-shadow: 0 -1px 0 var(--ix-edge-side);
+}
+
+/* One item: a 42x42 target with a 34px mark inside (§3.1). */
+.ix-dock__item {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: var(--ix-dock-item);
+  height: var(--ix-dock-item);
+  padding: 0;
+  border: 0;
+  border-radius: 14px;
+  background: none;
+  color: var(--ix-ink-3);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  /* Hover lifts it 2px (§5.15): 350ms on the spring. */
+  transition: transform 350ms var(--ix-spring);
+}
+
+@media (hover: hover) {
+  .ix-dock__item:hover {
+    transform: translateY(-2px);
+  }
+}
+
+.ix-dock__item:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+/* The mark: the current place at scale 1.08 and full strength, the others at .82
+   (§4.8). The scale is the spring (450ms), the dimming a plain fade (opacity). */
+.ix-dock__mark {
+  opacity: 0.82;
+  transition:
+    transform 450ms var(--ix-spring),
+    opacity 300ms var(--ix-ease);
+}
+
+.ix-dock__item[data-current] .ix-dock__mark {
+  opacity: 1;
+  transform: scale(1.08);
+}
+
+/* ---- Live, unread, mentions ---------------------------------------------------- */
+/* All three are always drawn and scale in and out (450ms spring); each wears the
+   sidebar's own foot color as a 2.5px ring so it bites the mark (§3.1). */
+.ix-dock__live,
+.ix-dock__unread,
+.ix-dock__chip {
+  position: absolute;
+  pointer-events: none;
+  transform: scale(0);
+  transition: transform 450ms var(--ix-spring);
+  box-shadow: 0 0 0 2.5px var(--ix-side-end);
+}
+
+/* Amber means live: 10px at the top right. */
+.ix-dock__live {
+  top: 1px;
+  right: 1px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--ix-amber);
+}
+
+.ix-dock__item[data-live] .ix-dock__live {
+  transform: scale(1);
+}
+
+/* The ping (§5.5): a 2px amber ring the size of the dot, played once by the
+   component from scale(1) to scale(2.2) while it fades. At rest it is not there. */
+.ix-dock__ping {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  border: 2px solid var(--ix-amber);
+  border-radius: 50%;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* White means it is for you: an 8px dot for unread at the top left... */
+.ix-dock__unread {
+  top: 3px;
+  left: 2px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ix-ink);
+}
+
+.ix-dock__item[data-attention='dot'] .ix-dock__unread {
+  transform: scale(1);
+}
+
+/* ...and a 16px-tall count in its place for mentions (People: also friend requests). */
+.ix-dock__chip {
+  top: -1px;
+  left: -3px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  box-sizing: border-box;
+  border-radius: 8px;
+  background: var(--ix-ink);
+  color: var(--ix-mention-ink);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.ix-dock__item[data-attention='count'] .ix-dock__chip {
+  transform: scale(1);
+}
+
+/* ---- Separator, servers, add ---------------------------------------------------- */
+.ix-dock__sep {
+  flex: none;
+  width: 1px;
+  height: 24px;
+  margin: 0 2px;
+  background: var(--ix-line);
+}
+
+/* The servers scroll sideways when they do not fit; People and + stay put outside
+   it. Padding with an equal negative margin leaves room for the hover lift, the
+   dots' rings, the ping and the focus ring, which an overflow box would clip. */
+.ix-dock__scroll {
+  display: flex;
+  align-items: center;
+  flex: 0 1 auto;
+  gap: 6px;
+  min-width: 0;
+  margin: -8px -6px;
+  padding: 8px 6px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  /* Keep the item brought into view out of the edge fades. */
+  scroll-padding-inline: 20px;
+}
+
+.ix-dock__scroll::-webkit-scrollbar {
+  display: none;
+}
+
+/* 16px static edge fades (a mask: the colors only say opaque and clear). */
+.ix-dock__scroll[data-fade-start] {
+  -webkit-mask-image: linear-gradient(90deg, transparent, currentcolor 16px);
+  mask-image: linear-gradient(90deg, transparent, currentcolor 16px);
+}
+
+.ix-dock__scroll[data-fade-end] {
+  -webkit-mask-image: linear-gradient(90deg, currentcolor calc(100% - 16px), transparent);
+  mask-image: linear-gradient(90deg, currentcolor calc(100% - 16px), transparent);
+}
+
+.ix-dock__scroll[data-fade-start][data-fade-end] {
+  -webkit-mask-image: linear-gradient(90deg, transparent, currentcolor 16px, currentcolor calc(100% - 16px), transparent);
+  mask-image: linear-gradient(90deg, transparent, currentcolor 16px, currentcolor calc(100% - 16px), transparent);
+}
+
+/* + : a 34px square, a 1.5px edge and a plus in ink-3 (§3.1). */
+.ix-dock__plus {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+  box-shadow: inset 0 0 0 1.5px var(--ix-edge-strong);
+  transition: color 120ms var(--ix-ease);
+}
+
+@media (hover: hover) {
+  .ix-dock__add:hover .ix-dock__plus {
+    color: var(--ix-ink-2);
+  }
+}
+
+.ix-dock__add[aria-expanded='true'] .ix-dock__plus {
+  color: var(--ix-ink);
+}
+
+/* ---- The one indicator --------------------------------------------------------- */
+/* 16x3, radius 2, ink, 7px from the dock's bottom. The component writes its
+   transform (and glides it); until it has measured it is not shown. */
+.ix-dock__ind {
+  position: absolute;
+  left: 0;
+  bottom: 7px;
+  width: 16px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--ix-ink);
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* ---- The name tooltip ------------------------------------------------------------ */
+/* Above the item after 400ms (§4.8): near-solid, radius 8, 12.5/600 (§6.11). The
+   component centers it over its item and keeps it 8px inside the sidebar. */
+.ix-dock__tip {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% - 2px);
+  z-index: 2;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--ix-tip);
+  box-shadow:
+    0 0 0 1px var(--ix-edge-lit),
+    var(--ix-shadow-room);
+  color: var(--ix-ink);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(3px);
+  transition:
+    opacity 120ms var(--ix-ease),
+    transform 180ms var(--ix-ease);
+}
+
+.ix-dock__tip[data-open] {
+  opacity: 1;
+  transform: none;
+}
+
+:root[data-motion='reduced'] .ix-dock__item:hover {
+  transform: none;
+}
+
+:root[data-motion='reduced'] .ix-dock__item,
+:root[data-motion='reduced'] .ix-dock__live,
+:root[data-motion='reduced'] .ix-dock__unread,
+:root[data-motion='reduced'] .ix-dock__chip,
+:root[data-motion='reduced'] .ix-dock__tip {
+  transition-duration: 150ms;
+}
+
+:root[data-motion='reduced'] .ix-dock__mark {
+  transition: opacity 150ms var(--ix-ease);
+}
+
+:root[data-motion='reduced'] .ix-dock__tip {
+  transform: none;
+}
+
+/* =============================================================================
+   The Add a server sheet (§4.8, §6.1): content for the sheet frame (IX-9's
+   `SheetFrame`, which draws the header and the surface). A segmented control, then
+   one panel.
+   ============================================================================= */
+.ix-add {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 4px 8px 0;
+}
+
+.ix-add__tabs {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 12px;
+  background: var(--ix-fill);
+}
+
+.ix-add__tab {
+  height: 32px;
+  border: 0;
+  border-radius: 9px;
+  background: none;
+  color: var(--ix-ink-2);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background-color 120ms var(--ix-ease),
+    color 120ms var(--ix-ease);
+}
+
+.ix-add__tab:hover {
+  color: var(--ix-ink);
+}
+
+.ix-add__tab[aria-selected='true'] {
+  background: var(--ix-fill-2);
+  color: var(--ix-ink);
+}
+
+.ix-add__tab:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+.ix-add__panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.ix-add__form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.ix-add__form .ix-cream {
+  flex: none;
+  align-self: stretch;
+}
+
+.ix-add__field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ix-add__label {
+  color: var(--ix-ink-3);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.ix-add__input {
+  height: 40px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--ix-fill-field);
+  box-shadow: inset 0 0 0 1px var(--ix-edge-lit);
+  color: var(--ix-ink);
+  font: inherit;
+  font-size: 15px;
+}
+
+.ix-add__input::placeholder {
+  color: var(--ix-ink-3);
+}
+
+.ix-add__input:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: 1px;
+}
+
+.ix-add__note,
+.ix-add__error {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--ix-ink-3);
+}
+
+.ix-add__error,
+.ix-add__note--error {
+  color: var(--ix-danger-ink);
+}
+
+.ix-add__error {
+  font-size: 13.5px;
+  font-weight: 500;
+}
+
+.ix-add__link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ix-ink);
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.ix-add__link:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* What to start from: one choice, a card each. */
+.ix-add__options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ix-add__option {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 14px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--ix-fill-card);
+  box-shadow: inset 0 0 0 1px var(--ix-edge-lit);
+  color: var(--ix-ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 120ms var(--ix-ease);
+}
+
+.ix-add__option:hover {
+  background: var(--ix-fill-card-hover);
+}
+
+.ix-add__option[data-selected] {
+  background: var(--ix-fill-card-hover);
+  box-shadow: inset 0 0 0 1px var(--ix-edge-strong);
+}
+
+.ix-add__option:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+.ix-add__radio {
+  position: relative;
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px var(--ix-edge-strong);
+}
+
+.ix-add__option[data-selected] .ix-add__radio {
+  box-shadow: inset 0 0 0 1.5px var(--ix-ink);
+}
+
+.ix-add__option[data-selected] .ix-add__radio::after {
+  content: '';
+  position: absolute;
+  inset: 4px;
+  border-radius: 50%;
+  background: var(--ix-ink);
+}
+
+.ix-add__option-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ix-add__option-title {
+  font-size: 14.5px;
+  font-weight: 600;
+}
+
+.ix-add__option-line {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  color: var(--ix-ink-3);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.ix-add__option-facts {
+  color: var(--ix-ink-3);
+  font-size: 12px;
+}
+
+/* The server's picture, optional. */
+.ix-add__picture {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ix-add__pick {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.ix-add__file {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.ix-add__tile {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 48px;
+  height: 48px;
+  overflow: hidden;
+  border-radius: 28%;
+  color: var(--ix-ink-3);
+  box-shadow: inset 0 0 0 1.5px var(--ix-edge-strong);
+}
+
+.ix-add__tile > img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.ix-add__pick:has(.ix-add__file:focus-visible) .ix-add__tile {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+.ix-add__pick-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ix-add__pick-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.ix-add__pick-line {
+  color: var(--ix-ink-3);
+  font-size: 12.5px;
+}
+
+/* Discover: where it leads. */
+.ix-add__discover {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 16px;
+  border-radius: 18px;
+  background: var(--ix-fill-card);
+  box-shadow: inset 0 0 0 1px var(--ix-edge-lit);
+}
+
+.ix-add__discover-mark {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+}
+
+.ix-add__discover-text {
+  min-width: 0;
+}
+
+.ix-add__discover-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.ix-add__discover-line {
+  margin: 4px 0 0;
+  color: var(--ix-ink-3);
+  font-size: 13px;
+  line-height: 1.4;
+}

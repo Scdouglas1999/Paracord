@@ -1,16 +1,22 @@
 import { getAccountChannelView } from '../lib/channelView';
-import { useAvailableGuilds, useSelectedGuildId } from './useGuilds';
+import { useSelectedGuildId } from './useGuilds';
 import { useCurrentAccountScope } from './useCurrentUser';
-import { activateGuild } from '../lib/guildNavigation';
+import { nthServer, placeKeyAction, stepPlace } from '../components/ix/dock/dockModel';
+import { useGoToPlace } from '../components/ix/dock/usePlaceNavigation';
+import { placeKey } from '../components/ix/shell/place';
+import { useCurrentPlace, usePlaceOrder } from '../components/ix/shell/usePlace';
 import { useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { useUIStore } from '../stores/uiStore';
 import { isTauri } from '../lib/tauriEnv';
+import { isMacOS } from '../lib/keyboardShortcuts';
 
 /**
  * Global keyboard shortcuts for the app shell:
  * - Alt+Up / Alt+Down: navigate to previous/next channel
- * - Ctrl+Alt+Up / Ctrl+Alt+Down: switch previous/next guild
+ * - Ctrl+Alt+Up / Ctrl+Alt+Down (⌥⌘↑/↓ on macOS): the previous/next place in the
+ *   dock (People, then the servers; docs/index-spec.md §4.8)
+ * - Ctrl+1…9 (⌘1…9): the nth server in the dock
  * - Ctrl+, : open user settings
  * - Ctrl+Shift+, : open current guild settings
  * - Mod+F: open channel message search (ContextPanel search mode)
@@ -22,9 +28,11 @@ import { isTauri } from '../lib/tauriEnv';
 export function useKeyboardNavigation() {
   const navigate = useNavigate();
   const { guildId } = useParams();
-  const guilds = useAvailableGuilds();
   const selectedGuildId = useSelectedGuildId();
   const scope = useCurrentAccountScope();
+  const order = usePlaceOrder();
+  const place = useCurrentPlace();
+  const goToPlace = useGoToPlace();
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -121,28 +129,24 @@ export function useKeyboardNavigation() {
         return;
       }
 
-      // The remaining shortcuts should not fire when editing text
-      if (isEditing) return;
-
-      // -- Ctrl+Alt+Up / Ctrl+Alt+Down: guild navigation --
-      if (e.ctrlKey && e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+      // -- Places (§4.8): Ctrl+Alt+Up/Down steps through the dock, Ctrl+1…9 jumps
+      // to the nth server. Their modifiers never insert text, so they work while
+      // typing; a modal dialog (focus trapped) keeps them from moving the app
+      // behind it.
+      const placeAction = placeKeyAction(e, isMacOS());
+      if (placeAction) {
+        if (document.querySelector('[role="dialog"][aria-modal="true"]:not([data-sheet])')) return;
+        const target = placeAction.kind === 'step'
+          ? stepPlace(order, placeKey(place), placeAction.delta)
+          : nthServer(order, placeAction.n);
+        if (!target) return;
         e.preventDefault();
-        if (guilds.length === 0) return;
-
-        const currentGuildId = guildId || selectedGuildId;
-        const currentIndex = guilds.findIndex((guild) => guild.id === currentGuildId && guild.scope.serverId === scope?.serverId && guild.scope.userId === scope.userId);
-        const startIndex = currentIndex >= 0 ? currentIndex : 0;
-        const nextIndex =
-          e.key === 'ArrowUp'
-            ? (startIndex - 1 + guilds.length) % guilds.length
-            : (startIndex + 1) % guilds.length;
-
-        const nextGuild = guilds[nextIndex];
-        if (!nextGuild) return;
-        activateGuild(nextGuild);
-        navigate(`/app/guilds/${nextGuild.id}`);
+        void goToPlace(target);
         return;
       }
+
+      // The remaining shortcuts should not fire when editing text
+      if (isEditing) return;
 
       // -- Alt+Up / Alt+Down: channel navigation --
       if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
@@ -182,7 +186,7 @@ export function useKeyboardNavigation() {
 
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [navigate, guildId, guilds, selectedGuildId, scope]);
+  }, [navigate, guildId, selectedGuildId, scope, order, place, goToPlace]);
 }
 
 

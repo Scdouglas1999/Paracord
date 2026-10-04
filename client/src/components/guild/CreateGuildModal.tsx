@@ -1,8 +1,5 @@
-import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
-import { guildLandingPath } from '../../lib/guildNavigation';
-import type { ScopedGuild } from '../../lib/guildScope';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Upload, LayoutTemplate, Hash, Volume2, Folder, ChevronLeft, ArrowRight } from 'lucide-react';
 import {
   Modal,
@@ -19,26 +16,15 @@ import { Input } from '../ui/Input';
 import { Tabs } from '../ui/Tabs';
 import { ErrorBanner, EmptyState, LoadingSpinner } from '../ui/Feedback';
 import { FieldLabel, GroupLabel } from './SettingsPrimitives';
-import { useGuildStore } from '../../stores/guildStore';
-import { extractApiError } from '../../api/client';
-import { getApi } from '../../api/activeClient';
 import { useNavigate } from 'react-router';
-import { isAllowedImageMimeType } from '../../lib/security';
 import { cn } from '../../lib/utils';
-
-interface GuildTemplate {
-  id: string;
-  name: string;
-  description: string;
-  creator_id: string;
-  source_guild_id: string | null;
-  template_data: {
-    channels: { name: string; type: number; position: number; parent_name: string | null }[];
-    roles: { name: string; permissions: string; color: number; position: number }[];
-  };
-  usage_count: number;
-  created_at: string;
-}
+import {
+  defaultServerName,
+  useAddServerActions,
+  useGuildTemplates,
+  useServerIcon,
+  type GuildTemplate,
+} from '../ix/dock/useAddServer';
 
 interface CreateGuildModalProps {
   initialTab?: Tab;
@@ -54,116 +40,37 @@ const TABS: { value: Tab; label: string }[] = [
 ];
 
 export function CreateGuildModal({ onClose, initialTab = 'create' }: CreateGuildModalProps) {
-  const guildScope = useCurrentAccountScope();
   const user = useCurrentUser();
   const navigate = useNavigate();
   const [tab, setTab] = useState<Tab>(initialTab);
-  const [serverName, setServerName] = useState(`${user?.username || 'My'}'s server`);
+  const [serverName, setServerName] = useState(defaultServerName(user?.username));
   const [inviteCode, setInviteCode] = useState('');
-  const [iconPreview, setIconPreview] = useState<string | null>(null);
-  const [iconDataUrl, setIconDataUrl] = useState<string | null>(null);
   const [iconDragActive, setIconDragActive] = useState(false);
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
 
-  // Template state
-  const [templates, setTemplates] = useState<GuildTemplate[]>([]);
-  const [templatesLoading, setTemplatesLoading] = useState(false);
+  // The rules (what a name is, how an invite is read, what a refused picture
+  // says) are shared with the Add a server sheet: components/ix/dock/useAddServer.
+  const icon = useServerIcon();
+  const { templates, loading: templatesLoading, error: templatesError } = useGuildTemplates(tab === 'template');
   const [selectedTemplate, setSelectedTemplate] = useState<GuildTemplate | null>(null);
   const [templateGuildName, setTemplateGuildName] = useState('');
+  const actions = useAddServerActions((path) => {
+    onClose();
+    navigate(path);
+  });
+  const loading = actions.loading;
+  const error =
+    actions.error ?? (tab === 'create' ? icon.error : null) ?? (tab === 'template' ? templatesError : null) ?? '';
+  const iconPreview = icon.preview;
 
-  useEffect(() => {
-    return () => {
-      if (iconPreview?.startsWith('blob:')) {
-        URL.revokeObjectURL(iconPreview);
-      }
-    };
-  }, [iconPreview]);
-
-  useEffect(() => {
-    if (tab !== 'template') return;
-    const controller = new AbortController();
-    setTemplatesLoading(true);
-    getApi()
-      .get<GuildTemplate[]>('/templates', { signal: controller.signal })
-      .then(res => { if (!controller.signal.aborted) setTemplates(res.data); })
-      .catch((err: unknown) => {
-        if (!controller.signal.aborted) setError(`Failed to load templates: ${extractApiError(err)}`);
-      })
-      .finally(() => { if (!controller.signal.aborted) setTemplatesLoading(false); });
-    return () => controller.abort();
-  }, [tab]);
-
-  const processIconFile = (file: File | undefined) => {
-    if (!file) return;
-    if (!isAllowedImageMimeType(file.type)) {
-      setError('Please upload PNG, JPG, GIF, or WEBP.');
-      return;
-    }
-    setError('');
-    const objectUrl = URL.createObjectURL(file);
-    setIconPreview(objectUrl);
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        setIconDataUrl(reader.result);
-      }
-    };
-    reader.readAsDataURL(file);
-  };
-
+  const processIconFile = icon.choose;
   const handleIconChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     processIconFile(e.target.files?.[0]);
   };
 
-  const navigateToGuild = async (guild: ScopedGuild) => {
-    const path = await guildLandingPath(guild);
-    onClose();
-    navigate(path);
-  };
-
-  const handleCreate = async () => {
-    if (!serverName.trim() || !guildScope) return;
-    setError('');
-    setLoading(true);
-    try {
-      const guild = await useGuildStore.getState().createGuild(serverName.trim(), guildScope, iconDataUrl || undefined);
-      await navigateToGuild(guild);
-    } catch (err: unknown) {
-      setError(extractApiError(err) || 'Failed to create server');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleJoin = async () => {
-    if (!inviteCode.trim() || !guildScope) return;
-    setError('');
-    setLoading(true);
-    try {
-      const code = inviteCode.trim().split('/').pop() || inviteCode.trim();
-      const guild = await useGuildStore.getState().acceptInvite(code, guildScope);
-      await navigateToGuild(guild);
-    } catch (err: unknown) {
-      setError(extractApiError(err) || 'Failed to join server');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleApplyTemplate = async () => {
-    if (!selectedTemplate || !templateGuildName.trim() || !guildScope) return;
-    setError('');
-    setLoading(true);
-    try {
-      const guild = await useGuildStore.getState().applyTemplate(selectedTemplate.id, templateGuildName.trim(), guildScope);
-      await navigateToGuild(guild);
-    } catch (err: unknown) {
-      setError(extractApiError(err) || 'Failed to create server from template');
-    } finally {
-      setLoading(false);
-    }
-  };
+  const handleCreate = () => actions.create(serverName, icon.dataUrl);
+  const handleJoin = () => actions.join(inviteCode);
+  const handleApplyTemplate = () =>
+    selectedTemplate ? actions.fromTemplate(selectedTemplate.id, templateGuildName) : Promise.resolve();
 
   const channelIcon = (type: number) => {
     switch (type) {
@@ -206,7 +113,7 @@ export function CreateGuildModal({ onClose, initialTab = 'create' }: CreateGuild
             label="How to add a server"
             items={TABS}
             value={tab}
-            onChange={(next) => { setTab(next); setError(''); }}
+            onChange={(next) => { setTab(next); actions.clearError(); }}
             fill
           />
         </ModalHeader>
@@ -288,7 +195,7 @@ export function CreateGuildModal({ onClose, initialTab = 'create' }: CreateGuild
                   title="Save a server as a template first"
                   description="A template copies an existing server's channels and roles. Open that server's settings, save its structure, and it shows up here for every new server you start."
                   action={
-                    <Button variant="ghost" onClick={() => { setTab('create'); setError(''); }}>
+                    <Button variant="ghost" onClick={() => { setTab('create'); actions.clearError(); }}>
                       Build one from scratch
                     </Button>
                   }
@@ -307,7 +214,7 @@ export function CreateGuildModal({ onClose, initialTab = 'create' }: CreateGuild
                       onClick={() => {
                         setSelectedTemplate(t);
                         setTemplateGuildName(`${user?.username || 'My'}'s server`);
-                        setError('');
+                        actions.clearError();
                       }}
                     >
                       <div className="flex items-center justify-between gap-2">
@@ -330,7 +237,7 @@ export function CreateGuildModal({ onClose, initialTab = 'create' }: CreateGuild
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => { setSelectedTemplate(null); setError(''); }}
+                    onClick={() => { setSelectedTemplate(null); actions.clearError(); }}
                   >
                     <ChevronLeft size={14} />
                     Back to templates
