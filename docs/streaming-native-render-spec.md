@@ -1,6 +1,8 @@
 # Streaming Final-Mile Spec: Native Surface Rendering, Simulcast, Bridge Parity
 
-Status: LAW for the streaming final-mile implementation (2026-07). Companion to the
+Status: LAW for the streaming final-mile implementation (2026-07). Route law
+revised 2026-10-04 (§2): the desktop app draws every video natively on every
+platform; WebCodecs is the browser client's route only. Companion to the
 2026-07-06 six-subsystem audit and the `streaming-stack-fix-all` overhaul that landed
 reliable keyframes, ingress bandwidth estimation, GPU bitrate retargeting, BT.709
 signaling, stereo stream audio, native camera, and lifecycle fixes. This spec covers
@@ -25,9 +27,8 @@ everything that remains between the current stack and "nothing left to improve."
 ## 1. Scope
 
 In scope:
-1. **Native surface rendering** for all native-decoded video tracks (Linux full
-   zero-copy; macOS via AVSampleBufferDisplayLayer; Windows intentionally excluded —
-   see §2 route matrix).
+1. **Native surface rendering** for every video track in the desktop app (Linux
+   GLArea; macOS AVSampleBufferDisplayLayer; Windows DirectComposition — see §2).
 2. **GPU-resident decode outputs** in paracord-codec (CUDA / VAAPI-dmabuf / CVPixelBuffer
    handles; CPU handle as the software floor).
 3. **Simulcast on by default** on hardware-encode paths, with relay-side per-viewer
@@ -44,29 +45,45 @@ Explicit non-goals (documented decisions, do not implement):
 - WebKitGTK GStreamer plugin work to make webview AV1 WebCodecs pass (environment-
   fragile; native surface rendering supersedes it).
 - BBR congestion control (may be evaluated later behind config; not default).
-- A Windows native surface backend (WebView2 hardware WebCodecs makes passthrough the
-  correct Windows route; do not build what will not be used).
+- ~~A Windows native surface backend~~ — superseded 2026-10-04: Windows has one
+  (`native_render/windows.rs`, DirectComposition under the WebView2), because the
+  desktop app has one route on every platform (§2).
 
-## 2. Route selection law
+## 2. Route law (revised 2026-10-04)
 
-Per subscription, at subscribe time, exactly one route:
+One route per platform, fixed at build time. Nothing probes, nothing chooses at
+runtime, nothing falls back.
 
-| Route | When | Frame flow |
+| Client | Route | Frame flow |
 |---|---|---|
-| `webcodecs-passthrough` | The functional WebCodecs probe passes for the track's codec | encoded frames (tens of KB) over the existing binary channel → webview WebCodecs → CanvasRenderer WebGL. Unchanged. |
-| `native-surface` | The probe fails AND a native decoder + surface backend exist for this platform | encoded frames → native per-track DecodeWorker → GPU-resident decode → platform surface. **Nothing crosses IPC but geometry/stats.** |
+| Desktop app (Linux, macOS, Windows) | `native-surface`, always | encoded frames → native per-track decode worker → platform surface UNDER the transparent webview. **Nothing crosses IPC but geometry, stills and stats.** |
+| Browser client (the web UI a server serves) | WebCodecs | WebTransport → WebCodecs → canvas. No native layer exists in a browser. |
 
-- The raw-I420 store/push path (`format: "i420"` frames over the channel) is **deleted**
-  — dispatch, packing, TS parsing, and the WebGL I420 shaders' IPC feed. The WebGL YUV
-  path in CanvasRenderer remains only if still needed by tests; the runtime feed is
-  passthrough-only.
-- Platform matrix today: Linux/WebKitGTK → `native-surface` is the expected route for
-  AV1/H264 (and VP9 where the probe fails). Windows/WebView2 → passthrough always; if
-  the probe somehow fails there, that is a **hard subscription error** naming the codec
-  (never raw IPC). macOS/WKWebView → passthrough for H264; `native-surface` for AV1
-  (VideoToolbox AV1 decode exists only on M3+; the macOS backend covers the rest).
-- The existing `media_set_stream_visibility` semantics apply to both routes: hidden ⇒
-  decode paused + surface hidden.
+- The WebCodecs passthrough route in the desktop app is **deleted**: the frame
+  channel (`media_register_stream_video_subscription`), the functional WebCodecs
+  probe and its probe frames (`media_generate_decode_probe`), the stall watchdog
+  that re-registered channels, and the webview-side decode-support merge. The
+  desktop's advertised `decode` for a codec means "a native decoder exists AND
+  this window's native renderer installed" (`capabilities.rs`).
+- The self-view takes the same route: the native side decodes the exact
+  bitstream viewers receive (from the encoder, never the relay) onto a surface.
+- Platform decoders: Linux lavc (NVDEC/VAAPI/software) for H.264/AV1 and libvpx
+  or lavc for VP9; macOS VideoToolbox H.264 (GPU-resident `CVPixelBuffer`) and
+  libvpx VP9 (CPU I420, wrapped in a `CVPixelBuffer` by the surface); Windows
+  Media Foundation H.264/AV1 (CPU I420) and libvpx VP9. A codec with no native
+  decoder is not advertised as decodable, so negotiation never picks it.
+- A window whose host did not install (no usable GL context, no WebView2
+  transparency, …) records the reason (`native_render::renderer_status`); every
+  video subscription then fails loudly with it, and `decode` is false for every
+  codec. It never draws video in the webview instead.
+- Hidden ⇒ decode paused only when the tile is off screen or the window hidden
+  (`media_set_stream_visibility`). A tile merely covered (a dialog, a stage
+  move) keeps decoding with its surface hidden. A resumed decoder drops deltas
+  until the keyframe it asks for.
+- Everything in the page that needs a picture of a video (room light, the
+  stage's glow, the pill's preview, tile posters, clip thumbnails) reads stills:
+  `native_render_still { streamId, trackId, maxWidth, maxHeight, afterSeq? }`,
+  binary RGBA of the latest presented frame (§3.6).
 
 ## 3. Native surface architecture
 
@@ -123,7 +140,7 @@ probe generation and the software floor. libvpx VP9 decode returns `CpuI420` dir
 ### 3.3 Linux backend (`linux.rs`) — the full zero-copy target
 
 Widget (UNDERLAY revision, 2026-07-07 — supersedes the original overlay-on-top
-design): on setup, reparent the webview inside the window's `default_vbox()` into a
+design; every platform is an underlay since 2026-10-04): on setup, reparent the webview inside the window's `default_vbox()` into a
 `gtk::Overlay` with a `gtk::Fixed` as the MAIN child (the GL host) and the webview as
 the overlay child ON TOP, its background cleared via
 `webkit_web_view_set_background_color(transparent)`. Each surface = one `gtk::GLArea`
@@ -173,12 +190,22 @@ runtime fallback. Do not fake tier-1 — an honest tier-2 beats a broken interop
 
 ### 3.5 macOS backend (`macos.rs`) — compile-unverified on this machine
 
-Sibling `NSView` added above the WKWebView in the window `contentView`, backed by an
-`AVSampleBufferDisplayLayer`. VideoToolbox decode (new `VtDecoder` for H264 now, AV1 on
+Sibling `NSView` added BELOW the WKWebView in the window `contentView` (an underlay
+since 2026-10-04; the WKWebView's `drawsBackground` is off and the window paints
+the ground color), hosting an `AVSampleBufferDisplayLayer`. VideoToolbox decode (new `VtDecoder` for H264 now, AV1 on
 M3+ later) outputs `CVPixelBuffer` → wrap in `CMSampleBuffer` → `enqueue(...)`. Geometry
 = `view.frame` (flip Y from top-left DOM coords), `layer.cornerRadius` for corners,
 `isHidden` for visibility. All AppKit calls on the main thread via
 `dispatch::Queue::main().exec_async`. This is the OS's own zero-copy video path.
+
+### 3.5a Windows backend (`windows.rs`) — compile-checked, not run
+
+A DirectComposition target on the top-level window with `topmost = FALSE`, so its
+visual tree composes behind the WebView2 child window, whose default background
+is transparent. A ground visual painted the ground color, and one visual per
+surface with a composition swap chain (premultiplied alpha) drawn by Direct3D 11
+from CPU I420 with the same shader math as Linux (matrix, fit, crop anchor,
+rounded mask, mirror). All D3D/DXGI/DComp objects live on one render thread.
 
 ### 3.6 Geometry & occlusion protocol (TS ↔ native)
 
@@ -187,18 +214,29 @@ New commands (contract S1):
   flips the subscription's route bookkeeping; called instead of (not in addition to)
   the frame-channel registration when the route is `native-surface`. The keyframe
   request / visibility / stats plumbing is shared with the existing subscription.
-- `native_render_update_geometry { surfaceId, x, y, width, height, dpr, cornerRadius, visible }`
-  — physical pixels relative to the window's client area.
+- `native_render_update_geometry { surfaceId, x, y, width, height, dpr, cornerRadius, visible, generation, mirrored }`
+  — physical pixels relative to the window's client area. `generation` counts the
+  page's reveals: once a backend has drawn a frame at a visible geometry of a new
+  generation it emits `native_render_shown { surfaceId, generation }`, and only
+  then does the page open the hole (it keeps the tile's poster up until then).
+- `native_render_still { streamId, trackId, maxWidth, maxHeight, afterSeq? }` —
+  the latest presented frame (a CPU copy kept at most every 200ms while wanted,
+  at least every second otherwise) scaled to fit, as binary RGBA; `unchanged`
+  when it is `afterSeq`.
 - `native_render_detach { surfaceId }`.
 
 TS side: a `NativeVideoTile` mount in the same place `CanvasRenderer` would mount.
 Reporting cadence: ResizeObserver + IntersectionObserver + window scroll/resize, all
 coalesced through one rAF-throttled reporter (≤1 update per frame, skip no-ops).
-**Occlusion rule**: each reporter tick samples `document.elementFromPoint` at the
-tile's center + 4 inset corners; if any topmost element is not the tile or its
-descendants, report `visible=false`. This deterministically yields "any modal, popover,
-or context menu over the video hides the native surface" — accepted UX, documented.
-While occluded/hidden the DOM shows the tile's existing poster/backdrop styling.
+**Occlusion rule** (underlay): each reporter tick samples `document.elementFromPoint`
+at the tile's center + 4 inset corners; a marked occluder (`data-native-shield`,
+`data-native-overlay-occlude`) or a dialog/menu over the tile's CENTER reports
+`visible=false`; stage chrome and corner-only menus do not. Hiding closes the hole
+first and hides the surface two frames later. While hidden the tile shows its
+poster (the latest still, drawn into its own canvas with the surface's fit). A
+stage move additionally makes the bottom of the page opaque in the ground color
+for its length (`html[data-native-moving]`), so no surface shows through from its
+old place on the move's first frames.
 
 ### 3.7 Failure law
 

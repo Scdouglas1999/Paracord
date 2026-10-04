@@ -105,7 +105,20 @@ how to check a contact's key. In short:
   `WEBKIT_DMABUF_RENDERER_FORCE_SHM=0` restores the default on a machine whose
   driver has since been fixed.
 - Video is not affected: it is drawn by the `gtk::GLArea` underlay, which owns
-  its own GL context.
+  its own GL context. Every video in the desktop app takes that route (no
+  WebCodecs in the desktop app since 2026-10-04). A machine where the GL context
+  cannot be created keeps an opaque window that shows no video at all, and every
+  video says why; it never falls back to drawing video in the page.
+- **The desktop app's video on macOS and Windows has not been run.** Both are
+  underlays to the same contract as Linux (macOS: `AVSampleBufferDisplayLayer`
+  under the WKWebView; Windows: a DirectComposition tree under the WebView2,
+  Media Foundation H.264/AV1 decode). The macOS code is type-checked against the
+  real Tauri/wry APIs in a stand-in crate; the Windows code is type-checked and
+  clippy-clean for `x86_64-pc-windows-gnu`. Neither has been seen on a real
+  machine. Windows shows AV1 only when an AV1 Media Foundation decoder (the Store
+  "AV1 Video Extension" or a GPU vendor's) is installed, and negotiation avoids
+  AV1 otherwise; macOS decodes H.264 and VP9 natively, so AV1 is not offered to a
+  call with a Mac in it.
 - The **AppImage** carries its own WebKit and GTK but uses the host's graphics
   driver and Wayland client libraries (`libwayland-client` and friends, present
   on any system with Mesa or GTK). Releases up to 3.2.0 bundled an older
@@ -219,4 +232,4 @@ how to check a contact's key. In short:
 
 ## Looks (3.1.0)
 
-- Dusk sky and Paper & ink switch to solid panels and drop the paper grain while a native video underlay is active on the Linux desktop client. The rules are keyed off the same attribute that opens the underlay, but have not been exercised against a live native stream.
+- Dusk sky and Paper & ink switch to solid panels and drop the paper grain while a native video underlay is active in the desktop app (every platform since 2026-10-04). The rules are keyed off the same attribute that opens the underlay, but have not been exercised against a live native stream.
