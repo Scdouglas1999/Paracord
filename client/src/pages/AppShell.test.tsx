@@ -34,15 +34,21 @@ vi.mock('../components/glass/sheets', () => ({
   ),
   toggleSheet: toggleSheetMock,
 }));
-// The call slot mounts the Glass stage until IX-13.
-vi.mock('../components/glass/stage', () => ({
-  Stage: ({ target, mode }: { target: { streamerId: string }; mode: string }) => (
-    <div data-testid="stage-slot" data-mode={mode}>{target.streamerId}</div>
-  ),
-}));
-vi.mock('../components/glass/shell/PhoneStageChrome', () => ({
-  PhoneStageChrome: () => <div data-testid="phone-stage-chrome" />,
-}));
+// The call slot (IX-13) is real; the view it mounts is a stand-in (its own suite is ix/call).
+vi.mock('../components/ix/call/CallView', async () => {
+  const { forwardRef } = await import('react');
+  return {
+    CallView: forwardRef<HTMLElement, { target: { streamerId: string | null }; mode: string; phone: boolean }>(
+      function CallView({ target, mode, phone }, ref) {
+        return (
+          <section ref={ref} aria-label="Call: lounge" className="ix-inset-surface ix-call" data-native-underlay-clear="">
+            <div data-testid="stage-slot" data-mode={mode} data-phone={phone ? 'true' : undefined}>{target.streamerId}</div>
+          </section>
+        );
+      },
+    ),
+  };
+});
 vi.mock('../components/layout/CommandPalette', () => ({
   CommandPalette: () => <div data-testid="command-palette" />,
 }));
@@ -259,7 +265,7 @@ describe('AppShell', () => {
 
     act(() => useGlassStore.getState().openStage(LOUNGE));
     expect(frameOf(container)).toHaveAttribute('data-stage', 'side');
-    const surface = screen.getByRole('region', { name: 'Call' });
+    const surface = screen.getByRole('region', { name: 'Call: lounge' });
     expect(host).toContainElement(surface);
     expect(surface).toHaveClass('ix-inset-surface');
     expect(surface).toContainElement(screen.getByTestId('stage-slot'));
@@ -362,12 +368,12 @@ describe('AppShell', () => {
       expect(frameScreen(container)).toBe('places');
     });
 
-    it('draws the call over the whole screen with the phone\'s chrome; both screens go inert under it', () => {
+    it('draws the call over the whole screen in its phone form; both screens go inert under it', () => {
       renderShell('/app/guilds/g1/channels/c1');
       act(() => useGlassStore.getState().openStage(LOUNGE));
-      const surface = screen.getByRole('region', { name: 'Call' });
+      const surface = screen.getByRole('region', { name: 'Call: lounge' });
       expect(surface).toContainElement(screen.getByTestId('stage-slot'));
-      expect(surface).toContainElement(screen.getByTestId('phone-stage-chrome'));
+      expect(screen.getByTestId('stage-slot')).toHaveAttribute('data-phone', 'true');
       expect(screen.getByRole('main', { hidden: true })).toHaveAttribute('inert');
       expect(sidebarOf()).toHaveAttribute('inert');
     });

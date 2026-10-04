@@ -1,1 +1,873 @@
-/* IX-13: the call view (§7). Created empty by IX-1; the owner fills it. */
+/* =============================================================================
+   IX-13: the call view (docs/index-spec.md §7, §3.1 "Call surface", §5.8,
+   §5.9, §7.6). The surface itself (`.ix-inset-surface`: inset 10, radius 24,
+   `--ix-call`, the call shadow) is ix-shell.css's; this sheet fills it.
+
+   Unlayered, after every Glass sheet (globals.css), so a rule here wins a tie
+   with the Glass rule it replaces (`.glass-stage__stream` and friends, which
+   the view composes unchanged).
+   ============================================================================= */
+
+/* ---- The surface and its counter-layer ------------------------------------------ */
+.ix-call {
+  --ix-call-pad: 20px;
+}
+
+.ix-call__layer {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.ix-call__body {
+  display: flex;
+  flex: 1 1 auto;
+  gap: 12px;
+  min-width: 0;
+  min-height: 0;
+  padding: 0 var(--ix-call-pad) 16px;
+}
+
+.ix-call__main {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* ---- Header ------------------------------------------------------------------- */
+.ix-call-head {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 12px;
+  padding: 18px var(--ix-call-pad);
+  min-width: 0;
+}
+
+.ix-call-head__glyph {
+  flex: 0 0 auto;
+  color: var(--ix-amber);
+}
+
+.ix-call-head__name {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  color: var(--ix-ink);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ix-call-head__place {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  color: var(--ix-amber);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ix-call-head__spacer {
+  flex: 1 1 auto;
+}
+
+.ix-call-head__tool {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--ix-ink-2);
+  cursor: pointer;
+  transition: background-color 120ms var(--ix-ease), color 120ms var(--ix-ease);
+}
+
+.ix-call-head__tool:hover {
+  background: var(--ix-fill);
+  color: var(--ix-ink);
+}
+
+.ix-call-head__tool[aria-pressed='true'] {
+  background: var(--ix-fill);
+  color: var(--ix-amber);
+}
+
+.ix-call-head__back {
+  flex: 0 0 auto;
+  padding: 9px 13px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--ix-fill);
+  box-shadow: inset 0 0 0 1px var(--ix-line);
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ix-ink);
+  cursor: pointer;
+  transition: background-color 150ms var(--ix-ease);
+}
+
+.ix-call-head__back:hover {
+  background: var(--ix-fill-2);
+}
+
+.ix-call-head__tool:focus-visible,
+.ix-call-head__back:focus-visible,
+.ix-call-btn:focus-visible,
+.ix-call-tile__button:focus-visible,
+.ix-call-stream__tool:focus-visible,
+.ix-call-notice__retry:focus-visible,
+.ix-call-pop__row:focus-visible,
+.ix-call-pop__select:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+/* ---- People grid (§7.2) ----------------------------------------------------------- */
+.ix-call-people {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+
+.ix-call-people__area {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 0;
+}
+
+.ix-call-grid {
+  display: grid;
+  grid-template-columns: repeat(var(--ix-call-cols, 2), minmax(0, 1fr));
+  grid-auto-rows: minmax(120px, 1fr);
+  gap: 12px;
+  align-self: stretch;
+  width: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.ix-call-grid::-webkit-scrollbar {
+  display: none;
+}
+
+/* Someone has a camera: 16:9 tiles at the largest size whose rows fit; a
+   short last row is centered under the others. */
+.ix-call-grid[data-sized='true'] {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: center;
+  align-self: center;
+  justify-content: center;
+  width: calc(var(--ix-call-cols, 2) * var(--ix-call-tile-w) + (var(--ix-call-cols, 2) - 1) * 12px);
+  max-width: 100%;
+}
+
+.ix-call-grid[data-sized='true'] > .ix-call-tile {
+  flex: 0 0 var(--ix-call-tile-w);
+  height: var(--ix-call-tile-h);
+}
+
+/* One person: one tile, half the width, as the prototype's two-column grid draws it. */
+.ix-call-grid[data-count='1']:not([data-sized='true']) {
+  grid-template-columns: minmax(0, 1fr);
+  width: calc(50% - 6px);
+  align-self: stretch;
+}
+
+/* ---- A tile ----------------------------------------------------------------------- */
+.ix-call-tile {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: 20px;
+  background: var(--ix-tile-end);
+  box-shadow: inset 0 0 0 1px var(--ix-fill);
+  isolation: isolate;
+}
+
+/* The person-hue gradient: drawn only where no picture is live (a native
+   camera's hole needs nothing painted over it). */
+.ix-call-tile__ground {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: radial-gradient(120% 100% at 50% 0%, hsl(var(--ix-h) 30% 24%), var(--ix-tile-end) 70%);
+}
+
+.ix-call-tile[data-picture='true'] .ix-call-tile__ground {
+  display: none;
+}
+
+.ix-call-tile[data-underlay='live'] {
+  background: transparent;
+}
+
+.ix-call-tile__button {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+button.ix-call-tile__button {
+  cursor: pointer;
+}
+
+.ix-call-tile__video {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  transition: opacity 200ms var(--ix-ease);
+}
+
+/* Your own camera reads as a mirror, as it always has (the native surface is told). */
+.ix-call-tile__video[data-self='true'] {
+  transform: scaleX(-1);
+}
+
+.ix-call-tile__face {
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+
+.ix-call-tile__shade {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(transparent 58%, color-mix(in srgb, var(--ix-call) 62%, transparent));
+}
+
+.ix-call-tile__name {
+  position: absolute;
+  left: 16px;
+  bottom: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100% - 32px);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--ix-ink);
+  pointer-events: none;
+}
+
+.ix-call-tile__who {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ix-call-tile__mark {
+  flex: 0 0 auto;
+  color: var(--ix-ink-3);
+}
+
+.ix-call-tile__wave {
+  flex: 0 0 auto;
+}
+
+/* The talker: a 2px amber inner edge and the amber glow (opacity of a layer, never an animated shadow). */
+.ix-call-tile::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 2px var(--ix-amber);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 300ms var(--ix-ease);
+}
+
+.ix-call-tile[data-talking='true']::after {
+  opacity: 1;
+  transition-duration: 150ms;
+}
+
+.ix-call-tile[data-talking='true'] {
+  box-shadow: inset 0 0 0 1px var(--ix-fill), var(--ix-glow-talk);
+}
+
+/* What a tile in focus or the filmstrip shows as current. */
+.ix-call-tile[data-current='true']::after {
+  box-shadow: inset 0 0 0 2px var(--ix-ink-2);
+  opacity: 1;
+}
+
+.ix-call-tile[data-current='true'][data-talking='true']::after {
+  box-shadow: inset 0 0 0 2px var(--ix-amber);
+}
+
+/* ---- Listening row ------------------------------------------------------------------ */
+.ix-call-listening {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 32px;
+  font-size: 13px;
+  color: var(--ix-ink-3);
+}
+
+.ix-call-listening__count {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Focus: a stream or a camera above the filmstrip (§7.2) --------------------------- */
+.ix-call-focus {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.ix-call-focus__stage {
+  display: grid;
+  flex: 1 1 auto;
+  place-items: center;
+  min-width: 0;
+  min-height: 0;
+}
+
+.ix-call-focus__camera {
+  position: relative;
+}
+
+.ix-call-focus__camera > .ix-call-tile {
+  position: absolute;
+  inset: 0;
+}
+
+.ix-call-strip {
+  display: flex;
+  flex: 0 0 112px;
+  align-items: stretch;
+  justify-content: center;
+  gap: 12px;
+  height: 112px;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.ix-call-strip::-webkit-scrollbar {
+  display: none;
+}
+
+.ix-call-tile--strip {
+  flex: 0 0 auto;
+  width: 160px;
+  border-radius: 16px;
+}
+
+.ix-call-tile--strip[data-camera='true'] {
+  width: 199px;
+}
+
+.ix-call-tile--strip .ix-call-tile__face {
+  margin-top: -18px;
+}
+
+.ix-call-tile--strip .ix-call-tile__name {
+  left: 12px;
+  bottom: 10px;
+  max-width: calc(100% - 24px);
+  font-size: 13px;
+}
+
+.ix-call-strip > .ix-call-listening {
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 8px;
+}
+
+/* ---- The stream (composes the Glass StreamSurface) -------------------------------------- */
+.ix-call .ix-call-stream {
+  flex: 0 0 auto;
+  width: 100%;
+  max-width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 20px;
+  background-color: var(--ix-tile-end);
+}
+
+.ix-call .ix-call-stream[style*='width'] {
+  aspect-ratio: auto;
+}
+
+.ix-call .ix-call-stream[data-underlay='live'] {
+  background-color: transparent;
+}
+
+.ix-call-stream__overlay {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  left: 12px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 200ms var(--ix-ease);
+}
+
+.ix-call-stream:hover > .ix-call-stream__overlay,
+.ix-call-stream__overlay:focus-within,
+.ix-call-stream__overlay:has([aria-expanded='true']) {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Near-solid fills: nothing in the webview can blur a native surface below it (§7.6). */
+.ix-call-stream__label,
+.ix-call-stream__tool {
+  background: color-mix(in srgb, var(--ix-call) 86%, transparent);
+  box-shadow: inset 0 0 0 1px var(--ix-line);
+}
+
+.ix-call-stream__label {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  padding: 7px 12px;
+  border-radius: 10px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ix-ink);
+}
+
+.ix-call-stream__who {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ix-call-stream__count {
+  flex: 0 0 auto;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ix-ink-3);
+}
+
+.ix-call-stream__tools {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+.ix-call .ix-call-stream__tool {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 10px;
+  color: var(--ix-ink-2);
+  cursor: pointer;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.ix-call .ix-call-stream__tool:hover {
+  color: var(--ix-ink);
+  background: color-mix(in srgb, var(--ix-ink) 12%, var(--ix-call));
+}
+
+.ix-call-notice {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  max-width: 44ch;
+  font-size: 15px;
+  line-height: 1.4;
+  color: var(--ix-ink);
+}
+
+.ix-call-notice[data-pending='true'] {
+  color: var(--ix-ink-2);
+}
+
+.ix-call-notice__retry {
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--ix-fill-btn);
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ix-ink);
+  cursor: pointer;
+}
+
+/* The clip toast and the surfacing messages over the stream: near-solid, the Index ink. */
+.ix-call .glass-clip-toast {
+  border-radius: 16px;
+  background: var(--ix-pop-solid);
+  box-shadow: inset 0 0 0 1px var(--ix-line), var(--ix-shadow-room);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* ---- Watch together -------------------------------------------------------------------- */
+.ix-call-together {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: 20px;
+}
+
+.ix-call__together-line {
+  flex: 0 0 auto;
+  padding: 0 var(--ix-call-pad) 12px;
+}
+
+/* ---- Chat column (H) -------------------------------------------------------------------- */
+.ix-call-chat {
+  display: flex;
+  flex: 0 0 360px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.ix-call-chat__panel {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: 20px;
+  background: color-mix(in srgb, var(--ix-ink) 3%, transparent);
+}
+
+.ix-call-chat__head {
+  flex: 0 0 auto;
+  max-height: 40%;
+  overflow-y: auto;
+  border-bottom: 1px solid var(--ix-line);
+}
+
+.ix-call-chat__feed {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.ix-call-chat__box {
+  flex: 0 0 auto;
+  padding: 0 4px 6px;
+}
+
+/* ---- Controls (§3.1) ------------------------------------------------------------------- */
+.ix-call-controls {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 0 var(--ix-call-pad) 20px;
+}
+
+.ix-call-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 46px;
+  min-width: 46px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 23px;
+  background: var(--ix-fill-btn);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ix-ink);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 120ms var(--ix-ease), color 120ms var(--ix-ease);
+}
+
+.ix-call-btn--icon {
+  padding: 0;
+  width: 46px;
+}
+
+.ix-call-btn:hover {
+  background: var(--ix-fill-ctl-hover);
+}
+
+.ix-call-btn[aria-pressed='true'] {
+  color: var(--ix-amber);
+}
+
+/* The mic reads its state from the glyph (mic / mic off), not a lit fill. */
+.ix-call-btn[aria-label='Microphone'][aria-pressed='true'] {
+  color: var(--ix-ink);
+}
+
+.ix-call-btn[aria-disabled='true'] {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.ix-call-btn--danger {
+  background: var(--ix-danger-fill-call);
+  color: var(--ix-danger-ink);
+}
+
+.ix-call-btn--danger:hover {
+  background: color-mix(in srgb, var(--ix-danger-ink) 22%, transparent);
+}
+
+.ix-call-btn--cream {
+  min-width: 96px;
+  background: var(--ix-cream);
+  color: var(--ix-cream-ink);
+  font-weight: 700;
+}
+
+.ix-call-btn--cream:hover {
+  background: var(--ix-cream-hover);
+}
+
+.ix-call-btn--cream:active {
+  background: var(--ix-cream-press);
+}
+
+/* ---- Popovers (the mic menu, More, share quality): near-solid, never blurred ------------- */
+.ix-call-pop {
+  overflow: hidden;
+  border-radius: 16px;
+  background: var(--ix-pop-solid);
+  box-shadow: inset 0 0 0 1px var(--ix-edge-strong), var(--ix-shadow-room);
+  color: var(--ix-ink);
+}
+
+html[data-native-underlay] .ix-call-pop {
+  background-color: var(--ix-pop-solid) !important;
+}
+
+.ix-call-pop__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+}
+
+.ix-call-pop__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--ix-ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.ix-call-pop__row:hover,
+.ix-call-pop__row:focus-visible {
+  background: var(--ix-fill-2);
+}
+
+.ix-call-pop__row[aria-pressed='true'] {
+  color: var(--ix-amber);
+}
+
+.ix-call-pop__row:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.ix-call-pop__icon {
+  display: grid;
+  place-items: center;
+  color: var(--ix-ink-2);
+}
+
+.ix-call-pop__label {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ix-call-pop__hint {
+  font-size: 12px;
+  color: var(--ix-ink-3);
+}
+
+.ix-call-pop__num {
+  font-variant-numeric: tabular-nums;
+}
+
+.ix-call-pop__kicker {
+  padding: 6px 4px 2px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ix-ink-3);
+}
+
+.ix-call-pop__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px;
+}
+
+.ix-call-pop__select {
+  height: 34px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--ix-fill-field);
+  box-shadow: inset 0 0 0 1px var(--ix-line);
+  font-size: 13.5px;
+  color: var(--ix-ink);
+}
+
+.ix-call-pop__check {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px 10px;
+  border-bottom: 1px solid var(--ix-line);
+}
+
+.ix-call-pop__check-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.ix-call-pop__check[data-warning='true'] .ix-call-pop__label {
+  color: var(--ix-danger-ink);
+}
+
+.ix-call-pop__meter {
+  display: block;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--ix-fill-2);
+}
+
+.ix-call-pop__meter-fill {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--ix-amber);
+  transform-origin: 0 50%;
+}
+
+/* ---- Moves (§5.8, §5.9) ------------------------------------------------------------------ */
+/* The still copy that shrinks back into the card on Back to chat. */
+.ix-call-ghost {
+  z-index: 70;
+  pointer-events: none;
+}
+
+/* For the length of a move in the desktop app: native video reads this as an
+   occluder and shows its poster; nothing half-moved can be clicked. */
+.ix-call-shield {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  background: transparent;
+  pointer-events: auto;
+}
+
+/* ---- Native video under the call (§7.6) ----------------------------------------------------
+   While a hole is open the surface is clear (it is `data-native-underlay-clear`,
+   layout.css), so whatever the page paints beneath it would show through over
+   the video: main's conversation, and in theater (or on a phone) the sidebar.
+   Nothing beneath is painted then; the ground the shell paints under the page
+   shows instead. During a move the surface keeps its own fill (the tiles show
+   posters), so nothing beneath shows through either. */
+html[data-native-underlay]:not([data-native-moving]) .ix-frame:not([data-stage='none']) > .ix-main > :not(.ix-tint),
+html[data-native-underlay]:not([data-native-moving]) .ix-frame[data-stage='theater'] > .ix-side > :not(.ix-tint),
+html[data-native-underlay]:not([data-native-moving]) .ix-frame[data-layout='phone']:not([data-stage='none']) > .ix-side > :not(.ix-tint) {
+  visibility: hidden;
+}
+
+html[data-native-moving] .ix-frame .ix-call.ix-inset-surface,
+html[data-native-moving] .ix-call-ghost {
+  background-color: var(--ix-call);
+}
+
+/* ---- Phone (IX-16 makes the call a sheet; until then the view fills the screen) --------- */
+.ix-frame[data-layout='phone'] .ix-call__body {
+  padding: 0 12px 12px;
+}
+
+.ix-frame[data-layout='phone'] .ix-call-head {
+  padding: calc(var(--safe-top, 0px) + 12px) 16px 12px;
+}
+
+.ix-frame[data-layout='phone'] .ix-call-controls {
+  padding-bottom: calc(var(--safe-bottom, 0px) + 16px);
+}
+
+.ix-frame[data-layout='phone'] .ix-call-grid {
+  grid-template-columns: repeat(min(var(--ix-call-cols, 2), 2), minmax(0, 1fr));
+}
+
+/* ---- Reduced motion (the app's one switch): no fades on the tiles -------------------------- */
+:root[data-motion='reduced'] .ix-call-tile::after,
+:root[data-motion='reduced'] .ix-call-tile__video {
+  transition: none;
+}

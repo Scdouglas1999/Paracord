@@ -334,14 +334,6 @@ describe('keyboard', () => {
     box.remove();
   });
 
-  it('Esc while browsing puts the places panel away first', () => {
-    renderStage();
-    act(() => useGlassStore.getState().setBrowseOpen(true));
-    fireEvent.keyDown(document.body, { key: 'Escape' });
-    expect(useGlassStore.getState().browseOpen).toBe(false);
-    expect(useGlassStore.getState().stage.mode).toBe('side');
-  });
-
   it('S opens browse from the sidebar button, T switches to theater', () => {
     renderStage();
     fireEvent.click(screen.getByRole('button', { name: 'Show servers and channels' }));

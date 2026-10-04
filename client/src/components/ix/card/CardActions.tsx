@@ -15,7 +15,7 @@ import {
   watchStream,
   type PillActionTarget,
 } from '../../glass/pill/pillActions';
-import { DeviceMenu } from '../../glass/stage/StageMenus';
+import { DeviceMenu } from '../call/CallMenus';
 import { useShareScreen } from '../../glass/stage/useShareScreen';
 import { ScreenSharePickerModal } from '../../voice/ScreenSharePickerModal';
 import { IxGlyph } from '../glyphs';

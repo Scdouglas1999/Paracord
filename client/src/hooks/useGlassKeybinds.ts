@@ -4,38 +4,35 @@ import { triggerClip } from '../lib/media/clips/useClip';
 import { useGlassStore } from '../stores/glassStore';
 
 /**
- * The stage's keys (docs/glass-spec.md §9): S sidebar, T theater, H hide chat,
- * C clip, Esc stop watching. Bound on `window` while a stage is on screen (the
- * stage mounts this), so every handler on the way (a menu's, a dialog's focus
- * trap, the message box's, the voice keybinds) has had the key first and can
- * claim it with `preventDefault`.
+ * The call view's keys (docs/index-spec.md §7.4): Esc (theater -> main ->
+ * closed), T theater, H the chat column, C clip (a stream in focus). Glass's S
+ * (browse) is retired. Bound on `window` while the call view is on screen (it
+ * mounts this), so every handler on the way (a menu's, a dialog's focus trap,
+ * the message box's, the voice keybinds) has had the key first and can claim
+ * it with `preventDefault`.
  *
- * A key is somebody else's, and the stage leaves it alone, when:
+ * A key is somebody else's, and the view leaves it alone, when:
  *   - it comes with Ctrl, Alt or Meta (those are the app's shortcuts), or repeats;
- *   - focus is in something you type into (input, textarea, select, contenteditable);
+ *   - focus is in something you type into (input, textarea, select, contenteditable):
+ *     the chat column's message box keeps every letter;
  *   - a menu, dialog, listbox or stream popover is open on screen;
- *   - a sheet (search, people…) is open over the conversation.
+ *   - a sheet (search, people…) is open.
  *
- * Esc while browsing puts the places panel away first; the next Esc stops
- * watching. Stop watching never leaves a call.
- *
- * C is WP-G16's `triggerClip()`: the same as pressing Clip, for the stream on
- * the stage (what cannot be clipped is said in a toast, as the button says it).
+ * Esc never leaves a call: closing the view keeps it (§7.3). C is the same as
+ * pressing Clip, for the stream in focus (what cannot be clipped is said in a
+ * toast, as the button says it). The phone has no theater and no chat column.
  */
 
-export type GlassKeyAction = 'browse' | 'theater' | 'chat' | 'clip' | 'stop';
+export type GlassKeyAction = 'theater' | 'chat' | 'clip' | 'stop';
 
 export interface GlassKeybindOptions {
-  /** A stage is on screen. */
+  /** The call view is on screen. */
   enabled: boolean;
-  /** The phone stage has no browse and its own full screen: Esc and C apply. */
+  /** The phone's call has no theater and no chat column: Esc and C apply. */
   phone: boolean;
-  /**
-   * A stream is on the stage (the default). The call itself has no stream: no
-   * theater, no chat to hide beside it, nothing to clip, so T, H and C stay free.
-   */
+  /** A stream is in focus (the default): C clips it. Without one C stays free. */
   stream?: boolean;
-  /** Stop watching (closes the stage and stops the watch). */
+  /** Close the view (stops watching; never leaves the call). */
   onStop: () => void;
 }
 
@@ -45,9 +42,6 @@ export function glassKeyAction(event: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'a
   switch (event.key) {
     case 'Escape':
       return 'stop';
-    case 's':
-    case 'S':
-      return 'browse';
     case 't':
     case 'T':
       return 'theater';
@@ -92,25 +86,19 @@ export function useGlassKeybinds({ enabled, phone, stream = true, onStop }: Glas
       switch (action) {
         case 'stop':
           event.preventDefault();
-          // Browsing is a layer over the stage: Esc puts the places panel away first.
-          if (glass.browseOpen) glass.setBrowseOpen(false);
+          // Theater steps back to main first; the next Esc closes the view.
+          if (glass.stage.mode === 'theater' && !phone) glass.setStageMode('side');
           else onStop();
           return;
-        case 'browse':
-          if (phone) return;
-          event.preventDefault();
-          glass.toggleBrowse();
-          return;
         case 'theater':
-          if (phone || !stream) return;
+          if (phone) return;
           event.preventDefault();
           glass.setStageMode(glass.stage.mode === 'theater' ? 'side' : 'theater');
           return;
         case 'chat':
-          // H only means something in theater; elsewhere the key stays free.
-          if (phone || !stream || glass.stage.mode !== 'theater') return;
+          if (phone) return;
           event.preventDefault();
-          glass.toggleChatHidden();
+          glass.toggleChat();
           return;
         case 'clip':
           if (!stream) return;

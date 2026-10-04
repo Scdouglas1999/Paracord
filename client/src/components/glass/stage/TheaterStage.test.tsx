@@ -217,7 +217,7 @@ describe('theater', () => {
     expect(screen.getByRole('button', { name: 'Leave Lounge' })).toBeInTheDocument();
   });
 
-  it('the chat button (H) hides and shows the chat; it says which it will do', () => {
+  it('the chat button hides and shows the chat; it says which it will do', () => {
     renderStage(LOUNGE, 'theater');
     const show = screen.getByRole('button', { name: 'Show chat' });
     expect(show).toHaveAttribute('aria-pressed', 'false');
@@ -226,8 +226,6 @@ describe('theater', () => {
     fireEvent.click(show);
     expect(useGlassStore.getState().chatHidden).toBe(false);
     expect(screen.getByRole('button', { name: 'Hide chat' })).toBeInTheDocument();
-    fireEvent.keyDown(document.body, { key: 'h' });
-    expect(useGlassStore.getState().chatHidden).toBe(true);
   });
 
   it('while browsing in theater the chat is out of the way, and the chat button brings it back', () => {

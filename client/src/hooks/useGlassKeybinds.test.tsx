@@ -5,9 +5,10 @@ import { useGlassStore, type StageTarget } from '../stores/glassStore';
 import { glassKeyAction, useGlassKeybinds } from './useGlassKeybinds';
 
 /**
- * The stage's keys (docs/glass-spec.md §9): S sidebar, T theater, H hide chat,
- * C clip, Esc stop watching, each only while a stage is open and never while
- * the key is somebody else's.
+ * The call view's keys (docs/index-spec.md §7.4): Esc (theater -> main ->
+ * closed), T theater, H the chat column, C clip with a stream in focus, each
+ * only while the view is open and never while the key is somebody else's.
+ * Glass's S (browse) is retired.
  */
 
 const clip = vi.hoisted(() => ({ triggerClip: vi.fn(async () => true) }));
@@ -34,50 +35,46 @@ afterEach(() => {
 });
 
 describe('glassKeyAction', () => {
-  it('maps S, T, H, C and Esc, either case, and nothing with a modifier', () => {
+  it('maps T, H, C and Esc, either case, nothing with a modifier, and no longer S', () => {
     const plain = { ctrlKey: false, altKey: false, metaKey: false };
-    expect(glassKeyAction({ key: 's', ...plain })).toBe('browse');
+    expect(glassKeyAction({ key: 's', ...plain })).toBeNull();
     expect(glassKeyAction({ key: 'T', ...plain })).toBe('theater');
     expect(glassKeyAction({ key: 'h', ...plain })).toBe('chat');
     expect(glassKeyAction({ key: 'c', ...plain })).toBe('clip');
     expect(glassKeyAction({ key: 'Escape', ...plain })).toBe('stop');
     expect(glassKeyAction({ key: 'x', ...plain })).toBeNull();
-    expect(glassKeyAction({ key: 's', ...plain, ctrlKey: true })).toBeNull();
+    expect(glassKeyAction({ key: 't', ...plain, ctrlKey: true })).toBeNull();
     expect(glassKeyAction({ key: 'f', ...plain, metaKey: true })).toBeNull();
   });
 });
 
 describe('useGlassKeybinds', () => {
-  it('S browses, T switches layouts, H hides the chat in theater only', () => {
+  it('T switches main and theater, H shows and hides the chat column in both', () => {
     const onStop = vi.fn();
     render(<Keys onStop={onStop} />);
     useGlassStore.getState().openStage(LOUNGE);
+    expect(useGlassStore.getState().stage.chat).toBe(false);
     press('h');
-    expect(useGlassStore.getState().chatHidden).toBe(false);
-    press('s');
-    expect(useGlassStore.getState().browseOpen).toBe(true);
-    press('s');
-    expect(useGlassStore.getState().browseOpen).toBe(false);
+    expect(useGlassStore.getState().stage.chat).toBe(true);
     press('t');
     expect(useGlassStore.getState().stage.mode).toBe('theater');
-    // Theater opens with the chat hidden (19db3e60); H brings it back and hides it again.
-    expect(useGlassStore.getState().chatHidden).toBe(true);
-    press('h');
-    expect(useGlassStore.getState().chatHidden).toBe(false);
+    // The chat column stays as it was across theater.
+    expect(useGlassStore.getState().stage.chat).toBe(true);
     press('H');
-    expect(useGlassStore.getState().chatHidden).toBe(true);
+    expect(useGlassStore.getState().stage.chat).toBe(false);
     press('T');
     expect(useGlassStore.getState().stage.mode).toBe('side');
+    press('s');
+    expect(useGlassStore.getState().browseOpen).toBe(false);
     expect(onStop).not.toHaveBeenCalled();
   });
 
-  it('Esc puts browse away first, then stops watching', () => {
+  it('Esc steps theater back to main first, then closes the view', () => {
     const onStop = vi.fn();
     render(<Keys onStop={onStop} />);
-    useGlassStore.getState().openStage(LOUNGE);
-    useGlassStore.getState().setBrowseOpen(true);
+    useGlassStore.getState().openStage(LOUNGE, 'theater');
     press('Escape');
-    expect(useGlassStore.getState().browseOpen).toBe(false);
+    expect(useGlassStore.getState().stage.mode).toBe('side');
     expect(onStop).not.toHaveBeenCalled();
     press('Escape');
     expect(onStop).toHaveBeenCalledTimes(1);
@@ -93,20 +90,20 @@ describe('useGlassKeybinds', () => {
   it('does nothing without a stage, while typing, with a menu open, or with a sheet open', () => {
     const onStop = vi.fn();
     render(<Keys onStop={onStop} />);
-    press('s');
+    press('t');
     press('Escape');
-    expect(useGlassStore.getState().browseOpen).toBe(false);
+    expect(useGlassStore.getState().stage.mode).toBe('none');
     expect(onStop).not.toHaveBeenCalled();
 
     useGlassStore.getState().openStage(LOUNGE);
     const box = document.createElement('textarea');
     document.body.appendChild(box);
     box.focus();
-    press('s', {}, box);
+    press('h', {}, box);
     press('t', {}, box);
     press('c', {}, box);
     press('Escape', {}, box);
-    expect(useGlassStore.getState().browseOpen).toBe(false);
+    expect(useGlassStore.getState().stage.chat).toBe(false);
     expect(useGlassStore.getState().stage.mode).toBe('side');
     expect(clip.triggerClip).not.toHaveBeenCalled();
     expect(onStop).not.toHaveBeenCalled();
@@ -135,38 +132,38 @@ describe('useGlassKeybinds', () => {
     const claim = (event: KeyboardEvent) => event.preventDefault();
     document.body.addEventListener('keydown', claim);
     press('Escape');
-    press('s');
+    press('t');
     document.body.removeEventListener('keydown', claim);
     expect(onStop).not.toHaveBeenCalled();
-    expect(useGlassStore.getState().browseOpen).toBe(false);
+    expect(useGlassStore.getState().stage.mode).toBe('side');
   });
 
-  it('the phone stage answers Esc and C (its card has a Clip button), not S or T', () => {
+  it('the phone answers Esc and C, not T or H (no theater, no chat column)', () => {
     const onStop = vi.fn();
     render(<Keys phone onStop={onStop} />);
     useGlassStore.getState().openStage(LOUNGE);
-    press('s');
     press('t');
-    expect(useGlassStore.getState().browseOpen).toBe(false);
+    press('h');
     expect(useGlassStore.getState().stage.mode).toBe('side');
+    expect(useGlassStore.getState().stage.chat).toBe(false);
     press('c');
     expect(clip.triggerClip).toHaveBeenCalledTimes(1);
     press('Escape');
     expect(onStop).toHaveBeenCalledTimes(1);
   });
 
-  it('the call itself (no stream) leaves T, H and C alone, and keeps S and Esc', () => {
+  it('with no stream in focus C stays free; T, H and Esc still work', () => {
     const onStop = vi.fn();
     render(<Keys stream={false} onStop={onStop} />);
     useGlassStore.getState().openStage({ ...LOUNGE, streamerId: null });
-    press('t');
     press('c');
-    expect(useGlassStore.getState().stage.mode).toBe('side');
     expect(clip.triggerClip).not.toHaveBeenCalled();
-    press('s');
-    expect(useGlassStore.getState().browseOpen).toBe(true);
+    press('t');
+    expect(useGlassStore.getState().stage.mode).toBe('theater');
+    press('h');
+    expect(useGlassStore.getState().stage.chat).toBe(true);
     press('Escape');
-    expect(useGlassStore.getState().browseOpen).toBe(false);
+    expect(useGlassStore.getState().stage.mode).toBe('side');
     press('Escape');
     expect(onStop).toHaveBeenCalledTimes(1);
   });

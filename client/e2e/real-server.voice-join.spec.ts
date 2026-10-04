@@ -482,8 +482,8 @@ async function dismissFirstRunOverlays(page: Page): Promise<void> {
 const pillOf = (page: Page): Locator =>
   page.getByRole('main').getByRole('region', { name: `${ROOM}, live voice channel`, exact: true });
 
-/** The stage (the call itself, or a watched screen) that takes the conversation's side. */
-const stagePane = (page: Page): Locator => page.getByRole('region', { name: 'Stage', exact: true });
+/** The call view (the call itself, or a watched screen) over main: the region "Call: <channel>" (index-spec §10). */
+const stagePane = (page: Page): Locator => page.getByRole('region', { name: /^Call: / });
 
 /**
  * Click a control, clearing the welcome screen if it lands between the page
@@ -1101,10 +1101,10 @@ test('two browsers in one room see each other — one on camera, one sharing a s
     //    participant* — and the tile is a picture rather than the well color with
     //    a face on it.
     const hostTileOnGuest = () =>
-      stagePane(guest).locator('.glass-stage__tile').filter({ hasText: hostAccount.username });
+      stagePane(guest).locator('.ix-call-tile').filter({ hasText: hostAccount.username });
     await expect(hostTileOnGuest()).toBeVisible({ timeout: 30_000 });
     await expect(
-      hostTileOnGuest().locator('.glass-stage__tile-face'),
+      hostTileOnGuest().locator('.ix-call-tile__face'),
       'the tile must stop showing the face stand-in once frames arrive',
     ).toHaveCount(0, { timeout: 60_000 });
     // The face goes on the first *decoded* frame; the renderer paints it on the
@@ -1144,7 +1144,7 @@ test('two browsers in one room see each other — one on camera, one sharing a s
     // screen", and it offers their stream ("Watch …") in place of "Show the
     // call". Watching is the stage's and never joins: the host is already in the
     // call, so the stream rides it.
-    await stagePane(host).getByRole('button', { name: 'Close', exact: true }).click();
+    await stagePane(host).getByRole('button', { name: 'Back to chat', exact: true }).click();
     await expect(stagePane(host)).toHaveCount(0);
     const hostPill = pillOf(host);
     await expect(hostPill.getByRole('button', { name: 'Show the call', exact: true })).toHaveCount(0);
@@ -1196,7 +1196,7 @@ test('two browsers in one room see each other — one on camera, one sharing a s
     // guest's tile for the host returns with a picture.
     await setStageToggle(hostControls, 'Camera', true);
     await expect(
-      hostTileOnGuest().locator('.glass-stage__tile-face'),
+      hostTileOnGuest().locator('.ix-call-tile__face'),
       'the host’s camera returned to the guest’s stage',
     ).toHaveCount(0, { timeout: 60_000 });
     await expect(shareStream).toHaveAttribute('data-picture', 'true');
