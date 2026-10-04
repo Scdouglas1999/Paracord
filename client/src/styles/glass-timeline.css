@@ -580,33 +580,35 @@ button.glass-msg__name:hover {
   box-shadow: var(--sh-content);
 }
 
-/* The dots tick in 60ms steps on one grid (0.48s rises and falls in 8 steps;
-   the delays are whole steps), so the three change on the same frames: about 16
-   pictures a second instead of 60. Every animated frame costs the Linux desktop
-   a whole-window copy (WP-G23, as the waveform in glass.css). */
+/* The dots tick in 100ms steps on one grid (0.4s rises and falls in 4 steps;
+   the delays are whole steps), so the three change on the same frames: 10
+   pictures a second instead of 60, on the same grid as the waveform (glass.css,
+   Waveform.tsx). Every animated frame costs the Linux desktop a whole-window
+   copy (WP-G23; the release check of 2026-10-04 moved both from 60ms and 50ms
+   grids to this one). */
 .glass-tl-typing > span {
   width: 6px;
   height: 6px;
   border-radius: 50%;
   background-color: color-mix(in srgb, var(--ink-1) 80%, transparent);
-  animation: glass-tl-dot 1.2s steps(8, jump-none) infinite;
+  animation: glass-tl-dot 1.2s steps(4, jump-none) infinite;
 }
 
 .glass-tl-typing > span:nth-child(2) {
-  animation-delay: 0.12s;
+  animation-delay: 0.1s;
 }
 
 .glass-tl-typing > span:nth-child(3) {
-  animation-delay: 0.24s;
+  animation-delay: 0.2s;
 }
 
 @keyframes glass-tl-dot {
   0%,
-  80%,
+  66.667%,
   100% {
     opacity: 0.25;
   }
-  40% {
+  33.333% {
     opacity: 1;
   }
 }
