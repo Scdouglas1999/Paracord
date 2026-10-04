@@ -345,6 +345,38 @@ the places panel is its own screen.
 - Layout changes (pill → stage, side by side ↔ theater, browse): 600–650ms
   spring on transform, size and radius. Content fades, never pops.
 - The room eases over 1–2s; server switches crossfade over 1.2s.
+- **The send flight (a protected signature gesture).** The owner's favorite
+  motion in the product: a message you send floats out of the message box into
+  the conversation. On Enter, on the same frame and before anything is awaited,
+  the words you typed leave the box on an arc. x and y run on different curves
+  (x `cubic-bezier(.3,.05,.2,1)`, y `cubic-bezier(.22,1,.36,1)`, 3px of
+  overshoot at 70% of the progress), 620ms in all. They start as plain words,
+  and between 14% and 22% of the flight they pick up the bubble's own fill and
+  dark ink, so they never lose contrast; a soft shadow holds while airborne and
+  settles away as the bubble lands. The conversation makes room underneath (the
+  rows already there glide up, on transform alone), the message box gives one
+  press (scale .992 and back over 300ms) and the send control releases once from
+  its cream look to the quiet one (420ms). Nothing waits for the server: the
+  bubble lands on a stand-in row held in the timeline, and the delivered message
+  takes that row's place on the same element, so there is no double, no flicker
+  and no second animation; "Delivered" fades in last. A send that fails gives
+  the words back to the box and lets the bubble go (it freezes and fades, the
+  rows glide back); one the outbox cannot deliver in good time is let go when
+  its card shows above the box. Only a plain text send flies (a reply too, with
+  its chip); a poll, a schedule, an attachment, a slash command and a refused
+  send never do. Reduced motion has no flight: the text clears and the row
+  appears.
+  *This one gesture is exempt from the quiet motion system's ceilings*
+  (docs/lantern-stage-spec.md §5.2: 4-8px of travel, no overshoot, 500ms) and
+  only from those: it moves transform and opacity, plus the color of the flying
+  words and of the send control, on the one flying bubble and the rows making
+  room; nothing else animates and nothing animates at rest. Its constants live
+  in `client/src/lib/motion/sendFlight.ts`, are pinned by
+  `sendFlight.test.tsx`, and must not be clamped back to a lift. The motion lint
+  (`scripts/motion-lint.mjs`) keeps its rule against animating layout, shadow or
+  filter properties and applies to the flight like anything else; the opt-in
+  motion gate does not drive a send (see `e2e/glass-send.spec.ts`, which films
+  and measures it).
 - Reduced motion: layout changes become 150ms crossfades; the waveform and
   floating reactions stop animating (reactions appear briefly in place).
 - Keyboard: S sidebar, T theater, H hide chat, C clip, Esc stop watching.

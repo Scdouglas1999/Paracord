@@ -2,7 +2,7 @@ import { useCurrentChannelStore, useChannelActions } from '../../hooks/useChanne
 import { accountScopeKey, entityScopeKey as memberScopeKey, type AccountScope } from '../../lib/serverScope';
 import { useCurrentUser, useCurrentAccountScope } from '../../hooks/useCurrentUser';
 import { memo, useRef, useEffect, useLayoutEffect, useMemo, useState, useReducer, useCallback, useSyncExternalStore, type CSSProperties, type MouseEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
-import { createPortal } from 'react-dom';
+import { createPortal, flushSync } from 'react-dom';
 import { captureScopedOperation, type OperationContext } from '../../lib/operationContext';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { AlertTriangle, ArrowDown, Smile, Reply, Hash, Check, X as XIcon, Pencil, Pin, PinOff, Copy, Clipboard, Trash2, MessageSquare, Send, Eye, Loader2, Bookmark, BookmarkCheck, Trophy, Clock, Forward } from 'lucide-react';
@@ -37,7 +37,8 @@ import { resolveResourceUrl } from '../../lib/config/apiBaseUrl';
 import { getDownloadTicket } from '../../lib/downloadTicket';
 import { writeClipboardText } from '../../lib/clipboard';
 import { SkeletonMessage } from '../ui/Skeleton';
-import { fadeIn, flicker, motionToken, ms, onMotion, prefersReducedMotion, settleIn, useLingering, walkIntoRoom } from '../../lib/motion';
+import { fadeIn, flicker, motionToken, ms, prefersReducedMotion, settleIn, useLingering, walkIntoRoom, type MotionEvents } from '../../lib/motion';
+import { useSendFlight } from './useSendFlight';
 import { messagePreviewText, parseMarkdown } from '../../lib/markdown';
 import { useDownloadTicket } from '../../hooks/useDownloadTicket';
 import { formatFileSize, formatTimestamp, relativeTime } from '../../lib/formatters';
@@ -760,7 +761,8 @@ function OwnedMessageList({
   const channelActions = useChannelActions();
   const activeChannel = useCurrentChannelStore((s) => s.channelsById[channelId]);
   const typingUsers = useTypingStore((s) => s.typingByChannel[channelId] ?? EMPTY_TYPING);
-  const me = useCurrentUser()?.id;
+  const currentUser = useCurrentUser();
+  const me = currentUser?.id;
   const activeGuildId = activeChannel?.guild_id || null;
   const pinnedSportsGame = useSportsStore((state) =>
     scoreUpdateGame(activeGuildId ? state.byGuild[activeGuildId] : undefined, channelId),
@@ -806,11 +808,15 @@ function OwnedMessageList({
   /* ---------------------------------------------------------------------- */
   /* §5.1 "a message has mass" — the landing half of the send                */
   /*                                                                        */
-  /* The composer's words lift out; this row rises 8px onto its mark on the   */
-  /* ease-out, so the two read as one object moving. Three rules           */
-  /* keep it honest:                                                        */
+  /* A send that can fly is the send flight (`useSendFlight`, called once   */
+  /* the scroller exists, below): a bubble leaves the composer on the        */
+  /* keystroke, lands on a stand-in row, and the delivered message takes the */
+  /* stand-in's place with no second animation. This block is the quiet     */
+  /* form for a send that cannot (reduced motion, a timeline that is not at */
+  /* its newest messages, an empty one): the row that arrives from it rises  */
+  /* 8px onto its mark. Three rules keep that honest:                       */
   /*   · only a row the person at this keyboard CAUSED lands — the gesture   */
-  /*     arrives on the motion bus, and without one nothing animates (§5.3:  */
+  /*     arrives from the hook, and without one nothing animates (§5.3:      */
   /*     never animate what the user did not cause);                        */
   /*   · only the new row animates: it is a transform on the row itself, so  */
   /*     no neighbor moves and the list never reflow-animates;             */
@@ -827,12 +833,9 @@ function OwnedMessageList({
     awaitingLanding.current = null;
   }, [channelId]);
 
-  useEffect(
-    () => onMotion('say:sent', (detail) => {
-      if (detail.channelId === channelId) awaitingLanding.current = { nonce: detail.nonce, at: Date.now() };
-    }),
-    [channelId],
-  );
+  const groundedSay = useCallback((say: MotionEvents['say:sent']) => {
+    awaitingLanding.current = { nonce: say.nonce, at: Date.now() };
+  }, []);
 
   useEffect(() => {
     const seen = seenMessageIds.current;
@@ -865,9 +868,6 @@ function OwnedMessageList({
   useEffect(() => () => {
     if (landingFrame.current !== null) cancelAnimationFrame(landingFrame.current);
   }, []);
-
-  /** Your own last message in this room — the only place a receipt belongs. */
-  const deliveredReceipt = messages.length > 0 && messages[messages.length - 1].author.id === me;
 
   useEffect(() => {
     void useSavedMessageStore.getState().load();
@@ -971,6 +971,29 @@ function OwnedMessageList({
     [navigate],
   );
   const scrollRef = useRef<HTMLDivElement>(null);
+  // §5.1 "a message has mass": a plain text send floats out of the message box
+  // to a stand-in row at the bottom of the timeline, and what is drawn is the
+  // delivered messages plus the stand-ins not yet answered for (never the
+  // store's: nothing but this list can see a stand-in).
+  const meAuthor = useMemo<Message['author'] | null>(
+    () => (currentUser
+      ? {
+          id: currentUser.id,
+          username: currentUser.username,
+          discriminator: String(currentUser.discriminator),
+          display_name: currentUser.display_name,
+          avatar_hash: currentUser.avatar_hash,
+        }
+      : null),
+    [currentUser],
+  );
+  // The virtualizer is made below, from the rows this hook helps draw; the hook
+  // reaches it through here.
+  const measureRowRef = useRef<(row: HTMLElement) => void>(() => {});
+  const measureRow = useCallback((row: HTMLElement) => measureRowRef.current(row), []);
+  const drawn = useSendFlight({ channelId, me: meAuthor, messages, scroller: scrollRef, onGrounded: groundedSay, measureRow, loading: isLoading });
+  /** Your own last message in this room — the only place a receipt belongs. */
+  const deliveredReceipt = drawn.length > 0 && drawn[drawn.length - 1].author.id === me;
   const [showScrollButton, setShowScrollButton] = useState(false);
   /** Messages that arrived while the user was scrolled away from the bottom. */
   const [newMessageCount, setNewMessageCount] = useState(0);
@@ -1222,7 +1245,7 @@ function OwnedMessageList({
     return map;
   }, [messages]);
 
-  const replyLayoutById = useMemo(() => computeReplyLayout(messages), [messages]);
+  const replyLayoutById = useMemo(() => computeReplyLayout(drawn), [drawn]);
 
   // The catch-up divider's marker: the message the reader had read up to when
   // they opened this conversation. Taken once, by `markLatestRead` just before
@@ -1243,7 +1266,7 @@ function OwnedMessageList({
   const rows: VirtualRow[] = useMemo(() => {
     const result: VirtualRow[] = [];
     const nowMs = Date.now();
-    const count = messages.length;
+    const count = drawn.length;
     const parentIds: (string | null)[] = new Array(count);
     const joinsPrevious: boolean[] = new Array(count);
     const dayBreaks: boolean[] = new Array(count);
@@ -1251,8 +1274,8 @@ function OwnedMessageList({
     const catchUp = findCatchUp(messages, catchUpFrom, me, isSystemMessage, hasMore);
 
     for (let i = 0; i < count; i++) {
-      const msg = messages[i];
-      const prevMsg = i > 0 ? messages[i - 1] : null;
+      const msg = drawn[i];
+      const prevMsg = i > 0 ? drawn[i - 1] : null;
       let parentId = replyLayoutById.get(msg.id)?.parentId ?? null;
       const msgType = msg.message_type ?? msg.type;
       if (!parentId && prevMsg && msgType === MessageType.Reply) parentId = prevMsg.id;
@@ -1276,7 +1299,7 @@ function OwnedMessageList({
     }
 
     for (let i = 0; i < count; i++) {
-      const msg = messages[i];
+      const msg = drawn[i];
       if (dayBreaks[i]) {
         result.push({ type: 'date-separator', date: getTimestamp(msg) });
       }
@@ -1307,7 +1330,7 @@ function OwnedMessageList({
 
     result.push({ type: 'bottom-sentinel' });
     return result;
-  }, [messages, activeTyping.length, replyLayoutById, roomLitEvents, catchUpFrom, me, hasMore]);
+  }, [messages, drawn, activeTyping.length, replyLayoutById, roomLitEvents, catchUpFrom, me, hasMore]);
 
   const isNearBottom = useCallback(() => {
     const el = scrollRef.current;
@@ -1417,6 +1440,14 @@ function OwnedMessageList({
       return el.getBoundingClientRect().height;
     },
   });
+
+  // The send flight lays its stand-in row out at its measured size at once
+  // (`useSendFlight`): the measuring render is flushed here rather than left to
+  // the next one, so the flight reads the layout that will be painted.
+  measureRowRef.current = (row) => {
+    const wrapper = row.closest<HTMLElement>('[data-index]');
+    if (wrapper) flushSync(() => virtualizer.measureElement(wrapper));
+  };
 
   /**
    * Put the timeline on its newest message and hold it there while the rows
@@ -3792,8 +3823,8 @@ function OwnedMessageList({
               onRetry={() => void fetchMessages(channelId)}
             />
           </div>
-        ) : messages.length === 0 ? (
-          <div className="glass-tl-col flex h-full flex-col items-start justify-end gap-3 pb-8">
+        ) : drawn.length === 0 ? (
+          <div data-timeline-empty className="glass-tl-col flex h-full flex-col items-start justify-end gap-3 pb-8">
             <span className="pc-window h-2.5 w-2.5" aria-hidden />
             <div>
               <h3 className="pc-display text-heading text-text-primary">

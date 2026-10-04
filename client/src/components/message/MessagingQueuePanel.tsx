@@ -33,10 +33,10 @@ import { cn } from '../../lib/utils';
  * an ordinary send never draws one, short enough that a stuck one still tells
  * you before you wonder.
  */
-const IN_FLIGHT_GRACE_MS = 1_500;
+export const IN_FLIGHT_GRACE_MS = 1_500;
 
 /** A send that is simply on its way, and has not been on its way for long. */
-function isQuietlyInFlight(row: RuntimeQueueRow, nowMs: number): boolean {
+export function isQuietlyInFlight(row: RuntimeQueueRow, nowMs: number): boolean {
   if (row.record.status !== 'pending' || row.record.error) return false;
   const started = Date.parse(row.record.createdAt);
   return Number.isFinite(started) && nowMs - started < IN_FLIGHT_GRACE_MS;

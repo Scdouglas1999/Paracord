@@ -563,20 +563,6 @@
   background-color: var(--wash-press);
 }
 
-/* The sent words lifting out of the capsule (a DOM node the motion engine owns);
-   it must sit exactly where the textarea's text sits. */
-.glass-composer__ghost {
-  position: absolute;
-  z-index: 10;
-  padding: 7px 10px;
-  font-size: 15px;
-  line-height: 22px;
-  color: var(--ink-1);
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-  pointer-events: none;
-}
-
 .glass-composer__count {
   position: absolute;
   top: -24px;

@@ -57,6 +57,12 @@ import {
  * them, FLIP elsewhere), still carries "walk into a room" from the timeline's
  * event line and a server's overview, and is gated on its own demo.
  *
+ * NOT A MOMENT OF THIS GATE: the send flight (docs/glass-spec.md §9), a protected
+ * signature gesture exempt from the 8px / 500ms / no-overshoot ceilings of the
+ * quiet motion system. This gate never sends a message; the flight is filmed and
+ * measured on its own (e2e/glass-send.spec.ts, `npx playwright test -c
+ * e2e/glass-send.config.ts`), and its constants are pinned in sendFlight.test.tsx.
+ *
  * Opt in:  PARACORD_E2E_MOTION=1 npx playwright test   (`npm run test:motion`)
  * It is gated out of the default mocked smoke so CI stays fast.
  */

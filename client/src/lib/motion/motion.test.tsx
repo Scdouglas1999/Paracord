@@ -14,7 +14,6 @@ import {
   emitMotion,
   flicker,
   lightsOnStep,
-  liftOut,
   MOTION_TOKEN_FALLBACKS,
   onMotion,
   parseDuration,
@@ -198,7 +197,7 @@ describe('the reduced-motion switch', () => {
     const el = document.createElement('div');
     document.body.append(el);
 
-    for (const play of [bloom, flicker, settleIn, press, relax, liftOut]) play(el);
+    for (const play of [bloom, flicker, settleIn, press, relax]) play(el);
     // Each returned a finished no-op, so nothing is left running on the element.
     expect(el.getAnimations()).toHaveLength(0);
     expect(waapi.played.every((record) => record.keyframes.length === 0)).toBe(true);
@@ -223,7 +222,6 @@ describe('the recipes', () => {
     settleIn(el);
     press(el);
     relax(el);
-    liftOut(el);
     stagger([el, el]);
     // WP9b's four: the Lobby receding, a face springing into a strip, a face
     // sliding out, and the FLIP that carries whatever they displaced.
@@ -247,7 +245,6 @@ describe('the recipes', () => {
     settleIn(el);
     press(el);
     relax(el);
-    liftOut(el);
     flicker(el);
     recede(el);
     arriveIn(el);
@@ -470,9 +467,9 @@ describe('the motion bus', () => {
       throw new Error('a listener with no element to animate');
     });
     const off = onMotion('say:sent', (detail) => seen.push(detail.nonce));
-    emitMotion('say:sent', { channelId: '1', nonce: 'a' });
+    emitMotion('say:sent', { channelId: '1', nonce: 'a', text: 'a', origin: null });
     off();
-    emitMotion('say:sent', { channelId: '1', nonce: 'b' });
+    emitMotion('say:sent', { channelId: '1', nonce: 'b', text: 'b', origin: null });
     expect(seen).toEqual(['a']);
   });
 });

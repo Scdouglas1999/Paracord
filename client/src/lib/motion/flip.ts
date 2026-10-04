@@ -21,8 +21,12 @@ import { ms } from './tokens';
  */
 
 export interface FlipCapture {
-  /** Measure again and play every element back from where it was. */
-  play(options?: { duration?: number }): Animation[];
+  /**
+   * Measure again and play every element back from where it was. `easing`
+   * replaces the §5.2 spring and `id` the animations' recipe name — the send
+   * flight (`sendFlight.ts`) is the one caller that brings its own.
+   */
+  play(options?: { duration?: number; easing?: string; id?: string }): Animation[];
   /** How many elements were measured — nothing to play is not a failure. */
   readonly size: number;
 }
@@ -47,9 +51,9 @@ export function captureFlip(elements: Iterable<Element | null | undefined>): Fli
 
   return {
     size: first.size,
-    play({ duration = ms('--duration-slow') } = {}) {
+    play({ duration = ms('--duration-slow'), easing: curve, id = 'data-motion-recipe:flip' } = {}) {
       if (prefersReducedMotion()) return [];
-      const easing = springEasing(springTokens(), { durationMs: duration });
+      const easing = curve ?? springEasing(springTokens(), { durationMs: duration });
       const animations: Animation[] = [];
       for (const [el, from] of first) {
         // An element React removed has no box any more; there is nothing to
@@ -67,7 +71,7 @@ export function captureFlip(elements: Iterable<Element | null | undefined>): Fli
           ],
           { duration, easing, fill: 'none' },
         );
-        animation.id = 'data-motion-recipe:flip';
+        animation.id = id;
         animations.push(animation);
       }
       return animations;
