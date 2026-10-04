@@ -139,10 +139,10 @@ export function CommandPalette() {
             id: `${isRoom ? 'room' : 'channel'}-${guild.key}-${channel.id}`,
             category: isRoom ? 'rooms' : 'channels',
             label: channel.name || 'unknown',
-            sublabel: isRoom ? 'Room' : undefined,
+            sublabel: isRoom ? 'Voice channel' : undefined,
             icon: <IxGlyph name={isRoom ? (type === 13 ? 'stage' : 'speaker') : 'hello'} size={16} />,
             action: here,
-            keywords: `${channel.name} ${guild.name} ${isRoom ? 'room voice' : 'channel text'}`,
+            keywords: `${channel.name} ${guild.name} ${isRoom ? 'voice' : 'channel text'}`,
           });
         } else if (!isRoom) {
           items.push({
@@ -396,7 +396,7 @@ export function CommandPalette() {
                 autoComplete="off"
                 spellCheck={false}
                 className="ix-switcher__input"
-                placeholder={searchGuild ? 'Jump to a channel, room or person' : 'Jump to a conversation or server'}
+                placeholder={searchGuild ? 'Jump to a channel or person' : 'Jump to a conversation or server'}
                 value={query}
                 onChange={(e) => {
                   setQuery(e.target.value);

@@ -1,4 +1,4 @@
-# IX-5 checkpoint: Sidebar (header, search, channels, rooms, add-ons, Coming up)
+# IX-5 checkpoint: Sidebar (header, search, channels, voice channels, add-ons, Coming up)
 
 Contract: `docs/index-spec.md` §3.1 ("Sidebar pane", "Header", "Search field", "Section label", "Channel row",
 "Room row"), §4.1 to §4.7, §5.2, §5.3, §5.20. Plan row: `docs/design/index-plan.md` §3 (IX-5). Slot contract:
@@ -21,7 +21,7 @@ prop and never from the route:
     .ix-sb__ghosts            where a closing category's rows fade out (empty at rest)
     ChannelList        one <section> per group: "Channels" (uncategorized) then each category
       ChannelRow       data-testid=ix-channel-row data-channel-id, two lines, fixed height
-    RoomList           "Rooms": data-testid=ix-room-row (buttons; click joins)
+    RoomList           "Voice channels": data-testid=ix-room-row (buttons; click joins)
     AddonList          "Add-ons": data-testid=ix-addon-row (Sports, Daily word, Game servers)
     ComingUp           "Coming up": data-testid=ix-event-row (at most three)
 ```
@@ -77,7 +77,7 @@ Data (the plan's owned files):
   category label is a button (chevron on hover and focus, turns a quarter when closed); Left closes, Right opens;
   a closed group still shows unread, mentioned and the open rows. `+` at a label (Manage Channels) opens IX-9's
   `openCreateChannel({ kind: 'text', parentId })`.
-- **Rooms.** Every voice and stage channel except the card's (`useInlineCardRoom(place)`, IX-7), in category order then
+- **Voice channels** (the code says rooms; the screen never does, see decision 12). Every voice and stage channel except the card's (`useInlineCardRoom(place)`, IX-7), in category order then
   position: speaker glyph (podium for a stage), name, `Empty` or `N here`; busy rows read brighter with an amber glyph
   and up to three 16px faces. Click joins (`pillActions.joinCall`, never navigates). Right-click: Listen in (not on a
   stage; disabled with the server's own sentence while it has refused), Open chat, Copy link to channel, and for
@@ -125,6 +125,13 @@ Data (the plan's owned files):
    on those events only.
 9. **Mute is the notification levels' "Nothing from this channel".** There is no separate Mute row.
 10. **Edit channel** opens server settings at the Channels section with that channel highlighted; there is no lighter editor.
+12. **The section is "Voice channels", not "Rooms"** (orchestrator, from the owner's 2026-09-14 rule that copy never says "room",
+    enforced by `src/lib/vocabulary.test.ts`; the prototype's label was a mistake). Done in the same commit, beyond my files, so
+    `vocabulary.test.ts` passes unweakened: `ix/menus/ServerMenu.tsx` ("Create voice channel"), `ix/menus/CreateChannelDialog.tsx`
+    (title, body, error noun), `layout/CommandPalette.tsx` (sublabel "Voice channel", placeholder "Jump to a channel or person", search keyword),
+    `layout/switcherModel.ts` (group "Voice channels"), and their tests and e2e (`menus.test.tsx`, `menuHost.test.tsx`,
+    `CommandPalette.test.tsx`, `switcherModel.test.ts`, `e2e/index-sheets.spec.ts`), plus `docs/index-spec.md` (§1 words, §1.5, §3 diagram, §4.3, §4.6,
+    §6.2, §8.3, §13.11 and a new §13.21 recording the rule). Test ids, identifiers and `data-*` keep "room".
 11. The Glass server-mode code (`PlacesPanel`'s `ServerBody`, `PlaceRows`, `AddonRows`, `ComingUp`, `ServerTitle`,
     `buildChannelRows`) is dead for servers but compiled because the People stub (IX-14 replaces it) still mounts `PlacesPanel` for Home.
     IX-19 deletes it; IX-14 should delete it with the People stub if it lands first.
@@ -155,6 +162,7 @@ Data (the plan's owned files):
 - Unit: `npx vitest run src/components/ix/sidebar src/components/glass/places src/hooks/useRoomMenu.test.ts`: 285 passed
   (new: `ix/sidebar/{sidebar,sidebarMotion,ServerSidebar,useSidebarMenus}.test.tsx`, `glass/places/{sidebarRows,usePlacesData}.test.*`; `model.test.ts` updated:
   "shared" is "posted", new `when`, `headerLine`, `Coming up`, clip and event-only cases).
+- `npx vitest run src/lib/vocabulary.test.ts src/components/layout src/components/ix/menus src/components/ix/sidebar src/components/ix/primitives`: 241 passed (the "never says room" sweep is green). The full run's other failures are not this package's (`useGlassKeybinds`, `stageTransition`, `lib/media/*` from the native-video merge).
 - `npm run lint`: 0 errors in my files (`eslint` on `ix/sidebar`, `glass/places`, `useRoomMenu.tsx`, the spec: clean). The tree's 3
   errors are others' (`e2e/index-pages.spec.ts`, `glass/sheets/PeopleSheet.tsx`, one more jsx-a11y).
 - `npm run test:tokens`, `test:motion-lint`, `test:a11y:static`, `test:contrast`: pass.
@@ -193,4 +201,5 @@ New: `client/src/components/ix/sidebar/**` (13 sources, 4 test files), `client/e
 `client/src/components/glass/places/{sidebarRows,usePlacesData}.test.*`, this file.
 Edited: `client/src/components/glass/places/{model,rows,usePlacesData}.ts`, `model.test.ts`, `client/src/hooks/useRoomMenu.tsx`,
 `client/src/styles/ix-sidebar.css`. Deleted: `client/src/components/ix/sidebar/stub.tsx`.
-Touched outside my list: none by me (`glass/places/ServerMenu.tsx` and `PlacesPanel.test.tsx` changed under IX-9 while I worked).
+Touched outside my list, on the orchestrator's instruction (decision 12): the IX-9 and layout files named there, `docs/index-spec.md`, and
+`ix/primitives/SectionLabel.tsx` (a comment). `glass/places/ServerMenu.tsx` and `PlacesPanel.test.tsx` changed under IX-9 while I worked.

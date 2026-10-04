@@ -26,7 +26,7 @@ export function roomLabel(room: SidebarRoom): string {
 }
 
 /**
- * Rooms (docs/index-spec.md §4.6): every voice and stage channel the live card is
+ * Voice channels (docs/index-spec.md §4.6; the code and the card say "room", the screen never does): every voice and stage channel the live card is
  * not showing, in the server's order. A slim row: the speaker (a podium for a
  * stage), the name, and "Empty" or "3 here". A room with people in it reads
  * brighter, with an amber glyph and up to three small faces before the count.
@@ -38,7 +38,7 @@ export function RoomList({ rooms, focusOf, onJoin, onMenu }: RoomListProps) {
   if (rooms.length === 0) return null;
   return (
     <section aria-labelledby="ix-sb-rooms">
-      <SidebarLabel id="ix-sb-rooms">Rooms</SidebarLabel>
+      <SidebarLabel id="ix-sb-rooms">Voice channels</SidebarLabel>
       <ul className="ix-sb__rooms">
         {rooms.map((room) => (
           <RoomRow key={room.id} room={room} focus={focusOf(room.id)} onJoin={onJoin} onMenu={onMenu} />

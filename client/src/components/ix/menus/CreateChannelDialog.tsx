@@ -11,20 +11,20 @@ import { CreamButton } from '../primitives';
 import { closeCreateChannel, type CreateChannelRequest } from './hostStore';
 
 /**
- * Create channel / Create room (docs/index-spec.md §6.2, §4.5): a name, an
+ * Create channel / Create voice channel (docs/index-spec.md §6.2, §4.5): a name, an
  * optional category, and one cream "Create". The server menu opens it for the two
  * rows it names; a category's "+" in the sidebar opens it with the category
  * preselected (`openCreateChannel({ ..., parentId })`). Only Manage Channels
  * reaches it; the server is still the authority.
  *
- * A text channel opens once it exists; a room does not navigate (joining never
- * navigates, §8.1: the sidebar shows it under Rooms).
+ * A text channel opens once it exists; a voice channel does not navigate (joining never
+ * navigates, §8.1: the sidebar shows it under Voice channels).
  */
 
 export function CreateChannelDialog({ request }: { request: CreateChannelRequest }) {
   const navigate = useNavigate();
   const room = request.kind === 'room';
-  const noun = room ? 'room' : 'channel';
+  const noun = room ? 'voice channel' : 'channel';
   const titleId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
   const [name, setName] = useState('');
@@ -78,11 +78,11 @@ export function CreateChannelDialog({ request }: { request: CreateChannelRequest
     >
       <form className="ix-dialog" onSubmit={(event) => void submit(event)}>
         <h2 id={titleId} className="ix-dialog__title">
-          {room ? 'Create room' : 'Create channel'}
+          {room ? 'Create voice channel' : 'Create channel'}
         </h2>
         <p className="ix-dialog__body">
           {room
-            ? 'A room is where people talk. It shows under Rooms in the sidebar.'
+            ? 'A voice channel is where people talk. It shows under Voice channels in the sidebar.'
             : 'Channels are where the conversation is kept.'}
         </p>
         <label className="ix-dialog__field">

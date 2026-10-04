@@ -33,8 +33,8 @@ stored theme ids `glass` and `glass-contrast` stay as opaque wire values (they
 mean "the dark look" and "the high-contrast look"); no migration.
 
 **Words.** "Place" in this document means "the server or People view the
-sidebar shows"; it is never UI copy. The UI says servers, channels, rooms (the
-approved label for voice channels in the sidebar), People and instance.
+sidebar shows"; it is never UI copy. The UI says servers, channels, voice
+channels, People and instance (never "room": see §13.21).
 
 ---
 
@@ -59,7 +59,7 @@ approved label for voice channels in the sidebar), People and instance.
    inside the sidebar). No uppercase TEXT/VOICE sections, no `#` glyph lists,
    no voice occupants nested under a channel row, no "voice connected" panel in
    a corner, no server name with a dropdown chevron, no "This is the start of
-   #x". Section labels are sentence case ("Channels", "Rooms").
+   #x". Section labels are sentence case ("Channels", "Voice channels").
 6. **Symmetry.** Sibling surfaces share geometry. The sidebar and main column
    are both flush inside the window, separated by a hairline; overlays inside
    main (call, sheets) share one inset (10px) and one radius (24px).
@@ -234,7 +234,7 @@ The window is two flush columns on `--ix-ground`:
 │  search 34                 │  conversation column                         │
 │  live room card (opt)      │                                              │
 │  Channels                  │                                              │
-│  Rooms                     │  message box 52 (98 open)                    │
+│  Voice channels            │  message box 52 (98 open)                    │
 │  Coming up (opt)           │                                              │
 │ dock ───────────────────── │  call view / sheets: inset 10, radius 24     │
 └────────────────────────────┴──────────────────────────────────────────────┘
@@ -314,7 +314,7 @@ directly.
 Shown when any voice or stage channel in the current server has people in it.
 **One card per server**: the room with the most people (ties: the earliest
 `started_at`). If you are in a call in this server, your room is the card.
-Other occupied rooms appear in the Rooms list as busy rows. In People, the card
+Other occupied rooms appear in the Voice channels list as busy rows. In People, the card
 shows an active DM or group call you are in, or an incoming call (§4.10).
 
 States:
@@ -380,9 +380,9 @@ name (12, ink-3). Threads do not appear as rows.
 Right-click (or the row's long-press on touch): mark read, mute, notification
 level, copy link, edit channel (permitted), delete (permitted, confirm).
 
-### 4.6 Rooms
+### 4.6 Voice channels
 
-Section label "Rooms". Every voice and stage channel not shown as the card, in
+Section label "Voice channels" (the code and this document call them rooms; the screen never does, §13.21). Every voice and stage channel not shown as the card, in
 category order then position. Row: speaker glyph (stage: a podium glyph), name,
 tail ("Empty" or "3 here"; busy rows ink-2 with an amber glyph and up to three
 16px faces before the count). Click joins (the prototype's behavior). Right-
@@ -391,7 +391,7 @@ copy link, edit, delete.
 
 ### 4.7 Coming up
 
-Shown only when the server has events in the next 7 days, under Rooms, at most
+Shown only when the server has events in the next 7 days, under Voice channels, at most
 three rows: a 32×36 date tile (weekday 10/700 hue, day 15/700), title 14/600,
 "Fri 9:00 PM · Lounge" 12.5 ink-3, and "Live" in amber for an event in
 progress. Click opens the event sheet. The server menu has "Events" for the full
@@ -613,7 +613,7 @@ server's dock mark. Popover 240 wide, radius 14, near-solid
 `rgba(24,25,28,.98)`, rows 36 (14/500, glyph 16 ink-3), separators as
 hairlines: Overview · Invite people · Events · Notifications ▸ (All messages /
 Only mentions / Nothing) · Mark as read · Mute server · Create channel ·
-Create room (both need Manage Channels) · Server settings (permitted) · Copy
+Create voice channel (both need Manage Channels) · Server settings (permitted) · Copy
 link · Leave server (danger ink, confirms).
 
 ### 6.3 Search
@@ -872,7 +872,7 @@ data are unchanged and the surface is restyled to Index tokens.
 | `CreateGuildModal` (Create / Join / Template) | Add a server sheet (dock `+`) |
 | `GuildWelcomeScreen` (first visit) | Joiner welcome (§4.13): "Welcome to Game Night", the description, cards Say hello / See who's here (people sheet) / Pick roles (when onboarding has roles) |
 | `GuildOnboardingGate` | Kept as a page in main before the server opens |
-| Sports, Daily word, Game servers (Glass add-on rows) | Sidebar section **Add-ons** after Rooms: two-line rows like channels with a live line ("Cubs 3–2 Brewers · 7th", "Daily word · 4 solved today", "2 of 3 game servers online"); they open their pages in main. Game servers' popover becomes its page |
+| Sports, Daily word, Game servers (Glass add-on rows) | Sidebar section **Add-ons** after Voice channels: two-line rows like channels with a live line ("Cubs 3–2 Brewers · 7th", "Daily word · 4 solved today", "2 of 3 game servers online"); they open their pages in main. Game servers' popover becomes its page |
 | Sports `ChannelPin` / `ChannelAmbient` (score pinned in a channel) | A thin card under the large title (event-card family, 52 tall) |
 | Feeds | Posts in channels (card bubbles); settings unchanged |
 | Events (`EventList`, scheduled events, RSVP) | Coming up (§4.7), Events page (server menu), event sheet, event cards in messages |
@@ -1054,7 +1054,7 @@ this document.
 8. No `backdrop-filter` on the folded toolbar (CPU, §4.9).
 9. Theater covers the sidebar; browse is retired (§7).
 10. Add-ons are a sidebar section of two-line rows (§8.3).
-11. Categories are sentence-case labels; all rooms sit in one Rooms section.
+11. Categories are sentence-case labels; all voice channels sit in one Voice channels section.
 12. The dock keeps today's server order; no reordering yet.
 13. Monograms are one letter for people and servers.
 14. The stored theme ids `glass` / `glass-contrast` are kept.
@@ -1065,6 +1065,11 @@ this document.
 19. Phone shows a call strip on pushed pages (§9).
 20. The conversation column is capped at 920px and centered (the prototype
     only shows 1280px windows).
+21. **Copy never says "room"** (owner rule of 2026-09-14, enforced by
+    `client/src/lib/vocabulary.test.ts`). The prototype's "Rooms" section is
+    "Voice channels" on screen, "Create room" is "Create voice channel", and
+    the switcher's group is "Voice channels". Code, identifiers, test ids and
+    this document's prose keep "room" (`ix-room-row`, `RoomCard`).
 
 **Follow-ups (not in this build):** dock reordering and folders (needs a
 server-side order); removing the dormant ambient view kind from the relay and

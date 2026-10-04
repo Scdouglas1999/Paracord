@@ -21,7 +21,7 @@ const sample = [
   c('dm-jeremy', 'dms', 'Jeremy'),
   c('srv-fuel', 'servers', 'Fuel', { sublabel: '5 channels' }),
   c('person-nick', 'people', 'Nick', { sublabel: '@nick' }),
-  c('room-lounge', 'rooms', 'Lounge', { sublabel: 'Room' }),
+  c('room-lounge', 'rooms', 'Lounge', { sublabel: 'Voice channel' }),
   c('ch-lounge', 'channels', 'lounge'),
   c('ch-lfg', 'channels', 'looking-for-group'),
   c('else-plans', 'elsewhere', 'plans', { sublabel: 'Fuel' }),

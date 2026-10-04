@@ -81,7 +81,7 @@ test.describe('IX-5 sidebar', () => {
     await expect(searchField(page)).toContainText('Search Fuel');
     await expect(searchField(page).locator('kbd')).toHaveText('Ctrl K');
     // Channels: a label 37 tall, then rows 51 tall on a 53 pitch, no `#`.
-    await expect(page.getByRole('heading', { name: 'Channels' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Channels', exact: true })).toBeVisible();
     expect(await box(page.locator('.ix-section-label').first())).toMatchObject({ x: 12, y: 112, height: 37 });
     for (const [key, top] of [['fuelGeneral', 149], ['fuelClips', 202], ['fuelPlans', 255]] as const) {
       expect(await box(channelRow(page, key))).toMatchObject({ x: 12, y: top, width: 292, height: 51 });
@@ -95,8 +95,8 @@ test.describe('IX-5 sidebar', () => {
     const selection = page.locator('.ix-sel');
     await expect(selection).toHaveAttribute('data-on', 'true');
     expect(await box(selection)).toMatchObject({ x: 12, y: 149, width: 292, height: 51 });
-    // Rooms: both rooms are rows (nobody is in either), 36 tall.
-    await expect(page.getByRole('heading', { name: 'Rooms' })).toBeVisible();
+    // Voice channels: both rooms are rows (nobody is in either), 36 tall.
+    await expect(page.getByRole('heading', { name: 'Voice channels' })).toBeVisible();
     await expect(roomRows(page)).toHaveCount(2);
     expect(await box(roomRow(page, 'General'))).toMatchObject({ x: 12, y: 343, width: 292, height: 36 });
     expect(await box(roomRow(page, 'Late night'))).toMatchObject({ x: 12, y: 379, height: 36 });
@@ -328,7 +328,7 @@ test.describe('IX-5 sidebar', () => {
     await page.waitForTimeout(MOTION_GONE_MS);
     const fold = category.getByRole('button', { name: 'Text channels' });
     await expect(fold).toHaveAttribute('aria-expanded', 'true');
-    const roomsBefore = await box(page.getByRole('heading', { name: 'Rooms' }));
+    const roomsBefore = await box(page.getByRole('heading', { name: 'Voice channels' }));
     await fold.click();
     await expect(fold).toHaveAttribute('aria-expanded', 'false');
     // clips is unread (kept); plans is not (gone).
@@ -339,7 +339,7 @@ test.describe('IX-5 sidebar', () => {
     expect(ids).toContain('ix-collapse:move');
     expect(ids).toContain('ix-collapse:fade');
     await page.waitForTimeout(MOTION_GONE_MS);
-    const roomsAfter = await box(page.getByRole('heading', { name: 'Rooms' }));
+    const roomsAfter = await box(page.getByRole('heading', { name: 'Voice channels' }));
     expect(roomsAfter.y).toBe(roomsBefore.y - 53);
     expect((await animationIds(page)).filter((id) => id.startsWith('ix-'))).toEqual([]);
     expect(await page.locator('.ix-sb__ghosts > *').count()).toBe(0);
@@ -348,7 +348,7 @@ test.describe('IX-5 sidebar', () => {
     await expect(fold).toHaveAttribute('aria-expanded', 'true');
     await expect(channelRow(page, 'fuelPlans')).toBeVisible();
     await page.waitForTimeout(MOTION_GONE_MS);
-    expect((await box(page.getByRole('heading', { name: 'Rooms' }))).y).toBe(roomsBefore.y);
+    expect((await box(page.getByRole('heading', { name: 'Voice channels' }))).y).toBe(roomsBefore.y);
   });
 
   test('sizes: 1440x900, narrow 900x700 and the phone root', async ({ page }) => {

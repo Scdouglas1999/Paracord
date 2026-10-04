@@ -158,7 +158,7 @@ describe('the server pane', () => {
     const search = screen.getByTestId('ix-search-field');
     const card = screen.getByTestId('card-slot');
     const channels = screen.getByRole('heading', { name: 'Channels' });
-    const rooms = screen.getByRole('heading', { name: 'Rooms' });
+    const rooms = screen.getByRole('heading', { name: 'Voice channels' });
     const order = [header, search, card, channels, rooms];
     for (let i = 1; i < order.length; i += 1) {
       expect(order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -170,7 +170,7 @@ describe('the server pane', () => {
     expect(header).toHaveTextContent('6 members · 4 here now');
   });
 
-  it('leaves out of Rooms the one room the card shows', () => {
+  it('leaves out of the voice channels the one room the card shows', () => {
     hooks.cardRoom = 'lounge';
     renderPane(<SidebarSlot place={serverPlace('g1')} />);
     expect(screen.getAllByTestId('ix-room-row').map((room) => room.getAttribute('data-channel-id'))).toEqual(['late']);

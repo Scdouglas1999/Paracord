@@ -497,7 +497,7 @@ test.describe('the quick switcher', () => {
     await shoot(page, 'switcher-empty');
     // Channels, then rooms, then the other servers, then direct messages; the search row last.
     const groups = await switcher(page).getByRole('group').evaluateAll((nodes) => nodes.map((n) => n.getAttribute('aria-label')));
-    expect(groups).toEqual(['Channels', 'Rooms', 'Servers', 'Direct messages']);
+    expect(groups).toEqual(['Channels', 'Voice channels', 'Servers', 'Direct messages']);
     const rows = switcher(page).getByRole('option');
     await expect(rows.last()).toContainText('Search messages in Game Night');
     // The panel sits over the sidebar's search field and is 420 wide.
@@ -524,7 +524,7 @@ test.describe('the quick switcher', () => {
     await page.waitForTimeout(SETTLE_MS);
     await shoot(page, 'switcher-people');
     const groups = await switcher(page).getByRole('group').evaluateAll((nodes) => nodes.map((n) => n.getAttribute('aria-label')));
-    const order = ['Channels', 'Rooms', 'People', 'Servers', 'Direct messages', 'In other servers', 'Commands'];
+    const order = ['Channels', 'Voice channels', 'People', 'Servers', 'Direct messages', 'In other servers', 'Commands'];
     expect(groups).toEqual(order.filter((label) => groups.includes(label)));
     await page.keyboard.press('Escape');
     await expect(switcher(page)).toHaveCount(0);

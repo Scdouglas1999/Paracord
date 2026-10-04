@@ -13,7 +13,7 @@ export interface SectionLabelProps {
 }
 
 /**
- * A section label (docs/index-spec.md §3.1): "Channels", "Rooms", "Messages".
+ * A section label (docs/index-spec.md §3.1): "Channels", "Voice channels", "Messages".
  * 12.5/600 in the tertiary ink, padding 16 8 6, sentence case, never uppercase.
  */
 export function SectionLabel({ children, count, as: Tag = 'div', id, className }: SectionLabelProps) {

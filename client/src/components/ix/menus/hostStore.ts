@@ -132,7 +132,7 @@ export function closeHelp(): void {
   useMenuHostStore.getState().setHelp(false);
 }
 
-/** Open the Create channel / Create room dialog (the server menu, a category's "+"). */
+/** Open the Create channel / Create voice channel dialog (the server menu, a category's "+"). */
 export function openCreateChannel(request: CreateChannelRequest): void {
   useMenuHostStore.getState().setCreateChannel(request);
 }

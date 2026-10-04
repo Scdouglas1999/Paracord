@@ -138,7 +138,7 @@ export function buildServerMenu(input: ServerMenuInput, actions: ServerMenuActio
     entries.push(
       { type: 'separator', id: 'sep-create' },
       { type: 'item', id: 'create-channel', label: 'Create channel', icon: glyph(Plus), onSelect: actions.createChannel },
-      { type: 'item', id: 'create-room', label: 'Create room', icon: <IxGlyph name="speaker" size={16} />, onSelect: actions.createRoom },
+      { type: 'item', id: 'create-room', label: 'Create voice channel', icon: <IxGlyph name="speaker" size={16} />, onSelect: actions.createRoom },
     );
   }
 

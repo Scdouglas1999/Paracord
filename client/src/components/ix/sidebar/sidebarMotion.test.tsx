@@ -169,7 +169,7 @@ describe('the selection glide', () => {
 /* ---- Category collapse (§5.20) ---------------------------------------------------- */
 
 /**
- * A server with a category of two rows above "Rooms". jsdom measures nothing, so
+ * A server with a category of two rows above "Voice channels". jsdom measures nothing, so
  * the rectangles are the page's own, read from data attributes by the state the
  * container is in: what each element's top was open, and what it is closed.
  */
@@ -194,7 +194,7 @@ function Collapse() {
         </a>
       )}
       <h2 data-testid="rooms" data-open="206" data-closed="153" {...{ [FLIP_ATTRIBUTE]: '' }}>
-        Rooms
+        Voice channels
       </h2>
       <button type="button" onClick={() => force((n) => n + 1)}>
         rerender
@@ -227,7 +227,7 @@ describe('closing a category', () => {
     const { getByText, getByTestId } = render(<Collapse />);
     fireEvent.click(getByText('fold'));
     expect(getByTestId('rooms').closest('[data-state]')).toHaveAttribute('data-state', 'closed');
-    // Rooms was at 206 and is at 153: it plays from where it was, as a translate only.
+    // The voice channels label was at 206 and is at 153: it plays from where it was, as a translate only.
     const [move] = played('ix-collapse:move').filter((record) => record.target === getByTestId('rooms'));
     expect(move.keyframes).toEqual([{ transform: 'translate(0px, 53px)', transformOrigin: '0 0' }, { transform: 'none', transformOrigin: '0 0' }]);
     expect(move.options).toMatchObject({ duration: 450, easing: 'cubic-bezier(0.32, 0.72, 0, 1)' });

@@ -188,10 +188,10 @@ describe('the quick switcher: access', () => {
 describe('the quick switcher: scope and order (docs/index-spec.md §4.2)', () => {
   it('lists the current server first (channels, rooms), then other servers and direct messages', async () => {
     await openWithKeyboard();
-    expect(groupNames()).toEqual(['Channels', 'Rooms', 'Servers', 'Direct messages']);
+    expect(groupNames()).toEqual(['Channels', 'Voice channels', 'Servers', 'Direct messages']);
     const channels = within(screen.getByRole('group', { name: 'Channels' })).getAllByRole('option');
     expect(channels.map((row) => row.textContent)).toEqual(expect.arrayContaining([expect.stringContaining('lounge'), expect.stringContaining('screenshots')]));
-    expect(within(screen.getByRole('group', { name: 'Rooms' })).getByRole('option', { name: /Ranked/ })).toBeInTheDocument();
+    expect(within(screen.getByRole('group', { name: 'Voice channels' })).getByRole('option', { name: /Ranked/ })).toBeInTheDocument();
     // The other server, not the current one.
     expect(within(screen.getByRole('group', { name: 'Servers' })).getByRole('option', { name: /Fuel/ })).toBeInTheDocument();
     expect(within(screen.getByRole('group', { name: 'Servers' })).queryByRole('option', { name: /Game Night/ })).not.toBeInTheDocument();
@@ -202,7 +202,7 @@ describe('the quick switcher: scope and order (docs/index-spec.md §4.2)', () =>
     expect(screen.queryByRole('option', { name: /New message/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('option', { name: /Nick/ })).not.toBeInTheDocument();
     await user.type(field(), 'n');
-    const order = ['Channels', 'Rooms', 'People', 'Servers', 'Direct messages', 'In other servers', 'Commands'];
+    const order = ['Channels', 'Voice channels', 'People', 'Servers', 'Direct messages', 'In other servers', 'Commands'];
     const names = groupNames();
     expect(names).toEqual(order.filter((label) => names.includes(label)));
     expect(names).toContain('People');

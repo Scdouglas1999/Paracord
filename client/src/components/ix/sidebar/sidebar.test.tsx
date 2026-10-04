@@ -222,7 +222,7 @@ describe('the channel list', () => {
   });
 });
 
-/* ---- Rooms ------------------------------------------------------------------------ */
+/* ---- Voice channels ------------------------------------------------------------------------ */
 
 describe('the rooms', () => {
   const room = (over: Partial<SidebarRoom> & Pick<SidebarRoom, 'channelId' | 'name'>): SidebarRoom => ({
@@ -261,7 +261,7 @@ describe('the rooms', () => {
         ]}
       />,
     );
-    expect(screen.getByRole('heading', { name: 'Rooms' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Voice channels' })).toBeInTheDocument();
     const [late, lounge] = screen.getAllByTestId('ix-room-row');
     expect(late.tagName).toBe('BUTTON');
     expect(late).toHaveTextContent('Late nightEmpty');

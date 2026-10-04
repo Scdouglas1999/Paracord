@@ -31,7 +31,7 @@ export interface ComingUpProps {
 
 /**
  * Coming up (docs/index-spec.md §4.7): shown only when the server has events in
- * the next seven days, under Rooms, at most three rows. A 32x36 date tile (the
+ * the next seven days, under Voice channels, at most three rows. A 32x36 date tile (the
  * weekday in the server's hue, the day), the title, "Fri 9:00 PM · Lounge", and
  * "Live" in amber for an event in progress. Click opens it.
  */

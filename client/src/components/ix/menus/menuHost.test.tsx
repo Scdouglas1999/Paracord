@@ -100,7 +100,7 @@ describe('the server menu in the host', () => {
     renderHost();
     act(() => openServerMenu(FUEL, { x: 20, y: 20 }));
     const menu = await screen.findByRole('menu', { name: 'Fuel menu' });
-    for (const name of ['Invite people', 'Create channel', 'Create room', 'Server settings']) {
+    for (const name of ['Invite people', 'Create channel', 'Create voice channel', 'Server settings']) {
       expect(within(menu).getByRole('menuitem', { name })).toBeInTheDocument();
     }
     expect(within(menu).queryByRole('menuitem', { name: 'Leave server' })).not.toBeInTheDocument();
@@ -223,7 +223,7 @@ describe('Help, the profile card and the small dialogs', () => {
   });
 });
 
-describe('Create channel / Create room', () => {
+describe('Create channel / Create voice channel', () => {
   it('creates a text channel with a name, then opens it', async () => {
     const createChannel = vi.fn().mockResolvedValue({ id: 'c9', name: 'plans', scope: SCOPE });
     useChannelStore.setState({ createChannel } as never);
@@ -247,7 +247,7 @@ describe('Create channel / Create room', () => {
     const user = userEvent.setup();
     renderHost();
     act(() => openCreateChannel({ guildId: 'g1', scope: SCOPE, kind: 'room' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Create room' });
+    const dialog = await screen.findByRole('dialog', { name: 'Create voice channel' });
     await user.type(within(dialog).getByRole('textbox', { name: 'Name' }), 'Late night{Enter}');
     await waitFor(() =>
       expect(createChannel).toHaveBeenCalledWith('g1', { name: 'Late night', channel_type: 2, parent_id: null }, SCOPE),

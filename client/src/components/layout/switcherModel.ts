@@ -32,7 +32,7 @@ export const SWITCHER_ORDER: readonly SwitcherCategory[] = [
 
 export const SWITCHER_LABEL: Record<SwitcherCategory, string> = {
   channels: 'Channels',
-  rooms: 'Rooms',
+  rooms: 'Voice channels',
   people: 'People',
   servers: 'Servers',
   dms: 'Direct messages',

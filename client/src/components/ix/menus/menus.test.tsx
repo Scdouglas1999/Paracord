@@ -74,12 +74,12 @@ describe('the server menu: rows by permission (§6.2)', () => {
     expect(labels(buildServerMenu(server(), actions()))).not.toContain('Invite people');
   });
 
-  it('adds Create channel and Create room only with Manage Channels', () => {
+  it('adds Create channel and Create voice channel only with Manage Channels', () => {
     expect(labels(buildServerMenu(server({}, { manageChannels: true }), actions()))).toEqual(
-      expect.arrayContaining(['Create channel', 'Create room']),
+      expect.arrayContaining(['Create channel', 'Create voice channel']),
     );
     expect(labels(buildServerMenu(server(), actions()))).not.toContain('Create channel');
-    expect(labels(buildServerMenu(server(), actions()))).not.toContain('Create room');
+    expect(labels(buildServerMenu(server(), actions()))).not.toContain('Create voice channel');
   });
 
   it('adds Server settings only where it is permitted', () => {
