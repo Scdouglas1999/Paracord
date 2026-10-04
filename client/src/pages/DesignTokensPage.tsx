@@ -77,6 +77,7 @@ import { cn } from '../lib/utils';
 import { useMobile } from '../hooks/useMobile';
 import { useUIStore } from '../stores/uiStore';
 import { GlassShowcase } from '../components/glass/primitives/GlassShowcase';
+import { IndexShowcase } from '../components/ix/primitives/IndexShowcase';
 
 /**
  * `/design-tokens` — the design-token reference page. **Dev builds only**
@@ -1116,6 +1117,14 @@ export default function DesignTokensPage() {
             component disagrees with what is here, the component is wrong.
           </p>
         </header>
+
+        <Section
+          id="index"
+          title="Index"
+          blurb="The interface docs/index-spec.md describes: ground, ink and cream tokens, a window tint from one hue, flat tonal avatars and server marks with a lighter letter and a hairline, presence as ink, the primitives and the glyph set. Drawn on Index's own ground, in the default theme and in High contrast."
+        >
+          <IndexShowcase />
+        </Section>
 
         <Section
           id="glass"

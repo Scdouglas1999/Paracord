@@ -2,6 +2,17 @@ import type { Role } from '../types';
 
 // ============ Identity colors ============
 
+/*
+ * RETIRING (docs/index-spec.md §2.3, §12). Index draws a person and a server as a
+ * flat tonal mark from a hue, not from one of eight fills: use `Avatar` and
+ * `ServerMark` (components/ix/identity) and `paletteHue` / `serverHue`
+ * (lib/identityHue.ts). What remains below is for the call sites that have not
+ * been rebuilt yet (the timeline's own avatar, the admin tables, the lobby head,
+ * the discovery banners); each package that rebuilds one deletes its use, and
+ * IX-19 deletes this section and the `--color-avatar-N` / `--identity-ink-N`
+ * tokens with the last of them.
+ */
+
 /**
  * The identity palette (docs/lantern-stage-spec.md §1.2, and the reference
  * renders' avatar hues). Eight soft colors that sit quietly on the dark
@@ -38,7 +49,11 @@ const IDENTITY_COLORS = [
  */
 const IDENTITY_INKS = IDENTITY_COLORS.map((_, index) => `var(--identity-ink-${index + 1})`);
 
-/** The palette slot a snowflake falls in. One hash, so a fill and its ink agree. */
+/**
+ * The palette slot a snowflake falls in. One hash, so a fill and its ink agree.
+ *
+ * @deprecated Index hues come from `paletteHue` (lib/identityHue.ts).
+ */
 export function identityIndex(id: string): number {
   let hash = 0;
   for (let i = 0; i < id.length; i++) {
@@ -51,17 +66,19 @@ export function identityIndex(id: string): number {
 /**
  * Deterministic identity color for a person or a server, from its snowflake.
  *
- * Use this for every avatar fallback and every identity mark. Never
- * `--accent-primary`: the emerald means "an action you can take", and a person
- * is not an action.
+ * @deprecated Draw an `Avatar` or a `ServerMark` (components/ix/identity); they
+ * own the fill, the letter and the hairline. Never `--accent-primary`: the
+ * action is cream, and a person is not an action.
  */
 export function getIdentityColor(id: string): string {
   return IDENTITY_COLORS[identityIndex(id)];
 }
 
 /**
- * The same identity, as text. Use this wherever a name is *written* in somebody's
- * color; {@link getIdentityColor} everywhere it is a fill.
+ * The same identity, as text. Index writes a name in the ink ramp, not in a
+ * person's color (docs/index-spec.md §4.11), so nothing new should call this.
+ *
+ * @deprecated Names are written in `--ix-ink-3` / `--ix-ink`.
  */
 export function getIdentityInk(id: string): string {
   return IDENTITY_INKS[identityIndex(id)];

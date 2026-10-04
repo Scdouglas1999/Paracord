@@ -40,15 +40,20 @@ describe('Glass tokens', () => {
     expect(decl('--ink-3')).toBe('rgba(240, 243, 243, 0.64)');
   });
 
-  it('holds the fixed colors and the restrained blue primary accent', () => {
-    expect(decl('--own-bub')).toBe('#ecebe6');
-    expect(decl('--own-ink')).toBe('#141516');
+  it('holds the fixed colors, with the action and your bubbles remapped onto the Index cream', () => {
+    // The 2026-10-03 soft-blue primary is superseded by Index (docs/index-spec.md
+    // §2.1): the Glass names stay, their values are the Index block's.
+    expect(decl('--own-bub')).toBe('var(--ix-cream)');
+    expect(decl('--own-ink')).toBe('var(--ix-cream-ink)');
     expect(decl('--mention-chip')).toBe('#f3f5f5');
     expect(decl('--mention-ink')).toBe('#111214');
     expect(decl('--amber')).toBe('#ffc27e');
     expect(decl('--amber-ink')).toBe('#ffd6a8');
-    expect(decl('--join')).toBe('#c7daed');
-    expect(decl('--join-press')).toBe('#b8cee4');
+    expect(decl('--join')).toBe('var(--ix-cream)');
+    expect(decl('--join-ink')).toBe('var(--ix-cream-ink)');
+    expect(decl('--join-hover')).toBe('var(--ix-cream-hover)');
+    expect(decl('--join-press')).toBe('var(--ix-cream-press)');
+    expect(decl('--accent-danger')).toBe('var(--ix-danger-ink)');
   });
 
   it('holds the shape and depth of §2.4 and the 120ms timing of §9', () => {

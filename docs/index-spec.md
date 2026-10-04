@@ -90,7 +90,7 @@ passes numbers (hues), never color strings.
 | `--ix-side-end` | `#111215` | Sidebar gradient end, dock, rings that "bite" (dot rings) |
 | `--ix-ink` | `#f2f3f5` | Primary text, unread dot, dock indicator |
 | `--ix-ink-2` | `rgba(235,238,242,.74)` | Secondary text, read channel names, people rows |
-| `--ix-ink-3` | `rgba(235,238,242,.5)` | Tertiary: previews, times, labels, placeholders. Must pass 4.5:1 on every surface it sits on at every server hue; `scripts/contrast-audit.mjs` sweeps hues 0–359 in 15° steps. If any pair fails, raise the alpha for all (never per surface) and record it here |
+| `--ix-ink-3` | `rgba(235,238,242,.62)` | Tertiary: previews, times, labels, placeholders. Must pass 4.5:1 on every surface it sits on at every server hue; `scripts/contrast-audit.mjs` sweeps hues 0–359 in 15° steps. If any pair fails, raise the alpha for all (never per surface) and record it here. **Recorded by IX-1: the prototype's .5 fails (others' bubble 4.34, event card 4.23, the selected row 4.11 at hue 0); .62 is the smallest step that passes every surface at every hue (the selected row near the top of the list at hue 60 needs .615)** |
 | `--ix-line` | `rgba(255,255,255,.08)` | Hairlines |
 | `--ix-fill` | `rgba(255,255,255,.06)` | Quiet controls, tool chips |
 | `--ix-fill-2` | `rgba(255,255,255,.10)` | Hover of quiet controls |

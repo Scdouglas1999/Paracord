@@ -1,0 +1,390 @@
+/* =============================================================================
+   Index foundation (docs/index-spec.md §2, §3.1). Owned by IX-1.
+
+   What lives here:
+     1. hue-derived classes   a place's tint, the selected row, a glyph tile
+     2. identity marks        .ix-av (a person), .ix-sq (a server), a stack of faces
+     3. presence              the dot, and its four states
+     4. primitives            cream button, control, wide control, tool chip,
+                              section label, hairline
+
+   Every color is a token (tokens.css, the Index block) or a hue built from a
+   number: `hsl(var(--ix-hue) …)` for a window's tint, `hsl(var(--ix-h) …)` for
+   one avatar or mark. JS passes the number and never a color string.
+   `npm run test:tokens` fails on any literal color in this file.
+
+   Imported after the Glass sheets and unlayered, so on a tie an Index rule beats
+   a Glass one: `Face` (components/glass/places/Lead.tsx) still carries
+   `.glass-face` for the rings other sheets draw around it, and `.ix-av` has to
+   win the type and the fill. Rules that a ring or a bite must be able to replace
+   are written inside `:where()` (zero specificity) on purpose.
+
+   Nothing here animates anything but a color, in 120ms. Reduced motion needs no
+   switch: a color change is not motion.
+   ============================================================================= */
+
+/* ---- 1. Hue-derived classes (§2.2) ----------------------------------------------
+   Set --ix-hue (a number, 0-359) on the element or an ancestor. Nothing animates
+   it: a hue change is a crossfade between two layers, never a transition of the
+   number. --ix-tint scales every tint (1; .5 in High contrast). */
+
+/* The sidebar's ground. */
+.ix-hue-side {
+  background: linear-gradient(
+    180deg,
+    hsl(var(--ix-hue) calc(24% * var(--ix-tint)) 14%),
+    hsl(var(--ix-hue) calc(10% * var(--ix-tint)) 10%) 45%,
+    var(--ix-side-end)
+  );
+}
+
+/* The glow at the top of main, over --ix-main. */
+.ix-hue-main {
+  background:
+    radial-gradient(900px 340px at 25% -140px, hsl(var(--ix-hue) 55% 40% / calc(0.26 * var(--ix-tint))), transparent 70%),
+    var(--ix-main);
+}
+
+/* The selected channel. */
+.ix-hue-selected {
+  background: hsl(var(--ix-hue) 50% 60% / calc(0.17 * var(--ix-tint)));
+  box-shadow: inset 0 0 0 1px hsl(var(--ix-hue) 60% 72% / calc(0.12 * var(--ix-tint)));
+}
+
+/* An action card's glyph tile: the tile, and the glyph inside it. */
+.ix-hue-tile {
+  background: hsl(var(--ix-hue) 50% 55% / calc(0.18 * var(--ix-tint)));
+  color: hsl(var(--ix-hue) 80% 80%);
+}
+
+/* An event's weekday. */
+.ix-hue-weekday {
+  color: hsl(var(--ix-hue) 75% 74%);
+}
+
+/* The message box's focus halo; fade this layer in by opacity. */
+.ix-hue-halo {
+  box-shadow: 0 0 0 4px hsl(var(--ix-hue) 60% 60% / calc(0.14 * var(--ix-tint)));
+}
+
+/* High contrast: the selection is opaque and has an edge you can see (§10). */
+[data-theme='glass-contrast'] .ix-hue-selected {
+  background: hsl(var(--ix-hue) 24% 15%);
+  box-shadow: inset 0 0 0 1px hsl(var(--ix-hue) 60% 82% / 0.7);
+}
+
+/* ---- 2. Identity marks (§2.3) ----------------------------------------------------
+   Flat tonal fills, a lighter same-hue letter, a hairline. No radial highlight,
+   no glow, no ring. Set --ix-h (a number, 0-359) on the mark; size, font size and
+   radius come from the component (inline), because they depend on the size. */
+
+.ix-av,
+.ix-sq {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+/* A person: a circle. */
+.ix-av {
+  --ix-av-hl: inset 0 0 0 1px hsl(var(--ix-h) 45% 75% / 0.13);
+  border-radius: 50%;
+  font-weight: 550;
+  font-stretch: 90%;
+  letter-spacing: -0.02em;
+  color: hsl(var(--ix-h) 75% 85%);
+  background: linear-gradient(180deg, hsl(var(--ix-h) 30% 30%), hsl(var(--ix-h) 27% 23%));
+}
+
+/* A server: a rounded square, a quiet diagonal, a condensed letter. */
+.ix-sq {
+  --ix-av-hl: inset 0 0 0 1px hsl(var(--ix-h) 60% 80% / 0.16);
+  border-radius: 28%;
+  font-weight: 600;
+  font-stretch: 85%;
+  letter-spacing: -0.03em;
+  color: hsl(var(--ix-h) 85% 90%);
+  background: linear-gradient(150deg, hsl(var(--ix-h) 44% 38%), hsl(var(--ix-h) 40% 23%));
+}
+
+/* The hairline. Zero specificity: a ring or a bite another sheet draws replaces it. */
+:where(.ix-av, .ix-sq) {
+  box-shadow: var(--ix-av-hl);
+}
+
+/* An uploaded picture always wins: it fills the same shape and wears the same
+   hairline, drawn over it (an inset shadow sits under an image, so a layer does it). */
+:where(.ix-has-img, .ix-has-dot) {
+  position: relative;
+}
+
+.ix-av > img,
+.ix-sq > img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
+}
+
+.ix-has-img::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: var(--ix-av-hl);
+  pointer-events: none;
+}
+
+/* High contrast: a darker fill, a nearly white letter and an edge that shows. */
+[data-theme='glass-contrast'] .ix-av {
+  --ix-av-hl: inset 0 0 0 1px hsl(var(--ix-h) 60% 85% / 0.5);
+  color: hsl(var(--ix-h) 90% 96%);
+  background: linear-gradient(180deg, hsl(var(--ix-h) 30% 22%), hsl(var(--ix-h) 27% 16%));
+}
+
+[data-theme='glass-contrast'] .ix-sq {
+  --ix-av-hl: inset 0 0 0 1px hsl(var(--ix-h) 60% 85% / 0.5);
+  color: hsl(var(--ix-h) 90% 96%);
+  background: linear-gradient(150deg, hsl(var(--ix-h) 44% 24%), hsl(var(--ix-h) 40% 15%));
+}
+
+/* Faces in a row, each over the one before it (the room card's "and 9 more",
+   a busy room's row). --ix-overlap is the pull, --ix-ring the color of the
+   surface behind: the front face bites the back one with a 2px ring. */
+.ix-faces {
+  display: inline-flex;
+  flex: none;
+}
+
+.ix-faces > .ix-av {
+  margin-left: calc(var(--ix-overlap, 7px) * -1);
+  box-shadow: var(--ix-av-hl), 0 0 0 2px var(--ix-ring, var(--ix-ring-default));
+}
+
+.ix-faces > .ix-av:first-child {
+  margin-left: 0;
+}
+
+/* ---- 3. Presence (§2.3) ------------------------------------------------------------
+   A 10px dot at the bottom-right with a 2.5px ring in the surface color:
+   online is solid ink, idle is the tertiary ink, do not disturb is a hollow
+   ring, offline draws nothing. No red, green or yellow: color never means
+   presence. --ix-ring is the surface behind (the sidebar's foot by default). */
+
+.ix-presence {
+  --ix-ring-surface: var(--ix-ring, var(--ix-side-end));
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  box-sizing: border-box;
+  width: var(--ix-dot, 10px);
+  height: var(--ix-dot, 10px);
+  border-radius: 50%;
+  background-color: var(--ix-ring-surface);
+  box-shadow: 0 0 0 2.5px var(--ix-ring-surface);
+  pointer-events: none;
+}
+
+.ix-presence--online {
+  background-color: var(--ix-ink);
+}
+
+/* The tertiary ink is translucent; layer it over the surface so the dot is solid. */
+.ix-presence--idle {
+  background-image: linear-gradient(var(--ix-ink-3), var(--ix-ink-3));
+}
+
+.ix-presence--dnd {
+  box-shadow:
+    inset 0 0 0 1.5px var(--ix-ink-2),
+    0 0 0 2.5px var(--ix-ring-surface);
+}
+
+/* In flow, not on a face (a people row's trailing state). */
+.ix-presence--inline {
+  position: static;
+  flex: none;
+}
+
+/* ---- 4. Primitives (§3.1) ----------------------------------------------------------
+   One cream button per surface. Controls are quiet fills. Everything focusable
+   shares the one focus ring. */
+
+.ix-cream,
+.ix-ctl,
+.ix-chip {
+  border: 0;
+  cursor: pointer;
+}
+
+.ix-cream:focus-visible,
+.ix-ctl:focus-visible,
+.ix-chip:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+.ix-cream:disabled,
+.ix-ctl:disabled,
+.ix-chip:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* The cream button: Join, Watch, Post it, Send with text. */
+.ix-cream {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 16px;
+  border-radius: 11px;
+  background: var(--ix-cream);
+  color: var(--ix-cream-ink);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+  transition: background-color 120ms var(--ix-ease);
+}
+
+.ix-cream:hover:not(:disabled) {
+  background: var(--ix-cream-hover);
+}
+
+.ix-cream:active:not(:disabled) {
+  background: var(--ix-cream-press);
+}
+
+/* Fills the row it sits in (the card's actions). */
+.ix-cream--grow {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+/* The inline size: an event card's primary button. */
+.ix-cream--sm {
+  height: auto;
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+/* A control: an icon in a quiet 36px tile (mic, camera, screen, listen, leave). */
+.ix-ctl {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  box-sizing: border-box;
+  width: var(--ix-ctl-size, 36px);
+  height: var(--ix-ctl-size, 36px);
+  padding: 0;
+  border-radius: 11px;
+  background: var(--ix-fill-ctl);
+  color: var(--ix-ink-2);
+  font-family: inherit;
+  transition:
+    background-color 120ms var(--ix-ease),
+    color 120ms var(--ix-ease);
+}
+
+.ix-ctl:hover:not(:disabled) {
+  background: var(--ix-fill-ctl-hover);
+}
+
+/* On: the amber glyph (listening, mic live). */
+.ix-ctl[aria-pressed='true'] {
+  color: var(--ix-amber);
+}
+
+/* A wide control: a label instead of a glyph, filling the row ("Open call"). */
+.ix-ctl--wide {
+  flex: 1 1 0;
+  width: auto;
+  min-width: 0;
+  padding: 0 12px;
+  color: var(--ix-ink);
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* Leave: the one danger color on its quiet fill. */
+.ix-ctl--danger {
+  background: var(--ix-danger-fill);
+  color: var(--ix-danger-ink);
+}
+
+.ix-ctl--danger:hover:not(:disabled) {
+  background: var(--ix-danger-fill-call);
+}
+
+/* A tool chip under the open message box: Attach, GIF, Poll, Event. */
+.ix-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--ix-fill);
+  color: var(--ix-ink-2);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 400;
+  line-height: 1;
+  white-space: nowrap;
+  transition: background-color 120ms var(--ix-ease);
+}
+
+.ix-chip:hover:not(:disabled) {
+  background: var(--ix-fill-2);
+}
+
+.ix-chip > svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* A section label: sentence case, never uppercase. */
+.ix-section-label {
+  display: flex;
+  align-items: center;
+  margin: 0;
+  padding: 16px 8px 6px;
+  color: var(--ix-ink-3);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.ix-section-label__count {
+  margin-left: auto;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A hairline: horizontal by default, or a 1px by --ix-hairline-length vertical. */
+.ix-hairline {
+  flex: none;
+  width: 100%;
+  height: 1px;
+  margin: 0;
+  border: 0;
+  background: var(--ix-line);
+}
+
+.ix-hairline--vertical {
+  width: 1px;
+  height: var(--ix-hairline-length, 24px);
+}
+
+/* A glyph (components/ix/glyphs): never shrinks, takes its color from the text. */
+.ix-glyph {
+  flex-shrink: 0;
+}

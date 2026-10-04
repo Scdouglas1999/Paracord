@@ -88,6 +88,25 @@
 @import './daily-word.css' layer(components);
 @import './feeds.css' layer(components);
 @import './server-home.css' layer(components);
+/* Index (docs/index-spec.md, docs/design/index-plan.md). Unlayered and after every
+   Glass sheet, so an Index rule wins a tie with the Glass rule it replaces; the
+   order below is the order the packages build in. ix-base.css is the foundation
+   (hue classes, identity marks, presence, primitives); the rest are created empty
+   by IX-1 and filled by the package named in each file's first line. */
+@import './ix-base.css';
+@import './ix-shell.css';
+@import './ix-sidebar.css';
+@import './ix-dock.css';
+@import './ix-card.css';
+@import './ix-cards.css';
+@import './ix-sheets.css';
+@import './ix-pages.css';
+@import './ix-timeline.css';
+@import './ix-composer.css';
+@import './ix-conversation.css';
+@import './ix-call.css';
+@import './ix-people.css';
+@import './ix-phone.css';
 @import './utilities.css';
 /* Last, and in a layer of its own: the §9 focus ring outranks the utilities, so
    a resting-state `shadow-*` cannot silently delete it. See focus.css. */

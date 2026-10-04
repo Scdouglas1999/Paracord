@@ -144,7 +144,7 @@ describe('TextRow', () => {
     expect(container.querySelector('.glass-lead--tile')).not.toBeNull();
   });
 
-  it('shows a person’s initials when they have no picture, and one face for a single speaker', () => {
+  it('shows a person’s monogram (one letter, docs/index-spec.md §2.3) when they have no picture, and one face for a single speaker', () => {
     const { container } = render(
       <TextRow
         row={text({ lead: { kind: 'faces', variant: 'authors', faces: [{ userId: 'n', name: 'Nick Vale', avatar: null }] } })}
@@ -154,7 +154,7 @@ describe('TextRow', () => {
       />,
     );
     expect(container.querySelector('.glass-lead--faces')).toHaveAttribute('data-count', '1');
-    expect(container.querySelector('.glass-face')).toHaveTextContent('NV');
+    expect(container.querySelector('.glass-face')).toHaveTextContent(/^N$/);
   });
 
   it('is a button, not a link, when it has no address', () => {

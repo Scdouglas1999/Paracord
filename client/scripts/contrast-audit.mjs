@@ -20,6 +20,15 @@
  *   - for High contrast, the higher floors it exists for: opaque panes, 12:1
  *     for the first ink step and 7:1 for the other two, and 3:1 for every edge.
  *
+ * The Index look (docs/index-spec.md §2) is audited too, by hue rather than by
+ * room: every server hue 0-359 in 15 degree steps, plus the eleven palette hues,
+ * for both themes. Ink, ink-2 and ink-3 are measured on the sidebar's top, its
+ * list zone and its foot, the selected row, main (with its glow), a bubble, an
+ * event card and the call surface; the cream, danger and amber pairs, the
+ * avatar and server-mark letters, and the High contrast hardening of each are
+ * measured too. The recipes are READ from src/styles/ix-base.css, not copied, so
+ * a change to the stylesheet is audited and cannot drift from this script.
+ *
  * It also fails on a token that lands outside sRGB (a browser would gamut-map
  * it and the measured color would no longer be the one written down), on a
  * second declaration of the danger ink (there is exactly one, and every other
@@ -610,6 +619,256 @@ for (const [themeName, overrides] of Object.entries(THEMES)) {
   }
 }
 
+/* ---- Index (docs/index-spec.md §2) ------------------------------------------
+   Hue is a number, so every server hue is a different set of surfaces. The
+   recipes (sidebar gradient, selection, glow, avatar and mark fills and letters)
+   are parsed out of ix-base.css with `--ix-hue` / `--ix-h` / `--ix-tint`
+   substituted, so the audit measures what ships. The tokens are read from
+   tokens.css. Set PARACORD_AUDIT_VERBOSE=1 for the table. */
+const stylesDir = path.dirname(tokensPath);
+const ixBaseCss = fs.readFileSync(path.join(stylesDir, 'ix-base.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '));
+const hueSource = fs.readFileSync(path.join(stylesDir, '..', 'lib', 'identityHue.ts'), 'utf8');
+const paletteMatch = hueSource.match(/PALETTE_HUES\s*=\s*\[([^\]]+)\]/);
+if (!paletteMatch) throw new Error('[contrast] PALETTE_HUES not found in src/lib/identityHue.ts');
+const PALETTE = paletteMatch[1].split(',').map((n) => Number(n.trim()));
+if (PALETTE.some((hue) => hue >= 250 && hue <= 320)) {
+  failures += 1;
+  console.error('[contrast] PALETTE_HUES holds a purple (250-320): the palette has no purples (docs/index-spec.md §2.2).');
+}
+const IX_HUES = [...new Set([...Array.from({ length: 24 }, (_, i) => i * 15), 359, ...PALETTE])].sort((a, b) => a - b);
+
+/** The declarations of the rule whose selector is exactly `selector`. */
+function ixRule(selector) {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // A rule starts at the top of the file or right after the `}` of the one before it
+  // (so a selector that is the tail of a list, `.ix-av,\n.ix-sq`, is not a match).
+  const found = ixBaseCss.match(new RegExp(`(?:^|\\})\\s*${escaped}\\s*\\{([^}]*)\\}`));
+  if (!found) throw new Error(`[contrast] ix-base.css has no rule "${selector}"`);
+  return found[1];
+}
+
+/** One declaration's value inside a rule body. */
+function ixDecl(body, property) {
+  const found = body.match(new RegExp(`(?:^|[;{\\s])${property}\\s*:\\s*([^;]+);`));
+  if (!found) throw new Error(`[contrast] ix-base.css: no "${property}" in "${body.trim().slice(0, 60)}…"`);
+  return found[1].trim();
+}
+
+/** Every top-level hsl(...) call in a value, parentheses balanced. */
+function hslCalls(value) {
+  const out = [];
+  let at = value.indexOf('hsl(');
+  while (at !== -1) {
+    let depth = 0;
+    let end = at + 3;
+    for (; end < value.length; end += 1) {
+      if (value[end] === '(') depth += 1;
+      else if (value[end] === ')') {
+        depth -= 1;
+        if (depth === 0) break;
+      }
+    }
+    out.push(value.slice(at, end + 1));
+    at = value.indexOf('hsl(', end);
+  }
+  return out;
+}
+
+function hslToRgb(h, sat, light) {
+  const s = sat / 100;
+  const l = light / 100;
+  const k = (n) => (n + h / 30) % 12;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+  return { r: f(0) * 255, g: f(8) * 255, b: f(4) * 255, a: 1 };
+}
+
+/** `hsl(var(--ix-hue) calc(24% * var(--ix-tint)) 14% / .3)` at a hue and a tint, as a color. */
+function evalHsl(call, hue, tint) {
+  const folded = foldCalc(
+    call
+      .replace(/var\(--ix-hue\)|var\(--ix-h\)/g, String(hue))
+      .replace(/var\(--ix-tint\)/g, String(tint)),
+  );
+  const m = folded.match(/^hsl\(\s*([\d.]+)\s+([\d.]+)%?\s+([\d.]+)%?\s*(?:\/\s*([\d.]+))?\s*\)$/);
+  if (!m) throw new Error(`[contrast] cannot read "${call}" (folded: "${folded}")`);
+  return { ...hslToRgb(Number(m[1]), Number(m[2]), Number(m[3])), a: m[4] == null ? 1 : Number(m[4]) };
+}
+
+const mixRgb = (from, to, t) => ({
+  r: from.r * (1 - t) + to.r * t,
+  g: from.g * (1 - t) + to.g * t,
+  b: from.b * (1 - t) + to.b * t,
+  a: 1,
+});
+
+let ixComparisons = 0;
+let ixWorst = { headroom: Infinity };
+function ixRecord(setting, fgName, bgName, ratio, min) {
+  comparisons += 1;
+  ixComparisons += 1;
+  const headroom = ratio / min;
+  if (headroom < ixWorst.headroom) ixWorst = { headroom, ratio, min, setting, fg: fgName, bg: bgName };
+  if (process.env.PARACORD_AUDIT_VERBOSE && headroom < 1.05) {
+    console.log(`[index] ${setting}: ${fgName} on ${bgName} ${ratio.toFixed(2)} (floor ${min})`);
+  }
+  if (ratio < min) {
+    failures += 1;
+    console.error(`[contrast] ${setting}: ${fgName} on ${bgName} ratio ${ratio.toFixed(2)} < ${min.toFixed(2)}`);
+  }
+}
+
+{
+  // The sidebar gradient's stops and where its list zone sits: the first row of
+  // a 900px window starts near 20% of the height, the mid stop is at 45%.
+  const SIDE_FRACTIONS = { 'list top (20%)': 0.2, 'mid stop (45%)': 0.45, 'list foot (70%)': 0.7 };
+  const sideBackground = ixDecl(ixRule('.ix-hue-side'), 'background');
+  const [sideTopCall, sideMidCall] = hslCalls(sideBackground);
+  if (!sideTopCall || !sideMidCall || !/var\(--ix-side-end\)/.test(sideBackground) || !/\b45%/.test(sideBackground)) {
+    throw new Error('[contrast] .ix-hue-side must be: top hsl, mid hsl at 45%, then var(--ix-side-end)');
+  }
+  const mainBackground = ixDecl(ixRule('.ix-hue-main'), 'background');
+  const glowGeometry = mainBackground.match(/radial-gradient\(\s*(\d+)px\s+(\d+)px\s+at\s+([\d.]+)%\s+(-?\d+)px/);
+  const glowEnd = mainBackground.match(/transparent\s+(\d+)%/);
+  const [glowCall] = hslCalls(mainBackground);
+  if (!glowGeometry || !glowEnd || !glowCall) throw new Error('[contrast] .ix-hue-main must be a radial-gradient of one hsl to transparent');
+  const glowRadiusY = Number(glowGeometry[2]);
+  const glowCenterY = Number(glowGeometry[4]);
+  const glowReach = Number(glowEnd[1]) / 100;
+
+  const selectedRule = ixRule('.ix-hue-selected');
+  const selectedHcRule = ixRule("[data-theme='glass-contrast'] .ix-hue-selected");
+
+  const avatarRule = ixRule('.ix-av');
+  const markRule = ixRule('.ix-sq');
+  const avatarHcRule = ixRule("[data-theme='glass-contrast'] .ix-av");
+  const markHcRule = ixRule("[data-theme='glass-contrast'] .ix-sq");
+  const letterOf = (rule) => hslCalls(ixDecl(rule, 'color'))[0];
+  const fillsOf = (rule) => hslCalls(ixDecl(rule, 'background'));
+
+  for (const [themeName, overrides] of Object.entries(THEMES)) {
+    const hc = isHighContrast(themeName);
+    const vars = { ...themeBase, ...rootBase, ...overrides };
+    const token = (name) => {
+      const value = resolveVar(name, vars);
+      const color = value ? parseColor(value, `index ${themeName}: ${name}`) : null;
+      if (!color) throw new Error(`[contrast] index ${themeName}: unable to resolve ${name}`);
+      return color;
+    };
+    const tint = Number(resolveVar('--ix-tint', vars));
+    const ground = token('--ix-ground');
+    const sideEnd = token('--ix-side-end');
+    const main = token('--ix-main');
+    const bubble = token('--ix-bubble');
+    const card = token('--ix-card');
+    const callSurface = token('--ix-call');
+    // Ink steps are translucent: each is measured over the surface it lands on.
+    const inks = hc
+      ? [['--ix-ink', 7], ['--ix-ink-2', 7], ['--ix-ink-3', 7]]
+      : [['--ix-ink', 7], ['--ix-ink-2', 4.5], ['--ix-ink-3', 4.5]];
+
+    // The sidebar and the glow at one hue.
+    const sweepHue = (hue) => {
+      const setting = `index ${themeName} @ hue ${hue}`;
+      const sideTop = evalHsl(sideTopCall, hue, tint);
+      const sideMid = evalHsl(sideMidCall, hue, tint);
+      const sideAt = (fraction) => (fraction <= 0.45 ? mixRgb(sideTop, sideMid, fraction / 0.45) : mixRgb(sideMid, sideEnd, (fraction - 0.45) / 0.55));
+      const selectedFill = hc
+        ? evalHsl(hslCalls(ixDecl(selectedHcRule, 'background'))[0], hue, tint)
+        : evalHsl(hslCalls(ixDecl(selectedRule, 'background'))[0], hue, tint);
+      const selectedOver = (base) => (hc ? selectedFill : blend(selectedFill, base));
+      const glow = evalHsl(glowCall, hue, tint);
+      // The strongest the glow gets under any text: the toolbar row, straight under its center.
+      const glowAtToolbar = glow.a * Math.max(0, 1 - Math.abs(0 - glowCenterY) / glowRadiusY / glowReach);
+      const surfaces = {
+        'sidebar top': sideTop,
+        'sidebar foot': sideEnd,
+        ...Object.fromEntries(Object.entries(SIDE_FRACTIONS).map(([name, fraction]) => [`sidebar ${name}`, sideAt(fraction)])),
+        ...Object.fromEntries(Object.entries(SIDE_FRACTIONS).map(([name, fraction]) => [`selection over ${name}`, selectedOver(sideAt(fraction))])),
+        main,
+        'main + glow at the toolbar': blend({ ...glow, a: glowAtToolbar }, main),
+        bubble,
+        card,
+        call: callSurface,
+      };
+      for (const [surfaceName, surface] of Object.entries(surfaces)) {
+        for (const [inkName, min] of inks) {
+          ixRecord(setting, inkName, surfaceName, contrastRatio(token(inkName), surface), min);
+        }
+      }
+
+      // The selection's edge shows in High contrast; in the default theme the
+      // selection is a tint by design (the prototype), carried by ink and aria-current.
+      if (hc) {
+        const edge = evalHsl(hslCalls(ixDecl(selectedHcRule, 'box-shadow'))[0], hue, tint);
+        ixRecord(setting, 'selection edge', 'selection fill', contrastRatio(blend(edge, selectedFill), selectedFill), 3);
+      }
+
+      // The live card: amber on its tint over the list zone, yours and not yours.
+      const cardOver = (tokenName, base) => {
+        const stops = resolveVar(tokenName, vars).match(/rgba\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*\)/g) ?? [];
+        // The strongest stop is the first; text sits over the whole card, so use it.
+        const first = parseColor(stops[0], tokenName);
+        return blend(first, base);
+      };
+      const amber = token('--ix-amber');
+      for (const [name, tokenName] of [['room card', '--ix-room-bg'], ['your room card', '--ix-room-bg-yours']]) {
+        ixRecord(setting, '--ix-amber', name, contrastRatio(amber, cardOver(tokenName, sideAt(0.2))), 4.5);
+        ixRecord(setting, '--ix-ink-2', name, contrastRatio(token('--ix-ink-2'), cardOver(tokenName, sideAt(0.2))), hc ? 7 : 4.5);
+      }
+
+      // Avatars and server marks: the letter against its fill.
+      const marks = [
+        ['avatar', letterOf(hc ? avatarHcRule : avatarRule), fillsOf(hc ? avatarHcRule : avatarRule), 4.5, 7],
+        ['server mark', letterOf(hc ? markHcRule : markRule), fillsOf(hc ? markHcRule : markRule), 4.5, 7],
+      ];
+      for (const [kind, letterCall, fillCalls, floor, floorHc] of marks) {
+        if (!letterCall || fillCalls.length !== 2) throw new Error(`[contrast] ${kind}: needs a letter and a two-stop gradient`);
+        const letter = evalHsl(letterCall, hue, tint);
+        const [start, end] = fillCalls.map((call) => evalHsl(call, hue, tint));
+        const lightest = luminance(start) >= luminance(end) ? start : end;
+        // The letter sits in the middle of the tile, where the gradient is halfway.
+        ixRecord(setting, `${kind} letter`, `${kind} fill (middle)`, contrastRatio(letter, mixRgb(start, end, 0.5)), hc ? floorHc : floor);
+        // Against the lightest corner it only has to be a legible graphic (3:1), 7:1 in High contrast.
+        ixRecord(setting, `${kind} letter`, `${kind} fill (lightest corner)`, contrastRatio(letter, lightest), hc ? floorHc : 3);
+      }
+    };
+    for (const hue of IX_HUES) sweepHue(hue);
+
+    // Pairs that do not move with the hue.
+    const fixed = (fgName, bg, bgName, min) => ixRecord(`index ${themeName}`, fgName, bgName, contrastRatio(token(fgName), bg), min);
+    for (const name of ['--ix-cream', '--ix-cream-hover', '--ix-cream-press']) {
+      fixed('--ix-cream-ink', token(name), name, 7);
+    }
+    fixed('--ix-mention-ink', token('--ix-ink'), '--ix-ink (the mention chip)', 7);
+    for (const [surfaceName, surface, fillName] of [
+      ['sidebar foot', sideEnd, '--ix-danger-fill'],
+      ['card', card, '--ix-danger-fill'],
+      ['main', main, '--ix-danger-fill'],
+      ['call', callSurface, '--ix-danger-fill-call'],
+    ]) {
+      fixed('--ix-danger-ink', blend(token(fillName), surface), `${fillName} over ${surfaceName}`, 4.5);
+    }
+    fixed('--ix-amber', callSurface, 'call', 4.5);
+    // The focus ring is a UI component: 3:1 against every ground it can sit on.
+    const focus = parseColor((resolveVar('--ix-focus', vars).match(/(rgba?\([^)]*\)|#[0-9a-f]{3,6})\s*$/i) ?? [])[1] ?? '', '--ix-focus');
+    if (!focus) throw new Error('[contrast] --ix-focus must end in a color');
+    for (const [name, surface] of [['--ix-ground', ground], ['--ix-main', main], ['--ix-side-end', sideEnd], ['--ix-card', card], ['--ix-bubble', bubble]]) {
+      ixRecord(`index ${themeName}`, '--ix-focus', name, contrastRatio(focus, surface), 3);
+    }
+  }
+
+  // Exactly one place writes each of the ink and danger colors.
+  for (const name of ['--ix-danger-ink', '--ix-ink-3', '--ix-cream']) {
+    const declarations = css.match(new RegExp(`^\\s*${name}\\s*:`, 'gm')) ?? [];
+    const expected = name === '--ix-ink-3' ? 2 : 1; // the base value and High contrast's
+    if (declarations.length !== expected) {
+      failures += 1;
+      console.error(`[contrast] ${name} is declared ${declarations.length} times in tokens.css; expected ${expected}.`);
+    }
+  }
+}
+
 /* ---- Glass reference tints (spec §2.1) --------------------------------------
    The default theme's derivation has to reproduce the two reference tints, not
    merely look like them. CIE76 delta-E in Lab (D65) on the resolved sRGB, under
@@ -674,6 +933,10 @@ console.log(
     + `(${Object.keys(THEMES).join(', ')}) x ${Object.keys(tints).length} room tints `
     + `(${Object.keys(namedTints).join(', ')}, and the clamp box: s 0..${CLAMP.saturationMax}, `
     + `v ${CLAMP.valueMin}..${CLAMP.valueMax}, every 15 degrees).`,
+);
+console.log(
+  `[contrast] index: ${ixComparisons} comparisons passed over ${IX_HUES.length} hues (0-359 in 15 degree steps, the ${PALETTE.length} palette hues) x 2 themes; `
+    + `tightest: ${ixWorst.fg} on ${ixWorst.bg} at ${ixWorst.setting} — ${ixWorst.ratio.toFixed(2)} against a floor of ${ixWorst.min}.`,
 );
 console.log('[contrast] one danger ink: --accent-danger is declared once and every other danger token is made from it.');
 console.log(`[contrast] glass reference tints reproduced: worst delta-E ${worstDelta.toFixed(2)} (limit 2).`);

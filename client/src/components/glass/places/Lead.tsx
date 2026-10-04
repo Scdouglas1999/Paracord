@@ -2,12 +2,9 @@ import { useEffect, useState, type CSSProperties } from 'react';
 import { Gamepad2, Grid3x3, Megaphone, MessagesSquare, Radio, Trophy, Volume2 } from 'lucide-react';
 
 import { fileApi } from '../../../api/files';
-import { useDownloadTicket } from '../../../hooks/useDownloadTicket';
-import { useAuthenticatedImage } from '../../../lib/authenticatedImage';
-import { getIdentityColor } from '../../../lib/colors';
-import { resolveUserAvatarUrl } from '../../../lib/userAvatar';
-import { useServerListStore } from '../../../stores/serverListStore';
 import { cn } from '../../../lib/utils';
+import { useServerListStore } from '../../../stores/serverListStore';
+import { Avatar } from '../../ix/identity';
 import type { ChannelGlyph, FaceModel } from './model';
 
 /**
@@ -15,9 +12,19 @@ import type { ChannelGlyph, FaceModel } from './model';
  * (docs/glass-spec.md §3.1). Faces and pictures are content, so they are solid
  * and carry no outline of their own; the ring around an overlapped face is the
  * color of the row behind it, so the front face bites the back one.
+ *
+ * Since Index (docs/index-spec.md §2.3) a face is drawn by the Index `Avatar`:
+ * a flat tonal circle in the person's hue with one letter. `Face` keeps its
+ * name, its props and its `.glass-face` class, so every place that draws a face
+ * (and every sheet that rings or dims one) changes at once.
  */
 
-/** Two letters at most, never an emoji. */
+/**
+ * Two letters at most, never an emoji.
+ *
+ * @deprecated A face has one letter now (`monogramOf` in components/ix/identity).
+ * Kept only for the timeline's own avatar until the timeline is rebuilt.
+ */
 export function initialsOf(name: string): string {
   const words = name
     .split(/[\s._-]+/)
@@ -38,25 +45,17 @@ export interface FaceProps {
   style?: CSSProperties;
 }
 
-/** A person's picture, or their initials on their identity color. */
+/** A person's picture, or their monogram on their hue: the Index `Avatar`, decorative. */
 export function Face({ face, size, className, style }: FaceProps) {
-  // The avatar URL carries the server's download ticket, minted after first paint.
-  useDownloadTicket();
-  const src = useAuthenticatedImage(resolveUserAvatarUrl(face.avatar));
   return (
-    <span
-      aria-hidden="true"
+    <Avatar
+      userId={face.userId}
+      name={face.name}
+      avatar={face.avatar}
+      size={size}
       className={cn('glass-face', className)}
-      style={{
-        width: size,
-        height: size,
-        fontSize: Math.max(9, Math.round(size * 0.38)),
-        background: src ? undefined : getIdentityColor(face.userId),
-        ...style,
-      }}
-    >
-      {src ? <img src={src} alt="" draggable={false} /> : initialsOf(face.name)}
-    </span>
+      style={style}
+    />
   );
 }
 
