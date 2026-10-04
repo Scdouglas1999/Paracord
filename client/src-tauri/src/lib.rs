@@ -1573,16 +1573,6 @@ fn configure_linux_gstreamer_audio_backend() {
 #[cfg(not(target_os = "linux"))]
 fn configure_linux_gstreamer_audio_backend() {}
 
-#[cfg(target_os = "linux")]
-fn linux_native_render_enabled() -> bool {
-    !matches!(
-        std::env::var("PARACORD_DISABLE_LINUX_NATIVE_RENDER")
-            .ok()
-            .as_deref(),
-        Some("1") | Some("true") | Some("TRUE") | Some("yes") | Some("YES")
-    )
-}
-
 /// Whether this machine's active EGL vendor is NVIDIA's proprietary driver.
 ///
 /// libglvnd picks an EGL implementation from the JSON manifests in
@@ -1661,11 +1651,6 @@ fn use_compositor_titlebar(app: &tauri::AppHandle) {
         Ok(gtk_window) => gtk_window.set_titlebar(None::<&gtk::Widget>),
         Err(err) => eprintln!("[window] could not reach the GTK window: {err}"),
     }
-}
-
-#[cfg(not(target_os = "linux"))]
-fn linux_native_render_enabled() -> bool {
-    false
 }
 
 /// Route the native layers' `tracing` events to stderr, which is where the
@@ -1761,52 +1746,31 @@ pub fn run() {
 
             #[cfg(windows)]
             configure_webview2_overrides(app);
-            // Native surface rendering (spec §3.3): reparent the webview into a
-            // gtk::Overlay so native-decoded video tracks can render into GLArea
-            // overlay children composited over it. The local tauri-runtime-wry
-            // patch makes Wry's GTK resize hook walk to the ancestor GtkWindow
-            // instead of assuming a fixed parent depth, so this host is safe to
-            // install by default on Linux. Best-effort: startup should survive a
-            // host installation failure, while native_render_attach fails loudly
-            // per subscription (spec §3.7).
             #[cfg(target_os = "linux")]
             use_compositor_titlebar(app.handle());
 
-            #[cfg(target_os = "linux")]
-            if linux_native_render_enabled() {
-                if let Err(err) =
-                    native_media::native_render::linux::install_render_host(app.handle())
-                {
-                    let _ = commands::append_client_log(
-                        app.handle().clone(),
-                        format!(
-                            "{} [native-render] linux host install failed: {}",
-                            chrono_like_timestamp_utc(),
-                            err
-                        ),
-                    );
-                    eprintln!("failed to install native render host: {err}");
-                } else {
-                    let _ = commands::append_client_log(
-                        app.handle().clone(),
-                        format!(
-                            "{} [native-render] linux host installed: GTK GLArea underlay tier-2",
-                            chrono_like_timestamp_utc()
-                        ),
-                    );
-                }
-            } else {
-                let _ = commands::append_client_log(
-                    app.handle().clone(),
+            // Native video (Glass spec §2): every remote video in the desktop
+            // app is decoded and drawn natively under a transparent webview.
+            // The platform host goes in here, once. Startup survives a host that
+            // cannot install, but video does not: the reason is recorded and
+            // every video subscription fails loudly with it (spec §3.7). There
+            // is no WebCodecs route to fall back to.
+            let host = native_media::native_render::install_platform_host(app.handle());
+            let line = match &host {
+                Ok(backend) => format!(
+                    "{} [native-render] host installed: {backend}",
+                    chrono_like_timestamp_utc()
+                ),
+                Err(err) => {
+                    eprintln!("failed to install the native video host: {err}");
                     format!(
-                        "{} [native-render] linux host disabled by PARACORD_DISABLE_LINUX_NATIVE_RENDER",
+                        "{} [native-render] host install FAILED, this window cannot show video: {err}",
                         chrono_like_timestamp_utc()
-                    ),
-                );
-                eprintln!(
-                    "linux native render host disabled by PARACORD_DISABLE_LINUX_NATIVE_RENDER"
-                );
-            }
+                    )
+                }
+            };
+            let _ = commands::append_client_log(app.handle().clone(), line);
+            native_media::native_render::record_renderer_status(host);
             tray::setup_tray(app.handle())?;
             commands::warm_secure_store();
             Ok(())
@@ -1875,10 +1839,7 @@ pub fn run() {
         native_media::commands::media_send_audio_key_announce,
         native_media::commands::media_send_track_key_announce,
         native_media::commands::media_register_track_subscription,
-        native_media::commands::media_register_stream_video_subscription,
-        native_media::commands::media_generate_decode_probe,
         native_media::commands::media_unregister_track_subscription,
-        native_media::commands::media_unregister_stream_video_subscription,
         native_media::commands::media_subscribe_audio,
         native_media::commands::media_unsubscribe_audio,
         native_media::commands::media_apply_audio_sender_key,
@@ -1891,7 +1852,7 @@ pub fn run() {
         native_media::native_render::native_render_update_geometry,
         native_media::native_render::native_render_detach,
         native_media::native_render::native_render_set_ground_color,
-        native_media::native_render::native_render_sample,
+        native_media::native_render::native_render_still,
         native_media::native_render::native_render_attach_sampler,
     ]);
 

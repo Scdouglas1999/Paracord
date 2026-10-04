@@ -42,10 +42,6 @@ const REORDER_MAX_HELD: usize = 2;
 /// anyway. Bounds added latency from the reorder stage.
 #[cfg(feature = "vpx")]
 const REORDER_HOLD: Duration = Duration::from_millis(50);
-/// A stored frame older than this at resume time is treated as stale, forcing a
-/// keyframe request so a re-shown tile does not paint a frozen old picture.
-#[cfg(feature = "vpx")]
-const VISIBILITY_STALE_AFTER: Duration = Duration::from_secs(2);
 /// How far behind the newest frame id a frame may be and still count as late
 /// (reordered or lost) rather than as a new numbering.
 ///
@@ -175,11 +171,7 @@ const SCREEN_KEYFRAME_INTERVAL_SECONDS: u32 = 4;
 #[cfg(feature = "vpx")]
 const MIN_ADAPTIVE_SCREEN_BITRATE_KBPS: u32 = 512;
 #[cfg(feature = "vpx")]
-pub const PULLED_VIDEO_FRAME_HEADER_SIZE: usize = 28;
-#[cfg(feature = "vpx")]
 static VIDEO_SEND_DEBUG_COUNT: AtomicU32 = AtomicU32::new(0);
-#[cfg(feature = "vpx")]
-static VIDEO_STORE_DEBUG_COUNT: AtomicU32 = AtomicU32::new(0);
 
 #[cfg(feature = "vpx")]
 static VIDEO_HANDLE_DEBUG_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -240,46 +232,29 @@ struct VideoReassemblyState {
 
 #[cfg(feature = "vpx")]
 struct VideoDispatchState {
-    remote_track_latest_frames: HashMap<String, PulledVideoFramePayload>,
-    remote_track_sequences: HashMap<String, u64>,
-    remote_track_ssrcs: HashMap<String, u32>,
-    /// Tracks whose frames should be stored encoded (passthrough) for the
-    /// webview's WebCodecs decoder instead of being decoded natively to raw
-    /// I420. Encoded frames are orders of magnitude smaller over Tauri IPC and
-    /// decode on the GPU.
-    remote_track_prefer_encoded: std::collections::HashSet<String>,
-    /// Push channel to the webview subscription for each track. Frames are sent
-    /// here (as packed binary bodies) the moment they are stored, so the webview
-    /// never polls. A cloned handle is taken out under the lock and the actual
-    /// send happens after the lock is released — `channel.send` dispatches to the
-    /// webview event loop and must never run inside the dispatch-state mutex.
-    remote_track_channels: HashMap<String, tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>>,
-    /// Subscriber viewport (target render size) per track. Natively decoded raw
-    /// I420 frames are downscaled to this before store/push so a 1080p frame does
-    /// not cross IPC at full size for a small tile. Absent = no downscale.
+    /// Subscriber viewport (target render size) per track: the relay's layer
+    /// selection hint (spec §4.2). The surface scales on the GPU; nothing is
+    /// downscaled on the CPU.
     remote_track_viewports: HashMap<String, (u32, u32)>,
-    /// Tracks the subscriber has hidden. While hidden, decode+push are skipped;
-    /// only keyframes are stored (no push) so a resume can paint immediately.
+    /// Tracks the page paused (off screen, or the window hidden). While paused
+    /// nothing is decoded; a resume waits for a keyframe (see
+    /// [`set_stream_video_visibility`]). A surface hidden under a dialog or a
+    /// stage move is NOT paused: it keeps decoding so it comes back current.
     remote_track_hidden: std::collections::HashSet<String>,
-    /// Wall-clock instant the latest frame for each track was stored, used to
-    /// decide staleness on a visibility resume.
-    remote_track_stored_at: HashMap<String, Instant>,
     /// Highest keyframe frame_id already accepted from a uni stream, per track.
     /// A stream keyframe whose frame_id is not newer is culled (a newer keyframe
     /// already superseded it), so a viewer too slow to drain the previous
     /// keyframe stream does not waste work decoding a stale one (L1 backpressure).
     remote_track_stream_high_water: HashMap<String, u64>,
-    /// Native-surface route bindings (spec §2/§3.6): tracks whose frames are
-    /// decoded to GPU-resident [`DecodedFrameHandle`]s and presented on a native
-    /// surface, NOT stored/pushed over the frame channel. Presence here selects
-    /// the `native-surface` route in [`deliver_decoded_frame`]; the raw-I420
-    /// store/push path is deleted, so a track is either here (native surface),
-    /// in `remote_track_prefer_encoded` (webcodecs passthrough), or has no
-    /// video consumer.
+    /// Native-surface bindings (spec §3.6): tracks whose frames are decoded
+    /// natively and presented on a surface (or kept as stills by a sampler).
+    /// This is the only video consumer in the desktop app: a track with no
+    /// binding has nothing to show its frames, and they are dropped after the
+    /// clip ring has seen them.
     remote_track_surfaces: HashMap<String, TrackSurfaceBinding>,
     /// Authoritative SSRC → track-key binding, taken from the relay's
     /// `TrackPublish`/`TrackLayers` announcements (every simulcast layer's
-    /// SSRC) plus the SSRC named at subscription time.
+    /// SSRC).
     ///
     /// This is the ONLY field of an incoming media packet whose ownership the
     /// relay actually authorizes: it resolves the SSRC to a published track
@@ -321,7 +296,17 @@ struct TrackSurfaceBinding {
     /// `media_native_render_first_frame` exactly once — the webview receives no
     /// frames on this route, so this event is what clears its poster state.
     first_frame_presented: Arc<AtomicBool>,
+    /// When the last frame was presented, for the frame-gap diagnostic: a
+    /// visible stream that stops moving says so in the log, with how long.
+    /// `None` for a sampler, whose ambient view sends a keyframe every couple
+    /// of seconds by design.
+    last_present: Option<Arc<Mutex<Option<Instant>>>>,
 }
+
+/// A gap between presented frames of a decoding track longer than this is
+/// logged (a frozen picture, or a publisher that stopped sending).
+#[cfg(feature = "vpx")]
+const PRESENT_GAP_LOG_AFTER: Duration = Duration::from_millis(1500);
 
 /// Consecutive `present()` errors that trip the native-render failure law
 /// (spec §3.7: "a present() error streak (>30 consecutive)").
@@ -342,43 +327,14 @@ const KEYFRAME_DECODE_FAILURE_LIMIT: u32 = 3;
 impl Default for VideoDispatchState {
     fn default() -> Self {
         Self {
-            remote_track_latest_frames: HashMap::new(),
-            remote_track_sequences: HashMap::new(),
-            remote_track_ssrcs: HashMap::new(),
-            remote_track_prefer_encoded: std::collections::HashSet::new(),
-            remote_track_channels: HashMap::new(),
             remote_track_viewports: HashMap::new(),
             remote_track_hidden: std::collections::HashSet::new(),
-            remote_track_stored_at: HashMap::new(),
             remote_track_stream_high_water: HashMap::new(),
             remote_track_surfaces: HashMap::new(),
             remote_ssrc_track_bindings: HashMap::new(),
             remote_track_max_dimensions: HashMap::new(),
         }
     }
-}
-
-#[cfg(feature = "vpx")]
-#[derive(Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PulledVideoFramePayload {
-    pub sequence: u64,
-    pub timestamp_us: u64,
-    pub is_keyframe: bool,
-    /// Source codec of the stream (`vp9` / `av1` / `h264`).
-    pub codec: String,
-    /// Wire format of `data`: `i420` when the frame was natively decoded, or
-    /// the encoded codec label (`vp9` / `h264` / `av1`) when passed through for
-    /// the frontend to decode.
-    pub format: String,
-    pub width: u32,
-    pub height: u32,
-    /// YUV matrix / range the frame's luma-chroma encoding uses. Wire tag: 0 =
-    /// BT.601, 1 = BT.709 (contract C1). The webview selects the matching YUV
-    /// matrix in its WebGL shader / CPU converter from this. See
-    /// [`encode_pulled_video_frame_binary`] (header byte 19).
-    pub colorspace: u8,
-    pub data: Vec<u8>,
 }
 
 #[cfg(feature = "vpx")]
@@ -431,8 +387,8 @@ fn video_decoder_pool() -> &'static Mutex<
 }
 
 /// Get (or lazily create) the per-track decoder handle. Returns `None` when no
-/// native decoder backend exists for `codec` (then the caller falls back to
-/// encoded passthrough). The map lock is released before the handle is returned.
+/// native decoder backend exists for `codec`; the caller then fails the
+/// subscription loudly. The map lock is released before the handle is returned.
 #[cfg(feature = "vpx")]
 fn decoder_handle_for_track(
     track_key: &str,
@@ -450,17 +406,20 @@ fn decoder_handle_for_track(
     if let Some(handle) = pool.get(track_key) {
         return Some(handle.clone());
     }
-    // This handle only ever feeds the native-surface route (deliver_decoded_frame
-    // → surface.present), so the decoder must emit handles the platform surface
-    // can present, chosen once at construction (spec §3.2). macOS'
-    // AVSampleBufferDisplayLayer accepts ONLY CVPixelBuffer, so its decoder must
-    // run GPU-resident (spec §3.5); on macOS a codec without a VideoToolbox GPU
-    // decoder returns None here and deliver_decoded_frame fails the subscription
-    // loudly (spec §3.7) rather than presenting a CPU frame the layer rejects. The
-    // Linux GLArea surface also imports the CPU-I420 tier-2 floor (spec §3.4), so
-    // CPU output is the deterministic choice there.
+    // This handle only ever feeds a native surface (deliver_decoded_frame →
+    // surface.present), so the decoder emits handles the platform surface can
+    // present, chosen once at construction (spec §3.2). On macOS VideoToolbox
+    // decodes H.264 to a CVPixelBuffer the AVSampleBufferDisplayLayer enqueues
+    // as it is; every other codec there (VP9 on libvpx) is CPU I420, which the
+    // macOS surface wraps in a CVPixelBuffer itself. The Linux GLArea and the
+    // Windows Direct3D surface upload CPU I420 (spec §3.4 tier 2) for every
+    // codec.
     #[cfg(target_os = "macos")]
-    let output = DecodeOutput::Gpu;
+    let output = if codec == paracord_codec::video::VideoCodec::H264 {
+        DecodeOutput::Gpu
+    } else {
+        DecodeOutput::Cpu
+    };
     #[cfg(not(target_os = "macos"))]
     let output = DecodeOutput::Cpu;
     // Cap the decoder at the resolution this peer actually announced when it
@@ -601,6 +560,61 @@ struct DecodeWorker {
     /// Set true when a native-decode track must drop deltas until the next
     /// keyframe (after an input-channel overflow or an undecodable frame).
     drop_until_keyframe: Arc<AtomicBool>,
+    /// Where keyframe requests go: the sink of the session that delivered the
+    /// latest frame. A track's worker outlives the session that started it (a
+    /// watch moving from its view session onto the call), and a request sent
+    /// down a closed connection never arrives.
+    sink: Arc<Mutex<KeyframeSink>>,
+}
+
+/// Which simulcast layer a track's decoder is fed, so it is fed one encoding.
+///
+/// Every layer of a track decodes in the same worker (one worker per track),
+/// and two sessions can carry the same track at once for a moment (a watch
+/// moving from its view session onto the call); each relay picks its own layer.
+/// A decoder handed deltas of two encodings draws garbage until the next
+/// keyframe. The relay switches layers at a keyframe of the new one (spec §4.2),
+/// so: a keyframe sets the layer, and a delta of another layer is dropped. When
+/// only another layer arrives for a while (its keyframe was lost), it is asked
+/// for one.
+#[cfg(feature = "vpx")]
+#[derive(Default)]
+struct LayerLock {
+    layer: Option<u8>,
+    last_own_frame: Option<Instant>,
+    last_foreign_request: Option<Instant>,
+}
+
+/// How long only another layer's deltas may arrive before its keyframe is asked
+/// for, and how often after that.
+#[cfg(feature = "vpx")]
+const FOREIGN_LAYER_KEYFRAME_AFTER: Duration = Duration::from_millis(700);
+
+#[cfg(feature = "vpx")]
+impl LayerLock {
+    /// Whether to decode `frame`; asks `sink` for a keyframe of a layer that
+    /// has taken over without one.
+    fn admit(&mut self, layer: u8, is_keyframe: bool, sink: &KeyframeSink) -> bool {
+        let now = Instant::now();
+        if is_keyframe || self.layer.is_none() || self.layer == Some(layer) {
+            if is_keyframe {
+                self.layer = Some(layer);
+            }
+            self.last_own_frame = Some(now);
+            return true;
+        }
+        let starved = self
+            .last_own_frame
+            .is_none_or(|at| now.duration_since(at) > FOREIGN_LAYER_KEYFRAME_AFTER);
+        let asked_recently = self
+            .last_foreign_request
+            .is_some_and(|at| now.duration_since(at) < FOREIGN_LAYER_KEYFRAME_AFTER);
+        if starved && !asked_recently {
+            self.last_foreign_request = Some(now);
+            sink.request(layer);
+        }
+        false
+    }
 }
 
 #[cfg(feature = "vpx")]
@@ -623,10 +637,9 @@ fn stop_decode_worker(track_key: &str) {
 }
 
 /// Dispatch a reassembled frame to `track_key`'s decode worker, creating the
-/// worker on first use with the given keyframe sink. Applies the overflow
-/// policy: drop-newest for encoded-passthrough tracks (the webview decoder has
-/// its own queue), drop-until-keyframe + keyframe request for native-decode
-/// tracks.
+/// worker on first use with the given keyframe sink. On overflow the worker
+/// drops deltas until the next keyframe and one is requested: a decoder that
+/// skipped a frame would otherwise draw on top of a missing reference.
 #[cfg(feature = "vpx")]
 fn dispatch_frame_to_worker(track_key: &str, frame: ReassembledVideoFrame, sink: KeyframeSink) {
     let layer_id = frame.simulcast_layer;
@@ -645,6 +658,8 @@ fn dispatch_frame_to_worker(track_key: &str, frame: ReassembledVideoFrame, sink:
     let worker = workers
         .entry(track_key.to_string())
         .or_insert_with(|| spawn_decode_worker(track_key.to_string(), sink.clone()));
+    // Requests follow the session delivering now (see `DecodeWorker::sink`).
+    *worker.sink.lock().unwrap_or_else(|e| e.into_inner()) = sink.clone();
     let result = worker.tx.try_send(frame);
     // Clone the Arc so the `&mut worker` borrow of the map ends here and the
     // Closed arm can `workers.remove(..)` without a borrow conflict.
@@ -652,12 +667,8 @@ fn dispatch_frame_to_worker(track_key: &str, frame: ReassembledVideoFrame, sink:
     match result {
         Ok(()) => {}
         Err(mpsc::error::TrySendError::Full(_)) => {
-            if track_prefers_encoded(track_key) {
-                // Drop-newest: the webview decoder tolerates the gap.
-            } else {
-                drop_until_keyframe.store(true, Ordering::SeqCst);
-                sink.request(layer_id);
-            }
+            drop_until_keyframe.store(true, Ordering::SeqCst);
+            sink.request(layer_id);
         }
         Err(mpsc::error::TrySendError::Closed(_)) => {
             // Worker exited; drop the stale handle so the next frame respawns it.
@@ -671,10 +682,19 @@ fn spawn_decode_worker(track_key: String, sink: KeyframeSink) -> DecodeWorker {
     let (tx, mut rx) = mpsc::channel::<ReassembledVideoFrame>(DECODE_CHANNEL_DEPTH);
     let shutdown = Arc::new(Notify::new());
     let drop_until_keyframe = Arc::new(AtomicBool::new(false));
+    let sink = Arc::new(Mutex::new(sink));
 
     let worker_shutdown = shutdown.clone();
     let worker_duk = drop_until_keyframe.clone();
+    let worker_sink = sink.clone();
     let handle = tokio::spawn(async move {
+        let current_sink = || {
+            worker_sink
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone()
+        };
+        let mut layer_lock = LayerLock::default();
         // Reorder stage: hold at most REORDER_MAX_HELD frames / REORDER_HOLD by
         // frame_id, deliver in order, drop anything older than last-delivered.
         let mut reorder: BTreeMap<u64, (Instant, ReassembledVideoFrame)> = BTreeMap::new();
@@ -714,10 +734,10 @@ fn spawn_decode_worker(track_key: String, sink: KeyframeSink) -> DecodeWorker {
                         ReorderAdmission::Stale => continue, // older than something already delivered: loss.
                     }
                     reorder.insert(frame.frame_id, (Instant::now(), frame));
-                    drain_reorder(&track_key, &sink, &worker_duk, &mut keyframe_failures, &mut reorder, &mut last_delivered, false).await;
+                    drain_reorder(&track_key, &current_sink(), &worker_duk, &mut keyframe_failures, &mut layer_lock, &mut reorder, &mut last_delivered, false).await;
                 }
                 _ = sleep_until_opt(next_deadline) => {
-                    drain_reorder(&track_key, &sink, &worker_duk, &mut keyframe_failures, &mut reorder, &mut last_delivered, true).await;
+                    drain_reorder(&track_key, &current_sink(), &worker_duk, &mut keyframe_failures, &mut layer_lock, &mut reorder, &mut last_delivered, true).await;
                 }
             }
         }
@@ -728,6 +748,7 @@ fn spawn_decode_worker(track_key: String, sink: KeyframeSink) -> DecodeWorker {
         shutdown,
         handle,
         drop_until_keyframe,
+        sink,
     }
 }
 
@@ -749,11 +770,13 @@ async fn sleep_until_opt(deadline: Option<Instant>) {
 /// when `force` (a hold deadline elapsed) or the buffer is over capacity — the
 /// oldest buffered frame regardless of gaps.
 #[cfg(feature = "vpx")]
+#[allow(clippy::too_many_arguments)]
 async fn drain_reorder(
     track_key: &str,
     sink: &KeyframeSink,
     drop_until_keyframe: &Arc<AtomicBool>,
     keyframe_failures: &mut u32,
+    layer_lock: &mut LayerLock,
     reorder: &mut BTreeMap<u64, (Instant, ReassembledVideoFrame)>,
     last_delivered: &mut Option<u64>,
     force: bool,
@@ -768,6 +791,9 @@ async fn drain_reorder(
         force_oldest = false;
         let (_, frame) = reorder.remove(&frame_id).expect("frame present");
         *last_delivered = Some(frame_id);
+        if !layer_lock.admit(frame.simulcast_layer, frame.encoded.is_keyframe, sink) {
+            continue;
+        }
         deliver_decoded_frame(
             track_key,
             sink,
@@ -779,17 +805,10 @@ async fn drain_reorder(
     }
 }
 
-/// Decode (or pass through) one delivered frame, honoring visibility (N4),
-/// drop-until-keyframe, and the per-subscription route (spec §2):
-/// - **native-surface**: a surface is bound → decode to a GPU-resident
-///   [`DecodedFrameHandle`] and `present()` it on the surface. Nothing crosses
-///   IPC. (spec §3.6/§3.7)
-/// - **webcodecs-passthrough**: `prefer_encoded` → store the encoded frame and
-///   push it over the frame channel for the webview's WebCodecs decoder.
-///
-/// The old raw-I420 store/push path (native decode → downscale-to-viewport →
-/// `format:"i420"` over the channel) is **deleted**: the frame channel now
-/// carries only encoded passthrough frames.
+/// Decode one delivered frame and present it on the track's native surface,
+/// honoring the page's pause (N4) and drop-until-keyframe (spec §3.6/§3.7).
+/// Nothing crosses IPC. Every frame reaches the clip ring first, whether or
+/// not anything shows it.
 #[cfg(feature = "vpx")]
 async fn deliver_decoded_frame(
     track_key: &str,
@@ -809,10 +828,9 @@ async fn deliver_decoded_frame(
     );
     let hidden = track_is_hidden(track_key);
 
-    // ── native-surface route ────────────────────────────────────────────────
     if let Some(binding) = track_surface_binding(track_key) {
-        // Hidden ⇒ decode paused (spec §2). The surface keeps showing its last
-        // frame; a resume requests a fresh keyframe (see set_stream_video_visibility).
+        // Paused ⇒ nothing decoded (spec §2). A resume drops deltas until a
+        // fresh keyframe (see set_stream_video_visibility).
         if hidden {
             return;
         }
@@ -861,6 +879,24 @@ async fn deliver_decoded_frame(
                     match present {
                         Ok(()) => {
                             binding.present_errors.store(0, Ordering::Relaxed);
+                            let now = Instant::now();
+                            let previous = binding
+                                .last_present
+                                .as_ref()
+                                .and_then(|last| last.lock().ok())
+                                .and_then(|mut last| last.replace(now));
+                            if let Some(gap) = previous.map(|at| now.duration_since(at)) {
+                                if gap > PRESENT_GAP_LOG_AFTER {
+                                    native_diag(
+                                        binding.app.as_ref(),
+                                        &format!(
+                                            "native-render: picture resumed after {} ms without a frame \
+                                             track={track_key} keyframe={was_keyframe}",
+                                            gap.as_millis()
+                                        ),
+                                    );
+                                }
+                            }
                             // First visible frame on this surface: tell the
                             // webview (it sees no frames on this route) so the
                             // poster clears and the tile reads as live.
@@ -932,40 +968,9 @@ async fn deliver_decoded_frame(
         return;
     }
 
-    // ── webcodecs-passthrough route ─────────────────────────────────────────
-    // While hidden, only keyframes are stored (never pushed) so a resume can
-    // paint; deltas are dropped without work.
-    if hidden && !frame.encoded.is_keyframe {
-        return;
-    }
-    if track_prefers_encoded(track_key) {
-        let source_codec = codec_label(frame.encoded.codec);
-        let colorspace = encoded_frame_colorspace(&frame.encoded);
-        store_pulled_video_frame(
-            track_key,
-            frame.timestamp_us,
-            frame.encoded.is_keyframe,
-            source_codec,
-            source_codec,
-            frame.encoded.width,
-            frame.encoded.height,
-            colorspace,
-            frame.encoded.data,
-            !hidden,
-        );
-        return;
-    }
-
-    // Neither a surface nor passthrough: the raw-I420 path is deleted (spec §2),
-    // so there is no consumer for this frame yet (a native-surface subscription
-    // whose `native_render_attach` has not landed, or a trailing frame after
-    // detach). Drop it — never store raw I420 over IPC.
-    if VIDEO_STORE_DEBUG_COUNT.load(Ordering::Relaxed) < 24 {
-        tracing::debug!(
-            track = track_key,
-            "dropping native-decode frame: no surface bound and not passthrough"
-        );
-    }
+    // No surface bound: nothing in this process shows the track (a subscription
+    // whose `native_render_attach` has not landed yet, or a trailing frame after
+    // detach). Drop it; the clip ring above has it already.
 }
 
 /// Result of decoding one frame to GPU-resident handles: the decoded handles, a
@@ -995,14 +1000,6 @@ fn decode_frame_to_handles(
         }
         Err(_) => HandleDecodeResult::Drop,
     }
-}
-
-/// Colorspace tag for an encoded frame (contract C1): the encoder signals what
-/// it actually produced, so this reads the frame's field directly rather than
-/// assuming the project default.
-#[cfg(feature = "vpx")]
-fn encoded_frame_colorspace(encoded: &paracord_codec::video::EncodedFrame) -> u8 {
-    encoded.colorspace.header_tag()
 }
 
 #[cfg(feature = "vpx")]
@@ -1048,6 +1045,7 @@ pub fn attach_native_surface(
     surface_id: super::native_render::SurfaceId,
     surface: super::native_render::SharedSurface,
     app: AppHandle,
+    on_screen: bool,
 ) {
     let key = make_track_key(stream_id, track_id);
     let binding = TrackSurfaceBinding {
@@ -1058,11 +1056,9 @@ pub fn attach_native_surface(
         app: Some(app),
         present_errors: Arc::new(AtomicU32::new(0)),
         first_frame_presented: Arc::new(AtomicBool::new(false)),
+        last_present: on_screen.then(|| Arc::new(Mutex::new(None))),
     };
     if let Ok(mut state) = video_dispatch_state().lock() {
-        // The native-surface route decodes natively; it must not also be marked
-        // as webview passthrough.
-        state.remote_track_prefer_encoded.remove(&key);
         state.remote_track_surfaces.insert(key, binding);
     }
 }
@@ -1074,6 +1070,7 @@ pub fn attach_native_surface(
     _surface_id: super::native_render::SurfaceId,
     _surface: super::native_render::SharedSurface,
     _app: AppHandle,
+    _on_screen: bool,
 ) {
 }
 
@@ -1153,60 +1150,35 @@ pub fn set_stream_video_viewport(stream_id: &str, track_id: &str, width: u32, he
 #[cfg(not(feature = "vpx"))]
 pub fn set_stream_video_viewport(_stream_id: &str, _track_id: &str, _width: u32, _height: u32) {}
 
-/// Toggle a track's visibility (N4 / contract C2). While hidden, the decode
-/// worker skips decode+push and stores keyframes only. On resume, push the
-/// latest stored frame immediately and report whether the caller must request a
-/// keyframe (the stored frame is a delta, missing, or stale).
+/// Pause or resume a track's decode (N4 / contract C2). The page pauses a
+/// track whose tile is off screen or whose window is hidden; a surface merely
+/// covered (a dialog, a stage move) keeps decoding. A paused decoder skipped
+/// frames, so on resume its worker drops deltas until a keyframe and this
+/// returns true: the caller asks the publisher for one.
 #[cfg(feature = "vpx")]
 pub fn set_stream_video_visibility(stream_id: &str, track_id: &str, visible: bool) -> bool {
     let key = make_track_key(stream_id, track_id);
-    // Native-surface route: hidden pauses decode via `remote_track_hidden`; the
-    // surface's own visibility is driven by the TS geometry reporter
-    // (`native_render_update_geometry` with the occlusion `visible` flag, spec
-    // §3.6). On resume there is no stored frame to replay, so request a fresh
-    // keyframe to refresh the surface promptly.
-    if track_surface_binding(&key).is_some() {
-        if let Ok(mut state) = video_dispatch_state().lock() {
+    let was_hidden = match video_dispatch_state().lock() {
+        Ok(mut state) => {
             if visible {
-                state.remote_track_hidden.remove(&key);
+                state.remote_track_hidden.remove(&key)
             } else {
-                state.remote_track_hidden.insert(key.clone());
+                !state.remote_track_hidden.insert(key.clone())
             }
         }
-        return visible;
-    }
-    let replay = {
-        let mut state = match video_dispatch_state().lock() {
-            Ok(state) => state,
-            Err(_) => return false,
-        };
-        if visible {
-            state.remote_track_hidden.remove(&key);
-            let stale = state
-                .remote_track_stored_at
-                .get(&key)
-                .is_none_or(|stored| stored.elapsed() > VISIBILITY_STALE_AFTER);
-            let frame = state.remote_track_latest_frames.get(&key).cloned();
-            let channel = state.remote_track_channels.get(&key).cloned();
-            let need_keyframe = match &frame {
-                Some(frame) => stale || !frame.is_keyframe,
-                None => true,
-            };
-            Some((frame, channel, need_keyframe))
-        } else {
-            state.remote_track_hidden.insert(key.clone());
-            None
-        }
+        Err(_) => return false,
     };
-    match replay {
-        Some((frame, channel, need_keyframe)) => {
-            if let (Some(frame), Some(channel)) = (frame, channel) {
-                push_frame_over_channel(&key, &channel, frame);
-            }
-            need_keyframe
-        }
-        None => false,
+    if !visible || !was_hidden {
+        return false;
     }
+    if let Some(worker) = decode_workers()
+        .lock()
+        .ok()
+        .and_then(|workers| workers.get(&key).map(|w| w.drop_until_keyframe.clone()))
+    {
+        worker.store(true, Ordering::SeqCst);
+    }
+    true
 }
 
 #[cfg(not(feature = "vpx"))]
@@ -1249,9 +1221,8 @@ pub fn clear_all_stream_video_state() {
     super::native_render::registry().clear();
 }
 
-/// Drop the process-wide video state of the named tracks only: their push
-/// channels, stored frames, surfaces, decoders and decode workers, SSRC
-/// bindings and partial frames.
+/// Drop the process-wide video state of the named tracks only: their
+/// surfaces, decoders and decode workers, SSRC bindings and partial frames.
 ///
 /// The call and the view session are separate sessions over one set of
 /// process-wide video tables, keyed by track. One session ending must not
@@ -1267,7 +1238,6 @@ pub fn clear_stream_video_state_for_tracks(tracks: &[(String, String)]) {
         if let Ok(mut state) = video_dispatch_state().lock() {
             state.remote_track_viewports.remove(&key);
             state.remote_track_hidden.remove(&key);
-            state.remote_track_stored_at.remove(&key);
             state.remote_track_stream_high_water.remove(&key);
         }
         let prefix = format!("{key}:");
@@ -1294,66 +1264,13 @@ fn reset_local_self_view_decode(session: &NativeMediaSession, is_screen: bool) {
     remove_remote_video_decoder(&stream_id.0, &track_id.0);
 }
 
-#[cfg(feature = "vpx")]
-pub fn register_stream_video_subscription(
-    stream_id: &str,
-    track_id: &str,
-    ssrc: u32,
-    prefer_encoded: bool,
-    channel: tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>,
-) -> Result<(), String> {
-    let key = make_track_key(stream_id, track_id);
-    // Register the push channel and read back the latest stored frame (if any)
-    // so a re-subscribe or a freshly-attached canvas paints immediately instead
-    // of waiting for the sender's next frame. The replay push happens outside the
-    // dispatch-state mutex, like every other channel send.
-    let replay = {
-        let mut state = video_dispatch_state()
-            .lock()
-            .map_err(|_| "video dispatch state lock poisoned".to_string())?;
-        state.remote_track_ssrcs.insert(key.clone(), ssrc);
-        if prefer_encoded {
-            state.remote_track_prefer_encoded.insert(key.clone());
-        } else {
-            state.remote_track_prefer_encoded.remove(&key);
-        }
-        state
-            .remote_track_channels
-            .insert(key.clone(), channel.clone());
-        state.remote_track_latest_frames.get(&key).cloned()
-    };
-    if prefer_encoded {
-        // Any native decoder previously created for this track is dead weight
-        // once the webview decodes the stream itself.
-        remove_remote_video_decoder(stream_id, track_id);
-    }
-    if let Some(frame) = replay {
-        push_frame_over_channel(&key, &channel, frame);
-    }
-    Ok(())
-}
-
-#[cfg(feature = "vpx")]
-fn track_prefers_encoded(track_key: &str) -> bool {
-    video_dispatch_state()
-        .lock()
-        .ok()
-        .is_some_and(|state| state.remote_track_prefer_encoded.contains(track_key))
-}
-
+/// Drop a track's surface binding and decoder (its subscription went away).
 #[cfg(feature = "vpx")]
 pub fn unregister_stream_video_subscription(stream_id: &str, track_id: &str) {
     let key = make_track_key(stream_id, track_id);
     if let Ok(mut state) = video_dispatch_state().lock() {
-        state.remote_track_latest_frames.remove(&key);
-        state.remote_track_sequences.remove(&key);
-        state.remote_track_ssrcs.remove(&key);
-        state.remote_track_prefer_encoded.remove(&key);
-        // Dropping our clone lets the channel close once the webview side is
-        // gone too; no more frames are pushed for this track.
-        state.remote_track_channels.remove(&key);
-        // If this track was on the native-surface route, drop its binding too so
-        // the surface is not left orphaned when the subscription goes away.
+        // Drop the binding so the surface is not left orphaned when the
+        // subscription goes away.
         if let Some(binding) = state.remote_track_surfaces.remove(&key) {
             super::native_render::registry().remove(binding.surface_id);
         }
@@ -1361,118 +1278,20 @@ pub fn unregister_stream_video_subscription(stream_id: &str, track_id: &str) {
     remove_remote_video_decoder(stream_id, track_id);
 }
 
-/// Read accessor for the latest stored frame of a remote track. Frames are now
-/// pushed to the webview over its channel as they arrive, so this is no longer
-/// on the delivery hot path — it is retained as a test/diagnostic accessor.
+/// One-shot snapshot of a track's self-view dispatch state, taken under a
+/// single lock (N12a): `(has_surface, hidden)`. A bound surface owns keyframe
+/// recovery (drop-until-keyframe + the `LocalEncoder` sink forcing our own
+/// encoder), so it is always primed: gating it on a stored frame forced a
+/// keyframe every other frame, permanently (the black-screen / keyframe
+/// ping-pong bug of 2026-07-07).
 #[cfg(feature = "vpx")]
-#[allow(dead_code)]
-pub fn pull_latest_remote_stream_video_frame(
-    stream_id: &str,
-    track_id: &str,
-    after_sequence: Option<u64>,
-) -> Option<PulledVideoFramePayload> {
-    let key = make_track_key(stream_id, track_id);
-    let state = video_dispatch_state().lock().ok()?;
-    let frame = state.remote_track_latest_frames.get(&key)?.clone();
-    if after_sequence.is_some_and(|last| frame.sequence <= last) {
-        return None;
-    }
-    Some(frame)
-}
-
-#[cfg(feature = "vpx")]
-fn format_label_to_tag(format: &str) -> u8 {
-    match format {
-        "i420" => 0,
-        "vp9" => 1,
-        "h264" => 2,
-        "av1" => 3,
-        "raw" => 4,
-        "bgra" => 5,
-        "rgba" => 6,
-        _ => 4,
-    }
-}
-
-#[cfg(feature = "vpx")]
-fn codec_label_to_tag(codec: &str) -> u8 {
-    match codec {
-        "vp9" => 1,
-        "h264" => 2,
-        "av1" => 3,
-        "raw" => 4,
-        _ => 0,
-    }
-}
-
-/// Pack a pulled frame for Tauri IPC as raw bytes (no base64).
-///
-/// Layout (all little-endian):
-///   sequence u64 | timestamp_us u64 | is_keyframe u8 | format_tag u8 |
-///   codec_tag u8 | colorspace u8 | width u32 | height u32 | payload
-///
-/// Byte 19 (the former reserved byte) carries the colorspace tag per contract
-/// C1: 0 = BT.601, 1 = BT.709. The webview parses it and picks the matching YUV
-/// matrix in its WebGL shader and CPU fallback converter.
-#[cfg(feature = "vpx")]
-pub fn encode_pulled_video_frame_binary(frame: PulledVideoFramePayload) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(PULLED_VIDEO_FRAME_HEADER_SIZE + frame.data.len());
-    buf.extend_from_slice(&frame.sequence.to_le_bytes());
-    buf.extend_from_slice(&frame.timestamp_us.to_le_bytes());
-    buf.push(u8::from(frame.is_keyframe));
-    buf.push(format_label_to_tag(&frame.format));
-    buf.push(codec_label_to_tag(&frame.codec));
-    buf.push(frame.colorspace);
-    buf.extend_from_slice(&frame.width.to_le_bytes());
-    buf.extend_from_slice(&frame.height.to_le_bytes());
-    buf.extend_from_slice(&frame.data);
-    buf
-}
-
-/// One-shot snapshot of a track's dispatch state, taken under a single lock
-/// (N12a): `(has_subscriber, prefers_encoded, sink_primed, hidden)`.
-///
-/// `sink_primed` answers "may the self-view send this track a delta frame?".
-/// On the passthrough route that means a frame is already stored (the webview
-/// decoder started from a keyframe). On the native-surface route the frame
-/// store is never populated — the decode worker owns keyframe recovery
-/// (drop-until-keyframe + the `LocalEncoder` sink forcing our own encoder) —
-/// so a bound surface is always primed. Gating the surface route on the store
-/// forced a keyframe every other frame, permanently (the black-screen /
-/// keyframe ping-pong bug of 2026-07-07).
-#[cfg(feature = "vpx")]
-fn video_dispatch_snapshot(track_key: &str) -> (bool, bool, bool, bool) {
+fn video_dispatch_snapshot(track_key: &str) -> (bool, bool) {
     match video_dispatch_state().lock() {
         Ok(state) => (
-            // A native-surface binding counts as a subscriber too (spec §2/§3.6):
-            // the self-view render loop must see it to feed the surface.
-            state.remote_track_ssrcs.contains_key(track_key)
-                || state.remote_track_surfaces.contains_key(track_key),
-            state.remote_track_prefer_encoded.contains(track_key),
-            state.remote_track_latest_frames.contains_key(track_key)
-                || state.remote_track_surfaces.contains_key(track_key),
+            state.remote_track_surfaces.contains_key(track_key),
             state.remote_track_hidden.contains(track_key),
         ),
-        Err(_) => (false, false, false, false),
-    }
-}
-
-/// Encode `payload` to the packed binary wire format and push it to the webview
-/// over its subscription channel. Callers must hold NO locks: `channel.send`
-/// dispatches to the webview event loop.
-#[cfg(feature = "vpx")]
-fn push_frame_over_channel(
-    track_key: &str,
-    channel: &tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>,
-    payload: PulledVideoFramePayload,
-) {
-    let bytes = encode_pulled_video_frame_binary(payload);
-    if let Err(err) = channel.send(tauri::ipc::InvokeResponseBody::Raw(bytes)) {
-        tracing::debug!(
-            track = track_key,
-            error = %err,
-            "failed to push video frame over subscription channel"
-        );
+        Err(_) => (false, false),
     }
 }
 
@@ -1682,90 +1501,6 @@ fn simulcast_enabled_for_codec(codec: VideoCodec) -> bool {
     !simulcast_opted_out() && codec_encode_is_hardware(codec)
 }
 
-/// Store the latest frame for a remote track into the pull store, assigning a
-/// monotonically increasing per-track sequence. When `push` is false the frame
-/// is stored but not sent over the subscription channel (used while a track is
-/// hidden — see N4 — so a resume can paint the last keyframe without streaming
-/// frames to a canvas nobody is watching).
-#[cfg(feature = "vpx")]
-#[allow(clippy::too_many_arguments)]
-fn store_pulled_video_frame(
-    track_key: &str,
-    timestamp_us: u64,
-    is_keyframe: bool,
-    codec: &str,
-    format: &str,
-    width: u32,
-    height: u32,
-    colorspace: u8,
-    data: Vec<u8>,
-    push: bool,
-) {
-    let debug_index = VIDEO_STORE_DEBUG_COUNT.fetch_add(1, Ordering::Relaxed);
-    if debug_index < 24 {
-        eprintln!(
-            "[native-video-debug] store frame track={} count={} codec={} format={} {}x{} keyframe={} bytes={}",
-            track_key,
-            debug_index + 1,
-            codec,
-            format,
-            width,
-            height,
-            is_keyframe,
-            data.len(),
-        );
-    }
-    // Store the latest frame under the dispatch lock, then clone out the
-    // subscription channel (if any). The push MUST happen after the lock is
-    // released — see `remote_track_channels`.
-    let outbound = {
-        let mut state = match video_dispatch_state().lock() {
-            Ok(state) => state,
-            Err(_) => return,
-        };
-
-        let next_sequence = state
-            .remote_track_sequences
-            .get(track_key)
-            .copied()
-            .unwrap_or(0)
-            .wrapping_add(1);
-        state
-            .remote_track_sequences
-            .insert(track_key.to_string(), next_sequence);
-        let payload = PulledVideoFramePayload {
-            sequence: next_sequence,
-            timestamp_us,
-            is_keyframe,
-            codec: codec.to_string(),
-            format: format.to_string(),
-            width,
-            height,
-            colorspace,
-            data,
-        };
-        state
-            .remote_track_latest_frames
-            .insert(track_key.to_string(), payload.clone());
-        state
-            .remote_track_stored_at
-            .insert(track_key.to_string(), Instant::now());
-        if push {
-            state
-                .remote_track_channels
-                .get(track_key)
-                .cloned()
-                .map(|channel| (channel, payload))
-        } else {
-            None
-        }
-    };
-
-    if let Some((channel, payload)) = outbound {
-        push_frame_over_channel(track_key, &channel, payload);
-    }
-}
-
 /// Record the relay-announced SSRC→track binding for a remote track and the
 /// largest resolution it advertised.
 ///
@@ -1862,11 +1597,6 @@ fn video_frame_identity_is_authorized(ssrc: u32, claimed_track_key: &str) -> boo
     };
     if let Some(bound) = state.remote_ssrc_track_bindings.get(&ssrc) {
         return bound == claimed_track_key;
-    }
-    if let Some(&subscribed_ssrc) = state.remote_track_ssrcs.get(claimed_track_key) {
-        if subscribed_ssrc == ssrc {
-            return true;
-        }
     }
     // This SSRC has no binding. Reject only if the claimed track does have
     // one — then this SSRC is provably not part of that track's ladder.
@@ -2746,8 +2476,7 @@ pub fn run_camera_frame(
     let encoded_count = encoded_frames.len();
     let mut local_seq = job.seq.clone();
     let self_view_track_key = make_track_key(&job.stream_id.0, &job.track_id.0);
-    let (sv_has_subscriber, sv_prefers_encoded, sv_has_stored, sv_hidden) =
-        video_dispatch_snapshot(&self_view_track_key);
+    let (sv_has_subscriber, _sv_hidden) = video_dispatch_snapshot(&self_view_track_key);
     let mut local_preview_frame: Option<LocalPreviewFrame> = None;
     for frame in encoded_frames.drain(..) {
         let frame_timestamp_us = job.capture_timestamp_us;
@@ -2846,25 +2575,7 @@ pub fn run_camera_frame(
         if !sv_has_subscriber {
             self_view_action = "no-subscriber";
         } else if let Some(preview) = local_preview_frame {
-            if !preview.is_keyframe && !sv_has_stored {
-                self_view_action = "await-keyframe";
-                job.video_force_keyframe.store(true, Ordering::SeqCst);
-            } else if sv_prefers_encoded {
-                self_view_action = "stored-encoded";
-                let label = codec_label(preview.codec);
-                store_pulled_video_frame(
-                    track_key,
-                    preview.timestamp_us,
-                    preview.is_keyframe,
-                    label,
-                    label,
-                    preview.width,
-                    preview.height,
-                    preview.colorspace.header_tag(),
-                    preview.data,
-                    !sv_hidden,
-                );
-            } else {
+            {
                 self_view_action = "native-decode";
                 let encoded = EncodedFrame {
                     data: preview.data,
@@ -3350,8 +3061,7 @@ pub fn run_screen_frame(
     // already stored, and whether the tile is hidden. Used to gate the preview
     // clone below and to route the self-view without re-locking per predicate.
     let self_view_track_key = make_track_key(&job.stream_id.0, &job.track_id.0);
-    let (sv_has_subscriber, sv_prefers_encoded, sv_has_stored, sv_hidden) =
-        video_dispatch_snapshot(&self_view_track_key);
+    let (sv_has_subscriber, _sv_hidden) = video_dispatch_snapshot(&self_view_track_key);
     let mut local_preview_frame: Option<LocalPreviewFrame> = None;
     for frame in encoded_frames.drain(..) {
         // L2: every simulcast layer of one captured frame shares that frame's
@@ -3457,36 +3167,12 @@ pub fn run_screen_frame(
         if !sv_has_subscriber {
             self_view_action = "no-subscriber";
         } else if let Some(preview) = local_preview_frame {
-            if !preview.is_keyframe && !sv_has_stored {
-                self_view_action = "await-keyframe";
-                // A decoder (webview or native) joining mid-stream can only start
-                // on an intra frame; force one instead of storing an undecodable
-                // delta.
-                job.screen_force_keyframe.store(true, Ordering::SeqCst);
-            } else if sv_prefers_encoded {
-                // Webview decodes the stream itself: hand it the encoded frame
-                // verbatim. Frames are tens of KB and the decoder needs every
-                // delta for prediction, so nothing is throttled.
-                self_view_action = "stored-encoded";
-                let label = codec_label(preview.codec);
-                store_pulled_video_frame(
-                    track_key,
-                    preview.timestamp_us,
-                    preview.is_keyframe,
-                    label,
-                    label,
-                    preview.width,
-                    preview.height,
-                    preview.colorspace.header_tag(),
-                    preview.data,
-                    !sv_hidden,
-                );
-            } else {
-                // Webview can't decode this codec: run the encoded frame through
+            {
+                // The self-view decodes the exact bitstream viewers receive in
                 // the same per-track decode worker remote subscribers use, off
                 // the encode thread and strictly ordered. A decoder that cannot
                 // make progress forces our own encoder to emit a keyframe
-                // directly (LocalEncoder sink) — no relay round-trip.
+                // directly (LocalEncoder sink), no relay round-trip.
                 self_view_action = "native-decode";
                 let encoded = EncodedFrame {
                     data: preview.data,
@@ -4613,6 +4299,46 @@ mod tests {
     /// session must clear its own tracks and leave the other's alone, or
     /// stopping a watch would blank the call's camera tiles (and vice versa).
     #[test]
+    fn a_decoder_is_fed_one_layer_and_switches_only_at_a_keyframe() {
+        let asked = Arc::new(AtomicBool::new(false));
+        let sink = KeyframeSink::LocalEncoder {
+            force_keyframe: asked.clone(),
+        };
+        let mut lock = LayerLock::default();
+        // Layer 1 starts with a keyframe and its deltas decode.
+        assert!(lock.admit(1, true, &sink));
+        assert!(lock.admit(1, false, &sink));
+        // Another session's layer 0 deltas interleave: dropped, and not asked
+        // for while layer 1 keeps coming.
+        assert!(!lock.admit(0, false, &sink));
+        assert!(!asked.load(Ordering::SeqCst));
+        // A layer 0 keyframe switches the decoder over; layer 1 is now the stranger.
+        assert!(lock.admit(0, true, &sink));
+        assert!(lock.admit(0, false, &sink));
+        assert!(!lock.admit(1, false, &sink));
+    }
+
+    #[test]
+    fn a_layer_that_took_over_without_a_keyframe_is_asked_for_one() {
+        let asked = Arc::new(AtomicBool::new(false));
+        let sink = KeyframeSink::LocalEncoder {
+            force_keyframe: asked.clone(),
+        };
+        let mut lock = LayerLock::default();
+        assert!(lock.admit(1, true, &sink));
+        // Layer 1 has gone quiet for longer than the grace period.
+        lock.last_own_frame = Some(Instant::now() - FOREIGN_LAYER_KEYFRAME_AFTER * 2);
+        assert!(!lock.admit(2, false, &sink));
+        assert!(
+            asked.swap(false, Ordering::SeqCst),
+            "asked for layer 2's keyframe"
+        );
+        // Not again right away.
+        assert!(!lock.admit(2, false, &sink));
+        assert!(!asked.load(Ordering::SeqCst));
+    }
+
+    #[test]
     fn scoped_teardown_leaves_the_other_sessions_tracks_alone() {
         let layer = |ssrc: u32| paracord_transport::stream::PublishedLayer {
             layer_id: 0,
@@ -4992,6 +4718,7 @@ mod tests {
             _app: &tauri::AppHandle,
             _id: super::super::native_render::SurfaceId,
             _fit: super::super::native_render::SurfaceFit,
+            _shown: super::super::native_render::ShownNotifier,
         ) -> Result<Self, String> {
             unreachable!("mock is constructed directly in tests")
         }
@@ -5041,7 +4768,6 @@ mod tests {
         // Attach without a full Tauri app: build the binding through the public
         // dispatch state directly (attach_native_surface needs an AppHandle).
         if let Ok(mut state) = video_dispatch_state().lock() {
-            state.remote_track_prefer_encoded.remove(&key);
             state.remote_track_surfaces.insert(
                 key.clone(),
                 TrackSurfaceBinding {
@@ -5052,6 +4778,7 @@ mod tests {
                     app: None,
                     present_errors: Arc::new(AtomicU32::new(0)),
                     first_frame_presented: Arc::new(AtomicBool::new(false)),
+                    last_present: None,
                 },
             );
         }
@@ -5109,7 +4836,6 @@ mod tests {
         super::super::native_render::registry().insert(id, shared.clone());
         if let Ok(mut state) = video_dispatch_state().lock() {
             state.remote_track_hidden.remove(&key);
-            state.remote_track_prefer_encoded.remove(&key);
             state.remote_track_surfaces.insert(
                 key.clone(),
                 TrackSurfaceBinding {
@@ -5120,6 +4846,7 @@ mod tests {
                     app: None,
                     present_errors: Arc::new(AtomicU32::new(0)),
                     first_frame_presented: Arc::new(AtomicBool::new(false)),
+                    last_present: None,
                 },
             );
         }
@@ -5400,6 +5127,7 @@ mod tests {
                     app: None,
                     present_errors: Arc::new(AtomicU32::new(0)),
                     first_frame_presented: Arc::new(AtomicBool::new(false)),
+                    last_present: None,
                 },
             );
         }

@@ -35,13 +35,19 @@ pub struct VideoCodecCapability {
 #[serde(rename_all = "camelCase")]
 pub struct MediaStreamCapabilities {
     pub video: Vec<VideoCodecCapability>,
+    /// This window can draw remote video: its native host installed (see
+    /// `native_render::renderer_status`). Remote video in the desktop app has no
+    /// other route, so when this is false every codec's `decode` is false too and
+    /// [`Self::native_renderer_error`] says why.
     pub native_desktop_renderer: bool,
-    /// True when the platform surface composites BELOW the webview (Linux GTK
-    /// underlay): DOM chrome renders over the video, so the tile must punch a
-    /// transparent hole and skip DOM occlusion sampling. False for overlay
-    /// backends (macOS AVSampleBufferDisplayLayer floats above the webview).
+    /// The surface composites BELOW the webview, which is true of every backend
+    /// (Linux, macOS, Windows): DOM chrome renders over the video, and a tile
+    /// punches a transparent hole where its video shows.
     #[serde(default)]
     pub native_render_underlay: bool,
+    /// Why this window cannot draw video, when it cannot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_renderer_error: Option<String>,
     pub browser_interop_protocol_v1: bool,
     pub real_media_e2ee: bool,
     pub simulcast_v1: bool,
@@ -77,10 +83,9 @@ pub fn video_codec_from_label(label: &str) -> Option<VideoCodec> {
 /// This probes [`paracord_codec::video::decoder::create_decoder`] — the single
 /// source of truth for which codecs have a working native decoder backend —
 /// rather than inferring decode support from an *encoder* probe (a
-/// MediaFoundation H.264/AV1 encoder says nothing about decode). Codecs without
-/// a native decoder are still delivered to the JS renderer as an encoded
-/// passthrough; that renderer-side (WebCodecs) decode support is advertised by
-/// the frontend via the session's `advertised_capabilities`, not inferred here.
+/// MediaFoundation H.264/AV1 encoder says nothing about decode). The desktop
+/// app shows remote video only through a native decoder and its native
+/// surface, so this is all of "can this client display the codec".
 fn native_decode_supported(codec: VideoCodec) -> bool {
     let native_codec = match codec {
         VideoCodec::Vp9 => paracord_codec::video::VideoCodec::Vp9,
@@ -205,65 +210,67 @@ pub fn detect_media_stream_capabilities() -> MediaStreamCapabilities {
         });
     }
 
+    gate_on_renderer(video, super::native_render::renderer_status())
+}
+
+/// `decode` is advertised to the relay and drives codec negotiation, so it
+/// means "this client can display the codec", not merely "Rust can decode it".
+/// With no native renderer nothing can be displayed: every `decode` is false
+/// and the reason travels with the capabilities.
+fn gate_on_renderer(
+    mut video: Vec<VideoCodecCapability>,
+    renderer: Result<&'static str, String>,
+) -> MediaStreamCapabilities {
+    let error = renderer.err();
+    if error.is_some() {
+        for capability in &mut video {
+            capability.decode = false;
+            capability.decode_hardware = false;
+        }
+    }
     MediaStreamCapabilities {
         video,
-        native_desktop_renderer: cfg!(any(target_os = "linux", target_os = "macos")),
-        native_render_underlay: cfg!(target_os = "linux"),
+        native_desktop_renderer: error.is_none(),
+        native_render_underlay: error.is_none(),
+        native_renderer_error: error,
         browser_interop_protocol_v1: true,
         real_media_e2ee: true,
         simulcast_v1: true,
     }
 }
 
-/// Encode one real keyframe with the local encoder for `codec`, so the
-/// webview can verify that its WebCodecs decoder actually decodes the codec
-/// rather than merely claiming to (`isConfigSupported` has been observed to
-/// approve configs the decoder then fails on with the first real frame).
-/// Returns `None` when no local encoder exists for the codec — the claim is
-/// then unverifiable and stands on its own.
-pub fn generate_decode_probe_frame(codec: &str) -> Option<Vec<u8>> {
-    match codec.trim().to_ascii_lowercase().as_str() {
-        "vp9" => generate_vp9_probe_frame(),
-        #[cfg(target_os = "macos")]
-        "h264" => paracord_codec::video::encoder::videotoolbox::generate_h264_probe_frame(),
-        #[cfg(all(unix, not(target_os = "macos")))]
-        "h264" => paracord_codec::video::lavc::generate_probe_frame(
-            paracord_codec::video::VideoCodec::H264,
-        ),
-        #[cfg(all(unix, not(target_os = "macos")))]
-        "av1" => paracord_codec::video::lavc::generate_probe_frame(
-            paracord_codec::video::VideoCodec::Av1,
-        ),
-        _ => None,
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn vp9(decode: bool) -> VideoCodecCapability {
+        VideoCodecCapability {
+            codec: VideoCodec::Vp9,
+            backend: VideoBackendKind::LibVpx,
+            encode: true,
+            decode,
+            encode_hardware: false,
+            decode_hardware: decode,
+        }
     }
-}
 
-#[cfg(feature = "vpx")]
-fn generate_vp9_probe_frame() -> Option<Vec<u8>> {
-    use paracord_codec::video::{
-        encoder::create_encoder, EncoderConfig, PixelFormat, VideoContentHint,
-    };
+    #[test]
+    fn a_window_without_a_renderer_displays_nothing_and_says_why() {
+        let caps = gate_on_renderer(vec![vp9(true)], Err("no GL".to_string()));
+        assert!(!caps.native_desktop_renderer);
+        assert!(!caps.native_render_underlay);
+        assert_eq!(caps.native_renderer_error.as_deref(), Some("no GL"));
+        assert!(!caps.video[0].decode && !caps.video[0].decode_hardware);
+        assert!(caps.video[0].encode, "it can still stream");
+    }
 
-    let config = EncoderConfig {
-        width: 320,
-        height: 180,
-        fps: 30,
-        bitrate_kbps: 500,
-        pixel_format: PixelFormat::I420,
-        keyframe_interval: 0,
-        content_hint: VideoContentHint::Default,
-    };
-    let frame = vec![128u8; PixelFormat::I420.frame_size(320, 180)];
-    let mut encoder = create_encoder(paracord_codec::video::VideoCodec::Vp9, config).ok()?;
-    encoder
-        .encode(0, &frame, true)
-        .ok()?
-        .into_iter()
-        .find(|frame| frame.is_keyframe)
-        .map(|frame| frame.data)
-}
-
-#[cfg(not(feature = "vpx"))]
-fn generate_vp9_probe_frame() -> Option<Vec<u8>> {
-    None
+    #[test]
+    fn a_window_with_a_renderer_keeps_its_native_decoders() {
+        let caps = gate_on_renderer(vec![vp9(true)], Ok("test"));
+        assert!(caps.native_desktop_renderer && caps.native_render_underlay);
+        assert!(caps.native_renderer_error.is_none());
+        assert!(caps.video[0].decode);
+        let json = serde_json::to_value(&caps).unwrap();
+        assert!(json.get("nativeRendererError").is_none());
+    }
 }

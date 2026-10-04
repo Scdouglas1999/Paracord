@@ -1087,84 +1087,6 @@ pub struct SystemAudioGrant {
     pub granted: bool,
 }
 
-#[tauri::command]
-pub async fn media_register_stream_video_subscription(
-    stream_id: String,
-    track_id: String,
-    ssrc: u32,
-    prefer_encoded: Option<bool>,
-    channel: tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>,
-    app: tauri::AppHandle,
-    owner_id: String,
-    state: State<'_, MediaState>,
-) -> Result<(), String> {
-    let app = super::CallEventSink::new(app, owner_id.clone());
-
-    // Either slot: the call and the view session both receive (see MediaState).
-    let slot = state.slot_for(&owner_id)?;
-    let _transition = slot.owners.transition.lock().await;
-    slot.owners.check(&owner_id)?;
-
-    super::video_pipeline::native_diag(
-        Some(&app),
-        &format!(
-            "register video push subscription: track={stream_id}:{track_id} ssrc={ssrc} \
-             prefer_encoded={prefer_encoded:?} channel={}",
-            channel.id()
-        ),
-    );
-    #[cfg(feature = "vpx")]
-    super::video_pipeline::register_stream_video_subscription(
-        &stream_id,
-        &track_id,
-        ssrc,
-        prefer_encoded.unwrap_or(false),
-        channel,
-    )?;
-
-    #[cfg(not(feature = "vpx"))]
-    let _ = (stream_id, track_id, ssrc, prefer_encoded, channel);
-
-    Ok(())
-}
-
-/// Encode one real keyframe with the local encoder for `codec` (binary IPC
-/// response) so the webview can functionally verify its WebCodecs decoder.
-/// Empty body = no local encoder for that codec, i.e. the claim cannot be
-/// verified here.
-#[tauri::command]
-pub async fn media_generate_decode_probe(codec: String) -> Result<tauri::ipc::Response, String> {
-    // ffmpeg-backed probes spawn a subprocess (~100-300ms); keep them off the
-    // async worker threads.
-    let bytes = tokio::task::spawn_blocking(move || {
-        super::capabilities::generate_decode_probe_frame(&codec)
-    })
-    .await
-    .map_err(|err| format!("decode probe task failed: {err}"))?;
-    Ok(tauri::ipc::Response::new(bytes.unwrap_or_default()))
-}
-
-#[tauri::command]
-pub async fn media_unregister_stream_video_subscription(
-    stream_id: String,
-    track_id: String,
-    owner_id: String,
-    state: State<'_, MediaState>,
-) -> Result<(), String> {
-    // Either slot: the call and the view session both receive (see MediaState).
-    let slot = state.slot_for(&owner_id)?;
-    let _transition = slot.owners.transition.lock().await;
-    slot.owners.check(&owner_id)?;
-
-    #[cfg(feature = "vpx")]
-    super::video_pipeline::unregister_stream_video_subscription(&stream_id, &track_id);
-
-    #[cfg(not(feature = "vpx"))]
-    let _ = (stream_id, track_id);
-
-    Ok(())
-}
-
 /// Route a keyframe request for `stream_id`:`track_id` (contract C2 / N3). If the
 /// track is one of our own published tracks, flip the matching encoder's
 /// force-keyframe flag directly; otherwise ask the publisher via the relay.
@@ -1231,9 +1153,9 @@ pub async fn media_set_stream_visibility(
     let _transition = slot.owners.transition.lock().await;
     slot.owners.check(&owner_id)?;
 
-    // Toggle native visibility first (no session lock needed — it touches the
-    // process-wide dispatch state), then request a keyframe if the resume found
-    // the stored frame stale/delta/missing.
+    // Toggle the pause first (no session lock needed — it touches the
+    // process-wide dispatch state), then ask for the keyframe a resumed
+    // decoder needs: frames were skipped while it was paused.
     let need_keyframe =
         super::video_pipeline::set_stream_video_visibility(&stream_id, &track_id, visible);
     if need_keyframe {
