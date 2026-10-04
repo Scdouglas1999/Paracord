@@ -1,6 +1,5 @@
 import type { ReactNode } from 'react';
 
-import { Kicker } from '../../../glass/primitives';
 import { cn } from '../../../../lib/utils';
 
 export interface WidgetCardProps {
@@ -8,26 +7,25 @@ export interface WidgetCardProps {
   /** A small link or control at the right of the title. */
   action?: ReactNode;
   className?: string;
-  /** Leave the solid card off: for content that is already solid (pictures). */
+  /** Leave the surface off: for content that is already a card (an event, pictures). */
   bare?: boolean;
   children: ReactNode;
 }
 
 /**
- * The shell every widget on a server's Overview shares: a kicker over one solid
- * tonal card (docs/glass-spec.md §1.1, §2.3), no outline. A widget that has
- * nothing to show does not render this at all, so the page never shows a hole.
+ * The shell every widget on a server's Overview shares (docs/index-spec.md §8.1): a
+ * sentence-case label (12.5/600) over one quiet card (the action card's surface,
+ * radius 18). A widget that has nothing to show does not render this at all, so the
+ * page never shows a hole.
  */
 export function WidgetCard({ title, action, className, bare = false, children }: WidgetCardProps) {
   return (
-    <section aria-label={title} className={cn('glass-sec', className)}>
-      <div className="glass-sec__head">
-        <Kicker as="h3" className="glass-sec__kicker">
-          {title}
-        </Kicker>
-        {action ? <span className="glass-sec__aside">{action}</span> : null}
+    <section aria-label={title} className={cn('ix-widget', className)} data-bare={bare || undefined}>
+      <div className="ix-widget__head">
+        <h3 className="ix-widget__label">{title}</h3>
+        {action ? <span className="ix-widget__aside">{action}</span> : null}
       </div>
-      {bare ? children : <div className="glass-card">{children}</div>}
+      {bare ? children : <div className="ix-widget__card">{children}</div>}
     </section>
   );
 }
@@ -35,16 +33,16 @@ export function WidgetCard({ title, action, className, bare = false, children }:
 /** The quiet text button at the top right of a widget ("Calendar", "All media"). */
 export function WidgetLink({ onClick, children }: { onClick: () => void; children: ReactNode }) {
   return (
-    <button type="button" onClick={onClick} className="glass-linkbtn glass-focusable">
+    <button type="button" onClick={onClick} className="ix-link">
       {children}
     </button>
   );
 }
 
-/** A widget whose data could not be loaded says so, in its own card. */
+/** A widget whose data could not be loaded says so, in its own card, in the one danger ink. */
 export function WidgetError({ children }: { children: ReactNode }) {
   return (
-    <p role="alert" className="glass-note" data-tone="danger">
+    <p role="alert" className="ix-note" data-tone="danger">
       {children}
     </p>
   );

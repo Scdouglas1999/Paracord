@@ -1,9 +1,8 @@
-import { MessageCircle } from 'lucide-react';
-
-import { IconButton } from '../../../ui';
 import type { FeedUser } from '../../../../api/serverFeed';
 import { displayName } from '../../../../lib/displayName';
 import type { Member } from '../../../../types';
+import { IxGlyph } from '../../../ix/glyphs';
+import { Control } from '../../../ix/primitives';
 import { shortAgo } from '../homeCaptions';
 import { FeedAvatar } from '../feedParts';
 import { WidgetCard } from './WidgetCard';
@@ -38,7 +37,7 @@ export function NewHereWidget({ members, viewerId, nowMs, onSayHi }: NewHereWidg
   const rest = fresh.length - shown.length;
   return (
     <WidgetCard title="New here">
-      <ul className="glass-wlist">
+      <ul className="ix-wlist">
         {shown.map((member) => {
           const user: FeedUser = {
             id: member.user.id,
@@ -48,22 +47,22 @@ export function NewHereWidget({ members, viewerId, nowMs, onSayHi }: NewHereWidg
           };
           const name = displayName(member.user, member.nick);
           return (
-            <li key={member.user.id} className="glass-wrow">
+            <li key={member.user.id} className="ix-row">
               <FeedAvatar user={user} size={32} />
-              <span className="glass-wrow__body">
-                <span className="glass-wrow__name">{name}</span>
+              <span className="ix-row__body">
+                <span className="ix-row__name">{name}</span>
               </span>
-              <span className="glass-instrument glass-wrow__aside">{shortAgo(member.joined_at, nowMs)}</span>
+              <span className="ix-row__aside">{shortAgo(member.joined_at, nowMs)}</span>
               {member.user.id !== viewerId && (
-                <IconButton label={`Say hi to ${name}`} tone="raised" size="sm" onClick={() => onSayHi(user)}>
-                  <MessageCircle size={15} aria-hidden />
-                </IconButton>
+                <Control label={`Say hi to ${name}`} className="ix-row__ctl" onClick={() => onSayHi(user)}>
+                  <IxGlyph name="hello" size={16} />
+                </Control>
               )}
             </li>
           );
         })}
       </ul>
-      {rest > 0 && <p className="glass-card__text">and {rest} more this fortnight</p>}
+      {rest > 0 && <p className="ix-wnote">and {rest} more this fortnight</p>}
     </WidgetCard>
   );
 }

@@ -4,8 +4,7 @@ import { Link } from 'react-router';
 import { useDailyWordSettings } from '../../../../hooks/useDailyWord';
 import { useDailyWordStore } from '../../../../stores/dailyWordStore';
 import { dailyWordHref, boardName, resultPhrase, solvedCaption, timeUntil } from '../../../dailyWord/model';
-import { FaceStack } from '../../../glass/places/Lead';
-import { Chip } from '../../../ui';
+import { AvatarStack } from '../../../ix/identity';
 import { WidgetCard, WidgetError } from './WidgetCard';
 
 /**
@@ -57,34 +56,36 @@ export function DailyWordWidget({ guildId, nowMs }: { guildId: string; nowMs: nu
       title="Daily word"
       action={
         today?.finished ? (
-          <Link to={href} className="glass-linkbtn glass-focusable">
+          <Link to={href} className="ix-link">
             Results
           </Link>
         ) : undefined
       }
     >
       <div className="min-w-0">
-        <p className="glass-wrow__name">
+        <p className="ix-row__name">
           Today's word
-          <span className="glass-secondary"> · {solvedCaption(board?.solved ?? 0)}</span>
+          <span className="ix-wsecondary"> · {solvedCaption(board?.solved ?? 0)}</span>
         </p>
-        {nextIn && <p className="glass-secondary">Next word in {nextIn}</p>}
+        {nextIn && <p className="ix-wsecondary">Next word in {nextIn}</p>}
       </div>
-      <div className="flex min-w-0 items-center justify-between gap-3">
+      <div className="ix-wfoot">
         {today?.finished ? (
-          <Chip size="sm" tone={today.solved ? 'accent' : 'neutral'} className="w-fit">{status}</Chip>
+          <span className="ix-pill" data-tone={today.solved ? 'accent' : undefined}>
+            {status}
+          </span>
         ) : (
           <Link
             to={href}
             aria-label={started ? `Keep playing, ${today?.guesses.length} of ${today?.max_guesses} guesses used` : undefined}
-            className="glass-btn glass-btn--glass glass-focusable"
+            className="ix-chip"
           >
             {started ? 'Keep playing' : 'Play'}
           </Link>
         )}
         {solvers.length > 0 && (
           <span role="img" aria-label={`Solved today's word: ${solvers.slice(0, 5).map((solver) => solver.name).join(', ')}`}>
-            <FaceStack faces={solvers.slice(0, 5)} size={26} overlap={7} />
+            <AvatarStack people={solvers.slice(0, 5)} size={26} overlap={7} ring="var(--ix-main)" />
           </span>
         )}
       </div>

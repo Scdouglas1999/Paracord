@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useId, useState, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router';
 import type { SportsBoard, SportsDefaultView, SportsGame } from '../../api/sports';
 import { asDefaultView, asLayout, sportsApi } from '../../api/sports';
@@ -20,7 +20,30 @@ import { GameRow } from './GameRow';
 import { readScoreAlertsOn, SCORE_ALERTS_EVENT, writeScoreAlertsOn } from './scoreAlerts';
 import { StandingsView } from './StandingsView';
 
-export function SportsBoardView({ guildId, serverName }: { guildId: string; serverName: string }) {
+/**
+ * Inside a large-title page (`GuildSportsPage`, docs/index-spec.md §8.3) the page draws
+ * the chrome (title, toolbar, column), and the board draws only itself.
+ */
+const EmbeddedContext = createContext(false);
+
+export function SportsBoardView({
+  guildId,
+  serverName,
+  embedded = false,
+}: {
+  guildId: string;
+  serverName: string;
+  /** The page around it has the large title; leave out this view's own page chrome. */
+  embedded?: boolean;
+}) {
+  return (
+    <EmbeddedContext.Provider value={embedded}>
+      <SportsBoard guildId={guildId} serverName={serverName} />
+    </EmbeddedContext.Provider>
+  );
+}
+
+function SportsBoard({ guildId, serverName }: { guildId: string; serverName: string }) {
   const { settings, status, error, board, boardError, flashes } = useSportsSettings(guildId);
   const enabled = settings?.enabled === true;
   useSportsPolling(guildId, enabled);
@@ -442,6 +465,16 @@ function StatusNote({ message, onRetry }: { message: string; onRetry: () => void
 }
 
 function Page({ serverName, title = 'Sports', children }: { serverName: string; title?: string; children: ReactNode }) {
+  const embedded = useContext(EmbeddedContext);
+  if (embedded) {
+    // The page's large title says "Sports"; the day ("Yesterday") or "Standings" is what this view adds.
+    return (
+      <section aria-label="Sports" className="ix-addon flex min-w-0 flex-col gap-5">
+        {title !== 'Sports' && <h2 className="ix-addon__heading">{title.replace(/^Sports · /, '')}</h2>}
+        {children}
+      </section>
+    );
+  }
   return (
     <div className="h-full min-w-0 overflow-x-hidden overflow-y-auto bg-bg-base p-[var(--gutter)]">
       <Plate as="section" aria-label="Sports" bare className="flex min-w-0 flex-col gap-5 px-4 py-5 sm:px-6">

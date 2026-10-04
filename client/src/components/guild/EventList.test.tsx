@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { EventList, defaultEventWindow } from './EventList';
 import { apiClient } from '../../api/client';
 import { toast } from '../../stores/toastStore';
@@ -170,7 +170,7 @@ describe('EventList', () => {
     expect(screen.queryByRole('button', { name: /^start$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^delete$/i })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /mark interested/i }));
+    fireEvent.click(screen.getByRole('button', { name: /i.m in/i }));
     await waitFor(() => {
       expect(putMock).toHaveBeenCalledWith('/guilds/guild-1/events/event-1/rsvp');
     });
@@ -229,7 +229,7 @@ describe('EventList', () => {
     );
     expect(screen.queryByText('No events yet')).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /retry/i }));
+    fireEvent.click(screen.getByRole('button', { name: /try again/i }));
 
     expect(await screen.findByText('Release Planning')).toBeInTheDocument();
   });
@@ -247,7 +247,7 @@ describe('EventList', () => {
 
     expect(await screen.findByText('Release Planning')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /mark interested/i }));
+    fireEvent.click(screen.getByRole('button', { name: /i.m in/i }));
     await waitFor(() => {
       expect(toast.error).toHaveBeenCalledWith('Failed to update RSVP: RSVPs are closed.');
     });
@@ -256,6 +256,71 @@ describe('EventList', () => {
     await waitFor(() => {
       expect(toast.error).toHaveBeenCalledWith('Failed to update event: Event already started.');
     });
+  });
+});
+
+describe('EventList on the Events page', () => {
+  beforeEach(() => {
+    mockState.canManageEvents = true;
+    vi.clearAllMocks();
+    getMock.mockResolvedValue({ data: [scheduledEvent, { ...scheduledEvent, id: 'event-2', name: 'Retro', status: 2, user_rsvp: true, scheduled_start: '2026-05-30T16:00:00.000Z' }, { ...scheduledEvent, id: 'event-3', name: 'Old news', status: 3 }] });
+    putMock.mockResolvedValue({ data: null });
+    deleteMock.mockResolvedValue({ data: null });
+  });
+
+  it('leaves its heading to the page, reports how many are coming, and keeps the actions', async () => {
+    const onUpcomingCount = vi.fn();
+    render(<EventList guildId="guild-1" variant="page" onUpcomingCount={onUpcomingCount} />);
+    expect(await screen.findByText('Release Planning')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Events' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /new event/i })).toHaveClass('ix-cream');
+    expect(screen.getByRole('button', { name: /^export$/i })).toBeInTheDocument();
+    // Scheduled and active are still to come; the completed one is not.
+    await waitFor(() => expect(onUpcomingCount).toHaveBeenLastCalledWith(2));
+  });
+
+  it('brings its own heading in Server settings, where no page has a title', async () => {
+    render(<EventList guildId="guild-1" />);
+    expect(await screen.findByRole('heading', { level: 2, name: 'Events' })).toBeInTheDocument();
+    expect(screen.getByText(/events are/)).toHaveTextContent('2');
+  });
+
+  it('is I’m in (cream) until you are, then a pressed You’re in; a past event has neither', async () => {
+    render(<EventList guildId="guild-1" variant="page" />);
+    const planning = await screen.findByRole('article', { name: 'Event: Release Planning' });
+    expect(within(planning).getByRole('button', { name: /i.m in/i })).toHaveClass('ix-cream');
+    const retro = screen.getByRole('article', { name: 'Event: Retro' });
+    const mine = within(retro).getByRole('button', { name: /you.re in/i });
+    expect(mine).toHaveAttribute('aria-pressed', 'true');
+    expect(mine).not.toHaveClass('ix-cream');
+    const old = screen.getByRole('article', { name: 'Event: Old news' });
+    expect(within(old).queryByRole('button', { name: /i.m in|you.re in/i })).toBeNull();
+    fireEvent.click(within(retro).getByRole('button', { name: /you.re in/i }));
+    await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('/guilds/guild-1/events/event-2/rsvp'));
+  });
+
+  it('says the state in words, not only by color, and marks the live and the over', async () => {
+    render(<EventList guildId="guild-1" variant="page" />);
+    const retro = await screen.findByRole('article', { name: 'Event: Retro' });
+    expect(retro).toHaveAttribute('data-tone', 'live');
+    expect(retro).toHaveTextContent('Active');
+    expect(retro).toHaveTextContent('Happening now');
+    const old = screen.getByRole('article', { name: 'Event: Old news' });
+    expect(old).toHaveAttribute('data-tone', 'over');
+    expect(old).toHaveTextContent('Completed');
+  });
+
+  it('offers a manager the first event on an empty calendar, and a member only the words', async () => {
+    getMock.mockResolvedValue({ data: [] });
+    const { unmount } = render(<EventList guildId="guild-1" variant="page" />);
+    expect(await screen.findByText('No events on the calendar')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create event' })).toHaveClass('ix-cream');
+    unmount();
+    mockState.canManageEvents = false;
+    render(<EventList guildId="guild-1" variant="page" />);
+    expect(await screen.findByText('No events on the calendar')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Create event' })).toBeNull();
+    expect(screen.getByText(/organizers will post events here/)).toBeInTheDocument();
   });
 });
 

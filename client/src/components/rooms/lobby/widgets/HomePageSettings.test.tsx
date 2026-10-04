@@ -54,11 +54,13 @@ describe('Home page settings', () => {
     ]);
   });
 
-  it('previews one column, live above the widgets and posts below them, at every width', () => {
+  it('previews two columns under the title, with the latest posts below the widgets', () => {
     render(<HomePageSettings widgets={DEFAULT_HOME_WIDGETS} onChange={() => {}} />);
     const preview = screen.getByRole('figure', { name: 'Preview' });
-    expect(preview).toHaveTextContent('one column');
-    // No side column: the widgets stack in the same flow as everything else.
-    expect(preview.querySelector('.grid')).toBeNull();
+    expect(preview).toHaveTextContent('two columns under the title');
+    // The widgets share one two-column grid; there is no "live" strip above it.
+    const grid = within(preview).getByTestId('widget-preview-grid');
+    expect(grid).toHaveClass('grid-cols-2');
+    expect(preview).not.toHaveTextContent(/what is live/i);
   });
 });

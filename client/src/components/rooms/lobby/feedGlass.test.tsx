@@ -31,7 +31,7 @@ describe('a feed post header', () => {
     expect(where).toHaveTextContent('Clips');
     expect(where).toHaveTextContent('6m');
     expect(where.textContent).not.toContain('#');
-    expect(screen.getByText('Poll')).toHaveClass('glass-post__tag');
+    expect(screen.getByText('Poll')).toHaveClass('ix-tag');
     await userEvent.click(where);
     expect(onOpen).toHaveBeenCalled();
   });
@@ -48,15 +48,15 @@ describe('pictures and files in a post', () => {
 
   it('lays out several pictures in two columns and counts the rest', () => {
     const { container } = render(<PhotoGrid images={['1', '2', '3', '4', '5', '6'].map(image)} />);
-    expect(container.querySelector('.glass-photogrid')).not.toBeNull();
-    expect(container.querySelectorAll('.glass-photo')).toHaveLength(4);
-    expect(container.querySelector('.glass-photo__more')).toHaveTextContent('+2');
+    expect(container.querySelector('.ix-photogrid')).not.toBeNull();
+    expect(container.querySelectorAll('.ix-photo')).toHaveLength(4);
+    expect(container.querySelector('.ix-photo__more')).toHaveTextContent('+2');
   });
 
   it('gives a single picture the full width', () => {
     const { container } = render(<PhotoGrid images={[image('1')]} />);
-    expect(container.querySelector('.glass-photogrid')).toBeNull();
-    expect(container.querySelector('.glass-photo')).not.toBeNull();
+    expect(container.querySelector('.ix-photogrid')).toBeNull();
+    expect(container.querySelector('.ix-photo')).not.toBeNull();
   });
 
   it('draws a file as a named solid chip that opens the message', async () => {
@@ -88,12 +88,12 @@ describe('a forum post in the feed', () => {
   it('is a solid card: who asked, the title, the start of the question and how it is going', () => {
     render(<FeedItemForumPost item={item} when="41m" nowMs={NOW} onOpen={vi.fn()} />);
     const card = screen.getByRole('article', { name: 'Forum post: Best loadout for Hazard 5?' });
-    expect(card).toHaveClass('glass-post');
+    expect(card).toHaveClass('ix-post');
     expect(card).toHaveTextContent('Brendan asked');
     expect(card).toHaveTextContent('Strategy');
     expect(card).toHaveTextContent('Three of us on tonight, no revive perk.');
     expect(card).toHaveTextContent('7 replies · last from Vincent');
-    expect(within(card).getByText('Forum')).toHaveClass('glass-post__tag');
+    expect(within(card).getByText('Forum')).toHaveClass('ix-tag');
   });
 
   it('opens the post from its title and from where it was posted', async () => {
@@ -120,8 +120,8 @@ describe('who joined, in the feed', () => {
     const onSayHi = vi.fn();
     const { container } = render(<FeedItemMembersJoined item={item} when="4h" onSayHi={onSayHi} viewerId="1" />);
     const line = screen.getByRole('article', { name: 'Mara and Dana joined' });
-    expect(line).toHaveClass('glass-happened');
-    expect(container.querySelector('.glass-post')).toBeNull();
+    expect(line).toHaveClass('ix-happened');
+    expect(container.querySelector('.ix-post')).toBeNull();
     await userEvent.click(within(line).getByRole('button', { name: 'Say hi to Mara' }));
     expect(onSayHi).toHaveBeenCalledWith(item.users[0]);
   });

@@ -1,1 +1,1823 @@
-/* IX-10: server pages and the Server color field (§8.1, §8.3). Created empty by IX-1; the owner fills it. */
+/* =============================================================================
+   Index pages (docs/index-spec.md §6.1, §6.8, §8.1, §8.3). Owned by IX-10.
+
+   What the large-title pages in main are made of, besides the page layout itself
+   (`LargeTitlePage`, in ix-shell.css):
+
+     1. page scope          the server's hue in reach, and the bridge for Glass parts
+     2. empty-state layout  "This channel is gone", "This server isn't yours to open"
+     3. skeletons           the conversation and the Overview while they load
+     4. Overview            the bar, the banner, the widgets in two columns, the feed
+     5. Events              the full calendar
+     6. Add-on pages        Sports, Daily word, Game servers, a game
+     7. Pinned game         the thin card under a channel's title
+     8. Onboarding          the gate that comes before a server opens
+     9. Server color        the field in Server settings › Overview
+
+   Imported after the Glass sheets and unlayered (globals.css), so a rule here wins
+   a tie with the Glass rule it replaces. Colors are tokens, or a hue built from a
+   number (`hsl(var(--ix-hue) ...)`); only color and transform/opacity ever change
+   (the motion lint), and only on an event: nothing here moves at rest.
+   ============================================================================= */
+
+/* ---- 1. Page scope ----------------------------------------------------------- */
+
+/* `ServerPage` sets --ix-hue here (a number; the tint layers behind the page carry
+   their own). display: contents keeps the wrapper out of the layout. */
+.ix-hued {
+  display: contents;
+}
+
+/* The faces on a page sit on main, so their ring bites main. */
+.ix-sp {
+  --ix-ring: var(--ix-main);
+}
+
+/* A page's content starts 18px under the large title (the Overview's rhythm). */
+.ix-sp .ix-page__body {
+  padding-top: 18px;
+}
+
+/* AppShell wraps the routed page in `.glass-outlet`, a block that is itself a flex item.
+   `.ix-page` (a scroller), `.ix-empty` and `.ix-skeleton` size themselves as flex
+   children of a column, so an Index page in it would be as tall as its content and
+   clipped, never scrolling. Until the outlet is a flex column itself (IX-14, IX-15),
+   make it one for exactly the pages that need it. */
+.glass-outlet:has(> .ix-page, > .ix-hued > .ix-page, > .ix-empty, > .ix-skeleton) {
+  display: flex;
+  flex-direction: column;
+}
+
+/* A few parts that predate Index (the plan cards' faces, the feed's reactions, the
+   code and text a post renders) still read the Glass ink ramp. On an Index page the
+   ramp is Index's: one place says so, so nothing on the page is a second white. */
+.ix-sp,
+.ix-gate {
+  --ink-1: var(--ix-ink);
+  --ink-2: var(--ix-ink-2);
+  --ink-3: var(--ix-ink-3);
+  --ink-placeholder: var(--ix-ink-3);
+  --bub: var(--ix-card);
+  --raise: var(--ix-fill-ctl);
+  --street: var(--ix-main);
+  --wash-hover: var(--ix-wash-hover);
+  --glass-fill-quiet: var(--ix-fill);
+}
+
+/* ---- 2. The empty-state layout (§6.8) ------------------------------------------ */
+
+.ix-empty {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px var(--ix-col-pad, 48px) 72px;
+  text-align: center;
+  color: var(--ix-ink);
+}
+
+/* The welcome's mark: 76px, radius 22, the place's hue. */
+.ix-empty__tile {
+  display: grid;
+  place-items: center;
+  width: 76px;
+  height: 76px;
+  border-radius: 22px;
+}
+
+.ix-empty__title {
+  margin: 20px 0 0;
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.018em;
+  line-height: 1.2;
+}
+
+.ix-empty__tile:first-child + .ix-empty__title {
+  margin-top: 20px;
+}
+
+.ix-empty__title:first-child {
+  margin-top: 0;
+}
+
+.ix-empty__line {
+  max-width: 420px;
+  margin: 6px 0 0;
+  color: var(--ix-ink-3);
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+.ix-empty__action {
+  margin-top: 24px;
+}
+
+/* ---- 3. Skeletons (static: nothing shimmers or pulses) ---------------------------- */
+
+.ix-skeleton {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: calc(var(--ix-col-max, 920px) + 2 * var(--ix-col-pad, 48px));
+  margin-inline: auto;
+  padding: calc(var(--ix-toolbar-h, 58px) + 8px) var(--ix-col-pad, 48px) 18px;
+  overflow: hidden;
+}
+
+.ix-skeleton__title,
+.ix-skeleton__sub,
+.ix-skeleton__face,
+.ix-skeleton__bubble,
+.ix-skeleton__box,
+.ix-skeleton__card {
+  display: block;
+  background: var(--ix-fill);
+}
+
+.ix-skeleton__title {
+  width: 220px;
+  height: 34px;
+  border-radius: 10px;
+}
+
+.ix-skeleton__sub {
+  width: 320px;
+  max-width: 100%;
+  height: 14px;
+  margin-top: 10px;
+  border-radius: 7px;
+}
+
+/* The feed sits on the box, like the real one (it is bottom-anchored). */
+.ix-skeleton__feed {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 3px;
+  padding: 14px 0 16px;
+  overflow: hidden;
+}
+
+.ix-skeleton__group {
+  display: grid;
+  grid-template-columns: 30px 1fr;
+  align-items: end;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.ix-skeleton__group[data-own] {
+  grid-template-columns: 1fr;
+}
+
+.ix-skeleton__face {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+}
+
+.ix-skeleton__bubbles {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  min-width: 0;
+}
+
+.ix-skeleton__group[data-own] .ix-skeleton__bubbles {
+  align-items: flex-end;
+}
+
+.ix-skeleton__bubble {
+  max-width: 520px;
+  height: 38px;
+  border-radius: 19px;
+  background: var(--ix-bubble);
+}
+
+.ix-skeleton__box {
+  flex: none;
+  height: 52px;
+  margin: 0 -12px;
+  border-radius: 24px;
+  background: var(--ix-fill-field);
+}
+
+.ix-skeleton__cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 28px;
+}
+
+.ix-skeleton__card {
+  height: 150px;
+  border-radius: 18px;
+  background: var(--ix-fill-card);
+  box-shadow: inset 0 0 0 1px var(--ix-line);
+}
+
+/* ---- 4. The Overview ------------------------------------------------------------------ */
+
+.ix-ov {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+/* The subtitle is the server's description: two lines at most. */
+.ix-ov__about,
+.ix-sp .ix-large-title__sub:has(.ix-ov__about) {
+  display: -webkit-box;
+  max-width: 62ch;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+/* Who is here, and what you can do from the front page. */
+.ix-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+}
+
+.ix-bar__members {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  margin-left: -4px;
+  padding: 4px 10px 4px 4px;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  color: var(--ix-ink-2);
+  font: inherit;
+  font-size: 13.5px;
+  cursor: pointer;
+  transition: background-color 120ms var(--ix-ease);
+}
+
+.ix-bar__members:hover {
+  background: var(--ix-fill);
+}
+
+.ix-bar__members:focus-visible,
+.ix-link:focus-visible,
+.ix-more:focus-visible,
+.ix-post__where:focus-visible,
+.ix-post__hit:focus-visible,
+.ix-run__row:focus-visible,
+.ix-photo:focus-visible,
+.ix-feedfile:focus-visible,
+.ix-game:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+.ix-bar__line {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ix-bar__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+/* The event card's buttons (§3.1): padding 8 12, radius 10, 13.5/600. The chips on
+   this row are those, so Invite (the one cream button) and the rest read as a set. */
+.ix-bar__actions .ix-chip {
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--ix-fill-btn);
+  color: var(--ix-ink);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.ix-bar__actions .ix-chip:hover:not(:disabled) {
+  background: var(--ix-fill-ctl-hover);
+}
+
+.ix-bar__actions .ix-cream {
+  gap: 6px;
+}
+
+/* The uploaded banner: the admin's own picture, as a card. */
+.ix-banner {
+  width: 100%;
+  overflow: hidden;
+  aspect-ratio: 3 / 1;
+  max-height: 240px;
+  border-radius: 20px;
+  background: var(--ix-fill-card);
+  box-shadow: inset 0 0 0 1px var(--ix-line);
+}
+
+.ix-banner > img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Widgets: two columns, balanced (a widget with nothing to show renders nothing, so
+   no column is held open). One column in a narrow main. */
+.ix-widgets {
+  columns: 2;
+  column-gap: 12px;
+  min-width: 0;
+}
+
+.ix-widgets:empty {
+  display: none;
+}
+
+.ix-widget {
+  break-inside: avoid;
+  margin: 0 0 18px;
+  min-width: 0;
+}
+
+@container ix-main (max-width: 700px) {
+  .ix-widgets {
+    columns: 1;
+  }
+}
+
+.ix-widget__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 4px 8px;
+}
+
+.ix-widget__label {
+  margin: 0;
+  color: var(--ix-ink-3);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.ix-widget__aside {
+  font-size: 12.5px;
+}
+
+/* The action card's surface (§3.1): a quiet fill and a hairline, radius 18. */
+.ix-widget__card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: var(--ix-fill-card);
+  box-shadow: inset 0 0 0 1px var(--ix-line);
+  color: var(--ix-ink);
+}
+
+/* A quiet text control: "Calendar", "All media", "Try again". */
+.ix-link {
+  padding: 2px 6px;
+  margin: -2px -6px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--ix-ink-2);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color 120ms var(--ix-ease);
+}
+
+.ix-link:hover {
+  background: var(--ix-fill);
+  color: var(--ix-ink);
+}
+
+.ix-note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: var(--ix-fill-card);
+  box-shadow: inset 0 0 0 1px var(--ix-line);
+  color: var(--ix-ink-2);
+  font-size: 13.5px;
+  line-height: 1.4;
+}
+
+/* Errors use the one danger ink as text, never a red fill (§6.8). */
+.ix-note[data-tone='danger'] {
+  color: var(--ix-danger-ink);
+}
+
+/* Rows inside a widget: a face or a mark, a name, a line, a trailing number or control. */
+.ix-wlist {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ix-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.ix-row__body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.ix-row__top {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.ix-row__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--ix-ink);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ix-row__line {
+  overflow: hidden;
+  color: var(--ix-ink-3);
+  font-size: 12.5px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ix-row__aside,
+.ix-num {
+  flex: none;
+  color: var(--ix-ink-3);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ix-row__score {
+  flex: none;
+  color: var(--ix-ink);
+  font-size: 16px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.ix-row__ctl {
+  --ix-ctl-size: 32px;
+}
+
+.ix-wnote,
+.ix-wsecondary {
+  margin: 0;
+  color: var(--ix-ink-3);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.ix-wfoot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.ix-wtext {
+  min-width: 0;
+  margin: 0;
+  color: var(--ix-ink);
+  font-size: 14px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.ix-clamp {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: var(--clamp-lines, 3);
+  line-clamp: var(--clamp-lines, 3);
+}
+
+/* Most active's share bar: scaleX would animate; this one is drawn at its width. */
+.ix-bar-meter {
+  display: block;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--ix-fill);
+}
+
+.ix-bar-meter > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--ix-ink-2);
+}
+
+/* Up to six pictures, three across: squares big enough to see in a column. */
+.ix-mosaic {
+  display: grid;
+  grid-template-columns: repeat(min(var(--n, 6), 3), minmax(0, 1fr));
+  gap: 8px;
+}
+
+/* A word: "Solved", "Not solved". */
+.ix-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--ix-fill);
+  color: var(--ix-ink-2);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.ix-pill[data-tone='accent'] {
+  color: var(--ix-ink);
+}
+
+/* The next game, in a widget. */
+.ix-game {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: -4px;
+  padding: 4px;
+  border-radius: 12px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.ix-game__status {
+  color: var(--ix-ink-3);
+  font-size: 12.5px;
+}
+
+.ix-game__status[data-live] {
+  color: var(--ix-amber);
+}
+
+.ix-wserver {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ix-wserver__pile {
+  padding-left: 20px;
+}
+
+/* Coming up: the event-card family, one under another, as wide as the column. */
+.ix-plans {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ix-widget .ix-plans > li > .ix-card {
+  width: 100%;
+}
+
+/* Latest: what people made, as cards of the event-card family (§8.4 "card bubbles"). */
+.ix-sec {
+  min-width: 0;
+}
+
+.ix-sec__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 4px 8px;
+}
+
+.ix-sec__label {
+  margin: 0;
+  color: var(--ix-ink-3);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.ix-sec__note {
+  margin: 0;
+  padding: 4px;
+  color: var(--ix-ink-3);
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+
+.ix-sec__note[data-center] {
+  margin-top: 12px;
+  text-align: center;
+}
+
+.ix-sentinel {
+  height: 1px;
+}
+
+.ix-feed {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ix-post {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 14px 16px 16px;
+  border-radius: 20px;
+  background: var(--ix-card);
+  box-shadow: var(--ix-shadow-event);
+  color: var(--ix-ink);
+}
+
+.ix-post--skeleton {
+  height: 150px;
+  background: var(--ix-fill-card);
+  box-shadow: inset 0 0 0 1px var(--ix-line);
+}
+
+.ix-post__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.ix-post__who {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.ix-post__name {
+  overflow: hidden;
+  color: var(--ix-ink);
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ix-post__where {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin: 0 0 0 -4px;
+  padding: 1px 4px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--ix-ink-3);
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1.35;
+  cursor: pointer;
+  transition: background-color 120ms var(--ix-ease);
+}
+
+.ix-post__where:hover {
+  background: var(--ix-fill);
+  color: var(--ix-ink-2);
+}
+
+.ix-post__where span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ix-tag {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: var(--ix-fill);
+  color: var(--ix-ink-2);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.2;
+}
+
+.ix-post__body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.ix-post__text {
+  min-width: 0;
+  margin: 0;
+  color: var(--ix-ink);
+  font-size: 15px;
+  line-height: 1.42;
+  overflow-wrap: anywhere;
+}
+
+.ix-clampwrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.ix-clampwrap > .ix-post__text {
+  width: 100%;
+}
+
+.ix-more {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--ix-ink-2);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.ix-run__more {
+  margin: 4px 8px 0;
+}
+
+.ix-post__title {
+  margin: 0;
+  color: var(--ix-ink);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.ix-post__hit {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: -4px;
+  padding: 4px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ix-post__excerpt {
+  margin: 0;
+  color: var(--ix-ink-3);
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+
+.ix-post__foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  color: var(--ix-ink-3);
+  font-size: 12.5px;
+}
+
+.ix-post__reactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ix-run {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ix-run__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  color: var(--ix-ink);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 120ms var(--ix-ease);
+}
+
+.ix-run__row:hover {
+  background: var(--ix-fill);
+}
+
+/* The people who joined on a day: something that happened, not something made. */
+.ix-happened {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 2px 4px;
+}
+
+.ix-happened__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  color: var(--ix-ink-2);
+  font-size: 13.5px;
+}
+
+.ix-happened__text strong {
+  color: var(--ix-ink);
+  font-weight: 600;
+}
+
+.ix-ghost-face {
+  display: block;
+  flex: none;
+  border-radius: 50%;
+  background: var(--ix-fill);
+}
+
+/* Pictures in a feed or a widget: flat, a hairline over the picture. */
+.ix-photo {
+  position: relative;
+  display: block;
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 14px;
+  background: var(--ix-fill);
+  cursor: pointer;
+}
+
+.ix-photo::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px var(--ix-line);
+  pointer-events: none;
+}
+
+.ix-photo img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.ix-photo__caption {
+  position: absolute;
+  inset: auto 0 0;
+  padding: 18px 10px 8px;
+  overflow: hidden;
+  background: linear-gradient(to top, var(--ix-ground), transparent);
+  color: var(--ix-ink);
+  font-size: 12.5px;
+  text-align: start;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ix-photo__more {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: var(--ix-toolbar-fold);
+  color: var(--ix-ink);
+  font-size: 20px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.ix-photogrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+/* A post's pictures are as wide as a bubble (§3.1), not the whole column. */
+.ix-post__body .ix-photo,
+.ix-post__body .ix-photogrid {
+  max-width: 520px;
+}
+
+.ix-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ix-feedfile {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--ix-fill-btn);
+  color: var(--ix-ink);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 120ms var(--ix-ease);
+}
+
+.ix-feedfile:hover {
+  background: var(--ix-fill-ctl-hover);
+}
+
+/* ---- 5. Events ---------------------------------------------------------------------- */
+
+.ix-events {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+}
+
+.ix-events__bar,
+.ix-events__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px 16px;
+}
+
+/* In Server settings the list brings its own heading (the page has a large title). */
+.ix-events__head {
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.ix-events__title {
+  margin: 0;
+  color: var(--ix-ink);
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.ix-events__sub {
+  max-width: 62ch;
+  margin: 6px 0 0;
+  color: var(--ix-ink-2);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.ix-events__tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.ix-events__tools .ix-chip {
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--ix-fill-btn);
+  color: var(--ix-ink);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.ix-events__group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ix-events__label {
+  margin: 0;
+  padding: 0 4px 2px;
+  color: var(--ix-ink-3);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+/* The event card, a row of the list: as wide as the column, the actions on their own line. */
+.ix-events__card.ix-card {
+  width: 100%;
+  /* minmax(0, 1fr): the one-line meta (its parts do not break inside) wraps between parts
+     instead of widening the card past the column. */
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.ix-events__cover {
+  display: block;
+  grid-column: 1 / -1;
+  width: 100%;
+  height: 150px;
+  margin-bottom: 8px;
+  border-radius: 14px;
+  object-fit: cover;
+}
+
+/* The state is a word beside the title; the tile and the title only second it. */
+.ix-events__state {
+  display: inline-block;
+  margin-left: 10px;
+  padding: 3px 8px;
+  border-radius: 7px;
+  background: var(--ix-fill);
+  color: var(--ix-ink-2);
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.2;
+  vertical-align: 2px;
+}
+
+.ix-events__state[data-tone='accent'] {
+  background: rgba(var(--ix-amber-rgb), 0.14);
+  color: var(--ix-amber);
+}
+
+.ix-events__state[data-tone='danger'] {
+  background: var(--ix-danger-fill);
+  color: var(--ix-danger-ink);
+}
+
+.ix-events__about {
+  grid-column: 1 / -1;
+  margin: 8px 0 0;
+  color: var(--ix-ink-2);
+  font-size: 14px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+/* Delete: the one danger color on its quiet fill, never red. */
+.ix-events__card .ix-event__btn--danger {
+  background: transparent;
+  color: var(--ix-danger-ink);
+}
+
+.ix-events__card .ix-event__btn--danger:hover:not(:disabled) {
+  background: var(--ix-danger-fill);
+}
+
+/* ---- 6. Add-on pages: Sports, Daily word, a game; the Game servers page ------------- */
+
+/* The view inside the page: no plate, no gutter; the page is the chrome. */
+.ix-addon {
+  min-width: 0;
+}
+
+.ix-addon__heading {
+  margin: 0;
+  color: var(--ix-ink);
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+/* The board's filter bar sticks under the toolbar (the page's scroller starts 58px
+   below its own top), and spans the column, not the plate it used to sit in. */
+.ix-addon .pc-sports-filters {
+  top: var(--ix-toolbar-h, 58px);
+  margin-inline: 0;
+  padding-inline: 0;
+  background-color: var(--ix-main);
+}
+
+.ix-gs__bar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
+}
+
+.ix-gs__bar .ix-chip {
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--ix-fill-btn);
+  color: var(--ix-ink);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.ix-gs {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ix-gs__card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: var(--ix-fill-card);
+  box-shadow: inset 0 0 0 1px var(--ix-line);
+}
+
+.ix-gs__card--skeleton {
+  height: 96px;
+}
+
+.ix-gs__head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.ix-gs__id {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ix-gs__name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  margin: 0;
+  color: var(--ix-ink);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.ix-gs__state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ix-ink-2);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+/* The address is what a person comes here for: it wraps, it is never cut. */
+.ix-gs__addr {
+  margin: 2px 0 0;
+  color: var(--ix-ink-3);
+  font-size: 13px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.ix-gs__acts {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+}
+
+.ix-gs__detail {
+  margin: 0;
+  color: var(--ix-ink-2);
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+
+.ix-gs__detail[data-tone='muted'] {
+  color: var(--ix-ink-3);
+}
+
+.ix-gs__detail[data-tone='error'] {
+  color: var(--ix-danger-ink);
+}
+
+.ix-gs__pile {
+  min-width: 0;
+}
+
+/* A quiet button as a link: Connect. The event card's button recipe (§3.1). */
+.ix-qbtn {
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
+  min-height: 32px;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--ix-fill-btn);
+  color: var(--ix-ink);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 16px;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 120ms var(--ix-ease);
+}
+
+.ix-qbtn:hover {
+  background: var(--ix-fill-ctl-hover);
+}
+
+.ix-qbtn:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+/* The game server parts (also used by the Overview's widget and Server settings). */
+.ix-gamekind {
+  display: grid;
+  flex: none;
+  place-items: center;
+}
+
+.ix-dot {
+  display: inline-block;
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ix-ink-3);
+}
+
+/* Up is live, so it is amber; down is the one danger ink; not checked yet is a ring. */
+.ix-dot[data-state='up'] {
+  background: var(--ix-amber);
+}
+
+.ix-dot[data-state='down'] {
+  background: var(--ix-danger-ink);
+}
+
+.ix-dot[data-state='checking'] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--ix-ink-3);
+}
+
+.ix-pile {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ix-pile__more {
+  color: var(--ix-ink-3);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A 28px control, for a row that is 32 tall. */
+.ix-ctl--small {
+  --ix-ctl-size: 30px;
+}
+
+/* ---- 7. The pinned game: a thin card under a channel's title (§8.3) ------------------ */
+
+/* The event-card family, one row, 52 tall. The expanded game opens inside the same
+   card. The pre-Index rules for the expanded stage (`.pc-sports-pin-stage …`, in
+   sports.css) keep drawing it; this block is the card and its row. */
+.ix-pin.pc-sports-pin {
+  gap: 0;
+  max-height: none;
+  margin: 0 0 12px;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 20px;
+  background: var(--ix-card);
+  box-shadow: var(--ix-shadow-event);
+  color: var(--ix-ink);
+}
+
+.ix-pin .ix-pin__row {
+  min-height: 52px;
+  padding: 0 8px 0 16px;
+  gap: 12px;
+  justify-content: flex-start;
+}
+
+.ix-pin__label {
+  flex: none;
+  color: var(--ix-ink-3);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.ix-pin .ix-pin__score {
+  flex: none;
+  gap: 8px;
+}
+
+.ix-pin__abbr {
+  color: var(--ix-ink);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.ix-pin__num {
+  color: var(--ix-ink);
+  font-size: 16px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.ix-pin__status {
+  color: var(--ix-ink-3);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The field strip or the diamond, then the last play, in the row's spare width. */
+.ix-pin .ix-pin__more {
+  flex: 1 1 0;
+  min-width: 0;
+  gap: 12px;
+}
+
+.ix-pin__play {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ix-ink-3);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ix-pin .ix-pin__compact {
+  color: var(--ix-ink);
+  font-size: 13.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.ix-pin__chip {
+  flex: none;
+  padding: 3px 8px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.3;
+  white-space: nowrap;
+  animation: ix-pin-chip 300ms var(--ix-ease) backwards;
+}
+
+@keyframes ix-pin-chip {
+  from {
+    opacity: 0;
+  }
+}
+
+.ix-pin__tools {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.ix-pin__btn {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--ix-ink-2);
+  cursor: pointer;
+  transition: background-color 120ms var(--ix-ease);
+}
+
+.ix-pin__btn:hover {
+  background: var(--ix-fill);
+}
+
+.ix-pin__btn:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+.ix-pin__btn[aria-expanded='true'] .ix-glyph {
+  transform: rotate(180deg);
+}
+
+.ix-pin.is-open .ix-pin__row {
+  box-shadow: 0 1px 0 var(--ix-line);
+}
+
+/* Narrow: the one-line score, the way the card always collapsed (the container rule in
+   sports.css hides the label, the wide score and the extras). */
+@container sports-pin (max-width: 640px) {
+  .ix-pin .ix-pin__row {
+    padding-left: 14px;
+  }
+
+  .ix-pin .ix-pin__compact {
+    flex: 1 1 0;
+  }
+}
+
+:root[data-motion='reduced'] .ix-pin__chip {
+  animation: none;
+}
+
+/* ---- 8. The onboarding gate: a page over the conversation (§8.3) ---------------------- */
+
+.ix-gate {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  color: var(--ix-ink);
+}
+
+.ix-gate:focus {
+  outline: none;
+}
+
+/* Outside the frame (a test, a showcase) the page is just a block. */
+.ix-gate:not([data-covering]) {
+  position: relative;
+}
+
+.ix-gate__scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-top: var(--ix-toolbar-h, 58px);
+  scrollbar-width: none;
+}
+
+.ix-gate__scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.ix-gate__body {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  padding: 28px 0 32px;
+}
+
+.ix-gate__sec {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ix-gate__label {
+  margin: 0;
+  padding: 0 4px;
+  color: var(--ix-ink-3);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.ix-gate__rules {
+  max-height: 240px;
+  padding: 14px 16px;
+  overflow-y: auto;
+  border-radius: 18px;
+  background: var(--ix-fill-card);
+  box-shadow: inset 0 0 0 1px var(--ix-line);
+  color: var(--ix-ink-2);
+  font-size: 14.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.ix-gate__rules:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+.ix-gate__choices {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+@container ix-main (max-width: 700px) {
+  .ix-gate__choices {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* The footer sits on the bottom of the page whatever the content's length. */
+.ix-gate__foot {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 20px;
+  padding: 14px 0 18px;
+  background: var(--ix-main);
+  box-shadow: 0 -1px 0 var(--ix-line);
+}
+
+.ix-gate__help {
+  min-width: 0;
+  margin: 0;
+  color: var(--ix-ink-3);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.ix-gate__acts {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.ix-gate__acts .ix-chip {
+  padding: 9px 14px;
+  border-radius: 10px;
+  background: var(--ix-fill-btn);
+  color: var(--ix-ink);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+/* A tick box and its words. The input is the control (visually hidden, still focusable). */
+.ix-choice {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+  padding: 4px;
+  border-radius: 12px;
+  cursor: pointer;
+}
+
+.ix-choice__input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.ix-choice__box {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  margin-top: 1px;
+  border-radius: 7px;
+  background: var(--ix-fill-ctl);
+  box-shadow: inset 0 0 0 1px var(--ix-edge-strong);
+  color: var(--ix-cream-ink);
+  transition: background-color 120ms var(--ix-ease);
+}
+
+.ix-choice[data-checked] .ix-choice__box {
+  background: var(--ix-cream);
+  box-shadow: none;
+}
+
+.ix-choice__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ix-choice__title {
+  color: var(--ix-ink-2);
+  font-size: 14.5px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.ix-choice[data-checked] .ix-choice__title {
+  color: var(--ix-ink);
+}
+
+.ix-choice__desc {
+  color: var(--ix-ink-3);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+/* A role card: the action card's surface, lit when chosen. */
+.ix-choice--card {
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: var(--ix-fill-card);
+  box-shadow: inset 0 0 0 1px var(--ix-line);
+  transition: background-color 120ms var(--ix-ease);
+}
+
+.ix-choice--card:hover {
+  background: var(--ix-fill-card-hover);
+}
+
+.ix-choice--card[data-checked] {
+  background: var(--ix-fill-card-hover);
+  box-shadow: inset 0 0 0 1px var(--ix-edge-open);
+}
+
+.ix-choice:has(.ix-choice__input:focus-visible) {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+/* ---- 9. Server color (Server settings › Overview) ---------------------------------- */
+
+.ix-color {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ix-color__help {
+  max-width: 62ch;
+  margin: 0;
+  color: var(--ix-ink-2);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.ix-color__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 20px;
+}
+
+.ix-color__swatches {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.ix-color__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ix-color__chips .ix-chip {
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--ix-fill-btn);
+  color: var(--ix-ink);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.ix-color__chips .ix-chip:hover:not(:disabled) {
+  background: var(--ix-fill-ctl-hover);
+}
+
+.ix-color__chips .ix-chip[aria-pressed='true'] {
+  background: var(--ix-fill-ctl);
+  box-shadow: inset 0 0 0 1px var(--ix-edge-open);
+}
+
+/* A swatch is the server mark's own fill at the hue (§2.3), round, so what you pick
+   is what the mark and the window become. The pressed one carries a check and a ring
+   as well as its color. */
+.ix-swatch {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: linear-gradient(150deg, hsl(var(--ix-h) 44% 38%), hsl(var(--ix-h) 40% 23%));
+  box-shadow: inset 0 0 0 1px hsl(var(--ix-h) 60% 80% / 0.16);
+  color: hsl(var(--ix-h) 85% 90%);
+  cursor: pointer;
+  transition: transform 350ms var(--ix-spring);
+}
+
+.ix-swatch:hover:not(:disabled) {
+  transform: translateY(-2px);
+}
+
+.ix-swatch[aria-pressed='true'],
+.ix-swatch--custom {
+  box-shadow:
+    inset 0 0 0 1px hsl(var(--ix-h) 60% 80% / 0.16),
+    0 0 0 2px var(--ix-ground),
+    0 0 0 4px var(--ix-ink);
+}
+
+.ix-swatch:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: 5px;
+}
+
+.ix-swatch:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.ix-swatch--custom {
+  cursor: default;
+}
+
+.ix-color__now,
+.ix-color__note {
+  margin: 0;
+  color: var(--ix-ink-3);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.ix-color__note:empty {
+  display: none;
+}
+
+.ix-color__note[data-kind='error'] {
+  color: var(--ix-danger-ink);
+}
+
+/* Reduced motion is the one `data-motion` switch (utilities.css), never a media query:
+   no lift. */
+:root[data-motion='reduced'] .ix-swatch:hover:not(:disabled) {
+  transform: none;
+}

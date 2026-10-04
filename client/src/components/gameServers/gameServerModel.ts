@@ -1,5 +1,19 @@
 import type { GameServer, GameServerKind, GameServerState, GameServerStatus } from '../../api/gameServers';
 
+/**
+ * The Game servers page's route (docs/index-spec.md §8.3): the add-on's old popover as a
+ * page in main. The same shape as `sportsHref` and `dailyWordHref`.
+ */
+export function gameServersHref(guildId: string): string {
+  return `/app/guilds/${encodeURIComponent(guildId)}/game-servers`;
+}
+
+/** True when `pathname` is this server's Game servers page. */
+export function isGameServersPath(guildId: string, pathname: string): boolean {
+  const base = gameServersHref(guildId);
+  return pathname === base || pathname === `${base}/`;
+}
+
 export interface GameKindMeta {
   label: string;
   /** In rows, after the address. */

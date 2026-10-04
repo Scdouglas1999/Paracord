@@ -48,12 +48,15 @@ export function GameDetailView({
   league,
   eventId,
   serverName,
+  embedded = false,
 }: {
   guildId: string;
   sport: string;
   league: string;
   eventId: string;
   serverName: string;
+  /** The page around it has the large title and the back chevron; leave out this view's own page chrome. */
+  embedded?: boolean;
 }) {
   const { detail, error, status, reload } = useGameDetail(guildId, sport, league, eventId);
   const [hideScores, setHideScores] = useState(readHideScores);
@@ -70,12 +73,24 @@ export function GameDetailView({
     };
   }, []);
 
+  const Root = embedded ? 'div' : Plate;
   return (
-    <div className={cn('pc-sports-page h-full min-w-0 overflow-x-hidden overflow-y-auto bg-bg-base', landscape ? 'is-landscape' : 'p-[var(--gutter)]')}>
-      <Plate as="section" aria-label="Game" bare className="pc-sports-detail flex min-w-0 flex-col gap-5 px-4 py-5 sm:px-6">
-        <Link to={sportsHref(guildId)} className="pc-focusable w-fit text-meta text-text-link">
-          Back to Sports
-        </Link>
+    <div
+      className={cn(
+        'pc-sports-page min-w-0',
+        embedded ? 'ix-addon' : 'h-full overflow-x-hidden overflow-y-auto bg-bg-base',
+        landscape ? 'is-landscape' : !embedded && 'p-[var(--gutter)]',
+      )}
+    >
+      <Root
+        {...(embedded ? {} : { as: 'section' as const, 'aria-label': 'Game', bare: true })}
+        className={cn('pc-sports-detail flex min-w-0 flex-col gap-5', !embedded && 'px-4 py-5 sm:px-6')}
+      >
+        {!embedded && (
+          <Link to={sportsHref(guildId)} className="pc-focusable w-fit text-meta text-text-link">
+            Back to Sports
+          </Link>
+        )}
         {status === 'loading' && !detail && <GameSkeleton sport={sport} />}
         {status === 'error' && (
           <div role="status" className="pc-well flex flex-wrap items-center justify-between gap-3 px-4 py-3">
@@ -87,7 +102,8 @@ export function GameDetailView({
           <DetailBody
             detail={detail}
             error={error}
-            serverName={serverName}
+            serverName={embedded ? '' : serverName}
+            embedded={embedded}
             guildId={guildId}
             hideScores={hideScores}
             hideId={hideId}
@@ -97,7 +113,7 @@ export function GameDetailView({
             }}
           />
         )}
-      </Plate>
+      </Root>
     </div>
   );
 }
@@ -106,6 +122,7 @@ function DetailBody({
   detail,
   error,
   serverName,
+  embedded,
   guildId,
   hideScores,
   hideId,
@@ -114,6 +131,8 @@ function DetailBody({
   detail: GameDetail;
   error: string | null;
   serverName: string;
+  /** The page's large title is the heading, and says the server. */
+  embedded: boolean;
   guildId: string;
   hideScores: boolean;
   hideId: string;
@@ -137,7 +156,7 @@ function DetailBody({
         <span className="pc-sports-card-face flex min-w-0 flex-col gap-3">
         <div className="flex min-w-0 items-center justify-between gap-3">
           <div className="min-w-0">
-            <h1 className="sr-only">{matchup}</h1>
+            {!embedded && <h1 className="sr-only">{matchup}</h1>}
             {serverName && <p className="truncate text-meta text-text-muted">{serverName}</p>}
           </div>
           <span className="flex shrink-0 flex-wrap items-start justify-end gap-3">

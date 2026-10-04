@@ -3,8 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router';
 import { sportsApi, type SportsBoard, type SportsGame, type SportsSettings, type SportsTeam } from '../../../../api/sports';
 import { useSportsStore } from '../../../../stores/sportsStore';
-import { GameWidget, useSportsGames } from './GameWidget';
-import { renderHook } from '@testing-library/react';
+import { GameWidget } from './GameWidget';
 
 vi.mock('../../../../api/sports', async () => {
   const actual = await vi.importActual<typeof import('../../../../api/sports')>('../../../../api/sports');
@@ -96,18 +95,15 @@ describe('GameWidget on the server home', () => {
     useSportsStore.getState().reset();
   });
 
-  it('shows a live game when the server shows games on its home page', async () => {
+  it('shows a live game when the server shows games on its home page, and polls the board for it', async () => {
     vi.mocked(sportsApi.getSettings).mockResolvedValue({ data: settings() } as never);
-    function Driver() {
-      useSportsGames('g1');
-      return <GameWidget guildId="g1" liveShownElsewhere={false} />;
-    }
     render(
       <MemoryRouter>
-        <Driver />
+        <GameWidget guildId="g1" />
       </MemoryRouter>,
     );
     expect(await screen.findByText('Game · live')).toBeInTheDocument();
+    expect(sportsApi.getBoard).toHaveBeenCalled();
   });
 
   it('renders nothing and does not poll when show_on_server_page is off', async () => {
@@ -116,7 +112,7 @@ describe('GameWidget on the server home', () => {
     } as never);
     const { container } = render(
       <MemoryRouter>
-        <GameWidget guildId="g1" liveShownElsewhere={false} />
+        <GameWidget guildId="g1" />
       </MemoryRouter>,
     );
     await waitFor(() => expect(useSportsStore.getState().byGuild.g1?.settingsStatus).toBe('ready'));
@@ -124,21 +120,16 @@ describe('GameWidget on the server home', () => {
     expect(sportsApi.getBoard).not.toHaveBeenCalled();
   });
 
-  it('useSportsGames reports no games while show_on_server_page is off', async () => {
-    vi.mocked(sportsApi.getSettings).mockResolvedValue({
-      data: settings({ show_on_server_page: false }),
-    } as never);
-    const { result } = renderHook(() => useSportsGames('g1'));
-    await waitFor(() => expect(useSportsStore.getState().byGuild.g1?.settingsStatus).toBe('ready'));
-    expect(result.current.shown).toBe(false);
-    expect(result.current.games).toEqual([]);
-    expect(sportsApi.getBoard).not.toHaveBeenCalled();
-  });
-
-  it('useSportsGames feeds Live now while show_on_server_page is on', async () => {
+  it('is the Overview\'s only place for a live game (there is no Live now block)', async () => {
     vi.mocked(sportsApi.getSettings).mockResolvedValue({ data: settings() } as never);
-    const { result } = renderHook(() => useSportsGames('g1'));
-    await waitFor(() => expect(result.current.games).toHaveLength(1));
-    expect(result.current.shown).toBe(true);
+    vi.mocked(sportsApi.getBoard).mockResolvedValue({ data: board([liveGame('Chiefs'), { ...liveGame('Bills'), state: 'pre' }]) } as never);
+    render(
+      <MemoryRouter>
+        <GameWidget guildId="g1" />
+      </MemoryRouter>,
+    );
+    // The live one is the one shown, not skipped for an upcoming game.
+    expect(await screen.findByText('Game · live')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Chiefs/ })).toBeInTheDocument();
   });
 });

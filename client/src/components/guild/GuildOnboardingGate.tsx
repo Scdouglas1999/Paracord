@@ -1,24 +1,16 @@
 import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
-import { useEffect, useMemo, useState } from 'react';
-import { ShieldCheck, UserRoundCheck, Check, X } from 'lucide-react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { createPortal } from 'react-dom';
 import { guildApi } from '../../api/guilds';
 import { extractApiError } from '../../api/client';
 import { toast } from '../../stores/toastStore';
 import { useChannelStore } from '../../stores/channelStore';
-import { ErrorBanner } from '../ui/Feedback';
-import { Button } from '../ui/Button';
-import { Divider } from '../ui/Divider';
-import { IconButton } from '../ui/IconButton';
-import {
-  Modal,
-  ModalBody,
-  ModalDescription,
-  ModalFooter,
-  ModalHeader,
-  ModalTitle,
-} from '../ui/Modal';
-import { GroupLabel } from './SettingsPrimitives';
+import { useGuild } from '../../hooks/useGuilds';
 import { cn } from '../../lib/utils';
+import { IxGlyph } from '../ix/glyphs';
+import { LargeTitle } from '../ix/page';
+import { CreamButton, ToolChip } from '../ix/primitives';
+import { serverPlace, usePlaceHue } from '../ix/shell';
 
 interface GuildOnboardingGateProps {
   guildId: string;
@@ -46,28 +38,6 @@ type OnboardingPayload = {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
-}
-
-/**
- * The tick box on a choice row. A checked row is a **raised** surface carrying
- * a real tick; an unchecked one is the well it sits in. Color is never the
- * only cue (§9) — the tick is.
- */
-function TickBox({ checked }: { checked: boolean }) {
-  return (
-    <span
-      aria-hidden
-      className={cn(
-        'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-[var(--radius-window)]',
-        'transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]',
-        checked
-          ? 'bg-accent-primary text-text-on-accent'
-          : 'bg-bg-mod-strong text-transparent shadow-[var(--shadow-well)]',
-      )}
-    >
-      {checked && <Check size={11} strokeWidth={3} />}
-    </span>
-  );
 }
 
 function normalizeOnboardingPayload(raw: unknown): OnboardingPayload {
@@ -104,8 +74,53 @@ function normalizeOnboardingPayload(raw: unknown): OnboardingPayload {
   };
 }
 
+
+/**
+ * A choice on the page: a tick box and its words. A checked one is lit (a lit edge and a
+ * stronger fill) and carries a real tick; color is never the only cue (§10). The input
+ * is the control, so the whole card is one click and one Tab stop.
+ */
+function Choice({
+  checked,
+  onChange,
+  title,
+  description,
+  className,
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  title: string;
+  description?: string | null;
+  className?: string;
+}) {
+  return (
+    <label className={cn('ix-choice', className)} data-checked={checked || undefined}>
+      <input type="checkbox" className="ix-choice__input" checked={checked} onChange={(event) => onChange(event.target.checked)} />
+      <span className="ix-choice__box" aria-hidden>
+        {checked && <IxGlyph name="check" size={13} />}
+      </span>
+      <span className="ix-choice__text">
+        <span className="ix-choice__title">{title}</span>
+        {description && <span className="ix-choice__desc">{description}</span>}
+      </span>
+    </label>
+  );
+}
+
+/**
+ * The page the server shows before it opens (docs/index-spec.md §8.3: "kept as a page in
+ * main"): its welcome, its rules, and the roles to pick. It covers main under the toolbar
+ * (it is rendered into the routed page's area, so the conversation behind it is inert) and
+ * leaves when it is done. A required rules gate cannot be dismissed (the server enforces it
+ * on channel visibility too); the rest has "Later".
+ *
+ * Mounted from the conversation's notices (`GuildPage`), so it works wherever the server's
+ * conversation is, in the frame or, in a test, bare.
+ */
 export function GuildOnboardingGate({ guildId }: GuildOnboardingGateProps) {
   const scope = useCurrentAccountScope();
+  const guild = useGuild(guildId);
+  const hue = usePlaceHue(serverPlace(guildId));
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [dismissed, setDismissed] = useState(false);
@@ -113,6 +128,8 @@ export function GuildOnboardingGate({ guildId }: GuildOnboardingGateProps) {
   const [acceptedRules, setAcceptedRules] = useState(false);
   const [selectedRoleIds, setSelectedRoleIds] = useState<string[]>([]);
   const [payload, setPayload] = useState<OnboardingPayload | null>(null);
+  const [host, setHost] = useState<HTMLElement | null>(null);
+  const page = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let canceled = false;
@@ -156,6 +173,7 @@ export function GuildOnboardingGate({ guildId }: GuildOnboardingGateProps) {
   const mustComplete = requiresRules && !isComplete;
   const canDismiss = !mustComplete;
   const canSubmit = !saving && (!requiresRules || acceptedRules);
+  const shown = !loading && Boolean(payload) && hasConfig && !isComplete && !(dismissed && canDismiss);
 
   const submit = async () => {
     if (!payload || !canSubmit) return;
@@ -190,8 +208,52 @@ export function GuildOnboardingGate({ guildId }: GuildOnboardingGateProps) {
     }
   };
 
-  if (loading) return null;
-  if (!payload || !hasConfig || isComplete || (dismissed && canDismiss)) return null;
+  // The routed page's area is where the conversation will be; the page goes over it.
+  useLayoutEffect(() => {
+    if (!shown) return;
+    setHost(document.querySelector<HTMLElement>('.ix-main__content'));
+  }, [shown]);
+
+  // Whatever the page covers stays out of the Tab order and the reading order while it is up.
+  useEffect(() => {
+    const root = page.current;
+    const parent = root?.parentElement;
+    if (!root || !parent || parent !== host) return;
+    const covered = [...parent.children].filter((child): child is HTMLElement => child !== root && child instanceof HTMLElement);
+    const was = covered.map((child) => Boolean(child.inert));
+    for (const child of covered) child.inert = true;
+    return () => {
+      covered.forEach((child, index) => {
+        child.inert = was[index];
+      });
+    };
+  }, [host, shown]);
+
+  // The page took over: focus goes to it, once, so a keyboard or screen reader user starts
+  // at its top and not on the conversation it covers.
+  const focused = useRef(false);
+  useEffect(() => {
+    if (!shown || focused.current || !page.current) return;
+    focused.current = true;
+    page.current.focus({ preventScroll: true });
+  }, [shown, host]);
+
+  // Esc is "Later", where there is a Later.
+  useEffect(() => {
+    if (!shown || !canDismiss) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      if (document.querySelector('[role="dialog"], [role="menu"], [role="listbox"]')) return;
+      setDismissed(true);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [shown, canDismiss]);
+
+  if (!shown || !payload) return null;
+  // Inside the frame the page goes over main; the first paint waits for its host.
+  const inFrame = typeof document !== 'undefined' && document.querySelector('.ix-main__content') !== null;
+  if (inFrame && !host) return null;
 
   const helperCopy = requiresRules && !acceptedRules
     ? 'Accept the server rules to continue.'
@@ -199,143 +261,86 @@ export function GuildOnboardingGate({ guildId }: GuildOnboardingGateProps) {
       ? `${selectedRoleIds.length} role${selectedRoleIds.length === 1 ? '' : 's'} selected — you can change these later.`
       : "You're all set. Continue when you're ready.";
 
-  return (
-    <Modal
-      open
-      // A required rules gate cannot be closed: Escape falls through to the same
-      // guard the Later button uses, and the backdrop was never a close affordance.
-      onClose={() => { if (canDismiss) setDismissed(true); }}
-      closeOnBackdrop={false}
-      labeledBy="guild-onboarding-title"
-      describedBy={payload.settings.welcome_body ? 'guild-onboarding-description' : undefined}
-      panelClassName="w-[min(94vw,42rem)]"
+  const content = (
+    <div
+      ref={page}
+      className="ix-gate ix-hue-main"
+      style={{ '--ix-hue': hue } as CSSProperties}
+      role="region"
+      aria-label="Getting started"
+      tabIndex={-1}
+      data-testid="ix-gate"
+      data-covering={host ? true : undefined}
     >
-      <div className="flex max-h-[min(86dvh,44rem)] flex-col">
-        <ModalHeader className="pb-5">
-          <div className="flex items-start justify-between gap-4">
-            <div className="min-w-0">
-              <GroupLabel>Getting started</GroupLabel>
-              <ModalTitle id="guild-onboarding-title" className="mt-1">
-                {payload.settings.welcome_title || 'Welcome'}
-              </ModalTitle>
-              {payload.settings.welcome_body && (
-                <ModalDescription id="guild-onboarding-description">
-                  {payload.settings.welcome_body}
-                </ModalDescription>
-              )}
-            </div>
-            {canDismiss && (
-              <IconButton
-                label="Dismiss onboarding"
-                onClick={() => setDismissed(true)}
-                className="-mr-1 -mt-1"
-              >
-                <X size={16} />
-              </IconButton>
-            )}
-          </div>
-        </ModalHeader>
-        <Divider />
+      <div className="ix-gate__scroll">
+        <div className="ix-column">
+          <LargeTitle
+            title={payload.settings.welcome_title || (guild?.name ? `Welcome to ${guild.name}` : 'Welcome')}
+            subtitle={payload.settings.welcome_body || undefined}
+          />
 
-        <ModalBody className="min-h-0 flex-1 space-y-6 overflow-auto py-5">
-          {payload.settings.rules_text && (
-            <section className="space-y-3">
-              <GroupLabel className="flex items-center gap-2">
-                <ShieldCheck size={15} className="text-text-secondary" aria-hidden />
-                Server rules
-              </GroupLabel>
-              <div className="scrollbar-thin pc-well max-h-40 overflow-y-auto whitespace-pre-wrap px-4 py-3 text-body leading-relaxed text-text-secondary">
-                {payload.settings.rules_text}
-              </div>
-              <label
-                className={cn(
-                  'flex min-h-[var(--h-control)] cursor-pointer items-center gap-3 rounded-[var(--radius-control)] px-2 py-1.5 text-label',
-                  'transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]',
-                  'focus-within:shadow-[var(--focus-ring)]',
-                  acceptedRules ? 'text-text-primary' : 'text-text-secondary hover:text-text-primary',
-                )}
-              >
-                <TickBox checked={acceptedRules} />
-                <input
-                  type="checkbox"
+          <div className="ix-gate__body">
+            {payload.settings.rules_text && (
+              <section className="ix-gate__sec" aria-labelledby="gate-rules">
+                <h2 id="gate-rules" className="ix-gate__label">Server rules</h2>
+                {/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- Keyboard users must be able to scroll the rules with Page Up/Down and Home/End. */}
+                <div className="ix-gate__rules" tabIndex={0} aria-label="Server rules text">
+                  {payload.settings.rules_text}
+                </div>
+                <Choice
                   checked={acceptedRules}
-                  onChange={(event) => setAcceptedRules(event.target.checked)}
-                  className="sr-only"
+                  onChange={setAcceptedRules}
+                  title="I have read and agree to follow these rules."
                 />
-                I have read and agree to follow these rules.
-              </label>
-            </section>
-          )}
-
-          {payload.settings.role_options.length > 0 && (
-            <section className="space-y-3">
-              <GroupLabel className="flex items-center gap-2">
-                <UserRoundCheck size={15} className="text-text-secondary" aria-hidden />
-                {payload.settings.role_prompt || 'Pick your interests'}
-              </GroupLabel>
-              <div className="grid gap-2 sm:grid-cols-2">
-                {payload.settings.role_options.map((option) => {
-                  const checked = selectedRoleIds.includes(option.role_id);
-                  return (
-                    <label
-                      key={option.id}
-                      className={cn(
-                        'group flex cursor-pointer items-start gap-3 px-3 py-2.5 text-label',
-                        'rounded-[var(--radius-control)] transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]',
-                        'focus-within:shadow-[var(--focus-ring)]',
-                        checked
-                          ? 'bg-bg-raised shadow-[var(--shadow-raised)]'
-                          : 'bg-bg-well shadow-[var(--shadow-well)] hover:bg-bg-mod-subtle',
-                      )}
-                    >
-                      <TickBox checked={checked} />
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={(event) => {
-                          setSelectedRoleIds((prev) =>
-                            event.target.checked
-                              ? Array.from(new Set([...prev, option.role_id]))
-                              : prev.filter((id) => id !== option.role_id),
-                          );
-                        }}
-                        className="sr-only"
-                      />
-                      <span className="min-w-0">
-                        <span className="block font-medium text-text-primary">
-                          {option.label || `Role ${option.role_id}`}
-                        </span>
-                        {option.description && (
-                          <span className="mt-0.5 block text-meta leading-relaxed text-text-muted">
-                            {option.description}
-                          </span>
-                        )}
-                      </span>
-                    </label>
-                  );
-                })}
-              </div>
-            </section>
-          )}
-
-          {error && <ErrorBanner message={error} multiline />}
-        </ModalBody>
-
-        <Divider />
-        <ModalFooter className="flex-col items-stretch gap-3 pt-4 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-meta leading-relaxed text-text-muted">{helperCopy}</p>
-          <div className="flex items-center justify-end gap-2">
-            {canDismiss && (
-              <Button variant="ghost" onClick={() => setDismissed(true)}>
-                Later
-              </Button>
+              </section>
             )}
-            <Button onClick={() => void submit()} disabled={!canSubmit} loading={saving}>
-              {saving ? 'Saving…' : 'Complete onboarding'}
-            </Button>
+
+            {payload.settings.role_options.length > 0 && (
+              <section className="ix-gate__sec" aria-labelledby="gate-roles">
+                <h2 id="gate-roles" className="ix-gate__label">{payload.settings.role_prompt || 'Pick your interests'}</h2>
+                <div className="ix-gate__choices">
+                  {payload.settings.role_options.map((option) => (
+                    <Choice
+                      key={option.id}
+                      className="ix-choice--card"
+                      checked={selectedRoleIds.includes(option.role_id)}
+                      onChange={(next) =>
+                        setSelectedRoleIds((prev) =>
+                          next ? Array.from(new Set([...prev, option.role_id])) : prev.filter((id) => id !== option.role_id),
+                        )
+                      }
+                      title={option.label || `Role ${option.role_id}`}
+                      description={option.description}
+                    />
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {error && (
+              <p role="alert" className="ix-note" data-tone="danger">
+                {error}
+              </p>
+            )}
           </div>
-        </ModalFooter>
+
+          <div className="ix-gate__foot">
+            <p className="ix-gate__help" role="status">{helperCopy}</p>
+            <div className="ix-gate__acts">
+              {canDismiss && (
+                <ToolChip onClick={() => setDismissed(true)} aria-label="Later">
+                  Later
+                </ToolChip>
+              )}
+              <CreamButton onClick={() => void submit()} disabled={!canSubmit || saving}>
+                {saving ? 'Saving…' : 'Complete onboarding'}
+              </CreamButton>
+            </div>
+          </div>
+        </div>
       </div>
-    </Modal>
+    </div>
   );
+
+  return host ? createPortal(content, host) : content;
 }

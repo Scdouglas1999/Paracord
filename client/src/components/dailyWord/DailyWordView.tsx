@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Share2 } from 'lucide-react';
 import { extractApiError } from '../../api/client';
 import { apiErrorCode, NOT_IN_WORD_LIST, type DailyWordGuess } from '../../api/dailyWord';
@@ -32,8 +32,31 @@ const REVEAL_MS = 180 * WORD_LENGTH + 40;
 const SHAKE_MS = 260;
 const BOARD_POLL_MS = 60_000;
 
+/**
+ * Inside a large-title page (`GuildDailyWordPage`, docs/index-spec.md §8.3) the page
+ * draws the chrome (title, toolbar, column), and the game draws only itself.
+ */
+const EmbeddedContext = createContext(false);
+
 /** The game page: the board and keyboard, then your result and the server's board. */
-export function DailyWordView({ guildId, serverName }: { guildId: string; serverName: string }) {
+export function DailyWordView({
+  guildId,
+  serverName,
+  embedded = false,
+}: {
+  guildId: string;
+  serverName: string;
+  /** The page around it has the large title; leave out this view's own page chrome. */
+  embedded?: boolean;
+}) {
+  return (
+    <EmbeddedContext.Provider value={embedded}>
+      <DailyWord guildId={guildId} serverName={serverName} />
+    </EmbeddedContext.Provider>
+  );
+}
+
+function DailyWord({ guildId, serverName }: { guildId: string; serverName: string }) {
   const { settings, status, error: settingsError, enabled } = useDailyWordSettings(guildId);
   const today = useDailyWordStore((state) => state.today);
   const todayStatus = useDailyWordStore((state) => state.todayStatus);
@@ -432,6 +455,22 @@ function Page({
   aside?: ReactNode;
   children: ReactNode;
 }) {
+  const embedded = useContext(EmbeddedContext);
+  if (embedded) {
+    // The page's large title says "Daily word" and the server; what the puzzle adds
+    // (its number and day, the contrast switch) is one line above the game.
+    return (
+      <section aria-label="Daily word" className="pc-word ix-addon flex min-w-0 flex-col gap-6" data-palette={palette}>
+        {(subtitle || aside) && (
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-2">
+            <p className="truncate text-meta text-text-muted">{subtitle}</p>
+            {aside}
+          </div>
+        )}
+        {children}
+      </section>
+    );
+  }
   return (
     <div className="h-full min-w-0 overflow-x-hidden overflow-y-auto bg-bg-base p-[var(--gutter)]">
       <Plate

@@ -20,6 +20,7 @@ import type { ApplyModerationTemplateRequest, ModerationTemplate } from '../../a
 import { ACTION_TYPE_LABELS } from '../../api/moderationTemplates';
 import { Button, Chip, EmptyState, IconButton, Input, Select, Textarea } from '../ui';
 import { BannerEditor } from '../user/BannerEditor';
+import { ServerColorField } from './ServerColorField';
 import { guildApi } from '../../api/guilds';
 import { clearAuthenticatedImageCache } from '../../lib/authenticatedImage';
 import { useDownloadTicket } from '../../hooks/useDownloadTicket';
@@ -234,6 +235,13 @@ export function OverviewSection({
           </label>
         </div>
       </section>
+
+      {/* The window's tint while you are in this server (docs/index-spec.md §2.2). */}
+      {guild && (
+        <div className="border-t border-border-subtle pt-6">
+          <ServerColorField guild={guild} iconSrc={iconDataUrl} />
+        </div>
+      )}
 
       {/* Stat strip — a read-only readout, so a well; not tiled cards. */}
       <section className="pc-well grid grid-cols-2 gap-y-4 divide-border-subtle px-5 py-4 sm:grid-cols-4 sm:divide-x">

@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Pin } from 'lucide-react';
 
 import { channelApi } from '../../../../api/channels';
 import { extractApiError } from '../../../../api/client';
@@ -82,7 +81,7 @@ export function PinnedWidget({ guildId, announcementChannels, mentionNames, onOp
       title="Pinned"
       action={<WidgetLink onClick={() => onOpenMessage(message.channel_id, message.id)}>Open</WidgetLink>}
     >
-      <div className="glass-wrow">
+      <div className="ix-row">
         <FeedAvatar
           user={{
             id: message.author.id,
@@ -92,16 +91,13 @@ export function PinnedWidget({ guildId, announcementChannels, mentionNames, onOp
           }}
           size={28}
         />
-        <span className="glass-wrow__body">
-          <span className="glass-wrow__name">{displayName(message.author)}</span>
-          <span className="glass-wrow__line inline-flex items-center gap-1">
-            <Pin size={12} aria-hidden className="shrink-0" />
-            {pin.channelName}
-          </span>
+        <span className="ix-row__body">
+          <span className="ix-row__name">{displayName(message.author)}</span>
+          <span className="ix-row__line">Pinned in {pin.channelName}</span>
         </span>
       </div>
       {nodes.length > 0 && (
-        <div className="glass-post__text glass-clamp" style={{ '--clamp-lines': 5 } as React.CSSProperties}>
+        <div className="ix-wtext ix-clamp" style={{ '--clamp-lines': 5 } as React.CSSProperties}>
           {nodes}
         </div>
       )}

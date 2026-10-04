@@ -9,6 +9,8 @@ import { boardDay } from '../components/sports/boardDate';
 
 vi.mock('../hooks/useGuilds', () => ({
   useGuild: () => ({ id: 'g1', name: 'Kestrel Robotics' }),
+  // The page's hue (`usePlaceHue`) reads the account's servers.
+  useAvailableGuilds: () => [],
 }));
 
 vi.mock('../api/sports', async () => {
@@ -194,7 +196,7 @@ describe('GuildSportsPage', () => {
   it('groups games, keeps a favorite in Your teams, and features the hottest live game', async () => {
     renderPage();
 
-    expect(await screen.findByRole('heading', { name: 'Sports' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { level: 1, name: 'Sports' })).toBeInTheDocument();
     expect(screen.getByText('Kestrel Robotics')).toBeInTheDocument();
     expect(screen.getByText('3 live · 1 upcoming')).toBeInTheDocument();
     expect(screen.getByRole('group', { name: 'Filters' })).toHaveClass('sticky');
@@ -359,7 +361,9 @@ describe('GuildSportsPage', () => {
     renderPage();
     await screen.findByRole('link', { name: 'Open Chiefs at Bills' });
     await user.click(screen.getByRole('button', { name: 'Standings' }));
-    expect(await screen.findByRole('heading', { level: 1, name: 'Standings' })).toBeInTheDocument();
+    // The page's large title stays "Sports"; Standings is the view's own heading under it.
+    expect(await screen.findByRole('heading', { level: 2, name: 'Standings' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: 'Sports' })).toBeInTheDocument();
     expect(await screen.findByRole('region', { name: 'AFC West' })).toBeInTheDocument();
     expect(sportsApi.getStandings).toHaveBeenCalledWith('g1', 'football/nfl');
     expect(screen.getByRole('button', { name: 'NFL' })).toHaveAttribute('aria-pressed', 'true');
@@ -473,7 +477,7 @@ describe('GuildSportsPage', () => {
     renderPage();
     await screen.findByRole('heading', { name: 'Sports' });
     await user.click(screen.getByRole('button', { name: 'Yesterday' }));
-    expect(await screen.findByRole('heading', { name: 'Sports · Yesterday' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { level: 2, name: 'Yesterday' })).toBeInTheDocument();
     expect(sportsApi.getBoard).toHaveBeenCalledWith('g1', yesterday.compact);
     expect(screen.getByText('No games yesterday')).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Open Chiefs at Bills' })).not.toBeInTheDocument();
@@ -486,7 +490,7 @@ describe('GuildSportsPage', () => {
       return { data: fullBoard() } as never;
     });
     renderPage(`/app/guilds/g1/sports?date=${day.iso}`);
-    expect(await screen.findByRole('heading', { name: `Sports · ${day.label}` })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { level: 2, name: day.label })).toBeInTheDocument();
     expect(sportsApi.getBoard).toHaveBeenCalledWith('g1', day.compact);
     expect(screen.getByText(`No games on ${day.label}`)).toBeInTheDocument();
 

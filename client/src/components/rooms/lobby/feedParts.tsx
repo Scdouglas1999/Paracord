@@ -1,7 +1,7 @@
 import { useMemo, type ReactNode } from 'react';
 import { BarChart3, Megaphone, MessagesSquare, Paperclip, Pin, Rss } from 'lucide-react';
 
-import { Face } from '../../glass/places/Lead';
+import { Avatar } from '../../ix/identity';
 import { ResourceImage } from '../../ui/ResourceImage';
 import { fileApi } from '../../../api/files';
 import type { FeedReason, FeedUser } from '../../../api/serverFeed';
@@ -24,10 +24,12 @@ export function isImageAttachment(attachment: Pick<Attachment, 'content_type' | 
 
 /** A person on a feed card: their face, or a plain disc while nobody is known. */
 export function FeedAvatar({ user, size = 36 }: { user: FeedUser | null; size?: number }) {
-  if (!user) return <span className="shrink-0 rounded-full bg-[var(--glass-fill-quiet)]" style={{ width: size, height: size }} />;
+  if (!user) return <span className="ix-ghost-face" style={{ width: size, height: size }} />;
   return (
-    <Face
-      face={{ userId: user.id, name: displayName(user), avatar: user.avatar_hash ?? null }}
+    <Avatar
+      userId={user.id}
+      name={displayName(user)}
+      avatar={user.avatar_hash ?? null}
       size={size}
       className="shrink-0"
     />
@@ -52,7 +54,7 @@ export function ReasonTag({ reason }: { reason: FeedReason }) {
   const entry = REASON[reason];
   if (!entry) return null;
   return (
-    <span className="glass-post__tag inline-flex shrink-0 items-center gap-1">
+    <span className="ix-tag">
       {entry.icon}
       {entry.label}
     </span>
@@ -81,14 +83,14 @@ export function FeedCardHeader({
   aside?: ReactNode;
 }) {
   return (
-    <div className="glass-post__head">
+    <div className="ix-post__head">
       {lead}
-      <div className="glass-post__who">
-        <span className="glass-post__name">{name}</span>
+      <div className="ix-post__who">
+        <span className="ix-post__name">{name}</span>
         <button
           type="button"
           onClick={onOpen}
-          className="glass-post__where glass-focusable"
+          className="ix-post__where"
           aria-label={`Open in ${channelName}`}
         >
           {forum ? <MessagesSquare size={13} aria-hidden className="shrink-0" /> : null}
@@ -96,7 +98,7 @@ export function FeedCardHeader({
           {when && (
             <>
               <span aria-hidden>·</span>
-              <span className="glass-instrument shrink-0 text-[var(--ink-3)]">{when}</span>
+              <span className="ix-num">{when}</span>
             </>
           )}
         </button>
@@ -140,12 +142,12 @@ export function Photo({
     <button
       type="button"
       onClick={onOpen}
-      className={cn('glass-photo glass-focusable', className)}
+      className={cn('ix-photo', className)}
       aria-label={caption ? `${attachment.filename || 'Image'}, ${caption}` : attachment.filename || 'Image'}
     >
       {src && <ResourceImage src={src} alt="" draggable={false} loading="lazy" />}
       {overlay}
-      {caption && <span className="glass-photo__caption truncate">{caption}</span>}
+      {caption && <span className="ix-photo__caption">{caption}</span>}
     </button>
   );
 }
@@ -169,7 +171,7 @@ export function PhotoGrid({ images }: { images: readonly Attachment[] }) {
     );
   }
   return (
-    <div className="glass-photogrid">
+    <div className="ix-photogrid">
       {shown.map((image, index) => (
         <Photo
           key={image.id}
@@ -178,7 +180,7 @@ export function PhotoGrid({ images }: { images: readonly Attachment[] }) {
           className={cn('aspect-[4/3] w-full', shown.length === 3 && index === 0 && 'col-span-2 aspect-[16/7]')}
           overlay={
             hidden > 0 && index === shown.length - 1 ? (
-              <span className="glass-photo__more glass-instrument">+{hidden}</span>
+              <span className="ix-photo__more">+{hidden}</span>
             ) : null
           }
         />
@@ -191,14 +193,14 @@ export function PhotoGrid({ images }: { images: readonly Attachment[] }) {
 export function FileChips({ files, onOpen }: { files: readonly Attachment[]; onOpen: () => void }) {
   if (files.length === 0) return null;
   return (
-    <div className="glass-files">
+    <div className="ix-files">
       {files.map((file) => (
         <button
           key={file.id}
           type="button"
           onClick={onOpen}
           aria-label={`${file.filename}. Open the message`}
-          className="glass-file glass-focusable"
+          className="ix-feedfile"
         >
           <Paperclip size={14} aria-hidden className="shrink-0" />
           <span className="truncate">{file.filename}</span>

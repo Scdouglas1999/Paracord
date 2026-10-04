@@ -152,7 +152,7 @@ describe('GuildPage composition shell', () => {
     const fetch = vi.spyOn(useChannelStore.getState(), 'fetchChannels').mockResolvedValue(undefined);
     renderGuildPage('any');
     expect(screen.getByRole('alert')).toHaveTextContent('Visibility service unavailable');
-    expect(screen.queryByText('Channel not found')).not.toBeInTheDocument();
+    expect(screen.queryByText('This channel is gone')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(fetch).toHaveBeenCalledWith(GUILD_ID, { serverId: '__local__', userId: 'me' });
     fetch.mockRestore();
@@ -163,7 +163,8 @@ describe('GuildPage composition shell', () => {
 
     renderGuildPage('ghost');
 
-    expect(screen.getByRole('heading', { name: /channel not found/i })).toBeInTheDocument();
+    // The empty-state layout (docs/index-spec.md §6.8), not a page with a title.
+    expect(screen.getByRole('heading', { name: /this channel is gone/i })).toBeInTheDocument();
     expect(screen.queryByTestId('text-view')).not.toBeInTheDocument();
   });
 

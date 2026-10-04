@@ -1,4 +1,4 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -254,6 +254,46 @@ describe('ambient strip', () => {
     expect(screen.getByText('KC 24 · 2nd 6:12 · 27 IND')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Unpin' }));
     expect(onUnpin).toHaveBeenCalled();
+  });
+
+  it('is one thin card (docs/index-spec.md §8.3): a row with the score, the last play and the tools, the stage inside it when open', async () => {
+    const user = userEvent.setup();
+    localStorage.clear();
+    render(
+      <MemoryRouter>
+        <AmbientStrip guildId="g1" channelId="c1" game={game()} canUnpin onUnpin={vi.fn()} />
+      </MemoryRouter>,
+    );
+    const card = screen.getByTestId('ix-pin');
+    expect(card).toHaveClass('ix-pin');
+    // One row: label, score, the last play beside it, and the tools. The play is not on a second line.
+    const row = card.querySelector('.ix-pin__row') as HTMLElement;
+    expect(row).not.toBeNull();
+    expect(row).toContainElement(screen.getByText('Taylor scores'));
+    expect(card.children).toHaveLength(1);
+    const tools = within(row).getByRole('link', { name: 'Open' }).closest('.ix-pin__tools') as HTMLElement;
+    expect(within(tools).getByRole('button', { name: 'Expand the game' })).toHaveAttribute('aria-expanded', 'false');
+    expect(within(tools).getByRole('button', { name: 'Unpin' })).toBeInTheDocument();
+    expect(within(row).getByRole('link', { name: 'Open' })).toHaveAttribute('href', '/app/guilds/g1/sports/football/nfl/401872945');
+
+    // Open: the game comes inside the same card, and the extras leave the row.
+    await user.click(within(tools).getByRole('button', { name: 'Expand the game' }));
+    expect(card.querySelector('.pc-sports-pin-stage')).not.toBeNull();
+    expect(card.querySelector('.ix-pin__more')).toBeNull();
+    expect(within(tools).getByRole('button', { name: 'Collapse the game' })).toHaveAttribute('aria-expanded', 'true');
+    resetGameDetailWatchers();
+    // Expanding is remembered per channel; leave nothing behind for the next test.
+    localStorage.clear();
+  });
+
+  it('keeps the score a single line of words for the narrow card, and nothing else shows the play twice', () => {
+    render(
+      <MemoryRouter>
+        <AmbientStrip guildId="g1" channelId="c1" game={game()} canUnpin={false} onUnpin={vi.fn()} />
+      </MemoryRouter>,
+    );
+    expect(screen.getByText('KC 24 · 2nd 6:12 · 27 IND')).toHaveClass('ix-pin__compact');
+    expect(screen.getAllByText('Taylor scores')).toHaveLength(1);
   });
 
   it('reads the last play from the game detail when the board left it out', async () => {

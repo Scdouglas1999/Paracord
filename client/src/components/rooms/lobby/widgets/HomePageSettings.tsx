@@ -17,10 +17,11 @@ export interface HomePageSettingsProps {
 }
 
 /**
- * "Overview" in Server settings → Server hub: which widgets sit between what is
- * live and the latest posts on the server's Overview, and in what order. Drag a
+ * "Overview" in Server settings → Server hub: which widgets sit under the title
+ * on the server's Overview, above the latest posts, and in what order. Drag a
  * row by its handle, or focus the handle and use the arrow keys. The preview
- * beside the list is the page as it will stack: one column at every width.
+ * beside the list is the page as it will lay out: the widgets in two columns
+ * (one in a narrow window), the latest posts below.
  */
 export function HomePageSettings({ widgets, onChange }: HomePageSettingsProps) {
   const [dragging, setDragging] = useState<number | null>(null);
@@ -118,22 +119,24 @@ export function HomePageSettings({ widgets, onChange }: HomePageSettingsProps) {
         <figcaption className="glass-kicker text-[var(--ink-3)]">Preview</figcaption>
         <div aria-hidden className="flex flex-col gap-1.5 overflow-hidden rounded-[var(--r-bubble)] bg-[var(--solid)] p-2.5">
           <div className="h-8 rounded-[var(--r-chip)] bg-[var(--glass-fill-quiet)]" />
-          <span className="h-6 rounded-[var(--r-chip)] bg-[var(--amber-tint)]" />
+          <span className="h-4 rounded-[var(--r-chip)] bg-[var(--glass-fill-quiet)]" />
           {shown.length === 0 && <span className="pt-1 text-[11px] leading-tight text-[var(--ink-3)]">No widgets</span>}
-          {shown.map((widget) => (
-            <span
-              key={widget.id}
-              className="flex h-9 items-start rounded-[var(--r-chip)] bg-[var(--bub)] px-2 pt-1.5 text-[11px] font-medium leading-tight text-[var(--ink-2)]"
-            >
-              {HOME_WIDGET_LABELS[widget.id]}
-            </span>
-          ))}
+          <div data-testid="widget-preview-grid" className="grid grid-cols-2 gap-1.5">
+            {shown.map((widget) => (
+              <span
+                key={widget.id}
+                className="flex h-9 items-start rounded-[var(--r-chip)] bg-[var(--bub)] px-2 pt-1.5 text-[11px] font-medium leading-tight text-[var(--ink-2)]"
+              >
+                {HOME_WIDGET_LABELS[widget.id]}
+              </span>
+            ))}
+          </div>
           {[0, 1].map((row) => (
             <span key={row} className="h-10 rounded-[var(--r-chip)] bg-[var(--glass-fill-quiet)]" />
           ))}
         </div>
         <p className="glass-secondary">
-          On every screen the widgets stack in one column, after what is live and before the latest posts.
+          The widgets sit in two columns under the title, one in a narrow window, with the latest posts below them.
         </p>
       </figure>
 

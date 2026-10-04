@@ -1,14 +1,17 @@
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import axios from 'axios';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { configureMotion, resetMotionSwitchForTests } from '../lib/motion/reducedMotion';
-import { MemoryRouter, Route, Routes } from 'react-router';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
+import { useToolbarStore } from '../components/ix/shell/toolbarStore';
 import { sportsApi, type GameDetail, type SportsGame, type SportsTeam } from '../api/sports';
 import { GuildSportsGamePage } from './GuildSportsGamePage';
 
 vi.mock('../hooks/useGuilds', () => ({
   useGuild: () => ({ id: 'g1', name: 'Kestrel Robotics' }),
+  // The page's hue (`usePlaceHue`) reads the account's servers.
+  useAvailableGuilds: () => [],
 }));
 
 vi.mock('../api/sports', async () => {
@@ -151,14 +154,27 @@ function footballDetail(over: Partial<GameDetail> = {}): GameDetail {
   };
 }
 
+function Where() {
+  return <div data-testid="where">{useLocation().pathname}</div>;
+}
+
 function renderGame(path = '/app/guilds/g1/sports/football/nfl/401872945') {
   return render(
     <MemoryRouter initialEntries={[path]}>
+      <Where />
       <Routes>
         <Route path="/app/guilds/:guildId/sports/:sport/:league/:eventId" element={<GuildSportsGamePage />} />
+        <Route path="/app/guilds/:guildId/sports" element={<div>the board</div>} />
       </Routes>
     </MemoryRouter>,
   );
+}
+
+/** The toolbar's back chevron is the frame's; the page tells it where back goes. */
+function goBack() {
+  const onBack = useToolbarStore.getState().page?.onBack;
+  expect(onBack).toBeTypeOf('function');
+  act(() => onBack?.());
 }
 
 function httpError(status: number, message: string) {
@@ -175,6 +191,7 @@ function httpError(status: number, message: string) {
 
 describe('GuildSportsGamePage', () => {
   beforeEach(() => {
+    useToolbarStore.setState({ page: null, owner: null });
     localStorage.clear();
     vi.mocked(sportsApi.getGame).mockReset();
     vi.mocked(sportsApi.getGame).mockResolvedValue({ data: footballDetail() } as never);
@@ -183,9 +200,12 @@ describe('GuildSportsGamePage', () => {
   it('loads a deep link and opens the field on the live play', async () => {
     const user = userEvent.setup();
     renderGame();
-    expect(await screen.findByRole('heading', { name: 'Chiefs at Colts' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { level: 1, name: 'Chiefs at Colts' })).toBeInTheDocument();
     expect(sportsApi.getGame).toHaveBeenCalledWith('g1', 'football', 'nfl', '401872945');
-    expect(screen.getByRole('link', { name: 'Back to Sports' })).toHaveAttribute('href', '/app/guilds/g1/sports');
+    // A pushed page (§6.1): the matchup is the one h1, and the toolbar's back chevron goes to the board.
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    expect(useToolbarStore.getState().page).toMatchObject({ title: 'Chiefs at Colts', backLabel: 'Back to Sports' });
+    expect(screen.queryByRole('link', { name: 'Back to Sports' })).not.toBeInTheDocument();
     expect(document.querySelectorAll('.pc-sports-bigscore')[1]).toHaveTextContent('27');
     expect(screen.getByText('On CBS')).toBeInTheDocument();
     expect(screen.getByRole('img', { name: /Ball on the IND 14/ })).toBeInTheDocument();
@@ -194,6 +214,13 @@ describe('GuildSportsGamePage', () => {
     expect(document.querySelector('[aria-current="step"]')).toHaveTextContent('Taylor right end for 4 yards');
     await user.click(screen.getByRole('tab', { name: 'Scoring' }));
     expect(screen.getByRole('region', { name: 'Scoring plays' })).toHaveTextContent('Taylor scores');
+  });
+
+  it('goes back to the board from the toolbar\'s chevron', async () => {
+    renderGame();
+    await screen.findByRole('heading', { level: 1, name: 'Chiefs at Colts' });
+    goBack();
+    expect(screen.getByTestId('where')).toHaveTextContent(/^\/app\/guilds\/g1\/sports$/);
   });
 
   it('steps an earlier drive and replays it from the start', async () => {
@@ -512,6 +539,39 @@ describe('GuildSportsGamePage', () => {
     vi.mocked(sportsApi.getGame).mockRejectedValue(httpError(status, message));
     renderGame();
     expect(await screen.findByText(message)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Back to Sports' })).toBeInTheDocument();
+    // Whatever the game did, the way back is on the toolbar.
+    expect(useToolbarStore.getState().page).toMatchObject({ title: 'Game', backLabel: 'Back to Sports' });
+    goBack();
+    expect(screen.getByTestId('where')).toHaveTextContent(/^\/app\/guilds\/g1\/sports$/);
+  });
+
+  it('goes back with Esc and Alt+Left, but not out of a text field or over an open dialog', async () => {
+    const user = userEvent.setup();
+    renderGame();
+    await screen.findByRole('heading', { level: 1, name: 'Chiefs at Colts' });
+    const input = document.createElement('input');
+    document.body.appendChild(input);
+    input.focus();
+    await user.keyboard('{Escape}');
+    expect(screen.getByTestId('where')).toHaveTextContent('/football/nfl/401872945');
+    input.remove();
+
+    const dialog = document.createElement('div');
+    dialog.setAttribute('role', 'dialog');
+    document.body.appendChild(dialog);
+    await user.keyboard('{Escape}');
+    expect(screen.getByTestId('where')).toHaveTextContent('/football/nfl/401872945');
+    dialog.remove();
+
+    await user.keyboard('{Alt>}{ArrowLeft}{/Alt}');
+    expect(screen.getByTestId('where')).toHaveTextContent(/^\/app\/guilds\/g1\/sports$/);
+  });
+
+  it('goes back with Esc', async () => {
+    const user = userEvent.setup();
+    renderGame();
+    await screen.findByRole('heading', { level: 1, name: 'Chiefs at Colts' });
+    await user.keyboard('{Escape}');
+    expect(screen.getByTestId('where')).toHaveTextContent(/^\/app\/guilds\/g1\/sports$/);
   });
 });

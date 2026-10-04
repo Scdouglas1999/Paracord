@@ -12,7 +12,7 @@ export interface MediaWidgetProps {
   onOpenMedia: () => void;
 }
 
-/** Six pictures, in a row. */
+/** Six pictures, two rows of three. */
 const COUNT = 6;
 
 function asAttachment(item: GalleryAttachment): Attachment {
@@ -63,8 +63,8 @@ export function MediaWidget({ guildId, onOpenMedia }: MediaWidgetProps) {
 
   return (
     <WidgetCard title="Media" bare action={<WidgetLink onClick={onOpenMedia}>All media</WidgetLink>}>
-      {/* One row of squares: the latest few, as wide as the column. */}
-      <div className="glass-mosaic" style={{ '--n': Math.min(items.length, COUNT) } as React.CSSProperties}>
+      {/* The latest few, three across. */}
+      <div className="ix-mosaic" style={{ '--n': Math.min(items.length, COUNT) } as React.CSSProperties}>
         {items.slice(0, COUNT).map((item) => (
           <Photo
             key={item.id}

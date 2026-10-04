@@ -20,8 +20,6 @@ export interface WidgetContext {
   members: readonly Member[] | undefined;
   announcementChannels: readonly { id: string; name: string }[];
   mentionNames: Map<string, string>;
-  /** A live game is already a card in "Live now". */
-  liveGameShown: boolean;
   channelName: (channelId: string | null) => string | null;
   onRsvp: (eventId: string) => void;
   onCalendar: () => void;
@@ -53,7 +51,7 @@ export function HomeWidget({ id, context }: { id: HomeWidgetId; context: WidgetC
         <MostActiveWidget guildId={context.guildId} onOpenLeaderboard={context.onOpenLeaderboard} />
       );
     case 'game':
-      return <GameWidget guildId={context.guildId} liveShownElsewhere={context.liveGameShown} />;
+      return <GameWidget guildId={context.guildId} />;
     case 'pinned':
       return (
         <PinnedWidget
@@ -79,11 +77,14 @@ export function HomeWidget({ id, context }: { id: HomeWidgetId; context: WidgetC
   }
 }
 
-/** The widgets in the owner's order. Empty ones leave no gap: they render nothing. */
+/**
+ * The widgets in the owner's order, in a two-column grid (one column in a narrow main;
+ * docs/index-spec.md §8.1). Empty ones leave no gap: they render nothing.
+ */
 export function WidgetStack({ ids, context }: { ids: readonly HomeWidgetId[]; context: WidgetContext }) {
   if (ids.length === 0) return null;
   return (
-    <div className="glass-widgets">
+    <div className="ix-widgets" data-testid="ix-widgets">
       {ids.map((id) => (
         <HomeWidget key={id} id={id} context={context} />
       ))}

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 
 import { GuildHomePage } from './GuildHomePage';
@@ -12,16 +12,17 @@ import { useServerListStore } from '../stores/serverListStore';
 import { useSportsStore } from '../stores/sportsStore';
 import { useTypingStore } from '../stores/typingStore';
 import { useUIStore } from '../stores/uiStore';
-import { useVoiceStore } from '../stores/voiceStore';
+import { useGlassStore } from '../stores/glassStore';
+import { useToolbarStore } from '../components/ix/shell/toolbarStore';
 import { roomLitHistory } from '../lib/attention/light';
 import { LOCAL_SERVER_ID, entityScopeKey } from '../lib/serverScope';
-import { ChannelType, type Channel, type Member, type VoiceState } from '../types';
+import { ChannelType, type Channel, type Member } from '../types';
 import type { FeedItem } from '../api/serverFeed';
 
 /**
- * The server home page, end to end (docs/server-home-spec.md).
+ * The server's Overview, end to end (docs/index-spec.md §8.1).
  *
- * Presence and voice come from the real stores, seeded the way the running app
+ * Presence comes from the real stores, seeded the way the running app
  * fills them; only what reaches the network or the media engine is mocked.
  */
 
@@ -43,7 +44,6 @@ const api = vi.hoisted(() => ({
 const gates = vi.hoisted(() => ({
   permissions: 0n,
   isAdmin: false,
-  joinChannel: vi.fn(),
 }));
 
 vi.mock('../api/activeClient', () => ({
@@ -64,10 +64,6 @@ vi.mock('../hooks/useMutedGuilds', () => ({
   useMutedGuilds: () => ({ mutedGuildKeys: [] as string[], saving: {}, isMuted: () => false, toggleMute: vi.fn() }),
 }));
 
-vi.mock('../hooks/useVoice', () => ({
-  useVoice: () => ({ joinChannel: gates.joinChannel }),
-}));
-
 vi.mock('../components/guild/InviteModal', () => ({
   InviteModal: () => <div data-testid="invite-modal" />,
 }));
@@ -86,21 +82,6 @@ function member(id: string, username: string, joinedAt = '2020-01-01T00:00:00Z')
     deaf: false,
     mute: false,
   } as unknown as Member;
-}
-
-function voiceState(over: Partial<VoiceState> & { user_id: string }): VoiceState {
-  return {
-    session_id: 's',
-    deaf: false,
-    mute: false,
-    self_deaf: false,
-    self_mute: false,
-    self_stream: false,
-    self_video: false,
-    suppress: false,
-    guild_id: GUILD,
-    ...over,
-  };
 }
 
 const author = { id: '1', username: 'mara', display_name: 'Mara', avatar_hash: null };
@@ -172,14 +153,6 @@ function seed(): void {
     ],
     SERVER,
   );
-  useVoiceStore.setState({
-    channelParticipants: new Map<string, VoiceState[]>(),
-    speakingUsers: new Set<string>(),
-    channelId: null,
-    guildId: null,
-    connected: false,
-    mediaEngine: null,
-  });
   useTypingStore.setState({ typingByChannel: {} });
 }
 
@@ -235,7 +208,6 @@ beforeEach(() => {
   api.post.mockResolvedValue({ data: {} });
   gates.permissions = 0n;
   gates.isAdmin = false;
-  gates.joinChannel = vi.fn();
   roomLitHistory.clear();
   useGuildStore.getState().reset();
   useChannelStore.getState().reset();
@@ -244,6 +216,8 @@ beforeEach(() => {
   useTypingStore.getState().reset();
   useSportsStore.getState().reset();
   useUIStore.setState({ guildSettingsId: null, guildSettingsInitialSection: null, contextPanelMode: null });
+  useToolbarStore.setState({ page: null, owner: null });
+  useGlassStore.setState({ sheet: null });
   seed();
 });
 
@@ -253,12 +227,14 @@ afterEach(() => {
   roomLitHistory.clear();
 });
 
-describe('the head', () => {
-  it('names the server, says what it is and who is online', async () => {
+describe('the page', () => {
+  it('is a large-title page: the server’s name, its description, who is here, and the toolbar told', async () => {
     renderHome();
     expect(screen.getByRole('heading', { level: 1, name: 'Kestrel Robotics' })).toBeInTheDocument();
     expect(screen.getByText('We build small robots on Saturdays.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /2 online · \d+ members?\. Show members/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /\d+ members? · 2 here now\. Show members/ })).toBeInTheDocument();
+    // The toolbar's folded title is the page's, and the page is not a pushed one.
+    expect(useToolbarStore.getState().page).toMatchObject({ title: 'Kestrel Robotics', onBack: null });
     await waitFor(() => expect(api.get).toHaveBeenCalledWith(expect.stringMatching(/^\/guilds\/g1\/feed/)));
   });
 
@@ -268,7 +244,19 @@ describe('the head', () => {
     expect(useUIStore.getState().contextPanelMode).toBe('media');
   });
 
-  it('offers the settings gear only to somebody who may manage the server', () => {
+  it('opens the Events page from its chip and from the Coming up link', async () => {
+    renderHome();
+    fireEvent.click(screen.getByRole('button', { name: 'Events' }));
+    expect(screen.getByTestId('pathname')).toHaveTextContent('/app/guilds/g1/events');
+  });
+
+  it('opens the people sheet from the members line', () => {
+    renderHome();
+    fireEvent.click(screen.getByRole('button', { name: /Show members/ }));
+    expect(useGlassStore.getState().sheet).toBe('people');
+  });
+
+  it('offers the settings only to somebody who may manage the server', () => {
     renderHome();
     expect(screen.queryByRole('button', { name: 'Server settings' })).not.toBeInTheDocument();
     cleanup();
@@ -277,32 +265,43 @@ describe('the head', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Server settings' }));
     expect(useUIStore.getState().guildSettingsId).toBe(GUILD);
   });
-});
 
-describe('live now', () => {
-  it('is one line of voice channels when nobody is in voice', () => {
+  it('has one cream button, Invite people, and none when there is no channel to invite into', async () => {
     renderHome();
-    const line = screen.getByRole('region', { name: 'Voice channels' });
-    expect(within(line).getByRole('button', { name: 'Join Shop floor' })).toBeInTheDocument();
-    expect(within(line).getByText('Nobody in voice')).toBeInTheDocument();
-    expect(screen.queryByText('Live now')).not.toBeInTheDocument();
+    const bar = screen.getByRole('group', { name: 'Server actions' });
+    const cream = within(bar).getAllByRole('button').filter((button) => button.classList.contains('ix-cream'));
+    expect(cream.map((button) => button.textContent)).toEqual(['Invite people']);
+    fireEvent.click(within(bar).getByRole('button', { name: 'Invite people' }));
+    expect(screen.getByTestId('invite-modal')).toBeInTheDocument();
   });
 
-  it('shows a call with people in it as a live card that joins', async () => {
-    act(() => {
-      useVoiceStore.setState({
-        channelParticipants: new Map([['v1', [voiceState({ user_id: '1' }), voiceState({ user_id: '2' })]]]),
-      });
-    });
+  it('mutes from the notification menu, and says so', async () => {
     renderHome();
-    expect(screen.getByRole('heading', { name: 'Live now' })).toBeInTheDocument();
-    const card = screen.getByRole('listitem', { name: 'Shop floor, live' });
-    expect(within(card).getByText('2 in here')).toBeInTheDocument();
-    // Join is the one cream button on the page.
-    expect(within(card).getByRole('button', { name: 'Join Shop floor' })).toHaveClass('glass-btn--primary');
-    fireEvent.click(within(card).getByRole('button', { name: 'Join Shop floor' }));
-    await waitFor(() => expect(gates.joinChannel).toHaveBeenCalledWith('v1', GUILD));
-    expect(screen.getByTestId('pathname')).toHaveTextContent('/app/guilds/g1/channels/v1');
+    fireEvent.click(screen.getByRole('button', { name: 'Notifications' }));
+    expect(await screen.findByText('Mute server')).toBeInTheDocument();
+    expect(screen.getByText('Mark as read')).toBeInTheDocument();
+  });
+
+  it('has no cover and no Live now: the room card is the live surface, a banner only when one is uploaded', () => {
+    renderHome();
+    expect(screen.queryByTestId('ix-banner')).not.toBeInTheDocument();
+    expect(screen.queryByText('Live now')).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Voice channels' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Join / })).not.toBeInTheDocument();
+  });
+
+  it('draws an uploaded banner as a card under the bar', () => {
+    const guild = useGuildStore.getState().guilds[0];
+    useGuildStore.setState({ guilds: [{ ...guild, banner_hash: '/api/v1/guilds/g1/banner?v=1' } as never] });
+    renderHome();
+    expect(screen.getByTestId('ix-banner')).toBeInTheDocument();
+  });
+
+  it('says it is opening while the server is not known yet, and offers nothing', () => {
+    useGuildStore.getState().reset();
+    renderHome();
+    expect(screen.getByRole('status', { name: 'Opening the server' })).toHaveAttribute('aria-busy', 'true');
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
 });
 
@@ -418,18 +417,44 @@ describe('the widget column', () => {
     expect(screen.queryByRole('region', { name: 'Coming up' })).not.toBeInTheDocument();
   });
 
-  it('is one column at every width: live, the widgets in the owner’s order, then the latest posts', async () => {
-    plateWidth = 390;
+  it('puts the widgets in one grid, in the owner’s order, between the bar and the latest posts', async () => {
     api.events = [{ id: 'e1', name: 'Thermal test', scheduled_start: soon(), status: 1 }];
     api.feed = ['1', '2', '3', '4', '5'].map((id) => feedMessage(id, { content: `post ${id}` }));
     renderHome();
     const comingUp = await screen.findByRole('region', { name: 'Coming up' });
     const newHere = await screen.findByRole('region', { name: 'New here' });
     const latest = screen.getByRole('heading', { name: 'Latest' });
+    const bar = screen.getByTestId('ix-overview-bar');
+    const grid = screen.getByTestId('ix-widgets');
+    // The two columns are CSS (a column count, one in a narrow main): the widgets share one container.
+    expect(grid).toContainElement(comingUp);
+    expect(grid).toContainElement(newHere);
+    expect(bar.compareDocumentPosition(comingUp) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(comingUp.compareDocumentPosition(newHere) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(newHere.compareDocumentPosition(latest) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     // Nothing is folded into the feed: every post comes after the widgets.
     expect(newHere.compareDocumentPosition(screen.getByText('post 1')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(screen.queryByRole('complementary', { name: 'Widgets' })).not.toBeInTheDocument();
+  });
+
+  it('shows an event under way first, since there is no Live now to hold it', async () => {
+    const started = new Date(Date.now() - 20 * 60 * 1000).toISOString();
+    api.events = [
+      { id: 'e2', name: 'Later this week', scheduled_start: soon(), status: 1, user_count: 1 },
+      { id: 'e1', name: 'Soldering hour', scheduled_start: started, status: 2, user_count: 3 },
+    ];
+    renderHome();
+    const widget = await screen.findByRole('region', { name: 'Coming up' });
+    const cards = within(widget).getAllByRole('group');
+    expect(cards[0]).toHaveAccessibleName('Event: Soldering hour');
+    expect(cards[0]).toHaveTextContent('Happening now');
+    expect(cards[1]).toHaveAccessibleName('Event: Later this week');
+  });
+
+  it('opens the calendar from the widget’s link', async () => {
+    api.events = [{ id: 'e1', name: 'Thermal test', scheduled_start: soon(), status: 1 }];
+    renderHome();
+    const widget = await screen.findByRole('region', { name: 'Coming up' });
+    fireEvent.click(within(widget).getByRole('button', { name: 'Calendar' }));
+    expect(screen.getByTestId('pathname')).toHaveTextContent('/app/guilds/g1/events');
   });
 });

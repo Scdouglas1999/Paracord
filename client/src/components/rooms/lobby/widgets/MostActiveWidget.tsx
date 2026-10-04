@@ -56,10 +56,10 @@ export function MostActiveWidget({ guildId, onOpenLeaderboard }: MostActiveWidge
 
   return (
     <WidgetCard title="Most active" action={<WidgetLink onClick={onOpenLeaderboard}>Leaderboard</WidgetLink>}>
-      <p className="glass-card__text">This week, by XP</p>
-      <ol className="glass-wlist">
+      <p className="ix-wnote">This week, by XP</p>
+      <ol className="ix-wlist">
         {top.map((entry) => (
-          <li key={entry.user.id} className="glass-wrow">
+          <li key={entry.user.id} className="ix-row">
             <FeedAvatar
               user={{
                 id: entry.user.id,
@@ -69,12 +69,12 @@ export function MostActiveWidget({ guildId, onOpenLeaderboard }: MostActiveWidge
               }}
               size={32}
             />
-            <span className="glass-wrow__body" style={{ gap: 6 }}>
-              <span className="flex items-baseline gap-2">
-                <span className="glass-wrow__name flex-1">{displayName(entry.user)}</span>
-                <span className="glass-instrument glass-wrow__aside">{entry.xp.toLocaleString()} XP</span>
+            <span className="ix-row__body" style={{ gap: 6 }}>
+              <span className="ix-row__top">
+                <span className="ix-row__name">{displayName(entry.user)}</span>
+                <span className="ix-row__aside">{entry.xp.toLocaleString()} XP</span>
               </span>
-              <span className="glass-wbar" aria-hidden>
+              <span className="ix-bar-meter" aria-hidden>
                 <span style={{ width: `${Math.max(4, Math.round((entry.xp / most) * 100))}%` }} />
               </span>
             </span>

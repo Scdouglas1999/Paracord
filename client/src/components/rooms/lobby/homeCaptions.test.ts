@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { callLength, joinedLine, namesLine, presenceLine, repliesLine, shortAgo, voiceLine } from './homeCaptions';
+import { joinedLine, namesLine, presenceLine, repliesLine, shortAgo } from './homeCaptions';
 
 describe('home captions', () => {
   it('counts who is online among the members', () => {
-    expect(presenceLine(8, 10)).toBe('8 online · 10 members');
+    expect(presenceLine(8, 10)).toBe('10 members · 8 here now');
+    expect(presenceLine(1, 1)).toBe('1 member · 1 here now');
     expect(presenceLine(0, 1)).toBe('1 member');
   });
 
@@ -12,21 +13,6 @@ describe('home captions', () => {
     expect(namesLine(['Priya'])).toBe('Priya');
     expect(namesLine(['Priya', 'Ren'])).toBe('Priya and Ren');
     expect(namesLine(['Priya', 'Ren', 'Mara', 'Ken'])).toBe('Priya, Ren and 2 others');
-  });
-
-  it('says how long a call has been going', () => {
-    expect(callLength(null)).toBeNull();
-    expect(callLength(20_000)).toBe('just started');
-    expect(callLength(42 * 60_000)).toBe('42 min');
-    expect(callLength(65 * 60_000)).toBe('1 h 5 min');
-    expect(callLength(120 * 60_000)).toBe('2 h');
-  });
-
-  it('says who is talking in a live call, or how many are in it', () => {
-    expect(voiceLine(['Priya'], 3, 42 * 60_000)).toBe('Priya is talking · 42 min');
-    expect(voiceLine(['Priya', 'Ren'], 3, null)).toBe('Priya and Ren are talking');
-    expect(voiceLine([], 1, 5 * 60_000)).toBe('1 person in voice · 5 min');
-    expect(voiceLine([], 4, null)).toBe('4 people in voice');
   });
 
   it('groups new members into one line', () => {
@@ -54,8 +40,6 @@ describe('home captions', () => {
   it('never uses the retired light words', () => {
     const lines = [
       presenceLine(3, 9),
-      voiceLine([], 2, 60_000),
-      voiceLine(['Ada'], 2, null),
       joinedLine(['Ada', 'Bo'], 2),
     ].join(' ');
     expect(lines).not.toMatch(/lights on|reading|\blit\b|dark/i);

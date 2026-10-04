@@ -1,12 +1,13 @@
-import { Blocks, Check, Copy, Gamepad2, Pickaxe, PlugZap, type LucideIcon } from 'lucide-react';
+import { Blocks, Copy, Gamepad2, Pickaxe, PlugZap, type LucideIcon } from 'lucide-react';
 import { useState } from 'react';
 import type { GameServerKind, GameServerState } from '../../api/gameServers';
 import { writeClipboardText } from '../../lib/clipboard';
-import { getIdentityColor } from '../../lib/colors';
 import { cn } from '../../lib/utils';
 import { toast } from '../../stores/toastStore';
-import { IconButton } from '../ui';
-import { playerInitials, stateLabel } from './gameServerModel';
+import { AvatarStack } from '../ix/identity';
+import { IxGlyph } from '../ix/glyphs';
+import { Control } from '../ix/primitives';
+import { stateLabel } from './gameServerModel';
 
 const KIND_ICONS: Record<GameServerKind, LucideIcon> = {
   minecraft_java: Pickaxe,
@@ -15,41 +16,43 @@ const KIND_ICONS: Record<GameServerKind, LucideIcon> = {
   tcp: PlugZap,
 };
 
-/** A game server type's glyph in a small well, the way a feed's source sits. */
+/**
+ * A game server type's glyph in a tile (docs/index-spec.md §3.1 "glyph tile": the
+ * place's hue, radius 30% of the side), the way an action card's glyph sits.
+ */
 export function GameKindIcon({ kind, size = 32, className }: { kind: string; size?: number; className?: string }) {
   const Icon = KIND_ICONS[kind as GameServerKind] ?? Gamepad2;
   return (
     <span
       aria-hidden
-      className={cn(
-        'pc-feed-icon pc-feed-icon-glyph flex shrink-0 items-center justify-center rounded-[var(--radius-thumb)]',
-        className,
-      )}
-      style={{ width: size, height: size }}
+      className={cn('ix-hue-tile ix-gamekind', className)}
+      style={{ width: size, height: size, borderRadius: Math.round(size * 0.3) }}
     >
-      <Icon size={Math.round(size * 0.5)} />
+      <Icon size={Math.round(size * 0.5)} strokeWidth={1.7} />
     </span>
   );
 }
 
-const DOT_TONE: Record<GameServerState, string> = {
-  up: 'bg-status-up',
-  down: 'bg-accent-danger',
-  checking: 'bg-text-faint',
-};
-
-/** Up, down or not checked yet. Always paired with words somewhere near it. */
+/**
+ * Up, down or not checked yet. Always paired with words somewhere near it: up is
+ * amber (it is live), down the one danger ink, and a server not checked yet a hollow
+ * ring.
+ */
 export function StatusDot({ state, className }: { state: GameServerState; className?: string }) {
   return (
     <span
       role="img"
       aria-label={stateLabel(state)}
-      className={cn('inline-block h-2 w-2 shrink-0 rounded-full', DOT_TONE[state] ?? DOT_TONE.checking, className)}
+      className={cn('ix-dot', className)}
+      data-state={state in { up: 1, down: 1, checking: 1 } ? state : 'checking'}
     />
   );
 }
 
-/** Who is on, as overlapping initials. Names are in the tooltip and for screen readers. */
+/**
+ * Who is on, as overlapping faces. A player is not a user: the name is the identity,
+ * and its hue the same one every time. The names are the group's accessible name.
+ */
 export function PlayerPile({
   names,
   total,
@@ -66,30 +69,15 @@ export function PlayerPile({
   const shown = names.slice(0, max);
   const more = Math.max(names.length, total ?? 0) - shown.length;
   return (
-    <span className="flex min-w-0 items-center" role="list" aria-label={`On now: ${names.join(', ')}`}>
-      {shown.map((name, index) => (
-        <span
-          key={`${name}-${index}`}
-          role="listitem"
-          title={name}
-          className={cn(
-            'pc-display flex shrink-0 items-center justify-center rounded-full font-bold text-text-on-light',
-            'shadow-[0_0_0_2px_var(--bg-plate)]',
-            index > 0 && '-ml-0.5',
-          )}
-          style={{
-            width: size,
-            height: size,
-            fontSize: Math.max(9, Math.round(size * 0.38)),
-            background: getIdentityColor(name),
-          }}
-        >
-          <span aria-hidden>{playerInitials(name)}</span>
-          <span className="sr-only">{name}</span>
-        </span>
-      ))}
+    <span className="ix-pile" role="img" aria-label={`On now: ${names.join(', ')}${more > 0 ? ` and ${more} more` : ''}`}>
+      <AvatarStack
+        people={shown.map((name) => ({ userId: `player:${name}`, name }))}
+        size={size}
+        overlap={7}
+        ring="var(--ix-main)"
+      />
       {more > 0 && (
-        <span className="ml-1.5 text-meta tabular-nums text-text-muted" aria-label={`and ${more} more`}>
+        <span className="ix-pile__more" aria-hidden>
           +{more}
         </span>
       )}
@@ -110,8 +98,12 @@ export function CopyAddressButton({ address, name }: { address: string; name: st
     }
   };
   return (
-    <IconButton size="sm" label={copied ? 'Copied' : `Copy the address of ${name}`} onClick={() => void copy()}>
-      {copied ? <Check size={14} /> : <Copy size={14} />}
-    </IconButton>
+    <Control
+      className="ix-ctl--small"
+      label={copied ? 'Copied' : `Copy the address of ${name}`}
+      onClick={() => void copy()}
+    >
+      {copied ? <IxGlyph name="check" size={14} /> : <Copy size={14} strokeWidth={1.7} />}
+    </Control>
   );
 }

@@ -83,7 +83,7 @@ export const FeedItemMessage = memo(function FeedItemMessage({
     feed ? <FeedSourceIcon kind={feed.kind} iconUrl={feed.icon_url} size={size} /> : <FeedAvatar user={author} size={size} />;
 
   return (
-    <article aria-label={`${authorName} in ${item.channel_name}`} className="glass-post">
+    <article aria-label={`${authorName} in ${item.channel_name}`} className="ix-post">
       <FeedCardHeader
         lead={avatar(32)}
         name={authorName}
@@ -92,7 +92,7 @@ export const FeedItemMessage = memo(function FeedItemMessage({
         onOpen={onOpen}
         aside={<ReasonTag reason={item.reason} />}
       />
-      <div className="glass-post__body">
+      <div className="ix-post__body">
         {feedEmbed && <FeedPostCard embed={feedEmbed} className="mt-0 w-full" />}
         {item.feed_group && item.feed_group.items.length > 0 && (
           <FeedRun
@@ -146,16 +146,16 @@ function FeedRun({
   const shown = open ? group.items : group.items.slice(0, RUN_SHOWN);
   return (
     <div>
-      <ul aria-label={`More from ${name}`} className="glass-run">
+      <ul aria-label={`More from ${name}`} className="ix-run">
         {shown.map((post) => (
           <li key={post.message_id}>
             <button
               type="button"
-              className="glass-run__row glass-focusable"
+              className="ix-run__row"
               onClick={() => onOpenMessage?.(post.channel_id, post.message_id)}
             >
               <span>{post.title || 'Untitled'}</span>
-              <time dateTime={post.at} className="glass-instrument shrink-0 text-[var(--ink-3)]">
+              <time dateTime={post.at} className="ix-num">
                 {shortAgo(post.at, nowMs)}
               </time>
             </button>
@@ -165,8 +165,7 @@ function FeedRun({
       {hidden > 0 && (
         <button
           type="button"
-          className="glass-post__more glass-focusable"
-          style={{ margin: '4px 8px 0' }}
+          className="ix-more ix-run__more"
           aria-expanded={open}
           onClick={() => setOpen((value) => !value)}
         >
@@ -188,16 +187,16 @@ function ClampedText({ children }: { children: React.ReactNode }) {
     setOverflows(node.scrollHeight > node.clientHeight + 1);
   }, [children, open]);
   return (
-    <div className="flex flex-col items-start gap-1">
+    <div className="ix-clampwrap">
       <div
         ref={ref}
-        className={cn('glass-post__text w-full', !open && 'glass-clamp')}
+        className={cn('ix-post__text', !open && 'ix-clamp')}
         style={{ '--clamp-lines': CLAMP } as React.CSSProperties}
       >
         {children}
       </div>
       {(overflows || open) && (
-        <button type="button" onClick={() => setOpen((value) => !value)} className="glass-post__more glass-focusable">
+        <button type="button" onClick={() => setOpen((value) => !value)} className="ix-more">
           {open ? 'Show less' : 'Show more'}
         </button>
       )}
@@ -221,7 +220,7 @@ function Reactions({
   // A custom emoji is an authenticated image; redraw when its ticket lands.
   useDownloadTicket();
   return (
-    <div className="glass-post__reactions">
+    <div className="ix-post__reactions">
       {reactions.map((reaction) => {
         const custom = parseCustomEmojiToken(reaction.emoji);
         return (

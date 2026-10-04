@@ -1,6 +1,6 @@
 import { useCurrentUser } from '../../hooks/useCurrentUser';
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Calendar, Clock, MapPin, Users, Plus, Check, Download, Repeat, Bell } from 'lucide-react';
+import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Download } from 'lucide-react';
 import { extractApiError } from '../../api/client';
 import { getApi } from '../../api/activeClient';
 import { usePermissions } from '../../hooks/usePermissions';
@@ -11,18 +11,22 @@ import {
   Chip,
   ChipTone,
   Divider,
-  EmptyState,
   ErrorBanner,
   Input,
   Select,
   Tabs,
   Textarea,
-  Well,
 } from '../ui';
+import { useGuildChannels } from '../../hooks/useChannels';
+import { dayTile, planWhen } from '../glass/cards/eventTime';
+import { EventButton } from '../glass/cards/EventCard';
+import { useMinuteNow } from '../glass/cards/useNow';
+import { IxGlyph } from '../ix/glyphs';
+import { EmptyPage } from '../ix/page/EmptyPage';
+import { CreamButton, ToolChip } from '../ix/primitives';
 import { Skeleton } from '../ui/Skeleton';
 import { FieldLabel } from './SettingsPrimitives';
 import { toast } from '../../stores/toastStore';
-import { cn } from '../../lib/utils';
 import { confirm } from '../../stores/confirmStore';
 import { safeClientResourceUrl } from '../../lib/security';
 
@@ -82,17 +86,6 @@ function formatEventDate(dateStr: string): string {
   } catch {
     return dateStr;
   }
-}
-
-/** The day tile on an event card (spec §8): mono weekday over a Gabarito date. */
-function eventDayTile(dateStr: string): { weekday: string; day: string; month: string } | null {
-  const date = new Date(dateStr);
-  if (Number.isNaN(date.getTime())) return null;
-  return {
-    weekday: date.toLocaleDateString(undefined, { weekday: 'short' }),
-    day: date.toLocaleDateString(undefined, { day: 'numeric' }),
-    month: date.toLocaleDateString(undefined, { month: 'short' }),
-  };
 }
 
 function eventListError(action: string, err: unknown): string {
@@ -363,15 +356,27 @@ function EventFormModal({ guildId, event, onClose, onSaved }: EventFormModalProp
 
 interface EventListProps {
   guildId: string;
+  /**
+   * `page`: the Events page in main (docs/index-spec.md §8.3). The page's large title
+   * says "Events" and its subtitle counts what is coming, so the list leaves its own
+   * heading out and keeps the actions. `settings` (default): Server settings › Events,
+   * which has no title above it, so the list brings its own.
+   */
+  variant?: 'settings' | 'page';
+  /** Called with how many events are still to come, once they are loaded and whenever that changes. */
+  onUpcomingCount?: (count: number) => void;
 }
 
-export function EventList({ guildId }: EventListProps) {
+export function EventList({ guildId, variant = 'settings', onUpcomingCount }: EventListProps) {
   const [events, setEvents] = useState<ScheduledEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingEvent, setEditingEvent] = useState<ScheduledEvent | null>(null);
   const user = useCurrentUser();
+  const nowMs = useMinuteNow();
+  const channels = useGuildChannels(guildId);
+  const channelNames = useMemo(() => new Map(channels.map((channel) => [channel.id, channel.name ?? ''])), [channels]);
   const { permissions, isAdmin } = usePermissions(guildId);
   const canManageEvents = isAdmin || hasPermission(permissions, Permissions.MANAGE_GUILD);
 
@@ -464,6 +469,10 @@ export function EventList({ guildId }: EventListProps) {
   const upcoming = events.filter((e) => e.status === 1 || e.status === 2);
   const past = events.filter((e) => e.status === 3 || e.status === 4);
 
+  useEffect(() => {
+    if (!loading) onUpcomingCount?.(upcoming.length);
+  }, [loading, upcoming.length, onUpcomingCount]);
+
   if (loading) {
     return (
       <div className="flex flex-col gap-3">
@@ -474,101 +483,103 @@ export function EventList({ guildId }: EventListProps) {
     );
   }
 
+  const page = variant === 'page';
+  const cards = (list: ScheduledEvent[]) =>
+    list.map((event) => (
+      <EventCard
+        key={event.id}
+        guildId={guildId}
+        event={event}
+        nowMs={nowMs}
+        channelName={channelNames.get(event.channel_id ?? '') ?? null}
+        onRsvp={handleRsvp}
+        currentUserId={user?.id}
+        canManageEvents={canManageEvents}
+        onRefreshEvent={refreshEvent}
+        onEditEvent={setEditingEvent}
+        onUpdateEventStatus={updateEventStatus}
+        onDeleteEvent={deleteEvent}
+      />
+    ));
+
+  const actions = (
+    <div className="ix-events__tools">
+      <ToolChip
+        onClick={() =>
+          window.open(
+            `/api/v1/guilds/${pathSegment(guildId)}/events.ics`,
+            '_blank',
+            'noopener,noreferrer',
+          )
+        }
+        title="Export calendar (.ics)"
+      >
+        <Download size={14} aria-hidden />
+        Export
+      </ToolChip>
+      {canManageEvents && (
+        <CreamButton size="sm" onClick={() => setShowCreateModal(true)}>
+          <IxGlyph name="plus" size={14} />
+          New event
+        </CreamButton>
+      )}
+    </div>
+  );
+
   return (
-    <div className="flex flex-col gap-6">
-      <header className="flex flex-wrap items-start justify-between gap-4">
-        <div className="min-w-0">
-          <h2 className="pc-display text-title text-text-primary">Events</h2>
-          <p className="mt-1.5 max-w-prose text-body text-text-secondary">
-            <span className="glass-instrument">{upcoming.length}</span>
-            {upcoming.length === 1 ? ' event is' : ' events are'} still to come. Everyone who marks
-            themselves interested gets the reminder.
-          </p>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() =>
-              window.open(
-                `/api/v1/guilds/${pathSegment(guildId)}/events.ics`,
-                '_blank',
-                'noopener,noreferrer',
-              )
-            }
-            title="Export calendar (.ics)"
-          >
-            <Download size={15} />
-            Export
-          </Button>
-          {canManageEvents && (
-            <Button size="sm" onClick={() => setShowCreateModal(true)}>
-              <Plus size={15} />
-              New event
-            </Button>
-          )}
-        </div>
-      </header>
+    <div className="ix-events" data-variant={variant}>
+      {page ? (
+        <div className="ix-events__bar">{actions}</div>
+      ) : (
+        <header className="ix-events__head">
+          <div className="min-w-0">
+            <h2 className="ix-events__title">Events</h2>
+            <p className="ix-events__sub">
+              <span className="ix-num">{upcoming.length}</span>
+              {upcoming.length === 1 ? ' event is' : ' events are'} still to come. Everyone who marks
+              themselves interested gets the reminder.
+            </p>
+          </div>
+          {actions}
+        </header>
+      )}
 
       {loadError ? (
-        <ErrorBanner message={loadError} multiline onRetry={fetchEvents} />
+        <div role="alert" className="ix-note" data-tone="danger">
+          <span>{loadError}</span>
+          <button type="button" className="ix-link" onClick={fetchEvents}>
+            Try again
+          </button>
+        </div>
       ) : events.length === 0 ? (
-        <EmptyState
-          icon={<Calendar size={20} />}
+        <EmptyPage
+          inline
+          glyph="event"
           title="No events on the calendar"
-          description={
+          line={
             canManageEvents
               ? 'Schedule one to bring people together — a movie night, a weekly standup, or a launch party.'
-              : "Nothing scheduled yet. Check back soon — the organizers will post events here."
+              : 'Nothing scheduled yet. Check back soon — the organizers will post events here.'
           }
           action={
             canManageEvents ? (
-              <Button variant="ghost" onClick={() => setShowCreateModal(true)}>
-                <Plus size={16} />
-                Create event
-              </Button>
+              <CreamButton onClick={() => setShowCreateModal(true)}>Create event</CreamButton>
             ) : undefined
           }
         />
       ) : (
         <>
           {upcoming.length > 0 && (
-            <section className="flex flex-col gap-3">
-              <h3 className="glass-kicker text-text-faint">Upcoming</h3>
-              {upcoming.map((event) => (
-                <EventCard
-                  key={event.id}
-                  guildId={guildId}
-                  event={event}
-                  onRsvp={handleRsvp}
-                  currentUserId={user?.id}
-                  canManageEvents={canManageEvents}
-                  onRefreshEvent={refreshEvent}
-                  onEditEvent={setEditingEvent}
-                  onUpdateEventStatus={updateEventStatus}
-                  onDeleteEvent={deleteEvent}
-                />
-              ))}
+            <section className="ix-events__group" aria-label="Upcoming events">
+              <h3 className="ix-events__label">Upcoming</h3>
+              {cards(upcoming)}
             </section>
           )}
 
           {past.length > 0 && (
-            <section className="flex flex-col gap-3">
-              <h3 className="glass-kicker text-text-faint">Past events</h3>
-              {past.map((event) => (
-                <EventCard
-                  key={event.id}
-                  guildId={guildId}
-                  event={event}
-                  onRsvp={handleRsvp}
-                  currentUserId={user?.id}
-                  canManageEvents={canManageEvents}
-                  onRefreshEvent={refreshEvent}
-                  onEditEvent={setEditingEvent}
-                  onUpdateEventStatus={updateEventStatus}
-                  onDeleteEvent={deleteEvent}
-                />
-              ))}
+            <section className="ix-events__group" aria-label="Past events">
+              <h3 className="ix-events__label">Past events</h3>
+              {cards(past)}
             </section>
           )}
         </>
@@ -599,6 +610,9 @@ export function EventList({ guildId }: EventListProps) {
 interface EventCardProps {
   guildId: string;
   event: ScheduledEvent;
+  nowMs: number;
+  /** The event's voice channel, by name, for "in Lounge". */
+  channelName: string | null;
   onRsvp: (eventId: string, hasRsvp: boolean) => void;
   currentUserId?: string;
   canManageEvents: boolean;
@@ -609,13 +623,16 @@ interface EventCardProps {
 }
 
 /**
- * EventCard — spec §8: a **well**, with a day tile (mono weekday over a
- * Gabarito date), the name, the meta line, and the actions. No bordered box,
- * no status dot: the status is a word in a chip.
+ * One event, as a card of the event-card family (docs/index-spec.md §3.1, §4.11): the
+ * calendar tile, the title with its state as a word, one line of when and where, and a
+ * row of actions: "I'm in" (cream) for anyone, and the manager's own. The status is a
+ * word first; the tile and the title only second it (color is never the only cue).
  */
 function EventCard({
   guildId,
   event,
+  nowMs,
+  channelName,
   onRsvp,
   currentUserId,
   canManageEvents,
@@ -625,147 +642,114 @@ function EventCard({
   onDeleteEvent,
 }: EventCardProps) {
   const isPast = event.status === 3 || event.status === 4;
+  const live = event.status === 2;
   const imageUrl = safeClientResourceUrl(event.image_url ?? '');
-  const day = eventDayTile(event.scheduled_start);
+  const start = new Date(event.scheduled_start);
+  const end = event.scheduled_end ? new Date(event.scheduled_end) : null;
+  const valid = !Number.isNaN(start.getTime());
+  const tile = valid ? dayTile(start) : null;
+  const when = valid ? planWhen(start, { nowMs, endsAt: end, happeningNow: live }) : formatEventDate(event.scheduled_start);
+  const parts: ReactNode[] = [when];
+  if (channelName) parts.push(`in ${channelName}`);
+  if (event.location) parts.push(event.location);
+  parts.push(`${event.user_count} interested`);
+  if (event.recurrence_rule) parts.push(`repeats ${event.recurrence_rule}`);
+  if (event.reminder_minutes) parts.push(`${event.reminder_minutes} min before`);
+  const chatId = event.event_channel_id;
 
   return (
-    <Well as="section" bare className={cn('flex flex-col gap-3 p-4', isPast && 'opacity-60')}>
-      {/* Cover image — framed intentionally, not a full-bleed hero */}
-      {imageUrl && (
-        <img
-          src={imageUrl}
-          alt=""
-          className="h-32 w-full rounded-[var(--radius-card)] object-cover"
-        />
+    <article
+      className="ix-card ix-event ix-events__card"
+      aria-label={`Event: ${event.name}`}
+      data-tone={live ? 'live' : event.status === 4 ? 'canceled' : isPast ? 'over' : undefined}
+    >
+      {imageUrl && <img src={imageUrl} alt="" className="ix-events__cover" />}
+      {tile ? (
+        <div className="ix-event__day ix-hue-weekday" aria-hidden>
+          <small>{tile.weekday}</small>
+          <b>{tile.day}</b>
+        </div>
+      ) : (
+        <div className="ix-event__day" aria-hidden />
       )}
+      <p className="ix-event__title">
+        {event.name}
+        <span className="ix-events__state" data-tone={STATUS_TONES[event.status] ?? 'neutral'}>
+          {STATUS_LABELS[event.status] || 'Unknown'}
+        </span>
+      </p>
+      <p className="ix-event__meta">
+        {parts.map((part, index) => (
+          <Fragment key={index}>
+            {index > 0 && <span aria-hidden> · </span>}
+            <span className="ix-event__part">{part}</span>
+          </Fragment>
+        ))}
+      </p>
+      {event.description && <p className="ix-events__about">{event.description}</p>}
 
-      <div className="flex flex-col gap-3">
-        <div className="flex min-w-0 flex-1 gap-3">
-          {day && (
-            <div className="flex h-14 w-14 shrink-0 flex-col items-center justify-center rounded-[var(--radius-card)] bg-bg-raised shadow-[var(--shadow-raised)]">
-              <span className="glass-instrument text-meta text-text-faint">{day.weekday}</span>
-              <span className="pc-display text-name text-text-primary">{day.day}</span>
-              <span className="glass-instrument text-meta text-text-faint">{day.month}</span>
-            </div>
-          )}
-
-          <div className="flex min-w-0 flex-1 flex-col gap-2">
-            <div className="flex flex-wrap items-center gap-2">
-              <h4 className="pc-display min-w-0 text-name text-text-primary">{event.name}</h4>
-              <Chip size="sm" tone={STATUS_TONES[event.status] ?? 'neutral'}>
-                {STATUS_LABELS[event.status] || 'Unknown'}
-              </Chip>
-            </div>
-
-            {event.description && (
-              <p className="text-body leading-relaxed text-text-secondary">{event.description}</p>
-            )}
-
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-meta text-text-faint">
-              <span className="inline-flex items-center gap-1.5">
-                <Clock size={13} className="shrink-0" aria-hidden />
-                <span className="glass-instrument">
-                  {formatEventDate(event.scheduled_start)}
-                  {event.scheduled_end && ` – ${formatEventDate(event.scheduled_end)}`}
-                </span>
-              </span>
-              {event.recurrence_rule && (
-                <span className="inline-flex items-center gap-1.5">
-                  <Repeat size={13} className="shrink-0" aria-hidden />
-                  repeats {event.recurrence_rule}
-                </span>
-              )}
-              {event.reminder_minutes && (
-                <span className="inline-flex items-center gap-1.5">
-                  <Bell size={13} className="shrink-0" aria-hidden />
-                  <span className="glass-instrument">{event.reminder_minutes}m</span> before
-                </span>
-              )}
-              {event.location && (
-                <span className="inline-flex items-center gap-1.5">
-                  <MapPin size={13} className="shrink-0" aria-hidden />
-                  {event.location}
-                </span>
-              )}
-              {event.event_channel_id && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() =>
-                    window.location.assign(
-                      `/app/guilds/${pathSegment(guildId)}/channels/${pathSegment(event.event_channel_id || '')}`,
-                    )
-                  }
-                >
-                  event chat
-                </Button>
-              )}
-              <span className="inline-flex items-center gap-1.5">
-                <Users size={13} className="shrink-0" aria-hidden />
-                <span className="glass-instrument">{`${event.user_count} interested`}</span>
-              </span>
-            </div>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-1">
-          {!isPast && currentUserId && (
-            <Button
-              variant="ghost"
-              size="sm"
-              aria-pressed={event.user_rsvp}
-              onClick={() => onRsvp(event.id, event.user_rsvp)}
-              className={event.user_rsvp ? 'bg-bg-mod-strong text-text-primary' : undefined}
+      <div className="ix-event__acts">
+        {!isPast && currentUserId && (
+          <EventButton
+            primary={!event.user_rsvp}
+            pressed={event.user_rsvp}
+            check={event.user_rsvp}
+            aria-pressed={event.user_rsvp}
+            onClick={() => onRsvp(event.id, event.user_rsvp)}
+          >
+            {event.user_rsvp ? 'You’re in' : 'I’m in'}
+          </EventButton>
+        )}
+        {chatId && (
+          <EventButton
+            onClick={() => window.location.assign(`/app/guilds/${pathSegment(guildId)}/channels/${pathSegment(chatId)}`)}
+          >
+            Event chat
+          </EventButton>
+        )}
+        {canManageEvents && (
+          <>
+            <EventButton className="ix-event__btn--quiet" onClick={() => onEditEvent(event)}>
+              Edit
+            </EventButton>
+            <EventButton className="ix-event__btn--quiet" onClick={() => onRefreshEvent(event.id)}>
+              Refresh
+            </EventButton>
+            <EventButton
+              className="ix-event__btn--quiet"
+              onClick={() =>
+                window.open(
+                  `/api/v1/guilds/${pathSegment(guildId)}/events/${pathSegment(event.id)}/ical`,
+                  '_blank',
+                  'noopener,noreferrer',
+                )
+              }
             >
-              <Check size={14} aria-hidden />
-              {event.user_rsvp ? 'Interested' : 'Mark interested'}
-            </Button>
-          )}
-          {canManageEvents && (
-            <>
-              <Button variant="ghost" size="sm" onClick={() => onEditEvent(event)}>
-                Edit
-              </Button>
-              <Button variant="ghost" size="sm" onClick={() => onRefreshEvent(event.id)}>
-                Refresh
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() =>
-                  window.open(
-                    `/api/v1/guilds/${pathSegment(guildId)}/events/${pathSegment(event.id)}/ical`,
-                    '_blank',
-                    'noopener,noreferrer',
-                  )
-                }
-              >
-                <Download size={13} aria-hidden />
-                iCal
-              </Button>
-              {event.status === 1 && (
-                <Button variant="ghost" size="sm" onClick={() => onUpdateEventStatus(event.id, 2)}>
-                  Start
-                </Button>
-              )}
-              {event.status === 2 && (
-                <Button variant="ghost" size="sm" onClick={() => onUpdateEventStatus(event.id, 3)}>
-                  Complete
-                </Button>
-              )}
-              {(event.status === 1 || event.status === 2) && (
-                <Button variant="ghost" size="sm" onClick={() => onUpdateEventStatus(event.id, 4)}>
-                  Cancel
-                </Button>
-              )}
-              <Button variant="danger" size="sm" onClick={() => onDeleteEvent(event.id)}>
-                Delete
-              </Button>
-            </>
-          )}
-        </div>
+              <Download size={13} aria-hidden />
+              iCal
+            </EventButton>
+            {event.status === 1 && (
+              <EventButton className="ix-event__btn--quiet" onClick={() => onUpdateEventStatus(event.id, 2)}>
+                Start
+              </EventButton>
+            )}
+            {event.status === 2 && (
+              <EventButton className="ix-event__btn--quiet" onClick={() => onUpdateEventStatus(event.id, 3)}>
+                Complete
+              </EventButton>
+            )}
+            {(event.status === 1 || event.status === 2) && (
+              <EventButton className="ix-event__btn--quiet" onClick={() => onUpdateEventStatus(event.id, 4)}>
+                Cancel
+              </EventButton>
+            )}
+            <EventButton className="ix-event__btn--danger" onClick={() => onDeleteEvent(event.id)}>
+              Delete
+            </EventButton>
+          </>
+        )}
       </div>
-    </Well>
+    </article>
   );
 }
 

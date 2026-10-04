@@ -1,7 +1,6 @@
 import { memo, useMemo } from 'react';
 
-import { GlassButton } from '../../glass/primitives';
-import { FaceStack } from '../../glass/places/Lead';
+import { AvatarStack } from '../../ix/identity';
 import type { FeedMembersJoinedItem, FeedUser } from '../../../api/serverFeed';
 import { displayName } from '../../../lib/displayName';
 import { joinedLine } from './homeCaptions';
@@ -29,16 +28,16 @@ export const FeedItemMembersJoined = memo(function FeedItemMembersJoined({ item,
   const line = joinedLine(names, item.total);
 
   return (
-    <article aria-label={line} className="glass-happened">
-      <FaceStack faces={faces.slice(0, 4)} size={28} overlap={8} />
-      <p className="glass-happened__text">
+    <article aria-label={line} className="ix-happened">
+      <AvatarStack people={faces.slice(0, 4)} size={28} overlap={8} ring="var(--ix-main)" />
+      <p className="ix-happened__text">
         <strong>{line}</strong>
-        {when && <span className="glass-instrument text-[var(--ink-3)]"> · {when}</span>}
+        {when && <span className="ix-num"> · {when}</span>}
       </p>
       {greet && onSayHi && (
-        <GlassButton variant="text" onClick={() => onSayHi(greet)} aria-label={`Say hi to ${displayName(greet)}`}>
+        <button type="button" className="ix-link" onClick={() => onSayHi(greet)} aria-label={`Say hi to ${displayName(greet)}`}>
           Say hi
-        </GlassButton>
+        </button>
       )}
     </article>
   );

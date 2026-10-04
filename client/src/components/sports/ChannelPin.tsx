@@ -16,6 +16,7 @@ import { HIDE_SCORES_EVENT, LIVE_POLL_MS, QUIET_POLL_MS, gameAriaLabel, gameHref
 import { latestPlayText, pinGameKey } from './timeline';
 import { TeamMark } from './TeamMark';
 import { Switch } from '../ui';
+import { IxGlyph } from '../ix/glyphs';
 import { editingText, useSidewaysPhone } from './sideways';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 
@@ -229,54 +230,62 @@ export function AmbientStrip({
   const flashing = Boolean(burst) && !reduced && !hideScores;
   return (
     <section
-      className={`pc-sports-pin${open ? ' is-open' : ''}${flashing ? ' is-score' : ''}`}
+      className={`ix-pin pc-sports-pin${open ? ' is-open' : ''}${flashing ? ' is-score' : ''}`}
       style={{
         ['--pc-away' as string]: away,
         ['--pc-home' as string]: home,
         ['--pc-score' as string]: scorePaint?.fill,
       }}
       aria-label={`Pinned game. ${gameAriaLabel(game, hideScores)}`}
+      data-testid="ix-pin"
     >
-      <div className="pc-sports-pin-main">
-        <span className="pc-sports-pin-label text-meta text-text-faint">{untilFinal ? 'Pinned until the final' : 'Pinned game'}</span>
-        <span className="pc-sports-pin-score pc-sports-pin-wide">
+      <div className="pc-sports-pin-main ix-pin__row">
+        <span className="pc-sports-pin-label ix-pin__label">{untilFinal ? 'Pinned until the final' : 'Pinned game'}</span>
+        <span className="pc-sports-pin-score pc-sports-pin-wide ix-pin__score">
           <TeamMark team={game.away} />
-          <span className="text-label text-text-primary">{game.away.abbr}</span>
-          <span className="pc-mono text-label text-text-primary">{awayScore}</span>
-          <span className="pc-mono text-meta text-text-secondary">{statusLine(game)}</span>
-          <span className="pc-mono text-label text-text-primary">{homeScore}</span>
-          <span className="text-label text-text-primary">{game.home.abbr}</span>
+          <span className="ix-pin__abbr">{game.away.abbr}</span>
+          <span className="ix-pin__num">{awayScore}</span>
+          <span className="ix-pin__status">{statusLine(game)}</span>
+          <span className="ix-pin__num">{homeScore}</span>
+          <span className="ix-pin__abbr">{game.home.abbr}</span>
           <TeamMark team={game.home} />
         </span>
-        <span className="pc-sports-pin-compact pc-mono">{pinOneLine(game, hideScores)}</span>
+        <span className="pc-sports-pin-compact ix-pin__compact">{pinOneLine(game, hideScores)}</span>
+        {!open && !hideScores && (
+          <span className="pc-sports-pin-more ix-pin__more">
+            {field && <PinField field={field} away={away} home={home} />}
+            {game.sport === 'baseball' && <PinDiamond game={game} />}
+            {playText && <span className="ix-pin__play">{playText}</span>}
+          </span>
+        )}
         {burst?.chip && !hideScores && (
-          <span className="pc-sports-pin-chip" style={{ background: scorePaint?.fill, color: scorePaint?.ink }}>{burst.chip}</span>
+          <span className="pc-sports-pin-chip ix-pin__chip" style={{ background: scorePaint?.fill, color: scorePaint?.ink }}>{burst.chip}</span>
         )}
-        {stageable && (
-          <button
-            type="button"
-            className="pc-focusable pc-sports-pin-chevron"
-            aria-expanded={open}
-            aria-label={open ? 'Collapse the game' : 'Expand the game'}
-            onClick={() => {
-              setOpen((value) => {
-                const next = !value;
-                writeNight(channelId, next);
-                return next;
-              });
-            }}
-          >
-            <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden>
-              <path d={open ? 'M2 8 L6 4 L10 8' : 'M2 4 L6 8 L10 4'} fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-            </svg>
-          </button>
-        )}
-        <Link to={gameHref(guildId, game)} className="pc-focusable shrink-0 text-label text-text-link">Open</Link>
-        {canUnpin && (
-          <button type="button" className="pc-focusable pc-sports-unpin" aria-label="Unpin" onClick={onUnpin}>
-            ×
-          </button>
-        )}
+        <span className="ix-pin__tools">
+          {stageable && (
+            <button
+              type="button"
+              className="ix-pin__btn"
+              aria-expanded={open}
+              aria-label={open ? 'Collapse the game' : 'Expand the game'}
+              onClick={() => {
+                setOpen((value) => {
+                  const next = !value;
+                  writeNight(channelId, next);
+                  return next;
+                });
+              }}
+            >
+              <IxGlyph name="chevron" size={14} />
+            </button>
+          )}
+          <Link to={gameHref(guildId, game)} className="ix-link">Open</Link>
+          {canUnpin && (
+            <button type="button" className="ix-pin__btn" aria-label="Unpin" onClick={onUnpin}>
+              <IxGlyph name="x" size={14} />
+            </button>
+          )}
+        </span>
       </div>
       {open && <GameNight guildId={guildId} game={game} hideScores={hideScores} />}
       {turned && (
@@ -286,13 +295,6 @@ export function AmbientStrip({
           hideScores={hideScores}
           onClose={closeTurned}
         />
-      )}
-      {!open && !hideScores && (
-        <div className="pc-sports-pin-more">
-          {field && <PinField field={field} away={away} home={home} />}
-          {game.sport === 'baseball' && <PinDiamond game={game} />}
-          {playText && <p className="truncate text-meta text-text-faint">{playText}</p>}
-        </div>
       )}
     </section>
   );

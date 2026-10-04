@@ -8,3 +8,5 @@ export { LargeTitlePage } from './LargeTitlePage';
 export type { LargeTitlePageProps } from './LargeTitlePage';
 export { FOLD_AT, FOLD_RANGE, foldProgress, useTitleFold } from './useTitleFold';
 export type { TitleFold } from './useTitleFold';
+export { EmptyPage } from './EmptyPage';
+export type { EmptyPageProps } from './EmptyPage';

@@ -3,9 +3,8 @@ import { displayName } from '../../../../lib/displayName';
 import type { Member } from '../../../../types';
 import { PlanAction, PlanCard, type PlanSlotModel } from '../../../glass/cards/PlanCard';
 import { planWhen } from '../../../glass/cards/eventTime';
-import { PageSection } from '../../../home/GlassPage';
 import type { HomeEvent } from '../useUpcomingEvents';
-import { WidgetError, WidgetLink } from './WidgetCard';
+import { WidgetCard, WidgetError, WidgetLink } from './WidgetCard';
 
 export interface ComingUpWidgetProps {
   events: readonly HomeEvent[];
@@ -15,26 +14,27 @@ export interface ComingUpWidgetProps {
   /** The server's members, so the host can wear their face. */
   members?: readonly Member[];
   onRsvp: (eventId: string) => void;
+  /** Opens the Events page. */
   onCalendar: () => void;
 }
 
-/** The three events after the ones happening now. */
+/** Three events, the one under way first (there is no "Live now" block to hold it). */
 const SHOWN = 3;
 
 /**
- * "Coming up": the next three events as plan cards (docs/glass-spec.md §3.2): the
- * title, when and where, and one decision as text, "Take the spot" and then
- * "You're in". The slots are the ones the server can vouch for: the host, and you.
- * "Calendar" opens the server's full list.
+ * "Coming up": the next three events (one under way comes first) as cards of the
+ * event-card family: the title, when and where, and one decision as text, "Take the spot" and then "You're in". The
+ * slots are the ones the server can vouch for: the host, and you. "Calendar" opens the
+ * Events page, the full list.
  */
 export function ComingUpWidget({ events, error, nowMs, channelName, members, onRsvp, onCalendar }: ComingUpWidgetProps) {
   const me = useCurrentUser();
-  const upcoming = events.filter((event) => !event.happeningNow).slice(0, SHOWN);
+  const upcoming = [...events].sort((a, b) => Number(b.happeningNow) - Number(a.happeningNow)).slice(0, SHOWN);
   if (upcoming.length === 0 && !error) return null;
   return (
-    <PageSection kicker="Coming up" list={false} aside={<WidgetLink onClick={onCalendar}>Calendar</WidgetLink>}>
+    <WidgetCard title="Coming up" bare action={<WidgetLink onClick={onCalendar}>Calendar</WidgetLink>}>
       {error && <WidgetError>Could not load events: {error}</WidgetError>}
-      <ul className="glass-plans">
+      <ul className="ix-plans">
         {upcoming.map((event) => {
           const where = channelName(event.channelId);
           const host = event.creatorId && event.creatorId !== me?.id
@@ -67,9 +67,9 @@ export function ComingUpWidget({ events, error, nowMs, channelName, members, onR
                 title={event.name}
                 meta={
                   <>
-                    {planWhen(event.startsAt, { nowMs, endsAt: event.endsAt })}
+                    {planWhen(event.startsAt, { nowMs, endsAt: event.endsAt, happeningNow: event.happeningNow })}
                     {where ? ` in ${where}` : event.location ? `, ${event.location}` : ''}
-                    {event.going > 0 && <span className="glass-plan__count"> · {event.going} going</span>}
+                    {event.going > 0 && <span> · {event.going} going</span>}
                   </>
                 }
                 action={<PlanAction taken={event.youAreGoing} onToggle={() => onRsvp(event.id)} />}
@@ -79,6 +79,6 @@ export function ComingUpWidget({ events, error, nowMs, channelName, members, onR
           );
         })}
       </ul>
-    </PageSection>
+    </WidgetCard>
   );
 }

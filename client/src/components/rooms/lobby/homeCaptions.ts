@@ -2,7 +2,7 @@
  * Every sentence the server home page writes about a server, in one place
  * (docs/server-home-spec.md, "Plain words").
  *
- * Plain words: people are online, here or in voice; a call is live. Pure
+ * Plain words: people are here now; a feed card says who, where and when. Pure
  * functions with the clock passed in, so the tests can pin them.
  */
 
@@ -14,10 +14,10 @@ function plural(count: number, one: string, many = `${one}s`): string {
   return `${count} ${count === 1 ? one : many}`;
 }
 
-/** "8 online · 10 members". Online is left out when nobody is. */
+/** "10 members · 8 here now" (docs/index-spec.md §4.1). "Here now" is left out when nobody is. */
 export function presenceLine(online: number, members: number): string {
   const total = plural(members, 'member');
-  return online > 0 ? `${online} online · ${total}` : total;
+  return online > 0 ? `${total} · ${online} here now` : total;
 }
 
 /** "Priya", "Priya and Ren", "Priya, Ren and 2 others". */
@@ -28,29 +28,6 @@ export function namesLine(names: readonly string[], max = 2): string {
   if (list.length <= max) return `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}`;
   const rest = list.length - max;
   return `${list.slice(0, max).join(', ')} and ${plural(rest, 'other')}`;
-}
-
-/** How long a call has been going: "just started", "42 min", "1 h 5 min". */
-export function callLength(durationMs: number | null): string | null {
-  if (durationMs == null || !Number.isFinite(durationMs) || durationMs < 0) return null;
-  if (durationMs < MINUTE) return 'just started';
-  const minutes = Math.floor(durationMs / MINUTE);
-  if (minutes < 60) return `${minutes} min`;
-  const hours = Math.floor(minutes / 60);
-  const rest = minutes % 60;
-  return rest === 0 ? `${hours} h` : `${hours} h ${rest} min`;
-}
-
-/**
- * The line under a live voice channel: who is talking, else how many are in
- * it, then how long it has been going. "Priya is talking · 42 min".
- */
-export function voiceLine(talking: readonly string[], inVoice: number, durationMs: number | null): string {
-  const who = talking.length > 0
-    ? `${namesLine(talking)} ${talking.length === 1 ? 'is' : 'are'} talking`
-    : `${plural(inVoice, 'person', 'people')} in voice`;
-  const length = callLength(durationMs);
-  return length ? `${who} · ${length}` : who;
 }
 
 /** "Yara joined", "Yara and Ken joined", "Yara and 2 others joined". */
@@ -86,15 +63,3 @@ export function shortAgo(iso: string | null | undefined, nowMs: number): string 
   if (diff < 6 * DAY) return date.toLocaleDateString(undefined, { weekday: 'short' });
   return date.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
 }
-
-/** "+2 more" after the third live card. */
-export function moreLine(count: number): string {
-  return `+${count} more`;
-}
-
-/** The count beside "Live now": "3 live". */
-export function liveCountLine(count: number): string {
-  return `${count} live`;
-}
-
-export const NOBODY_IN_VOICE = 'Nobody in voice';

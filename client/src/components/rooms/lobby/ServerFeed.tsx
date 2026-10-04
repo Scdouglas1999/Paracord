@@ -1,7 +1,5 @@
-import { Fragment, memo, useEffect, useRef, useState, type RefObject } from 'react';
+import { Fragment, memo, useEffect, useRef, useState } from 'react';
 
-import { GlassButton } from '../../glass/primitives';
-import { Kicker } from '../../glass/primitives';
 import type { FeedItem, FeedUser } from '../../../api/serverFeed';
 import type { Reaction } from '../../../types';
 import { FeedItemForumPost } from './FeedItemForumPost';
@@ -13,8 +11,6 @@ import type { ServerFeed as ServerFeedModel } from './useServerFeed';
 export interface ServerFeedProps {
   guildId: string;
   feed: ServerFeedModel;
-  /** The page's scroller, which the next page is fetched ahead of. */
-  scrollRoot: RefObject<HTMLElement | null>;
   mentionNames: Map<string, string>;
   viewerId: string | null;
   nowMs: number;
@@ -40,7 +36,6 @@ interface ItemHandlers {
 export const ServerFeed = memo(function ServerFeed({
   guildId,
   feed,
-  scrollRoot,
   mentionNames,
   viewerId,
   nowMs,
@@ -87,15 +82,17 @@ export const ServerFeed = memo(function ServerFeed({
   useEffect(() => {
     const node = sentinel.current;
     if (!node || done || typeof IntersectionObserver === 'undefined') return;
+    // The next page is fetched ahead of the reader, in the page's own scroller
+    // (the large-title page, `.ix-page`): a viewport root would not see past its clip.
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries.some((entry) => entry.isIntersecting)) loadMore();
       },
-      { root: scrollRoot.current, rootMargin: '600px 0px' },
+      { root: node.closest<HTMLElement>('.ix-page'), rootMargin: '600px 0px' },
     );
     observer.observe(node);
     return () => observer.disconnect();
-  }, [done, loadMore, scrollRoot, items.length]);
+  }, [done, loadMore, items.length]);
 
   const render = (item: FeedItem) => {
     const when = shortAgo(item.at, nowMs);
@@ -128,50 +125,50 @@ export const ServerFeed = memo(function ServerFeed({
   };
 
   return (
-    <section aria-labelledby={`latest-${guildId}`} aria-busy={loading || loadingMore} className="glass-sec">
-      <div className="glass-sec__head">
-        <Kicker as="h2" id={`latest-${guildId}`} className="glass-sec__kicker">
+    <section aria-labelledby={`latest-${guildId}`} aria-busy={loading || loadingMore} className="ix-sec">
+      <div className="ix-sec__head">
+        <h2 id={`latest-${guildId}`} className="ix-sec__label">
           Latest
-        </Kicker>
+        </h2>
       </div>
 
       {loading && items.length === 0 && (
-        <div role="status" aria-label="Loading the latest posts" className="glass-feed">
+        <div role="status" aria-label="Loading the latest posts" className="ix-feed">
           {[0, 1].map((index) => (
-            <div key={index} className="glass-post pc-skeleton h-40" aria-hidden />
+            <div key={index} className="ix-post ix-post--skeleton" aria-hidden />
           ))}
         </div>
       )}
 
       {!loading && items.length === 0 && !error && (
-        <p className="glass-sec__note">
+        <p className="ix-sec__note">
           Pictures, polls, announcements and busy threads from every channel show up here. Nothing yet.
         </p>
       )}
 
-      <div className="glass-feed">
+      <div className="ix-feed">
         {items.map((item) => (
           <Fragment key={item.id}>{render(item)}</Fragment>
         ))}
       </div>
 
       {error && (
-        <div role="alert" className="glass-note" data-tone="danger" style={{ marginTop: 8 }}>
-          <span style={{ flex: '1 1 auto', minWidth: 0 }}>Could not load the latest posts: {error}</span>
-          <GlassButton variant="text" onClick={retry}>
+        <div role="alert" className="ix-note" data-tone="danger">
+          <span>Could not load the latest posts: {error}</span>
+          <button type="button" className="ix-link" onClick={retry}>
             Try again
-          </GlassButton>
+          </button>
         </div>
       )}
 
-      {!done && !error && <div ref={sentinel} className="h-px" aria-hidden />}
+      {!done && !error && <div ref={sentinel} className="ix-sentinel" aria-hidden />}
       {loadingMore && (
-        <p role="status" className="glass-sec__note" style={{ textAlign: 'center', margin: '12px 0 0' }}>
+        <p role="status" className="ix-sec__note" data-center>
           Loading older posts…
         </p>
       )}
       {done && items.length > 0 && (
-        <p className="glass-sec__note" style={{ textAlign: 'center', margin: '12px 0 0' }}>
+        <p className="ix-sec__note" data-center>
           That’s everything.
         </p>
       )}

@@ -1,36 +1,36 @@
 /* =============================================================================
-   The server home page's entrance (docs/server-home-spec.md).
+   The Overview's entrance (docs/index-spec.md §5.2: the page's sections enter as the
+   feed does on a channel switch).
 
-   Its sections rise into place, one after another. Everything else the page
-   draws (the generated cover, the live rows, the cards) is Glass now and lives
-   in `glass-pages.css`; the cover's lightness steps are `--cover-*` in
-   tokens.css. Imported into `@layer components`, so a utility at the call site
-   still wins.
+   Its sections rise into place one after another: from 14px below with a fade, 480ms
+   on the spring, 40ms apart. Everything else the page draws is `ix-pages.css`.
+   Imported into `@layer components`, so a utility at the call site still wins.
 
-   Reduced motion is the `data-motion` switch (utilities.css) plus the block at
-   the end of this file, which takes the entrance away too: the global switch
-   only shortens durations.
+   Reduced motion is the `data-motion` switch (utilities.css): the move becomes a
+   150ms fade (§5), with no stagger. Only transform and opacity move, once, on mount.
    ============================================================================= */
 
-/* ---- Sections ------------------------------------------------------------- */
-
-@keyframes pc-home-enter {
+@keyframes ix-ov-enter {
   from {
     opacity: 0;
-    transform: translate3d(0, 8px, 0) scale(0.99);
+    transform: translate3d(0, 14px, 0);
   }
 }
 
-/* Rest state is the visible one: the keyframe only declares where a section
-   comes FROM, and `backwards` holds it there for its stagger delay. */
-.pc-home-enter {
-  animation: pc-home-enter var(--duration-page) var(--ease-out) backwards;
-  animation-delay: calc(var(--enter-index, 0) * var(--stagger-page));
-  transform-origin: 50% 0;
+@keyframes ix-ov-fade {
+  from {
+    opacity: 0;
+  }
 }
 
-/* ---- Reduced motion ------------------------------------------------------------ */
+/* The keyframe only declares where a section comes FROM, and `backwards` holds it
+   there for its stagger delay. At rest nothing runs (no `forwards`). */
+.ix-enter {
+  animation: ix-ov-enter 480ms var(--ix-spring) backwards;
+  animation-delay: calc(var(--enter-index, 0) * 40ms);
+}
 
-:root[data-motion='reduced'] .pc-home-enter {
-  animation: none !important;
+:root[data-motion='reduced'] .ix-enter {
+  animation: ix-ov-fade 150ms linear backwards;
+  animation-delay: 0ms;
 }
