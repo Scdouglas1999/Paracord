@@ -1,1 +1,386 @@
-/* IX-7: the live room card and the incoming call card (§4.3, §4.4, §4.10). Created empty by IX-1; the owner fills it. */
+/* IX-7: the live room card and the incoming call card (docs/index-spec.md §3.1
+   "Room card", "People rows", "Card actions"; §4.3, §4.4, §4.10).
+
+   Static shadows only; what moves is transform and opacity (cardMotion.ts, and
+   the opacity transitions below). The waveform's loop runs only while somebody
+   talks: the element is removed when they stop. */
+
+/* The inline slot: a box that holds the card's top margin, so its height is the
+   card's whole footprint (what a FLIP pushes the sidebar by). Empty: 0 tall. */
+.ix-card-slot {
+  display: flow-root;
+  flex-shrink: 0;
+}
+
+/* The pinned host's cards never shrink either (the host is above the panes). */
+.ix-side__pinned > .ix-room-card {
+  flex-shrink: 0;
+}
+
+/* ---- The card -------------------------------------------------------------------- */
+
+.ix-room-card {
+  position: relative;
+  isolation: isolate;
+  margin-top: 12px;
+  padding: 12px;
+  border-radius: 16px;
+  color: var(--ix-ink);
+  font-family: inherit;
+}
+
+/* Two background layers: the live tint, and "yours" (stronger tint, edge and
+   glow) that crossfades over it when you join (§5.7, 400ms, opacity only). */
+.ix-room-card__layer {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  transition: opacity 400ms var(--ix-ease);
+}
+
+.ix-room-card__layer--live {
+  background: var(--ix-room-bg);
+  box-shadow:
+    inset 0 0 0 1px var(--ix-amber-edge),
+    var(--ix-shadow-room);
+}
+
+.ix-room-card__layer--yours {
+  opacity: 0;
+  background: var(--ix-room-bg-yours);
+  box-shadow:
+    inset 0 0 0 1px var(--ix-amber-edge-yours),
+    var(--ix-shadow-room-yours);
+}
+
+.ix-room-card[data-state='yours'] > .ix-room-card__layer--yours {
+  opacity: 1;
+}
+
+.ix-room-card[data-state='yours'] > .ix-room-card__layer--live {
+  opacity: 0;
+}
+
+/* A sidebar pane sliding out still draws the old place for 450ms. Your call is
+   not in it: it is travelling to the pinned slot (§5.4). */
+.ix-pane[data-leaving] .ix-room-card[data-ix-call-card] {
+  visibility: hidden;
+}
+
+/* Head: speaker glyph 16 amber, name 14/600, gap 8; the state 12/500 amber at the right. */
+.ix-room-card__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: normal;
+}
+
+.ix-room-card__glyph {
+  flex: none;
+  color: var(--ix-amber);
+}
+
+.ix-room-card__title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ix-room-card__when {
+  flex: none;
+  margin-left: auto;
+  color: var(--ix-amber);
+  font-size: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The server line of a card pinned in another place ("Fuel"), and the card's
+   other quiet lines (now playing; your computer's sound). */
+.ix-room-card__from,
+.ix-room-card__line {
+  margin: -2px 0 0 24px;
+  overflow: hidden;
+  color: var(--ix-ink-3);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ix-room-card__line {
+  margin-top: 2px;
+}
+
+/* Privacy, not decoration: everyone in the call hears this computer. */
+.ix-room-card__line--privacy {
+  color: var(--ix-ink-2);
+}
+
+/* ---- People rows ------------------------------------------------------------------ */
+
+.ix-card-rows {
+  display: grid;
+  gap: 2px;
+  margin: 10px 0 2px;
+  padding: 0;
+  list-style: none;
+}
+
+.ix-card-row {
+  display: flex;
+  align-items: center;
+  height: 32px;
+  border-radius: 9px;
+  color: var(--ix-ink-2);
+  font-size: 14px;
+}
+
+.ix-card-row[data-talking='true'] {
+  color: var(--ix-ink);
+}
+
+.ix-card-row[data-listening='true'] {
+  color: var(--ix-ink-3);
+}
+
+/* The row's main button: face and name. The trailing mark sits beside it. */
+.ix-card-row__who {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  height: 32px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ix-card-row__who:focus-visible,
+.ix-card-row__watch:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+.ix-card-row__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The face carries the talking ring: an element of its own whose opacity fades
+   150ms in and 300ms out (§4.4). The ring's shadow never animates. */
+.ix-card-row__face {
+  position: relative;
+  display: inline-grid;
+  flex: none;
+}
+
+.ix-card-row__ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 2px var(--ix-room-dark),
+    0 0 0 3.5px var(--ix-amber);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 300ms var(--ix-ease);
+}
+
+.ix-card-row[data-talking='true'] .ix-card-row__ring {
+  opacity: 1;
+  transition-duration: 150ms;
+}
+
+/* Trailing: the screen glyph (sharing), mic-off (muted), 14px in the tertiary ink. */
+.ix-card-row__mark {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin-right: 4px;
+  color: var(--ix-ink-3);
+}
+
+.ix-card-row__watch {
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  cursor: pointer;
+  transition: color 120ms var(--ix-ease);
+}
+
+.ix-card-row__watch:hover {
+  color: var(--ix-ink);
+}
+
+.ix-card-row__wave {
+  margin-right: 6px;
+}
+
+/* "and 9 more": up to five 24px faces, -7px, a 2px ring in the card's color. */
+.ix-card-row--more .ix-card-row__who {
+  gap: 10px;
+}
+
+/* ---- The waveform (§4.4) ------------------------------------------------------------
+   Four bars 2.5x12, gap 2, radius 2, amber, scaleY(.35 <-> 1). The loop ticks
+   in 100ms steps (each half of a bar's cycle is a whole number of tenths), so
+   the four bars change on the same frames: on the Linux desktop every animated
+   frame is a whole window copied, and the grid is what keeps a call cheap
+   (lib/motion and the Glass release check). The loop's lengths are 1, .8, 1.2
+   and 1s: the prototype's 1.15 and .9 rounded onto the grid. */
+.ix-wave {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  height: 12px;
+}
+
+.ix-wave > i {
+  display: block;
+  width: 2.5px;
+  height: 12px;
+  border-radius: 2px;
+  background: var(--ix-amber);
+  transform-origin: center;
+  animation: ix-eq 1s steps(5, jump-none) infinite;
+}
+
+.ix-wave > i:nth-child(2) {
+  animation-duration: 0.8s;
+  animation-timing-function: steps(4, jump-none);
+  animation-delay: -0.1s;
+}
+
+.ix-wave > i:nth-child(3) {
+  animation-duration: 1.2s;
+  animation-timing-function: steps(6, jump-none);
+  animation-delay: -0.3s;
+}
+
+.ix-wave > i:nth-child(4) {
+  animation-duration: 1s;
+  animation-delay: -0.2s;
+}
+
+@keyframes ix-eq {
+  0%,
+  100% {
+    transform: scaleY(0.35);
+  }
+
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+/* Real voice: the engine writes --voice-level on the waveform (data-motion-speaking)
+   and each bar takes its share of it; the loop stops. */
+.ix-wave[data-real] > i {
+  animation: none;
+  transform: scaleY(calc(0.35 + 0.65 * min(1, var(--voice-level, 0) * var(--ix-wave-gain, 1))));
+  transition: transform 90ms linear;
+}
+
+.ix-wave[data-real] > i:nth-child(1) {
+  --ix-wave-gain: 0.85;
+}
+
+.ix-wave[data-real] > i:nth-child(3) {
+  --ix-wave-gain: 0.9;
+}
+
+.ix-wave[data-real] > i:nth-child(4) {
+  --ix-wave-gain: 0.75;
+}
+
+/* Reduced motion: still bars at mid height. */
+:root[data-motion='reduced'] .ix-wave > i {
+  animation: none;
+  transform: scaleY(0.7);
+  transition: none;
+}
+
+/* ---- Actions --------------------------------------------------------------------- */
+
+.ix-card-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+/* "Open call" and "Back to chat" crossfade in place (§5.8, 200ms). Both sit in
+   one cell, which may be narrower than the longer label: each label centers
+   and, in a narrow sidebar, ellipsizes rather than spill over its neighbors. */
+.ix-swap {
+  display: grid;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.ix-swap > span {
+  grid-area: 1 / 1;
+  min-width: 0;
+  overflow: hidden;
+  justify-self: center;
+  max-width: 100%;
+  opacity: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: opacity 200ms var(--ix-ease);
+}
+
+.ix-swap > span[data-on] {
+  opacity: 1;
+}
+
+/* ---- Incoming call (§4.10) ----------------------------------------------------------- */
+
+.ix-room-card__head--incoming {
+  gap: 10px;
+}
+
+/* ---- Narrow (768-1023px, a 280px sidebar): tighter icon controls so the wide
+   control keeps room for its words ------------------------------------------------- */
+.ix-frame[data-layout='narrow'] .ix-room-card .ix-card-actions {
+  gap: 5px;
+}
+
+.ix-frame[data-layout='narrow'] .ix-room-card .ix-ctl:not(.ix-ctl--wide) {
+  width: 31px;
+}
+
+.ix-frame[data-layout='narrow'] .ix-room-card .ix-ctl--wide {
+  padding: 0 4px;
+  font-size: 13px;
+}
+
+/* ---- Phone (§9): the card's controls are 40px ---------------------------------- */
+
+.ix-frame[data-layout='phone'] .ix-room-card {
+  --ix-ctl-size: 40px;
+}
+
+.ix-frame[data-layout='phone'] .ix-room-card .ix-cream,
+.ix-frame[data-layout='phone'] .ix-room-card .ix-ctl--wide {
+  height: 40px;
+}

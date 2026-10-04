@@ -55,6 +55,7 @@ import {
   ToggleRow as UiToggleRow,
   Well,
 } from '../ui';
+import { JoinMutedSetting } from '../ix/card/JoinMutedSetting';
 import {
   isEnabled as isNotificationsEnabled,
   setEnabled as setNotificationsEnabled,
@@ -1736,6 +1737,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                       ]}
                     />
                   </div>
+                  <JoinMutedSetting className="mt-2 py-4" />
                 </section>
 
                 <section className="mt-9 border-t border-border-subtle pt-8">
