@@ -48,8 +48,9 @@ pub enum DecodedFrameHandle {
     /// side imports each plane with `eglCreateImageKHR(EGL_LINUX_DMA_BUF_EXT)`.
     #[cfg(all(unix, not(target_os = "macos")))]
     DmaBufNv12(DmaBufFrame),
-    /// A `CVPixelBuffer` (NV12/BGRA) from a VideoToolbox decode session, wrapped
-    /// in a `CMSampleBuffer` and enqueued on an `AVSampleBufferDisplayLayer`.
+    /// A `CVPixelBuffer` (NV12, `'420v'`) from a VideoToolbox decode session,
+    /// wrapped in a `CMSampleBuffer` and enqueued on an
+    /// `AVSampleBufferDisplayLayer`.
     #[cfg(target_os = "macos")]
     CvPixelBuffer(CvPixelBufferFrame),
     /// CPU I420 — the software floor (libvpx VP9, or the tier-2 GPU-decode →
@@ -634,6 +635,77 @@ extern "C" {
     fn CFRelease(cf: *const std::ffi::c_void);
 }
 
+// The CoreVideo calls `CvPixelBufferFrame::read_back_i420` makes, with the
+// signatures of `<CoreVideo/CVPixelBuffer.h>`: `CVReturn` is `int32_t`,
+// `CVPixelBufferLockFlags` is `CVOptionFlags` (`uint64_t`), `OSType` is
+// `uint32_t`, `size_t` is `usize`.
+#[cfg(target_os = "macos")]
+#[link(name = "CoreVideo", kind = "framework")]
+extern "C" {
+    fn CVPixelBufferLockBaseAddress(pixel_buffer: *mut std::ffi::c_void, lock_flags: u64) -> i32;
+    fn CVPixelBufferUnlockBaseAddress(
+        pixel_buffer: *mut std::ffi::c_void,
+        unlock_flags: u64,
+    ) -> i32;
+    fn CVPixelBufferGetPixelFormatType(pixel_buffer: *mut std::ffi::c_void) -> u32;
+    fn CVPixelBufferGetWidth(pixel_buffer: *mut std::ffi::c_void) -> usize;
+    fn CVPixelBufferGetHeight(pixel_buffer: *mut std::ffi::c_void) -> usize;
+    fn CVPixelBufferGetPlaneCount(pixel_buffer: *mut std::ffi::c_void) -> usize;
+    fn CVPixelBufferGetBaseAddressOfPlane(
+        pixel_buffer: *mut std::ffi::c_void,
+        plane_index: usize,
+    ) -> *mut std::ffi::c_void;
+    fn CVPixelBufferGetBytesPerRowOfPlane(
+        pixel_buffer: *mut std::ffi::c_void,
+        plane_index: usize,
+    ) -> usize;
+    fn CVPixelBufferGetWidthOfPlane(
+        pixel_buffer: *mut std::ffi::c_void,
+        plane_index: usize,
+    ) -> usize;
+    fn CVPixelBufferGetHeightOfPlane(
+        pixel_buffer: *mut std::ffi::c_void,
+        plane_index: usize,
+    ) -> usize;
+}
+
+/// `kCVPixelBufferLock_ReadOnly`. The unlock must pass the same flags.
+#[cfg(target_os = "macos")]
+const CV_PIXEL_BUFFER_LOCK_READ_ONLY: u64 = 0x0000_0001;
+/// `kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange` (`'420v'`): NV12, limited
+/// range. What the VideoToolbox decoder asks for in GPU-output mode, and what
+/// the macOS surface wraps CPU I420 frames in.
+#[cfg(target_os = "macos")]
+const PIXEL_FORMAT_420V: u32 = 0x3432_3076;
+/// `kCVPixelFormatType_420YpCbCr8BiPlanarFullRange` (`'420f'`): NV12, full range.
+#[cfg(target_os = "macos")]
+const PIXEL_FORMAT_420F: u32 = 0x3432_3066;
+
+/// A `CVPixelBufferLockBaseAddress(kCVPixelBufferLock_ReadOnly)` that is undone
+/// on every exit, early returns included.
+#[cfg(target_os = "macos")]
+struct ReadOnlyLock(*mut std::ffi::c_void);
+
+#[cfg(target_os = "macos")]
+impl Drop for ReadOnlyLock {
+    fn drop(&mut self) {
+        unsafe {
+            CVPixelBufferUnlockBaseAddress(self.0, CV_PIXEL_BUFFER_LOCK_READ_ONLY);
+        }
+    }
+}
+
+/// A four-character code as text, for error messages (`'420v'`).
+#[cfg(target_os = "macos")]
+fn fourcc_text(code: u32) -> String {
+    let bytes = code.to_be_bytes();
+    if bytes.iter().all(|b| b.is_ascii_graphic() || *b == b' ') {
+        format!("'{}'", String::from_utf8_lossy(&bytes))
+    } else {
+        format!("0x{code:08x}")
+    }
+}
+
 #[cfg(target_os = "macos")]
 // Safety: the retained CVPixelBuffer is only touched through `&self`; the handle
 // is moved to the main-thread render side as an owned value.
@@ -681,6 +753,214 @@ impl CvPixelBufferFrame {
     pub fn pixel_buffer(&self) -> *mut std::ffi::c_void {
         self.pixel_buffer
     }
+
+    /// Copy the frame to the CPU as tightly packed, limited-range I420 (the Y
+    /// plane, then U, then V; chroma `ceil(w/2)` x `ceil(h/2)`), with the
+    /// frame's width and height. The still path reads stills of what a macOS
+    /// surface presents through this.
+    ///
+    /// Reads NV12 only: `'420v'` as it is, `'420f'` scaled to limited range.
+    /// VideoToolbox is asked for `'420v'` in GPU-output mode and the macOS
+    /// surface wraps CPU frames in `'420v'`, so nothing else reaches a surface
+    /// here; any other format (BGRA included) is refused with its code rather
+    /// than guessed at. The buffer is locked read-only for the copy and
+    /// unlocked on every exit.
+    pub fn read_back_i420(&self) -> Result<(Vec<u8>, u32, u32), String> {
+        let pb = self.pixel_buffer;
+        if pb.is_null() {
+            return Err("the CVPixelBuffer is null".to_string());
+        }
+        unsafe {
+            let full_range = match CVPixelBufferGetPixelFormatType(pb) {
+                PIXEL_FORMAT_420V => false,
+                PIXEL_FORMAT_420F => true,
+                other => {
+                    return Err(format!(
+                        "pixel format {} is not NV12 ('420v' or '420f'); only NV12 is read back",
+                        fourcc_text(other)
+                    ))
+                }
+            };
+            let planes = CVPixelBufferGetPlaneCount(pb);
+            if planes != 2 {
+                return Err(format!("an NV12 buffer with {planes} planes, not 2"));
+            }
+            let width = CVPixelBufferGetWidth(pb);
+            let height = CVPixelBufferGetHeight(pb);
+            if width == 0 || height == 0 {
+                return Err(format!("a {width}x{height} buffer has nothing to read"));
+            }
+            let status = CVPixelBufferLockBaseAddress(pb, CV_PIXEL_BUFFER_LOCK_READ_ONLY);
+            if status != 0 {
+                return Err(format!(
+                    "CVPixelBufferLockBaseAddress failed: CVReturn {status}"
+                ));
+            }
+            let _lock = ReadOnlyLock(pb);
+
+            let (chroma_w, chroma_h) = (width.div_ceil(2), height.div_ceil(2));
+            let y_base = CVPixelBufferGetBaseAddressOfPlane(pb, 0) as *const u8;
+            let uv_base = CVPixelBufferGetBaseAddressOfPlane(pb, 1) as *const u8;
+            let y_stride = CVPixelBufferGetBytesPerRowOfPlane(pb, 0);
+            let uv_stride = CVPixelBufferGetBytesPerRowOfPlane(pb, 1);
+            let y_rows = CVPixelBufferGetHeightOfPlane(pb, 0);
+            let uv_rows = CVPixelBufferGetHeightOfPlane(pb, 1);
+            if y_base.is_null() || uv_base.is_null() {
+                return Err("an NV12 plane has no base address".to_string());
+            }
+            if CVPixelBufferGetWidthOfPlane(pb, 0) < width
+                || y_rows < height
+                || y_stride < width
+                || CVPixelBufferGetWidthOfPlane(pb, 1) < chroma_w
+                || uv_rows < chroma_h
+                || uv_stride < 2 * chroma_w
+            {
+                return Err(format!(
+                    "NV12 planes smaller than a {width}x{height} frame (luma {y_stride}x{y_rows}, \
+                     chroma {uv_stride}x{uv_rows} bytes)"
+                ));
+            }
+            // Each plane holds at least `stride * rows` bytes while locked.
+            let y_plane = std::slice::from_raw_parts(y_base, y_stride * height);
+            let uv_plane = std::slice::from_raw_parts(uv_base, uv_stride * chroma_h);
+            let data = nv12_to_i420(
+                y_plane, y_stride, uv_plane, uv_stride, width, height, full_range,
+            );
+            Ok((data, width as u32, height as u32))
+        }
+    }
+}
+
+/// Convert an NV12 frame (a luma plane and an interleaved CbCr plane, each with
+/// its own row stride) to tightly packed limited-range I420 with chroma planes
+/// of `ceil(width/2)` x `ceil(height/2)`. `full_range` scales full-range
+/// samples to limited range (luma 16..235, chroma 16..240), which is what every
+/// consumer of I420 here assumes.
+///
+/// The caller guarantees the planes cover the frame: `y` holds `height` rows of
+/// `y_stride` bytes and `uv` holds `ceil(height/2)` rows of `uv_stride` bytes.
+#[cfg(any(test, target_os = "macos"))]
+pub fn nv12_to_i420(
+    y: &[u8],
+    y_stride: usize,
+    uv: &[u8],
+    uv_stride: usize,
+    width: usize,
+    height: usize,
+    full_range: bool,
+) -> Vec<u8> {
+    let (chroma_w, chroma_h) = (width.div_ceil(2), height.div_ceil(2));
+    let chroma_size = chroma_w * chroma_h;
+    let mut out = vec![0u8; width * height + 2 * chroma_size];
+    let (out_y, out_chroma) = out.split_at_mut(width * height);
+    let (out_u, out_v) = out_chroma.split_at_mut(chroma_size);
+    let luma = |v: u8| -> u8 {
+        if full_range {
+            (16 + (u32::from(v) * 219 + 127) / 255) as u8
+        } else {
+            v
+        }
+    };
+    let chroma = |v: u8| -> u8 {
+        if full_range {
+            let scaled = (i32::from(v) - 128) * 224;
+            let rounded = if scaled >= 0 {
+                (scaled + 127) / 255
+            } else {
+                (scaled - 127) / 255
+            };
+            (128 + rounded) as u8
+        } else {
+            v
+        }
+    };
+    for row in 0..height {
+        let src = &y[row * y_stride..row * y_stride + width];
+        let dst = &mut out_y[row * width..(row + 1) * width];
+        if full_range {
+            for (d, s) in dst.iter_mut().zip(src) {
+                *d = luma(*s);
+            }
+        } else {
+            dst.copy_from_slice(src);
+        }
+    }
+    for row in 0..chroma_h {
+        let src = &uv[row * uv_stride..row * uv_stride + 2 * chroma_w];
+        for col in 0..chroma_w {
+            out_u[row * chroma_w + col] = chroma(src[2 * col]);
+            out_v[row * chroma_w + col] = chroma(src[2 * col + 1]);
+        }
+    }
+    out
+}
+
+/// Write a tightly packed I420 frame into NV12 planes (a luma plane and an
+/// interleaved CbCr plane, each with its own row stride), as a `'420v'`
+/// `CVPixelBuffer` holds them. The I420 chroma planes are `floor(width/2)` x
+/// `floor(height/2)`, as this crate's decoders pack them
+/// ([`PixelFormat::I420`](crate::video::PixelFormat::I420)'s `frame_size`); an
+/// odd width or height has one more NV12 chroma column or row than that, which
+/// repeats the last one.
+///
+/// Refuses a buffer shorter than the frame or planes smaller than it.
+#[cfg(any(test, target_os = "macos"))]
+pub fn i420_to_nv12(
+    data: &[u8],
+    width: usize,
+    height: usize,
+    y: &mut [u8],
+    y_stride: usize,
+    uv: &mut [u8],
+    uv_stride: usize,
+) -> Result<(), String> {
+    if width == 0 || height == 0 {
+        return Err(format!("a {width}x{height} frame has nothing to copy"));
+    }
+    let (src_cw, src_ch) = (width / 2, height / 2);
+    let src_chroma = src_cw * src_ch;
+    let needed = width * height + 2 * src_chroma;
+    if data.len() < needed {
+        return Err(format!(
+            "I420 frame is {} bytes, {needed} expected for {width}x{height}",
+            data.len()
+        ));
+    }
+    let (dst_cw, dst_ch) = (width.div_ceil(2), height.div_ceil(2));
+    if y_stride < width
+        || y.len() < y_stride * (height - 1) + width
+        || uv_stride < 2 * dst_cw
+        || uv.len() < uv_stride * (dst_ch - 1) + 2 * dst_cw
+    {
+        return Err(format!(
+            "NV12 planes too small for {width}x{height} (luma {} bytes at stride {y_stride}, \
+             chroma {} bytes at stride {uv_stride})",
+            y.len(),
+            uv.len()
+        ));
+    }
+    if src_cw == 0 || src_ch == 0 {
+        return Err(format!(
+            "a {width}x{height} I420 frame has no chroma to copy"
+        ));
+    }
+    let (src_y, rest) = data.split_at(width * height);
+    let (src_u, rest) = rest.split_at(src_chroma);
+    let src_v = &rest[..src_chroma];
+    for row in 0..height {
+        y[row * y_stride..row * y_stride + width]
+            .copy_from_slice(&src_y[row * width..(row + 1) * width]);
+    }
+    for row in 0..dst_ch {
+        let src_row = row.min(src_ch - 1) * src_cw;
+        let dst = &mut uv[row * uv_stride..row * uv_stride + 2 * dst_cw];
+        for col in 0..dst_cw {
+            let src = src_row + col.min(src_cw - 1);
+            dst[2 * col] = src_u[src];
+            dst[2 * col + 1] = src_v[src];
+        }
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]
@@ -711,6 +991,85 @@ mod tests {
         assert_eq!(handle.width(), 320);
         assert_eq!(handle.height(), 180);
         assert_eq!(handle.colorspace(), ColorSpace::Bt601);
+    }
+
+    /// A `width`x`height` I420 frame whose every sample differs from its
+    /// neighbors, chroma packed `floor(w/2)` x `floor(h/2)`.
+    fn gradient_i420(width: usize, height: usize) -> Vec<u8> {
+        let (cw, ch) = (width / 2, height / 2);
+        let mut data = Vec::with_capacity(width * height + 2 * cw * ch);
+        data.extend((0..width * height).map(|i| (16 + i % 200) as u8));
+        data.extend((0..cw * ch).map(|i| (40 + i % 150) as u8));
+        data.extend((0..cw * ch).map(|i| (60 + i % 170) as u8));
+        data
+    }
+
+    #[test]
+    fn i420_survives_a_round_trip_through_padded_nv12() {
+        let (w, h) = (6usize, 4usize);
+        let data = gradient_i420(w, h);
+        // Strides wider than the rows, as a CVPixelBuffer pads them.
+        let (y_stride, uv_stride) = (16usize, 16usize);
+        let mut y = vec![0xAAu8; y_stride * h];
+        let mut uv = vec![0xAAu8; uv_stride * (h / 2)];
+        i420_to_nv12(&data, w, h, &mut y, y_stride, &mut uv, uv_stride).unwrap();
+        // Cb and Cr interleave: the first chroma pair is U[0], V[0].
+        let chroma = (w / 2) * (h / 2);
+        assert_eq!(uv[0], data[w * h]);
+        assert_eq!(uv[1], data[w * h + chroma]);
+        // The padding is left alone.
+        assert_eq!(y[w], 0xAA);
+        let back = nv12_to_i420(&y, y_stride, &uv, uv_stride, w, h, false);
+        assert_eq!(back, data);
+    }
+
+    #[test]
+    fn an_odd_frame_repeats_its_last_chroma_column_and_row() {
+        let (w, h) = (5usize, 3usize);
+        let data = gradient_i420(w, h);
+        // floor: 2x1 chroma in; ceil: 3x2 chroma pairs out.
+        let (y_stride, uv_stride) = (w, 6usize);
+        let mut y = vec![0u8; y_stride * h];
+        let mut uv = vec![0u8; uv_stride * 2];
+        i420_to_nv12(&data, w, h, &mut y, y_stride, &mut uv, uv_stride).unwrap();
+        let u = &data[w * h..w * h + 2];
+        assert_eq!(
+            [uv[0], uv[2], uv[4]],
+            [u[0], u[1], u[1]],
+            "last column repeats"
+        );
+        assert_eq!(&uv[6..12], &uv[0..6], "last row repeats");
+        // Read back with ceil chroma, as the still path expects.
+        let back = nv12_to_i420(&y, y_stride, &uv, uv_stride, w, h, false);
+        assert_eq!(back.len(), w * h + 2 * 3 * 2);
+        assert_eq!(&back[..w * h], &data[..w * h]);
+    }
+
+    #[test]
+    fn short_frames_and_small_planes_are_refused() {
+        let data = gradient_i420(4, 4);
+        let mut y = vec![0u8; 16];
+        let mut uv = vec![0u8; 8];
+        assert!(i420_to_nv12(&data[..10], 4, 4, &mut y, 4, &mut uv, 4).is_err());
+        assert!(i420_to_nv12(&data, 4, 4, &mut y[..8], 4, &mut uv, 4).is_err());
+        assert!(i420_to_nv12(&data, 4, 4, &mut y, 4, &mut uv, 2).is_err());
+        assert!(i420_to_nv12(&data, 0, 4, &mut y, 4, &mut uv, 4).is_err());
+        assert!(i420_to_nv12(&data, 4, 4, &mut y, 4, &mut uv, 4).is_ok());
+    }
+
+    #[test]
+    fn full_range_nv12_is_read_back_as_limited_range() {
+        // Full-range black, white and the chroma extremes.
+        let y = [0u8, 255, 128, 128];
+        let uv = [0u8, 255];
+        let out = nv12_to_i420(&y, 2, &uv, 2, 2, 2, true);
+        assert_eq!(&out[..4], &[16, 235, 126, 126]);
+        assert_eq!(out[4], 16, "Cb 0 is limited 16");
+        assert_eq!(out[5], 240, "Cr 255 is limited 240");
+        // Limited range passes through untouched.
+        let same = nv12_to_i420(&y, 2, &uv, 2, 2, 2, false);
+        assert_eq!(&same[..4], &y);
+        assert_eq!(&same[4..], &[0, 255]);
     }
 
     #[test]
