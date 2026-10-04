@@ -13,20 +13,24 @@ vi.mock('../../api/tenor', () => ({
 
 const trending = vi.mocked(tenorApi.trending);
 const search = vi.mocked(tenorApi.search);
-const tenorResponse = (results: unknown[]) =>
+// Search and trending send different query params, and axios types each
+// response by its request config, so each endpoint gets its own helper.
+const trendingResponse = (results: unknown[]) =>
   ({ data: { results } }) as Awaited<ReturnType<typeof tenorApi.trending>>;
+const searchResponse = (results: unknown[]) =>
+  ({ data: { results } }) as Awaited<ReturnType<typeof tenorApi.search>>;
 
 describe('GifPicker', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    search.mockResolvedValue(tenorResponse([]));
+    search.mockResolvedValue(searchResponse([]));
   });
 
   it('renders and selects only safe GIF URLs', async () => {
     const user = userEvent.setup();
     const onSelect = vi.fn();
     trending.mockResolvedValue(
-      tenorResponse([
+      trendingResponse([
         {
           id: 'safe',
           title: 'Safe',
@@ -61,7 +65,7 @@ describe('GifPicker', () => {
 
   it('does not render GIFs with invalid dimensions', async () => {
     trending.mockResolvedValue(
-      tenorResponse([
+      trendingResponse([
         {
           id: 'zero-height',
           title: 'Zero Height',
@@ -81,7 +85,7 @@ describe('GifPicker', () => {
   it('closes on Escape', async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
-    trending.mockResolvedValue(tenorResponse([]));
+    trending.mockResolvedValue(trendingResponse([]));
     render(<GifPicker onSelect={vi.fn()} onClose={onClose} />);
 
     await user.keyboard('{Escape}');
