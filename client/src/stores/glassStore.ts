@@ -139,7 +139,7 @@ export const useGlassStore = create<GlassState>()((set, get) => ({
       pillExpanded: false,
       // A fresh Watch starts with the conversation beside the stream.
       browseOpen: opening ? false : get().browseOpen,
-      chatHidden: opening || nextMode !== 'theater' ? false : get().chatHidden,
+      chatHidden: nextMode === 'theater' && (current.mode !== 'theater' || get().chatHidden),
     });
   },
 
@@ -150,8 +150,8 @@ export const useGlassStore = create<GlassState>()((set, get) => ({
     if (stage.mode === 'none') return;
     set({
       stage: { ...stage, mode },
-      // Side by side always shows the conversation.
-      chatHidden: mode === 'theater' ? get().chatHidden : false,
+      // Enter theater with the stream unobstructed; side by side restores chat.
+      chatHidden: mode === 'theater' && (stage.mode !== 'theater' || get().chatHidden),
     });
   },
 

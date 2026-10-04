@@ -219,15 +219,15 @@ describe('theater', () => {
 
   it('the chat button (H) hides and shows the chat; it says which it will do', () => {
     renderStage(LOUNGE, 'theater');
-    const hide = screen.getByRole('button', { name: 'Hide chat' });
-    expect(hide).toHaveAttribute('aria-pressed', 'true');
-    expect(hide).toHaveAttribute('aria-keyshortcuts', 'H');
-    fireEvent.click(hide);
-    expect(useGlassStore.getState().chatHidden).toBe(true);
+    const show = screen.getByRole('button', { name: 'Show chat' });
+    expect(show).toHaveAttribute('aria-pressed', 'false');
+    expect(show).toHaveAttribute('aria-keyshortcuts', 'H');
     expect(document.querySelector('.glass-stage')).toHaveAttribute('data-chat', 'hidden');
-    fireEvent.keyDown(document.body, { key: 'h' });
+    fireEvent.click(show);
     expect(useGlassStore.getState().chatHidden).toBe(false);
     expect(screen.getByRole('button', { name: 'Hide chat' })).toBeInTheDocument();
+    fireEvent.keyDown(document.body, { key: 'h' });
+    expect(useGlassStore.getState().chatHidden).toBe(true);
   });
 
   it('while browsing in theater the chat is out of the way, and the chat button brings it back', () => {

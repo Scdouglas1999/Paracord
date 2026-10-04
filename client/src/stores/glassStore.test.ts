@@ -31,6 +31,7 @@ describe('glassStore', () => {
   it('opens straight into theater when asked', () => {
     useGlassStore.getState().openStage(LOUNGE, 'theater');
     expect(useGlassStore.getState().stage.mode).toBe('theater');
+    expect(useGlassStore.getState().chatHidden).toBe(true);
   });
 
   it('keeps the chosen mode when switching streams inside an open stage', () => {
@@ -41,7 +42,7 @@ describe('glassStore', () => {
     store.openStage({ ...LOUNGE, streamerId: 'brendan' });
     const s = useGlassStore.getState();
     expect(s.stage).toEqual({ mode: 'theater', ...LOUNGE, streamerId: 'brendan' });
-    expect(s.chatHidden).toBe(true);
+    expect(s.chatHidden).toBe(false);
   });
 
   it('closing the stage clears browse and hidden chat with it', () => {
@@ -77,8 +78,12 @@ describe('glassStore', () => {
     expect(useGlassStore.getState().chatHidden).toBe(false);
 
     store.setStageMode('theater');
-    store.toggleChatHidden();
     expect(useGlassStore.getState().chatHidden).toBe(true);
+    store.toggleChatHidden();
+    expect(useGlassStore.getState().chatHidden).toBe(false);
+    store.setStageMode('theater');
+    expect(useGlassStore.getState().chatHidden).toBe(false);
+    store.setChatHidden(true);
 
     store.setStageMode('side');
     expect(useGlassStore.getState().chatHidden).toBe(false);

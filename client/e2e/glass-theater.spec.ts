@@ -303,7 +303,7 @@ async function arrive(page: Page) {
   );
 }
 
-test('05 theater with the chat beside it, joined', async ({ page }) => {
+test('05 theater with chat manually reopened, joined', async ({ page }) => {
   await open(page);
   await fakeMedia(page, { joined: true, watchers: 2 });
   await watchFromPill(page);
@@ -312,6 +312,9 @@ test('05 theater with the chat beside it, joined', async ({ page }) => {
   await settled(page);
   const stage = stagePane(page);
   await expect(page.locator('.glass-stage[data-mode="theater"]')).toBeVisible();
+  await expect(page.getByRole('main')).toHaveAttribute('data-away', 'true');
+  await stage.getByRole('button', { name: 'Show chat', exact: true }).click();
+  await settled(page);
   await expect(stage.getByRole('button', { name: 'Hide chat' })).toHaveAttribute('aria-pressed', 'true');
   // Only the talker has a tile; everyone else is a face.
   await expect(page.locator('.glass-theater__people .glass-stage__tile')).toHaveCount(1);
@@ -321,14 +324,12 @@ test('05 theater with the chat beside it, joined', async ({ page }) => {
   await shoot(page, 'theater-05-chat-desktop');
 });
 
-test('05 theater, chat hidden (H), messages surfacing; a click brings the chat back', async ({ page }) => {
+test('05 theater hides chat on entry, messages surfacing; a click brings the chat back', async ({ page }) => {
   await open(page);
   await fakeMedia(page, { joined: true, watchers: 2 });
   await watchFromPill(page);
   await settled(page);
   await page.keyboard.press('t');
-  await settled(page);
-  await page.keyboard.press('h');
   await settled(page);
   await expect(page.getByRole('main')).toHaveAttribute('data-away', 'true');
   await arrive(page);
