@@ -80,6 +80,15 @@ windows = { version = "0.61", features = [
     # Now playing: the system media transport controls (now_playing/gsmtc.rs).
     "Foundation",
     "Media_Control",
+    # Native video underlay (native_media/native_render/windows.rs): a
+    # DirectComposition tree of Direct3D 11 swapchains under the WebView2,
+    # shaders compiled at install with D3DCompile.
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D_Fxc",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_DirectComposition",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
 ] }
 
 # In-process libavcodec GPU codec engine (hardware H.264/AV1 encode + native
