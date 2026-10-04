@@ -44,83 +44,14 @@ export function getValidatedDecoderCodecString(codec: string): string | null {
   return validatedCodecStrings.get(codec.trim().toLowerCase()) ?? null;
 }
 
-/** Fetch one real encoded keyframe from the native encoder for `codec`, or
- * null when unavailable (not running under Tauri, or no local encoder). */
-async function fetchDecodeProbeFrame(key: string): Promise<Uint8Array | null> {
-  try {
-    const mod = await import('@tauri-apps/api/core');
-    const raw = await mod.invoke('media_generate_decode_probe', { codec: key });
-    if (raw instanceof ArrayBuffer && raw.byteLength > 0) {
-      return new Uint8Array(raw);
-    }
-    if (raw instanceof Uint8Array && raw.byteLength > 0) {
-      return raw;
-    }
-    // Tauri's postMessage IPC transport encodes binary responses as JSON
-    // number arrays; the probe must still run there.
-    if (Array.isArray(raw) && raw.length > 0) {
-      return Uint8Array.from(raw as number[]);
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-/** Configure a decoder for `codecString` and require it to actually produce a
- * decoded frame from a real keyframe. Resolves false on error or timeout. */
-function decodesProbeFrame(codecString: string, key: string, probe: Uint8Array): Promise<boolean> {
-  return new Promise<boolean>((resolve) => {
-    let settled = false;
-    let decoder: VideoDecoder | null = null;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const settle = (ok: boolean) => {
-      if (settled) return;
-      settled = true;
-      if (timer) clearTimeout(timer);
-      try {
-        decoder?.close();
-      } catch {
-        // Already closed.
-      }
-      resolve(ok);
-    };
-    timer = setTimeout(() => settle(false), 3000);
-    try {
-      decoder = new VideoDecoder({
-        output: (frame) => {
-          frame.close();
-          settle(true);
-        },
-        error: () => settle(false),
-      });
-      const decoderConfig = { codec: codecString } satisfies Record<string, unknown>;
-      if (key === 'h264') {
-        (decoderConfig as { avc?: { format: 'annexb' } }).avc = { format: 'annexb' };
-      }
-      decoder.configure(decoderConfig as Parameters<VideoDecoder['configure']>[0]);
-      decoder.decode(new EncodedVideoChunk({ type: 'key', timestamp: 0, data: probe }));
-      decoder
-        .flush()
-        .then(() => settle(false)) // flushed without ever emitting a frame
-        .catch(() => settle(false));
-    } catch {
-      settle(false);
-    }
-  });
-}
-
 /**
- * Whether this webview can decode the given codec family ('vp9' | 'h264' |
- * 'av1') with WebCodecs. Used both for advertised decode capabilities (which
- * drive codec negotiation) and to decide between encoded passthrough and
- * native in-process decoding. Result is cached per codec.
+ * Whether this browser can decode the given codec family ('vp9' | 'h264' |
+ * 'av1') with WebCodecs. The browser client advertises it as decode support
+ * (codec negotiation) and decodes with it. Result is cached per codec.
  *
- * This is a FUNCTIONAL check, not just `isConfigSupported`: when the native
- * side can produce a real keyframe for the codec, the decoder must actually
- * decode it. WebKitGTK has been observed to approve an H264 config and then
- * fail every real frame with "Decode error" — trusting the claim made the
- * host stream a picture it could not show itself.
+ * The desktop app never asks: it decodes every video natively and draws it on
+ * a native surface (docs/glass-spec.md §2), so there is no WebCodecs claim to
+ * verify there.
  */
 export function isWebCodecsDecodeSupported(codec: string): Promise<boolean> {
   const key = codec.trim().toLowerCase();
@@ -158,24 +89,8 @@ export function isWebCodecsDecodeSupported(codec: string): Promise<boolean> {
       if (!configurable || typeof EncodedVideoChunk === 'undefined') {
         return false;
       }
-      const probe = await fetchDecodeProbeFrame(key);
-      if (!probe) {
-        // No local encoder to generate a probe frame — the config-level claim
-        // is the best available evidence.
-        validatedCodecStrings.set(key, configurable);
-        return true;
-      }
-      const verdict = await decodesProbeFrame(configurable, key, probe);
-      if (verdict) {
-        validatedCodecStrings.set(key, configurable);
-      }
-      if (!verdict) {
-        console.error(
-          `[media] webview claims WebCodecs ${key} support but failed to decode a real keyframe; ` +
-            'excluding it from decode capabilities',
-        );
-      }
-      return verdict;
+      validatedCodecStrings.set(key, configurable);
+      return true;
     })();
     decodeSupportCache.set(key, cached);
   }

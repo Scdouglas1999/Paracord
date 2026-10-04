@@ -28,6 +28,11 @@ const SRC = join(HERE, '..', 'src');
 /** Files that may hold a literal color, and why no token can replace it. */
 const ALLOWED = new Map([
   [
+    'lib/media/video/nativeVideoTile.ts',
+    'the poster stands in for the native video surface, whose shader paints '
+      + 'letterbox bars black; it is the video\'s own black, not a theme color',
+  ],
+  [
     'styles/tokens.css',
     'the palette itself — every literal in the product lives here',
   ],

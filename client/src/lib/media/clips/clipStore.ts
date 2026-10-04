@@ -182,7 +182,7 @@ let clipIds = 0;
 
 /** A still of the stream now, as an object URL (cover-cropped 16:9), or null. */
 async function sampleThumbnail(streamerId: string): Promise<string | null> {
-  const bitmap = await createViewFrameSource('watch', streamerId).getLatestFrame();
+  const bitmap = await createViewFrameSource('watch', streamerId, { width: THUMB_WIDTH * 2, height: THUMB_HEIGHT * 2 }).getLatestFrame();
   if (!bitmap) return null;
   try {
     const canvas = document.createElement('canvas');

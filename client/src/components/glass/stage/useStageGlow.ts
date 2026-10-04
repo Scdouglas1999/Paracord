@@ -68,7 +68,7 @@ export function useStageGlow(rootRef: RefObject<HTMLElement | null>, streamerId:
     let right: Rgb | null = null;
     let lastAt = 0;
 
-    const source = createViewFrameSource('watch', streamerId);
+    const source = createViewFrameSource('watch', streamerId, { width: SAMPLE_W * 2, height: SAMPLE_H * 2 });
     const stop = source.subscribe((bitmap) => {
       try {
         if (!context) {

@@ -236,6 +236,9 @@ export async function reportGroundColor(invoke?: GroundInvoke): Promise<void> {
   try {
     await send('native_render_set_ground_color', { color: reading.hex });
     lastReported = reading.hex;
+    // What the shell paints under the page, for the page to paint the same
+    // when it has to cover the video itself (a stage move, layout.css).
+    document.documentElement.style.setProperty('--native-ground', reading.hex);
     logVoiceDiagnostic(`[native-render] ground reported as ${reading.hex}`, {
       computed: reading.computed,
       theme: document.documentElement.getAttribute('data-theme'),

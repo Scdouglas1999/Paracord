@@ -58,14 +58,16 @@ export interface VideoCodecCapability {
 
 export interface MediaStreamCapabilities {
   video: VideoCodecCapability[];
+  /** The desktop app can draw remote video in this window: its native host
+   * installed. Remote video in the desktop app has no other route, so without
+   * it every codec's `decode` is false and `nativeRendererError` says why.
+   * Always false in the browser, which draws with WebCodecs. */
   nativeDesktopRenderer: boolean;
-  /** True when the platform surface composites BELOW the webview (Linux GTK
-   * underlay): DOM chrome renders over the video and the tile punches a
-   * transparent hole. Underlay backends disable DOM-occlusion blanking
-   * (`occlusion: false`) so menus/tooltips never hide the whole GL tile;
-   * opaque portal CSS keeps floating UI readable over live video. False for
-   * overlay backends (macOS) where the surface floats above the webview. */
+  /** The surface composites BELOW the webview (every desktop backend): DOM
+   * chrome renders over the video and the tile punches a transparent hole. */
   nativeRenderUnderlay?: boolean;
+  /** Why this window cannot draw video, when it cannot (desktop app). */
+  nativeRendererError?: string;
   browserInteropProtocolV1: boolean;
   realMediaE2ee: boolean;
   simulcastV1: boolean;
@@ -160,17 +162,25 @@ export type MediaSessionRole = 'call' | 'listen' | 'view';
 export type PeerRole = 'member' | 'viewer';
 
 /**
- * Where a frame tap's pixels come from, decided once per track when the tap
- * starts (never switched mid-stream):
+ * Where a frame tap's pixels come from. One route per engine, never switched:
  *
- * - `frames`: decoded `VideoFrame`s reach JavaScript and are handed to the tap.
- * - `native-surface`: the desktop app decodes and presents this track on a
- *   platform surface (Linux GTK underlay, macOS layer); no frame reaches
- *   JavaScript. Sampling needs the native sampler (WP-G8's command).
- * - `no-route`: nothing in this client can decode the track's codec.
+ * - `frames`: decoded `VideoFrame`s reach JavaScript and are handed to the tap
+ *   (the browser client, which decodes with WebCodecs).
+ * - `native-surface`: the desktop app decodes and presents every track on a
+ *   platform surface under the webview; no frame reaches JavaScript. Sampling
+ *   reads stills instead (`MediaEngine.readVideoStill`).
+ * - `no-route`: nothing in this client can show the track (its codec, or the
+ *   desktop app's renderer is missing).
  * - `no-track`: the publisher has no such track (yet, or any more).
  */
 export type VideoTapRoute = 'frames' | 'native-surface' | 'no-route' | 'no-track';
+
+/** A still of a natively drawn track, owned by the caller (close the bitmap). */
+export interface VideoStill {
+  bitmap: ImageBitmap;
+  /** Increases with every newer frame the still was taken from. */
+  seq: number;
+}
 
 export interface VideoFrameTap {
   /** Settles once the track's route is known. */
@@ -313,6 +323,21 @@ export interface MediaEngine {
     trackId: 'camera' | 'screen',
     onFrame: (frame: VideoFrame) => void,
   ): VideoFrameTap;
+  /**
+   * The desktop app's `native-surface` route: a still of what the track's
+   * native surface (or sampler) last presented, scaled to fit
+   * `maxWidth`x`maxHeight`, proportions kept. Null while there is none yet, or
+   * when it is the one numbered `afterSeq`. Throws when the shell cannot read
+   * the frame back (never a quiet blank). Absent on engines whose taps deliver
+   * frames.
+   */
+  readVideoStill?(
+    userId: string,
+    trackId: 'camera' | 'screen',
+    maxWidth: number,
+    maxHeight: number,
+    afterSeq?: number,
+  ): Promise<VideoStill | null>;
 }
 
 export async function createMediaEngine(): Promise<MediaEngine> {

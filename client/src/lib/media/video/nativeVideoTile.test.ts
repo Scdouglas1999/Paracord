@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   NativeVideoTile,
+  isMirrored,
   isUnderlayOccluder,
+  posterPlacement,
   sampleTileVisibility,
   type NativeVideoTileOptions,
 } from './nativeVideoTile';
@@ -450,5 +452,142 @@ describe('NativeVideoTile', () => {
     expect(document.elementFromPoint).not.toHaveBeenCalled();
     tile.destroy();
     document.body.removeChild(foreignOverlay);
+  });
+
+  function geometryCalls(invoke: ReturnType<typeof makeTile>['invoke']) {
+    return invoke.mock.calls
+      .filter((c) => c[0] === 'native_render_update_geometry')
+      .map((c) => c[1] as Record<string, number | boolean>);
+  }
+
+  it('keeps the hole closed until the native side confirms a frame is drawn in place', async () => {
+    const onVisibilityChange = vi.fn();
+    let confirm: (generation: number) => void = () => {};
+    const unlisten = vi.fn();
+    const { tile, element, invoke } = makeTile({
+      onVisibilityChange,
+      listenShown: (surfaceId, onShown) => {
+        expect(surfaceId).toBe(7);
+        confirm = onShown;
+        return unlisten;
+      },
+    });
+    document.elementFromPoint = vi.fn(() => element) as typeof document.elementFromPoint;
+    await tile.attach();
+    const [reveal] = geometryCalls(invoke);
+    expect(reveal).toMatchObject({ visible: true, generation: 1, mirrored: false });
+    expect(onVisibilityChange).not.toHaveBeenCalled();
+    expect(tile.revealed).toBe(false);
+    // A stale confirmation opens nothing.
+    confirm(0);
+    expect(onVisibilityChange).not.toHaveBeenCalled();
+    confirm(1);
+    expect(onVisibilityChange).toHaveBeenCalledWith(true);
+    expect(tile.revealed).toBe(true);
+    tile.destroy();
+    expect(onVisibilityChange).toHaveBeenLastCalledWith(false);
+    expect(unlisten).toHaveBeenCalled();
+  });
+
+  it('closes the hole first, hides the surface after, keeps decoding while covered, and reveals afresh', async () => {
+    const events: string[] = [];
+    let confirm: (generation: number) => void = () => {};
+    const { tile, element } = makeTile({
+      onVisibilityChange: (visible) => events.push(`hole:${visible}`),
+      onActiveChange: (active) => events.push(`decode:${active}`),
+      listenShown: (_id, onShown) => {
+        confirm = onShown;
+        return () => {};
+      },
+      invoke: vi.fn(async (cmd: string, args?: Record<string, unknown>) => {
+        if (cmd === 'native_render_attach') return { surfaceId: 7 };
+        if (cmd === 'native_render_update_geometry') events.push(`surface:${String(args?.visible)}`);
+        return undefined;
+      }),
+    });
+    document.elementFromPoint = vi.fn(() => element) as typeof document.elementFromPoint;
+    await tile.attach();
+    confirm(1);
+    expect(events).toEqual(['decode:true', 'surface:true', 'hole:true']);
+
+    // A stage move's shield covers the tile.
+    const shield = document.createElement('div');
+    shield.setAttribute('data-native-shield', '');
+    document.body.appendChild(shield);
+    document.elementFromPoint = vi.fn(() => shield) as typeof document.elementFromPoint;
+    (tile as unknown as { report: () => void }).report();
+    // The hole closed before the surface was hidden; decoding never paused.
+    expect(events.slice(3)).toEqual(['hole:false', 'surface:false']);
+
+    // The shield comes off: a new generation, and the hole waits for it.
+    shield.remove();
+    document.elementFromPoint = vi.fn(() => element) as typeof document.elementFromPoint;
+    (tile as unknown as { report: () => void }).report();
+    expect(events.slice(5)).toEqual(['surface:true']);
+    confirm(1);
+    expect(events.slice(6)).toEqual([]);
+    confirm(2);
+    expect(events.slice(6)).toEqual(['hole:true']);
+    tile.destroy();
+  });
+
+  it('pauses decoding only when the tile leaves the screen', async () => {
+    const onActiveChange = vi.fn();
+    const { tile, element } = makeTile({ onActiveChange });
+    document.elementFromPoint = vi.fn(() => element) as typeof document.elementFromPoint;
+    await tile.attach();
+    expect(onActiveChange).toHaveBeenLastCalledWith(true);
+    (tile as unknown as { intersecting: boolean }).intersecting = false;
+    (tile as unknown as { report: () => void }).report();
+    expect(onActiveChange).toHaveBeenLastCalledWith(false);
+    expect(onActiveChange).toHaveBeenCalledTimes(2);
+    tile.destroy();
+  });
+
+  it('tells the surface to mirror a tile its page mirrors (the self-view)', async () => {
+    const { tile, element, invoke } = makeTile({
+      window: {
+        devicePixelRatio: 1,
+        getComputedStyle: () => ({ borderTopLeftRadius: '0px', transform: 'matrix(-1, 0, 0, 1, 0, 0)' }) as CSSStyleDeclaration,
+        requestAnimationFrame: (cb: FrameRequestCallback) => {
+          cb(0);
+          return 1;
+        },
+        cancelAnimationFrame: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      } as unknown as Window,
+    });
+    document.elementFromPoint = vi.fn(() => element) as typeof document.elementFromPoint;
+    await tile.attach();
+    expect(geometryCalls(invoke)[0]).toMatchObject({ mirrored: true });
+    tile.destroy();
+  });
+});
+
+describe('isMirrored', () => {
+  const view = (transform: string) =>
+    ({ getComputedStyle: () => ({ transform }) as CSSStyleDeclaration }) as unknown as Window;
+  const el = document.createElement('canvas');
+  it('reads a left-to-right flip from the computed transform', () => {
+    expect(isMirrored(el, view('matrix(-1, 0, 0, 1, 0, 0)'))).toBe(true);
+    expect(isMirrored(el, view('matrix(1, 0, 0, 1, 0, 0)'))).toBe(false);
+    expect(isMirrored(el, view('none'))).toBe(false);
+    expect(isMirrored(el, null)).toBe(false);
+  });
+});
+
+describe('posterPlacement', () => {
+  it('contains a frame whole and centered, as the surface letterboxes it', () => {
+    expect(posterPlacement(1280, 720, 400, 400, 'contain', { x: 0.5, y: 0.5 })).toEqual({ x: 0, y: 87.5, width: 400, height: 225 });
+  });
+
+  it('covers the box and crops around the anchor, as a camera tile does', () => {
+    // A 3:4 camera in a 2:1 tile: full width, the crop 35% from the top.
+    const at = posterPlacement(600, 800, 400, 200, 'cover', { x: 0.5, y: 0.35 });
+    expect(at.width).toBe(400);
+    expect(at.height).toBeCloseTo(533.33, 1);
+    expect(at.x).toBe(0);
+    expect(at.y).toBeCloseTo((200 - 533.333) * 0.35, 1);
   });
 });

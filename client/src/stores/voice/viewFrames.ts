@@ -15,11 +15,14 @@ export interface ViewFrameOptions {
   /** Frames a second wanted (capped: ambient 1, watch 4). */
   fps?: number;
   /**
-   * Where the frames come from, each time the view (re)attaches: `frames`, or
-   * why there are none (`native-surface` on the desktop's platform-surface
-   * route, `no-route`, `no-track`). Never switched mid-stream.
+   * Where the frames come from, each time the view (re)attaches: `frames` (the
+   * browser), `native-surface` (the desktop app's stills), or why there are
+   * none (`no-route`, `no-track`). Never switched mid-stream.
    */
   onRoute?: (route: VideoTapRoute) => void;
+  /** The largest still wanted on the desktop app's native route, each way
+   * (proportions kept). Frames on the browser arrive at their own size. */
+  size?: { width: number; height: number };
   /** For tests. */
   deps?: EngineFrameTapDeps;
 }
@@ -52,7 +55,7 @@ export function subscribeViewFrames(
       current = null;
     }
     if (!current && engine && view) {
-      const tap = tapEngineFrames(engine, view.streamerId, 'screen', onFrame, fps, options.deps);
+      const tap = tapEngineFrames(engine, view.streamerId, 'screen', onFrame, fps, options.deps, options.size);
       current = { engine, streamerId: view.streamerId, release: () => tap.release() };
       void tap.route.then((route) => { if (!stopped) options.onRoute?.(route); });
     }
