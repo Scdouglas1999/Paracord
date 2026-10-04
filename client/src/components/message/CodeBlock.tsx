@@ -86,6 +86,12 @@ function sanitizeHighlightedHtml(html: string): string {
   });
 }
 
+/**
+ * A code block in a message (docs/index-spec.md §8.4): `--ix-code`, radius 12, the
+ * language and a Copy chip in one quiet row, the code in the code face. The
+ * colors are in `ix-cards.css`; highlight.js only supplies the class names, and
+ * everything it returns is sanitized down to `hljs-*` spans.
+ */
 export default function CodeBlock({ code, language }: CodeBlockProps) {
   const [copied, setCopied] = useState(false);
 
@@ -119,35 +125,9 @@ export default function CodeBlock({ code, language }: CodeBlockProps) {
   };
 
   return (
-    <div
-      style={{
-        margin: '6px 0',
-        border: '1px solid var(--border-subtle)',
-        borderRadius: 'var(--radius-chip)',
-        overflow: 'hidden',
-        backgroundColor: 'var(--bg-code)',
-        boxShadow: 'var(--shadow-chip)',
-      }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          padding: '4px 8px 4px 12px',
-          borderBottom: '1px solid var(--border-subtle)',
-        }}
-      >
-        <span
-          style={{
-            fontSize: 'var(--text-section)',
-            fontWeight: 600,
-            fontFamily: 'var(--font-code)',
-            color: 'var(--text-muted)',
-          }}
-        >
-          {language || 'code'}
-        </span>
+    <div className="ix-code">
+      <div className="ix-code__head">
+        <span className="ix-code__lang">{language || 'code'}</span>
         <button
           type="button"
           onClick={handleCopy}
@@ -156,41 +136,8 @@ export default function CodeBlock({ code, language }: CodeBlockProps) {
           // block's header rhythm asks for and carries its hit area out to 44px
           // on a coarse pointer. On a phone this is the only way to copy a code
           // block — there is no hover row and no context menu behind it.
-          className="pc-touch"
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '5px',
-            background: 'none',
-            border: 'none',
-            cursor: 'pointer',
-            color: copied ? 'var(--accent-success)' : 'var(--text-muted)',
-            fontSize: 'var(--text-meta)',
-            fontWeight: 500,
-            padding: '3px 7px',
-            borderRadius: 'var(--radius-chip)',
-            outline: 'none',
-            transition: 'color var(--duration-fast) var(--ease-out), background-color var(--duration-fast) var(--ease-out)',
-          }}
-          onMouseEnter={(e) => {
-            if (copied) return;
-            e.currentTarget.style.color = 'var(--text-primary)';
-            e.currentTarget.style.backgroundColor = 'var(--bg-mod-subtle)';
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.color = copied ? 'var(--accent-success)' : 'var(--text-muted)';
-            e.currentTarget.style.backgroundColor = 'transparent';
-          }}
-          onFocus={(e) => {
-            // Keyboard focus must be as reachable/visible as hover (a11y §8).
-            e.currentTarget.style.boxShadow = 'var(--focus-ring)';
-            if (!copied) e.currentTarget.style.color = 'var(--text-primary)';
-          }}
-          onBlur={(e) => {
-            e.currentTarget.style.boxShadow = 'none';
-            e.currentTarget.style.color = copied ? 'var(--accent-success)' : 'var(--text-muted)';
-            e.currentTarget.style.backgroundColor = 'transparent';
-          }}
+          className="ix-code__copy pc-touch"
+          data-copied={copied || undefined}
         >
           {copied ? (
             <>
@@ -205,16 +152,7 @@ export default function CodeBlock({ code, language }: CodeBlockProps) {
           )}
         </button>
       </div>
-      <pre
-        style={{
-          padding: '10px 12px',
-          margin: 0,
-          overflowX: 'auto',
-          fontSize: '0.875em',
-          lineHeight: '1.45',
-          fontFamily: 'var(--font-code)',
-        }}
-      >
+      <pre className="ix-code__pre">
         <code
           className="hljs"
           dangerouslySetInnerHTML={{ __html: safeHighlightedHtml }}

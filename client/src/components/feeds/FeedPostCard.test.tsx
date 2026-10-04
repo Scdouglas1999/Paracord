@@ -34,6 +34,24 @@ describe('FeedPostCard', () => {
     expect(screen.getByText(/2 hours ago/)).toBeInTheDocument();
   });
 
+  it('is a card of the family; a video marks itself so its summary is two lines, and a post is not', () => {
+    const { container, rerender } = render(<FeedPostCard embed={embed()} />);
+    expect(container.querySelector('article')).toHaveClass('ix-card', 'ix-feed');
+    expect(container.querySelector('article')).toHaveAttribute('data-video', 'true');
+    expect(container.querySelector('.ix-feed__media img')).toHaveAttribute('src', 'https://i1.ytimg.com/vi/aaaaaaaaaaa/hqdefault.jpg');
+    rerender(<FeedPostCard embed={embed({ feed: { kind: 'rss' } })} />);
+    expect(container.querySelector('article')).not.toHaveAttribute('data-video');
+  });
+
+  it('draws a Jellyfin poster tall, and names the source rather than the home server’s address', () => {
+    const { container } = render(
+      <FeedPostCard embed={embed({ feed: { kind: 'jellyfin' }, url: 'https://media.home/item/9', thumbnail: 'https://cdn.example/poster.jpg' })} />,
+    );
+    expect(container.querySelector('img.ix-feed__thumb')).toHaveAttribute('data-shape', 'poster');
+    expect(screen.getByText('Jellyfin')).toBeInTheDocument();
+    expect(screen.queryByText('media.home')).toBeNull();
+  });
+
   it('has room for more actions under the card', () => {
     render(<FeedPostCard embed={embed()} actions={<button type="button">Watch together</button>} />);
     expect(screen.getByRole('button', { name: 'Watch together' })).toBeInTheDocument();
@@ -44,7 +62,9 @@ describe('FeedPostCard', () => {
       <FeedPostCard embed={embed({ feed: { kind: 'rss' }, url: 'https://blog.example/post', thumbnail: 'https://cdn.example/p.jpg' })} />,
     );
     expect(screen.queryByRole('link', { name: /Play/ })).not.toBeInTheDocument();
-    expect(container.querySelector('img.pc-feed-thumb.is-square')).toHaveAttribute('src', 'https://cdn.example/p.jpg');
+    const thumb = container.querySelector('img.ix-feed__thumb');
+    expect(thumb).toHaveAttribute('src', 'https://cdn.example/p.jpg');
+    expect(thumb).toHaveAttribute('data-shape', 'square');
   });
 
   it('turns the overflow into one line to the source', () => {

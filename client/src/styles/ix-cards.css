@@ -1,1 +1,1744 @@
-/* IX-8: the cards in a conversation: event, poll, file, link, score, code (§4.11). Created empty by IX-1; the owner fills it. */
+/* =============================================================================
+   Index conversation cards (docs/index-spec.md §3.1, §4.11, §8.4). Owned by IX-8.
+
+   What a message carries besides words, all of one family: `--ix-card`, radius
+   20, a lit top edge and a soft drop (`--ix-shadow-event`), padding 16, ink in
+   the Index ramp. The prototype's `.event` is the pattern.
+
+     1. the family          .ix-card
+     2. event card          .ix-event          day tile, title, line, actions
+     3. plan card           .ix-plan           title, line, children (a poll's options)
+     4. poll                .ix-poll           option rows with a scaleX share bar
+     5. files and media     .ix-file, .ix-media-card, .ix-captions
+     6. link and feed       .ix-embed, .ix-gh, .ix-feed
+     7. sports score        .ix-score
+     8. code block          .ix-code
+     9. ephemeral line      .ix-ephemeral
+    10. bot components      .ix-bot, .ix-bot-btn, .ix-bot-select
+    11. inline chips        .ix-inline, and the mentions
+
+   Imported after the Glass sheets and unlayered (globals.css), so a rule here
+   beats the Glass rule it replaces at any specificity (the Glass card sheet,
+   glass-cards.css, is in `@layer components`). Colors are tokens or a hue built
+   from `--ix-hue`; only color and transform/opacity ever change (the motion
+   lint), and only on an event: nothing here moves at rest.
+   ============================================================================= */
+
+/* ---- 1. The family ------------------------------------------------------------ */
+
+.ix-card {
+  box-sizing: border-box;
+  width: 400px;
+  max-width: 100%;
+  padding: 16px;
+  border-radius: 20px;
+  background: var(--ix-card);
+  box-shadow: var(--ix-shadow-event);
+  color: var(--ix-ink);
+  text-align: left;
+}
+
+/* The wrapper the timeline puts a card in is as wide as the card, so a card in
+   your own messages sits at the right edge with the rest of them. */
+.glass-msg__card--plan {
+  width: auto;
+  max-width: 100%;
+}
+
+/* Every link and button on a card shares the one focus ring. */
+.ix-card :is(a, button):focus-visible,
+.ix-file:focus-visible,
+.ix-score:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+/* ---- 2. Event card --------------------------------------------------------------
+   The prototype's `.event`: a day tile spanning the title and the line, then the
+   actions in a row. */
+
+.ix-event {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 14px;
+  align-items: center;
+}
+
+.ix-event__day {
+  display: grid;
+  grid-row: span 2;
+  place-items: center;
+  width: 48px;
+  height: 52px;
+  border-radius: 12px;
+  background: var(--ix-fill-card-hover);
+  line-height: 1.05;
+  text-align: center;
+}
+
+/* The weekday takes the place's hue (.ix-hue-weekday on the tile); it is the
+   one uppercase in the product's chrome. */
+.ix-event__day small {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.ix-event__day b {
+  color: var(--ix-ink);
+  font-size: 20px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.ix-event__title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.ix-event__meta {
+  margin: 0;
+  color: var(--ix-ink-3);
+  font-size: 13.5px;
+  line-height: 1.35;
+}
+
+/* Amber means live: "Happening now" and the tile's weekday. */
+.ix-event__live {
+  color: var(--ix-amber);
+  font-weight: 600;
+}
+
+.ix-event__part {
+  white-space: nowrap;
+}
+
+.ix-event[data-tone='live'] .ix-event__day small {
+  color: var(--ix-amber);
+}
+
+.ix-event[data-tone='over'] .ix-event__day small,
+.ix-event[data-tone='canceled'] .ix-event__day small {
+  color: var(--ix-ink-3);
+}
+
+.ix-event[data-tone='over'] .ix-event__title,
+.ix-event[data-tone='canceled'] .ix-event__title {
+  color: var(--ix-ink-2);
+}
+
+.ix-event[data-tone='canceled'] .ix-event__title {
+  text-decoration: line-through;
+}
+
+.ix-event__acts {
+  display: flex;
+  flex-wrap: wrap;
+  grid-column: 1 / -1;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+/* A quiet action: padding 8 12, radius 10, 13.5/600 on the button wash. The one
+   cream button beside it is the CreamButton's `sm` size; both read 32px tall. */
+.ix-event__btn,
+.ix-event__acts .ix-cream--sm {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  line-height: 16px;
+}
+
+.ix-event__btn {
+  box-sizing: border-box;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--ix-fill-btn);
+  color: var(--ix-ink);
+  font-family: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 120ms var(--ix-ease);
+}
+
+.ix-event__btn:hover:not(:disabled) {
+  background: var(--ix-fill-ctl-hover);
+}
+
+.ix-event__btn[data-pressed] {
+  background: var(--ix-fill-ctl-hover);
+  box-shadow: inset 0 0 0 1px var(--ix-edge-strong);
+}
+
+.ix-event__btn--quiet {
+  background: transparent;
+  color: var(--ix-ink-2);
+}
+
+.ix-event__btn--quiet:hover:not(:disabled) {
+  background: var(--ix-fill-btn);
+  color: var(--ix-ink);
+}
+
+.ix-event__btn:disabled,
+.ix-event__acts .ix-cream:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.ix-event__btn:focus-visible,
+.ix-event__acts .ix-cream:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+/* ---- 3. Plan card (title, line, children) --------------------------------------- */
+
+.ix-plan {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ix-plan__head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.ix-plan__text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.ix-plan__title {
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.ix-plan__meta {
+  color: var(--ix-ink-3);
+  font-size: 13.5px;
+  line-height: 1.35;
+}
+
+/* The decision on a card that has one ("Take the spot", "You're in"). */
+.ix-plan__action {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--ix-fill-btn);
+  color: var(--ix-ink);
+  font-family: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 120ms var(--ix-ease);
+}
+
+.ix-plan__action:hover:not(:disabled) {
+  background: var(--ix-fill-ctl-hover);
+}
+
+.ix-plan__action[data-taken] {
+  color: var(--ix-ink-2);
+}
+
+.ix-plan__action:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* The faces and names row (Home and a server's Overview still draw it). */
+.ix-plan__slots {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ix-plan__slot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* You: a light ring around your face, set off from the card by a gap. */
+.ix-plan__slot[data-you] > .ix-av {
+  box-shadow:
+    var(--ix-av-hl),
+    0 0 0 2px var(--ix-card),
+    0 0 0 3.5px var(--ix-ink);
+}
+
+.ix-plan__open {
+  box-sizing: border-box;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border: 1.5px dashed var(--ix-edge-strong);
+  border-radius: 50%;
+}
+
+.ix-plan__name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.2;
+}
+
+.ix-plan__who,
+.ix-plan__detail {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ix-plan__who {
+  font-weight: 500;
+}
+
+.ix-plan__slot[data-you] .ix-plan__who {
+  font-weight: 600;
+}
+
+.ix-plan__slot[data-open] {
+  color: var(--ix-ink-2);
+}
+
+.ix-plan__slot[data-open] .ix-plan__who {
+  font-weight: 400;
+}
+
+.ix-plan__detail {
+  color: var(--ix-ink-3);
+}
+
+/* Plan cards on a page are as wide as the page's column asks. */
+.glass-plans .ix-card,
+.glass-post .ix-card {
+  width: auto;
+  max-width: none;
+}
+
+/* ---- 4. Poll ---------------------------------------------------------------------
+   Options as rows. The share bar behind a row is a scaleX from its left edge
+   (--share is 0 to 1): a vote moving it is a composited change, not a relayout.
+   Your vote is checked. */
+
+.ix-poll__state {
+  flex: none;
+  color: var(--ix-ink-3);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.ix-poll__options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ix-poll__option {
+  position: relative;
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 12px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 12px;
+  background: var(--ix-fill);
+  color: var(--ix-ink-2);
+  font: inherit;
+  font-size: 14.5px;
+  text-align: left;
+  cursor: default;
+  transition: background-color 120ms var(--ix-ease);
+}
+
+.ix-poll__option[data-votable] {
+  cursor: pointer;
+  color: var(--ix-ink);
+}
+
+.ix-poll__option[data-votable]:hover:not(:disabled) {
+  background: var(--ix-fill-ctl);
+}
+
+.ix-poll__option[data-voted] {
+  color: var(--ix-ink);
+  box-shadow: inset 0 0 0 1px var(--ix-edge-strong);
+}
+
+.ix-poll__option:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+.ix-poll__bar {
+  position: absolute;
+  inset: 0;
+  background: var(--ix-fill-2);
+  transform: scaleX(var(--share, 0));
+  transform-origin: left;
+  transition: transform 400ms var(--ix-spring);
+  pointer-events: none;
+}
+
+.ix-poll__option[data-voted] .ix-poll__bar {
+  background: var(--ix-fill-ctl-hover);
+}
+
+:root[data-motion='reduced'] .ix-poll__bar {
+  transition: none;
+}
+
+.ix-poll__body {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+}
+
+/* The choice mark: a ring you can press; cream and checked once it is yours. */
+.ix-poll__mark {
+  display: grid;
+  flex: none;
+  place-items: center;
+  box-sizing: border-box;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px var(--ix-edge-strong);
+  color: var(--ix-cream-ink);
+}
+
+.ix-poll__option[data-voted] .ix-poll__mark {
+  background: var(--ix-cream);
+  box-shadow: none;
+}
+
+/* A poll you cannot vote in, or one that has closed, has no ring to press: the
+   column stays only when a vote is shown in it, so the words keep their line. */
+.ix-poll__options:not([data-marks]) .ix-poll__mark {
+  display: none;
+}
+
+.ix-poll__option:not([data-votable]):not([data-voted]) .ix-poll__mark {
+  visibility: hidden;
+}
+
+.ix-poll__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.ix-poll__option[data-voted] .ix-poll__text {
+  font-weight: 600;
+}
+
+/* The percent sits on the bar at its worst (a share of 100): ink-3 reads 3.6:1
+   there, so it is ink-2, and ink on your own row, whose bar is one step lighter. */
+.ix-poll__stat {
+  flex: none;
+  color: var(--ix-ink-2);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ix-poll__option[data-voted] .ix-poll__stat {
+  color: var(--ix-ink);
+}
+
+/* ---- 5. Files and media ----------------------------------------------------------
+   A file is a card bubble: a 38px glyph tile in the place's hue, the name, the
+   size, the way to download. */
+
+.ix-file {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  box-sizing: border-box;
+  width: 360px;
+  max-width: 100%;
+  padding: 10px 14px 10px 10px;
+  border-radius: 20px;
+  background: var(--ix-card);
+  box-shadow: var(--ix-shadow-event);
+  color: var(--ix-ink);
+  text-decoration: none;
+  transition: background-color 120ms var(--ix-ease);
+}
+
+a.ix-file:hover {
+  background-image: linear-gradient(var(--ix-wash-hover), var(--ix-wash-hover));
+}
+
+.ix-file__tile {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+}
+
+.ix-file__text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.ix-file__name {
+  overflow: hidden;
+  font-size: 14.5px;
+  font-weight: 600;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ix-file__size {
+  color: var(--ix-ink-3);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ix-file__dl {
+  flex: none;
+  color: var(--ix-ink-3);
+  transition: color 120ms var(--ix-ease);
+}
+
+a.ix-file:hover .ix-file__dl {
+  color: var(--ix-ink);
+}
+
+/* The same card where the timeline draws a file itself (`GlassFile`, until the
+   timeline is rebuilt). Scoped to a message row: the server pages draw their own
+   `.glass-file` chips. */
+.glass-msg .glass-file {
+  gap: 12px;
+  width: 360px;
+  max-width: 100%;
+  padding: 10px 14px 10px 10px;
+  border-radius: 20px;
+  background: var(--ix-card);
+  box-shadow: var(--ix-shadow-event);
+  color: var(--ix-ink);
+}
+
+.glass-msg .glass-file__icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  background: hsl(var(--ix-hue) 50% 55% / calc(0.18 * var(--ix-tint)));
+  color: hsl(var(--ix-hue) 80% 80%);
+}
+
+.glass-msg .glass-file__name {
+  font-size: 14.5px;
+  font-weight: 600;
+}
+
+.glass-msg .glass-file__line {
+  color: var(--ix-ink-3);
+  font-size: 12.5px;
+}
+
+.glass-msg .glass-file__action {
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 10px;
+  color: var(--ix-ink-2);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.glass-msg .glass-file__action:hover:not(:disabled) {
+  background-color: var(--ix-fill-btn);
+  color: var(--ix-ink);
+}
+
+/* A picture, a video or a sound in a card: the media, then one line. */
+.ix-media-card {
+  box-sizing: border-box;
+  width: 360px;
+  max-width: 100%;
+  overflow: hidden;
+  border-radius: 20px;
+  background: var(--ix-card);
+  box-shadow: var(--ix-shadow-event);
+  color: var(--ix-ink);
+}
+
+.ix-media-card__open {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: zoom-in;
+}
+
+.ix-media-card__open:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: calc(var(--ix-focus-offset) * -1);
+}
+
+.ix-media-card__img {
+  display: block;
+  width: 100%;
+  max-height: 288px;
+  object-fit: contain;
+  background: var(--ix-fill);
+}
+
+.ix-media-card__audio {
+  padding: 14px 14px 4px;
+}
+
+/* A video fills the card to its edges; the captions line sits inside the card's padding. */
+.ix-media-card .ix-video {
+  border-radius: 0;
+}
+
+.ix-media-card .ix-captions {
+  padding: 0 14px;
+}
+
+.ix-media-card__foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px 10px;
+  color: var(--ix-ink-3);
+  font-size: 12.5px;
+}
+
+.ix-media-card__name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ix-ink-2);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ix-media-card__size {
+  margin-left: auto;
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+/* An attachment that is blocked, still loading, or failed: a quiet card that says so. */
+.ix-media-note {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 360px;
+  max-width: 100%;
+  padding: 12px 14px;
+  border-radius: 20px;
+  background: var(--ix-card);
+  box-shadow: var(--ix-shadow-event);
+  color: var(--ix-ink-3);
+  font-size: 13.5px;
+}
+
+.ix-media-note[data-tone='error'] {
+  background: var(--ix-danger-fill);
+  box-shadow: none;
+  color: var(--ix-danger-ink);
+}
+
+/* The full-size view an image opens in. */
+.ix-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--overlay-backdrop);
+  cursor: pointer;
+}
+
+.ix-lightbox__close {
+  --ix-ctl-size: 40px;
+  position: absolute;
+  top: 16px;
+  right: 16px;
+}
+
+.ix-lightbox__img {
+  max-width: 90vw;
+  max-height: 90vh;
+  object-fit: contain;
+}
+
+/* A local video or sound, and the captions you may pair with it on this device. */
+.ix-video {
+  display: block;
+  border-radius: 12px;
+  background: var(--ix-ground);
+}
+
+.ix-video--inline {
+  width: 100%;
+  max-height: 288px;
+}
+
+.ix-captions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 8px;
+  margin-top: 6px;
+  color: var(--ix-ink-3);
+  font-size: 12.5px;
+}
+
+.ix-captions__load,
+.ix-captions__remove {
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ix-ink-2);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background-color 120ms var(--ix-ease),
+    color 120ms var(--ix-ease);
+}
+
+.ix-captions__load:hover,
+.ix-captions__remove:hover {
+  background: var(--ix-fill);
+  color: var(--ix-ink);
+}
+
+.ix-captions__remove:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+/* The file input is the label's: visually hidden, still focusable, and the label wears its focus ring. */
+.ix-captions__input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.ix-captions:has(.ix-captions__input:focus-visible) .ix-captions__load {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+.ix-captions__error {
+  margin: 4px 0 0;
+  color: var(--ix-danger-ink);
+  font-size: 12.5px;
+}
+
+/* ---- 6. Link, GitHub and feed cards --------------------------------------------- */
+
+/* A link preview: the site, the title as the link, two lines of the page, a
+   thumbnail at the end. The source's own color, when it sends one, is a 4px edge. */
+.ix-embed {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  overflow: hidden;
+  padding: 12px 14px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.ix-embed[data-accent] {
+  padding-left: 18px;
+}
+
+.ix-embed__accent {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+}
+
+.ix-embed__body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ix-embed__site {
+  color: var(--ix-ink-3);
+  font-size: 12.5px;
+}
+
+.ix-embed__title {
+  color: var(--ix-ink);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+a.ix-embed:hover .ix-embed__title {
+  text-decoration: underline;
+}
+
+.ix-embed__desc {
+  display: -webkit-box;
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--ix-ink-2);
+  font-size: 13.5px;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.ix-embed__url {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--ix-ink-3);
+  font-size: 13px;
+}
+
+.ix-embed__url span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ix-embed__thumb {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  border-radius: 12px;
+  background: var(--ix-fill);
+  color: var(--ix-ink-3);
+  font-size: 12px;
+  object-fit: cover;
+}
+
+/* A GitHub event: the mark, what happened, where, and the way to see it. */
+.ix-gh {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+}
+
+.ix-gh__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ix-gh__mark {
+  flex: none;
+  color: var(--ix-ink-2);
+}
+
+.ix-gh__label {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: var(--ix-fill-2);
+  color: var(--ix-ink-2);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+/* One danger color, for what removes something. */
+.ix-gh__label[data-tone='danger'] {
+  background: var(--ix-danger-fill);
+  color: var(--ix-danger-ink);
+}
+
+.ix-gh__repo {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ix-ink-2);
+  font-size: 13.5px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ix-gh__link {
+  align-self: flex-start;
+  color: var(--ix-ink);
+  font-size: 13.5px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.ix-gh__link:hover {
+  text-decoration: underline;
+}
+
+/* A feed's new item: a video leads with its thumbnail and a play mark; anything
+   else is the text and a picture at its end. */
+.ix-feed {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+.ix-feed__media {
+  position: relative;
+  display: block;
+  aspect-ratio: 16 / 9;
+  background: var(--ix-fill);
+}
+
+.ix-feed__media img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.ix-feed__play {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--ix-pop);
+  color: var(--ix-ink);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.ix-feed__main {
+  display: flex;
+  gap: 12px;
+  padding: 12px 14px;
+}
+
+.ix-feed__body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.ix-feed__kicker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 6px;
+  min-width: 0;
+  color: var(--ix-ink-3);
+  font-size: 12.5px;
+}
+
+.ix-feed__host {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ix-feed__title {
+  color: var(--ix-ink);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.3;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+a.ix-feed__title:hover {
+  text-decoration: underline;
+}
+
+.ix-feed__desc {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  color: var(--ix-ink-2);
+  font-size: 13.5px;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.ix-feed[data-video] .ix-feed__desc {
+  -webkit-line-clamp: 2;
+}
+
+.ix-feed__thumb {
+  flex: none;
+  width: 64px;
+  height: 64px;
+  border-radius: 12px;
+  object-fit: cover;
+}
+
+.ix-feed__thumb[data-shape='poster'] {
+  width: 56px;
+  height: 84px;
+}
+
+.ix-feed__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px 12px;
+}
+
+/* "and 7 more from <source>": one line to the source. */
+.ix-feed-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 6px 12px;
+  border-radius: 10px;
+  background: var(--ix-fill);
+  color: var(--ix-ink-2);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: background-color 120ms var(--ix-ease);
+}
+
+a.ix-feed-more:hover {
+  background: var(--ix-fill-2);
+  color: var(--ix-ink);
+}
+
+a.ix-feed-more:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+/* ---- 7. Sports score -------------------------------------------------------------
+   The Sports add-on's score update: the two marks and their scores, what
+   happened, the play. A team's own color is a 2px rule under its score. */
+
+.ix-score {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  width: 360px;
+  padding: 12px 14px;
+  color: inherit;
+  text-decoration: none;
+}
+
+a.ix-score:hover {
+  background-image: linear-gradient(var(--ix-wash-hover), var(--ix-wash-hover));
+}
+
+.ix-score__line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ix-score__team {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ix-score__n {
+  padding-bottom: 1px;
+  box-shadow: 0 2px 0 var(--team, transparent);
+  font-size: 20px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.ix-score__what {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 8px;
+  color: var(--ix-ink-2);
+  font-size: 13.5px;
+}
+
+.ix-score__clock {
+  color: var(--ix-ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.ix-score__play {
+  color: var(--ix-ink-3);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+/* ---- 8. Code block ------------------------------------------------------------------
+   `--ix-code`, radius 12, in a bubble that goes the full width of the column. A
+   restrained palette from the place's hue: keywords carry it, strings are paler,
+   the rest is ink. */
+
+.ix-code {
+  margin: 6px 0;
+  overflow: hidden;
+  border-radius: 12px;
+  background: var(--ix-code);
+  color: var(--ix-ink-2);
+  text-align: left;
+}
+
+.ix-code__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 6px 0 12px;
+}
+
+.ix-code__lang {
+  color: var(--ix-ink-3);
+  font-family: var(--font-code);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.ix-code__copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 7px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ix-ink-3);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background-color 120ms var(--ix-ease),
+    color 120ms var(--ix-ease);
+}
+
+.ix-code__copy:hover,
+.ix-code__copy[data-copied] {
+  background: var(--ix-fill);
+  color: var(--ix-ink);
+}
+
+.ix-code__copy:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+.ix-code__pre {
+  margin: 0;
+  padding: 4px 12px 12px;
+  overflow-x: auto;
+  font-family: var(--font-code);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* highlight.js's theme lives in utilities.css, with !important, in the accent
+   (cream now) and the Glass amber; two classes of specificity put these ahead. */
+.ix-code .hljs {
+  color: var(--ix-ink-2) !important;
+}
+
+.ix-code .hljs-keyword,
+.ix-code .hljs-selector-tag,
+.ix-code .hljs-literal,
+.ix-code .hljs-section,
+.ix-code .hljs-link {
+  color: hsl(var(--ix-hue) 75% 74%) !important;
+}
+
+.ix-code .hljs-string,
+.ix-code .hljs-title,
+.ix-code .hljs-name,
+.ix-code .hljs-type,
+.ix-code .hljs-attribute,
+.ix-code .hljs-symbol,
+.ix-code .hljs-bullet,
+.ix-code .hljs-addition,
+.ix-code .hljs-variable,
+.ix-code .hljs-template-tag,
+.ix-code .hljs-template-variable {
+  color: hsl(var(--ix-hue) 45% 84%) !important;
+}
+
+.ix-code .hljs-comment,
+.ix-code .hljs-quote,
+.ix-code .hljs-deletion,
+.ix-code .hljs-meta {
+  color: var(--ix-ink-3) !important;
+}
+
+.ix-code .hljs-number,
+.ix-code .hljs-built_in,
+.ix-code .hljs-class .hljs-title,
+.ix-code .hljs-title.function_ {
+  color: var(--ix-ink) !important;
+}
+
+.ix-code .hljs-params {
+  color: var(--ix-ink-2) !important;
+}
+
+.ix-code .hljs-attr {
+  color: hsl(var(--ix-hue) 60% 80%) !important;
+}
+
+/* ---- 9. Ephemeral line ------------------------------------------------------------- */
+
+.ix-ephemeral__note {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 4px 0 0;
+  color: var(--ix-ink-3);
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+/* The same line inside your cream bubble: the dark ink at the tertiary strength. */
+[data-own] .ix-ephemeral__note {
+  color: color-mix(in srgb, var(--ix-cream-ink) 62%, transparent);
+}
+
+/* ---- 10. Bot components ------------------------------------------------------------
+   A bot's buttons and menus, in Index's controls. A bot's primary button is the
+   cream one only when it is the message's only primary (the component decides
+   and sets data-tone); the rest are quiet. */
+
+.ix-bot {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.ix-bot__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.ix-bot-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  box-sizing: border-box;
+  min-height: 34px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--ix-fill-btn);
+  color: var(--ix-ink);
+  font-family: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color 120ms var(--ix-ease),
+    color 120ms var(--ix-ease);
+}
+
+.ix-bot-btn:hover:not(:disabled) {
+  background: var(--ix-fill-ctl-hover);
+}
+
+.ix-bot-btn:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+.ix-bot-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Primary and success when another is cream: a lit edge, not a second cream. */
+.ix-bot-btn[data-tone='primary'] {
+  box-shadow: inset 0 0 0 1px var(--ix-edge-strong);
+}
+
+.ix-bot-btn[data-tone='cream'] {
+  background: var(--ix-cream);
+  color: var(--ix-cream-ink);
+}
+
+.ix-bot-btn[data-tone='cream']:hover:not(:disabled) {
+  background: var(--ix-cream-hover);
+}
+
+.ix-bot-btn[data-tone='cream']:active:not(:disabled) {
+  background: var(--ix-cream-press);
+}
+
+.ix-bot-btn[data-tone='danger'] {
+  background: var(--ix-danger-fill);
+  color: var(--ix-danger-ink);
+}
+
+.ix-bot-btn[data-tone='danger']:hover:not(:disabled) {
+  background: var(--ix-danger-fill-call);
+}
+
+.ix-bot-btn[data-tone='link'] {
+  background: transparent;
+  color: var(--ix-ink-2);
+}
+
+.ix-bot-btn[data-tone='link']:hover:not(:disabled) {
+  background: var(--ix-fill);
+  color: var(--ix-ink);
+}
+
+/* A request in flight: a small ring that turns, for as long as it is. */
+.ix-bot-btn__busy {
+  flex: none;
+  animation: ix-cards-spin 900ms linear infinite;
+}
+
+@keyframes ix-cards-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+:root[data-motion='reduced'] .ix-bot-btn__busy {
+  animation: none;
+}
+
+.ix-bot-select {
+  position: relative;
+  display: inline-block;
+  min-width: 12rem;
+  max-width: 25rem;
+}
+
+.ix-bot-select__btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  box-sizing: border-box;
+  width: 100%;
+  height: 38px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--ix-fill-field);
+  box-shadow: inset 0 0 0 1px var(--ix-line);
+  color: var(--ix-ink);
+  font-family: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 120ms var(--ix-ease);
+}
+
+.ix-bot-select__btn:hover:not(:disabled) {
+  background: var(--ix-fill-2);
+}
+
+.ix-bot-select__btn:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+.ix-bot-select__btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.ix-bot-select__value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ix-bot-select__value[data-placeholder] {
+  color: var(--ix-ink-3);
+}
+
+.ix-bot-select__chevron {
+  flex: none;
+  color: var(--ix-ink-3);
+  transition: transform 200ms var(--ix-ease);
+}
+
+.ix-bot-select__btn[aria-expanded='true'] .ix-bot-select__chevron {
+  transform: rotate(180deg);
+}
+
+/* The list: near solid, radius 16, six rows then it scrolls (§4.12's popover). */
+.ix-bot-select__pop {
+  position: absolute;
+  left: 0;
+  z-index: 20;
+  box-sizing: border-box;
+  width: 100%;
+  max-height: 264px;
+  margin-top: 6px;
+  padding: 6px;
+  overflow-y: auto;
+  border-radius: 16px;
+  background: var(--ix-pop);
+  box-shadow:
+    inset 0 0 0 1px var(--ix-edge-lit),
+    var(--ix-shadow-room);
+}
+
+.ix-bot-select__opt {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--ix-ink-2);
+  font-family: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 120ms var(--ix-ease);
+}
+
+.ix-bot-select__opt:hover,
+.ix-bot-select__opt[data-selected] {
+  background: var(--ix-fill-2);
+  color: var(--ix-ink);
+}
+
+.ix-bot-select__opt:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: -2px;
+}
+
+.ix-bot-select__line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ix-bot-select__label {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ix-bot-select__desc {
+  color: var(--ix-ink-3);
+  font-size: 12.5px;
+}
+
+/* A multi-select's choice mark, the poll's: a ring, cream and checked once chosen. */
+.ix-bot-select__mark {
+  display: grid;
+  flex: none;
+  place-items: center;
+  box-sizing: border-box;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px var(--ix-edge-strong);
+  color: var(--ix-cream-ink);
+}
+
+.ix-bot-select__opt[data-selected] .ix-bot-select__mark {
+  background: var(--ix-cream);
+  box-shadow: none;
+}
+
+.ix-bot-select__note {
+  padding: 12px 10px;
+  color: var(--ix-ink-3);
+  font-size: 13.5px;
+  text-align: center;
+}
+
+.ix-bot-select__note[role='alert'] {
+  color: var(--ix-danger-ink);
+  text-align: left;
+}
+
+.ix-bot-select__foot {
+  margin-top: 6px;
+  padding: 8px 4px 2px;
+  box-shadow: 0 -1px 0 var(--ix-line);
+}
+
+.ix-bot-select__confirm {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--ix-cream);
+  color: var(--ix-cream-ink);
+  font-family: inherit;
+  font-size: 13.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background-color 120ms var(--ix-ease);
+}
+
+.ix-bot-select__confirm:hover:not(:disabled) {
+  background: var(--ix-cream-hover);
+}
+
+.ix-bot-select__confirm:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+.ix-bot-select__confirm:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* The choice's own faces: a person 22px, a role's shield, a channel's glyph. */
+.ix-bot-select__role {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--ix-fill-2);
+  color: var(--ix-ink-2);
+}
+
+/* ---- 11. Inline chips and mentions ---------------------------------------------------
+   Inside a sentence, 24px, radius 8, in the sentence's size. A channel is
+   --ix-fill with ink 600; a room with people in it is the live chip (amber tint);
+   an event is --ix-card with a lit edge. Inside YOUR cream bubble each turns to a
+   dark wash, since the light bubble is the surface behind it. */
+
+.ix-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--ix-fill);
+  color: var(--ix-ink);
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  text-decoration: none;
+  vertical-align: 1px;
+}
+
+button.ix-inline {
+  cursor: pointer;
+  transition: background-color 120ms var(--ix-ease);
+}
+
+button.ix-inline:hover {
+  background-image: linear-gradient(var(--ix-wash-hover), var(--ix-wash-hover));
+}
+
+button.ix-inline:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+.ix-inline[data-missing] {
+  color: var(--ix-ink-2);
+  font-weight: 400;
+}
+
+.ix-inline--live {
+  background: rgba(var(--ix-amber-rgb), 0.16);
+  color: var(--ix-amber);
+}
+
+.ix-inline__dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ix-amber);
+}
+
+.ix-inline--event {
+  background: var(--ix-card);
+  box-shadow: inset 0 0 0 1px var(--ix-edge-lit);
+}
+
+.ix-inline--event > svg {
+  color: var(--ix-ink-2);
+}
+
+/* "3 in", "Fri 9 PM": the second, lighter word. */
+.ix-inline__aside {
+  font-weight: 400;
+}
+
+.ix-inline--event .ix-inline__aside {
+  color: var(--ix-ink-3);
+}
+
+.ix-inline--live .ix-inline__aside {
+  color: color-mix(in srgb, var(--ix-amber) 80%, transparent);
+}
+
+[data-own] .ix-inline--channel,
+[data-own] .ix-inline--event {
+  background: color-mix(in srgb, var(--ix-cream-ink) 10%, transparent);
+  box-shadow: none;
+  color: var(--ix-cream-ink);
+}
+
+[data-own] .ix-inline--event > svg,
+[data-own] .ix-inline--event .ix-inline__aside {
+  color: color-mix(in srgb, var(--ix-cream-ink) 72%, transparent);
+}
+
+[data-own] .ix-inline--live {
+  background: var(--ix-cream-ink);
+}
+
+/* A mention of someone: ink, 600. The mention of YOU is the white chip (--ix-ink
+   on #111214, radius 6, padding 0 5). */
+.glass-mention:not(.glass-mention-self) {
+  padding: 0;
+  background: transparent;
+  color: var(--ix-ink);
+  font-weight: 600;
+}
+
+.glass-mention.glass-mention-self {
+  padding: 0 5px;
+  border-radius: 6px;
+  background: var(--ix-ink);
+  color: var(--ix-mention-ink);
+  font-weight: 600;
+}
+
+[data-own] .glass-mention:not(.glass-mention-self) {
+  color: var(--ix-cream-ink);
+}
+
+[data-own] .glass-mention.glass-mention-self {
+  background: var(--ix-cream-ink);
+  color: var(--ix-ink);
+}
+
+/* ---- High contrast (§10): every card keeps an edge you can see, and the hue gives way to ink ----- */
+
+[data-theme='glass-contrast'] .ix-card,
+[data-theme='glass-contrast'] .ix-file,
+[data-theme='glass-contrast'] .ix-media-card,
+[data-theme='glass-contrast'] .ix-media-note,
+[data-theme='glass-contrast'] .glass-msg .glass-file {
+  box-shadow: inset 0 0 0 1px var(--ix-edge-lit);
+}
+
+[data-theme='glass-contrast'] .ix-poll__option,
+[data-theme='glass-contrast'] .ix-event__btn,
+[data-theme='glass-contrast'] .ix-bot-btn {
+  box-shadow: inset 0 0 0 1px var(--ix-edge-strong);
+}
+
+/* The weekday and the code are ink, not a hue: a tint at half strength is not
+   enough for 11px text or a code face. */
+[data-theme='glass-contrast'] .ix-event__day small {
+  color: var(--ix-ink-2);
+}
+
+[data-theme='glass-contrast'] .ix-code :is(.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-section, .hljs-link, .hljs-string, .hljs-title, .hljs-name, .hljs-type, .hljs-attribute, .hljs-symbol, .hljs-bullet, .hljs-addition, .hljs-variable, .hljs-template-tag, .hljs-template-variable, .hljs-attr) {
+  color: var(--ix-ink) !important;
+}
+
+/* The live chip's second word is the full amber, not 80% of it. */
+[data-theme='glass-contrast'] .ix-inline--live .ix-inline__aside {
+  color: var(--ix-amber);
+}

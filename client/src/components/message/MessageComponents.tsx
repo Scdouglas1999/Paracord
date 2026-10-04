@@ -4,7 +4,7 @@ import { useServerListStore } from '../../stores/serverListStore';
 import { LOCAL_SERVER_ID } from '../../lib/serverScope';
 import { useCurrentChannelStore } from '../../hooks/useChannels';
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { ExternalLink, Hash, Volume2, User, Shield } from 'lucide-react';
+import { ExternalLink, Hash, Loader2, Shield, Volume2 } from 'lucide-react';
 import { ComponentType, ButtonStyle, type Component } from '../../types/components';
 import { InteractionType } from '../../types/interactions';
 import type { Interaction } from '../../types/interactions';
@@ -15,13 +15,12 @@ import { useInteractionStore } from '../../stores/interactionStore';
 import { toast } from '../../stores/toastStore';
 import type { Member, Role, Channel } from '../../types';
 import { safeExternalUrl } from '../../lib/security';
-import { resolveUserAvatarUrl } from '../../lib/userAvatar';
 import { roleColorToHex } from '../../lib/colors';
-import { LoadingSpinner } from '../ui/Feedback';
-import { Button, type ButtonProps } from '../ui/Button';
+import { IxGlyph } from '../ix/glyphs/IxGlyph';
+import { Avatar } from '../ix/identity/Avatar';
 import { displayName } from '../../lib/displayName';
 import { useDownloadTicket } from '../../hooks/useDownloadTicket';
-import { CustomEmojiImage, ResourceImage } from '../ui/ResourceImage';
+import { CustomEmojiImage } from '../ui/ResourceImage';
 
 interface MessageComponentsProps {
   components: Component[];
@@ -79,28 +78,52 @@ function notifyComponentError(action: string, err: unknown): void {
 // Button Component
 // ---------------------------------------------------------------------------
 
-// Map bot-supplied ButtonStyle onto the shared Button primitive's variants so
-// in-message buttons match the rest of the product exactly (lantern-stage-spec §8).
-// Success has no primitive variant; it gets a token-driven className, keeping the
-// primitive's metrics/motion/focus-ring intact.
-const BUTTON_STYLE_VARIANT: Record<number, ButtonProps['variant']> = {
-  [ButtonStyle.Primary]: 'default',
-  [ButtonStyle.Secondary]: 'secondary',
-  [ButtonStyle.Success]: 'default',
-  [ButtonStyle.Danger]: 'destructive',
-  [ButtonStyle.Link]: 'link',
-};
+// A bot's button style, in Index's controls (docs/index-spec.md §8.4). Cream is
+// the one action on a surface, so a bot's Primary is cream only when it is the
+// message's only Primary; with several, each carries a lit edge instead. Success
+// is the same lit edge (Index has no green), Danger is the one danger color,
+// Link is text, and Secondary is the quiet control.
+type BotTone = 'cream' | 'primary' | 'danger' | 'link' | undefined;
+
+function toneForStyle(style: number, onlyPrimary: boolean): BotTone {
+  switch (style) {
+    case ButtonStyle.Primary:
+      return onlyPrimary ? 'cream' : 'primary';
+    case ButtonStyle.Success:
+      return 'primary';
+    case ButtonStyle.Danger:
+      return 'danger';
+    case ButtonStyle.Link:
+      return 'link';
+    default:
+      return undefined;
+  }
+}
+
+/** How many Primary buttons the message has, across every row. */
+function countPrimaryButtons(components: Component[]): number {
+  let count = 0;
+  for (const row of components) {
+    for (const child of row.components || []) {
+      if (child.type === ComponentType.Button && (child.style ?? ButtonStyle.Secondary) === ButtonStyle.Primary) count += 1;
+    }
+  }
+  return count;
+}
 
 function ComponentButton({
   component,
   channelId,
   messageId,
   guildId,
+  onlyPrimary,
 }: {
   component: Component;
   channelId: string;
   messageId: string;
   guildId?: string;
+  /** This message has exactly one Primary button. */
+  onlyPrimary: boolean;
 }) {
   const [busy, setBusy] = useState(false);
   // A custom-emoji button face is an authenticated image; re-render when the
@@ -111,11 +134,7 @@ function ComponentButton({
   const isLink = style === ButtonStyle.Link;
   const isDisabled = component.disabled || busy;
 
-  const variant = BUTTON_STYLE_VARIANT[style] ?? 'secondary';
-  const successClasses =
-    style === ButtonStyle.Success
-      ? 'bg-accent-success text-text-on-accent hover:bg-accent-primary-hover active:bg-accent-primary-active'
-      : '';
+  const tone = toneForStyle(style, onlyPrimary);
 
   const handleClick = async () => {
     if (isDisabled) return;
@@ -169,19 +188,20 @@ function ComponentButton({
   ) : null;
 
   return (
-    <Button
-      variant={variant}
-      size="sm"
-      className={`gap-1.5${successClasses ? ` ${successClasses}` : ''}`}
+    <button
+      type="button"
+      className="ix-bot-btn"
+      data-tone={tone}
       onClick={() => void handleClick()}
       disabled={isDisabled}
-      loading={busy}
+      aria-busy={busy || undefined}
       title={component.label || component.custom_id || undefined}
     >
+      {busy && <Loader2 size={14} aria-hidden className="ix-bot-btn__busy" />}
       {emojiRender}
       {component.label && <span>{component.label}</span>}
-      {isLink && <ExternalLink size={13} />}
-    </Button>
+      {isLink && <ExternalLink size={13} aria-hidden />}
+    </button>
   );
 }
 
@@ -292,91 +312,101 @@ function StringSelectMenu({
       : component.placeholder || 'Make a selection...';
 
   return (
-    <div ref={containerRef} className="relative inline-block min-w-[12rem] max-w-[25rem]">
-      <button
-        type="button"
-        className={`flex h-10 w-full items-center justify-between gap-2 rounded-chip border border-border-subtle bg-bg-well px-3 text-left text-body transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:border-accent-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring-input)] ${
-          isDisabled
-            ? 'cursor-not-allowed opacity-50'
-            : 'cursor-pointer hover:border-border-strong'
-        }`}
-        onClick={() => {
+    <div ref={containerRef} className="ix-bot-select">
+      <SelectTrigger
+        open={open}
+        disabled={isDisabled}
+        hasValue={selectedValues.length > 0}
+        text={displayText}
+        onToggle={() => {
           if (!isDisabled) setOpen((prev) => !prev);
         }}
-        disabled={isDisabled}
-      >
-        <span
-          className={`truncate ${
-            selectedValues.length > 0 ? 'text-text-primary' : 'text-text-muted'
-          }`}
-        >
-          {displayText}
-        </span>
-        <svg
-          className={`h-4 w-4 shrink-0 text-text-muted transition-transform duration-[var(--duration-fast)] ease-[var(--ease-out)] ${open ? 'rotate-180' : ''}`}
-          viewBox="0 0 20 20"
-          fill="currentColor"
-        >
-          <path
-            fillRule="evenodd"
-            d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
-            clipRule="evenodd"
-          />
-        </svg>
-      </button>
+      />
 
       {open && (
-        <div className="absolute left-0 z-20 mt-1 max-h-56 w-full overflow-y-auto rounded-well border border-border-subtle bg-bg-floating p-1 shadow-[var(--shadow-plate)]">
+        <div className="ix-bot-select__pop">
           {options.map((option) => {
             const isSelected = selectedValues.includes(option.value);
             return (
               <button
                 key={option.value}
                 type="button"
-                className={`flex w-full flex-col gap-0.5 rounded-chip px-2.5 py-1.5 text-left text-label transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
-                  isSelected ? 'bg-accent-tint text-text-primary' : 'text-text-secondary hover:bg-accent-tint hover:text-text-primary'
-                }`}
+                className="ix-bot-select__opt"
+                data-selected={isSelected || undefined}
                 onClick={() => handleOptionClick(option.value)}
               >
-                <div className="flex items-center gap-2">
-                  {isMulti && (
-                    <span
-                      className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-window border text-[10px] ${
-                        isSelected
-                          ? 'border-accent-primary bg-accent-primary text-text-on-accent'
-                          : 'border-border-strong bg-transparent'
-                      }`}
-                    >
-                      {isSelected ? '\u2713' : ''}
-                    </span>
-                  )}
-                  <span className="truncate font-medium">{option.label}</span>
-                </div>
-                {option.description && (
-                  <span className="text-meta text-text-muted">{option.description}</span>
-                )}
+                <span className="ix-bot-select__line">
+                  {isMulti && <ChoiceMark chosen={isSelected} />}
+                  <span className="ix-bot-select__label">{option.label}</span>
+                </span>
+                {option.description && <span className="ix-bot-select__desc">{option.description}</span>}
               </button>
             );
           })}
 
           {isMulti && (
-            <div className="mt-1 border-t border-border-subtle px-1 pt-2">
-              <button
-                type="button"
-                className={`w-full rounded-chip px-2 py-1.5 text-meta font-semibold transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
-                  selectedValues.length >= minValues
-                    ? 'bg-accent-primary text-text-on-accent hover:bg-accent-primary-hover'
-                    : 'cursor-not-allowed bg-bg-mod-strong text-text-muted opacity-50'
-                }`}
-                onClick={() => void submitSelection()}
-                disabled={selectedValues.length < minValues}
-              >
-                Confirm ({selectedValues.length} selected)
-              </button>
-            </div>
+            <ConfirmFoot
+              count={selectedValues.length}
+              enabled={selectedValues.length >= minValues}
+              onConfirm={() => void submitSelection()}
+            />
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The select's shared parts: the trigger, a choice mark, the Confirm row
+// ---------------------------------------------------------------------------
+
+function SelectTrigger({
+  open,
+  disabled,
+  hasValue,
+  text,
+  onToggle,
+}: {
+  open: boolean;
+  disabled: boolean;
+  hasValue: boolean;
+  text: string;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="ix-bot-select__btn"
+      aria-expanded={open}
+      aria-label={text}
+      onClick={onToggle}
+      disabled={disabled}
+    >
+      <span className="ix-bot-select__value" data-placeholder={hasValue ? undefined : ''}>
+        {text}
+      </span>
+      <IxGlyph name="chevron" size={14} className="ix-bot-select__chevron" />
+    </button>
+  );
+}
+
+/** A multi-select's choice: a ring, cream and checked once chosen. */
+function ChoiceMark({ chosen }: { chosen: boolean }) {
+  return (
+    <span className="ix-bot-select__mark" aria-hidden>
+      {chosen && <IxGlyph name="check" size={12} />}
+    </span>
+  );
+}
+
+/** A multi-select sends nothing until you confirm: one cream button under the list. */
+function ConfirmFoot({ count, enabled, onConfirm }: { count: number; enabled: boolean; onConfirm: () => void }) {
+  return (
+    <div className="ix-bot-select__foot">
+      <button type="button" className="ix-bot-select__confirm" onClick={onConfirm} disabled={!enabled}>
+        Confirm ({count} selected)
+      </button>
     </div>
   );
 }
@@ -513,43 +543,25 @@ function EntitySelectMenu({
       : component.placeholder || placeholderText;
 
   return (
-    <div ref={containerRef} className="relative inline-block min-w-[12rem] max-w-[25rem]">
-      <button
-        type="button"
-        className={`flex h-10 w-full items-center justify-between gap-2 rounded-chip border border-border-subtle bg-bg-well px-3 text-left text-body transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:border-accent-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring-input)] ${
-          isDisabled
-            ? 'cursor-not-allowed opacity-50'
-            : 'cursor-pointer hover:border-border-strong'
-        }`}
-        onClick={() => void handleOpen()}
+    <div ref={containerRef} className="ix-bot-select">
+      <SelectTrigger
+        open={open}
         disabled={isDisabled}
-      >
-        <span className={`truncate ${selectedIds.length > 0 ? 'text-text-primary' : 'text-text-muted'}`}>
-          {displayText}
-        </span>
-        <svg
-          className={`h-4 w-4 shrink-0 text-text-muted transition-transform duration-[var(--duration-fast)] ease-[var(--ease-out)] ${open ? 'rotate-180' : ''}`}
-          viewBox="0 0 20 20"
-          fill="currentColor"
-        >
-          <path
-            fillRule="evenodd"
-            d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
-            clipRule="evenodd"
-          />
-        </svg>
-      </button>
+        hasValue={selectedIds.length > 0}
+        text={displayText}
+        onToggle={() => void handleOpen()}
+      />
 
       {open && (
-        <div className="absolute left-0 z-20 mt-1 max-h-56 w-full overflow-y-auto rounded-well border border-border-subtle bg-bg-floating p-1 shadow-[var(--shadow-plate)]">
+        <div className="ix-bot-select__pop">
           {loading ? (
-            <LoadingSpinner className="px-3 py-3" size="sm" label="Loading options..." />
+            <p className="ix-bot-select__note" role="status">Loading options…</p>
           ) : loadError ? (
-            <div role="alert" className="px-2.5 py-3 text-label text-accent-danger">
+            <div role="alert" className="ix-bot-select__note">
               {loadError}
             </div>
           ) : items.length === 0 ? (
-            <div className="px-2.5 py-3 text-center text-label text-text-muted">Nothing here to pick from yet</div>
+            <p className="ix-bot-select__note">Nothing here to pick from yet</p>
           ) : (
             items.map((item) => {
               const isSelected = selectedIds.includes(item.id);
@@ -557,43 +569,25 @@ function EntitySelectMenu({
                 <button
                   key={item.id}
                   type="button"
-                  className={`flex w-full items-center gap-2 rounded-chip px-2.5 py-1.5 text-left text-label transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
-                    isSelected ? 'bg-accent-tint text-text-primary' : 'text-text-secondary hover:bg-accent-tint hover:text-text-primary'
-                  }`}
+                  className="ix-bot-select__opt"
+                  data-selected={isSelected || undefined}
                   onClick={() => handleItemClick(item.id)}
                 >
-                  {isMulti && (
-                    <span
-                      className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-window border text-[10px] ${
-                        isSelected
-                          ? 'border-accent-primary bg-accent-primary text-text-on-accent'
-                          : 'border-border-strong bg-transparent'
-                      }`}
-                    >
-                      {isSelected ? '\u2713' : ''}
-                    </span>
-                  )}
-                  {renderItem(item, isSelected, isMulti)}
+                  <span className="ix-bot-select__line">
+                    {isMulti && <ChoiceMark chosen={isSelected} />}
+                    {renderItem(item, isSelected, isMulti)}
+                  </span>
                 </button>
               );
             })
           )}
 
           {isMulti && selectedIds.length > 0 && (
-            <div className="mt-1 border-t border-border-subtle px-1 pt-2">
-              <button
-                type="button"
-                className={`w-full rounded-chip px-2 py-1.5 text-meta font-semibold transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
-                  selectedIds.length >= minValues
-                    ? 'bg-accent-primary text-text-on-accent hover:bg-accent-primary-hover'
-                    : 'cursor-not-allowed bg-bg-mod-strong text-text-muted opacity-50'
-                }`}
-                onClick={() => void submitSelection(selectedIds)}
-                disabled={selectedIds.length < minValues}
-              >
-                Confirm ({selectedIds.length} selected)
-              </button>
-            </div>
+            <ConfirmFoot
+              count={selectedIds.length}
+              enabled={selectedIds.length >= minValues}
+              onConfirm={() => void submitSelection(selectedIds)}
+            />
           )}
         </div>
       )}
@@ -640,29 +634,15 @@ function UserSelectMenu({
     }));
   }, [guildId]);
 
-  const renderItem = (item: EntityItem) => {
-    const avatarSrc = resolveUserAvatarUrl(item.avatar);
-    return (
-      <div className="flex min-w-0 items-center gap-2">
-        <ResourceImage
-          src={avatarSrc}
-          alt=""
-          className="h-6 w-6 shrink-0 rounded-full object-cover"
-          fallback={
-            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-bg-mod-strong">
-              <User size={12} className="text-text-muted" />
-            </span>
-          }
-        />
-        <div className="min-w-0">
-          <div className="truncate text-sm font-medium text-text-primary">{item.label}</div>
-          {item.sublabel && (
-            <div className="truncate text-xs text-text-muted">{item.sublabel}</div>
-          )}
-        </div>
-      </div>
-    );
-  };
+  const renderItem = (item: EntityItem) => (
+    <>
+      <Avatar userId={item.id} name={item.label} avatar={item.avatar} size={24} />
+      <span className="ix-bot-select__label">
+        {item.label}
+        {item.sublabel && <span className="ix-bot-select__desc">{` ${item.sublabel}`}</span>}
+      </span>
+    </>
+  );
 
   return (
     <EntitySelectMenu
@@ -715,20 +695,18 @@ function RoleSelectMenu({
       }));
   }, [guildId]);
 
+  // A role's own color is its data: the shield and the name carry it.
   const renderItem = useCallback((item: EntityItem) => {
     const colorHex = item.color ? roleColorToHex(item.color) : undefined;
     return (
-      <div className="flex min-w-0 items-center gap-2">
-        <span
-          className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full"
-          style={colorHex ? { backgroundColor: colorHex + '33', border: `2px solid ${colorHex}` } : undefined}
-        >
-          <Shield size={10} style={colorHex ? { color: colorHex } : undefined} className="text-text-muted" />
+      <>
+        <span className="ix-bot-select__role" style={colorHex ? { color: colorHex } : undefined}>
+          <Shield size={12} aria-hidden />
         </span>
-        <span className="truncate text-sm font-medium" style={colorHex ? { color: colorHex } : undefined}>
+        <span className="ix-bot-select__label" style={colorHex ? { color: colorHex } : undefined}>
           {item.label}
         </span>
-      </div>
+      </>
     );
   }, []);
 
@@ -800,40 +778,20 @@ function MentionableSelectMenu({
   const renderItem = (item: EntityItem) => {
     const isRole = item.id.startsWith('role:');
     const colorHex = item.color ? roleColorToHex(item.color) : undefined;
-    const avatarSrc = resolveUserAvatarUrl(item.avatar);
     return (
-      <div className="flex min-w-0 items-center gap-2">
+      <>
         {isRole ? (
-          <span
-            className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full"
-            style={colorHex ? { backgroundColor: colorHex + '33', border: `2px solid ${colorHex}` } : undefined}
-          >
-            <Shield size={10} style={colorHex ? { color: colorHex } : undefined} className="text-text-muted" />
+          <span className="ix-bot-select__role" style={colorHex ? { color: colorHex } : undefined}>
+            <Shield size={12} aria-hidden />
           </span>
         ) : (
-          <ResourceImage
-            src={avatarSrc}
-            alt=""
-            className="h-5 w-5 shrink-0 rounded-full object-cover"
-            fallback={
-              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-bg-mod-strong">
-                <User size={10} className="text-text-muted" />
-              </span>
-            }
-          />
+          <Avatar userId={item.id.replace(/^user:/, '')} name={item.label} avatar={item.avatar} size={24} />
         )}
-        <div className="min-w-0">
-          <span
-            className="truncate text-sm font-medium"
-            style={!isRole || !colorHex ? undefined : { color: colorHex }}
-          >
-            {item.label}
-          </span>
-          {item.sublabel && (
-            <span className="ml-1.5 text-xs text-text-muted">{item.sublabel}</span>
-          )}
-        </div>
-      </div>
+        <span className="ix-bot-select__label" style={isRole && colorHex ? { color: colorHex } : undefined}>
+          {item.label}
+          {item.sublabel && <span className="ix-bot-select__desc">{` ${item.sublabel}`}</span>}
+        </span>
+      </>
     );
   };
 
@@ -859,8 +817,8 @@ function MentionableSelectMenu({
 // ---------------------------------------------------------------------------
 
 function channelIcon(type: number) {
-  if (type === 2) return <Volume2 size={12} className="text-text-muted" />;
-  return <Hash size={12} className="text-text-muted" />;
+  if (type === 2) return <Volume2 size={14} aria-hidden />;
+  return <Hash size={14} aria-hidden />;
 }
 
 function ChannelSelectMenu({
@@ -898,10 +856,10 @@ function ChannelSelectMenu({
   }, [guildId]);
 
   const renderItem = useCallback((item: EntityItem) => (
-    <div className="flex min-w-0 items-center gap-1.5">
-      <span className="shrink-0">{item.icon ?? <Hash size={12} className="text-text-muted" />}</span>
-      <span className="truncate text-sm font-medium text-text-primary">{item.label}</span>
-    </div>
+    <>
+      <span className="ix-bot-select__role">{item.icon ?? <Hash size={14} aria-hidden />}</span>
+      <span className="ix-bot-select__label">{item.label}</span>
+    </>
   ), []);
 
   return (
@@ -927,16 +885,18 @@ function ActionRow({
   channelId,
   messageId,
   guildId,
+  onlyPrimary,
 }: {
   component: Component;
   channelId: string;
   messageId: string;
   guildId?: string;
+  onlyPrimary: boolean;
 }) {
   const children = component.components || [];
 
   return (
-    <div className="flex flex-wrap items-center gap-1.5">
+    <div className="ix-bot__row">
       {children.map((child, index) => {
         const key = child.custom_id || `comp-${index}`;
 
@@ -949,6 +909,7 @@ function ActionRow({
                 channelId={channelId}
                 messageId={messageId}
                 guildId={guildId}
+                onlyPrimary={onlyPrimary}
               />
             );
           case ComponentType.StringSelect:
@@ -1015,9 +976,10 @@ function ActionRow({
 
 export function MessageComponents({ components, messageId, channelId, guildId }: MessageComponentsProps) {
   if (!components || components.length === 0) return null;
+  const onlyPrimary = countPrimaryButtons(components) === 1;
 
   return (
-    <div className="mt-1.5 flex flex-col gap-1.5">
+    <div className="ix-bot">
       {components.map((row, index) => {
         if (row.type === ComponentType.ActionRow) {
           return (
@@ -1027,6 +989,7 @@ export function MessageComponents({ components, messageId, channelId, guildId }:
               channelId={channelId}
               messageId={messageId}
               guildId={guildId}
+              onlyPrimary={onlyPrimary}
             />
           );
         }

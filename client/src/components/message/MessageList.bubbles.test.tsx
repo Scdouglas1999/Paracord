@@ -798,7 +798,7 @@ describe('events and channels in a message (§3.2)', () => {
     mocks.useMessagesReturn.messages = [message('brendan', todayAt(0), { content: '<event:7001>' })];
     const { container } = renderList();
     const card = await screen.findByRole('group', { name: 'Event: Haz 5 run' });
-    expect(within(card).getByRole('button', { name: 'Take the spot' })).toBeInTheDocument();
+    expect(within(card).getByRole('button', { name: 'I’m in' })).toBeInTheDocument();
     expect(container.querySelector('.glass-bubble')).toBeNull();
   });
 
@@ -807,7 +807,7 @@ describe('events and channels in a message (§3.2)', () => {
     mocks.useMessagesReturn.messages = [message('jeremy', todayAt(0), { content: 'is <event:7001> still on? bring snacks' })];
     const { container } = renderList();
     const row = (await screen.findByText(/still on\? bring snacks/)).closest('[role="article"]') as HTMLElement;
-    expect(row.querySelector('.glass-bubble .glass-chip--event')).toHaveTextContent('Haz 5 run');
+    expect(row.querySelector('.glass-bubble .ix-inline--event')).toHaveTextContent('Haz 5 run');
     expect(container.querySelector('.glass-plan')).toBeNull();
   });
 });

@@ -67,4 +67,41 @@ describe('FilePreview image lightbox accessibility', () => {
     expect(screen.queryByRole('button', { name: 'Open image preview: vector.svg' })).not.toBeInTheDocument();
     expect(screen.queryByAltText('vector.svg')).not.toBeInTheDocument();
   });
+
+  it('draws a file as a card: a glyph tile, the name, the size, and a link that downloads', async () => {
+    render(<FilePreview url="/api/v1/files/q3" filename="Q3-roadmap.pdf" mimeType="application/pdf" size={2_411_724} />);
+    const card = await screen.findByRole('link');
+    expect(card).toHaveClass('ix-file');
+    expect(card).toHaveAttribute('download', 'Q3-roadmap.pdf');
+    expect(card).toHaveTextContent('Q3-roadmap.pdf');
+    expect(card).toHaveTextContent('2.3 MB');
+    expect(card.querySelector('.ix-file__tile')).toHaveClass('ix-hue-tile');
+  });
+
+  it('draws a picture in a card with its name and size under it', async () => {
+    const { container } = render(<FilePreview url="/api/v1/files/ridge" filename="ridge.png" mimeType="image/png" size={61_440} />);
+    await screen.findByRole('button', { name: 'Open image preview: ridge.png' });
+    expect(container.querySelector('.ix-media-card')).not.toBeNull();
+    expect(container.querySelector('.ix-media-card__name')).toHaveTextContent('ridge.png');
+    expect(container.querySelector('.ix-media-card__size')).toHaveTextContent('60.0 KB');
+  });
+
+  it('says a blocked link in a quiet card, and a failure in the danger one', async () => {
+    const { container, rerender } = render(<FilePreview url="javascript:alert(1)" filename="x.html" mimeType="text/html" size={1} />);
+    expect(container.querySelector('.ix-media-note')).toHaveTextContent('Attachment link blocked.');
+    rerender(
+      <FilePreview
+        url="/api/v1/files/gone"
+        filename="notes.txt"
+        mimeType="text/plain"
+        size={9}
+        resolveObjectUrl={async () => {
+          throw new Error('Could not decrypt.');
+        }}
+      />,
+    );
+    const failure = await screen.findByRole('alert');
+    expect(failure).toHaveAttribute('data-tone', 'error');
+    expect(failure).toHaveTextContent('notes.txt: Could not decrypt.');
+  });
 });

@@ -131,7 +131,7 @@ on each tinted layer, never animated):
 | Main glow | `radial-gradient(900px 340px at 25% -140px, hsl(h 55% 40% / .26), transparent 70%)` over `--ix-main` |
 | Selected channel | `hsl(h 50% 60% / .17)` with `inset 0 0 0 1px hsl(h 60% 72% / .12)` |
 | Action-card glyph tile | background `hsl(h 50% 55% / .18)`, glyph `hsl(h 80% 80%)` |
-| Event weekday | `hsl(h 75% 74%)` |
+| Event weekday | `hsl(h 75% 78%)`. **Recorded by IX-8: the prototype's 74 puts the 11px weekday at 3.8:1 on the day tile at hue 240 (a "Match icon" blue; the eleven palette hues pass); 78 clears 4.5:1 at every hue (§10)** |
 | Message box focus halo | `0 0 0 4px hsl(h 60% 60% / .14)` |
 
 ### 2.3 Avatars and server marks

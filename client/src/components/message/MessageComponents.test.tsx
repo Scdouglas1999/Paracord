@@ -349,6 +349,99 @@ describe('MessageComponents interaction feedback', () => {
     expect(renderedImages).not.toContain('/avatars/user-2/legacy-avatar-hash.png');
   });
 
+  describe('button tones (docs/index-spec.md §8.4)', () => {
+    const row = (...buttons: Array<{ label: string; style: ButtonStyle; url?: string; disabled?: boolean }>) => [
+      {
+        type: ComponentType.ActionRow,
+        components: buttons.map((b, i) => ({ type: ComponentType.Button, custom_id: `b${i}`, ...b })),
+      },
+    ];
+    const show = (components: ReturnType<typeof row>) =>
+      render(<MessageComponents channelId="channel-1" messageId="message-1" guildId="guild-1" components={components} />);
+
+    it('makes a bot’s only primary button the cream one', () => {
+      show(row({ label: 'Approve', style: ButtonStyle.Primary }, { label: 'Later', style: ButtonStyle.Secondary }));
+      expect(screen.getByRole('button', { name: 'Approve' })).toHaveAttribute('data-tone', 'cream');
+      expect(screen.getByRole('button', { name: 'Later' })).not.toHaveAttribute('data-tone');
+    });
+
+    it('makes none of several primaries cream: one cream button per surface', () => {
+      show(row({ label: 'Ship', style: ButtonStyle.Primary }, { label: 'Hold', style: ButtonStyle.Primary }));
+      expect(screen.getByRole('button', { name: 'Ship' })).toHaveAttribute('data-tone', 'primary');
+      expect(screen.getByRole('button', { name: 'Hold' })).toHaveAttribute('data-tone', 'primary');
+    });
+
+    it('counts the primaries across every row of the message', () => {
+      show([
+        ...row({ label: 'One', style: ButtonStyle.Primary }),
+        ...row({ label: 'Two', style: ButtonStyle.Primary }),
+      ]);
+      expect(document.querySelector('[data-tone="cream"]')).toBeNull();
+    });
+
+    it('gives success the same lit edge as a primary (Index has no green), danger the danger ink, a link its text', () => {
+      show(row({ label: 'Done', style: ButtonStyle.Success }, { label: 'Delete', style: ButtonStyle.Danger }, { label: 'Docs', style: ButtonStyle.Link, url: 'https://example.com' }));
+      expect(screen.getByRole('button', { name: 'Done' })).toHaveAttribute('data-tone', 'primary');
+      expect(screen.getByRole('button', { name: 'Delete' })).toHaveAttribute('data-tone', 'danger');
+      expect(screen.getByRole('button', { name: 'Docs' })).toHaveAttribute('data-tone', 'link');
+    });
+
+    it('shows a ring that turns while a click is on its way, and says it is busy', async () => {
+      const user = userEvent.setup();
+      let finish!: (value: unknown) => void;
+      mocks.post.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+      show(row({ label: 'Approve', style: ButtonStyle.Primary }));
+      const button = screen.getByRole('button', { name: 'Approve' });
+      await user.click(button);
+      await waitFor(() => expect(button).toBeDisabled());
+      expect(button).toHaveAttribute('aria-busy', 'true');
+      expect(button.querySelector('.ix-bot-btn__busy')).not.toBeNull();
+      finish({ data: { id: 'ix-1', guild_id: 'guild-1' } });
+      await waitFor(() => expect(button).not.toBeDisabled());
+      expect(button.querySelector('.ix-bot-btn__busy')).toBeNull();
+    });
+  });
+
+  it('keeps a multi-select’s choices until Confirm, which sends them once', async () => {
+    const user = userEvent.setup();
+    render(
+      <MessageComponents
+        channelId="channel-1"
+        messageId="message-1"
+        guildId="guild-1"
+        components={[
+          {
+            type: ComponentType.ActionRow,
+            components: [
+              {
+                type: ComponentType.StringSelect,
+                custom_id: 'days',
+                placeholder: 'Pick the days',
+                min_values: 1,
+                max_values: 2,
+                options: [
+                  { label: 'Friday', value: 'fri' },
+                  { label: 'Saturday', value: 'sat' },
+                ],
+              },
+            ],
+          },
+        ]}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: 'Pick the days' }));
+    await user.click(screen.getByRole('button', { name: 'Friday' }));
+    await user.click(screen.getByRole('button', { name: 'Saturday' }));
+    expect(mocks.post).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Confirm (2 selected)' }));
+    await waitFor(() => {
+      expect(mocks.post).toHaveBeenCalledWith(
+        '/interactions',
+        expect.objectContaining({ custom_id: 'days', values: ['fri', 'sat'] }),
+      );
+    });
+  });
+
   it('blocks unsafe link button URLs instead of opening them', async () => {
     const user = userEvent.setup();
 

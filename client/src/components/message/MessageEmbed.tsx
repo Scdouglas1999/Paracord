@@ -8,9 +8,15 @@ interface MessageEmbedCardProps {
   embed: EmbedType;
 }
 
+/**
+ * A link preview, as a card of the event-card family (docs/index-spec.md §8.4):
+ * the site, the title as the link, two lines of the page, a thumbnail at the end.
+ * The source's own color, when it sends one, is a 4px edge: the one place a
+ * color that is not Index's is shown, because it is the source's mark.
+ */
 export function MessageEmbedCard({ embed }: MessageEmbedCardProps) {
   const lowBandwidthMode = useUIStore((s) => s.lowBandwidthMode);
-  const accentColor = embed.color || 'var(--accent-primary)';
+  const accentColor = embed.color || null;
   const imageUrl = safeClientResourceUrl(embed.image || embed.thumbnail || '');
   const hasImage = !lowBandwidthMode && Boolean(imageUrl);
   const url = safeExternalUrl(embed.url);
@@ -27,66 +33,37 @@ export function MessageEmbedCard({ embed }: MessageEmbedCardProps) {
   const hasBody = Boolean(embed.site_name || embed.title || embed.description || imageUrl);
   if (!url && (claimsDestination || !hasBody)) return null;
 
-  const surface =
-    'group mt-1.5 flex max-w-[480px] overflow-hidden rounded-well border border-border-subtle bg-bg-raised shadow-[var(--shadow-chip)] transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]';
-  const Surface = url
-    ? ({ children }: { children: ReactNode }) => (
-        <a
-          href={url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className={`${surface} hover:border-border-strong`}
-        >
-          {children}
-        </a>
-      )
-    : ({ children }: { children: ReactNode }) => <div className={surface}>{children}</div>;
+  const content: ReactNode = (
+    <>
+      {accentColor && <span className="ix-embed__accent" style={{ backgroundColor: accentColor }} aria-hidden />}
+      <span className="ix-embed__body">
+        {embed.site_name && <span className="ix-embed__site">{embed.site_name}</span>}
+        {embed.title && <span className="ix-embed__title">{embed.title}</span>}
+        {embed.description && <span className="ix-embed__desc">{embed.description}</span>}
+        {!embed.title && !embed.description && url && (
+          <span className="ix-embed__url">
+            <ExternalLink size={13} aria-hidden />
+            <span>{url}</span>
+          </span>
+        )}
+      </span>
 
+      {hasImage && <img src={imageUrl ?? undefined} alt="" className="ix-embed__thumb" loading="lazy" />}
+      {!hasImage && lowBandwidthMode && imageUrl && <span className="ix-embed__thumb">Image</span>}
+    </>
+  );
+
+  if (url) {
+    return (
+      <a href={url} target="_blank" rel="noopener noreferrer" className="ix-card ix-embed" data-accent={accentColor ? '' : undefined}>
+        {content}
+      </a>
+    );
+  }
   return (
-    <Surface>
-      {/* Accent bar — the source's own color, a single meaning marker */}
-      <div className="w-1 shrink-0" style={{ backgroundColor: accentColor }} />
-
-      <div className="flex min-w-0 flex-1 gap-3 px-3.5 py-3">
-        <div className="min-w-0 flex-1">
-          {embed.site_name && (
-            <div className="text-section text-text-muted">
-              {embed.site_name}
-            </div>
-          )}
-          {embed.title && (
-            <div className="mt-0.5 text-label font-semibold leading-snug text-accent-primary group-hover:underline">
-              {embed.title}
-            </div>
-          )}
-          {embed.description && (
-            <div className="mt-1 line-clamp-2 text-meta leading-relaxed text-text-secondary">
-              {embed.description}
-            </div>
-          )}
-          {!embed.title && !embed.description && url && (
-            <div className="flex items-center gap-1.5 text-meta text-text-muted">
-              <ExternalLink size={13} />
-              <span className="truncate">{url}</span>
-            </div>
-          )}
-        </div>
-
-        {hasImage && (
-          <img
-            src={imageUrl ?? undefined}
-            alt=""
-            className="h-16 w-16 shrink-0 rounded-chip object-cover"
-            loading="lazy"
-          />
-        )}
-        {!hasImage && lowBandwidthMode && imageUrl && (
-          <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-chip border border-border-subtle bg-bg-well text-section text-text-muted">
-            Image
-          </div>
-        )}
-      </div>
-    </Surface>
+    <div className="ix-card ix-embed" data-accent={accentColor ? '' : undefined}>
+      {content}
+    </div>
   );
 }
 

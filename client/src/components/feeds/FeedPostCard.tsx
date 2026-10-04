@@ -45,9 +45,20 @@ function useCardImage(raw: string | null | undefined): { src: string | null; sto
   }, [raw, ticket]);
 }
 
-function CardImage({ src, stored, className }: { src: string; stored: boolean; className?: string }) {
+function CardImage({
+  src,
+  stored,
+  className,
+  shape,
+}: {
+  src: string;
+  stored: boolean;
+  className?: string;
+  /** The thumbnail beside the text: a square, or a tall poster. */
+  shape?: 'square' | 'poster';
+}) {
   if (stored) {
-    return <ResourceImage src={src} alt="" loading="lazy" draggable={false} className={className} />;
+    return <ResourceImage src={src} alt="" loading="lazy" draggable={false} className={className} data-shape={shape} />;
   }
   return (
     <img
@@ -57,6 +68,7 @@ function CardImage({ src, stored, className }: { src: string; stored: boolean; c
       draggable={false}
       referrerPolicy="no-referrer"
       className={className}
+      data-shape={shape}
     />
   );
 }
@@ -81,9 +93,10 @@ function sourceHost(url: string | null): string | null {
 }
 
 /**
- * A new item from a feed, in a channel or on the front page: the title as a
- * link, where it came from and when, a short summary, and its picture when it
- * has one. A YouTube video leads with its thumbnail and a play mark.
+ * A new item from a feed, in a channel or on the front page, as a card of the
+ * event-card family (docs/index-spec.md §8.4): the title as a link, where it came
+ * from and when, a short summary, and its picture when it has one. A YouTube
+ * video leads with its thumbnail and a play mark.
  */
 export function FeedPostCard({ embed, actions, className }: FeedPostCardProps) {
   const lowBandwidthMode = useUIStore((s) => s.lowBandwidthMode);
@@ -97,17 +110,12 @@ export function FeedPostCard({ embed, actions, className }: FeedPostCardProps) {
   if (typeof embed.feed.more === 'number' && embed.feed.more > 0) {
     const text = embed.title || `and ${embed.feed.more} more`;
     return url ? (
-      <a
-        href={url}
-        target="_blank"
-        rel="noopener noreferrer"
-        className={cn('pc-feed-more pc-focusable', className)}
-      >
+      <a href={url} target="_blank" rel="noopener noreferrer" className={cn('ix-feed-more', className)}>
         <span className="truncate">{text}</span>
         <ArrowUpRight size={14} aria-hidden className="shrink-0" />
       </a>
     ) : (
-      <p className={cn('pc-feed-more', className)}>{text}</p>
+      <p className={cn('ix-feed-more', className)}>{text}</p>
     );
   }
 
@@ -117,11 +125,11 @@ export function FeedPostCard({ embed, actions, className }: FeedPostCardProps) {
 
   // The card sits under the feed's own name, so the kicker names the site.
   const kicker = (
-    <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 text-meta text-text-muted">
-      {host && <span className="pc-feed-host max-w-full truncate">{host}</span>}
-      {host && when && <span aria-hidden className="pc-feed-host text-text-faint">·</span>}
+    <div className="ix-feed__kicker">
+      {host && <span className="ix-feed__host">{host}</span>}
+      {host && when && <span aria-hidden>·</span>}
       {when && (
-        <time dateTime={embed.timestamp ?? undefined} className="shrink-0 tabular-nums">
+        <time dateTime={embed.timestamp ?? undefined} className="tabular-nums">
           {when}
         </time>
       )}
@@ -130,64 +138,60 @@ export function FeedPostCard({ embed, actions, className }: FeedPostCardProps) {
 
   const title = embed.title ? (
     url ? (
-      <a
-        href={url}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="pc-feed-title pc-focusable rounded-[var(--radius-chip)]"
-      >
+      <a href={url} target="_blank" rel="noopener noreferrer" className="ix-feed__title">
         {embed.title}
       </a>
     ) : (
-      <span className="pc-feed-title">{embed.title}</span>
+      <span className="ix-feed__title">{embed.title}</span>
     )
   ) : null;
 
   const body = (
-    <div className="flex min-w-0 flex-1 flex-col gap-1">
+    <div className="ix-feed__body">
       {kicker}
       {title}
-      {embed.description && (
-        <p className={cn('text-meta leading-relaxed text-text-secondary', video ? 'line-clamp-2' : 'line-clamp-3')}>
-          {embed.description}
-        </p>
-      )}
+      {embed.description && <p className="ix-feed__desc">{embed.description}</p>}
     </div>
   );
 
   return (
-    <article className={cn('pc-feed-card', video && 'is-video', className)} aria-label={embed.title || 'Feed post'}>
+    <article
+      className={cn('ix-card ix-feed', className)}
+      data-video={video || undefined}
+      aria-label={embed.title || 'Feed post'}
+    >
       {video && image.src && (
         url ? (
           <a
             href={url}
             target="_blank"
             rel="noopener noreferrer"
-            className="pc-feed-media pc-focusable-composed"
+            className="ix-feed__media"
             aria-label={`Play ${embed.title ?? 'video'} on YouTube`}
           >
             <CardImage src={image.src} stored={image.stored} />
-            <span className="pc-feed-play" aria-hidden>
+            <span className="ix-feed__play" aria-hidden>
               <Play size={20} fill="currentColor" />
             </span>
           </a>
         ) : (
-          <div className="pc-feed-media">
+          <div className="ix-feed__media">
             <CardImage src={image.src} stored={image.stored} />
           </div>
         )
       )}
-      <div className="flex min-w-0 gap-3 px-3.5 py-3">
+      <div className="ix-feed__main">
         {body}
         {!video && showImage && image.src && (
           <CardImage
             src={image.src}
             stored={image.stored}
-            className={cn('pc-feed-thumb shrink-0 object-cover', poster ? 'is-poster' : 'is-square')}
+            className="ix-feed__thumb"
+            shape={poster ? 'poster' : 'square'}
           />
         )}
       </div>
-      {actions && <div className="flex flex-wrap items-center gap-2 px-3.5 pb-3">{actions}</div>}
+      {actions && <div className="ix-feed__actions">{actions}</div>}
     </article>
   );
 }

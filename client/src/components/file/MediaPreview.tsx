@@ -111,7 +111,7 @@ function MediaPlayer({ src, filename, kind, autoPlay, videoStyle }: MediaPreview
           controls
           autoPlay={autoPlay}
           aria-label={filename}
-          className={videoStyle ? 'glass-media-video' : 'glass-media-video glass-media-video--inline'}
+          className={videoStyle ? 'ix-video' : 'ix-video ix-video--inline'}
           style={videoStyle}
         >
           {captions && <track key={captions.url} kind="captions" label={captions.name} src={captions.url} default />}
@@ -133,27 +133,27 @@ function MediaPlayer({ src, filename, kind, autoPlay, videoStyle }: MediaPreview
       {kind === 'audio' && captions && <p aria-live="polite" aria-atomic="true" className="mt-2 whitespace-pre-line text-body text-text-body">{cueText}</p>}
       {/* Captions stay on this device: a quiet line under the player, the file
           picker behind the label so it reads as a text button (Glass). */}
-      <div className="glass-media-captions">
-        <label htmlFor={inputId} className="glass-media-captions__load">Load captions (.vtt)</label>
+      <div className="ix-captions">
+        <label htmlFor={inputId} className="ix-captions__load">Load captions (.vtt)</label>
         <input
           id={inputId}
           type="file"
           accept=".vtt,text/vtt"
-          className="glass-media-captions__input"
+          className="ix-captions__input"
           onChange={(event) => {
             void loadCaptions(event.currentTarget.files?.[0]);
             event.currentTarget.value = '';
           }}
         />
         {captions && <span>{captions.name} · local only</span>}
-        {captions && <button type="button" className="glass-media-captions__remove glass-focusable" onClick={() => {
+        {captions && <button type="button" className="ix-captions__remove" onClick={() => {
           selection.current += 1;
           setCaptions(null);
           setCueText('');
           setError(null);
         }}>Remove captions</button>}
       </div>
-      {error && <p role="alert" className="glass-media-captions__error">{error}</p>}
+      {error && <p role="alert" className="ix-captions__error">{error}</p>}
     </div>
   );
 }

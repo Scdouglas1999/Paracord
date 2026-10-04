@@ -1,24 +1,23 @@
 import type { ReactNode } from 'react';
-import { Eye } from 'lucide-react';
+import { IxGlyph } from '../ix/glyphs/IxGlyph';
 
 interface EphemeralMessageProps {
   children: ReactNode;
 }
 
 /**
- * Wraps ephemeral message content (flags & 64) with a visual indicator
- * that it is only visible to the current user.
+ * Wraps ephemeral message content (flags & 64) with its mark
+ * (docs/index-spec.md §8.4): the message in its bubble as it always is, and
+ * "Only you can see this" under it, 12px in the tertiary ink with an eye.
  */
 export function EphemeralMessage({ children }: EphemeralMessageProps) {
   return (
-    <div className="rounded-chip border-l-2 border-border-strong bg-bg-mod-subtle px-3 py-1.5">
-      <div className="mb-1 flex items-center gap-1.5">
-        <Eye size={13} className="shrink-0 text-text-muted" />
-        <span className="text-meta font-medium text-text-muted">
-          Only you can see this
-        </span>
-      </div>
+    <div className="ix-ephemeral">
       <div>{children}</div>
+      <p className="ix-ephemeral__note">
+        <IxGlyph name="watch" size={13} />
+        Only you can see this
+      </p>
     </div>
   );
 }

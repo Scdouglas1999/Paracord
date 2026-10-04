@@ -1,21 +1,22 @@
 import * as React from 'react';
 
 import { cn } from '../../../lib/utils';
-import { TimelineAvatar } from '../../message/TimelineParts';
+import { Avatar } from '../../ix/identity/Avatar';
 import { CheckMark } from './CardGlyphs';
 
 /**
- * The plan card (docs/glass-spec.md §3.2): one step above a bubble (`--raise`),
- * radius 20 with the group's joined corner, a title, a time-and-place line, the
- * slots as faces and names, and one decision as text.
+ * A titled card of the event-card family (docs/index-spec.md §3.1, §4.11): the
+ * `--ix-card` surface, radius 20, padding 16, a 16/700 title and a 13.5 line
+ * under it. It is the shell of a poll (the options are its children) and of any
+ * card that has a title and a line and has not got a calendar tile; the event in
+ * a message is `EventCard`.
  *
- *   Haz 5 run                                       Take the spot
- *   Tonight at 9:30 PM in Lounge
- *   (B) Brendan   (V) Vincent   (L) Luke 10 min   ( ) 1 open
+ *   Late one after the run?
+ *   Pick one · 12 votes · ends Fri
+ *   ...children...
  *
- * Presentational. `EventPlanCard` gives it an event, `PollMessageCard` a poll;
- * neither changes how it looks. Under 340px of card the names hide (a container
- * query in `glass-cards.css`), and the faces stay.
+ * Presentational. With `slots` it still draws the faces-and-names row the Home
+ * and server pages use (docs/glass-spec.md §3.2), in the same card.
  */
 
 export interface PlanSlotModel {
@@ -24,7 +25,7 @@ export interface PlanSlotModel {
   name: string;
   /** A second line under the name ("10 min", "Host"). */
   detail?: string;
-  /** Who is in this slot. Omitted for an open one. `name` is the person's own name, for their initials, when the slot's label is not it ("You"). */
+  /** Who is in this slot. Omitted for an open one. `name` is the person's own name, for their letter, when the slot's label is not it ("You"). */
   face?: { userId: string; avatar?: string | null; name?: string };
   /** The reader: their face wears a light ring. */
   you?: boolean;
@@ -34,12 +35,12 @@ export interface PlanSlotModel {
 
 export interface PlanCardProps extends Omit<React.HTMLAttributes<HTMLDivElement>, 'title'> {
   title: React.ReactNode;
-  /** The time-and-place line under the title. */
+  /** The line under the title. */
   meta?: React.ReactNode;
   /** The decision, top right: a `PlanAction` (or any text button). */
   action?: React.ReactNode;
   slots?: readonly PlanSlotModel[];
-  /** Follows a bubble of the same group, so its top corner joins too. */
+  /** Follows a bubble of the same group; kept as a hook for the timeline (`data-join-top`). */
   joinTop?: boolean;
   /** What the card is, for assistive tech ("Plan", "Poll"). */
   kind?: string;
@@ -50,17 +51,17 @@ export interface PlanCardProps extends Omit<React.HTMLAttributes<HTMLDivElement>
 
 function Slot({ slot }: { slot: PlanSlotModel }) {
   return (
-    <li className="glass-plan__slot" data-open={slot.open || undefined} data-you={slot.you || undefined}>
+    <li className="ix-plan__slot" data-open={slot.open || undefined} data-you={slot.you || undefined}>
       {slot.open || !slot.face ? (
-        <span className="glass-plan__open" aria-hidden />
+        <span className="ix-plan__open" aria-hidden />
       ) : (
-        <TimelineAvatar userId={slot.face.userId} name={slot.face.name ?? slot.name} avatar={slot.face.avatar ?? null} size={28} />
+        <Avatar userId={slot.face.userId} name={slot.face.name ?? slot.name} avatar={slot.face.avatar ?? null} size={28} />
       )}
       {/* The name is hidden under 340px by CSS, so assistive tech gets it here. */}
       <span className="sr-only">{slot.detail ? `${slot.name}, ${slot.detail}` : slot.name}</span>
-      <span className="glass-plan__name" aria-hidden>
-        <span className="glass-plan__who">{slot.name}</span>
-        {slot.detail && <span className="glass-plan__detail">{slot.detail}</span>}
+      <span className="ix-plan__name" aria-hidden>
+        <span className="ix-plan__who">{slot.name}</span>
+        {slot.detail && <span className="ix-plan__detail">{slot.detail}</span>}
       </span>
     </li>
   );
@@ -83,18 +84,18 @@ export function PlanCard({
       role="group"
       aria-label={label ?? (typeof title === 'string' ? `${kind}: ${title}` : kind)}
       data-join-top={joinTop || undefined}
-      className={cn('glass-plan', className)}
+      className={cn('ix-card ix-plan', className)}
       {...rest}
     >
-      <div className="glass-plan__head">
-        <span className="glass-plan__text">
-          <span className="glass-plan__title">{title}</span>
-          {meta && <span className="glass-plan__meta">{meta}</span>}
+      <div className="ix-plan__head">
+        <span className="ix-plan__text">
+          <span className="ix-plan__title">{title}</span>
+          {meta && <span className="ix-plan__meta">{meta}</span>}
         </span>
         {action}
       </div>
       {slots && slots.length > 0 && (
-        <ul className="glass-plan__slots">
+        <ul className="ix-plan__slots">
           {slots.map((slot) => (
             <Slot key={slot.key} slot={slot} />
           ))}
@@ -106,8 +107,8 @@ export function PlanCard({
 }
 
 /**
- * The card's decision, as text: "Take the spot", and "You're in" with a check
- * once taken. Pressing it again gives the spot back.
+ * The card's decision, as a quiet button: "Take the spot", and "You're in" with
+ * a check once taken. Pressing it again gives the spot back.
  */
 export function PlanAction({
   taken,
@@ -125,7 +126,7 @@ export function PlanAction({
   return (
     <button
       type="button"
-      className="glass-plan__action glass-focusable"
+      className="ix-plan__action"
       data-taken={taken || undefined}
       // The words it shows are the words it is called (the check is decoration).
       aria-label={taken ? takenLabel : takeLabel}

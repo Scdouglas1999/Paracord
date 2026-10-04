@@ -1007,6 +1007,9 @@
   /* White means it's for you: the mention count's text on its white chip. */
   --ix-mention-ink: #111214;
 
+  /* A code block inside a message (§8.4, IX-8): one step below the bubble it sits in. */
+  --ix-code: #18191c;
+
   /* Every focus-visible ring: outline: var(--ix-focus); outline-offset: var(--ix-focus-offset). */
   --ix-focus: 2px solid rgba(255, 255, 255, 0.85);
   --ix-focus-offset: 2px;

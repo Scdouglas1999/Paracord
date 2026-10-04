@@ -38,6 +38,11 @@ const MediaTest = import.meta.env.DEV ? lazy(() => import('./pages/MediaTest')) 
 const DesignTokensPage = import.meta.env.DEV
   ? lazy(() => import('./pages/DesignTokensPage'))
   : null;
+// The conversation cards in every state (docs/index-spec.md §4.11; the
+// `index-cards` e2e spec). Dev builds only, the same way.
+const IxCardsGallery = import.meta.env.DEV
+  ? lazy(() => import('./pages/IxCardsGallery'))
+  : null;
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { Button } from './components/ui/Button';
 import { gateway } from './gateway/manager';
@@ -514,6 +519,11 @@ export default function App() {
       {/* Design-system reference — dev builds only, stripped from production. */}
       {import.meta.env.DEV && DesignTokensPage && (
         <Route path="/design-tokens" element={lazyRoute(<DesignTokensPage />)} />
+      )}
+
+      {/* Conversation cards gallery — dev builds only, stripped from production. */}
+      {import.meta.env.DEV && IxCardsGallery && (
+        <Route path="/ix-cards" element={lazyRoute(<IxCardsGallery />)} />
       )}
 
       {/* Default: send to app (which handles auth redirects) */}

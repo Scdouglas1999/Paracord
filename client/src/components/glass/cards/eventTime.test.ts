@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { eventCardIds } from './eventRefs';
-import { chipWhen, clockLabel, dayOffset, planWhen } from './eventTime';
+import { chipWhen, clockLabel, dayOffset, dayTile, endsWhen, planWhen } from './eventTime';
 
 const RealDateTimeFormat = Intl.DateTimeFormat;
 beforeEach(() => {
@@ -15,13 +15,13 @@ afterEach(() => vi.restoreAllMocks());
 const NOW = new Date(2026, 9, 1, 21, 12).getTime();
 const at = (day: number, hour: number, minute = 0) => new Date(2026, 9, day, hour, minute);
 
-describe('planWhen (the plan card’s sentence)', () => {
+describe('planWhen (the event card’s sentence)', () => {
   it('says tonight, today, tomorrow, a weekday, a date', () => {
     expect(planWhen(at(1, 21, 30), { nowMs: NOW })).toBe('Tonight at 9:30 PM');
     expect(planWhen(at(1, 23, 0), { nowMs: new Date(2026, 9, 1, 8, 0).getTime() })).toBe('Tonight at 11:00 PM');
     expect(planWhen(at(1, 13, 0), { nowMs: new Date(2026, 9, 1, 8, 0).getTime() })).toBe('Today at 1:00 PM');
     expect(planWhen(at(2, 21, 0), { nowMs: NOW })).toBe('Tomorrow at 9:00 PM');
-    expect(planWhen(at(4, 19, 0), { nowMs: NOW })).toBe('Sun at 7:00 PM');
+    expect(planWhen(at(4, 19, 0), { nowMs: NOW })).toBe('Sunday at 7:00 PM');
     expect(planWhen(at(20, 19, 0), { nowMs: NOW })).toBe('Oct 20 at 7:00 PM');
   });
 
@@ -29,6 +29,27 @@ describe('planWhen (the plan card’s sentence)', () => {
     expect(planWhen(at(1, 21, 0), { nowMs: NOW, happeningNow: true })).toBe('Happening now');
     expect(planWhen(at(1, 18, 0), { nowMs: NOW, endsAt: at(1, 19, 0) })).toBe('Earlier today at 6:00 PM');
     expect(planWhen(at(0 + 30, 18, 0), { nowMs: NOW + 40 * 24 * 3600 * 1000 })).toBe('Oct 30');
+  });
+});
+
+describe('dayTile (the event card’s calendar tile)', () => {
+  it('is the short weekday over the day of the month', () => {
+    expect(dayTile(at(9, 21))).toEqual({ weekday: 'Fri', day: '9' });
+    expect(dayTile(at(25, 9))).toEqual({ weekday: 'Sun', day: '25' });
+  });
+});
+
+describe('endsWhen (when a poll closes)', () => {
+  it('is as little as it can say', () => {
+    expect(endsWhen(null, NOW)).toBeNull();
+    expect(endsWhen(undefined, NOW)).toBeNull();
+    expect(endsWhen(new Date(NOW - 1000), NOW)).toBe('ended');
+    expect(endsWhen(new Date(NOW + 12 * 60_000), NOW)).toBe('ends in 12 min');
+    expect(endsWhen(new Date(NOW + 5_000), NOW)).toBe('ends in 1 min');
+    expect(endsWhen(at(1, 23, 0), NOW)).toBe('ends today 11 PM');
+    expect(endsWhen(at(2, 9, 0), NOW)).toBe('ends tomorrow');
+    expect(endsWhen(at(4, 19, 0), NOW)).toBe('ends Sun');
+    expect(endsWhen(at(20, 19, 0), NOW)).toBe('ends Oct 20');
   });
 });
 

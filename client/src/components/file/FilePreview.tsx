@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Download, FileText, FileWarning, X } from 'lucide-react';
 import { fileApi } from '../../api/files';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { isAllowedImageMimeType, safeClientResourceUrl } from '../../lib/security';
 import { formatFileSize } from '../../lib/formatters';
+import { DownloadMark, FileMark } from '../glass/cards/CardGlyphs';
+import { IxGlyph } from '../ix/glyphs/IxGlyph';
+import { Control } from '../ix/primitives/Control';
 import { MediaPreview } from './MediaPreview';
 
 interface FilePreviewProps {
@@ -62,75 +64,52 @@ export function FilePreview({ url, filename, mimeType, size, resolveObjectUrl }:
   }, [safeRawUrl, resolveObjectUrl]);
 
   if (!safeRawUrl) {
-    return (
-      <div className="mt-2 flex max-w-sm items-center gap-2.5 rounded-[var(--radius-well)] bg-bg-well px-3.5 py-3 text-meta text-text-muted shadow-[var(--shadow-well)]">
-        <FileWarning size={16} className="shrink-0 text-accent-warning" />
-        Attachment link blocked.
-      </div>
-    );
+    return <div className="ix-media-note">Attachment link blocked.</div>;
   }
 
   if (error) {
     return (
-      <div role="alert" className="mt-2 flex max-w-sm items-center gap-2.5 rounded-[var(--radius-well)] bg-danger-well px-3.5 py-3 text-meta text-accent-danger">
-        <FileWarning size={16} className="shrink-0" />
+      <div role="alert" className="ix-media-note" data-tone="error">
         <span className="min-w-0">{filename}: {error}</span>
       </div>
     );
   }
 
   if (!resolvedSrc) {
-    return (
-      <div className="mt-2 max-w-sm rounded-[var(--radius-well)] bg-bg-well px-3.5 py-3 text-meta text-text-faint shadow-[var(--shadow-well)]">
-        Loading attachment…
-      </div>
-    );
+    return <div className="ix-media-note">Loading attachment…</div>;
   }
 
   // Image preview
   if (isAllowedImageMimeType(mimeType)) {
     return (
       <>
-        <div className="mt-2 max-w-md overflow-hidden rounded-[var(--radius-well)] bg-bg-well shadow-[var(--shadow-chip)]">
+        <div className="ix-media-card">
           <button
             type="button"
             aria-label={`Open image preview: ${filename}`}
-            className="pc-focusable block w-full p-0 text-left outline-none"
+            className="ix-media-card__open"
             onClick={() => setLightbox(true)}
           >
-            <img
-              src={resolvedSrc}
-              alt={filename}
-              className="max-h-72 w-full object-contain"
-            />
+            <img src={resolvedSrc} alt={filename} className="ix-media-card__img" />
           </button>
-          <div className="flex items-center gap-2 px-3 py-2 text-meta text-text-muted">
-            <span className="min-w-0 truncate font-medium text-text-body">{filename}</span>
-            <span className="pc-mono ml-auto shrink-0">{formatFileSize(size)}</span>
-          </div>
+          <MediaCardFoot filename={filename} size={size} />
         </div>
 
         {/* Lightbox */}
         {lightbox && (
           <div
             ref={lightboxRef}
-            className="fixed inset-0 z-50 flex cursor-pointer items-center justify-center"
+            className="ix-lightbox fixed inset-0"
             role="dialog"
             aria-modal="true"
             aria-label={`Image preview: ${filename}`}
             tabIndex={-1}
-            style={{ backgroundColor: 'var(--overlay-backdrop)' }}
             onClick={closeLightbox}
           >
-            <button
-              type="button"
-              aria-label="Close image preview"
-              className="pc-focusable absolute right-4 top-4 flex h-9 w-9 items-center justify-center rounded-[var(--radius-control)] bg-bg-raised text-text-primary shadow-[var(--shadow-lifted)] outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-strong"
-              onClick={closeLightbox}
-            >
-              <X size={18} />
-            </button>
-            <img src={resolvedSrc} alt={filename} className="max-h-[90vh] max-w-[90vw] object-contain" />
+            <Control label="Close image preview" className="ix-lightbox__close" onClick={closeLightbox}>
+              <IxGlyph name="x" size={16} />
+            </Control>
+            <img src={resolvedSrc} alt={filename} className="ix-lightbox__img" />
           </div>
         )}
       </>
@@ -140,12 +119,9 @@ export function FilePreview({ url, filename, mimeType, size, resolveObjectUrl }:
   // Video preview
   if (mimeType.startsWith('video/')) {
     return (
-      <div className="mt-2 max-w-md overflow-hidden rounded-[var(--radius-well)] bg-bg-well shadow-[var(--shadow-chip)]">
+      <div className="ix-media-card">
         <MediaPreview key={resolvedSrc} src={resolvedSrc} filename={filename} kind="video" />
-        <div className="flex items-center gap-2 px-3 py-2 text-meta text-text-muted">
-          <span className="min-w-0 truncate font-medium text-text-body">{filename}</span>
-          <span className="pc-mono ml-auto shrink-0">{formatFileSize(size)}</span>
-        </div>
+        <MediaCardFoot filename={filename} size={size} />
       </div>
     );
   }
@@ -153,39 +129,39 @@ export function FilePreview({ url, filename, mimeType, size, resolveObjectUrl }:
   // Audio preview
   if (mimeType.startsWith('audio/')) {
     return (
-      <div className="mt-2 max-w-md overflow-hidden rounded-[var(--radius-well)] bg-bg-well shadow-[var(--shadow-chip)]">
-        <div className="flex items-center gap-3 p-3.5">
+      <div className="ix-media-card">
+        <div className="ix-media-card__audio">
           <MediaPreview key={resolvedSrc} src={resolvedSrc} filename={filename} kind="audio" />
         </div>
-        <div className="flex items-center gap-2 px-3 pb-2 text-meta text-text-muted">
-          <span className="min-w-0 truncate font-medium text-text-body">{filename}</span>
-          <span className="pc-mono ml-auto shrink-0">{formatFileSize(size)}</span>
-        </div>
+        <MediaCardFoot filename={filename} size={size} />
       </div>
     );
   }
 
-  // Generic / unknown-type file card — framed, with a lucide file icon and a
-  // download affordance (no emoji chrome, kill-list #3).
+  // Generic / unknown-type file: a card bubble (docs/index-spec.md §4.11), a glyph
+  // tile in the place's hue, the name, the size and the way to download.
   return (
-    <div className="mt-2 max-w-sm">
-      <a
-        href={resolvedSrc}
-        download={filename}
-        className="pc-focusable group flex items-center gap-3 rounded-[var(--radius-well)] bg-bg-well p-3 no-underline shadow-[var(--shadow-well)] outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle"
-      >
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-chip)] bg-bg-mod-strong text-text-secondary">
-          <FileText size={20} />
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-label font-medium text-text-primary">{filename}</div>
-          <div className="pc-mono text-meta text-text-faint">{formatFileSize(size)}</div>
-        </div>
-        <Download
-          size={18}
-          className="shrink-0 text-text-muted transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] group-hover:text-accent-primary"
-        />
-      </a>
+    <a href={resolvedSrc} download={filename} className="ix-file">
+      <span className="ix-file__tile ix-hue-tile" aria-hidden>
+        <FileMark />
+      </span>
+      <span className="ix-file__text">
+        <span className="ix-file__name">{filename}</span>
+        <span className="ix-file__size">{formatFileSize(size)}</span>
+      </span>
+      <span className="ix-file__dl" aria-hidden>
+        <DownloadMark />
+      </span>
+    </a>
+  );
+}
+
+/** The line under a picture, a video or a sound: its name, and its size at the end. */
+function MediaCardFoot({ filename, size }: { filename: string; size: number }) {
+  return (
+    <div className="ix-media-card__foot">
+      <span className="ix-media-card__name">{filename}</span>
+      <span className="ix-media-card__size">{formatFileSize(size)}</span>
     </div>
   );
 }

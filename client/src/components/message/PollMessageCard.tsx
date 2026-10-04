@@ -3,60 +3,128 @@ import type { Poll, PollOption } from '../../types';
 import { channelApi } from '../../api/channels';
 import { usePollStore } from '../../stores/pollStore';
 import { toast } from '../../stores/toastStore';
-import { CheckMark } from '../glass/cards/CardGlyphs';
+import { endsWhen } from '../glass/cards/eventTime';
 import { PlanCard } from '../glass/cards/PlanCard';
+import { IxGlyph } from '../ix/glyphs/IxGlyph';
 
 interface PollMessageCardProps {
   channelId: string;
   poll: Poll;
   canVote: boolean;
-  /** Follows a bubble of the same group, so the card's top corner joins too. */
+  /** Follows a bubble of the same group; kept as a hook for the timeline (`data-join-top`). */
   joinTop?: boolean;
 }
 
-/** "2h 5m left", or null when the poll has no end (that is the ordinary case: nothing to say). */
-function formatExpiryLabel(expiresAt: string | null | undefined, nowMs: number): string | null {
-  if (!expiresAt) return null;
-  const expiresMs = new Date(expiresAt).getTime();
-  const remaining = expiresMs - nowMs;
-  if (remaining <= 0) return 'Ended';
+/** Longest a single timer waits (a browser clamps near 2^31 ms): a poll further out is re-checked each minute. */
+const MAX_TIMER_MS = 24 * 60 * 60 * 1000;
 
-  const totalSeconds = Math.floor(remaining / 1000);
-  const days = Math.floor(totalSeconds / 86400);
-  const hours = Math.floor((totalSeconds % 86400) / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
+export interface PollCardProps {
+  poll: Poll;
+  /** The reader may vote (a permission; not whether the poll is still open). */
+  canVote: boolean;
+  /** Now, for "ends Fri" and whether it has closed. */
+  nowMs: number;
+  /** The option whose vote is on its way. */
+  pendingOptionId?: string | null;
+  onVote: (option: PollOption) => void;
+  joinTop?: boolean;
+}
 
-  if (days > 0) return `${days}d ${hours}h left`;
-  if (hours > 0) return `${hours}h ${minutes}m left`;
-  if (minutes > 0) return `${minutes}m left`;
-  return `${seconds}s left`;
+/** "Pick one · 12 votes · ends Fri". */
+export function pollMeta(poll: Poll, nowMs: number, closed: boolean): string {
+  return [
+    poll.allow_multiselect ? 'Pick any' : 'Pick one',
+    `${poll.total_votes} vote${poll.total_votes === 1 ? '' : 's'}`,
+    closed ? null : endsWhen(poll.expires_at ? new Date(poll.expires_at) : null, nowMs),
+  ]
+    .filter(Boolean)
+    .join(' · ');
 }
 
 /**
- * A poll, as a plan card (docs/glass-spec.md §3.2): the question is the title,
- * the line under it says how it is answered and how it is going, and each
- * option is a row you press to vote (press again to take the vote back). The
- * bar behind an option is its share of the vote; a check marks yours.
+ * A poll (docs/index-spec.md §4.11): the question as the card's title, how it is
+ * answered and how it is going under it, and each option a row you press to vote
+ * (press again to take the vote back; the poll API votes per option, at once).
+ * The bar behind an option is its share, drawn as a `scaleX` from the left edge
+ * so a vote moving it is a composited change, not a relayout; your vote is
+ * checked.
+ *
+ * This is the view: it holds no state and calls no API, so every state can be
+ * drawn from data. `PollMessageCard` is the card with the poll store behind it.
  */
+export function PollCard({ poll, canVote, nowMs, pendingOptionId, onVote, joinTop }: PollCardProps) {
+  const orderedOptions = useMemo(() => [...poll.options].sort((a, b) => a.position - b.position), [poll.options]);
+  const closed = Boolean(poll.expires_at) && new Date(poll.expires_at as string).getTime() <= nowMs;
+  const canToggle = canVote && !closed;
+  const total = poll.total_votes;
+
+  return (
+    <PlanCard
+      kind="Poll"
+      joinTop={joinTop}
+      className="ix-poll"
+      title={poll.question}
+      meta={pollMeta(poll, nowMs, closed)}
+      action={closed ? <span className="ix-poll__state">Closed</span> : undefined}
+    >
+      {/* The choice marks take a column while there is a choice to make or a vote to show, so the words line up. */}
+      <ul className="ix-poll__options" data-marks={canToggle || orderedOptions.some((o) => o.voted) || undefined}>
+        {orderedOptions.map((option) => {
+          const percent = total > 0 ? Math.round((option.vote_count / total) * 100) : 0;
+          return (
+            <li key={option.id}>
+              <button
+                type="button"
+                className="ix-poll__option"
+                data-voted={option.voted || undefined}
+                data-votable={canToggle || undefined}
+                aria-pressed={option.voted}
+                disabled={!canToggle || pendingOptionId === option.id}
+                onClick={() => onVote(option)}
+                // The share of the vote, as a scale from the left edge.
+                style={{ '--share': percent / 100 } as CSSProperties}
+              >
+                <span className="ix-poll__bar" aria-hidden />
+                <span className="ix-poll__body">
+                  <span className="ix-poll__mark" aria-hidden>
+                    {option.voted && <IxGlyph name="check" size={12} />}
+                  </span>
+                  <span className="ix-poll__text">
+                    {option.emoji ? `${option.emoji} ` : ''}
+                    {option.text}
+                  </span>
+                  <span className="ix-poll__stat">{percent}%</span>
+                  <span className="sr-only">{`${option.vote_count} vote${option.vote_count === 1 ? '' : 's'}`}</span>
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </PlanCard>
+  );
+}
+
+/** A poll in the timeline: the poll store behind `PollCard`, kept fresh while it is open. */
 export function PollMessageCard({ channelId, poll, canVote, joinTop }: PollMessageCardProps) {
   const livePoll = usePollStore((s) => s.pollsById[poll.id]) ?? poll;
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [pendingOptionId, setPendingOptionId] = useState<string | null>(null);
 
-  const orderedOptions = useMemo(
-    () => [...livePoll.options].sort((a, b) => a.position - b.position),
-    [livePoll.options],
-  );
-  const totalVotes = livePoll.total_votes;
-  const isExpired = Boolean(livePoll.expires_at) && new Date(livePoll.expires_at as string).getTime() <= nowMs;
+  const expiresMs = livePoll.expires_at ? new Date(livePoll.expires_at).getTime() : null;
+  const isExpired = expiresMs !== null && expiresMs <= nowMs;
 
+  // One timer to the moment it closes (so the card closes on time), and one
+  // tick a minute for "ends in 12 min": a poll does not need a clock a second.
   useEffect(() => {
-    if (!livePoll.expires_at) return;
-    if (isExpired) return;
-    const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [livePoll.expires_at, isExpired]);
+    if (expiresMs === null || isExpired) return;
+    const toClose = window.setTimeout(() => setNowMs(Date.now()), Math.min(Math.max(expiresMs - Date.now(), 0) + 50, MAX_TIMER_MS));
+    const tick = window.setInterval(() => setNowMs(Date.now()), 60_000);
+    return () => {
+      window.clearTimeout(toClose);
+      window.clearInterval(tick);
+    };
+  }, [expiresMs, isExpired]);
 
   useEffect(() => {
     let canceled = false;
@@ -104,54 +172,14 @@ export function PollMessageCard({ channelId, poll, canVote, joinTop }: PollMessa
     }
   };
 
-  const expiry = formatExpiryLabel(livePoll.expires_at, nowMs);
-  const meta = [
-    livePoll.allow_multiselect ? 'Pick any' : 'Pick one',
-    `${totalVotes} vote${totalVotes === 1 ? '' : 's'}`,
-    expiry && !isExpired ? expiry : null,
-  ]
-    .filter(Boolean)
-    .join(' · ');
-
   return (
-    <PlanCard
-      kind="Poll"
+    <PollCard
+      poll={livePoll}
+      canVote={canVote}
+      nowMs={nowMs}
+      pendingOptionId={pendingOptionId}
+      onVote={(option) => void applyVoteChange(option)}
       joinTop={joinTop}
-      title={livePoll.question}
-      meta={meta}
-      action={isExpired ? <span className="glass-plan__state">Closed</span> : undefined}
-    >
-      <ul className="glass-plan__options">
-        {orderedOptions.map((option) => {
-          const votePercent = totalVotes > 0 ? Math.round((option.vote_count / totalVotes) * 100) : 0;
-          const canToggle = canVote && !isExpired;
-          return (
-            <li key={option.id}>
-              <button
-                type="button"
-                className="glass-plan__option"
-                data-voted={option.voted || undefined}
-                aria-pressed={option.voted}
-                disabled={!canToggle || pendingOptionId === option.id}
-                onClick={() => void applyVoteChange(option)}
-                // The share of the vote, drawn as a scale from the left edge so
-                // a vote moving the bar is a composited change, not a relayout.
-                style={{ '--share': votePercent / 100 } as CSSProperties}
-              >
-                <span className="glass-plan__option-body">
-                  <span className="glass-plan__option-text">
-                    {option.emoji ? `${option.emoji} ` : ''}
-                    {option.text}
-                  </span>
-                  <span className="glass-plan__option-stat glass-instrument">{votePercent}%</span>
-                  <span className="glass-plan__option-stat glass-instrument">{option.vote_count}</span>
-                  {option.voted && <CheckMark />}
-                </span>
-              </button>
-            </li>
-          );
-        })}
-      </ul>
-    </PlanCard>
+    />
   );
 }

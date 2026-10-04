@@ -57,9 +57,12 @@
   color: hsl(var(--ix-hue) 80% 80%);
 }
 
-/* An event's weekday. */
+/* An event's weekday. 78% lightness, not the spec's 74: at 74 an 11px weekday on its
+   tile is 3.8:1 at hue 240 (the eleven palette hues pass, a "Match icon" blue does
+   not); 78 clears 4.5:1 at every hue (docs/index-spec.md §10), audited in
+   scripts/contrast-audit.mjs. */
 .ix-hue-weekday {
-  color: hsl(var(--ix-hue) 75% 74%);
+  color: hsl(var(--ix-hue) 75% 78%);
 }
 
 /* The message box's focus halo; fade this layer in by opacity. */

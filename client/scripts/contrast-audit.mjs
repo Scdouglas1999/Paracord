@@ -869,6 +869,111 @@ function ixRecord(setting, fgName, bgName, ratio, min) {
   }
 }
 
+/* ---- Index conversation cards (IX-8; styles/ix-cards.css) --------------------
+   What the card family writes over a surface of its own: the weekday on the
+   day tile and the code's highlight colors (hue-derived: swept like the rest),
+   and the pairs that do not move with the hue (chips on a bubble and on your
+   cream one, the poll's percent on its share bar, a select's list, a code
+   block's ink). The code's hue colors are read out of ix-cards.css, the weekday's out of ix-base.css. */
+{
+  const cardsCss = fs.readFileSync(path.join(stylesDir, 'ix-cards.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '));
+  /** One declaration of the first rule whose selector list names `selector` exactly. */
+  const cardsDecl = (selector, property) => {
+    for (const rule of cardsCss.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
+      if (!rule[1].split(',').some((part) => part.trim() === selector)) continue;
+      const found = rule[2].match(new RegExp(`(?:^|[;{\\s])${property}\\s*:\\s*([^;]+);`));
+      if (found) return found[1].replace(/\s*!important/, '').trim();
+    }
+    throw new Error(`[contrast] ix-cards.css has no "${selector}" with "${property}"`);
+  };
+  const weekdayCall = hslCalls(ixDecl(ixRule('.ix-hue-weekday'), 'color'))[0];
+  const hueCalls = [
+    ['keyword', hslCalls(cardsDecl('.ix-code .hljs-keyword', 'color'))[0]],
+    ['string', hslCalls(cardsDecl('.ix-code .hljs-string', 'color'))[0]],
+    ['attribute', hslCalls(cardsDecl('.ix-code .hljs-attr', 'color'))[0]],
+  ];
+  if (!weekdayCall || hueCalls.some(([, call]) => !call)) throw new Error('[contrast] ix-cards.css: the weekday and the code colors must be hsl() of --ix-hue');
+
+  for (const [themeName, overrides] of Object.entries(THEMES)) {
+    const hc = isHighContrast(themeName);
+    const vars = { ...themeBase, ...rootBase, ...overrides };
+    const token = (name) => {
+      const value = resolveVar(name, vars);
+      const color = value ? parseColor(value, `index cards ${themeName}: ${name}`) : null;
+      if (!color) throw new Error(`[contrast] index cards ${themeName}: unable to resolve ${name}`);
+      return color;
+    };
+    const setting = `index cards ${themeName}`;
+    const check = (fgName, fg, bgName, bg, min) => ixRecord(setting, fgName, bgName, contrastRatio(fg, bg), min);
+    const tint = Number(resolveVar('--ix-tint', vars));
+    const main = token('--ix-main');
+    const bubble = token('--ix-bubble');
+    const card = token('--ix-card');
+    const code = token('--ix-code');
+    const cream = token('--ix-cream');
+    const creamInk = token('--ix-cream-ink');
+    const amber = token('--ix-amber');
+    const [ink, ink2, ink3] = ['--ix-ink', '--ix-ink-2', '--ix-ink-3'].map(token);
+    // Plain ground: 7:1 in High contrast. A translucent fill under the text (a bar, a tile, a chip's
+    // wash) lifts the surface a step, so there the floor is the spec's 4.5:1 in both themes.
+    const textFloor = hc ? 7 : 4.5;
+    const fillFloor = 4.5;
+    const over = (name, base) => blend(token(name), base);
+
+    // Hue-derived: the weekday on its tile, the code's colors on the code (in High
+    // contrast both are ink, which the ink checks below hold).
+    const tile = over('--ix-fill-card-hover', card);
+    for (const hue of IX_HUES) {
+      if (hc) break;
+      const at = `${setting} @ hue ${hue}`;
+      ixRecord(at, 'event weekday', 'day tile', contrastRatio(evalHsl(weekdayCall, hue, tint), tile), 4.5);
+      for (const [name, call] of hueCalls) ixRecord(at, `code ${name}`, '--ix-code', contrastRatio(evalHsl(call, hue, tint), code), 4.5);
+    }
+    if (hc) {
+      check('--ix-ink-2 (the weekday)', ink2, 'day tile', tile, fillFloor);
+      check('--ix-ink (the code)', ink, '--ix-code', code, 7);
+    }
+
+    // The day tile: a done event's weekday is ink-3; a live one amber.
+    check('--ix-ink-3', ink3, 'day tile', tile, fillFloor);
+    check('--ix-amber', amber, 'day tile', tile, 4.5);
+
+    // The poll: its percent sits on the share bar at its widest (a share of 100).
+    const optionBar = over('--ix-fill-2', over('--ix-fill', card));
+    const votedBar = over('--ix-fill-ctl-hover', over('--ix-fill', card));
+    check('--ix-ink-2 (percent)', ink2, 'poll share bar', optionBar, fillFloor);
+    check('--ix-ink (your percent)', ink, 'poll share bar (yours)', votedBar, fillFloor);
+    check('--ix-cream-ink (the check)', creamInk, '--ix-cream', cream, 7);
+
+    // Chips: on a bubble, and on your cream one (a dark wash over cream).
+    const liveOnBubble = blend({ ...parseColor('rgb(255, 170, 90)', 'amber rgb'), a: 0.16 }, bubble);
+    check('--ix-amber (live chip)', amber, 'live chip tint over bubble', liveOnBubble, 4.5);
+    check(hc ? '--ix-amber (its aside)' : '--ix-amber 80% (its aside)', hc ? amber : mixRgb(liveOnBubble, amber, 0.8), 'live chip tint over bubble', liveOnBubble, 4.5);
+    check('--ix-amber (own live chip)', amber, '--ix-cream-ink', creamInk, 4.5);
+    check('--ix-amber 80% (own aside)', mixRgb(creamInk, amber, 0.8), '--ix-cream-ink', creamInk, 4.5);
+    check('--ix-ink (channel chip)', ink, '--ix-fill over bubble', over('--ix-fill', bubble), fillFloor);
+    check('--ix-ink-3 (event chip aside)', ink3, '--ix-card', card, textFloor);
+    const wash = mixRgb(cream, creamInk, 0.1);
+    check('--ix-cream-ink (own chip)', creamInk, 'dark wash over cream', wash, 7);
+    check('--ix-cream-ink 72% (own aside)', mixRgb(wash, creamInk, 0.72), 'dark wash over cream', wash, 4.5);
+    check('--ix-cream-ink 62% (own ephemeral line)', mixRgb(cream, creamInk, 0.62), '--ix-cream', cream, 4.5);
+
+    // A select's list, and the secondary labels on a card.
+    const pop = over('--ix-pop', main);
+    check('--ix-ink-2', ink2, '--ix-pop', pop, textFloor);
+    check('--ix-ink-3 (description)', ink3, '--ix-pop', pop, textFloor);
+    check('--ix-ink (hovered option)', ink, '--ix-fill-2 over --ix-pop', over('--ix-fill-2', pop), fillFloor);
+    check('--ix-ink-3 (selected description)', ink3, '--ix-fill-2 over --ix-pop', over('--ix-fill-2', pop), fillFloor);
+    check('--ix-ink-3 (placeholder)', ink3, '--ix-fill-field over bubble', over('--ix-fill-field', bubble), fillFloor);
+    check('--ix-ink-2 (GitHub label)', ink2, '--ix-fill-2 over card', over('--ix-fill-2', card), fillFloor);
+    check('--ix-danger-ink (Deleted label)', token('--ix-danger-ink'), '--ix-danger-fill over card', over('--ix-danger-fill', card), 4.5);
+
+    // Code: the plain ink, the comments and the language label, on the code surface.
+    check('--ix-ink-2 (code)', ink2, '--ix-code', code, textFloor);
+    check('--ix-ink-3 (comment, language)', ink3, '--ix-code', code, textFloor);
+  }
+}
+
 /* ---- Glass reference tints (spec §2.1) --------------------------------------
    The default theme's derivation has to reproduce the two reference tints, not
    merely look like them. CIE76 delta-E in Lab (D65) on the resolved sRGB, under
