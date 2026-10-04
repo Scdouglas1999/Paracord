@@ -402,7 +402,8 @@ test('reduced motion: the screens crossfade in 150ms and nothing travels', async
 });
 
 test('a message: back to places returns to the list, and Friends is a page with a way back', async ({ page }) => {
-  await open(page, '/app');
+  // The messages index is the route that opens on places (Home opens its page).
+  await open(page, '/app/dms');
   await screenIs(page, 'places');
   await page.getByRole('link', { name: /brendan/ }).first().click();
   await screenIs(page, 'conversation');
@@ -598,22 +599,27 @@ test('the edge swipe goes back; a swipe that starts inside the screen does not',
   await screenIs(page, 'places');
 });
 
-test('Home: the messages index opens on places; the tray, tapped again, shows the page', async ({ page }) => {
+test('Home opens its page; back shows its places; the tray, tapped again, shows the page', async ({ page }) => {
   await open(page, '/app');
-  await screenIs(page, 'places');
+  await screenIs(page, 'conversation');
   await withSafeAreas(page);
+  await settled(page);
+  await measure(page, 'home-page');
+  await shoot(page, 'phone-home-page');
+
+  await page.getByRole('button', { name: 'Back to places' }).click();
+  await screenIs(page, 'places');
   await expect(page.getByRole('navigation', { name: 'Conversations' })).toBeVisible();
+  await settled(page);
   await measure(page, 'home-places');
   await shoot(page, 'phone-home-places');
   await page.getByRole('button', { name: /Home and direct messages/ }).click();
   await screenIs(page, 'conversation');
-  await settled(page);
-  await measure(page, 'home-page');
-  await shoot(page, 'phone-home-page');
+  await expect(page).toHaveURL(/\/app\/?$/);
 });
 
 test('the account menu is one tap from places (there is no bottom bar)', async ({ page }) => {
-  await open(page, '/app');
+  await open(page, '/app/dms');
   await screenIs(page, 'places');
   await expect(page.locator('nav[aria-label="Main navigation"]')).toHaveCount(0);
   await page.getByRole('button', { name: /Your profile/ }).click();
@@ -775,10 +781,11 @@ for (const [name, size] of [
     await settled(page);
     await shoot(page, `phone-places-${name}`);
 
+    // Home opens its own page on a phone, not the list.
     await page.getByRole('button', { name: /Home and direct messages/ }).click();
     await page.waitForTimeout(700);
-    await screenIs(page, 'places');
-    await shoot(page, `phone-home-places-${name}`);
+    await screenIs(page, 'conversation');
+    await shoot(page, `phone-home-page-${name}`);
   });
 }
 

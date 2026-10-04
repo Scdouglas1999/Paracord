@@ -135,11 +135,13 @@ async function signIn(page: Page): Promise<void> {
 async function openSettings(page: Page): Promise<void> {
   const face = page.getByRole('button', { name: /^Your profile, / }).first();
   const back = page.getByRole('button', { name: 'Back to places', exact: true });
-  // A phone that opened on a page is one tap from its places screen, where the
-  // face is; a window wide enough for the panes shows it on the header. Wait
-  // for whichever the layout draws before choosing.
+  // A phone that opened on a page (Home opens its own page there) is one tap
+  // from its places screen, where the face is; a window wide enough for the
+  // panes shows it on the header. Wait for whichever the layout draws before
+  // choosing. Test the way back first: on a phone the places screen stays laid
+  // out (inert) beneath the page, so its face reads as visible while covered.
   await expect(face.or(back).first()).toBeVisible();
-  if (!(await face.isVisible())) await back.click();
+  if (await back.isVisible()) await back.click();
   await face.click();
   await page.getByRole('menuitem', { name: 'Settings', exact: true }).click();
 }
