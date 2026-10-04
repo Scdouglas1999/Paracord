@@ -1,8 +1,3 @@
-// The light seam is stubbed here: this suite mocks the stores down to the
-// fields its subject needs, and light reads half a dozen more. Light itself is
-// covered in messageLight.test.tsx and TextRoom.test.tsx.
-vi.mock('./messageLight', () => import('../../test/messageLightMock'));
-vi.mock('../../hooks/useLights', () => import('../../test/messageLightMock'));
 vi.mock('../../lib/channelView', () => ({ getAccountChannelView: (_scope: unknown, state: unknown) => state }));
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -130,6 +125,7 @@ vi.mock('./SlashCommandPopup', () => ({
 
 vi.mock('../../lib/constants', () => ({
   MAX_MESSAGE_LENGTH: 2000,
+  SCHEDULED_MESSAGE_MIN_LEAD_MS: 5000,
 }));
 
 const listStickers = vi.mocked(guildApi.listStickers);
@@ -162,8 +158,9 @@ describe('MessageInput sticker flow', () => {
 
     render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
 
-    await user.click(screen.getByRole('button', { name: 'More message tools' }));
-    await user.click(screen.getByRole('menuitem', { name: /Stickers/ }));
+    // The one picker, from the emoji button, on its Stickers tab.
+    await user.click(screen.getByRole('button', { name: 'Emoji' }));
+    await user.click(await screen.findByRole('tab', { name: 'Stickers' }));
     await user.click(await screen.findByRole('button', { name: 'Select sticker ship_it' }));
 
     expect(mockSendMessage).toHaveBeenCalledWith('ch1', '', undefined, undefined, ['1001']);
@@ -177,8 +174,9 @@ describe('MessageInput sticker flow', () => {
 
     render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
 
-    await user.click(screen.getByRole('button', { name: 'More message tools' }));
-    await user.click(screen.getByRole('menuitem', { name: /Stickers/ }));
+    // The one picker, from the emoji button, on its Stickers tab.
+    await user.click(screen.getByRole('button', { name: 'Emoji' }));
+    await user.click(await screen.findByRole('tab', { name: 'Stickers' }));
     await user.click(await screen.findByRole('button', { name: 'Select sticker ship_it' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
@@ -194,8 +192,9 @@ describe('MessageInput sticker flow', () => {
 
     render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
 
-    await user.click(screen.getByRole('button', { name: 'More message tools' }));
-    await user.click(screen.getByRole('menuitem', { name: /GIFs/ }));
+    // The GIF chip opens the one picker on GIF.
+    await user.click(screen.getByRole('textbox'));
+    await user.click(screen.getByRole('button', { name: 'GIF' }));
     await user.click(await screen.findByRole('button', { name: 'Select GIF' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(

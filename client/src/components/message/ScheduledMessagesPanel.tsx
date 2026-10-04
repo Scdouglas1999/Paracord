@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Clock3, Pencil, Trash2 } from 'lucide-react';
 import { channelApi, type ScheduledMessage } from '../../api/channels';
 import { useCurrentMessageStoreApi } from '../../hooks/useMessageStore';
 import { toast } from '../../stores/toastStore';
@@ -7,10 +6,10 @@ import { confirm } from '../../stores/confirmStore';
 import { extractApiError } from '../../api/client';
 import { formatTimestamp, toDatetimeLocalValue } from '../../lib/formatters';
 import { SCHEDULED_MESSAGE_MIN_LEAD_MS } from '../../lib/constants';
-import { Modal, ModalCloseButton } from '../ui/Modal';
-import { Skeleton } from '../ui/Skeleton';
-import { EmptyState, ErrorBanner } from '../ui/Feedback';
-import { Button } from '../ui/Button';
+import { SheetFrame } from '../glass/sheets/SheetFrame';
+import { SheetEmpty } from '../glass/sheets/SheetParts';
+import { GlyphFrame, IxGlyph } from '../ix/glyphs';
+import { CreamButton } from '../ix/primitives';
 
 const STATUS_SCHEDULED = 0;
 const STATUS_SENT = 1;
@@ -18,10 +17,12 @@ const STATUS_CANCELED = 2;
 const STATUS_FAILED = 3;
 
 interface ScheduledMessagesPanelProps {
+  /** The sheet is showing. It loads the list each time it opens. */
+  open: boolean;
   channelId: string;
   channelName?: string;
   onClose: () => void;
-  /** Notifies the opener when the pending count changes (create composer badge). */
+  /** Notifies the opener when the pending count changes (the Send menu's count). */
   onCountChange?: (pending: number) => void;
 }
 
@@ -40,8 +41,24 @@ function statusLabel(status: number): string {
   }
 }
 
+function ClockGlyph({ size = 20 }: { size?: number }) {
+  return (
+    <GlyphFrame size={size}>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M12 7.5V12l3 2" />
+    </GlyphFrame>
+  );
+}
 
+/**
+ * Scheduled messages (docs/index-spec.md §8.4; WP IX-12): the sheet the Send
+ * control's menu opens ("Scheduled messages"), inside main on its right like
+ * every sheet (§6.1). Each pending message can be changed (its words and its
+ * time) or canceled; sent, canceled and failed ones stay listed with their
+ * state.
+ */
 export function ScheduledMessagesPanel({
+  open,
   channelId,
   channelName,
   onClose,
@@ -59,6 +76,7 @@ export function ScheduledMessagesPanel({
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!open) return;
     let canceled = false;
     setLoading(true);
     setLoadError(null);
@@ -79,7 +97,7 @@ export function ScheduledMessagesPanel({
     return () => {
       canceled = true;
     };
-  }, [channelId, onCountChange]);
+  }, [open, channelId, onCountChange]);
 
   const emitCount = (next: ScheduledMessage[]) => {
     onCountChange?.(next.filter((m) => m.status === STATUS_SCHEDULED).length);
@@ -172,165 +190,128 @@ export function ScheduledMessagesPanel({
     [items],
   );
 
-  const minSendAt = toDatetimeLocalValue(Date.now() + SCHEDULED_MESSAGE_MIN_LEAD_MS);
+  // Only a message being changed has a time field to bound.
+  const minSendAt = editingId ? toDatetimeLocalValue(Date.now() + SCHEDULED_MESSAGE_MIN_LEAD_MS) : undefined;
 
   return (
-    <Modal
-      open
+    <SheetFrame
+      open={open}
       onClose={onClose}
-      labeledBy="scheduled-messages-title"
-      size="auto"
-      panelClassName="max-h-[min(86dvh,44rem)] w-[min(92vw,34rem)] overflow-auto"
+      kind="scheduled"
+      label="Scheduled messages"
+      title="Scheduled messages"
+      subtitle={channelName ?? 'This conversation'}
+      closeLabel="Close scheduled messages"
     >
-      <ModalCloseButton className="right-3 top-3 sm:right-4 sm:top-4" />
-      <div className="px-6 pb-4 pt-6 sm:px-7 sm:pt-7">
-          <div className="flex items-center gap-2">
-            <Clock3 size={18} className="text-accent-primary" />
-            <h2
-              id="scheduled-messages-title"
-              className="text-title text-text-primary"
-            >
-              Scheduled messages
-            </h2>
-          </div>
-          <p className="mt-1 text-label text-text-secondary">
-            {channelName ? `#${channelName}` : 'This channel'}
-          </p>
-        </div>
-
-        <div className="px-6 pb-6 sm:px-7 sm:pb-7">
-          {loading && (
-            <div className="flex flex-col" aria-busy="true" aria-label="Loading scheduled messages">
-              {[0, 1, 2].map((i) => (
-                <div key={i} className="border-t border-border-subtle py-3 first:border-t-0 first:pt-1">
-                  <Skeleton width="42%" height={12} borderRadius="var(--radius-window)" />
-                  <div className="mt-2.5">
-                    <Skeleton width="85%" height={14} borderRadius="var(--radius-window)" />
-                  </div>
-                </div>
-              ))}
+      {loading && (
+        <div className="ix-scheduled" aria-busy="true" aria-label="Loading scheduled messages">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="ix-scheduled__item ix-scheduled__item--skeleton">
+              <span className="ix-scheduled__bar" />
+              <span className="ix-scheduled__bar ix-scheduled__bar--long" />
             </div>
-          )}
+          ))}
+        </div>
+      )}
 
-          {!loading && loadError && (
-            <ErrorBanner message={loadError} />
-          )}
+      {!loading && loadError && (
+        <div role="alert" className="ix-scheduled__alert">
+          <span>Scheduled messages did not load: {loadError}</span>
+        </div>
+      )}
 
-          {!loading && !loadError && sorted.length === 0 && (
-            <EmptyState
-              icon={<Clock3 size={20} />}
-              title="Nothing scheduled"
-              description="No messages scheduled — pick a time in the composer to queue one, and it'll send itself even while you're away."
-              action={<Button onClick={onClose}>Back to composer</Button>}
-            />
-          )}
+      {!loading && !loadError && sorted.length === 0 && (
+        <SheetEmpty icon={<ClockGlyph />} title="Nothing scheduled">
+          Right-click or hold Send, then choose Send later to pick a time. It goes out on its own, even while you are away.
+        </SheetEmpty>
+      )}
 
-          {!loading && !loadError && sorted.length > 0 && (
-            <div className="flex flex-col">
-            {sorted.map((item) => {
-              const isEditing = editingId === item.id;
-              const isPending = item.status === STATUS_SCHEDULED;
-              return (
-                <div
-                  key={item.id}
-                  className="group border-t border-border-subtle py-3 first:border-t-0 first:pt-1"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2 text-section text-text-secondary">
-                        <span>{statusLabel(item.status)}</span>
-                        <span aria-hidden>·</span>
-                        <span className="font-code normal-case tabular-nums tracking-normal text-text-muted">
-                          {formatTimestamp(item.send_at)}
-                        </span>
-                      </div>
-                      {item.status === STATUS_FAILED && item.error && (
-                        <p className="mt-1 text-meta text-accent-danger">{item.error}</p>
-                      )}
-                    </div>
-                    {isPending && !isEditing && (
-                      <div className="flex flex-shrink-0 items-center gap-1 opacity-0 transition-opacity duration-[var(--duration-fast)] ease-[var(--ease-out)] group-hover:opacity-100 group-focus-within:opacity-100">
-                        <button
-                          type="button"
-                          onClick={() => beginEdit(item)}
-                          className="icon-btn h-7 w-7"
-                          aria-label="Edit scheduled message"
-                          title="Edit"
-                        >
-                          <Pencil size={15} />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => removeItem(item)}
-                          disabled={deletingId === item.id}
-                          className="icon-btn h-7 w-7 text-accent-danger"
-                          aria-label="Cancel scheduled message"
-                          title="Cancel"
-                        >
-                          <Trash2 size={15} />
-                        </button>
-                      </div>
-                    )}
-                  </div>
-
-                  {isEditing ? (
-                    <div className="mt-2 space-y-2">
-                      <textarea
-                        value={editContent}
-                        onChange={(e) => setEditContent(e.target.value)}
-                        className="input-field min-h-[64px] resize-y"
-                        aria-label="Scheduled message content"
-                      />
-                      <label className="block">
-                        <span className="text-section text-text-secondary">
-                          Send at
-                        </span>
-                        <input
-                          type="datetime-local"
-                          value={editSendAt}
-                          onChange={(e) => setEditSendAt(e.target.value)}
-                          className="input-field mt-1.5"
-                          min={minSendAt}
-                          aria-label="Scheduled send time"
-                        />
-                      </label>
-                      {editError && (
-                        <div
-                          role="alert"
-                          className="rounded-chip border border-accent-danger/35 bg-accent-danger/10 px-3 py-2 text-meta font-semibold text-accent-danger"
-                        >
-                          {editError}
-                        </div>
-                      )}
-                      <div className="flex items-center justify-end gap-2">
-                        <button
-                          type="button"
-                          onClick={cancelEdit}
-                          className="btn-secondary px-3 py-1.5 text-label"
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => saveEdit(item.id)}
-                          disabled={savingId === item.id}
-                          className="btn-primary px-3 py-1.5 text-label"
-                        >
-                          {savingId === item.id ? 'Saving…' : 'Save'}
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <p className="mt-1.5 whitespace-pre-wrap break-words text-body text-text-primary">
-                      {item.content || <span className="italic text-text-muted">Attachment only</span>}
-                    </p>
+      {!loading && !loadError && sorted.length > 0 && (
+        <ul className="ix-scheduled">
+          {sorted.map((item) => {
+            const isEditing = editingId === item.id;
+            const isPending = item.status === STATUS_SCHEDULED;
+            return (
+              <li key={item.id} className="ix-scheduled__item" data-status={statusLabel(item.status).toLowerCase()}>
+                <div className="ix-scheduled__head">
+                  <span className="ix-scheduled__when">
+                    <span className="ix-scheduled__state">{statusLabel(item.status)}</span>
+                    <span aria-hidden>·</span>
+                    <time dateTime={item.send_at}>{formatTimestamp(item.send_at)}</time>
+                  </span>
+                  {isPending && !isEditing && (
+                    <span className="ix-scheduled__actions">
+                      <button
+                        type="button"
+                        onClick={() => beginEdit(item)}
+                        className="ix-scheduled__btn"
+                        aria-label="Edit scheduled message"
+                        title="Edit"
+                      >
+                        <GlyphFrame size={15}>
+                          <path d="M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4" />
+                        </GlyphFrame>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => removeItem(item)}
+                        disabled={deletingId === item.id}
+                        className="ix-scheduled__btn ix-scheduled__btn--danger"
+                        aria-label="Cancel scheduled message"
+                        title="Cancel"
+                      >
+                        <IxGlyph name="x" size={15} />
+                      </button>
+                    </span>
                   )}
                 </div>
-              );
-            })}
-            </div>
-          )}
-        </div>
-    </Modal>
+                {item.status === STATUS_FAILED && item.error && (
+                  <p className="ix-scheduled__error">{item.error}</p>
+                )}
+
+                {isEditing ? (
+                  <div className="ix-scheduled__edit">
+                    <textarea
+                      value={editContent}
+                      onChange={(e) => setEditContent(e.target.value)}
+                      className="ix-scheduled__input ix-scheduled__input--text"
+                      aria-label="Scheduled message content"
+                    />
+                    <label className="ix-scheduled__field">
+                      <span>Send at</span>
+                      <input
+                        type="datetime-local"
+                        value={editSendAt}
+                        onChange={(e) => setEditSendAt(e.target.value)}
+                        className="ix-scheduled__input"
+                        min={minSendAt}
+                        aria-label="Scheduled send time"
+                      />
+                    </label>
+                    {editError && (
+                      <p role="alert" className="ix-scheduled__error">
+                        {editError}
+                      </p>
+                    )}
+                    <div className="ix-scheduled__edit-actions">
+                      <button type="button" onClick={cancelEdit} className="ix-scheduled__text-btn">
+                        Cancel
+                      </button>
+                      <CreamButton size="sm" onClick={() => saveEdit(item.id)} disabled={savingId === item.id}>
+                        {savingId === item.id ? 'Saving…' : 'Save'}
+                      </CreamButton>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="ix-scheduled__text">
+                    {item.content || <span className="ix-scheduled__muted">Attachment only</span>}
+                  </p>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </SheetFrame>
   );
 }

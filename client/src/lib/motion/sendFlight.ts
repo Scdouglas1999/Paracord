@@ -432,13 +432,15 @@ export function pressComposer(capsule: Element | null | undefined): Animation | 
  * The send control releasing once: from the cream "on" look it is wearing to
  * the quiet one it is about to settle into, over 420ms. Colors only, and only
  * on the control; the target colors are read from its own tokens, never typed
- * here.
+ * here: the Index message box declares its quiet look on the control as
+ * `--ix-send-quiet` (fill) and `--ix-send-quiet-ink` (glyph), in
+ * styles/ix-composer.css. A control that declares neither is left alone.
  */
 export function releaseSend(button: HTMLElement | null | undefined): Animation | null {
   if (!button || typeof button.animate !== 'function' || prefersReducedMotion()) return null;
   const style = getComputedStyle(button);
-  const quiet = style.getPropertyValue('--glass-fill-quiet').trim();
-  const ink = style.getPropertyValue('--ink-1').trim();
+  const quiet = style.getPropertyValue('--ix-send-quiet').trim();
+  const ink = style.getPropertyValue('--ix-send-quiet-ink').trim();
   if (!quiet || !ink) return null;
   const release = button.animate(
     [

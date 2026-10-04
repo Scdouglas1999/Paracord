@@ -2,7 +2,6 @@ import { Fragment } from 'react';
 import { Bold, Italic, Strikethrough, Code, Quote, Link, Eye, FileCode2 } from 'lucide-react';
 import { formatShortcut } from '../../lib/keyboardShortcuts';
 import { Tooltip } from '../ui/Tooltip';
-import { cn } from '../../lib/utils';
 
 interface MarkdownToolbarProps {
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
@@ -97,21 +96,21 @@ interface ToolbarButton {
 const TOOLBAR_BUTTONS: ToolbarButton[] = [
   {
     id: 'bold',
-    icon: <Bold size={16} />,
+    icon: <Bold size={15} strokeWidth={1.7} />,
     label: 'Bold',
     shortcutKey: 'b',
     action: (ta, cb) => wrapSelection(ta, '**', '**', cb),
   },
   {
     id: 'italic',
-    icon: <Italic size={16} />,
+    icon: <Italic size={15} strokeWidth={1.7} />,
     label: 'Italic',
     shortcutKey: 'i',
     action: (ta, cb) => wrapSelection(ta, '*', '*', cb),
   },
   {
     id: 'strikethrough',
-    icon: <Strikethrough size={16} />,
+    icon: <Strikethrough size={15} strokeWidth={1.7} />,
     label: 'Strikethrough',
     shortcutKey: 'x',
     shortcutShift: true,
@@ -119,14 +118,14 @@ const TOOLBAR_BUTTONS: ToolbarButton[] = [
   },
   {
     id: 'inline_code',
-    icon: <Code size={16} />,
+    icon: <Code size={15} strokeWidth={1.7} />,
     label: 'Inline code',
     shortcutKey: '`',
     action: (ta, cb) => wrapSelection(ta, '`', '`', cb),
   },
   {
     id: 'code_block',
-    icon: <FileCode2 size={16} />,
+    icon: <FileCode2 size={15} strokeWidth={1.7} />,
     label: 'Code block',
     shortcutKey: '`',
     shortcutShift: true,
@@ -134,13 +133,13 @@ const TOOLBAR_BUTTONS: ToolbarButton[] = [
   },
   {
     id: 'spoiler',
-    icon: <Eye size={16} />,
+    icon: <Eye size={15} strokeWidth={1.7} />,
     label: 'Spoiler',
     action: (ta, cb) => wrapSelection(ta, '||', '||', cb),
   },
   {
     id: 'link',
-    icon: <Link size={16} />,
+    icon: <Link size={15} strokeWidth={1.7} />,
     label: 'Link',
     shortcutKey: 'k',
     action: (ta, cb) => {
@@ -156,7 +155,7 @@ const TOOLBAR_BUTTONS: ToolbarButton[] = [
   },
   {
     id: 'quote',
-    icon: <Quote size={14} />,
+    icon: <Quote size={15} strokeWidth={1.7} />,
     label: 'Block quote',
     shortcutKey: 'q',
     shortcutShift: true,
@@ -207,7 +206,7 @@ export function MarkdownToolbar({ textareaRef, onContentChange }: MarkdownToolba
   };
 
   return (
-    <div role="toolbar" aria-label="Text formatting" className="flex items-center gap-0.5">
+    <div role="toolbar" aria-label="Text formatting" className="ix-format">
       {TOOLBAR_BUTTONS.map((button) => {
         const shortcut = toolbarShortcutLabel(button);
         return (
@@ -216,22 +215,15 @@ export function MarkdownToolbar({ textareaRef, onContentChange }: MarkdownToolba
             <button
               type="button"
               aria-label={shortcut ? `${button.label} (${shortcut})` : button.label}
+              // The text keeps its selection: the press never takes focus.
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => handleClick(button)}
-              className={cn(
-                'flex h-8 w-8 items-center justify-center rounded-chip text-interactive-normal',
-                'transition-[color,background-color] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
-                'hover:bg-bg-mod-subtle hover:text-text-primary',
-                'active:bg-bg-mod-strong active:text-text-primary',
-                'focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]',
-              )}
+              className="ix-format__btn"
             >
               {button.icon}
             </button>
           </Tooltip>
-          {DIVIDER_AFTER.has(button.id) && (
-            <span aria-hidden className="mx-0.5 h-5 w-px shrink-0 bg-border-subtle" />
-          )}
+          {DIVIDER_AFTER.has(button.id) && <span aria-hidden className="ix-format__divider" />}
         </Fragment>
         );
       })}

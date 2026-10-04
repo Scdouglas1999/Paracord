@@ -19,15 +19,16 @@ export interface SlashCommandPopupProps {
 }
 
 const MAX_VISIBLE = 10;
+const LIST_ID = 'ix-slash-commands';
 
-// Popover recipe (lantern-stage-spec §8): --bg-floating, radius-md, 1px --border-subtle,
-// --shadow-plate, and the small-surface pop grown from its bottom edge, where
-// the composer is. Every state below renders the same root <div>, so moving
-// between loading, empty and a list keeps the element and never replays it.
-// It closes the instant the query stops being a command: an autocomplete
-// follows keystrokes, and a leave would trail behind the typing.
-const POPOVER_CLASS =
-  'absolute bottom-full left-2 right-2 z-30 mb-2 rounded-well border border-border-subtle bg-bg-floating shadow-[var(--shadow-plate)] [--pc-origin:50%_100%]';
+// The completion popover of the message box (docs/index-spec.md §4.12): near-
+// solid, radius 16, above the box, at most six rows before it scrolls; the same
+// surface as @ / # / : completion (`.ix-complete` in ix-composer.css). Every
+// state below renders the same root, so moving between loading, empty and a
+// list keeps the element and never replays its entrance. It closes the instant
+// the query stops being a command: an autocomplete follows keystrokes, and a
+// leave would trail behind the typing.
+const POPOVER_CLASS = 'ix-complete';
 
 export function SlashCommandPopup({
   query,
@@ -139,54 +140,46 @@ export function SlashCommandPopup({
   if (showingChoices) {
     if (autocompleteLoading && visibleChoices.length === 0) {
       return (
-        <div className={`pc-pop-in ${POPOVER_CLASS} p-3`}>
-          <LoadingSpinner size="sm" label="Loading suggestions…" />
+        <div className={POPOVER_CLASS}>
+          <div className="ix-complete__status">
+            <LoadingSpinner size="sm" label="Loading suggestions…" />
+          </div>
         </div>
       );
     }
     if (visibleChoices.length === 0) {
       return (
-        <div className={`pc-pop-in ${POPOVER_CLASS} px-3 py-2.5`}>
-          <p className="text-meta text-text-secondary">No suggestions for this option.</p>
+        <div className={POPOVER_CLASS}>
+          <p className="ix-complete__status">No suggestions for this option.</p>
         </div>
       );
     }
     return (
-      <div
-        className={`pc-pop-in ${POPOVER_CLASS} max-h-80 overflow-y-auto p-1`}
-      >
-        <div ref={listRef} className="flex flex-col gap-0.5">
+      <div className={POPOVER_CLASS} role="listbox" id={LIST_ID} aria-label="Suggestions">
+        <div ref={listRef} className="ix-complete__list">
           {visibleChoices.map((choice, i) => {
             const selected = i === selectedIndex;
             return (
-              <button
+              <div
                 key={`${choice.name}:${String(choice.value)}`}
-                type="button"
-                className={`flex w-full items-center gap-2.5 rounded-chip px-2 py-1.5 text-left transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
-                  selected
-                    ? 'bg-accent-tint text-text-primary'
-                    : 'text-text-secondary hover:bg-accent-tint hover:text-text-primary'
-                }`}
+                role="option"
+                tabIndex={-1}
+                aria-selected={selected}
+                className="ix-complete__row ix-complete__row--two"
                 onMouseDown={(e) => {
                   e.preventDefault();
                   onSelectChoice?.(choice);
                 }}
                 onMouseEnter={() => setSelectedIndex(i)}
               >
-                <span
-                  className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-chip ${
-                    selected ? 'bg-accent-tint-strong text-accent-primary' : 'bg-bg-mod-strong text-text-muted'
-                  }`}
-                >
-                  <ListFilter size={14} strokeWidth={2} />
+                <span className="ix-complete__mark" aria-hidden>
+                  <ListFilter size={15} strokeWidth={1.7} />
                 </span>
-                <div className="min-w-0 flex-1">
-                  <span className="text-label text-text-primary">{choice.name}</span>
-                  <span className="block truncate text-meta text-text-secondary">
-                    {String(choice.value)}
-                  </span>
-                </div>
-              </button>
+                <span className="ix-complete__stack">
+                  <span className="ix-complete__name">{choice.name}</span>
+                  <span className="ix-complete__meta">{String(choice.value)}</span>
+                </span>
+              </div>
             );
           })}
         </div>
@@ -196,60 +189,51 @@ export function SlashCommandPopup({
 
   if (loading && !guildCommands.get(guildId)?.length) {
     return (
-      <div className={`pc-pop-in ${POPOVER_CLASS} p-3`}>
-        <LoadingSpinner size="sm" label="Loading commands…" />
+      <div className={POPOVER_CLASS}>
+        <div className="ix-complete__status">
+          <LoadingSpinner size="sm" label="Loading commands…" />
+        </div>
       </div>
     );
   }
 
   if (filteredCommands.length === 0) {
     return (
-      <div className={`pc-pop-in ${POPOVER_CLASS} px-3 py-2.5`}>
-        <p className="text-meta text-text-secondary">
-          No commands match{' '}
-          <span className="font-semibold text-text-primary">/{query}</span> — check the spelling or
-          browse this server&rsquo;s apps.
+      <div className={POPOVER_CLASS}>
+        <p className="ix-complete__status">
+          No commands match <span className="ix-complete__strong">/{query}</span>. Check the spelling, or
+          look through this server&rsquo;s apps.
         </p>
       </div>
     );
   }
 
   return (
-    <div
-      className={`pc-pop-in ${POPOVER_CLASS} max-h-80 overflow-y-auto p-1`}
-    >
-      <div ref={listRef} className="flex flex-col gap-0.5">
+    <div className={POPOVER_CLASS} role="listbox" id={LIST_ID} aria-label="Commands">
+      <div ref={listRef} className="ix-complete__list">
         {filteredCommands.map((cmd, i) => {
           const selected = i === selectedIndex;
           return (
-            <button
+            <div
               key={cmd.id}
-              type="button"
-              className={`flex w-full items-center gap-2.5 rounded-chip px-2 py-1.5 text-left transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
-                selected
-                  ? 'bg-accent-tint text-text-primary'
-                  : 'text-text-secondary hover:bg-accent-tint hover:text-text-primary'
-              }`}
+              role="option"
+              tabIndex={-1}
+              aria-selected={selected}
+              className={`ix-complete__row${cmd.description ? ' ix-complete__row--two' : ''}`}
               onMouseDown={(e) => {
                 e.preventDefault();
                 onSelectCommand(cmd);
               }}
               onMouseEnter={() => setSelectedIndex(i)}
             >
-              <span
-                className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-chip ${
-                  selected ? 'bg-accent-tint-strong text-accent-primary' : 'bg-bg-mod-strong text-text-muted'
-                }`}
-              >
+              <span className="ix-complete__mark" aria-hidden>
                 <CommandTypeIcon type={cmd.type} />
               </span>
-              <div className="min-w-0 flex-1">
-                <span className="text-label text-text-primary">/{cmd.name}</span>
-                {cmd.description && (
-                  <span className="block truncate text-meta text-text-secondary">{cmd.description}</span>
-                )}
-              </div>
-            </button>
+              <span className="ix-complete__stack">
+                <span className="ix-complete__name">/{cmd.name}</span>
+                {cmd.description && <span className="ix-complete__meta">{cmd.description}</span>}
+              </span>
+            </div>
           );
         })}
       </div>
@@ -260,11 +244,11 @@ export function SlashCommandPopup({
 function CommandTypeIcon({ type }: { type: ApplicationCommandType }) {
   switch (type) {
     case ApplicationCommandType.User:
-      return <User size={14} strokeWidth={2} />;
+      return <User size={15} strokeWidth={1.7} />;
     case ApplicationCommandType.Message:
-      return <MessageSquare size={14} strokeWidth={2} />;
+      return <MessageSquare size={15} strokeWidth={1.7} />;
     case ApplicationCommandType.ChatInput:
     default:
-      return <Slash size={14} strokeWidth={2} />;
+      return <Slash size={15} strokeWidth={1.7} />;
   }
 }

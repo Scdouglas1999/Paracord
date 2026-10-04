@@ -344,14 +344,24 @@ describe('the rows that make room, and the composer', () => {
     const button = document.createElement('button');
     button.style.backgroundColor = 'rgb(199, 218, 237)';
     button.style.color = 'rgb(16, 19, 20)';
-    button.style.setProperty('--glass-fill-quiet', 'rgba(255, 255, 255, 0.08)');
-    button.style.setProperty('--ink-1', 'rgb(243, 245, 245)');
+    // The Index message box declares its quiet look on the control (ix-composer.css).
+    button.style.setProperty('--ix-send-quiet', 'rgba(255, 255, 255, 0.08)');
+    button.style.setProperty('--ix-send-quiet-ink', 'rgba(235, 238, 242, 0.62)');
     document.body.append(button);
     releaseSend(button);
     const record = waapi.played.find((entry) => entry.target === button)!;
     expect(Object.keys(record.keyframes[0]).sort()).toEqual(['backgroundColor', 'color']);
-    expect(record.keyframes[1]).toEqual({ backgroundColor: 'rgba(255, 255, 255, 0.08)', color: 'rgb(243, 245, 245)' });
+    expect(record.keyframes[1]).toEqual({ backgroundColor: 'rgba(255, 255, 255, 0.08)', color: 'rgba(235, 238, 242, 0.62)' });
     expect(Number(record.options.duration)).toBe(420);
+    expect(record.animation.id).toBe('data-motion-recipe:send-release');
+  });
+
+  it('leaves a control that declares no quiet look alone (the old Glass tokens no longer count)', () => {
+    const button = document.createElement('button');
+    button.style.setProperty('--glass-fill-quiet', 'rgba(255, 255, 255, 0.08)');
+    button.style.setProperty('--ink-1', 'rgb(243, 245, 245)');
+    document.body.append(button);
+    expect(releaseSend(button)).toBeNull();
   });
 
   it('does neither under reduced motion', () => {

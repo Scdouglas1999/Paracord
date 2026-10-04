@@ -147,7 +147,7 @@ const ENTITY_TABS = [
   { value: '2', label: 'External' },
 ] as const;
 
-function EventFormModal({ guildId, event, onClose, onSaved }: EventFormModalProps) {
+export function EventFormModal({ guildId, event, onClose, onSaved }: EventFormModalProps) {
   const [name, setName] = useState(event?.name ?? '');
   const [description, setDescription] = useState(event?.description ?? '');
   const fallbackWindow = useMemo(() => defaultEventWindow(), []);

@@ -9,7 +9,7 @@ import { useMemberStore } from '../../stores/memberStore';
 import { usePresenceStore } from '../../stores/presenceStore';
 import type { Role } from '../../types';
 import { presenceLabel } from '../../lib/presence';
-import { Face } from '../glass/places/Lead';
+import { Avatar } from '../ix/identity';
 import { Popover } from '../ui/Popover';
 
 function here(status: string | undefined): boolean {
@@ -78,67 +78,51 @@ export function RoleMentionChip({ guildId, roleId }: { guildId?: string; roleId:
       <button
         ref={anchorRef}
         type="button"
-        className="pc-focusable inline rounded-[var(--radius-window)] px-0.5 font-medium transition-[background-color] duration-[var(--duration-fast)] ease-[var(--ease-out)]"
-        // A role's own color can be anything, so the ink is the color mixed
-        // into the theme's text color: dark roles lighten on a dark theme and
-        // light roles darken on a light one, and the text always reads.
-        style={
-          tint
-            ? {
-                color: `color-mix(in srgb, ${tint} 55%, var(--text-primary))`,
-                backgroundColor: `color-mix(in srgb, ${tint} 16%, transparent)`,
-              }
-            : {
-                color: 'var(--accent-primary)',
-                backgroundColor: 'var(--accent-tint-strong)',
-              }
-        }
+        // A mention that is not of you: ink at 600 (docs/index-spec.md §4.11).
+        // The role's own color is the dot in front of its name in the card.
+        className="ix-role-mention"
         aria-haspopup="dialog"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
       >
         {label}
       </button>
-      <Popover anchor={anchorRef} open={open} onClose={() => setOpen(false)} label={role?.name ?? 'Role'} className="w-60 p-2">
-        <div className="flex items-center gap-2 px-1 pb-2">
+      <Popover anchor={anchorRef} open={open} onClose={() => setOpen(false)} label={role?.name ?? 'Role'} className="ix-role-card">
+        <div className="ix-role-card__head">
           <span
-            className="h-2.5 w-2.5 shrink-0 rounded-full"
-            style={{ backgroundColor: tint ?? 'var(--text-muted)' }}
+            className="ix-role-card__dot"
+            style={tint ? { backgroundColor: tint } : undefined}
             aria-hidden
           />
-          <span className="min-w-0 flex-1 truncate text-label font-semibold text-text-primary">{role?.name ?? 'Role'}</span>
+          <span className="ix-role-card__name">{role?.name ?? 'Role'}</span>
           {members && (
-            <span className="shrink-0 text-meta text-text-muted">
+            <span className="ix-role-card__count">
               {holders.length} {holders.length === 1 ? 'member' : 'members'}
             </span>
           )}
         </div>
-        {error && <p role="alert" className="px-1 text-meta text-accent-danger">{error}</p>}
+        {error && <p role="alert" className="ix-role-card__error">{error}</p>}
         {!error && !members && membersLoading && (
-          <p className="px-1 text-meta text-text-muted">Loading members…</p>
+          <p className="ix-role-card__line">Loading members…</p>
         )}
         {!error && !members && !membersLoading && (
-          <p role="alert" className="px-1 text-meta text-accent-danger">The member list did not load.</p>
+          <p role="alert" className="ix-role-card__error">The member list did not load.</p>
         )}
         {!error && members && (
-          <p className="px-1 pb-1 text-section text-text-faint">
+          <p className="ix-role-card__line">
             {present.length === 0 ? 'Nobody with this role is here right now.' : `Here now · ${present.length}`}
           </p>
         )}
-        <ul className="flex max-h-52 flex-col gap-0.5 overflow-y-auto">
+        <ul className="ix-role-card__list">
           {present.map(({ member, status }) => {
             const name = displayName(member.user, member.nick);
             return (
-              <li key={member.user.id} className="flex items-center gap-2 px-1 py-0.5">
-                <Face face={{ userId: member.user.id, name, avatar: member.user.avatar_hash ?? null }} size={22} />
-                <span className="min-w-0 flex-1 truncate text-label text-text-primary">{name}</span>
-                {/* Presence is ink, not color: a dot (here), a ring (away), a dot
-                    with a bar (do not disturb). The word is for assistive tech. */}
-                <span
-                  className="glass-sheet-presence glass-sheet-presence--inline shrink-0"
-                  data-status={status}
-                  aria-hidden
-                />
+              <li key={member.user.id} className="ix-role-card__row">
+                {/* Presence is ink, not color (docs/index-spec.md §2.3): a dot,
+                    a dimmer dot (away), a ring (do not disturb). The word is for
+                    assistive tech. */}
+                <Avatar userId={member.user.id} name={name} avatar={member.user.avatar_hash ?? null} size={24} presence={status} />
+                <span className="ix-role-card__person">{name}</span>
                 <span className="sr-only">{presenceLabel(status)}</span>
               </li>
             );

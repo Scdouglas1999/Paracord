@@ -1,1 +1,1361 @@
-/* IX-12: the message box (§4.12). Created empty by IX-1; the owner fills it. */
+/* =============================================================================
+   The message box (docs/index-spec.md §3.1, §4.12, §5.12, §5.13, §6.11; WP IX-12).
+   Component: components/message/MessageInput.tsx (+ ComposerPickerHost,
+   composerShape, ScheduledMessagesPanel, MarkdownToolbar, SlashCommandPopup,
+   RoleMentionChip).
+
+     .ix-composer                  the root: data-ix-composer-open, --ix-hue
+       .ix-composer__stack         notices and the poll / send-later cards, above
+       .ix-composer__box           the capsule: 52 closed, 98 open (+ attachments,
+                                   + lines), radius 24
+         .ix-composer__shape       three slices: top cap, middle, bottom cap
+         .ix-composer__head        attachments queue + the input row (rides the top)
+         .ix-composer__tools-clip  the tools row, clipped to the box's foot
+         .ix-complete, .ix-picker  popovers above the box
+
+   Only transform and opacity animate (the motion lint): the height changes once
+   and the slices play it back (composerShape.ts); the ring fades by opacity;
+   the send control's color is a color transition (§5.13, allowed).
+   ============================================================================= */
+
+/* ---- Where it sits ----------------------------------------------------------
+   In the conversation column the box is 24px wider than the feed: the column's
+   padding less 12 on each side (§3: margin 36 vs 48), 18px above main's foot.
+   `.ix-composer-column` is the host class for the Index conversation (IX-15);
+   `.glass-conversation__composer` is today's host until IX-15 replaces it. */
+.ix-composer-column,
+.glass-conversation__composer {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: calc(var(--ix-col-max, 920px) + 2 * var(--ix-col-pad, 48px));
+  margin-inline: auto;
+  padding: 0 calc(var(--ix-col-pad, 48px) - 12px) 18px;
+}
+
+.ix-composer {
+  position: relative;
+  /* Its popovers (completion, the picker) rise over the conversation, whose
+     rows can make stacking contexts of their own (FLIPs, arrivals). */
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  color: var(--ix-ink);
+}
+
+/* A narrow box (the call's chat column, a thread beside the conversation)
+   keeps a little room of its own; those hosts do not pad it. */
+.ix-composer--narrow {
+  padding: 8px 12px calc(var(--safe-bottom, 0px) + 12px);
+}
+
+/* ---- Above the box: notices and the cards that stand in for a send ---------- */
+.ix-composer__stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-block-end: 8px;
+}
+
+.ix-composer__stack:empty {
+  display: none;
+}
+
+.ix-composer__note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 14px;
+  border-radius: 16px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--ix-ink-2);
+  background: var(--ix-card);
+}
+
+.ix-composer__note > svg {
+  flex: none;
+}
+
+.ix-composer__note--error {
+  justify-content: space-between;
+  color: var(--ix-danger-ink);
+  background: var(--ix-danger-fill);
+}
+
+.ix-composer__link {
+  margin-inline-start: 8px;
+  padding: 0;
+  border: 0;
+  font: inherit;
+  font-weight: 600;
+  color: var(--ix-ink);
+  background: none;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.ix-composer__link:hover {
+  text-decoration: underline;
+}
+
+.ix-composer__link:focus-visible,
+.ix-composer__text-btn:focus-visible,
+.ix-composer__icon:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+  border-radius: 6px;
+}
+
+/* The poll and Send later cards: the event-card family (§4.11), at the box's width. */
+.ix-composer__card {
+  padding: 16px;
+  border-radius: 20px;
+  background: var(--ix-card);
+  box-shadow: var(--ix-shadow-event);
+}
+
+.ix-composer__card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.ix-composer__card-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ix-ink);
+}
+
+.ix-composer__text-btn {
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ix-ink-2);
+  background: none;
+  cursor: pointer;
+  transition: background-color 120ms var(--ix-ease), color 120ms var(--ix-ease);
+}
+
+.ix-composer__text-btn:hover {
+  color: var(--ix-ink);
+  background: var(--ix-fill);
+}
+
+.ix-composer__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ix-composer__label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ix-ink-3);
+}
+
+.ix-composer__options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.ix-composer__option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ix-composer__icon {
+  display: grid;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 0;
+  border-radius: 9px;
+  color: var(--ix-ink-3);
+  background: none;
+  cursor: pointer;
+  transition: background-color 120ms var(--ix-ease), color 120ms var(--ix-ease);
+}
+
+.ix-composer__icon:hover:not(:disabled) {
+  color: var(--ix-ink);
+  background: var(--ix-fill);
+}
+
+.ix-composer__icon:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.ix-composer__card-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  margin-top: 12px;
+}
+
+.ix-composer__card-foot--split {
+  justify-content: space-between;
+}
+
+.ix-composer__check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ix-ink-2);
+}
+
+.ix-composer__check input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--ix-cream);
+}
+
+.ix-composer__select {
+  display: inline-block;
+  width: 10rem;
+}
+
+/* ---- A channel this person cannot post in (§4.12) --------------------------- */
+.ix-composer__readonly {
+  margin: 0;
+  padding: 16px 12px;
+  font-size: 13px;
+  line-height: 20px;
+  text-align: center;
+  color: var(--ix-ink-3);
+}
+
+/* ---- The box ------------------------------------------------------------------ */
+.ix-composer__box {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  min-height: 52px;
+  cursor: text;
+}
+
+/* Open: the tools row's 46px are laid out under the input row, once, at the
+   start; the slices play the change (composerShape.ts). */
+.ix-composer__box[data-open='true'] {
+  padding-bottom: 46px;
+}
+
+/* The shape: three slices, so the 24px corners never distort (§5.12). The
+   middle stretches from its bottom edge; the caps keep their size.
+
+   Fill: the slices are drawn solid and overlap by a pixel inside ONE group
+   whose opacity is the field's .055 (--ix-fill-field). While they move, a
+   translucent slice beside another would show its antialiased edge as a seam;
+   inside the group they are one shape, and the group is what is translucent.
+   Edges: each slice draws its share of the quiet edge (::before) and of the
+   open edge and focus halo (::after), clipped where it meets its neighbor so
+   no seam doubles. */
+.ix-composer__shape {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.ix-composer__fill,
+.ix-composer__edges {
+  position: absolute;
+  inset: 0;
+}
+
+/* Keep in step with --ix-fill-field's alpha. */
+.ix-composer__fill {
+  opacity: 0.055;
+}
+
+.ix-composer__slice {
+  position: absolute;
+  right: 0;
+  left: 0;
+}
+
+.ix-composer__slice--top {
+  top: 0;
+  height: 24px;
+  border-radius: 24px 24px 0 0;
+}
+
+.ix-composer__slice--mid {
+  top: 24px;
+  bottom: 24px;
+  transform-origin: 50% 100%;
+}
+
+.ix-composer__slice--bottom {
+  bottom: 0;
+  height: 24px;
+  border-radius: 0 0 24px 24px;
+}
+
+.ix-composer__fill > .ix-composer__slice {
+  background: var(--ix-fill-field-solid);
+}
+
+/* The caps reach a pixel into the middle: solid over solid, no seam. */
+.ix-composer__fill > .ix-composer__slice--top,
+.ix-composer__fill > .ix-composer__slice--bottom {
+  height: 25px;
+}
+
+.ix-composer__edges > .ix-composer__slice::before,
+.ix-composer__edges > .ix-composer__slice::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  border: 1px solid;
+  border-radius: inherit;
+}
+
+.ix-composer__edges > .ix-composer__slice::before {
+  border-color: var(--ix-line);
+}
+
+.ix-composer__edges > .ix-composer__slice::after {
+  border-color: var(--ix-edge-open-over);
+  box-shadow: 0 0 0 4px hsl(var(--ix-hue) 60% 60% / calc(0.14 * var(--ix-tint)));
+  opacity: 0;
+  transition: opacity 250ms var(--ix-ease);
+}
+
+.ix-composer__edges > .ix-composer__slice--top::before,
+.ix-composer__edges > .ix-composer__slice--top::after {
+  border-bottom-width: 0;
+}
+
+.ix-composer__edges > .ix-composer__slice--top::after {
+  clip-path: inset(-6px -6px 0 -6px);
+}
+
+.ix-composer__edges > .ix-composer__slice--mid::before,
+.ix-composer__edges > .ix-composer__slice--mid::after {
+  border-top-width: 0;
+  border-bottom-width: 0;
+}
+
+.ix-composer__edges > .ix-composer__slice--mid::after {
+  clip-path: inset(0 -6px);
+}
+
+.ix-composer__edges > .ix-composer__slice--bottom::before,
+.ix-composer__edges > .ix-composer__slice--bottom::after {
+  border-top-width: 0;
+}
+
+.ix-composer__edges > .ix-composer__slice--bottom::after {
+  clip-path: inset(0 -6px -6px -6px);
+}
+
+/* The focus edge and halo: the open box's ring, by opacity (250ms). */
+.ix-composer__box[data-open='true'] .ix-composer__slice::after,
+.ix-composer[data-drag-over='true'] .ix-composer__slice::after {
+  opacity: 1;
+}
+
+/* Everything inside sits over the shape. */
+.ix-composer__head {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* ---- Attachments: 52px thumbnails above the input row, three rows at most ---- */
+.ix-composer__queue {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-height: calc(3 * 52px + 2 * 8px + 12px);
+  margin: 0;
+  padding: 12px 12px 0;
+  overflow-y: auto;
+  list-style: none;
+  scrollbar-width: none;
+}
+
+.ix-composer__queue::-webkit-scrollbar {
+  display: none;
+}
+
+.ix-composer__file {
+  position: relative;
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  box-sizing: border-box;
+  max-width: 220px;
+  height: 52px;
+  padding: 0 32px 0 6px;
+  border-radius: 12px;
+  background: var(--ix-card);
+  cursor: default;
+}
+
+.ix-composer__file--image {
+  width: 52px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.ix-composer__file[data-over='true'] {
+  box-shadow: inset 0 0 0 1.5px var(--ix-danger-ink);
+}
+
+.ix-composer__thumb {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.ix-composer__ext {
+  display: grid;
+  flex: none;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border-radius: 9px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--ix-ink-2);
+  background: var(--ix-fill-2);
+}
+
+.ix-composer__file-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.ix-composer__file-name {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ix-ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ix-composer__file-size {
+  font-size: 12px;
+  color: var(--ix-ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.ix-composer__file-size[data-over='true'] {
+  color: var(--ix-danger-ink);
+}
+
+.ix-composer__unqueue {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: var(--ix-ink);
+  background: var(--ix-pop);
+  cursor: pointer;
+  transition: background-color 120ms var(--ix-ease);
+}
+
+.ix-composer__unqueue:hover {
+  background: var(--ix-tip);
+}
+
+.ix-composer__unqueue:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: 1px;
+}
+
+/* ---- The input row: text, emoji, send ------------------------------------------ */
+.ix-composer__row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  min-height: 52px;
+  padding: 0 8px 0 18px;
+}
+
+/* The words: 15/22 with 15px above and below, so one line is the box's 52px.
+   No padding on the left: `readSendOrigin` reads padding-left as where the
+   first glyph starts, and the send flight leaves from exactly there (M1). */
+.ix-composer__input {
+  flex: 1 1 0;
+  box-sizing: border-box;
+  min-width: 0;
+  height: 52px;
+  max-height: 50vh;
+  margin: 0;
+  padding: 15px 0;
+  border: 0;
+  outline: none;
+  resize: none;
+  font: inherit;
+  font-size: 15px;
+  line-height: 22px;
+  color: var(--ix-ink);
+  background: transparent;
+  scrollbar-width: none;
+}
+
+.ix-composer__input::-webkit-scrollbar {
+  display: none;
+}
+
+/* A placeholder is one line, clipped, never wrapped: the box keeps its 52px. */
+.ix-composer__input::placeholder {
+  overflow: hidden;
+  color: var(--ix-ink-3);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ix-composer__input:disabled {
+  cursor: not-allowed;
+}
+
+/* The box's focus is the open ring; a keyboard focus also gets the one ring. */
+.ix-composer__box:has(.ix-composer__input:focus-visible) .ix-composer__slice::after {
+  opacity: 1;
+}
+
+/* 16px on a coarse pointer, or the mobile browser zooms the page on focus. */
+@media (pointer: coarse) {
+  .ix-composer__input {
+    font-size: 16px;
+  }
+}
+
+.ix-composer__emoji,
+.ix-composer__send {
+  display: grid;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  margin-bottom: 8px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.ix-composer__emoji {
+  color: var(--ix-ink-3);
+  background-color: transparent;
+  transition: background-color 120ms var(--ix-ease), color 120ms var(--ix-ease);
+}
+
+.ix-composer__emoji:hover:not(:disabled),
+.ix-composer__emoji[aria-expanded='true'] {
+  color: var(--ix-ink-2);
+  background-color: var(--ix-fill);
+}
+
+.ix-composer__emoji:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Send (§3.1, §5.13): a quiet circle, cream with dark ink once there is
+   something to send, a 200ms color transition. The send flight's release
+   (`releaseSend`, lib/motion/sendFlight.ts) reads the quiet look from
+   --ix-send-quiet and --ix-send-quiet-ink on this element; keep both. */
+.ix-composer__send {
+  --ix-send-quiet: var(--ix-fill-btn);
+  --ix-send-quiet-ink: var(--ix-ink-3);
+  color: var(--ix-send-quiet-ink);
+  background-color: var(--ix-send-quiet);
+  transition: background-color 200ms var(--ix-ease), color 200ms var(--ix-ease);
+}
+
+.ix-composer__send[data-ready='true']:not(:disabled) {
+  color: var(--ix-cream-ink);
+  background-color: var(--ix-cream);
+}
+
+.ix-composer__send[data-ready='true']:not(:disabled):hover {
+  background-color: var(--ix-cream-hover);
+}
+
+.ix-composer__send[data-ready='true']:not(:disabled):active {
+  background-color: var(--ix-cream-press);
+}
+
+.ix-composer__send:disabled {
+  cursor: default;
+}
+
+.ix-composer__emoji:focus-visible,
+.ix-composer__send:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+/* ---- The tools row (§4.12): Attach, GIF, Poll, Event, Format ------------------
+   Laid out in the 46px under the input row, clipped at the box's foot. Opening:
+   from translateY(6px), opacity 300ms after 80ms, translate 450ms on the spring
+   (§5.12). Closing: it fades fast while composerShape pushes it out through the
+   foot with the input row coming down. */
+.ix-composer__tools-clip {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 1;
+  height: 46px;
+  overflow: hidden;
+  border-radius: 0 0 24px 24px;
+  pointer-events: none;
+}
+
+.ix-composer__box[data-open='true'] .ix-composer__tools-clip {
+  pointer-events: auto;
+}
+
+.ix-composer__tools-move {
+  height: 100%;
+}
+
+.ix-composer__tools {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  box-sizing: border-box;
+  height: 100%;
+  padding: 0 12px 12px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  opacity: 0;
+  transform: translateY(6px);
+  transition:
+    opacity 150ms var(--ix-ease),
+    transform 350ms var(--ix-spring);
+}
+
+.ix-composer__tools::-webkit-scrollbar {
+  display: none;
+}
+
+.ix-composer__box[data-open='true'] .ix-composer__tools {
+  opacity: 1;
+  transform: none;
+  transition:
+    opacity 300ms var(--ix-ease) 80ms,
+    transform 450ms var(--ix-spring);
+}
+
+:root[data-motion='reduced'] .ix-composer__tools,
+:root[data-motion='reduced'] .ix-composer__box[data-open='true'] .ix-composer__tools {
+  transform: none;
+  transition: opacity 150ms linear;
+}
+
+/* The chips: 27px (12.5 on a 15px line, padding 6 10), as the prototype. */
+.ix-composer__tools .ix-chip {
+  flex: none;
+  line-height: 15px;
+}
+
+.ix-composer__tools .ix-chip[aria-pressed='true'] {
+  color: var(--ix-ink);
+  background: var(--ix-fill-2);
+}
+
+/* "Replying to Jeremy ×" leads the row. */
+.ix-composer__reply {
+  min-width: 0;
+  max-width: 45%;
+  padding-right: 4px;
+  color: var(--ix-ink);
+}
+
+.ix-composer__reply-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ix-composer__reply-x {
+  display: grid;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: var(--ix-ink-3);
+  background: none;
+  cursor: pointer;
+  transition: background-color 120ms var(--ix-ease), color 120ms var(--ix-ease);
+}
+
+.ix-composer__reply-x:hover {
+  color: var(--ix-ink);
+  background: var(--ix-fill-2);
+}
+
+.ix-composer__reply-x:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: 1px;
+}
+
+/* Slow mode and the length count, at the row's end. */
+.ix-composer__tail {
+  display: inline-flex;
+  flex: none;
+  gap: 10px;
+  margin-left: auto;
+  padding: 6px 4px 0 8px;
+  font-size: 12.5px;
+  line-height: 15px;
+  color: var(--ix-ink-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.ix-composer__count[data-over='true'] {
+  font-weight: 600;
+  color: var(--ix-danger-ink);
+}
+
+/* Format swaps the row for the formatting bar (MarkdownToolbar). */
+.ix-format {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  height: 27px;
+}
+
+.ix-format__btn {
+  display: grid;
+  width: 30px;
+  height: 27px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  color: var(--ix-ink-2);
+  background: none;
+  cursor: pointer;
+  transition: background-color 120ms var(--ix-ease), color 120ms var(--ix-ease);
+}
+
+.ix-format__btn:hover {
+  color: var(--ix-ink);
+  background: var(--ix-fill);
+}
+
+.ix-format__btn:active {
+  background: var(--ix-fill-2);
+}
+
+.ix-format__btn:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: 1px;
+}
+
+.ix-format__divider {
+  flex: none;
+  width: 1px;
+  height: 16px;
+  margin: 0 4px;
+  background: var(--ix-line);
+}
+
+.ix-composer__done {
+  margin-left: 4px;
+  color: var(--ix-ink);
+}
+
+/* Upload progress, along the foot. */
+.ix-composer__progress {
+  position: absolute;
+  right: 24px;
+  bottom: 0;
+  left: 24px;
+  z-index: 2;
+  height: 2px;
+  overflow: hidden;
+  border-radius: 1px;
+  background: var(--ix-fill-2);
+  pointer-events: none;
+}
+
+/* ---- Completion: @ / # / : and slash commands (§4.12) ------------------------
+   Near-solid, radius 16, above the box, at most six 40px rows, then it scrolls. */
+@keyframes ix-composer-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+
+@keyframes ix-composer-pop-out {
+  to {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+
+.ix-complete {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 30;
+  box-sizing: border-box;
+  width: min(100%, 440px);
+  max-height: calc(6 * 40px + 12px);
+  padding: 6px;
+  overflow-y: auto;
+  border-radius: 16px;
+  color: var(--ix-ink);
+  background: var(--ix-pop);
+  box-shadow:
+    0 0 0 1px var(--ix-edge-lit),
+    var(--ix-shadow-room);
+  transform-origin: 0% 100%;
+  animation: ix-composer-pop 180ms var(--ix-ease) backwards;
+  cursor: default;
+  scrollbar-width: thin;
+}
+
+:root[data-reduced-transparency='true'] .ix-complete,
+:root[data-reduced-transparency='true'] .ix-picker {
+  background: var(--ix-pop-solid);
+}
+
+.ix-complete__list {
+  display: flex;
+  flex-direction: column;
+}
+
+.ix-complete__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  box-sizing: border-box;
+  min-height: 40px;
+  padding: 0 10px 0 8px;
+  border-radius: 10px;
+  font-size: 14px;
+  color: var(--ix-ink-2);
+  cursor: pointer;
+}
+
+.ix-complete__row[aria-selected='true'] {
+  color: var(--ix-ink);
+  background: var(--ix-fill-2);
+}
+
+.ix-complete__row--two {
+  min-height: 48px;
+}
+
+.ix-complete__mark {
+  display: grid;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  color: var(--ix-ink-3);
+}
+
+.ix-complete__mark--text {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.ix-complete__mark--emoji {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.ix-complete__img {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+}
+
+.ix-complete__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--ix-ink-3);
+}
+
+.ix-complete__stack {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.ix-complete__name {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ix-complete__meta {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12.5px;
+  color: var(--ix-ink-3);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ix-complete__row > .ix-complete__meta {
+  flex: none;
+  margin-left: auto;
+}
+
+.ix-complete__label {
+  margin: 0;
+  padding: 8px 10px 4px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ix-ink-3);
+}
+
+.ix-complete__status {
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--ix-ink-2);
+}
+
+.ix-complete__strong {
+  font-weight: 600;
+  color: var(--ix-ink);
+}
+
+.ix-complete__error {
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--ix-danger-ink);
+}
+
+/* ---- The one picker (§6.11): Emoji / GIF / Stickers, 360x420 -------------------- */
+.ix-picker {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  width: min(360px, calc(100vw - 16px));
+  height: min(420px, calc(100dvh - 120px));
+  overflow: hidden;
+  border-radius: 16px;
+  color: var(--ix-ink);
+  background: var(--ix-pop);
+  box-shadow:
+    0 0 0 1px var(--ix-edge-lit),
+    var(--ix-shadow-room);
+  transform-origin: calc(100% - 62px) 100%;
+  animation: ix-composer-pop 180ms var(--ix-ease) backwards;
+  cursor: default;
+}
+
+.ix-picker.is-leaving {
+  animation: ix-composer-pop-out 120ms var(--ix-ease) forwards;
+}
+
+.ix-picker__tabs {
+  display: flex;
+  flex: none;
+  gap: 2px;
+  margin: 10px 10px 4px;
+  padding: 2px;
+  border-radius: 10px;
+  background: var(--ix-fill);
+}
+
+.ix-picker__tab {
+  flex: 1;
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ix-ink-3);
+  background: none;
+  cursor: pointer;
+  transition: background-color 120ms var(--ix-ease), color 120ms var(--ix-ease);
+}
+
+.ix-picker__tab:hover {
+  color: var(--ix-ink-2);
+}
+
+.ix-picker__tab[aria-selected='true'] {
+  color: var(--ix-ink);
+  background: var(--ix-fill-2);
+}
+
+.ix-picker__tab:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: 1px;
+}
+
+.ix-picker__body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.ix-picker__loading {
+  flex: 1;
+}
+
+/* The pickers inside draw their own floating surface elsewhere; here the host
+   is the surface, so theirs comes off: no fill, no edge, no blur, no entrance
+   of their own, and they fill the body. (IX-17 restyles their insides.) */
+.ix-picker__body > .pc-floating {
+  flex: 1;
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  max-height: none;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  animation: none;
+}
+
+/* ---- A role mention in a message (RoleMentionChip) ------------------------------ */
+.ix-role-mention {
+  display: inline;
+  padding: 0 2px;
+  border: 0;
+  border-radius: 6px;
+  font: inherit;
+  font-weight: 600;
+  color: inherit;
+  background: none;
+  cursor: pointer;
+  transition: background-color 120ms var(--ix-ease);
+}
+
+.ix-role-mention:hover {
+  background: var(--ix-fill-2);
+}
+
+.ix-role-mention:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: 1px;
+}
+
+.ix-role-card {
+  width: 15rem;
+  padding: 8px;
+}
+
+.ix-role-card__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 4px 8px;
+}
+
+.ix-role-card__dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--ix-ink-3);
+}
+
+.ix-role-card__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ix-ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ix-role-card__count {
+  flex: none;
+  font-size: 12.5px;
+  color: var(--ix-ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.ix-role-card__line {
+  margin: 0;
+  padding: 0 4px 6px;
+  font-size: 12.5px;
+  color: var(--ix-ink-3);
+}
+
+.ix-role-card__error {
+  margin: 0;
+  padding: 0 4px 6px;
+  font-size: 13px;
+  color: var(--ix-danger-ink);
+}
+
+.ix-role-card__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 13rem;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.ix-role-card__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px;
+  --ix-ring: var(--ix-pop-solid);
+}
+
+.ix-role-card__person {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 14px;
+  color: var(--ix-ink-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- Scheduled messages: a sheet (ScheduledMessagesPanel) ------------------------ */
+.ix-scheduled {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 4px 16px 16px;
+  list-style: none;
+}
+
+.ix-scheduled__item {
+  padding: 12px 0;
+  border-top: 1px solid var(--ix-line);
+}
+
+.ix-scheduled__item:first-child {
+  border-top: 0;
+}
+
+.ix-scheduled__item--skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ix-scheduled__bar {
+  display: block;
+  width: 42%;
+  height: 12px;
+  border-radius: 6px;
+  background: var(--ix-fill);
+}
+
+.ix-scheduled__bar--long {
+  width: 85%;
+}
+
+.ix-scheduled__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 28px;
+}
+
+.ix-scheduled__when {
+  display: inline-flex;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--ix-ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.ix-scheduled__state {
+  font-weight: 600;
+  color: var(--ix-ink-2);
+}
+
+.ix-scheduled__item[data-status='failed'] .ix-scheduled__state {
+  color: var(--ix-danger-ink);
+}
+
+.ix-scheduled__actions {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.ix-scheduled__btn {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  color: var(--ix-ink-3);
+  background: none;
+  cursor: pointer;
+  transition: background-color 120ms var(--ix-ease), color 120ms var(--ix-ease);
+}
+
+.ix-scheduled__btn:hover:not(:disabled) {
+  color: var(--ix-ink);
+  background: var(--ix-fill);
+}
+
+.ix-scheduled__btn--danger:hover:not(:disabled) {
+  color: var(--ix-danger-ink);
+  background: var(--ix-danger-fill);
+}
+
+.ix-scheduled__btn:focus-visible,
+.ix-scheduled__text-btn:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: 1px;
+}
+
+.ix-scheduled__text {
+  margin: 4px 0 0;
+  font-size: 15px;
+  line-height: 1.42;
+  color: var(--ix-ink);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.ix-scheduled__muted {
+  color: var(--ix-ink-3);
+}
+
+.ix-scheduled__error {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--ix-danger-ink);
+}
+
+.ix-scheduled__alert {
+  margin: 8px 16px;
+  padding: 10px 14px;
+  border-radius: 14px;
+  font-size: 13px;
+  color: var(--ix-danger-ink);
+  background: var(--ix-danger-fill);
+}
+
+.ix-scheduled__edit {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.ix-scheduled__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ix-ink-3);
+}
+
+.ix-scheduled__input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 10px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--ix-ink);
+  background: var(--ix-fill-field);
+  box-shadow: inset 0 0 0 1px var(--ix-line);
+  color-scheme: dark;
+}
+
+.ix-scheduled__input:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: 1px;
+}
+
+.ix-scheduled__input--text {
+  min-height: 72px;
+  resize: vertical;
+}
+
+.ix-scheduled__edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.ix-scheduled__text-btn {
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 10px;
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ix-ink-2);
+  background: none;
+  cursor: pointer;
+}
+
+.ix-scheduled__text-btn:hover {
+  color: var(--ix-ink);
+  background: var(--ix-fill);
+}

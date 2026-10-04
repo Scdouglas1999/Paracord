@@ -55,14 +55,14 @@ describe('ScheduledMessagesPanel', () => {
   });
 
   it('lists pending scheduled messages on open', async () => {
-    render(<ScheduledMessagesPanel channelId="chan-1" onClose={() => {}} />);
+    render(<ScheduledMessagesPanel open channelId="chan-1" onClose={() => {}} />);
     expect(channelApi.listScheduledMessages).toHaveBeenCalledWith('chan-1');
     expect(await screen.findByText('Hello later')).toBeInTheDocument();
   });
 
   it('edits and reschedules a message, calling editScheduledMessage with the new send_at', async () => {
     const user = userEvent.setup();
-    render(<ScheduledMessagesPanel channelId="chan-1" onClose={() => {}} />);
+    render(<ScheduledMessagesPanel open channelId="chan-1" onClose={() => {}} />);
 
     await user.click(await screen.findByLabelText('Edit scheduled message'));
 

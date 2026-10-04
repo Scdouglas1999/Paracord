@@ -75,10 +75,10 @@ describe('RoleMentionChip', () => {
     expect(rows).toHaveLength(2);
     expect(rows[0]).toHaveTextContent('mara');
     expect(rows[0]).toHaveTextContent('Online');
-    expect(rows[0].querySelector('.glass-face')).toHaveTextContent('M');
+    expect(rows[0].querySelector('.ix-av')).toHaveTextContent('M');
     expect(rows[1]).toHaveTextContent('tomas');
     expect(rows[1]).toHaveTextContent('Away');
-    expect(rows[1].querySelector('.glass-sheet-presence')).toHaveAttribute('data-status', 'idle');
+    expect(rows[1].querySelector('.ix-presence')).toHaveAttribute('data-presence', 'idle');
     // Holders who are offline and people without the role are not listed.
     expect(within(card).queryByText('ren')).not.toBeInTheDocument();
     expect(within(card).queryByText('aisha')).not.toBeInTheDocument();

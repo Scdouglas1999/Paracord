@@ -5,16 +5,33 @@ import { getAccountChannelView } from '../../lib/channelView';
 import { isGroupDm, pendingGroupMembers, runtimeAttachDecision, runtimeSendDecision } from '../../lib/messages/messagingReadiness';
 import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
 import { entityScopeKey as memberScopeKey, type AccountScope } from '../../lib/serverScope';
-import { Fragment, useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback, lazy, Suspense, type CSSProperties } from 'react';
+import { Fragment, useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback, type CSSProperties, type ReactNode } from 'react';
 
 // §5.3: one reduced-motion switch for the whole app — lib/motion is the only
 // JavaScript motion engine; the composer's enter/exit surfaces are CSS.
 import { emitMotion, fadeIn, ms, pressComposer, readSendOrigin, releaseSend, useLingering, useReducedMotion } from '../../lib/motion';
-import { ArrowUp, BarChart3, Clock3, CornerUpLeft, EyeOff, FileText, Image, Loader2, MinusCircle, Plus, PlusCircle, Smile, Type, X } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { Input, Select } from '../ui/Input';
-import { Button } from '../ui/Button';
-import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu';
+import { IxMenu, type IxMenuEntry } from '../ix/menus';
+import { GlyphFrame, IxGlyph, type IxGlyphName } from '../ix/glyphs';
+import { Avatar } from '../ix/identity';
+import { useGuildStore } from '../../stores/guildStore';
+import { PEOPLE_HUE, serverHue } from '../../lib/identityHue';
+import { emojiApi } from '../../api/emojis';
+import { buildGuildEmojiImageUrl, formatCustomEmojiToken } from '../../lib/customEmoji';
+import { EventFormModal } from '../guild/EventList';
+import { ComposerPickerHost, type ComposerPickerTab } from './ComposerPickerHost';
+import { useComposerShape } from './composerShape';
+import { registerComposerFiles } from './composerFiles';
+import {
+  applyCompletion,
+  completionAt,
+  isLinkableChannel,
+  matchShortcodes,
+  slowModeLabel,
+  type CompletionQuery,
+} from './composerCompletion';
 import { useCurrentMessageStoreApi } from '../../hooks/useMessageStore';
 import { useMessageDraft } from '../../hooks/useMessageDraft';
 import { MessagingQueuePanel, isQuietlyInFlight } from './MessagingQueuePanel';
@@ -40,7 +57,7 @@ import { useInteractionStore, type AutocompleteChoice } from '../../stores/inter
 import { useConversationActions } from '../../hooks/useConversationActions';
 import { captureScopedOperation } from '../../lib/operationContext';
 import type { Message, Role } from '../../types';
-import { Permissions, hasPermission } from '../../types';
+import { ChannelType, Permissions, hasPermission } from '../../types';
 import { usePermissions } from '../../hooks/usePermissions';
 import { fetchGuildRoles } from '../../lib/permissionDataCache';
 import { roleColorToHex } from '../../lib/colors';
@@ -50,19 +67,54 @@ import { toast } from '../../stores/toastStore';
 import { extractApiError } from '../../api/client';
 import { displayName } from '../../lib/displayName';
 
-/** A composer picker opens upward from its button at the composer's right
- * edge, so it grows from its own bottom-right corner (`--pc-origin`). */
-const PICKER_LAYER_STYLE = { zIndex: 50, '--pc-origin': '100% 100%' } as CSSProperties;
+/**
+ * The server's refusal for an action this person lacks the permission for
+ * (`routes/channels/capabilities.rs`). A channel that answers it for sending
+ * is read-only to them, and says so in plain words (§4.12).
+ */
+const PERMISSION_REFUSAL = 'You do not have permission to use this action in this channel.';
 
-const EmojiPicker = lazy(() =>
-  import('../ui/EmojiPicker').then((m) => ({ default: m.EmojiPicker })),
-);
-const GifPicker = lazy(() =>
-  import('./GifPicker').then((m) => ({ default: m.GifPicker })),
-);
-const StickerPicker = lazy(() =>
-  import('./StickerPicker').then((m) => ({ default: m.StickerPicker })),
-);
+/** How long a press on Send has to be held for its menu (touch: "Send later"). */
+const LONG_PRESS_MS = 500;
+
+/** Server emoji for `:` completion, fetched once per server per session. */
+const serverEmojiCache = new Map<string, Promise<Array<{ id: string; name: string; animated?: boolean }>>>();
+function loadServerEmoji(guildId: string) {
+  let pending = serverEmojiCache.get(guildId);
+  if (!pending) {
+    pending = emojiApi.listGuild(guildId).then(({ data }) => data.map((emoji) => ({ id: emoji.id, name: emoji.name, animated: emoji.animated })));
+    // A failure is said in the list, and asked again next time.
+    pending.catch(() => serverEmojiCache.delete(guildId));
+    serverEmojiCache.set(guildId, pending);
+  }
+  return pending;
+}
+
+/** The emoji glyph (a face) and the Format glyph ("A" over a line), drawn like the set. */
+function EmojiGlyph({ size = 18 }: { size?: number }) {
+  return (
+    <GlyphFrame size={size}>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M8.6 14.2a4.2 4.2 0 0 0 6.8 0" />
+      <path d="M9.2 9.6h.01M14.8 9.6h.01" strokeWidth={2.4} />
+    </GlyphFrame>
+  );
+}
+function FormatGlyph({ size = 14 }: { size?: number }) {
+  return (
+    <GlyphFrame size={size}>
+      <path d="m5 17 5.5-12h1L17 17M7.3 12.5h7.4M4 21h16" />
+    </GlyphFrame>
+  );
+}
+function ClockGlyph({ size = 18 }: { size?: number }) {
+  return (
+    <GlyphFrame size={size}>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M12 7.5V12l3 2" />
+    </GlyphFrame>
+  );
+}
 
 interface MessageInputProps {
   channelId: string;
@@ -368,23 +420,19 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
   const [stagedFiles, setStagedFiles] = useState<File[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [toolsPosition, setToolsPosition] = useState<{ x: number; y: number } | null>(null);
-  const toolsButtonRef = useRef<HTMLButtonElement>(null);
-  // The "+" menu opens ABOVE the capsule, and the menu's own height is only
-  // known once it is on the page, so it is placed twice: at the button, then
-  // (before paint) lifted by its measured height. See the layout effect below.
-  const toolsAnchorRef = useRef<{ left: number; top: number } | null>(null);
-  const toolsPlacedRef = useRef(false);
-  // The capsule's measured width says whether the emoji button still fits.
+  // The send control's menu (right-click or a long press): Send later, Scheduled.
+  const [sendMenu, setSendMenu] = useState(false);
+  const longPress = useRef<{ timer: number | null; fired: boolean }>({ timer: null, fired: false });
+  // The box's measured width says whether the tool chips keep their words.
   const [compact, setCompact] = useState(false);
-  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
-  const [showGifPicker, setShowGifPicker] = useState(false);
-  const [showStickerPicker, setShowStickerPicker] = useState(false);
-  // The pickers leave the way they came (§5.2): kept mounted for their exit.
-  const emojiLayer = useLingering(showEmojiPicker);
-  const gifLayer = useLingering(showGifPicker);
-  const stickerLayer = useLingering(showStickerPicker);
+  // The one picker (§6.11): which tab, or closed. It leaves the way it came.
+  const [picker, setPicker] = useState<ComposerPickerTab | null>(null);
+  const pickerLayer = useLingering(picker);
+  // Format swaps the tools row for the formatting bar (§4.12).
   const [showFormattingTools, setShowFormattingTools] = useState(false);
+  const [showEventForm, setShowEventForm] = useState(false);
+  // Focus anywhere in the box (the text, a chip, the picker) keeps it open.
+  const [focused, setFocused] = useState(false);
   const [showPollComposer, setShowPollComposer] = useState(false);
   const [pollQuestion, setPollQuestion] = useState('');
   const [pollOptions, setPollOptions] = useState<string[]>(['', '']);
@@ -399,8 +447,25 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
   const [scheduledCount, setScheduledCount] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // The box (the capsule): what the send flight presses (`pressComposer`).
   const composerShellRef = useRef<HTMLDivElement>(null);
+  // The three slices and what rides on them (composerShape.ts, §5.12).
+  const capTopRef = useRef<HTMLSpanElement>(null);
+  const capMidRef = useRef<HTMLSpanElement>(null);
+  const fillTopRef = useRef<HTMLSpanElement>(null);
+  const fillMidRef = useRef<HTMLSpanElement>(null);
+  // Stable lists: the shape hook's effect depends on them.
+  const shapeTops = useMemo(() => [capTopRef, fillTopRef], []);
+  const shapeMids = useMemo(() => [capMidRef, fillMidRef], []);
+  const headRef = useRef<HTMLDivElement>(null);
+  const toolsMoveRef = useRef<HTMLDivElement>(null);
+  const openRef = useRef(false);
+  // True for the frame a send closes the box up around the empty line: that
+  // change is part of the send flight and snaps (M1: no other motion at send).
+  const holdShapeRef = useRef(false);
   const sendingRef = useRef(false);
+  const scheduleAtRef = useRef<HTMLInputElement>(null);
+  const pendingCaretRef = useRef<number | null>(null);
   /* §5.1 "a message has mass" — see `beginSay` below. The words that fly are a
      ghost the motion engine owns, not React state: the send frame is the one
      frame in this moment that must not be spent re-rendering a 1,600-line
@@ -413,7 +478,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
   const { upload, uploading, maxUploadSize } = useFileUpload(channelId);
   const { triggerTyping, stopTyping } = useTyping(channelId);
   const reduceMotion = useReducedMotion();
-  const { actions: serverActions, encrypted, encryption, error: capabilityError, refresh: refreshActions } = useConversationActions(channelId);
+  const { actions: serverActions, encrypted, encryption, error: capabilityError, refresh: refreshActions, loading: actionsLoading } = useConversationActions(channelId);
   const runtimeState = useStore(messagingRuntime.store);
   const channel = useChannelStore(state => getAccountChannelView(scope, state).channelsById[channelId]);
   const channelType = channel?.channel_type ?? channel?.type;
@@ -492,13 +557,16 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
     }
   }, []);
 
-  // @mention autocomplete — subscribe only to this guild's member list
+  // Completion (§4.12): @ people and roles, # channels, : emoji. The list is a
+  // popover above the box; Up/Down move, Enter or Tab picks, Escape closes.
   const memberScope = useCurrentAccountScope();
   const guildMembers = useMemberStore((s) => (guildId ? (memberScope ? s.members.get(memberScopeKey(memberScope, guildId)) : undefined) : undefined));
-  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
-  const [mentionIndex, setMentionIndex] = useState(0);
-  const { permissions: mentionPerms } = usePermissions(guildId ?? null);
-  const canMentionRoles = hasPermission(mentionPerms, Permissions.MENTION_EVERYONE);
+  const [completion, setCompletion] = useState<CompletionQuery | null>(null);
+  const [completionIndex, setCompletionIndex] = useState(0);
+  const { permissions: guildPerms, isAdmin: guildAdmin } = usePermissions(guildId ?? null);
+  const canMentionRoles = hasPermission(guildPerms, Permissions.MENTION_EVERYONE);
+  // Events are created by whoever manages the server (the Events page's rule).
+  const canCreateEvents = Boolean(guildId) && (guildAdmin || hasPermission(guildPerms, Permissions.MANAGE_GUILD));
   const [composerRoles, setComposerRoles] = useState<Role[]>([]);
   const [composerRolesError, setComposerRolesError] = useState<string | null>(null);
   useEffect(() => {
@@ -523,44 +591,86 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
     };
   }, [guildId]);
 
+  const mentioning = completion?.kind === 'mention';
   useEffect(() => {
-    if (mentionQuery === null || !guildId || !memberScope || guildMembers) return;
+    if (!mentioning || !guildId || !memberScope || guildMembers) return;
     void useMemberStore.getState().fetchMembers(guildId, memberScope);
-  }, [mentionQuery, guildId, memberScope, guildMembers]);
+  }, [mentioning, guildId, memberScope, guildMembers]);
 
-  type MentionOption =
-    | { kind: 'member'; id: string; member: NonNullable<typeof guildMembers>[number] }
-    | { kind: 'role'; id: string; role: Role; count: number };
-
-  const mentionResults = useMemo(() => {
-    if (mentionQuery === null || !guildId) return [] as MentionOption[];
-    const q = mentionQuery.toLowerCase();
-    const people: MentionOption[] = (guildMembers || [])
-      .filter((m) => {
-        const visibleName = displayName(m.user, m.nick).toLowerCase();
-        return visibleName.includes(q) || m.user.username.toLowerCase().includes(q);
+  // The server's own emoji, for `:`. Loaded the first time someone types one.
+  const emojiQuerying = completion?.kind === 'emoji';
+  const [serverEmoji, setServerEmoji] = useState<{ guildId: string; list: Array<{ id: string; name: string; animated?: boolean }> } | null>(null);
+  const [serverEmojiError, setServerEmojiError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!emojiQuerying || !guildId || serverEmoji?.guildId === guildId) return;
+    let canceled = false;
+    loadServerEmoji(guildId)
+      .then((list) => {
+        if (canceled) return;
+        setServerEmoji({ guildId, list });
+        setServerEmojiError(null);
       })
-      .slice(0, 8)
-      .map((member) => ({ kind: 'member' as const, id: member.user.id, member }));
-    const roles: MentionOption[] = composerRoles
-      // @everyone is its own mention, not a role to pick here.
-      .filter((role) => role.id !== guildId && (role.mentionable || canMentionRoles) && role.name.toLowerCase().includes(q))
-      .slice(0, 5)
-      .map((role) => ({
-        kind: 'role' as const,
-        id: role.id,
-        role,
-        count: guildMembers ? guildMembers.filter((member) => member.roles.includes(role.id)).length : -1,
-      }));
-    return [...people, ...roles];
-  }, [mentionQuery, guildId, guildMembers, composerRoles, canMentionRoles]);
+      .catch((err) => {
+        if (!canceled) setServerEmojiError(`Server emoji did not load: ${extractApiError(err)}`);
+      });
+    return () => {
+      canceled = true;
+    };
+  }, [emojiQuerying, guildId, serverEmoji?.guildId]);
+
+  const guildChannels = useChannelStore((state) => (guildId ? getAccountChannelView(scope, state).channelsByGuild?.[guildId] : undefined));
+
+  type CompletionOption =
+    | { kind: 'member'; id: string; member: NonNullable<typeof guildMembers>[number] }
+    | { kind: 'role'; id: string; role: Role; count: number }
+    | { kind: 'channel'; id: string; name: string }
+    | { kind: 'emoji'; id: string; name: string; emoji: string }
+    | { kind: 'custom-emoji'; id: string; name: string; animated: boolean };
+
+  const completionResults = useMemo(() => {
+    if (!completion) return [] as CompletionOption[];
+    const q = completion.query.toLowerCase();
+    if (completion.kind === 'mention') {
+      if (!guildId) return [] as CompletionOption[];
+      const people: CompletionOption[] = (guildMembers || [])
+        .filter((m) => {
+          const visibleName = displayName(m.user, m.nick).toLowerCase();
+          return visibleName.includes(q) || m.user.username.toLowerCase().includes(q);
+        })
+        .slice(0, 8)
+        .map((member) => ({ kind: 'member' as const, id: member.user.id, member }));
+      const roles: CompletionOption[] = composerRoles
+        // @everyone is its own mention, not a role to pick here.
+        .filter((role) => role.id !== guildId && (role.mentionable || canMentionRoles) && role.name.toLowerCase().includes(q))
+        .slice(0, 5)
+        .map((role) => ({
+          kind: 'role' as const,
+          id: role.id,
+          role,
+          count: guildMembers ? guildMembers.filter((member) => member.roles.includes(role.id)).length : -1,
+        }));
+      return [...people, ...roles];
+    }
+    if (completion.kind === 'channel') {
+      return (guildChannels ?? [])
+        .filter((entry) => isLinkableChannel(entry) && (entry.name ?? '').toLowerCase().includes(q))
+        .slice(0, 12)
+        .map((entry) => ({ kind: 'channel' as const, id: entry.id, name: entry.name ?? '' }));
+    }
+    const own: CompletionOption[] = (serverEmoji && serverEmoji.guildId === guildId ? serverEmoji.list : [])
+      .filter((emoji) => emoji.name.toLowerCase().includes(q))
+      .slice(0, 6)
+      .map((emoji) => ({ kind: 'custom-emoji' as const, id: emoji.id, name: emoji.name, animated: Boolean(emoji.animated) }));
+    const common: CompletionOption[] = matchShortcodes(q).map((entry) => ({ kind: 'emoji' as const, id: entry.name, name: entry.name, emoji: entry.emoji }));
+    return [...own, ...common];
+  }, [completion, guildId, guildMembers, composerRoles, canMentionRoles, guildChannels, serverEmoji]);
 
   const resizeDraft = useCallback(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
     const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
     textarea.style.height = 'auto';
-    textarea.style.height = `${Math.min(textarea.scrollHeight, Math.max(44, viewportHeight * 0.45))}px`;
+    textarea.style.height = `${Math.min(textarea.scrollHeight, Math.max(52, viewportHeight * 0.45))}px`;
   }, []);
   useEffect(() => { resizeDraft(); }, [content, resizeDraft]);
   useEffect(() => {
@@ -585,20 +695,6 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
       window.visualViewport?.removeEventListener('resize', resizeDraft);
     };
   }, [resizeDraft]);
-
-  // Click-outside dismiss for inline emoji picker and formatting toolbar.
-  useEffect(() => {
-    if (!showEmojiPicker && !showFormattingTools) return;
-    const onPointerDown = (e: MouseEvent) => {
-      const target = e.target as Node | null;
-      if (!target) return;
-      if (composerShellRef.current?.contains(target)) return;
-      setShowEmojiPicker(false);
-      setShowFormattingTools(false);
-    };
-    document.addEventListener('mousedown', onPointerDown);
-    return () => document.removeEventListener('mousedown', onPointerDown);
-  }, [showEmojiPicker, showFormattingTools]);
 
   const refreshScheduledCount = useCallback(async () => {
     try {
@@ -682,7 +778,10 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
     if (origin && textarea) {
       // The real words hide behind the bubble. Visibility only: the draft is
       // never touched. The box closes up around the empty line, in the same
-      // frame the timeline makes room, so the two glide as one.
+      // frame the timeline makes room, so the two glide as one. That change of
+      // height is the flight's, not the box's own: it snaps (holdShapeRef).
+      holdShapeRef.current = true;
+      requestAnimationFrame(() => requestAnimationFrame(() => { holdShapeRef.current = false; }));
       textarea.style.opacity = '0';
       textarea.style.height = 'auto';
       pressComposer(composerShellRef.current);
@@ -964,16 +1063,15 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
     watchTimer.current = null;
   }, []);
 
-  /** Detect @mention query and /slash command query from cursor position */
+  /** Detect the @ / # / : completion and the /slash command query at the caret. */
   const detectMentionQuery = useCallback((text: string, cursorPos: number) => {
-    const before = text.slice(0, cursorPos);
-    const match = before.match(/@(\w*)$/);
-    if (match) {
-      setMentionQuery(match[1]);
-      setMentionIndex(0);
-    } else {
-      setMentionQuery(null);
-    }
+    const found = completionAt(text, cursorPos);
+    setCompletion((current) => {
+      if (!found) return null;
+      if (current && current.kind === found.kind && current.start === found.start && current.query === found.query) return current;
+      return found;
+    });
+    setCompletionIndex(0);
 
     // Detect slash command name entry: "/cmd" with no args yet
     const slashNameMatch = text.match(/^\/(\w*)$/);
@@ -1080,31 +1178,49 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
     [content, clearAutocompleteChoices, setContent],
   );
 
-  const insertMention = useCallback((token: string) => {
+  /** Put the picked completion into the draft, where its trigger was. */
+  const insertCompletion = useCallback((token: string) => {
     const textarea = textareaRef.current;
-    if (!textarea) return;
-    const before = content.slice(0, textarea.selectionStart);
-    const after = content.slice(textarea.selectionStart);
-    const mentionStart = before.lastIndexOf('@');
-    if (mentionStart === -1) return;
-    const mentionText = token;
-    const newContent = before.slice(0, mentionStart) + mentionText + ' ' + after;
-    setContent(newContent);
-    setMentionQuery(null);
-    // Restore focus
-    requestAnimationFrame(() => {
-      const newPos = mentionStart + mentionText.length + 1;
-      textarea.focus();
-      textarea.setSelectionRange(newPos, newPos);
-    });
-  }, [content, setContent]);
+    if (!textarea || !completion) return;
+    const caret = textarea.selectionStart;
+    const next = applyCompletion(content, caret, completion.start, token);
+    // The caret lands after the token on the commit that puts it in, not a
+    // frame later, so the next keystroke can never arrive before it.
+    pendingCaretRef.current = next.caret;
+    setContent(next.text);
+    setCompletion(null);
+    triggerTyping();
+  }, [content, completion, setContent, triggerTyping]);
+  useLayoutEffect(() => {
+    const at = pendingCaretRef.current;
+    const textarea = textareaRef.current;
+    if (at === null || !textarea || textarea.value.length < at) return;
+    pendingCaretRef.current = null;
+    textarea.focus();
+    textarea.setSelectionRange(at, at);
+  }, [content]);
+
+  const completionToken = (option: CompletionOption): string => {
+    switch (option.kind) {
+      case 'member':
+        return `<@${option.member.user.id}>`;
+      case 'role':
+        return `<@&${option.role.id}>`;
+      case 'channel':
+        return `<#${option.id}>`;
+      case 'emoji':
+        return option.emoji;
+      case 'custom-emoji':
+        return formatCustomEmojiToken(option.name, option.id, option.animated);
+    }
+  };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // Dismiss composer popovers first (including mention mode with zero matches).
+    // Dismiss composer popovers first (including a completion with zero matches).
     if (e.key === 'Escape') {
-      if (mentionQuery !== null) {
+      if (completion !== null) {
         e.preventDefault();
-        setMentionQuery(null);
+        setCompletion(null);
         return;
       }
       if (slashQuery !== null || slashOptionMode) {
@@ -1114,33 +1230,30 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
         clearAutocompleteChoices();
         return;
       }
-      if (showEmojiPicker || showFormattingTools || showGifPicker || showStickerPicker) {
+      if (picker !== null || showFormattingTools) {
         e.preventDefault();
-        setShowEmojiPicker(false);
+        setPicker(null);
         setShowFormattingTools(false);
-        setShowGifPicker(false);
-        setShowStickerPicker(false);
         return;
       }
     }
 
-    // Handle mention autocomplete navigation
-    if (mentionQuery !== null && mentionResults.length > 0) {
+    // Completion: Up/Down move, Enter or Tab picks.
+    if (completion !== null && completionResults.length > 0) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
-        setMentionIndex((prev) => (prev + 1) % mentionResults.length);
+        setCompletionIndex((prev) => (prev + 1) % completionResults.length);
         return;
       }
       if (e.key === 'ArrowUp') {
         e.preventDefault();
-        setMentionIndex((prev) => (prev - 1 + mentionResults.length) % mentionResults.length);
+        setCompletionIndex((prev) => (prev - 1 + completionResults.length) % completionResults.length);
         return;
       }
-      if (e.key === 'Tab' || e.key === 'Enter') {
+      if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
         e.preventDefault();
-        const selected = mentionResults[mentionIndex];
-        if (selected?.kind === 'member') insertMention(`<@${selected.member.user.id}>`);
-        if (selected?.kind === 'role') insertMention(`<@&${selected.role.id}>`);
+        const selected = completionResults[completionIndex];
+        if (selected) insertCompletion(completionToken(selected));
         return;
       }
     }
@@ -1263,30 +1376,20 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
     }
     fileInputRef.current?.click();
   };
-  useLayoutEffect(() => {
-    if (!toolsPosition) { toolsPlacedRef.current = false; return; }
-    const anchor = toolsAnchorRef.current;
-    if (toolsPlacedRef.current || !anchor) return;
-    const menu = document.querySelector<HTMLElement>('[role="menu"][aria-label="Message tools"]');
-    if (!menu) return;
-    toolsPlacedRef.current = true;
-    setToolsPosition({ x: anchor.left, y: Math.max(8, anchor.top - menu.offsetHeight - 8) });
-  }, [toolsPosition]);
-
-  // Everything the capsule does not carry stays one click from "+": attach
-  // first (the reason for the button), then the composers and pickers. Emoji
-  // only appears here when the capsule has no room for its own button.
-  const composerTools: ContextMenuItem[] = [
-    { label: 'Attach files', icon: <Plus size={18} />, action: attachFiles, disabled: showPollComposer || !canAttachFiles || !canSendMessages, description: actions.attach.reason ?? undefined },
-    { label: 'Formatting tools', icon: <Type size={18} />, action: () => { setShowFormattingTools(true); requestAnimationFrame(() => textareaRef.current?.focus()); }, selected: showFormattingTools || undefined },
-    { label: 'Create a poll', icon: <BarChart3 size={18} />, action: togglePollComposer, disabled: !canCreatePoll, description: actions.poll.reason ?? undefined },
-    { label: 'Schedule message', icon: <Clock3 size={18} />, action: () => setShowScheduleComposer((value) => !value), disabled: showPollComposer || !actions.schedule.allowed, description: actions.schedule.reason ?? undefined },
-    ...(guildId ? [{ label: 'Stickers', icon: <Image size={18} />, action: () => { setShowStickerPicker(true); setShowGifPicker(false); setShowEmojiPicker(false); }, disabled: showPollComposer || !canSendMessages, description: actions.send.reason ?? undefined }] : []),
-    { label: 'GIFs', icon: <Image size={18} />, action: () => { setShowGifPicker(true); setShowEmojiPicker(false); setShowStickerPicker(false); }, disabled: showPollComposer || !canSendMessages, description: actions.send.reason ?? undefined },
-    ...(ribbon || narrow || compact
-      ? [{ label: 'Emoji', icon: <Smile size={18} />, action: () => { setShowEmojiPicker(true); setShowGifPicker(false); setShowStickerPicker(false); }, disabled: showPollComposer }]
-      : []),
-  ];
+  // Files from anywhere else on the page (IX-15's drop target over main) queue
+  // here, through the same checks as a drop on the box itself.
+  const addFiles = (files: File[]) => {
+    if (files.length === 0) return;
+    if (showPollComposer) {
+      setSubmitError('Disable poll composer before adding attachments.');
+      return;
+    }
+    if (!canAttachFiles) { setSubmitError(actions.attach.reason); return; }
+    setStagedFiles((prev) => [...prev, ...files]);
+  };
+  const addFilesRef = useRef(addFiles);
+  addFilesRef.current = addFiles;
+  useEffect(() => registerComposerFiles(channelId, (files) => addFilesRef.current(files)), [channelId]);
 
   const [blockerSettled, setBlockerSettled] = useState(false);
   useEffect(() => {
@@ -1294,6 +1397,40 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
     const timer = window.setTimeout(() => setBlockerSettled(true), 400);
     return () => window.clearTimeout(timer);
   }, [composerAction.allowed, composerAction.reason]);
+
+  // A channel this person cannot post in has no message box: one centered
+  // line says why (§4.12). Only the server's own answer decides that, never a
+  // readiness dip of the messaging runtime, an encryption step this person can
+  // take, or an answer that has not arrived yet.
+  const serverSend = serverActions.send;
+  const readOnly = !serverSend.allowed && !encrypted && !groupDmRefusal && !capabilityError && !actionsLoading;
+  const readOnlyLine = !readOnly
+    ? null
+    : serverSend.reason === PERMISSION_REFUSAL
+      ? channelType === ChannelType.Announcement
+        ? `Only moderators can post in ${channelName ?? 'this channel'}`
+        : `You can't send messages in ${channelName ?? 'this channel'}`
+      : serverSend.reason;
+
+  const open = !readOnly && (
+    focused
+    || content.length > 0
+    || stagedFiles.length > 0
+    || Boolean(replyingTo)
+    || showFormattingTools
+    || picker !== null
+    || showPollComposer
+    || showScheduleComposer
+  );
+  openRef.current = open;
+  useComposerShape(
+    { box: composerShellRef, top: shapeTops, mid: shapeMids, head: headRef, tools: toolsMoveRef },
+    { open: openRef, hold: holdShapeRef, active: !readOnly },
+  );
+
+  // The halo is the place's hue (§2.2): the server's, or People's.
+  const guildHue = useGuildStore((state) => (guildId ? state.guilds.find((guild) => guild.id === guildId)?.hue ?? null : null));
+  const hue = guildId ? serverHue({ id: guildId, hue: guildHue }) : PEOPLE_HUE;
 
   const busy = uploading || creatingPoll || schedulingMessage || sending;
   // A spinner is for a wait a person can feel. A plain send is over in a frame
@@ -1307,12 +1444,15 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
     (showScheduleComposer
       ? !content.trim() || !scheduledAt
       : !showPollComposer && !content.trim() && stagedFiles.length === 0);
+  // §5.13: quiet until there is something to send, then cream.
+  const hasSomething = showScheduleComposer
+    ? Boolean(content.trim() && scheduledAt)
+    : showPollComposer || content.trim().length > 0 || stagedFiles.length > 0;
   const nearLimit = content.length > MAX_MESSAGE_LENGTH * 0.9;
   const overLimit = content.length > MAX_MESSAGE_LENGTH;
-  // The tools the capsule has no room for live in the "+" menu: on a phone, in
-  // the Stage's ribbon, in a thread panel, and in any capsule narrower than
-  // COMPACT_CAPSULE_MAX (the 420px side chat included).
-  const foldTools = ribbon || narrow || compact;
+  // In a box too narrow for the words (the call's chat column, a thread
+  // beside the conversation, a phone) the tool chips keep only their glyphs.
+  const iconTools = ribbon || narrow || compact;
   const fullLabel = replyingTo
     ? `Reply to ${replyingTo.author}`
     : composerPlaceholder(channelName, conversationKind);
@@ -1321,21 +1461,336 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
     : showScheduleComposer
       ? `Schedule a message for ${channelName ?? 'this conversation'}`
       : ribbon || narrow
-        ? // The ribbon and the thread panel are narrower than a sentence, and the
-          // room they belong to is named in the heading directly above them.
+        ? // A box narrower than a sentence, whose conversation is named in the
+          // heading directly above it.
           'Say something'
         : replyingTo
-          ? replyPlaceholder(replyingTo.author, foldTools)
+          ? replyPlaceholder(replyingTo.author, iconTools)
           : composerPlaceholder(channelName, conversationKind, phoneWidth);
   const sendLabel = showScheduleComposer
     ? (schedulingMessage ? 'Scheduling message' : 'Schedule message')
     : 'Send message';
+  const slowMode = slowModeLabel(channel?.rate_limit_per_user);
+
+  const openPicker = (tab: ComposerPickerTab) => {
+    setCompletion(null);
+    setPicker((current) => (current === tab ? null : tab));
+  };
+  // Closing the picker from inside it (Escape, a choice) gives the words their
+  // focus back, synchronously, so a press outside still wins the focus it takes.
+  const closePicker = useCallback(() => {
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && composerShellRef.current?.contains(active)) textareaRef.current?.focus();
+    setPicker(null);
+  }, []);
+
+  const openSendMenu = () => {
+    setPicker(null);
+    setCompletion(null);
+    setSendMenu(true);
+  };
+  const clearLongPress = () => {
+    if (longPress.current.timer !== null) window.clearTimeout(longPress.current.timer);
+    longPress.current.timer = null;
+  };
+  useEffect(() => () => clearLongPress(), []);
+
+  // Right-click or a long press on Send (§8.4): send later, and the list of
+  // what is scheduled, which is a sheet.
+  const sendMenuEntries: IxMenuEntry[] = [
+    {
+      type: 'item',
+      id: 'send-later',
+      label: 'Send later…',
+      icon: <ClockGlyph size={16} />,
+      disabled: !actions.schedule.allowed,
+      description: actions.schedule.allowed ? undefined : actions.schedule.reason ?? undefined,
+      onSelect: () => {
+        if (showPollComposer) resetPollComposer();
+        setShowScheduleComposer(true);
+        // The one thing left to choose is when.
+        requestAnimationFrame(() => scheduleAtRef.current?.focus());
+      },
+    },
+    {
+      type: 'item',
+      id: 'scheduled',
+      label: 'Scheduled messages',
+      hint: scheduledCount > 0 ? String(scheduledCount) : undefined,
+      icon: <IxGlyph name="event" size={16} />,
+      onSelect: () => setShowScheduledPanel(true),
+    },
+  ];
+
+  type Tool = { id: string; label: string; glyph: IxGlyphName | 'format' | null; onClick: () => void; pressed?: boolean };
+  const tools: Tool[] = [];
+  if (canAttachFiles && canSendMessages) tools.push({ id: 'attach', label: 'Attach', glyph: 'attach', onClick: attachFiles });
+  if (canSendMessages) tools.push({ id: 'gif', label: 'GIF', glyph: null, onClick: () => openPicker('gif'), pressed: picker === 'gif' });
+  if (canCreatePoll) tools.push({ id: 'poll', label: 'Poll', glyph: 'poll', onClick: togglePollComposer, pressed: showPollComposer });
+  if (canCreateEvents) tools.push({ id: 'event', label: 'Event', glyph: 'event', onClick: () => setShowEventForm(true) });
+  tools.push({
+    id: 'format',
+    label: 'Format',
+    glyph: 'format',
+    onClick: () => {
+      setShowFormattingTools(true);
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    },
+  });
+
+  const completionLabel = completion?.kind === 'channel' ? 'Channels' : completion?.kind === 'emoji' ? 'Emoji' : 'People and roles';
+  const completionError = completion?.kind === 'mention' ? composerRolesError : completion?.kind === 'emoji' ? serverEmojiError : null;
+  const showCompletion = completion !== null && (completionResults.length > 0 || Boolean(completionError));
+
+  const renderCompletionRow = (option: CompletionOption): ReactNode => {
+    switch (option.kind) {
+      case 'member': {
+        const name = displayName(option.member.user, option.member.nick);
+        return (
+          <>
+            <Avatar userId={option.member.user.id} name={name} avatar={option.member.user.avatar_hash ?? null} size={24} />
+            <span className="ix-complete__name">{name}</span>
+            {name !== option.member.user.username && <span className="ix-complete__meta">@{option.member.user.username}</span>}
+          </>
+        );
+      }
+      case 'role':
+        return (
+          <>
+            <span className="ix-complete__mark" aria-hidden>
+              <span
+                className="ix-complete__dot"
+                style={option.role.color === 0 ? undefined : { backgroundColor: roleColorToHex(option.role.color) }}
+              />
+            </span>
+            <span className="ix-complete__name">@{option.role.name}</span>
+            <span className="ix-complete__meta">
+              {option.count < 0 ? 'Loading…' : `${option.count} ${option.count === 1 ? 'member' : 'members'}`}
+            </span>
+          </>
+        );
+      case 'channel':
+        return (
+          <>
+            <span className="ix-complete__mark ix-complete__mark--text" aria-hidden>#</span>
+            <span className="ix-complete__name">{option.name}</span>
+          </>
+        );
+      case 'emoji':
+        return (
+          <>
+            <span className="ix-complete__mark ix-complete__mark--emoji" aria-hidden>{option.emoji}</span>
+            <span className="ix-complete__name">:{option.name}:</span>
+          </>
+        );
+      case 'custom-emoji':
+        return (
+          <>
+            <span className="ix-complete__mark" aria-hidden>
+              <img className="ix-complete__img" src={guildId ? buildGuildEmojiImageUrl(guildId, option.id) : ''} alt="" />
+            </span>
+            <span className="ix-complete__name">:{option.name}:</span>
+            <span className="ix-complete__meta">This server</span>
+          </>
+        );
+    }
+  };
+
+  // Everything that sits directly above the box: notices and the cards that
+  // stand in for a send (poll, send later), all at the box's width.
+  const stack = (
+    <div className="ix-composer__stack">
+      {showCommandThinking && (
+        <div role="status" aria-live="polite" className="ix-composer__note">
+          <Loader2 size={14} className="shrink-0 animate-spin" />
+          <span>Waiting for command response…</span>
+        </div>
+      )}
+      {!readOnly && !composerAction.allowed && blockerSettled && (
+        <div role="status" className="ix-composer__note">
+          <span>
+            {composerAction.reason}
+            {!groupDmRefusal && encrypted && encryption === 'setup' && <Link className="ix-composer__link" to={`/setup?${new URLSearchParams({ migrate: '1', server: scope.serverId, user: scope.userId, returnTo: window.location.pathname + window.location.search })}`}>Set up encryption</Link>}
+            {!groupDmRefusal && encrypted && encryption === 'unlock' && <Link className="ix-composer__link" to={`/unlock?${new URLSearchParams({ returnTo: window.location.pathname + window.location.search })}`}>Unlock encryption</Link>}
+            {/* A second device — a fresh browser, a new laptop — signs in and
+                lands here holding no identity, or a different one. Without this
+                it was the one encryption blocker with no route out: nothing but
+                "Check again". Setup is not the answer either — it refuses when
+                the account already has an identity, and tells the user to restore
+                the recovery phrase — so link straight at the page that does it. */}
+            {!groupDmRefusal && encrypted && encryption === 'identity_mismatch' && <Link className="ix-composer__link" to="/recover">Restore your identity</Link>}
+            {/* A blocker can be resolved by someone else (a recipient finishing
+                encryption setup, a restored permission), so the check is always
+                repeatable from here instead of only after a request failure.
+                A group waiting on somebody's enrollment is not a server answer
+                to re-ask: the missing key is the other person's to publish. */}
+            {!groupDmRefusal && <button type="button" className="ix-composer__link" onClick={refreshActions}>{capabilityError ? 'Retry' : 'Check again'}</button>}
+          </span>
+        </div>
+      )}
+      {!readOnly && isAnonymousChannel && (
+        <div className="ix-composer__note">
+          <GlyphFrame size={14}>
+            <path d="M3 3l18 18M10.6 5.1A9.7 9.7 0 0 1 12 5c5 0 8.5 4.2 9.5 7-.4 1.1-1.2 2.5-2.4 3.7M6.3 6.3C4.4 7.6 3.1 9.6 2.5 12c1 2.8 4.5 7 9.5 7 1.8 0 3.4-.5 4.7-1.3" />
+          </GlyphFrame>
+          <span>Messages in this channel are posted anonymously</span>
+        </div>
+      )}
+
+      {!readOnly && showPollComposer && (
+        <div className="ix-composer__card" data-card="poll">
+          <div className="ix-composer__card-head">
+            <span className="ix-composer__card-title">
+              <IxGlyph name="poll" size={16} />
+              Poll
+            </span>
+            <button type="button" className="ix-composer__text-btn" onClick={togglePollComposer}>
+              Close
+            </button>
+          </div>
+
+          <label className="ix-composer__field">
+            <span className="ix-composer__label">Question</span>
+            <Input
+              type="text"
+              maxLength={300}
+              value={pollQuestion}
+              onChange={(e) => setPollQuestion(e.target.value)}
+              placeholder="What should everyone weigh in on?"
+            />
+          </label>
+
+          <div className="ix-composer__options">
+            {pollOptions.map((option, index) => (
+              <div key={index} className="ix-composer__option">
+                <Input
+                  type="text"
+                  value={option}
+                  maxLength={100}
+                  onChange={(e) => updatePollOption(index, e.target.value)}
+                  placeholder={`Option ${index + 1}`}
+                />
+                <button
+                  type="button"
+                  onClick={() => removePollOption(index)}
+                  disabled={pollOptions.length <= 2}
+                  className="ix-composer__icon"
+                  aria-label={`Remove option ${index + 1}`}
+                  title={`Remove option ${index + 1}`}
+                >
+                  <IxGlyph name="x" size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <div className="ix-composer__card-foot">
+            <button type="button" className="ix-chip" onClick={addPollOption} disabled={pollOptions.length >= 10}>
+              <IxGlyph name="plus" size={14} />
+              Add option
+            </button>
+            <label className="ix-composer__check">
+              <input
+                type="checkbox"
+                checked={pollAllowMultiselect}
+                onChange={(e) => setPollAllowMultiselect(e.target.checked)}
+              />
+              Allow multiple answers
+            </label>
+            <label className="ix-composer__check">
+              <span>Ends after</span>
+              <span className="ix-composer__select">
+                <Select
+                  value={pollDurationMinutes}
+                  onChange={(e) => setPollDurationMinutes(Number(e.target.value))}
+                >
+                  {POLL_DURATION_OPTIONS.map((option) => (
+                    <option key={option.minutes} value={option.minutes}>
+                      {option.label}
+                    </option>
+                  ))}
+                </Select>
+              </span>
+            </label>
+          </div>
+        </div>
+      )}
+
+      {!readOnly && showScheduleComposer && (
+        <div className="ix-composer__card" data-card="schedule">
+          <label className="ix-composer__field">
+            <span className="ix-composer__label">Send at</span>
+            <Input
+              ref={scheduleAtRef}
+              type="datetime-local"
+              value={scheduledAt}
+              onChange={(e) => setScheduledAt(e.target.value)}
+              min={toDatetimeLocalValue(Date.now() + SCHEDULED_MESSAGE_MIN_LEAD_MS)}
+            />
+          </label>
+          <div className="ix-composer__card-foot ix-composer__card-foot--split">
+            <button type="button" className="ix-composer__text-btn" onClick={() => setShowScheduledPanel(true)}>
+              {scheduledCount > 0 ? `Scheduled messages (${scheduledCount})` : 'Scheduled messages'}
+            </button>
+            <button type="button" className="ix-composer__text-btn" onClick={() => setShowScheduleComposer(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      <MessagingRecoveryNotice runtime={messagingRuntime} encryptedConversation={!guildId} channelId={channelId} />
+      <MessagingQueuePanel runtime={messagingRuntime} channelId={channelId} />
+      {draftError && (
+        <div role="alert" className="ix-composer__note ix-composer__note--error">
+          <span>{draftError}</span>
+          <button type="button" className="ix-composer__link" onClick={() => void retrySave().catch(() => {})}>Retry saving draft</button>
+        </div>
+      )}
+      {/* The blocker row above already carries the reason a send was refused —
+          for a blocked sender, word for word. Printing it again underneath said
+          the same sentence twice, stacked, which reads as two problems. */}
+      {!readOnly && submitError && submitError !== composerAction.reason && (
+        <div className="ix-composer__note ix-composer__note--error" role="alert">
+          {submitError}
+        </div>
+      )}
+    </div>
+  );
+
+  const scheduledSheet = (
+    <ScheduledMessagesPanel
+      open={showScheduledPanel}
+      channelId={channelId}
+      channelName={channelName}
+      onClose={() => setShowScheduledPanel(false)}
+      onCountChange={setScheduledCount}
+    />
+  );
+
+  if (readOnly) {
+    return (
+      <div
+        className={cn('ix-composer', narrow && 'ix-composer--narrow')}
+        data-testid="ix-composer"
+        data-ix-composer-open="false"
+        data-read-only="true"
+      >
+        {stack}
+        <p role="status" className="ix-composer__readonly">{readOnlyLine}</p>
+        {scheduledSheet}
+      </div>
+    );
+  }
 
   return (
     <div
-      className={cn('glass-composer', ribbon && 'glass-composer--ribbon', narrow && 'glass-composer--narrow')}
-      data-compact={foldTools ? 'true' : undefined}
+      className={cn('ix-composer', narrow && 'ix-composer--narrow')}
+      data-testid="ix-composer"
+      data-ix-composer-open={open ? 'true' : 'false'}
+      data-icon-tools={iconTools ? 'true' : undefined}
       data-drag-over={isDragOver ? 'true' : undefined}
+      style={{ '--ix-hue': hue } as CSSProperties}
       onDragOver={(e) => {
         if (!canAttachFiles || !canSendMessages) return;
         e.preventDefault();
@@ -1344,259 +1799,271 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
       onDragLeave={() => setIsDragOver(false)}
       onDrop={canAttachFiles && canSendMessages ? handleDrop : undefined}
     >
-      <div className="glass-composer__stack">
-        {showCommandThinking && (
-          <div role="status" aria-live="polite" className="glass-composer__note">
-            <Loader2 size={14} className="shrink-0 animate-spin" />
-            <span>Waiting for command response…</span>
-          </div>
-        )}
-        {!composerAction.allowed && blockerSettled && (
-          <div role="status" className="glass-composer__note">
-            <span>
-              {composerAction.reason}
-              {!groupDmRefusal && encrypted && encryption === 'setup' && <Link className="ml-2 underline" to={`/setup?${new URLSearchParams({ migrate: '1', server: scope.serverId, user: scope.userId, returnTo: window.location.pathname + window.location.search })}`}>Set up encryption</Link>}
-              {!groupDmRefusal && encrypted && encryption === 'unlock' && <Link className="ml-2 underline" to={`/unlock?${new URLSearchParams({ returnTo: window.location.pathname + window.location.search })}`}>Unlock encryption</Link>}
-              {/* A second device — a fresh browser, a new laptop — signs in and
-                  lands here holding no identity, or a different one. Without this
-                  it was the one encryption blocker with no route out: nothing but
-                  "Check again". Setup is not the answer either — it refuses when
-                  the account already has an identity, and tells the user to restore
-                  the recovery phrase — so link straight at the page that does it. */}
-              {!groupDmRefusal && encrypted && encryption === 'identity_mismatch' && <Link className="ml-2 underline" to="/recover">Restore your identity</Link>}
-              {/* A blocker can be resolved by someone else (a recipient finishing
-                  encryption setup, a restored permission), so the check is always
-                  repeatable from here instead of only after a request failure. */}
-              {/* A group waiting on somebody's enrollment is not a server answer to
-                  re-ask: the capability call already said the group is encrypted,
-                  and the missing key is the other person's to publish. */}
-              {!groupDmRefusal && <button type="button" className="ml-2 underline" onClick={refreshActions}>{capabilityError ? 'Retry' : 'Check again'}</button>}
-            </span>
-          </div>
-        )}
-        {isAnonymousChannel && (
-          <div className="glass-composer__note">
-            <EyeOff size={14} className="shrink-0" />
-            <span>Messages in this channel are posted anonymously</span>
-          </div>
-        )}
-
-        {stagedFiles.length > 0 && (
-          <div className="flex flex-col gap-1">
-            <div className="flex gap-2 overflow-x-auto pb-1">
-              {stagedFiles.map((file, i) => {
-                const overLimit = file.size > maxUploadSize;
-                return (
-                  <div
-                    key={i}
-                    className={cn('glass-composer__file', overLimit && 'glass-composer__file--over')}
-                    style={{ maxWidth: 'min(220px, 60vw)' }}
-                  >
-                    {canPreviewImageFile(file) ? (
-                      <img
-                        src={stagedImagePreviews[i] || ''}
-                        alt={file.name}
-                        className="h-10 w-10 rounded-[var(--radius-chip)] object-cover"
-                      />
-                    ) : (
-                      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-chip)] bg-bg-well text-text-muted">
-                        <FileText size={18} />
-                      </span>
-                    )}
-                    <div className="min-w-0">
-                      <div className="truncate text-label text-text-primary">{file.name}</div>
-                      <div className={`text-meta tabular-nums ${overLimit ? 'text-accent-danger' : 'text-text-muted'}`}>
-                        {formatFileSize(file.size)}
-                        {overLimit ? ' · exceeds limit' : ''}
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => removeFile(i)}
-                      className="glass-composer__icon glass-focusable"
-                      aria-label={`Remove ${file.name}`}
-                      title={`Remove ${file.name}`}
-                    >
-                      <X size={13} aria-hidden />
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-            <div className="px-0.5 text-meta text-text-faint">
-              Max file size <span className="pc-mono">{formatFileSize(maxUploadSize)}</span>
-            </div>
-          </div>
-        )}
-
-        {showPollComposer && (
-          <div className="glass-composer__card">
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <span className="inline-flex items-center gap-1.5 text-section text-text-secondary">
-                <BarChart3 size={14} className="text-accent-primary" />
-                Poll
-              </span>
-              <Button variant="ghost" size="sm" onClick={togglePollComposer}>
-                Close
-              </Button>
-            </div>
-
-            <label className="block">
-              <span className="text-label text-text-secondary">Question</span>
-              <Input
-                type="text"
-                maxLength={300}
-                value={pollQuestion}
-                onChange={(e) => setPollQuestion(e.target.value)}
-                className="mt-1.5"
-                placeholder="What should everyone weigh in on?"
-              />
-            </label>
-
-            <div className="mt-3 flex flex-col gap-2">
-              {pollOptions.map((option, index) => (
-                <div key={index} className="flex items-center gap-2">
-                  <Input
-                    type="text"
-                    value={option}
-                    maxLength={100}
-                    onChange={(e) => updatePollOption(index, e.target.value)}
-                    placeholder={`Option ${index + 1}`}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => removePollOption(index)}
-                    disabled={pollOptions.length <= 2}
-                    className="glass-composer__icon glass-focusable"
-                    aria-label={`Remove option ${index + 1}`}
-                  >
-                    <MinusCircle size={16} aria-hidden />
-                  </button>
-                </div>
-              ))}
-            </div>
-
-            <div className="mt-3 flex flex-wrap items-center gap-3">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={addPollOption}
-                disabled={pollOptions.length >= 10}
-              >
-                <PlusCircle size={14} className="mr-1.5" />
-                Add option
-              </Button>
-              <label className="inline-flex items-center gap-2 text-label text-text-secondary">
-                <input
-                  type="checkbox"
-                  checked={pollAllowMultiselect}
-                  onChange={(e) => setPollAllowMultiselect(e.target.checked)}
-                  className="h-4 w-4 rounded-window accent-[color:var(--accent-primary)]"
-                />
-                Allow multiple answers
-              </label>
-              <label className="inline-flex items-center gap-2 text-label text-text-secondary">
-                <span>Duration</span>
-                <span className="inline-block w-40">
-                  <Select
-                    value={pollDurationMinutes}
-                    onChange={(e) => setPollDurationMinutes(Number(e.target.value))}
-                  >
-                    {POLL_DURATION_OPTIONS.map((option) => (
-                      <option key={option.minutes} value={option.minutes}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </Select>
-                </span>
-              </label>
-            </div>
-          </div>
-        )}
-
-        {showScheduleComposer && (
-          <div className="glass-composer__card">
-            <label className="block">
-              <span className="text-section text-text-secondary">Send at</span>
-              <Input
-                type="datetime-local"
-                value={scheduledAt}
-                onChange={(e) => setScheduledAt(e.target.value)}
-                className="mt-1.5"
-                min={toDatetimeLocalValue(Date.now() + SCHEDULED_MESSAGE_MIN_LEAD_MS)}
-              />
-            </label>
-            <div className="mt-2 flex items-center justify-between gap-2">
-              <Button
-                variant="link"
-                size="sm"
-                className="h-auto px-0"
-                onClick={() => setShowScheduledPanel(true)}
-              >
-                {scheduledCount > 0 ? `View scheduled (${scheduledCount})` : 'View scheduled'}
-              </Button>
-              <Button variant="ghost" size="sm" onClick={() => setShowScheduleComposer(false)}>
-                Cancel
-              </Button>
-            </div>
-          </div>
-        )}
-
-        {showScheduledPanel && (
-          <ScheduledMessagesPanel
-            channelId={channelId}
-            channelName={channelName}
-            onClose={() => setShowScheduledPanel(false)}
-            onCountChange={setScheduledCount}
-          />
-        )}
-
-        <MessagingRecoveryNotice runtime={messagingRuntime} encryptedConversation={!guildId} channelId={channelId} />
-        <MessagingQueuePanel runtime={messagingRuntime} channelId={channelId} />
-        {draftError && (
-          <div role="alert" className="flex items-center justify-between gap-2 text-meta text-accent-danger">
-            <span>{draftError}</span>
-            <Button variant="ghost" onClick={() => void retrySave().catch(() => {})}>Retry saving draft</Button>
-          </div>
-        )}
-        {/* The blocker row above already carries the reason a send was refused —
-            for a blocked sender, word for word. Printing it again underneath said
-            the same sentence twice, stacked, which reads as two problems. */}
-        {submitError && submitError !== composerAction.reason && (
-          <div className="glass-composer__note glass-composer__note--error" role="alert">
-            {submitError}
-          </div>
-        )}
-      </div>
+      {stack}
 
       <div
         ref={composerShellRef}
-        className="glass-composer__capsule"
+        className="ix-composer__box glass-composer__capsule"
+        data-open={open ? 'true' : 'false'}
+        onFocus={() => setFocused(true)}
+        onBlur={(event) => {
+          const next = event.relatedTarget as Node | null;
+          if (next && event.currentTarget.contains(next)) return;
+          setFocused(false);
+        }}
+        onMouseDown={(event) => {
+          // A press on the box's empty space puts the caret in the text (the
+          // whole box reads as one field), without stealing a control's press.
+          const target = event.target as HTMLElement;
+          if (target.closest('button, a, input, textarea, select, [role="dialog"], [role="listbox"]')) return;
+          event.preventDefault();
+          textareaRef.current?.focus();
+        }}
       >
-        {nearLimit && (
-          <span className="glass-composer__count" data-over={overLimit ? 'true' : undefined}>
-            <span className="pc-mono">{content.length}/{MAX_MESSAGE_LENGTH}</span>
+        {/* The shape: three slices, so the corners never stretch (§5.12). The
+            fill is drawn solid inside one translucent group, so slices that
+            overlap by a pixel never show a seam while they move; the edges and
+            the ring are their own slices over it. */}
+        <span className="ix-composer__shape" aria-hidden>
+          <span className="ix-composer__fill">
+            <span ref={fillTopRef} className="ix-composer__slice ix-composer__slice--top" />
+            <span ref={fillMidRef} className="ix-composer__slice ix-composer__slice--mid" />
+            <span className="ix-composer__slice ix-composer__slice--bottom" />
+          </span>
+          <span className="ix-composer__edges">
+            <span ref={capTopRef} className="ix-composer__slice ix-composer__slice--top" />
+            <span ref={capMidRef} className="ix-composer__slice ix-composer__slice--mid" />
+            <span className="ix-composer__slice ix-composer__slice--bottom" />
+          </span>
+        </span>
+
+        <div ref={headRef} className="ix-composer__head">
+          {stagedFiles.length > 0 && (
+            <ul className="ix-composer__queue" aria-label="Attachments">
+              {stagedFiles.map((file, i) => {
+                const tooLarge = file.size > maxUploadSize;
+                const image = canPreviewImageFile(file);
+                const extension = file.name.includes('.') ? file.name.split('.').pop()!.slice(0, 4).toUpperCase() : 'FILE';
+                return (
+                  <li
+                    key={i}
+                    className={cn('ix-composer__file', image && 'ix-composer__file--image')}
+                    data-over={tooLarge ? 'true' : undefined}
+                    title={`${file.name} · ${formatFileSize(file.size)}${tooLarge ? ` · larger than ${formatFileSize(maxUploadSize)}` : ''}`}
+                  >
+                    {image ? (
+                      <img src={stagedImagePreviews[i] || ''} alt={file.name} className="ix-composer__thumb" />
+                    ) : (
+                      <>
+                        <span className="ix-composer__ext" aria-hidden>{extension}</span>
+                        <span className="ix-composer__file-text">
+                          <span className="ix-composer__file-name">{file.name}</span>
+                          <span className="ix-composer__file-size" data-over={tooLarge ? 'true' : undefined}>
+                            {tooLarge ? `Over ${formatFileSize(maxUploadSize)}` : formatFileSize(file.size)}
+                          </span>
+                        </span>
+                      </>
+                    )}
+                    {image && tooLarge && <span className="sr-only">Larger than {formatFileSize(maxUploadSize)}</span>}
+                    <button
+                      type="button"
+                      onClick={() => removeFile(i)}
+                      className="ix-composer__unqueue"
+                      aria-label={`Remove ${file.name}`}
+                      title={`Remove ${file.name}`}
+                    >
+                      <IxGlyph name="x" size={12} />
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+
+          <div className="ix-composer__row">
+            <textarea
+              ref={textareaRef}
+              value={showPollComposer ? '' : content}
+              onChange={(e) => {
+                setContent(e.target.value);
+                detectMentionQuery(e.target.value, e.target.selectionStart);
+                triggerTyping();
+              }}
+              onKeyDown={handleKeyDown}
+              onPaste={handlePaste}
+              onSelect={(e) => {
+                const target = e.currentTarget;
+                if (completion) detectMentionQuery(target.value, target.selectionStart);
+              }}
+              placeholder={placeholder}
+              aria-label={fullLabel}
+              aria-autocomplete="list"
+              aria-controls={showCompletion ? `ix-complete-${channelId}` : undefined}
+              aria-activedescendant={showCompletion && completionResults[completionIndex] ? `ix-complete-${channelId}-${completionIndex}` : undefined}
+              rows={1}
+              maxLength={MAX_MESSAGE_LENGTH}
+              disabled={showPollComposer}
+              data-composer-input=""
+              // A placeholder with a long channel name can be wider than a
+              // phone's box. Clipping the PLACEHOLDER to one line keeps the box
+              // at its 52px; a real draft still wraps and grows.
+              className="ix-composer__input"
+            />
+
+            <button
+              type="button"
+              data-composer-picker-toggle="emoji"
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={() => openPicker('emoji')}
+              disabled={showPollComposer}
+              className="ix-composer__emoji"
+              aria-label="Emoji"
+              title="Emoji"
+              aria-haspopup="dialog"
+              aria-expanded={picker !== null}
+            >
+              <EmojiGlyph />
+            </button>
+
+            <button
+              ref={sendButtonRef}
+              type="button"
+              onClick={() => {
+                if (longPress.current.fired) { longPress.current.fired = false; return; }
+                void handleSubmit();
+              }}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                openSendMenu();
+              }}
+              onPointerDown={(event) => {
+                if (event.pointerType !== 'touch') return;
+                clearLongPress();
+                longPress.current.fired = false;
+                longPress.current.timer = window.setTimeout(() => {
+                  longPress.current.timer = null;
+                  longPress.current.fired = true;
+                  openSendMenu();
+                }, LONG_PRESS_MS);
+              }}
+              onPointerUp={clearLongPress}
+              onPointerCancel={clearLongPress}
+              onPointerLeave={clearLongPress}
+              disabled={sendDisabled}
+              // Quiet until there is something to send, then cream: the one
+              // primary action on the surface (§1.4, §5.13). It does not scale
+              // on press. The send flight's release reads its quiet fill and ink
+              // from this element (`releaseSend`).
+              className="ix-composer__send"
+              data-ready={hasSomething ? 'true' : 'false'}
+              aria-label={sendLabel}
+              title={sendLabel}
+            >
+              {showsSpinner ? (
+                <Loader2 size={17} className="animate-spin" aria-hidden />
+              ) : showScheduleComposer ? (
+                <ClockGlyph />
+              ) : (
+                <IxGlyph name="send" size={18} />
+              )}
+            </button>
+          </div>
+        </div>
+
+        {/* The tools row: under the input row while the box is open. Its clip
+            is the box's foot, so on closing it leaves through the bottom edge. */}
+        <div className="ix-composer__tools-clip" aria-hidden={!open || undefined} inert={!open || undefined}>
+          <div ref={toolsMoveRef} className="ix-composer__tools-move">
+            <div className="ix-composer__tools" data-format={showFormattingTools ? 'true' : undefined}>
+              {replyingTo && (
+                <span
+                  role="group"
+                  aria-label={`Replying to ${replyingTo.author}`}
+                  title={replyingTo.content ? `${replyingTo.author}: ${replyingTo.content}` : undefined}
+                  className="ix-chip ix-composer__reply glass-composer__reply"
+                >
+                  <span className="ix-composer__reply-text">
+                    {iconTools ? replyingTo.author : `Replying to ${replyingTo.author}`}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={onCancelReply}
+                    className="ix-composer__reply-x"
+                    aria-label="Cancel reply"
+                    title="Cancel reply"
+                  >
+                    <IxGlyph name="x" size={12} />
+                  </button>
+                </span>
+              )}
+              {showFormattingTools ? (
+                <>
+                  <MarkdownToolbar textareaRef={textareaRef} onContentChange={setContent} />
+                  <button
+                    type="button"
+                    className="ix-chip ix-composer__done"
+                    onClick={() => {
+                      setShowFormattingTools(false);
+                      requestAnimationFrame(() => textareaRef.current?.focus());
+                    }}
+                  >
+                    Done
+                  </button>
+                </>
+              ) : (
+                tools.map((tool) => (
+                  <button
+                    key={tool.id}
+                    type="button"
+                    className="ix-chip"
+                    data-tool={tool.id}
+                    aria-label={iconTools && tool.glyph ? tool.label : undefined}
+                    aria-pressed={tool.pressed === undefined ? undefined : tool.pressed}
+                    title={iconTools && tool.glyph ? tool.label : undefined}
+                    data-composer-picker-toggle={tool.id === 'gif' ? 'gif' : undefined}
+                    onMouseDown={tool.id === 'gif' ? (e) => e.stopPropagation() : undefined}
+                    onClick={tool.onClick}
+                  >
+                    {tool.glyph === 'format' ? <FormatGlyph /> : tool.glyph ? <IxGlyph name={tool.glyph} size={14} /> : null}
+                    {(!iconTools || !tool.glyph) && tool.label}
+                  </button>
+                ))
+              )}
+              {(slowMode || nearLimit) && (
+                <span className="ix-composer__tail">
+                  {slowMode && (
+                    <span className="ix-composer__slow" title={`One message every ${channel?.rate_limit_per_user ?? 0} seconds`}>
+                      {slowMode}
+                    </span>
+                  )}
+                  {nearLimit && (
+                    <span className="ix-composer__count" data-over={overLimit ? 'true' : undefined}>
+                      {content.length}/{MAX_MESSAGE_LENGTH}
+                    </span>
+                  )}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Upload progress: an indeterminate sweep along the foot. */}
+        {uploading && (
+          <span className="ix-composer__progress" aria-hidden>
+            {!reduceMotion && <span className="pc-sweep block h-full w-1/3 rounded-full bg-accent-primary" />}
           </span>
         )}
 
-        {/* Upload progress — indeterminate sweep while attachments upload. */}
-        {uploading && (
-          reduceMotion ? (
-            <span className="glass-composer__progress" />
-          ) : (
-            <span className="glass-composer__progress">
-              <span className="pc-sweep block h-full w-1/3 rounded-full bg-accent-primary" />
-            </span>
-          )
-        )}
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          className="hidden"
+          tabIndex={-1}
+          onChange={handleFileSelect}
+        />
 
-        {showFormattingTools && (
-          <div className="pc-pop-in pc-floating absolute bottom-full left-2 right-2 z-10 mb-2 p-1 [--pc-origin:50%_100%]">
-            <MarkdownToolbar textareaRef={textareaRef} onContentChange={setContent} />
-          </div>
-        )}
-
-        {/* Slash command popup */}
+        {/* Slash commands: their own popover, the same surface. */}
         {guildId && (
           <SlashCommandPopup
             query={slashQuery ?? ''}
@@ -1624,255 +2091,95 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
           />
         )}
 
-        {/* @mention autocomplete */}
-        {mentionQuery !== null && (mentionResults.length > 0 || composerRolesError) && (
-          <div className="pc-pop-in pc-floating absolute bottom-full left-2 right-2 z-20 mb-2 max-h-64 overflow-y-auto p-1 [--pc-origin:50%_100%]">
-            {composerRolesError && (
-              <p className="px-2 py-1 text-meta text-accent-danger">{composerRolesError}</p>
-            )}
-            {mentionResults.map((option, i) => (
+        {/* @ / # / : completion. */}
+        {showCompletion && (
+          <div className="ix-complete" role="listbox" id={`ix-complete-${channelId}`} aria-label={completionLabel}>
+            {completionError && <p role="alert" className="ix-complete__error">{completionError}</p>}
+            {completionResults.map((option, i) => (
               <Fragment key={`${option.kind}-${option.id}`}>
-              {option.kind === 'role' && mentionResults[i - 1]?.kind !== 'role' && (
-                <p className="px-2 pb-1 pt-2 text-section text-text-faint" aria-hidden>Roles</p>
-              )}
-              <button
-                type="button"
-                className={cn(
-                  'pc-focusable flex w-full items-center gap-2.5 rounded-[var(--radius-control)] px-2 py-1.5 text-left',
-                  'transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]',
-                  i === mentionIndex
-                    ? 'bg-bg-mod-strong text-text-primary'
-                    : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary',
+                {option.kind === 'role' && completionResults[i - 1]?.kind !== 'role' && (
+                  <p className="ix-complete__label" aria-hidden>Roles</p>
                 )}
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  insertMention(option.kind === 'member' ? `<@${option.member.user.id}>` : `<@&${option.role.id}>`);
-                }}
-                onMouseEnter={() => setMentionIndex(i)}
-              >
-                {option.kind === 'member' ? (
-                  <>
-                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-bg-mod-strong text-meta font-semibold text-text-secondary">
-                      {displayName(option.member.user, option.member.nick).charAt(0).toUpperCase()}
-                    </span>
-                    <span className="min-w-0 flex-1 truncate">
-                      <span className="text-label text-text-primary">{displayName(option.member.user, option.member.nick)}</span>
-                      {displayName(option.member.user, option.member.nick) !== option.member.user.username && (
-                        <span className="ml-1.5 text-meta text-text-muted">@{option.member.user.username}</span>
-                      )}
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    <span className="flex h-7 w-7 shrink-0 items-center justify-center" aria-hidden>
-                      <span
-                        className="h-2.5 w-2.5 rounded-full"
-                        style={{ backgroundColor: option.role.color === 0 ? 'var(--text-muted)' : roleColorToHex(option.role.color) }}
-                      />
-                    </span>
-                    <span className="min-w-0 flex-1 truncate text-label text-text-primary">@{option.role.name}</span>
-                    <span className="shrink-0 text-meta text-text-muted">
-                      {option.count < 0 ? 'Loading…' : `${option.count} ${option.count === 1 ? 'member' : 'members'}`}
-                    </span>
-                  </>
-                )}
-              </button>
+                <div
+                  id={`ix-complete-${channelId}-${i}`}
+                  role="option"
+                  tabIndex={-1}
+                  aria-selected={i === completionIndex}
+                  className="ix-complete__row"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    insertCompletion(completionToken(option));
+                  }}
+                  onMouseEnter={() => setCompletionIndex(i)}
+                >
+                  {renderCompletionRow(option)}
+                </div>
               </Fragment>
             ))}
           </div>
         )}
 
-        {/* "+" — attach, and everything the capsule has no room for. */}
-        <button
-          ref={toolsButtonRef}
-          type="button"
-          className="glass-composer__btn glass-focusable"
-          aria-label="More message tools"
-          aria-haspopup="menu"
-          aria-expanded={toolsPosition !== null}
-          onClick={(event) => {
-            if (toolsPosition) { setToolsPosition(null); return; }
-            const rect = event.currentTarget.getBoundingClientRect();
-            // The menu stands on the capsule's top edge, not on the button.
-            const capsuleTop = composerShellRef.current?.getBoundingClientRect().top ?? rect.top;
-            toolsAnchorRef.current = { left: rect.left, top: capsuleTop };
-            toolsPlacedRef.current = false;
-            setToolsPosition({ x: rect.left, y: rect.top });
-          }}
-        >
-          <Plus size={19} strokeWidth={1.7} aria-hidden />
-        </button>
-        <ContextMenu
-          label="Message tools"
-          open={toolsPosition != null}
-          position={toolsPosition ?? undefined}
-          items={composerTools}
-          onClose={() => {
-            setToolsPosition(null);
-            toolsButtonRef.current?.focus();
-          }}
-        />
-
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          className="hidden"
-          onChange={handleFileSelect}
-        />
-
-        {replyingTo && (
-          <span
-            role="group"
-            aria-label={`Replying to ${replyingTo.author}`}
-            title={replyingTo.content ? `${replyingTo.author}: ${replyingTo.content}` : undefined}
-            className="glass-composer__reply"
-          >
-            <CornerUpLeft size={14} strokeWidth={1.7} aria-hidden />
-            <span className="glass-composer__reply-name">{replyingTo.author}</span>
-            <button
-              type="button"
-              onClick={onCancelReply}
-              className="glass-composer__reply-x glass-focusable"
-              aria-label="Cancel reply"
-              title="Cancel reply"
-            >
-              <X size={12} strokeWidth={2} aria-hidden />
-            </button>
-          </span>
+        {/* The one picker, above the emoji button. */}
+        {pickerLayer.value && (
+          <ComposerPickerHost
+            tab={pickerLayer.value}
+            leaving={pickerLayer.leaving}
+            guildId={guildId}
+            onTab={(tab) => setPicker(tab)}
+            onClose={closePicker}
+            onEmoji={(emoji) => {
+              setContent((prev) => `${prev}${emoji}`);
+              triggerTyping();
+              setPicker(null);
+              requestAnimationFrame(() => textareaRef.current?.focus());
+            }}
+            onGif={(gifUrl) => {
+              if (!actions.send.allowed) { setSubmitError(actions.send.reason); return; }
+              setPicker(null);
+              void (async () => {
+                try {
+                  await messageStore.getState().sendMessage(channelId, gifUrl, replyingTo?.id);
+                  if (mounted.current) onCancelReply?.();
+                } catch (err) {
+                  setSubmitError(`Failed to send GIF: ${messageInputError(err, 'Request failed')}`);
+                }
+              })();
+            }}
+            onSticker={(stickerId) => {
+              if (!actions.send.allowed) { setSubmitError(actions.send.reason); return; }
+              setPicker(null);
+              void (async () => {
+                try {
+                  await messageStore.getState().sendMessage(channelId, '', replyingTo?.id, undefined, [stickerId]);
+                  if (mounted.current) onCancelReply?.();
+                } catch (err) {
+                  setSubmitError(`Failed to send sticker: ${messageInputError(err, 'Request failed')}`);
+                }
+              })();
+            }}
+          />
         )}
-
-        <textarea
-          ref={textareaRef}
-          value={showPollComposer ? '' : content}
-          onChange={(e) => {
-            setContent(e.target.value);
-            detectMentionQuery(e.target.value, e.target.selectionStart);
-            triggerTyping();
-          }}
-          onKeyDown={handleKeyDown}
-          onPaste={handlePaste}
-          placeholder={placeholder}
-          aria-label={fullLabel}
-          rows={1}
-          maxLength={MAX_MESSAGE_LENGTH}
-          disabled={showPollComposer}
-          data-composer-input=""
-          // A placeholder with a long channel name can be wider than a phone's
-          // composer. Clipping the PLACEHOLDER to one line keeps the capsule at
-          // its 52px; a real draft still wraps and grows, which is what a draft
-          // should do.
-          className="glass-composer__input"
-          style={{ maxHeight: '50vh' }}
-        />
-
-        {/* The layers of the pickers grow out of the capsule's right end. */}
-        {stickerLayer.value && guildId && (
-          <div className="absolute bottom-full right-0 mb-2 max-w-[90vw]" style={PICKER_LAYER_STYLE}>
-            <Suspense fallback={null}>
-              <StickerPicker
-                leaving={stickerLayer.leaving}
-                guildId={guildId}
-                onSelect={(stickerId) => {
-                  if (!actions.send.allowed) { setSubmitError(actions.send.reason); return; }
-                  setShowStickerPicker(false);
-                  void (async () => {
-                    try {
-                      await messageStore.getState().sendMessage(channelId, '', replyingTo?.id, undefined, [stickerId]);
-                      if (mounted.current) onCancelReply?.();
-                    } catch (err) {
-                      setSubmitError(`Failed to send sticker: ${messageInputError(err, 'Request failed')}`);
-                    }
-                  })();
-                }}
-                onClose={() => setShowStickerPicker(false)}
-              />
-            </Suspense>
-          </div>
-        )}
-        {gifLayer.value && (
-          <div className="absolute bottom-full right-0 mb-2 max-w-[90vw]" style={PICKER_LAYER_STYLE}>
-            <Suspense fallback={null}>
-              <GifPicker
-                leaving={gifLayer.leaving}
-                onSelect={(gifUrl) => {
-                  if (!actions.send.allowed) { setSubmitError(actions.send.reason); return; }
-                  setShowGifPicker(false);
-                  void (async () => {
-                    try {
-                      await messageStore.getState().sendMessage(channelId, gifUrl, replyingTo?.id);
-                      if (mounted.current) onCancelReply?.();
-                    } catch (err) {
-                      setSubmitError(`Failed to send GIF: ${messageInputError(err, 'Request failed')}`);
-                    }
-                  })();
-                }}
-                onClose={() => setShowGifPicker(false)}
-              />
-            </Suspense>
-          </div>
-        )}
-        {emojiLayer.value && (
-          <div className="absolute bottom-full right-0 mb-2 max-w-[90vw]" style={PICKER_LAYER_STYLE}>
-            <Suspense fallback={null}>
-              <EmojiPicker
-                leaving={emojiLayer.leaving}
-                onSelect={(emoji) => {
-                  setContent((prev) => `${prev}${emoji}`);
-                  triggerTyping();
-                  setShowEmojiPicker(false);
-                }}
-                onClose={() => setShowEmojiPicker(false)}
-                guildId={guildId}
-              />
-            </Suspense>
-          </div>
-        )}
-
-        {!foldTools && (
-          <button
-            type="button"
-            data-composer-picker-toggle="emoji"
-            onMouseDown={(e) => e.stopPropagation()}
-            onClick={() => { setShowEmojiPicker(!showEmojiPicker); setShowGifPicker(false); setShowStickerPicker(false); }}
-            disabled={showPollComposer}
-            className="glass-composer__btn glass-focusable"
-            aria-label="Emoji"
-            title="Emoji"
-          >
-            <Smile size={19} strokeWidth={1.7} aria-hidden />
-          </button>
-        )}
-
-        <button
-          ref={sendButtonRef}
-          type="button"
-          onClick={() => void handleSubmit()}
-          disabled={sendDisabled}
-          // Quiet until there is something to send, then cream: the one primary
-          // action on the screen (§1.4). It does not scale on press (§9).
-          className="glass-composer__send glass-focusable"
-          aria-label={sendLabel}
-          title={sendLabel}
-        >
-          {showsSpinner ? (
-            <Loader2 size={17} className="animate-spin" aria-hidden />
-          ) : showScheduleComposer ? (
-            <Clock3 size={17} aria-hidden />
-          ) : (
-            <ArrowUp size={17} strokeWidth={2.3} aria-hidden />
-          )}
-        </button>
       </div>
 
-      {isDragOver && (
-        <div className="glass-composer__drop">
-          <div className="inline-flex items-center gap-2 text-heading text-text-primary">
-            <Plus size={20} aria-hidden />
-            Drop files to attach
-          </div>
-        </div>
+      <IxMenu
+        label="Send options"
+        open={sendMenu}
+        anchor={sendMenu && sendButtonRef.current ? { element: sendButtonRef.current, align: 'end', gap: 10 } : null}
+        width={220}
+        entries={sendMenuEntries}
+        onClose={() => setSendMenu(false)}
+        restoreTo={() => sendButtonRef.current}
+      />
+
+      {showEventForm && guildId && (
+        <EventFormModal
+          guildId={guildId}
+          onClose={() => setShowEventForm(false)}
+          onSaved={() => setShowEventForm(false)}
+        />
       )}
+
+      {scheduledSheet}
     </div>
   );
 }
