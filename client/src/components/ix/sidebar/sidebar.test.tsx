@@ -379,15 +379,13 @@ describe('Coming up', () => {
 describe('the add-ons', () => {
   const sports: AddonModel = { id: ADDON_ID.sports, kind: 'sports', name: 'Sports', line: 'Cubs 3–2 Brewers · 7th', selected: true, href: '/app/guilds/g1/sports' };
   const word: AddonModel = { id: ADDON_ID.word, kind: 'word', name: 'Daily word', line: '4 solved today', selected: false, href: '/app/guilds/g1/daily-word' };
-  const server = (id: string, name: string, state: 'up' | 'down'): GameServer =>
-    ({ id, name, kind: 'minecraft_java', address: `${name}.example:25565`, status: { state, players: null, error: null, checked_at: null } }) as unknown as GameServer;
   const games: AddonModel = {
     id: ADDON_ID.games,
     kind: 'games',
     name: 'Game servers',
     line: '1 of 2 online',
     selected: false,
-    servers: [server('s1', 'Survival', 'up'), server('s2', 'Creative', 'down')],
+    href: '/app/guilds/g1/game-servers',
   };
 
   it('renders nothing when the server has none', () => {
@@ -409,17 +407,17 @@ describe('the add-ons', () => {
     expect(onOpen).toHaveBeenCalledWith(word);
   });
 
-  it('opens a small list for Game servers, which have no page: each with its status', async () => {
-    render(<AddonList addons={[games]} focusOf={focus} onOpen={vi.fn()} />);
+  it('opens Game servers on their page like the others, and marks it current there', () => {
+    const onOpen = vi.fn();
+    const { rerender } = render(<AddonList addons={[games]} focusOf={focus} onOpen={onOpen} />);
     const row = screen.getByTestId('ix-addon-row');
-    expect(row.tagName).toBe('BUTTON');
-    expect(row).toHaveAttribute('aria-haspopup', 'dialog');
-    expect(row).toHaveAttribute('aria-expanded', 'false');
+    expect(row.tagName).toBe('A');
+    expect(row).toHaveAttribute('href', '/app/guilds/g1/game-servers');
+    expect(row).toHaveTextContent('Game servers1 of 2 online');
     fireEvent.click(row);
-    expect(row).toHaveAttribute('aria-expanded', 'true');
-    const dialog = await screen.findByRole('dialog', { name: 'Game servers' });
-    expect(within(dialog).getByText('Survival')).toBeInTheDocument();
-    expect(within(dialog).getByText('Creative')).toBeInTheDocument();
+    expect(onOpen).toHaveBeenCalledWith(games);
+    rerender(<AddonList addons={[{ ...games, selected: true }]} focusOf={focus} onOpen={onOpen} />);
+    expect(screen.getByTestId('ix-addon-row')).toHaveAttribute('aria-current', 'page');
   });
 });
 

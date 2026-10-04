@@ -7,7 +7,7 @@ import { useGameServers } from '../../../hooks/useGameServers';
 import { useSportsPolling, useSportsSettings } from '../../../hooks/useSportsBoard';
 import { useDailyWordStore } from '../../../stores/dailyWordStore';
 import { dailyWordHref, isDailyWordPath } from '../../dailyWord/model';
-import { upCount } from '../../gameServers/gameServerModel';
+import { gameServersHref, isGameServersPath, upCount } from '../../gameServers/gameServerModel';
 import { hottestLiveId, isSportsPath, liveCount, readHideScores, sportsHref, statusLine, teamLabel } from '../../sports/model';
 
 /**
@@ -27,9 +27,8 @@ export interface AddonModel {
   /** What is going on in it; null until it is known. */
   line: string | null;
   selected: boolean;
-  /** Where it opens. Game servers have no page yet: they open a small list. */
-  href?: string;
-  servers?: readonly GameServer[];
+  /** Where it opens: its page in main. */
+  href: string;
 }
 
 export const ADDON_ID = {
@@ -94,7 +93,14 @@ export function useAddons(guildId: string, pathname: string): AddonModel[] {
       });
     }
     if (servers.length > 0) {
-      models.push({ id: ADDON_ID.games, kind: 'games', name: 'Game servers', line: gamesLine(servers), selected: false, servers });
+      models.push({
+        id: ADDON_ID.games,
+        kind: 'games',
+        name: 'Game servers',
+        line: gamesLine(servers),
+        selected: isGameServersPath(guildId, pathname),
+        href: gameServersHref(guildId),
+      });
     }
     return models;
   }, [sportsOn, board, wordOn, solved, servers, guildId, pathname]);

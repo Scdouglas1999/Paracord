@@ -87,8 +87,8 @@ Data (the plan's owned files):
   as read, Copy link to channel, and the same two management rows.
 - **Add-ons.** Only while the server has them on. Live lines: Sports `Cubs 3–2 Brewers · 7th` (the hottest live game; `N
   live now` for several or when scores are hidden; `Scores` otherwise), Daily word `4 solved today` (else `Today's
-  puzzle`), Game servers `2 of 3 online` (`Checking…`). Sports and Daily word open their pages. **Game servers have no
-  page yet**, so the row opens a small popover (name, status, Connect, copy the address).
+  puzzle`), Game servers `2 of 3 online` (`Checking…`). Each opens its page: Sports, Daily word and Game servers (`gameServersHref`, IX-10's page);
+  the one whose page is open is current and the selection glides to it.
 - **Coming up.** Events running now or starting within seven days, running first, at most three: a 32x36 tile (weekday in
   the server's hue, day), the title, `Fri 9:00 PM · Lounge`, amber `Live`. Click opens the server's **Events page**
   (§4.7 says "event sheet"; there is none, and `ServerSidebar`'s `openEvent` is the one place to change when there is).
@@ -149,8 +149,6 @@ Data (the plan's owned files):
 - **IX-9**: the sidebar opens `openServerMenu(server, { element, align: 'end' })` / `anchorFromEvent(event)` and
   `openCreateChannel({ guildId, scope, kind: 'text', parentId })`; it reads `useServerMenuOpenFor(guildId)`. The channel and room row
   menus are its own `ContextMenu` items (`useSidebarMenus`); restyle `ContextMenu` and they follow.
-- **IX-10**: Game servers need a page (`/app/guilds/:g/game-servers` or similar); give `AddonModel.href` (`useAddons.ts`, the `games`
-  entry) and the popover is not used.
 - **IX-6**: the dock's live and unread rules are yours; `useServerLive` is IX-7's.
 - **IX-18**: animation ids are `ix-select:glide`, `ix-select:fade`, `ix-preview:line`, `ix-preview:time`, `ix-collapse:move`,
   `ix-collapse:fade`. Nothing fills forwards; at rest `document.getAnimations()` holds none of them.
@@ -188,8 +186,7 @@ I read each side by side with its reference. `s0-quiet.png`, `s1-someone-arrives
 ## Left undone or uncertain
 
 - **Event sheet** (§4.7) does not exist; events open the Events page.
-- **Game servers page** does not exist; a popover stands in.
-- **A selected add-on is not a glide target between pages that are not rows** (Overview, Events): their pages show no row highlight.
+- **Pages that are not rows** (Overview, Events) show no row highlight; the header is `aria-current` on Overview.
 - The 1px offset under IX-7's pinned card (above) is theirs.
 - `PlacesPanel` etc. (above) await IX-14/IX-19.
 - Not measured: CPU on WebKitGTK (IX-20). The sidebar's own contribution is re-rendering on voice, presence, message-store, read-state
