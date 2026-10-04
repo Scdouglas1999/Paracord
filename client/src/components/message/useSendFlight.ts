@@ -82,6 +82,22 @@ export interface SendFlightHost {
   measureRow: (row: HTMLElement) => void;
   /** The conversation is still loading: there is no timeline to land in yet. */
   loading?: boolean;
+  /**
+   * Filled by the hook: a delivered message's id → the id of the stand-in it
+   * replaced. The list keys a row by `sendRowKey`, so the stand-in and the
+   * message that takes its slot share one key and React keeps one DOM node
+   * across the hand-off, whatever else moves in the list. Never cleared while
+   * the list lives: a key that changed later would remount the row.
+   */
+  rowKeys?: Map<string, string>;
+}
+
+/**
+ * The React key of a drawn message's row: the stand-in's own id, for the
+ * stand-in AND for the delivered message that replaced it (see `rowKeys`).
+ */
+export function sendRowKey(message: Pick<Message, 'id'>, rowKeys: ReadonlyMap<string, string> | null | undefined): string {
+  return rowKeys?.get(message.id) ?? message.id;
 }
 
 function rowElement(id: string): HTMLElement | null {
@@ -119,13 +135,21 @@ function release(row: HTMLElement | null): void {
 }
 
 /** The messages to draw: the delivered ones, then the stand-ins not yet answered for. */
-export function useSendFlight({ channelId, me, messages, scroller, onGrounded, measureRow, loading = false }: SendFlightHost): Message[] {
+export function useSendFlight({ channelId, me, messages, scroller, onGrounded, measureRow, loading = false, rowKeys }: SendFlightHost): Message[] {
   const [pendings, setPendings] = useState<PendingSay[]>([]);
   const records = useRef(new Map<string, FlightRecord>());
   const takeoffs = useRef(new Map<string, Takeoff>());
   const gliding = useRef<ReturnType<typeof captureRoom> | null>(null);
 
   const arrivals = useMemo(() => matchArrivals(messages, pendings, me?.id), [messages, pendings, me?.id]);
+  // The pairing is known here, in the render the delivered message first
+  // replaces its stand-in: record it now, so that render already keys the
+  // delivered row as the stand-in. Idempotent (a re-render writes the same pair).
+  if (rowKeys) {
+    for (const [nonce, arrived] of arrivals) {
+      if (!rowKeys.has(arrived.id)) rowKeys.set(arrived.id, pendingMessageId(nonce));
+    }
+  }
   const open = useMemo(() => pendings.filter((pending) => !arrivals.has(pending.nonce)), [pendings, arrivals]);
   const drawn = useMemo<Message[]>(
     () => (open.length > 0 ? [...messages, ...open.map((pending) => pending.message)] : messages),

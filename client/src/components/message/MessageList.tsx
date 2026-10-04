@@ -1,11 +1,11 @@
 import { useCurrentChannelStore, useChannelActions } from '../../hooks/useChannels';
 import { accountScopeKey, entityScopeKey as memberScopeKey, type AccountScope } from '../../lib/serverScope';
 import { useCurrentUser, useCurrentAccountScope } from '../../hooks/useCurrentUser';
-import { memo, useRef, useEffect, useLayoutEffect, useMemo, useState, useReducer, useCallback, useSyncExternalStore, type CSSProperties, type MouseEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { memo, useRef, useEffect, useLayoutEffect, useMemo, useState, useReducer, useCallback, type CSSProperties, type MouseEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { createPortal, flushSync } from 'react-dom';
 import { captureScopedOperation, type OperationContext } from '../../lib/operationContext';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { AlertTriangle, ArrowDown, Smile, Reply, Hash, Check, X as XIcon, Pencil, Pin, PinOff, Copy, Clipboard, Trash2, MessageSquare, Send, Eye, Loader2, Bookmark, BookmarkCheck, Trophy, Clock, Forward } from 'lucide-react';
+import { AlertTriangle, Smile, Reply, Hash, Pencil, Pin, PinOff, Copy, Clipboard, Trash2, MessageSquare, Eye, Bookmark, BookmarkCheck, Trophy, Clock, Forward, Link2 } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { useMessages } from '../../hooks/useMessages';
 import { useTypingStore } from '../../stores/typingStore';
@@ -30,18 +30,16 @@ import { guildApi } from '../../api/guilds';
 import { UserProfilePopup } from '../user/UserProfile';
 import { groupEnrollmentReason, isGroupDm, pendingGroupMembers } from '../../lib/messages/messagingReadiness';
 import { EmojiPicker } from '../ui/EmojiPicker';
-import { ContextMenu, useContextMenu, type ContextMenuItem } from '../ui/ContextMenu';
 import { usePermissions } from '../../hooks/usePermissions';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { resolveResourceUrl } from '../../lib/config/apiBaseUrl';
 import { getDownloadTicket } from '../../lib/downloadTicket';
 import { writeClipboardText } from '../../lib/clipboard';
-import { SkeletonMessage } from '../ui/Skeleton';
-import { fadeIn, flicker, motionToken, ms, prefersReducedMotion, settleIn, useLingering, walkIntoRoom, type MotionEvents } from '../../lib/motion';
-import { useSendFlight } from './useSendFlight';
+import { fadeIn, flicker, motionToken, ms, prefersReducedMotion, settleIn, useLingering, type MotionEvents } from '../../lib/motion';
+import { sendRowKey, useSendFlight } from './useSendFlight';
 import { messagePreviewText, parseMarkdown } from '../../lib/markdown';
 import { useDownloadTicket } from '../../hooks/useDownloadTicket';
-import { formatFileSize, formatTimestamp, relativeTime } from '../../lib/formatters';
+import { formatFileSize, formatTimestamp } from '../../lib/formatters';
 import { createResolvedLightboxImage, useLightboxStore } from '../../stores/lightboxStore';
 import { confirm } from '../../stores/confirmStore';
 import { ResourceImage } from '../ui/ResourceImage';
@@ -50,37 +48,44 @@ import { mentionsEveryone } from '../../lib/mentions';
 import { MessageEmbedCard, extractUrls } from './MessageEmbed';
 import { FeedPostCard, isFeedEmbed } from '../feeds/FeedPostCard';
 import { FeedSourceIcon, GAME_SERVER_POST_KIND } from '../feeds/feedKinds';
-import { Chip } from '../ui';
 import {
-  DayDivider,
-  dayDividerLabel,
-  isToday,
+  EncryptedBubbleText,
+  HistorySkeleton,
+  JumpToLatest,
   MessageActions,
-  timelineTime,
-  ReplyChip,
-  RoomLitEventRow,
-  ThreadRow,
+  NewDivider,
+  ReplyLine,
+  SystemLine,
+  ThreadLine,
+  TimeDivider,
   TimelineAvatar,
-  TypingBubble,
-  typingSentence,
+  TypingRow,
+  timelineTime,
+  type SystemGlyph,
+  type Typist,
 } from './TimelineParts';
-import { InstrumentText } from '../glass/primitives';
+import { isPendingMessageId } from './pendingSay';
+import { useAuthStore } from '../../stores/authStore';
+import { IX_EASE, canAnimate, ixReduced } from '../ix/motion';
 import {
-  CatchUpDivider,
   DownloadMark,
   EventPlanCard,
   GlassFile,
   GlassMedia,
+  MEDIA_MAX,
   MediaTool,
   ReactionBite,
   TrashMark,
-  catchUpLabel,
   eventCardIds,
   findCatchUp,
   type ReactionTally,
 } from '../glass/cards';
-import { TimelineAuthor, TimelineLightSource, createTimelineLightStore, type RoomLitEvent } from './messageLight';
-import { useVoiceStore } from '../../stores/voiceStore';
+import { buildTimelineRows, messageTime, type TimelineRow } from './timelineRows';
+import { startVoiceLines, useVoiceLineStore, voiceLineText, type VoiceLine } from './voiceLines';
+import { captureRows, glideFrom, useArrivals } from './useArrivals';
+import { IxMenu, type IxMenuEntry, type MenuAnchor } from '../ix/menus';
+import { eventsHref } from '../guild/eventsRoute';
+import { snowflakeTime } from '../../hooks/useChannelPreviews';
 import { GitHubEventEmbed, isGitHubWebhookMessage } from './GitHubEventEmbed';
 import { ScoreUpdateCard } from '../sports/ScoreUpdateCard';
 import { isSportsScoreAuthor, parseScoreUpdate, resolveScoreSides, scoreUpdateGame, scoreUpdateHref } from '../sports/scoreUpdate';
@@ -147,6 +152,22 @@ export function systemMessageText(message: Message, authorName: string): string 
       return `${authorName} joined the server`;
     default:
       return content || `${authorName} posted a system message`;
+  }
+}
+
+/** The glyph beside a system line (§3.1): amber only for voice. */
+export function systemGlyphOf(message: Message): SystemGlyph {
+  switch (Number(message.message_type ?? message.type)) {
+    case MessageType.Call:
+      return 'call';
+    case MessageType.PinnedMessage:
+      return 'pin';
+    case MessageType.GuildMemberJoin:
+    case MessageType.RecipientAdd:
+    case MessageType.RecipientRemove:
+      return 'person';
+    default:
+      return 'info';
   }
 }
 
@@ -257,14 +278,6 @@ const NO_ROLE_IDS: ReadonlySet<string> = new Set();
 
 const MAX_REPLY_NEST_DEPTH = 6;
 
-/**
- * The shortest the message actions menu may be squeezed to before it scrolls.
- *
- * A short room on a short window can leave less room on both sides than the
- * menu needs; below this the menu stops being a menu, so it keeps this much
- * and scrolls the rest.
- */
-const MIN_MESSAGE_MENU_HEIGHT = 120;
 const THREAD_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const _threadHydratedAt = new Map<string, number>();
 const IMAGE_ATTACHMENT_EXTENSION_RE = /\.(png|jpe?g|gif|webp)$/i;
@@ -380,7 +393,7 @@ function ResolvedAttachmentImage({
     // The picture's own frame (the tone of a bubble, 16:9 unless the server
     // told us better) says it is coming; if it cannot come, it says so.
     return (
-      <div className="glass-media__pending" role={failed || !safeRawUrl ? 'alert' : 'img'} aria-label={failed || !safeRawUrl ? undefined : `Loading ${alt}`}>
+      <div className="ix-media__pending" role={failed || !safeRawUrl ? 'alert' : 'img'} aria-label={failed || !safeRawUrl ? undefined : `Loading ${alt}`}>
         {failed || !safeRawUrl ? `${alt} could not be loaded` : null}
       </div>
     );
@@ -430,65 +443,26 @@ function forwardThumbnails(message: Message): ReactNode {
   });
 }
 
-/** "4 replies · 12 min ago" — the meta line on a thread row (§7.4). */
-function threadMetaFor(thread: Channel): string {
-  const replies = thread.message_count ?? null;
-  const parts: string[] = [];
-  if (replies != null) parts.push(`${replies} ${replies === 1 ? 'reply' : 'replies'}`);
-  if (thread.created_at) parts.push(relativeTime(thread.created_at));
-  return parts.join(' \u00b7 ');
-}
-
 interface MessageListProps {
   channelId: string;
   onReply?: (message: Message) => void;
   /**
-   * WP3 (spec §7.2), additive: `ribbon` is the compact timeline in the Stage's
-   * chat ribbon — 28px avatars, tighter rows, the 14/1.45 ribbon body step.
-   * Everything else about the list is unchanged.
+   * The first item of the scroller, above the history (docs/design/index-plan.md
+   * §1.3): the conversation's large title. Shown once the start of the
+   * conversation is loaded, so it scrolls away with the oldest messages.
    */
-  variant?: 'default' | 'ribbon';
+  header?: ReactNode;
   /**
-   * WP3 (spec §7.2), additive: authors who are in the room right now, so their
-   * messages get the raised "from the room" highlight. The set comes from
-   * WP1's `useHereNow` — this list never works out who is present itself.
+   * What the conversation shows when it has no messages (§1.3): the welcome.
+   * Replaces the feed; the first message sent flies into its place.
    */
-  inRoomUserIds?: ReadonlySet<string>;
+  emptyState?: ReactNode;
+  /** The scroller element, for a title fold that reads its `scrollTop` (`useTitleFold`). */
+  onScroller?: (element: HTMLDivElement | null) => void;
 }
 
-function getTimestamp(msg: { timestamp?: string; created_at?: string }): string {
-  return msg.timestamp || msg.created_at || '';
-}
-
-type GroupableMessage = {
-  author?: { id?: string | null } | null;
-  timestamp?: string;
-  created_at?: string;
-};
-
-export function shouldGroup(prev: GroupableMessage | null, curr: GroupableMessage): boolean {
-  if (!prev) return false;
-  // Author may be absent on a malformed payload. Two authorless rows are not
-  // "the same author" — never group them, and never dereference blindly: this
-  // exact read is what a bot reply used to crash on, taking the app with it.
-  const prevAuthorId = prev.author?.id;
-  const currAuthorId = curr.author?.id;
-  if (!prevAuthorId || !currAuthorId) return false;
-  if (prevAuthorId !== currAuthorId) return false;
-  const prevTs = getTimestamp(prev);
-  const currTs = getTimestamp(curr);
-  if (!prevTs || !currTs) return false;
-  const diff = new Date(currTs).getTime() - new Date(prevTs).getTime();
-  return diff < 7 * 60 * 1000;
-}
-
-export function isDifferentDay(a: string, b: string): boolean {
-  try {
-    return new Date(a).toDateString() !== new Date(b).toDateString();
-  } catch {
-    return false;
-  }
-}
+/** Grouping and dividers are the row model's (`timelineRows.ts`); re-exported for the list's callers and tests. */
+export { isDifferentDay, shouldGroup } from './timelineRows';
 
 function truncateInline(value: string, max = 96): string {
   if (value.length <= max) return value;
@@ -583,46 +557,20 @@ export function computeReplyLayout(messages: Message[]): Map<string, ReplyLayout
   return cache;
 }
 
-// Row types for the virtual list
-type VirtualRow =
-  | { type: 'date-separator'; date: string }
-  | {
-      type: 'message';
-      message: Message;
-      messageIndex: number;
-      /** Continues the group above it (same author, close in time, same day). */
-      isGrouped: boolean;
-      /** The next message continues this one's group; false for the group's last. */
-      isLastInGroup: boolean;
-      /** Written by the server about the conversation: a centered line, not a bubble. */
-      isSystem: boolean;
-      replyParentId: string | null;
-    }
-  | { type: 'typing' }
-  /**
-   * "6 new since 8:58": above the first message the reader had not read when
-   * they opened the conversation (docs/glass-spec.md §3.2). A row of its own
-   * that breaks the group it lands in.
-   */
-  | { type: 'catch-up'; count: number; atLeast: boolean; since: string | null }
-  /**
-   * A voice room in this building lit up while you were reading (§7.4). It is a
-   * transition in WP1's room light observed by this client, never a server
-   * message — so it lives in the row list without ever entering `messages`.
-   */
-  | { type: 'room-event'; event: RoomLitEvent }
-  | { type: 'bottom-sentinel' };
-
 // --- Consolidated UI state (useReducer) -------------------------------------
 // The message feed carries several loosely-related overlay/dialog state groups.
 // They are held in one reducer keyed by slice; each dispatch carries a partial
 // patch (or a function of the current slice, for updates that depend on the
 // latest value) that is merged into that slice.
 
+/** A message's menu: More in its capsule, or a right click. */
+interface MessageMenu {
+  messageId: string;
+  anchor: MenuAnchor;
+}
+
 interface PopupSlice {
-  hoveredMessageId: string | null;
-  focusedMessageId: string | null;
-  menuMessageId: string | null;
+  menu: MessageMenu | null;
   profileUser: Message['author'] | null;
   profilePos: { x: number; y: number };
   emojiPickerFor: { messageId: string; position: { x: number; y: number } } | null;
@@ -706,9 +654,7 @@ function messageListUIReducer(state: MessageListUIState, action: MessageListUIAc
 
 const initialMessageListUIState: MessageListUIState = {
   popup: {
-    hoveredMessageId: null,
-    focusedMessageId: null,
-    menuMessageId: null,
+    menu: null,
     profileUser: null,
     profilePos: { x: 0, y: 0 },
     emojiPickerFor: null,
@@ -722,6 +668,16 @@ const initialMessageListUIState: MessageListUIState = {
   editHistory: { editHistoryMsgId: null, editHistoryPos: { x: 0, y: 0 } },
 };
 
+/** Where a menu opened, as a point: Remind me and React open beside it. */
+function menuPoint(anchor: MenuAnchor): { x: number; y: number } {
+  if ('x' in anchor) return { x: anchor.x, y: anchor.y };
+  const rect = anchor.element.getBoundingClientRect();
+  return { x: rect.left, y: rect.bottom };
+}
+
+/** The New divider leaves this long after you reach the bottom (§4.11). */
+const NEW_DIVIDER_LINGER_MS = 2_000;
+
 export function MessageList(props: MessageListProps) {
   const scope = useCurrentAccountScope();
   const key = scope ? memberScopeKey(scope, props.channelId) : `unavailable:${props.channelId}`;
@@ -731,13 +687,11 @@ export function MessageList(props: MessageListProps) {
 function OwnedMessageList({
   channelId,
   onReply,
-  variant = 'default',
-  inRoomUserIds,
+  header,
+  emptyState,
+  onScroller,
   scope,
 }: MessageListProps & { scope: AccountScope | null }) {
-  // WP3: the Stage's chat ribbon. A presentation variant only — no branch below
-  // changes what is fetched, rendered or announced.
-  const ribbon = variant === 'ribbon';
   // Custom emoji and attachment thumbnails are authenticated by a download
   // ticket that is minted after the first paint; re-render when it lands.
   const downloadTicket = useDownloadTicket();
@@ -948,29 +902,38 @@ function OwnedMessageList({
     return map;
   }, [activeGuildChannels, channelId]);
   const activeTyping = typingUsers.filter((id) => id !== me);
-  // §7.4: a timeline row is a person, so every author carries their light, and
-  // the meta says "in Shop floor" when they are in a room right now. Both come
-  // from WP1 — this file never decides who is lit. The light is read through a
-  // store that `TimelineLightSource` fills, never subscribed here: somebody
-  // speaking or coming online re-renders that author's rows, not the timeline.
-  const [lightStore] = useState(createTimelineLightStore);
-  const roomLitEvents = useSyncExternalStore(lightStore.subscribe, lightStore.events);
-  // §5.1: the inline event is a door like any other, so walking through it is
-  // the same journey — the line you clicked becomes the Stage's dominant tile.
-  const joinLitRoom = useCallback(
-    (event: RoomLitEvent, origin?: Element | null) => {
-      void walkIntoRoom({
-        channelId: event.channelId,
-        origin,
-        go: () => {
-          void useVoiceStore.getState().joinChannel(event.channelId, event.guildId ?? undefined);
-          if (event.guildId) navigate(`/app/guilds/${event.guildId}/channels/${event.channelId}`);
-        },
-      });
-    },
-    [navigate],
+  // Your own voice joins and leaves (§4.11): recorded app-wide, shown here when
+  // this is the voice channel's own conversation or its server's first channel.
+  useEffect(() => startVoiceLines(), []);
+  const allVoiceLines = useVoiceLineStore((state) => state.lines);
+  const firstTextChannelId = useMemo(() => {
+    let first: Channel | null = null;
+    for (const channel of activeGuildChannels) {
+      const kind = channel.channel_type ?? channel.type;
+      if (kind !== ChannelType.Text && kind !== 5) continue;
+      if (!first || (channel.position ?? 0) < (first.position ?? 0)) first = channel;
+    }
+    return first?.id ?? null;
+  }, [activeGuildChannels]);
+  const voiceLines = useMemo<VoiceLine[]>(
+    () =>
+      activeGuildId
+        ? allVoiceLines.filter(
+            (line) => line.guildId === activeGuildId && (line.channelId === channelId || channelId === firstTextChannelId),
+          )
+        : [],
+    [allVoiceLines, activeGuildId, channelId, firstTextChannelId],
   );
   const scrollRef = useRef<HTMLDivElement>(null);
+  const onScrollerRef = useRef(onScroller);
+  onScrollerRef.current = onScroller;
+  const setScroller = useCallback((node: HTMLDivElement | null) => {
+    scrollRef.current = node;
+    onScrollerRef.current?.(node);
+  }, []);
+  // Compact density (§6.13): a 24px group face instead of 30.
+  const compact = useAuthStore((state) => Boolean(state.settings?.message_display_compact));
+  const msgFaceSize = compact ? 24 : 30;
   // §5.1 "a message has mass": a plain text send floats out of the message box
   // to a stand-in row at the bottom of the timeline, and what is drawn is the
   // delivered messages plus the stand-ins not yet answered for (never the
@@ -991,7 +954,11 @@ function OwnedMessageList({
   // reaches it through here.
   const measureRowRef = useRef<(row: HTMLElement) => void>(() => {});
   const measureRow = useCallback((row: HTMLElement) => measureRowRef.current(row), []);
-  const drawn = useSendFlight({ channelId, me: meAuthor, messages, scroller: scrollRef, onGrounded: groundedSay, measureRow, loading: isLoading });
+  // Rows are keyed by identity: the stand-in and the message that replaces it
+  // share a key (the hook records the pairing here), so the hand-off stays on
+  // one DOM node and nothing else in the list changes node when a row is added.
+  const [rowKeys] = useState(() => new Map<string, string>());
+  const drawn = useSendFlight({ channelId, me: meAuthor, messages, scroller: scrollRef, onGrounded: groundedSay, measureRow, loading: isLoading, rowKeys });
   /** Your own last message in this room — the only place a receipt belongs. */
   const deliveredReceipt = drawn.length > 0 && drawn[drawn.length - 1].author.id === me;
   const [showScrollButton, setShowScrollButton] = useState(false);
@@ -1008,53 +975,11 @@ function OwnedMessageList({
   const [uiState, dispatchUI] = useReducer(messageListUIReducer, initialMessageListUIState);
 
   // Popup/overlay slice
-  const { hoveredMessageId, focusedMessageId, menuMessageId, profileUser, profilePos, emojiPickerFor, deleteConfirmId } = uiState.popup;
+  const { menu: messageMenu, profileUser, profilePos, emojiPickerFor, deleteConfirmId } = uiState.popup;
   // The reaction picker leaves the way it came (§5.2): kept for its exit beat.
   const reactionPicker = useLingering(emojiPickerFor);
-  const setHoveredMessageId = (hoveredMessageId: string | null) =>
-    dispatchUI({ slice: 'popup', patch: { hoveredMessageId } });
-  // Hover follows the pointer, not the scroll. A wheel scroll slides row after
-  // row under a resting pointer, and each one used to set the hovered row —
-  // a timeline re-render and a hover toolbar animating in, per row, many times
-  // a second. While the timeline is scrolling the hover is held (and the
-  // toolbar put away); the row under the pointer when it stops gets it.
-  const hoverHold = useRef<{ until: number; dirty: boolean; pending: string | null; timer: number | null }>({
-    until: 0,
-    dirty: false,
-    pending: null,
-    timer: null,
-  });
-  const hoveredRef = useRef<string | null>(hoveredMessageId);
-  hoveredRef.current = hoveredMessageId;
-  const hoverRow = (id: string | null) => {
-    const hold = hoverHold.current;
-    if (performance.now() < hold.until) {
-      hold.pending = id;
-      hold.dirty = true;
-      return;
-    }
-    if (hoveredRef.current !== id) setHoveredMessageId(id);
-  };
-  const holdHoverForScroll = useCallback(() => {
-    const hold = hoverHold.current;
-    hold.until = performance.now() + 140;
-    if (hoveredRef.current !== null) {
-      hold.pending = null;
-      hold.dirty = true;
-      setHoveredMessageId(null);
-    }
-    if (hold.timer !== null) window.clearTimeout(hold.timer);
-    hold.timer = window.setTimeout(() => {
-      hold.timer = null;
-      if (!hold.dirty) return;
-      hold.dirty = false;
-      if (hoveredRef.current !== hold.pending) setHoveredMessageId(hold.pending);
-    }, 150);
-  }, []);
-  const setFocusedMessageId = (value: string | null | ((curr: string | null) => string | null)) =>
-    dispatchUI({ slice: 'popup', patch: (s) => ({ focusedMessageId: typeof value === 'function' ? value(s.focusedMessageId) : value }) });
-  const setMenuMessageId = (value: string | null | ((curr: string | null) => string | null)) =>
-    dispatchUI({ slice: 'popup', patch: (s) => ({ menuMessageId: typeof value === 'function' ? value(s.menuMessageId) : value }) });
+  const setMessageMenu = (menu: MessageMenu | null) => dispatchUI({ slice: 'popup', patch: { menu } });
+  const closeMessageMenu = () => setMessageMenu(null);
   const setProfileUser = (profileUser: Message['author'] | null) =>
     dispatchUI({ slice: 'popup', patch: { profileUser } });
   const setProfilePos = (profilePos: { x: number; y: number }) =>
@@ -1080,10 +1005,6 @@ function OwnedMessageList({
     dispatchUI({ slice: 'popup', patch: { deleteConfirmId } });
   };
   useEffect(() => () => {
-    const hold = hoverHold.current;
-    if (hold.timer !== null) window.clearTimeout(hold.timer);
-  }, []);
-  useEffect(() => () => {
     deleteDialogGeneration.current++;
     const context = deleteContext.current; deleteContext.current = null; context?.dispose();
   }, []);
@@ -1105,8 +1026,6 @@ function OwnedMessageList({
   const setReportSubmitting = (reportSubmitting: boolean) =>
     dispatchUI({ slice: 'report', patch: { reportSubmitting } });
   const reportDialogRef = useRef<HTMLDivElement>(null);
-
-  const { contextMenu, onContextMenu, closeContextMenu } = useContextMenu();
 
   // Thread-create slice
   const { threadModalForMessageId, threadName, threadCreateError } = uiState.threadCreate;
@@ -1256,81 +1175,65 @@ function OwnedMessageList({
   const [catchUpFrom, setCatchUpFrom] = useState<string | null>(null);
   const catchUpCapturedRef = useRef(false);
 
-  // Build flat row list for virtualization.
-  //
-  // Grouping decides the bubbles' shape (§2.4): a group is one author, close in
-  // time, on one day, with no reply and no system line breaking it. Every
-  // message knows whether it continues the group above (`isGrouped`) and
-  // whether the next one continues it (`isLastInGroup`): the first carries the
-  // name and time, the last carries the face.
-  const rows: VirtualRow[] = useMemo(() => {
-    const result: VirtualRow[] = [];
-    const nowMs = Date.now();
-    const count = drawn.length;
-    const parentIds: (string | null)[] = new Array(count);
-    const joinsPrevious: boolean[] = new Array(count);
-    const dayBreaks: boolean[] = new Array(count);
-    const systems: boolean[] = new Array(count);
-    const catchUp = findCatchUp(messages, catchUpFrom, me, isSystemMessage, hasMore);
+  // The rows (docs/index-spec.md §4.11, `timelineRows.ts`): messages grouped
+  // by author within five minutes, time dividers, your voice joins, the New
+  // divider above what you had not read, the typing row, and three skeleton
+  // bubbles at the top while older history exists.
+  const catchUp = useMemo(
+    () => findCatchUp(messages, catchUpFrom, me, isSystemMessage, hasMore),
+    [messages, catchUpFrom, me, hasMore],
+  );
+  const newIndex = catchUp ? drawn.indexOf(messages[catchUp.index]) : -1;
+  const rows: TimelineRow[] = useMemo(
+    () =>
+      buildTimelineRows({
+        drawn,
+        keyOf: (message) => sendRowKey(message, rowKeys),
+        replyParentOf: (message, previous) => {
+          const parent = replyLayoutById.get(message.id)?.parentId ?? null;
+          if (parent) return parent;
+          const kind = message.message_type ?? message.type;
+          return kind === MessageType.Reply && previous ? previous.id : null;
+        },
+        isSystem: isSystemMessage,
+        newIndex: newIndex >= 0 ? newIndex : null,
+        voiceLines,
+        typing: activeTyping.length > 0,
+        hasMore,
+      }),
+    [drawn, rowKeys, replyLayoutById, newIndex, voiceLines, activeTyping.length, hasMore],
+  );
 
-    for (let i = 0; i < count; i++) {
-      const msg = drawn[i];
-      const prevMsg = i > 0 ? drawn[i - 1] : null;
-      let parentId = replyLayoutById.get(msg.id)?.parentId ?? null;
-      const msgType = msg.message_type ?? msg.type;
-      if (!parentId && prevMsg && msgType === MessageType.Reply) parentId = prevMsg.id;
-      parentIds[i] = parentId;
-      systems[i] = isSystemMessage(msg);
-      const timestamp = getTimestamp(msg);
-      // A day kicker between days, and above the oldest loaded message when it
-      // is not from today (the reference opens today's conversation bare).
-      dayBreaks[i] = prevMsg
-        ? isDifferentDay(getTimestamp(prevMsg), timestamp)
-        : Boolean(timestamp) && !isToday(timestamp, nowMs);
-      joinsPrevious[i] =
-        prevMsg !== null
-        && !dayBreaks[i]
-        // The divider splits a group: what you missed starts a new one.
-        && catchUp?.index !== i
-        && !parentId
-        && !systems[i]
-        && !systems[i - 1]
-        && shouldGroup(prevMsg, msg);
-    }
-
-    for (let i = 0; i < count; i++) {
-      const msg = drawn[i];
-      if (dayBreaks[i]) {
-        result.push({ type: 'date-separator', date: getTimestamp(msg) });
+  // The New divider (§4.11) leaves 2s after the reader reaches the bottom, or
+  // at once on "Mark read": it fades, then the rows close up over its line.
+  const newDividerRef = useRef<HTMLDivElement>(null);
+  const [atBottom, setAtBottom] = useState(true);
+  const closeUp = useRef<Map<Element, DOMRect> | null>(null);
+  const markCaughtUpRef = useRef<() => void>(() => {});
+  const markCaughtUp = useCallback(() => markCaughtUpRef.current(), []);
+  useLayoutEffect(() => {
+    const before = closeUp.current;
+    closeUp.current = null;
+    if (before) queueMicrotask(() => glideFrom(before, { duration: 450, id: 'ix-timeline:close-up' }));
+  });
+  useEffect(() => {
+    if (!catchUp || !atBottom) return undefined;
+    let fade: Animation | null = null;
+    const timer = window.setTimeout(() => {
+      const divider = newDividerRef.current;
+      if (!canAnimate(divider) || ixReduced()) {
+        markCaughtUpRef.current();
+        return;
       }
-      if (catchUp && catchUp.index === i) {
-        result.push({ type: 'catch-up', count: catchUp.count, atLeast: catchUp.atLeast, since: catchUp.since });
-      }
-      result.push({
-        type: 'message',
-        message: msg,
-        messageIndex: i,
-        isGrouped: joinsPrevious[i],
-        isLastInGroup: !(i + 1 < count && joinsPrevious[i + 1]),
-        isSystem: systems[i],
-        replyParentId: parentIds[i],
-      });
-    }
-
-    // Room events sit at the tail of the timeline, after everything that has
-    // actually been said: they report what is happening *now*, not something
-    // that happened at a point in the history.
-    for (const event of roomLitEvents) {
-      result.push({ type: 'room-event', event });
-    }
-
-    if (activeTyping.length > 0) {
-      result.push({ type: 'typing' });
-    }
-
-    result.push({ type: 'bottom-sentinel' });
-    return result;
-  }, [messages, drawn, activeTyping.length, replyLayoutById, roomLitEvents, catchUpFrom, me, hasMore]);
+      fade = divider.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 300, easing: IX_EASE, fill: 'forwards' });
+      fade.id = 'ix-timeline:new-out';
+      fade.finished.then(() => markCaughtUpRef.current(), () => {});
+    }, NEW_DIVIDER_LINGER_MS);
+    return () => {
+      window.clearTimeout(timer);
+      fade?.cancel();
+    };
+  }, [catchUp, atBottom]);
 
   const isNearBottom = useCallback(() => {
     const el = scrollRef.current;
@@ -1412,28 +1315,37 @@ function OwnedMessageList({
     }
     writeRead(lastMessage.id);
   }, [messages, channelId, memberScope]);
+  markCaughtUpRef.current = () => {
+    closeUp.current = captureRows(scrollRef.current);
+    setCatchUpFrom(null);
+    markLatestRead();
+  };
 
   // Virtualizer
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
+    // Identity, never position: a row added above another (the send flight's
+    // stand-in above the typing row) must not hand that row's DOM node to
+    // something else, or a FLIP measured on it plays from the wrong place.
+    getItemKey: (index) => rows[index]?.key ?? index,
     estimateSize: (index) => {
       const row = rows[index];
-      if (row.type === 'date-separator') return 44;
-      // 12px above a 28px row.
-      if (row.type === 'catch-up') return 40;
-      if (row.type === 'room-event') return 36;
-      if (row.type === 'typing') return 46;
-      if (row.type === 'bottom-sentinel') return 1;
-      if (row.isSystem) return 34;
-      // A bubble is 42px; the first of a group adds the 22px name line, and
-      // the gap above is 12px between groups and 4px inside one.
-      return row.isGrouped ? 46 : 80;
+      if (!row) return 40;
+      // 12px words with 17 above and 8 below (§3.1).
+      if (row.type === 'divider' || row.type === 'new') return 40;
+      if (row.type === 'voice') return 35;
+      if (row.type === 'history') return 150;
+      if (row.type === 'typing') return 48;
+      if (row.type === 'sentinel') return 1;
+      if (row.isSystem) return 35;
+      // A 39px bubble; the first of others' groups adds the 18px name line and
+      // 9px above, a continuation 3px.
+      return row.isGrouped ? 42 : 66;
     },
     overscan: 10,
-    // The first row clears the 28px fade under the header; the last sits
-    // 16px above the composer (§3.2).
-    paddingStart: 28,
+    // §3.1 feed: 14 above (the first divider adds its own), 16 under the last row.
+    paddingStart: 11,
     paddingEnd: 16,
     measureElement: (el) => {
       if (!el) return 0;
@@ -1448,6 +1360,18 @@ function OwnedMessageList({
     const wrapper = row.closest<HTMLElement>('[data-index]');
     if (wrapper) flushSync(() => virtualizer.measureElement(wrapper));
   };
+
+  // §5.10: somebody else's message rises in; what was at the bottom glides up.
+  const sawLoadingRef = useRef(isLoading);
+  if (isLoading) sawLoadingRef.current = true;
+  useArrivals({
+    rows,
+    scroller: scrollRef,
+    me,
+    following: () => followBottomRef.current && !isLoadingMoreRef.current,
+    measureRow,
+    ready: sawLoadingRef.current && !isLoading,
+  });
 
   /**
    * Put the timeline on its newest message and hold it there while the rows
@@ -1714,9 +1638,7 @@ function OwnedMessageList({
     dispatchUI({
       slice: 'popup',
       patch: {
-        hoveredMessageId: null,
-        focusedMessageId: null,
-        menuMessageId: null,
+        menu: null,
         profileUser: null,
         emojiPickerFor: null,
         deleteConfirmId: null,
@@ -1819,7 +1741,10 @@ function OwnedMessageList({
       setShowScrollButton(false);
       setNewMessageCount(0);
     } else {
-      setShowScrollButton(true);
+      const element = scrollRef.current;
+      if (element) {
+        setShowScrollButton(element.scrollHeight - element.scrollTop - element.clientHeight > element.clientHeight);
+      }
       // Only arrivals the user has scrolled away from are worth announcing.
       // `hasHydratedChannelRef` is false only for the channel's first page, so
       // the initial backlog never counts as "new".
@@ -2142,16 +2067,17 @@ function OwnedMessageList({
 
   const handleScroll = useCallback(() => {
     if (!scrollRef.current) return;
-    holdHoverForScroll();
     const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
     const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
     const nearBottom = distanceFromBottom <= 140;
     // Only the reader can leave the bottom. The virtualizer also moves
     // scrollTop when a row above the fold measures taller, and that must not
     // count as the reader scrolling away.
+    setAtBottom(nearBottom);
     if (nearBottom) followBottomRef.current = true;
     else if (performance.now() - lastReaderScrollRef.current < 1000) followBottomRef.current = false;
-    setShowScrollButton(!nearBottom && distanceFromBottom > 200);
+    // §4.11: the capsule appears once the reader is more than a screen up.
+    setShowScrollButton(!nearBottom && distanceFromBottom > clientHeight);
     if (nearBottom) {
       markLatestRead();
       setNewMessageCount(0);
@@ -2173,7 +2099,7 @@ function OwnedMessageList({
       };
       loadMore();
     }
-  }, [hasMore, holdHoverForScroll, isLoading, loadMore, markLatestRead, messages]);
+  }, [hasMore, isLoading, loadMore, markLatestRead, messages]);
 
   const scrollToBottom = useCallback(() => {
     // "Jump to present" has to mean the present. A reader who scrolled a long
@@ -2268,7 +2194,7 @@ function OwnedMessageList({
 
   const toggleSavedMessage = async (message: Message) => {
     const isSaved = savedIds.has(message.id);
-    setMenuMessageId(null);
+    closeMessageMenu();
     try {
       if (isSaved) {
         await useSavedMessageStore.getState().remove(message.id);
@@ -2285,7 +2211,7 @@ function OwnedMessageList({
   const startEditingMessage = (msg: Message) => {
     setEditingMessageId(msg.id);
     setEditContent(msg.content || '');
-    setMenuMessageId(null);
+    closeMessageMenu();
   };
 
   const cancelEditing = () => {
@@ -2343,7 +2269,7 @@ function OwnedMessageList({
       setDeletingMessageId(current => current === messageId ? null : current);
     }
     if (deleteDialogGeneration.current !== generation) return;
-    setMenuMessageId(null);
+    closeMessageMenu();
     setDeleteConfirmId(null);
   };
 
@@ -2383,7 +2309,7 @@ function OwnedMessageList({
 
   const requestDelete = (messageId: string) => {
     setDeleteConfirmId(messageId);
-    setMenuMessageId(null);
+    closeMessageMenu();
   };
 
   const openReportDialog = (msg: Message) => {
@@ -2391,7 +2317,7 @@ function OwnedMessageList({
     setReportingMessage(msg);
     setReportReason('');
     setReportEvidence('');
-    setMenuMessageId(null);
+    closeMessageMenu();
   };
 
   const submitReport = async () => {
@@ -2464,7 +2390,7 @@ function OwnedMessageList({
     setThreadModalForMessageId(msg.id);
     setThreadName(nextName);
     setThreadCreateError(null);
-    setMenuMessageId(null);
+    closeMessageMenu();
   };
 
   const downloadAttachment = async (attachmentId: string, filename: string) => {
@@ -2551,155 +2477,138 @@ function OwnedMessageList({
     }
   };
 
-  const buildMessageContextMenuItems = (msg: Message, at: { x: number; y: number }): ContextMenuItem[] => {
+  /** A message's link: opening it jumps to the message (`?message=`). */
+  const messageLink = (msg: Message): string => {
+    const path = activeGuildId
+      ? `/app/guilds/${activeGuildId}/channels/${channelId}?message=${msg.id}`
+      : `/app/dms/${channelId}?message=${msg.id}`;
+    return new URL(path, window.location.origin).toString();
+  };
+
+  /**
+   * A message's menu (docs/index-spec.md §4.11). More in the capsule: edit
+   * (yours), copy, pin, forward, remind me, copy link, delete; a right click
+   * also leads with react, reply and thread. "Mark unread" is not offered: the
+   * server's read position only moves forward, so nothing could honor it.
+   */
+  const buildMessageMenu = (msg: Message, at: { x: number; y: number }, full: boolean): IxMenuEntry[] => {
     const isOwnMessage = msg.author.id === me;
     // Editing rewrites the whole encrypted body, and a delivered message's
     // attachment descriptors cannot be recovered from the server, so an
     // encrypted message that carries attachments is not editable.
     const canEditMsg = isOwnMessage && !hasEncryptedAttachments(msg);
     const canDeleteMsg = isOwnMessage || canManageMessages;
-    const canPinMsg = canPinInChannel;
-    const items: ContextMenuItem[] = [];
+    const thread = (linkedThreadsByStarterMessageId[msg.id] ?? NO_THREADS)[0];
+    const entries: IxMenuEntry[] = [];
+    const item = (entry: Omit<Extract<IxMenuEntry, { type: 'item' }>, 'type'>) => entries.push({ type: 'item', ...entry });
+    const separator = (id: string) => {
+      if (entries.length > 0 && entries[entries.length - 1].type !== 'separator') entries.push({ type: 'separator', id });
+    };
 
-    if (onReply) {
-      items.push({
-        label: 'Reply',
-        icon: <Reply size={14} />,
-        action: () => onReply(msg),
-      });
-    }
-
-    if (canCreateThreads) {
-      items.push({
-        label: 'Create thread',
-        icon: <Hash size={14} />,
-        action: () => openCreateThreadDialog(msg),
-      });
-    }
-
-    if (canAddReactions) {
-      items.push({
-        label: 'React',
-        icon: <Smile size={14} />,
-        // The click point itself, the way Remind me takes it: reading state
-        // here returns where the PREVIOUS menu opened — the new one is still
-        // being dispatched.
-        action: () => {
-          setEmojiPickerFor({
-            messageId: msg.id,
-            position: {
-              x: at.x + 4,
-              y: at.y + 4,
-            },
-          });
-        },
-      });
-    }
-
-    if (msg.anonymous?.can_deanonymize) {
-      items.push({
-        label: deanonymizedById[msg.id] ? `Author: ${deanonymizedById[msg.id]}` : 'Reveal author',
-        icon: <Eye size={14} />,
-        disabled: Boolean(deanonymizedById[msg.id]) || deanonymizingId === msg.id,
-        action: () => {
-          void deanonymizeMessage(msg);
-        },
-      });
+    if (full) {
+      if (canAddReactions) {
+        item({
+          id: 'react',
+          label: 'React',
+          icon: <Smile size={16} strokeWidth={1.7} />,
+          // The click point itself: state still holds where the PREVIOUS menu opened.
+          onSelect: () => setEmojiPickerFor({ messageId: msg.id, position: { x: at.x + 4, y: at.y + 4 } }),
+        });
+      }
+      if (onReply) item({ id: 'reply', label: 'Reply', icon: <Reply size={16} strokeWidth={1.7} />, onSelect: () => onReply(msg) });
+      if (thread) {
+        item({ id: 'thread', label: 'Open thread', icon: <Hash size={16} strokeWidth={1.7} />, onSelect: () => openLinkedThread(thread.id) });
+      } else if (canCreateThreads) {
+        item({ id: 'thread', label: 'Start a thread', icon: <Hash size={16} strokeWidth={1.7} />, onSelect: () => openCreateThreadDialog(msg) });
+      }
+      separator('sep-gesture');
     }
 
     if (canEditMsg) {
-      items.push({
-        label: 'Edit message',
-        icon: <Pencil size={14} />,
-        action: () => startEditingMessage(msg),
-      });
+      item({ id: 'edit', label: 'Edit', icon: <Pencil size={16} strokeWidth={1.7} />, onSelect: () => startEditingMessage(msg) });
     }
-
-    if (canPinMsg) {
-      items.push({
-        label: msg.pinned ? 'Unpin message' : 'Pin message',
-        icon: msg.pinned ? <PinOff size={14} /> : <Pin size={14} />,
-        action: () => {
-          void togglePin(msg);
-        },
-      });
-    }
-
-    items.push({
-      label: 'Remind me',
-      icon: <Clock size={14} />,
-      // The click point itself: any anchor kept in state still holds the
-      // previous menu's position while this list is being built.
-      action: () => openRemind(msg, at.x, at.y),
-    });
-    const forwardBlocked = forwardBlockedFor(msg);
-    items.push({
-      label: 'Forward',
-      icon: <Forward size={14} />,
-      disabled: Boolean(forwardBlocked),
-      description: forwardBlocked ?? undefined,
-      action: () => {
-        if (forwardBlocked) return;
-        setForwardTarget(msg);
-        setForwardOpen(true);
-      },
-    });
-
-    items.push({
-      label: savedIds.has(msg.id) ? 'Remove from Saved' : 'Save for later',
-      icon: savedIds.has(msg.id) ? <BookmarkCheck size={14} /> : <Bookmark size={14} />,
-      action: () => {
-        void toggleSavedMessage(msg);
-      },
-    });
-
-    items.push({ label: '', action: () => {}, divider: true });
-
-    items.push({
+    item({
+      id: 'copy',
       label: 'Copy text',
-      icon: <Copy size={14} />,
-      action: () => {
+      icon: <Copy size={16} strokeWidth={1.7} />,
+      onSelect: () => {
         void writeClipboardText(msg.content || '')
           .then(() => toast.success('Message text copied.'))
           .catch((err) => toast.error(`Failed to copy message text: ${extractApiError(err)}`));
       },
     });
-
-    items.push({
-      label: 'Copy Message ID',
-      icon: <Clipboard size={14} />,
-      action: () => {
+    if (canPinInChannel) {
+      item({
+        id: 'pin',
+        label: msg.pinned ? 'Unpin' : 'Pin',
+        icon: msg.pinned ? <PinOff size={16} strokeWidth={1.7} /> : <Pin size={16} strokeWidth={1.7} />,
+        onSelect: () => void togglePin(msg),
+      });
+    }
+    const forwardBlocked = forwardBlockedFor(msg);
+    item({
+      id: 'forward',
+      label: 'Forward',
+      icon: <Forward size={16} strokeWidth={1.7} />,
+      disabled: Boolean(forwardBlocked),
+      description: forwardBlocked ?? undefined,
+      onSelect: () => {
+        if (forwardBlocked) return;
+        setForwardTarget(msg);
+        setForwardOpen(true);
+      },
+    });
+    item({ id: 'remind', label: 'Remind me', icon: <Clock size={16} strokeWidth={1.7} />, onSelect: () => openRemind(msg, at.x, at.y) });
+    item({
+      id: 'save',
+      label: savedIds.has(msg.id) ? 'Remove from Saved' : 'Save for later',
+      icon: savedIds.has(msg.id) ? <BookmarkCheck size={16} strokeWidth={1.7} /> : <Bookmark size={16} strokeWidth={1.7} />,
+      onSelect: () => void toggleSavedMessage(msg),
+    });
+    item({
+      id: 'link',
+      label: 'Copy link',
+      icon: <Link2 size={16} strokeWidth={1.7} />,
+      onSelect: () => {
+        void writeClipboardText(messageLink(msg))
+          .then(() => toast.success('Link copied.'))
+          .catch((err) => toast.error(`Could not copy the link: ${extractApiError(err)}`));
+      },
+    });
+    item({
+      id: 'copy-id',
+      label: 'Copy message ID',
+      icon: <Clipboard size={16} strokeWidth={1.7} />,
+      onSelect: () => {
         void writeClipboardText(msg.id)
           .then(() => toast.success('Message ID copied.'))
           .catch((err) => toast.error(`Failed to copy message ID: ${extractApiError(err)}`));
       },
     });
-
+    if (msg.anonymous?.can_deanonymize) {
+      item({
+        id: 'reveal',
+        label: deanonymizedById[msg.id] ? `Author: ${deanonymizedById[msg.id]}` : deanonymizingId === msg.id ? 'Revealing…' : 'Reveal author',
+        icon: <Eye size={16} strokeWidth={1.7} />,
+        disabled: Boolean(deanonymizedById[msg.id]) || deanonymizingId === msg.id,
+        onSelect: () => void deanonymizeMessage(msg),
+      });
+    }
     if (activeGuildId && msg.author.id !== me) {
-      items.push({
-        label: 'Report message',
-        icon: <MessageSquare size={14} />,
-        action: () => openReportDialog(msg),
-      });
+      item({ id: 'report', label: 'Report', icon: <MessageSquare size={16} strokeWidth={1.7} />, onSelect: () => openReportDialog(msg) });
     }
-
     if (canDeleteMsg) {
-      items.push({ label: '', action: () => {}, divider: true });
-      items.push({
-        label: 'Delete message',
-        icon: <Trash2 size={14} />,
-        danger: true,
-        action: () => requestDelete(msg.id),
-      });
+      separator('sep-delete');
+      item({ id: 'delete', label: 'Delete', icon: <Trash2 size={16} strokeWidth={1.7} />, danger: true, onSelect: () => requestDelete(msg.id) });
     }
-
     if (canManageMessages) {
-      items.push({ label: '', action: () => {}, divider: true });
-      items.push({
+      separator('sep-bulk');
+      item({
+        id: 'bulk',
         label: bulkDeleteMode ? 'Cancel bulk delete' : 'Bulk delete messages',
-        icon: <Trash2 size={14} />,
+        icon: <Trash2 size={16} strokeWidth={1.7} />,
         danger: bulkDeleteMode,
-        action: () => {
+        onSelect: () => {
           if (bulkDeleteMode) {
             cancelBulkDelete();
           } else {
@@ -2709,13 +2618,24 @@ function OwnedMessageList({
         },
       });
     }
-
-    return items;
+    return entries;
   };
 
-  const handleMessageContextMenu = (e: React.MouseEvent, msg: Message) => {
-    onContextMenu(e, buildMessageContextMenuItems(msg, { x: e.clientX, y: e.clientY }));
+  const openMessageMenu = (event: React.MouseEvent<HTMLElement>, msg: Message, from: 'more' | 'context') => {
+    if (from === 'context') {
+      event.preventDefault();
+      setMessageMenu({ messageId: msg.id, anchor: { x: event.clientX, y: event.clientY } });
+      return;
+    }
+    if (messageMenu?.messageId === msg.id) {
+      closeMessageMenu();
+      return;
+    }
+    // Under the More button, hanging toward the middle of the conversation.
+    setMessageMenu({ messageId: msg.id, anchor: { element: event.currentTarget, align: msg.author.id === me ? 'start' : 'end' } });
   };
+
+  const handleMessageContextMenu = (e: React.MouseEvent<HTMLElement>, msg: Message) => openMessageMenu(e, msg, 'context');
 
   const rowActions = useForwardedActions({
     handleMessageRowKeyDown,
@@ -2740,28 +2660,36 @@ function OwnedMessageList({
     toggleSavedMessage,
     openReportDialog,
     requestDelete,
+    openMessageMenu,
+    openEventDetails: () => {
+      if (activeGuildId) navigate(eventsHref(activeGuildId));
+    },
   });
 
-  // Render a single virtual row
-  const renderRow = (row: VirtualRow) => {
-    if (row.type === 'date-separator') {
-      return <DayDivider label={dayDividerLabel(row.date)} />;
+  // Render a single virtual row (docs/index-spec.md §4.11). Every branch
+  // returns ONE element: the row the list positions and the flight measures.
+  const renderRow = (row: TimelineRow) => {
+    if (row.type === 'divider') {
+      return <TimeDivider at={row.at} />;
     }
 
-    if (row.type === 'catch-up') {
+    if (row.type === 'new') {
+      return <NewDivider ref={newDividerRef} onMarkRead={markCaughtUp} />;
+    }
+
+    if (row.type === 'history') {
+      return <HistorySkeleton />;
+    }
+
+    if (row.type === 'voice') {
+      const room = activeGuildChannels.find((channel) => channel.id === row.line.channelId);
       return (
-        <CatchUpDivider
-          label={catchUpLabel(row)}
-          onMarkRead={() => {
-            setCatchUpFrom(null);
-            markLatestRead();
-          }}
+        <SystemLine
+          glyph="voice"
+          role="note"
+          text={voiceLineText(row.line, room?.name || 'a voice channel')}
         />
       );
-    }
-
-    if (row.type === 'room-event') {
-      return <RoomLitEventRow event={row.event} onJoin={joinLitRoom} />;
     }
 
     if (row.type === 'typing') {
@@ -2769,43 +2697,26 @@ function OwnedMessageList({
       const guildMembers = guildId === activeGuildId
         ? activeGuildMembers
         : (guildId && memberScope ? useMemberStore.getState().members.get(memberScopeKey(memberScope, guildId)) ?? null : null);
-      const resolveTypist = (userId: string): { id: string; name: string; avatar: string | null } => {
+      const resolveTypist = (userId: string): Typist => {
         if (guildMembers) {
           const member = guildMembers.find((m) => m.user.id === userId);
           if (member) {
             return { id: userId, name: displayName(member.user, member.nick), avatar: member.user.avatar_hash ?? null };
           }
         }
-        // A DM has no guild and therefore no member list, so this fell through
-        // to "Someone" for the one person in the conversation — whose name is
-        // already in the header two lines above. The channel carries them.
+        // A DM has no guild and therefore no member list: the channel carries
+        // the one person in the conversation.
         const recipients = activeChannel?.recipients
           ?? (activeChannel?.recipient ? [activeChannel.recipient] : []);
         const recipient = recipients.find((person) => person.id === userId);
         if (recipient) return { id: userId, name: displayName(recipient), avatar: recipient.avatar_hash ?? null };
         return { id: userId, name: 'Someone', avatar: null };
       };
-
-      const typists = activeTyping.map(resolveTypist);
-      // §3.2: typing is a bubble of three dots beside the typist's face. Up to
-      // three are drawn; the sentence names everybody for assistive tech.
-      return (
-        <div className="glass-tl-typing-row glass-tl-col">
-          {typists.slice(0, 3).map((typist) => (
-            <div key={typist.id} className="glass-msg__typing">
-              <span className="glass-msg__face">
-                <TimelineAvatar userId={typist.id} name={typist.name} avatar={typist.avatar} />
-              </span>
-              <TypingBubble />
-            </div>
-          ))}
-          <span className="sr-only">{typingSentence(typists.map((typist) => typist.name))}</span>
-        </div>
-      );
+      return <TypingRow typists={activeTyping.map(resolveTypist)} />;
     }
 
-    if (row.type === 'bottom-sentinel') {
-      return <div style={{ height: 1 }} />;
+    if (row.type === 'sentinel') {
+      return <div className="ix-tl-sentinel" aria-hidden />;
     }
 
     // Message row.
@@ -2814,7 +2725,7 @@ function OwnedMessageList({
     // reached for messages cached before that guard existed and for any future
     // shape the server invents. Substituting a placeholder author costs one
     // object and removes the last way a single bad record can white-screen the
-    // app — the row degrades instead of the whole feed.
+    // app: the row degrades instead of the whole feed.
     const msg: Message = row.message.author?.id
       ? row.message
       : {
@@ -2831,10 +2742,6 @@ function OwnedMessageList({
     const replyParentId = row.replyParentId;
     const replyParentMessage = replyParentId ? messageById.get(replyParentId) : undefined;
     const isOwnMessage = msg.author.id === me;
-    const canEditMessage = isOwnMessage && !hasEncryptedAttachments(msg);
-    const canDeleteMessage = isOwnMessage || canManageMessages;
-    const canPinMessage = canPinInChannel;
-    const forwardBlocked = forwardBlockedFor(msg);
     const linkedThreads = linkedThreadsByStarterMessageId[msg.id] ?? NO_THREADS;
     const authorGuildMember = activeGuildMemberById.get(msg.author.id);
     const authorName = displayName(msg.author, authorGuildMember?.nick);
@@ -2850,22 +2757,20 @@ function OwnedMessageList({
       name: authorName,
       avatar: msg.author.avatar_hash ?? msg.author.avatar ?? null,
     };
-    // A message that addresses the reader: its bubble takes the raised step
-    // and their own mention becomes the white chip (§3.2).
+    // A mention of the reader is the white chip inside the bubble (§4.11); the
+    // bubble keeps its own fill.
     const mentionsMe = messageMentionsUser(msg, me, myRoleIds);
-    const isActiveRow = hoveredMessageId === msg.id || focusedMessageId === msg.id;
-    const menuOpen = menuMessageId === msg.id;
-    // "From the room": written by somebody who is in the call right now (§7.2).
-    const fromRoom = Boolean(inRoomUserIds?.has(msg.author.id));
+    const menuOpen = messageMenu?.messageId === msg.id;
     const isJumpTarget = jumpHighlightId === msg.id;
     const isEditing = editingMessageId === msg.id;
+    const pending = isPendingMessageId(msg.id);
 
     const hasAttachments = Boolean(msg.attachments?.length);
     // Everything the row below reads from the list, and nothing else: while
-    // these are unchanged the row keeps what it drew last time (hovering a
-    // row, typing, a message arriving further up do not redraw the timeline).
-    // Its handlers go through `rowActions`, which always calls the current
-    // ones, so a row that did not redraw never acts on a stale list.
+    // these are unchanged the row keeps what it drew last time (typing, a
+    // message arriving further up do not redraw the timeline). Its handlers go
+    // through `rowActions`, which always calls the current ones, so a row that
+    // did not redraw never acts on a stale list.
     //
     // The group edges are here because they decide the bubble's corners, the
     // name line and the face: a message arriving under this one from the same
@@ -2874,96 +2779,90 @@ function OwnedMessageList({
       row.message, isGrouped, isLastInGroup, row.isSystem, replyParentId, row.messageIndex, messages.length,
       replyParentMessage, replyParentId ? deletedMessageIds.has(replyParentId) : false,
       me, mentionsMe, canManageMessages, canPinInChannel, canAddReactions, canCreateThreads, canVoteInPolls,
-      Boolean(onReply), activeGuildId, channelId, ribbon, isCoarsePointer, lowBandwidthMode,
+      Boolean(onReply), activeGuildId, channelId, isCoarsePointer, lowBandwidthMode,
       downloadTicket, bulkDeleteMode, bulkDeleteMode && selectedMessageIds.includes(msg.id),
       authorGuildMember, activeGuildMemberById, mentionMap, roleNameMap, handleMentionClick,
       toggleReactionFromRow,
       scoreUpdate ? pinnedSportsGame : null, linkedThreads, pendingReminderIds.has(msg.id),
       savedIds.has(msg.id), decryptingIds.has(msg.id), deanonymizedById[msg.id], deanonymizingId === msg.id,
-      isActiveRow, isJumpTarget, activeRowMessageId === msg.id, menuOpen,
+      isJumpTarget, activeRowMessageId === msg.id, menuOpen,
       isEditing, isEditing ? editContent : null,
       isEditing ? editSaving : false,
       hasAttachments ? attachmentBusyId : null, hasAttachments ? downloadProgress : null,
-      fromRoom, scope, lightStore,
+      scope,
     ];
 
-    const timestamp = getTimestamp(msg);
+    const timestamp = messageTime(msg);
     const fullTime = formatTimestamp(timestamp);
+    const clock = timelineTime(timestamp);
     const edited = msg.edited_timestamp || msg.edited_at;
     const rowHandlers = {
-      onMouseEnter: () => hoverRow(msg.id),
-      onMouseLeave: () => hoverRow(null),
       onKeyDown: (e: ReactKeyboardEvent<HTMLDivElement>) => rowActions.handleMessageRowKeyDown(e, msg.id),
-      onFocus: () => {
-        setFocusedMessageId(msg.id);
-        setActiveRowId(msg.id);
+      onFocus: () => setActiveRowId(msg.id),
+      onContextMenu: (e: React.MouseEvent<HTMLDivElement>) => {
+        if (pending) return;
+        rowActions.handleMessageContextMenu(e, msg);
       },
-      onBlur: (e: React.FocusEvent<HTMLDivElement>) => {
-        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
-          setFocusedMessageId((curr) => (curr === msg.id ? null : curr));
-        }
-      },
-      onContextMenu: (e: React.MouseEvent) => rowActions.handleMessageContextMenu(e, msg),
     };
 
     if (row.isSystem) {
-      // §3.2: the conversation's own news is a centered line, not a bubble.
+      // §3.1: the conversation's own news is a centered line, not a bubble.
       return (
         <MessageRowMemo deps={rowDeps} render={() => (
-          <div
+          <SystemLine
             id={`msg-${msg.id}`}
             role="article"
-            aria-label={`System message: ${systemMessageText(msg, authorName)}`}
+            aria-label={systemMessageText(msg, authorName)}
             aria-posinset={row.messageIndex + 1}
             aria-setsize={messages.length}
             tabIndex={msg.id === activeRowMessageId ? 0 : -1}
-            className="glass-tl-system glass-tl-col"
+            glyph={systemGlyphOf(msg)}
+            text={systemMessageText(msg, authorName)}
+            time={clock}
             data-jump={isJumpTarget || undefined}
             {...rowHandlers}
-          >
-            <span>{systemMessageText(msg, authorName)}</span>
-            <InstrumentText dateTime={timestamp} className="glass-tl-system__time" title={fullTime}>
-              {timelineTime(timestamp)}
-            </InstrumentText>
-          </div>
+          />
         )} />
       );
     }
 
     const decrypting = !msg.poll && decryptingIds.has(msg.id);
+    const unreadable = !decrypting && Boolean(msg.e2ee) && msg.content === ENCRYPTED_DM_PLACEHOLDER;
     const ephemeral = Boolean((msg.flags ?? 0) & 64);
     const scoreCard = !msg.poll && !decrypting && scoreUpdate && scoreSides;
     const feedCard = !msg.poll && !decrypting && !scoreCard && feedEmbed;
-    // A message that is only events is an event share: a plan card, not a
-    // bubble holding a chip (§3.2). An event inside a sentence stays a chip.
+    // A message that is only events is an event share: a card, not a bubble
+    // holding a chip (§4.11). An event inside a sentence stays a chip.
     const eventCards = activeGuildId && !decrypting && !ephemeral && !msg.forwarded_from && !msg.poll
       ? eventCardIds(bubbleText)
       : NO_EVENT_CARDS;
-    const hasText = Boolean(bubbleText && bubbleText.trim()) && eventCards.length === 0;
+    const hasText = Boolean(bubbleText && bubbleText.trim()) && eventCards.length === 0 && !unreadable;
     // A bubble holds words (or the promise of them: a decrypting skeleton, a
-    // forwarded quote, a reply's context). A message that is only a picture or
+    // forwarded quote, a sealed message). A message that is only a picture or
     // only a card has no empty bubble above it.
     const hasBubble = !msg.poll && !scoreCard && !feedCard
-      && (ephemeral || decrypting || hasText || Boolean(msg.forwarded_from) || Boolean(replyParentId));
-    // Reactions are ONE chip biting the top-right corner of what the message
-    // is (§3.2): its first picture, else its bubble, else its card. A message
-    // with none of those (a sticker, an embed) gets the same chip in the flow.
-    // The picture must be one the frame below actually draws.
-    const biteMedia = !feedEmbed && !msg.e2ee && !lowBandwidthMode
-      ? (msg.attachments ?? []).find((att) =>
+      && (ephemeral || decrypting || unreadable || hasText || Boolean(msg.forwarded_from));
+    // The pictures this row draws as media bubbles: they join the bubble above
+    // them and each other (§4.11, joined corners).
+    const mediaAttachments = !feedEmbed && !msg.e2ee && !lowBandwidthMode
+      ? (msg.attachments ?? []).filter((att) =>
         !inForwardCard(msg, att)
         && (isImageAttachment(att) || isClipAttachment(att.filename))
         && Boolean(resolveFederatedAttachmentUrl(att, msg.channel_id)))
-      : undefined;
+      : [];
+    // Reactions are ONE chip biting the top trailing corner of what the message
+    // is (§4.11): its bubble, else its first picture, else its card. A message
+    // with none of those (a sticker, an embed) gets the same chip in the flow.
+    const biteMedia = !hasBubble ? mediaAttachments[0] : undefined;
     const biteCard = scoreCard ? 'score' : feedCard ? 'feed' : msg.poll ? 'poll' : eventCards.length > 0 ? 'event' : null;
-    const biteHost: 'media' | 'bubble' | 'card' | 'inline' = biteMedia
-      ? 'media'
-      : hasBubble && !isEditing
-        ? 'bubble'
+    const biteHost: 'media' | 'bubble' | 'card' | 'inline' = hasBubble && !isEditing
+      ? 'bubble'
+      : biteMedia
+        ? 'media'
         : biteCard && !isEditing
           ? 'card'
           : 'inline';
-    const bite = Array.isArray(msg.reactions) && msg.reactions.length > 0 ? (
+    const bite = !pending && Array.isArray(msg.reactions) && msg.reactions.length > 0 ? (
       <ReactionBite
         reactions={msg.reactions as ReactionTally[]}
         guildId={activeGuildId}
@@ -2973,44 +2872,48 @@ function OwnedMessageList({
         placement={biteHost}
       />
     ) : null;
-    // The actions a row offers: react, reply, more (§3.2). On the first of a
-    // group they sit beside the name and time; a row without a header gets
-    // them beside its bubble (fine pointer) or under it (touch, where a tap on
-    // the message is what reveals them).
-    const showActions = isActiveRow || menuOpen;
-    const hasHeader = isFirstInGroup && !isOwnMessage;
-    const actionsPlacement: 'header' | 'beside' | 'below' = hasHeader
-      ? 'header'
-      : isCoarsePointer ? 'below' : 'beside';
-    const renderActions = () => (
+    const thread = linkedThreads[0];
+    // The action capsule (§4.11): react, reply, thread, more. Drawn for every
+    // row and shown by CSS on hover or focus (no state per pointer move); a
+    // stand-in still in the air has nothing to act on yet.
+    const capsule = pending ? null : (
       <MessageActions
         authorName={authorName}
         onReact={canAddReactions ? (e) => rowActions.openReactionPicker(e, msg.id) : undefined}
         onReply={onReply ? () => rowActions.reply(msg) : undefined}
-        onMore={() => setMenuMessageId((curr) => (curr === msg.id ? null : msg.id))}
+        onThread={
+          thread
+            ? () => rowActions.openLinkedThread(thread.id)
+            : canCreateThreads
+              ? () => rowActions.openCreateThreadDialog(msg)
+              : undefined
+        }
+        threadLabel={thread ? 'Open thread' : 'Start a thread'}
+        onMore={(e) => rowActions.openMessageMenu(e, msg, 'more')}
         moreExpanded={menuOpen}
       />
     );
+    const hasName = isFirstInGroup && !isOwnMessage;
     const face = scoreUpdate ? (
-      <span className={cn('pc-sports-trophy', ribbon && 'is-ribbon')} aria-hidden>
-        <Trophy size={16} />
+      <span className="ix-msg__badge-face" aria-hidden>
+        <Trophy size={15} strokeWidth={1.7} />
       </span>
     ) : feedPost ? (
-      <span className="pc-feed-author glass-msg__feed-face" aria-hidden>
-        <FeedSourceIcon kind={feedPost.kind} iconUrl={feedPost.icon_url} size={32} />
+      <span className="ix-msg__badge-face" aria-hidden>
+        <FeedSourceIcon kind={feedPost.kind} iconUrl={feedPost.icon_url} size={30} />
       </span>
     ) : (
       <button
         type="button"
         aria-label={`Open profile for ${authorName}`}
-        className="glass-msg__face-button"
+        className="ix-msg__face-button"
         onClick={(e) => rowActions.openAuthorProfile(e, msg)}
       >
-        <TimelineAvatar userId={author.id} name={author.name} avatar={author.avatar} />
+        <TimelineAvatar userId={author.id} name={author.name} avatar={author.avatar} size={msgFaceSize} />
       </button>
     );
-    const parsedContent = () => {
-      const nodes = getCachedParsedMarkdown(
+    const parsedContent = () =>
+      getCachedParsedMarkdown(
         msg.id,
         bubbleText,
         String(msg.edited_timestamp || msg.edited_at || ''),
@@ -3020,54 +2923,71 @@ function OwnedMessageList({
         downloadTicket,
         me ?? null,
       );
-      return nodes;
-    };
     const editedMark = edited ? (
       <button
         type="button"
-        className="glass-bubble__edited"
-        title={`Edited: ${formatTimestamp(edited)}`}
-        aria-label={`Show edit history for message ${msg.id}`}
+        className="ix-bubble__edited"
+        title={`Edited ${formatTimestamp(edited)}`}
+        aria-label={`Edited. Show the edit history`}
         onClick={(e) => rowActions.openEditHistory(e, msg.id)}
       >
         edited
       </button>
     ) : null;
     const decryptingSkeleton = (
-      <div className="glass-bubble__decrypting" aria-label="Decrypting message">
-        <div className="pc-skeleton" />
-        <div className="pc-skeleton" />
-      </div>
+      <span className="ix-bubble__decrypting" role="img" aria-label="Decrypting message">
+        <span />
+        <span />
+      </span>
     );
-    const ownMeta = isOwnMessage && isFirstInGroup && (
+    const marks = (
+      <>
+        {msg.anonymous?.is_anonymous && <span className="ix-msg__tag">Anonymous</span>}
+        {feedPost ? (
+          <span className="ix-msg__tag">{feedPost.kind === GAME_SERVER_POST_KIND ? 'Game server' : 'Feed'}</span>
+        ) : msg.author.bot && <span className="ix-msg__tag">Bot</span>}
+        {pendingReminderIds.has(msg.id) && (
+          <span className="ix-msg__mark" title="Reminder set">
+            <Clock size={12} aria-hidden />
+            <span className="sr-only">Reminder set</span>
+          </span>
+        )}
+        {msg.expires_at && (
+          <span className="ix-msg__mark" title={`Expires ${formatTimestamp(msg.expires_at)}`}>
+            expires {formatTimestamp(msg.expires_at)}
+          </span>
+        )}
+      </>
+    );
+    const ownMarks = isOwnMessage && isFirstInGroup && (
       msg.anonymous?.is_anonymous || pendingReminderIds.has(msg.id) || msg.expires_at
     );
+    const mediaCount = mediaAttachments.length;
 
     return (
       <MessageRowMemo deps={rowDeps} render={() => (
       <div
         id={`msg-${msg.id}`}
         role="article"
-        aria-label={`Message from ${authorName}`}
+        aria-labelledby={`msg-label-${msg.id}`}
         aria-posinset={row.messageIndex + 1}
         aria-setsize={messages.length}
         tabIndex={msg.id === activeRowMessageId ? 0 : -1}
-        className="glass-msg glass-tl-col"
+        className="glass-msg ix-msg ix-tl-col"
         data-own={isOwnMessage || undefined}
         data-grouped={isGrouped || undefined}
         data-last={isLastInGroup || undefined}
         data-mentions-me={mentionsMe || undefined}
         data-jump={isJumpTarget || undefined}
-        data-from-room={fromRoom || undefined}
-        data-variant={ribbon ? 'ribbon' : undefined}
+        data-menu-open={menuOpen || undefined}
+        data-bitten={(biteHost === 'bubble' && bite !== null) || undefined}
         data-coarse={isCoarsePointer || undefined}
         {...rowHandlers}
       >
-        {bulkDeleteMode && canManageMessages && (
-          <span className="glass-msg__check">
+        {bulkDeleteMode && canManageMessages && !pending && (
+          <span className="ix-msg__check">
             <input
               type="checkbox"
-              className="h-4 w-4 accent-accent-danger"
               checked={selectedMessageIds.includes(msg.id)}
               onChange={() => rowActions.toggleBulkSelection(msg.id)}
               aria-label={`Select message ${msg.id} for bulk delete`}
@@ -3075,90 +2995,57 @@ function OwnedMessageList({
           </span>
         )}
 
-        {/* §3.2: the face sits at the bottom of the group, beside its last
+        {/* §3.1: the 30px face sits at the bottom of the group, beside its last
             bubble. Your own messages have none. */}
-        {!isOwnMessage && <span className="glass-msg__face">{isLastInGroup && face}</span>}
+        {!isOwnMessage && <span className="ix-msg__face">{isLastInGroup && face}</span>}
 
-        <div className="glass-msg__body">
-          {hasHeader && (
-            <div className="glass-msg__head">
+        <div className="ix-msg__body">
+          {/* §10: each bubble carries its author and time for a screen reader. */}
+          <span id={`msg-label-${msg.id}`} className="sr-only">{`${isOwnMessage ? 'You' : authorName}, ${clock}${pending ? ', sending' : ''}. `}</span>
+          {hasName && (
+            <div className="ix-msg__name">
               {feedPost ? (
-                <span className="glass-msg__name">{feedPost.name}</span>
+                <span className="ix-msg__who">{feedPost.name}</span>
               ) : (
                 <button
                   type="button"
-                  className="glass-msg__name"
-                  aria-label={`Open profile for ${authorName}`}
+                  className="ix-msg__who"
                   onClick={(e) => rowActions.openAuthorProfile(e, msg)}
                 >
                   {authorName}
                 </button>
               )}
-              {msg.anonymous?.is_anonymous && (
-                <Chip size="sm" className="text-accent-warning">
-                  Anonymous
-                </Chip>
-              )}
-              {feedPost ? (
-                <Chip size="sm">
-                  {feedPost.kind === GAME_SERVER_POST_KIND ? 'Game server' : 'Feed'}
-                </Chip>
-              ) : msg.author.bot && (
-                <Chip size="sm">
-                  Bot
-                </Chip>
-              )}
-              <InstrumentText dateTime={timestamp} className="glass-msg__time" title={fullTime}>
-                {timelineTime(timestamp)}
-              </InstrumentText>
-              {pendingReminderIds.has(msg.id) && (
-                <span className="glass-msg__time" title="Reminder set">
-                  <Clock size={12} aria-hidden />
-                  <span className="sr-only">Reminder set</span>
-                </span>
-              )}
-              {msg.expires_at && (
-                <span className="glass-msg__time" title={`Expires ${formatTimestamp(msg.expires_at)}`}>
-                  expires {formatTimestamp(msg.expires_at)}
-                </span>
-              )}
-              {showActions && actionsPlacement === 'header' && renderActions()}
+              {marks}
             </div>
           )}
-          {ownMeta && (
-            <div className="glass-msg__head glass-msg__head--own">
-              {msg.anonymous?.is_anonymous && (
-                <Chip size="sm" className="text-accent-warning">
-                  Anonymous
-                </Chip>
-              )}
-              {pendingReminderIds.has(msg.id) && (
-                <span className="glass-msg__time" title="Reminder set">
-                  <Clock size={12} aria-hidden />
-                  <span className="sr-only">Reminder set</span>
-                </span>
-              )}
-              {msg.expires_at && (
-                <span className="glass-msg__time" title={`Expires ${formatTimestamp(msg.expires_at)}`}>
-                  expires {formatTimestamp(msg.expires_at)}
-                </span>
-              )}
-            </div>
-          )}
-          {!hasHeader && (
-            // The time, for a row that has no header to carry it.
-            <InstrumentText dateTime={timestamp} className="sr-only">
-              {fullTime}
-            </InstrumentText>
+          {ownMarks && <div className="ix-msg__name ix-msg__name--own">{marks}</div>}
+          {replyParentId && (
+            <ReplyLine
+              author={
+                replyParentMessage
+                  ? displayName(
+                      replyParentMessage.author,
+                      activeGuildMemberById.get(replyParentMessage.author.id)?.nick,
+                    )
+                  : 'Original message'
+              }
+              preview={
+                replyParentMessage
+                  ? getReplyPreviewText(replyParentMessage, mentionMap, roleNameMap)
+                  : deletedMessageIds.has(replyParentId)
+                    ? 'This message was deleted'
+                    : 'Message not loaded'
+              }
+              onJump={() => rowActions.scrollToMessage(replyParentId)}
+            />
           )}
 
           {isEditing ? (
-            <div className="glass-msg__edit">
+            <div className="ix-msg__edit">
               <textarea
                 autoFocus
-                aria-label={`Edit message from ${authorName}`}
-                className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 text-body text-text-primary shadow-[var(--shadow-well)] outline-none focus-visible:shadow-[var(--focus-ring-input)]"
-                style={{ minHeight: '2.5rem', maxHeight: '50vh' }}
+                aria-label={`Edit your message`}
+                className="ix-msg__edit-field"
                 value={editContent}
                 onChange={(e) => setEditContent(e.target.value)}
                 onKeyDown={rowActions.handleEditKeyDown}
@@ -3177,87 +3064,71 @@ function OwnedMessageList({
                   }
                 }}
               />
-              <div className="mt-1.5 flex items-center gap-2">
+              <div className="ix-msg__edit-line">
+                <span>Esc to cancel · Enter to save</span>
+                <button type="button" className="ix-msg__edit-btn" onClick={rowActions.cancelEditing}>
+                  Cancel
+                </button>
                 <button
+                  type="button"
+                  className="ix-msg__edit-btn"
+                  data-primary
                   onClick={() => void rowActions.saveEditMessage()}
                   disabled={editSaving}
-                  className="inline-flex items-center gap-1 rounded-chip px-2 py-1 text-meta font-semibold text-accent-primary transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-accent-tint focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
                 >
-                  <Check size={13} /> {editSaving ? 'Saving…' : 'Save'}
+                  {editSaving ? 'Saving…' : 'Save'}
                 </button>
-                <button
-                  onClick={rowActions.cancelEditing}
-                  className="inline-flex items-center gap-1 rounded-chip px-2 py-1 text-meta font-semibold text-text-muted transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-                >
-                  <XIcon size={13} /> Cancel
-                </button>
-                <span className="text-[11px] text-text-muted">
-                  Enter to save, Esc to cancel
-                </span>
               </div>
             </div>
           ) : (
             <>
               {hasBubble && (
-                <div className="glass-msg__line" data-bitten={(biteHost === 'bubble' && bite !== null) || undefined}>
-                    <div
-                      className="glass-bubble"
-                      data-join-top={isGrouped || undefined}
-                      title={hasHeader ? undefined : fullTime}
-                    >
-                      {replyParentId && (
-                        <ReplyChip
-                          author={
-                            replyParentMessage
-                              ? displayName(
-                                  replyParentMessage.author,
-                                  activeGuildMemberById.get(replyParentMessage.author.id)?.nick,
-                                )
-                              : 'Original message'
-                          }
-                          preview={
-                            replyParentMessage
-                              ? getReplyPreviewText(replyParentMessage, mentionMap, roleNameMap)
-                              : deletedMessageIds.has(replyParentId)
-                                ? 'This message was deleted'
-                                : 'Message not loaded'
-                          }
-                          onJump={() => rowActions.scrollToMessage(replyParentId)}
-                        />
-                      )}
-                      {ephemeral ? (
-                        <EphemeralMessage>
-                          {decrypting ? decryptingSkeleton : (
-                            <div className="glass-bubble__text">{parsedContent()}</div>
-                          )}
-                        </EphemeralMessage>
-                      ) : decrypting ? (
-                        decryptingSkeleton
-                      ) : (
-                        <>
-                          {msg.forwarded_from && (
-                            <ForwardedCard
-                              forward={msg.forwarded_from}
-                              scope={scope}
-                              quote={decryptingIds.has(msg.id) ? 'Decrypting this message…' : forwardQuote(msg)}
-                              thumbnails={forwardThumbnails(msg)}
-                            />
-                          )}
-                          {hasText && <div className="glass-bubble__text">{parsedContent()}{editedMark}</div>}
-                        </>
-                      )}
-                    </div>
-                  {biteHost === 'bubble' && bite}
-                  {showActions && actionsPlacement === 'beside' && renderActions()}
+                <div className="ix-msg__line">
+                  <div
+                    className="glass-bubble ix-bubble"
+                    data-join-top={isGrouped || undefined}
+                    data-join-bottom={!isLastInGroup || mediaCount > 0 || undefined}
+                    data-muted={unreadable || undefined}
+                    title={fullTime}
+                  >
+                    {ephemeral ? (
+                      <EphemeralMessage>
+                        {decrypting ? decryptingSkeleton : (
+                          <div className="glass-bubble__text">{parsedContent()}</div>
+                        )}
+                      </EphemeralMessage>
+                    ) : decrypting ? (
+                      decryptingSkeleton
+                    ) : unreadable ? (
+                      <EncryptedBubbleText />
+                    ) : (
+                      <>
+                        {msg.forwarded_from && (
+                          <ForwardedCard
+                            forward={msg.forwarded_from}
+                            scope={scope}
+                            quote={decryptingIds.has(msg.id) ? 'Decrypting this message…' : forwardQuote(msg)}
+                            thumbnails={forwardThumbnails(msg)}
+                          />
+                        )}
+                        {hasText && <div className="glass-bubble__text">{parsedContent()}{editedMark}</div>}
+                      </>
+                    )}
+                  </div>
+                  {/* §4.11: on hover or focus, the time outside the bubble on the far side… */}
+                  <time className="ix-msg__time" dateTime={timestamp} aria-hidden>
+                    {clock}
+                  </time>
+                  {/* …and the capsule and the reactions at its top trailing corner. */}
+                  <div className="ix-msg__corner">
+                    {capsule}
+                    {biteHost === 'bubble' && bite}
+                  </div>
                 </div>
               )}
-              {!hasBubble && showActions && actionsPlacement === 'beside' && (
-                // Nothing to sit beside (a picture, a card): the actions float
-                // at the far side of the column, on their own plate.
-                <div className="glass-msg__float">{renderActions()}</div>
-              )}
+              {!hasBubble && capsule && <div className="ix-msg__corner ix-msg__corner--float">{capsule}</div>}
               {scoreCard && scoreSides && scoreUpdate && (
-                <div className="glass-msg__card" data-join-top={isGrouped || undefined} data-bitten={(biteHost === 'card' && biteCard === 'score' && bite !== null) || undefined}>
+                <div className="ix-msg__card" data-bitten={(biteHost === 'card' && biteCard === 'score' && bite !== null) || undefined}>
                   <ScoreUpdateCard
                     update={scoreUpdate}
                     lead={scoreSides.lead}
@@ -3268,13 +3139,13 @@ function OwnedMessageList({
                 </div>
               )}
               {feedCard && (
-                <div className="glass-msg__card" data-join-top={isGrouped || undefined} data-bitten={(biteHost === 'card' && biteCard === 'feed' && bite !== null) || undefined}>
+                <div className="ix-msg__card" data-bitten={(biteHost === 'card' && biteCard === 'feed' && bite !== null) || undefined}>
                   <FeedPostCard embed={feedCard} />
                   {biteHost === 'card' && biteCard === 'feed' && bite}
                 </div>
               )}
               {msg.poll && (
-                <div className="glass-msg__card glass-msg__card--plan" data-join-top={isGrouped || undefined} data-bitten={(biteHost === 'card' && biteCard === 'poll' && bite !== null) || undefined}>
+                <div className="ix-msg__card" data-bitten={(biteHost === 'card' && biteCard === 'poll' && bite !== null) || undefined}>
                   <PollMessageCard
                     channelId={channelId}
                     poll={msg.poll}
@@ -3287,11 +3158,15 @@ function OwnedMessageList({
               {eventCards.map((eventId, eventIndex) => (
                 <div
                   key={eventId}
-                  className="glass-msg__card glass-msg__card--plan"
-                  data-join-top={isGrouped || eventIndex > 0 || undefined}
+                  className="ix-msg__card"
                   data-bitten={(eventIndex === 0 && biteHost === 'card' && biteCard === 'event' && bite !== null) || undefined}
                 >
-                  <EventPlanCard guildId={activeGuildId} eventId={eventId} joinTop={isGrouped || eventIndex > 0} />
+                  <EventPlanCard
+                    guildId={activeGuildId}
+                    eventId={eventId}
+                    joinTop={isGrouped || eventIndex > 0}
+                    onOpenDetails={activeGuildId ? () => rowActions.openEventDetails() : undefined}
+                  />
                   {eventIndex === 0 && biteHost === 'card' && biteCard === 'event' && bite}
                 </div>
               ))}
@@ -3308,8 +3183,8 @@ function OwnedMessageList({
           )}
 
           {msg.anonymous?.is_anonymous && deanonymizedById[msg.id] && (
-            <p className="glass-msg__note">
-              Real author: <span className="font-semibold text-text-secondary">{deanonymizedById[msg.id]}</span>
+            <p className="ix-msg__note">
+              Real author: <span className="ix-msg__note-strong">{deanonymizedById[msg.id]}</span>
             </p>
           )}
 
@@ -3318,7 +3193,7 @@ function OwnedMessageList({
             <GitHubEventEmbed content={msg.content || ''} />
           )}
 
-          {/* URL Embeds — server-provided or client-extracted */}
+          {/* Link embeds: a card bubble under the text bubble (§4.11). */}
           {!feedEmbed && (() => {
             const embeds = msg.embeds || [];
             const contentUrls = embeds.length === 0 ? extractUrls(msg.content) : [];
@@ -3327,7 +3202,7 @@ function OwnedMessageList({
               : contentUrls.slice(0, 3).map((url) => ({ url }));
             if (allEmbeds.length === 0) return null;
             return (
-              <div className="glass-msg__extras">
+              <div className="ix-msg__extras">
                 {allEmbeds.map((embed) => (
                   <MessageEmbedCard key={embed.url} embed={embed} />
                 ))}
@@ -3335,52 +3210,21 @@ function OwnedMessageList({
             );
           })()}
 
-          {linkedThreads.length > 0 && (
-            <div className="glass-msg__extras">
-              {linkedThreads.map((thread) => (
-                <TimelineAuthor key={thread.id} store={lightStore} author={author}>
-                  {(person) => (
-                    <ThreadRow
-                      name={thread.name || 'Thread'}
-                      meta={threadMetaFor(thread)}
-                      people={[person]}
-                      archived={Boolean(thread.thread_metadata?.archived)}
-                      onOpen={() => rowActions.openLinkedThread(thread.id)}
-                    />
-                  )}
-                </TimelineAuthor>
-              ))}
-            </div>
-          )}
-          {/* Reactions with nothing to bite (§3.2): the same chip, in the flow. */}
+          {/* Reactions with nothing to bite: the same chip, in the flow. */}
           {biteHost === 'inline' && bite}
           {msg.stickers && msg.stickers.length > 0 && (
-            <div className="glass-msg__extras glass-msg__stickers">
+            <div className="ix-msg__extras ix-msg__stickers">
               {msg.stickers.map((sticker) => {
                 const stickerSrc = sticker.image_url ? resolveAttachmentUrl(sticker.image_url) : null;
                 return (
-                  <div
-                    key={sticker.id}
-                    className="relative inline-flex flex-col items-center gap-1"
-                    title={sticker.name}
-                  >
+                  <div key={sticker.id} className="ix-sticker" title={sticker.name}>
                     <ResourceImage
                       src={stickerSrc}
                       alt={sticker.name}
-                      className="rounded-well object-contain"
+                      className="ix-sticker__img"
                       style={{ width: 128, height: 128 }}
                       loading="lazy"
-                      fallback={
-                      <div className="inline-flex items-center gap-1.5 rounded-well border border-border-subtle bg-bg-mod-subtle px-2.5 py-1 text-xs font-semibold text-text-secondary">
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                          <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
-                          <polyline points="14 2 14 8 20 8" />
-                          <circle cx="10" cy="13" r="2" />
-                          <path d="m20 17-1.09-1.09a2 2 0 0 0-2.82 0L10 22" />
-                        </svg>
-                        {sticker.name}
-                      </div>
-                      }
+                      fallback={<span className="ix-sticker__name">{sticker.name}</span>}
                     />
                   </div>
                 );
@@ -3389,8 +3233,8 @@ function OwnedMessageList({
           )}
           {/* Attachments */}
           {!feedEmbed && msg.attachments && msg.attachments.length > 0 && (
-            <div className="glass-msg__attachments">
-              {msg.attachments.filter((att) => !inForwardCard(msg, att)).map((att, attIndex) => {
+            <div className="ix-msg__attachments">
+              {msg.attachments.filter((att) => !inForwardCard(msg, att)).map((att) => {
                 // Encrypted attachment seam: in an end-to-end encrypted
                 // conversation the server's row is an opaque blob. Its real
                 // name, type and bytes come from the encrypted message body and
@@ -3408,7 +3252,10 @@ function OwnedMessageList({
                 const attachmentIsImage = isImageAttachment(att) && Boolean(src);
                 const busy = attachmentBusyId === att.id;
                 const busyLabel = busy ? (downloadProgress != null ? `${downloadProgress}%` : 'Downloading…') : null;
-                const joinTop = hasBubble || isGrouped || attIndex > 0;
+                const mediaIndex = mediaAttachments.indexOf(att);
+                // Media bubbles join what they follow in the group, and what follows them (§4.11).
+                const joinTop = hasBubble || isGrouped || mediaIndex > 0;
+                const joinBottom = !isLastInGroup || (mediaIndex >= 0 && mediaIndex < mediaCount - 1);
                 // Downloading is one gesture whether it is a picture's tool or a
                 // file's text button; so is deleting your own attachment.
                 const download = () => void rowActions.downloadAttachment(att.id, att.filename);
@@ -3424,11 +3271,11 @@ function OwnedMessageList({
                         joinTop={joinTop}
                         actions={
                           <>
-                            <button type="button" className="glass-file__action glass-focusable" onClick={download} disabled={busy}>
+                            <button type="button" className="ix-file__action" onClick={download} disabled={busy}>
                               {busyLabel ?? 'Download'}
                             </button>
                             {isOwnMessage && !isFederated && (
-                              <button type="button" className="glass-file__action glass-focusable" onClick={remove} disabled={busy}>
+                              <button type="button" className="ix-file__action" onClick={remove} disabled={busy}>
                                 {busy ? 'Deleting…' : 'Delete'}
                               </button>
                             )}
@@ -3481,6 +3328,7 @@ function OwnedMessageList({
                     <GlassMedia
                       key={att.id}
                       joinTop={joinTop}
+                      joinBottom={joinBottom}
                       width={att.width}
                       height={att.height}
                       badge={federatedNote}
@@ -3502,10 +3350,10 @@ function OwnedMessageList({
                         type="button"
                         aria-label={`Open image preview: ${att.filename}`}
                         title={att.filename}
-                        className="glass-media__open"
+                        className="ix-media__open"
                         onClick={() => void openImageLightbox()}
                       >
-                        <ResolvedAttachmentImage url={src!} alt={att.filename} className="glass-media__img" />
+                        <ResolvedAttachmentImage url={src!} alt={att.filename} className="ix-media__img" />
                       </button>
                     </GlassMedia>
                   );
@@ -3520,8 +3368,10 @@ function OwnedMessageList({
                     <GlassMedia
                       key={att.id}
                       joinTop={joinTop}
-                      width={16}
-                      height={9}
+                      joinBottom={joinBottom}
+                      // A clip is 16:9 at the media bubble's full width.
+                      width={MEDIA_MAX}
+                      height={Math.round((MEDIA_MAX * 9) / 16)}
                       badge={federatedNote}
                       bite={att.id === biteMedia?.id ? bite : undefined}
                       tools={
@@ -3552,11 +3402,11 @@ function OwnedMessageList({
                     onOpen={download}
                     actions={
                       <>
-                        <button type="button" className="glass-file__action glass-focusable" onClick={download} disabled={busy}>
+                        <button type="button" className="ix-file__action" onClick={download} disabled={busy}>
                           {busyLabel ?? 'Download'}
                         </button>
                         {isOwnMessage && !isFederated && (
-                          <button type="button" className="glass-file__action glass-focusable" onClick={remove} disabled={busy}>
+                          <button type="button" className="ix-file__action" onClick={remove} disabled={busy}>
                             {busy ? 'Deleting…' : 'Delete'}
                           </button>
                         )}
@@ -3567,198 +3417,37 @@ function OwnedMessageList({
               })}
             </div>
           )}
-          {showActions && actionsPlacement === 'below' && (
-            <div className="glass-msg__below">{renderActions()}</div>
+          {linkedThreads.length > 0 && (
+            <div className="ix-msg__threads">
+              {linkedThreads.map((linked) => {
+                const lastReply = snowflakeTime(linked.last_message_id ?? '');
+                const at = lastReply != null ? new Date(lastReply).toISOString() : linked.created_at ?? null;
+                return (
+                  <ThreadLine
+                    key={linked.id}
+                    name={linked.name || 'Thread'}
+                    replies={linked.message_count ?? null}
+                    time={at ? timelineTime(at) : null}
+                    archived={Boolean(linked.thread_metadata?.archived)}
+                    onOpen={() => rowActions.openLinkedThread(linked.id)}
+                  />
+                );
+              })}
+            </div>
           )}
         </div>
-
-        {menuMessageId === msg.id && (
-          <div
-            // The menu hangs below its trigger, which is fine in the middle of
-            // a timeline and wrong at the end of one: the newest message is the
-            // message people act on, it sits against the composer, and 235px of
-            // menu below it puts Create thread, Edit, Pin, Save for later and
-            // Delete past the bottom of the window. Nothing says so — there is
-            // no scrollbar on the menu and the timeline is already at rest — so
-            // the menu reads as a menu with two items. Measure once on mount
-            // and hang it above the row instead, when there is more room there.
-            //
-            // The floor is NOT the window. The composer plate is painted over
-            // the bottom ~90px of it, and a menu that ends between the two is
-            // fully on screen and still unclickable — `elementFromPoint` on
-            // "Delete" returns the composer surface. Measured at 1440x900: the
-            // composer starts at y=809, and three of the eight newest messages
-            // put one or two rows of their menu underneath it. The timeline's
-            // own scroll port is the frame that matters; its bottom edge is
-            // exactly where the composer begins and its top edge is where the
-            // channel header ends. When neither side has room the menu scrolls
-            // rather than hiding rows nothing says are there.
-            ref={(node) => {
-              if (!node) return;
-              node.style.top = '';
-              node.style.bottom = '';
-              node.style.maxHeight = '';
-              node.style.overflowY = '';
-              const row = node.parentElement?.getBoundingClientRect();
-              if (!row) return;
-              let port: HTMLElement | null = node.parentElement;
-              while (port && port !== document.body) {
-                const overflowY = getComputedStyle(port).overflowY;
-                if (overflowY === 'auto' || overflowY === 'scroll') break;
-                port = port.parentElement;
-              }
-              const frame =
-                port && port !== document.body
-                  ? port.getBoundingClientRect()
-                  : { top: 0, bottom: window.innerHeight };
-              const floor = Math.min(frame.bottom, window.innerHeight) - 8;
-              const ceiling = Math.max(frame.top, 0) + 8;
-              const menu = node.getBoundingClientRect();
-              const offset = menu.top - row.top;
-              let height = menu.height;
-              if (height > floor - ceiling) {
-                height = Math.max(MIN_MESSAGE_MENU_HEIGHT, floor - ceiling);
-                node.style.maxHeight = `${height}px`;
-                node.style.overflowY = 'auto';
-              }
-              let top = row.top + offset;
-              // Below the trigger first, above the row when that runs past the
-              // floor, and pinned to the floor when neither fits — the newest
-              // rows sit *under* the composer plate, so "above the row" alone
-              // still left Delete beneath it.
-              if (top + height > floor) top = row.top - height;
-              if (top + height > floor) top = floor - height;
-              if (top < ceiling) top = ceiling;
-              if (Math.abs(top - (row.top + offset)) < 0.5) return;
-              node.style.top = `${Math.round(top - row.top)}px`;
-            }}
-            className="pc-floating glass-msg__menu z-10 min-w-[10rem] max-w-[calc(100vw-2.75rem)] p-1"
-          >
-            {canAddReactions && (
-              <button
-                className="context-menu-item w-full text-left"
-                onClick={(e) => {
-                  setMenuMessageId(null);
-                  rowActions.openReactionPicker(e, msg.id);
-                }}
-              >
-                Add reaction
-              </button>
-            )}
-            {msg.anonymous?.can_deanonymize && (
-              <button
-                className="context-menu-item w-full text-left"
-                disabled={Boolean(deanonymizedById[msg.id]) || deanonymizingId === msg.id}
-                onClick={() => {
-                  setMenuMessageId(null);
-                  void rowActions.deanonymizeMessage(msg);
-                }}
-              >
-                {deanonymizingId === msg.id ? (
-                  <span className="inline-flex items-center gap-1.5"><Loader2 size={14} className="animate-spin" /> Revealing…</span>
-                ) : deanonymizedById[msg.id] ? (
-                  `Author: ${deanonymizedById[msg.id]}`
-                ) : (
-                  'Reveal author'
-                )}
-              </button>
-            )}
-            {onReply && (
-              <button
-                className="context-menu-item w-full text-left"
-                onClick={() => {
-                  setMenuMessageId(null);
-                  rowActions.reply(msg);
-                }}
-              >
-                Reply
-              </button>
-            )}
-            {canCreateThreads && (
-              <button
-                className="context-menu-item w-full text-left"
-                onClick={() => rowActions.openCreateThreadDialog(msg)}
-              >
-                Create thread
-              </button>
-            )}
-            {canEditMessage && (
-              <button className="context-menu-item w-full text-left" onClick={() => rowActions.startEditingMessage(msg)}>
-                Edit
-              </button>
-            )}
-            {canPinMessage && (
-              <button
-                className="context-menu-item w-full text-left"
-                onClick={async () => {
-                  setMenuMessageId(null);
-                  await rowActions.togglePin(msg);
-                }}
-              >
-                {msg.pinned ? 'Unpin' : 'Pin'}
-              </button>
-            )}
-            <button
-              className="context-menu-item w-full text-left"
-              onClick={(event) => rowActions.openRemind(msg, event.clientX, event.clientY)}
-            >
-              <span className="flex items-center gap-2 whitespace-nowrap">
-                <Clock size={14} />
-                Remind me
-              </span>
-            </button>
-            <button
-              className="context-menu-item w-full text-left"
-              disabled={Boolean(forwardBlocked)}
-              title={forwardBlocked ?? undefined}
-              onClick={() => {
-                if (forwardBlocked) return;
-                setMenuMessageId(null);
-                setForwardTarget(msg);
-                setForwardOpen(true);
-              }}
-            >
-              <span className="flex items-center gap-2 whitespace-nowrap">
-                <Forward size={14} />
-                Forward
-              </span>
-            </button>
-            <button
-              className="context-menu-item w-full text-left"
-              onClick={() => void rowActions.toggleSavedMessage(msg)}
-            >
-              {/* `.context-menu-item` sets `display:block`, which beats the
-                  `flex` utility — and preflight makes every icon a block — so
-                  the icon and its label used to land on two lines. The inner
-                  span owns the row instead, where nothing outranks it. */}
-              <span className="flex items-center gap-2 whitespace-nowrap">
-                {savedIds.has(msg.id) ? <BookmarkCheck size={14} /> : <Bookmark size={14} />}
-                {savedIds.has(msg.id) ? 'Remove from Saved' : 'Save for later'}
-              </span>
-            </button>
-            {activeGuildId && msg.author.id !== me && (
-              <button className="context-menu-item w-full text-left" onClick={() => rowActions.openReportDialog(msg)}>
-                Report
-              </button>
-            )}
-            {canDeleteMessage && (
-              <button className="context-menu-item danger w-full text-left" onClick={() => rowActions.requestDelete(msg.id)}>
-                Delete
-              </button>
-            )}
-          </div>
-        )}
       </div>
       )} />
     );
   };
 
   const virtualItems = virtualizer.getVirtualItems();
+  const initialLoading = isLoading && messages.length === 0;
+  const failed = Boolean(error) && messages.length === 0 && !isLoading;
+  const empty = !initialLoading && !failed && drawn.length === 0;
 
   return (
-    <div className={cn('glass-timeline relative flex-1 overflow-hidden', ribbon && 'glass-timeline--ribbon')}>
-      {/* First, so the rows rendered after it in the same pass read its light. */}
-      <TimelineLightSource guildId={activeGuildId} serverId={channelServerId} store={lightStore} />
+    <div className="glass-timeline ix-timeline relative flex-1 overflow-hidden">
       <div ref={actionAnchor} className="pointer-events-none fixed h-px w-px" aria-hidden />
       {remindTarget && (
         <RemindMeMenu
@@ -3788,7 +3477,7 @@ function OwnedMessageList({
       <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {newMessageAnnouncement}
       </div>
-      {/* The pull lamp — a window the dragged-down timeline reveals. Its
+      {/* The pull lamp: a window the dragged-down timeline reveals. Its
           position and glow are driven from the touch listeners above; it is
           scenery, never interactive. */}
       {isCoarsePointer && (
@@ -3799,118 +3488,89 @@ function OwnedMessageList({
         />
       )}
       <div
-        ref={scrollRef}
-        // §3.2: bottom-anchored in the 720px column, with a 28px fade under
-        // the header (`glass-timeline.css`).
-        className="glass-timeline__scroller flex h-full flex-col overflow-y-auto"
+        ref={setScroller}
+        // §3.1: bottom-anchored in the conversation column; the header (the
+        // large title) is the scroller's first item, above the history.
+        className="glass-timeline__scroller ix-timeline__scroller"
         onScroll={handleScroll}
-        style={{ overscrollBehavior: 'contain' }}
         role="feed"
         aria-busy={isLoading ? 'true' : 'false'}
         aria-label="Message history"
       >
-        {isLoading && messages.length === 0 ? (
-          <div className="py-6" aria-label="Loading messages">
-            {Array.from({ length: 8 }, (_, i) => (
-              <SkeletonMessage key={i} />
-            ))}
+        {header != null && (failed || initialLoading || empty || !hasMore) && (
+          <div className="ix-timeline__header">{header}</div>
+        )}
+        {initialLoading ? (
+          <div className="ix-timeline__loading" aria-label="Loading messages">
+            <HistorySkeleton label="Loading messages" />
           </div>
-        ) : error && messages.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center px-4">
+        ) : failed ? (
+          <div className="ix-timeline__error">
             <ErrorBanner
               className="w-full max-w-md"
-              message={error}
+              message={error ?? 'The messages could not be loaded.'}
               onRetry={() => void fetchMessages(channelId)}
             />
           </div>
-        ) : drawn.length === 0 ? (
-          <div data-timeline-empty className="glass-tl-col flex h-full flex-col items-start justify-end gap-3 pb-8">
-            <span className="pc-window h-2.5 w-2.5" aria-hidden />
-            <div>
-              <h3 className="pc-display text-heading text-text-primary">
-                {emptyGroupDm
-                  ? 'Waiting on everyone’s encryption'
-                  : emptyThread
-                  ? 'No replies yet'
-                  : activeChannel?.name ? `Nothing in ${activeChannel.name} yet` : 'Nobody has said anything here yet'}
-              </h3>
-              <p className="mt-1 max-w-md text-body text-text-body">
-                {emptyGroupDm
-                  ? groupEnrollmentReason(groupPending)
-                  : emptyThread
-                  ? 'Nobody has replied in this thread yet. Say the first thing.'
-                  : 'Nobody has posted here yet. Be the first to say something.'}
-              </p>
-            </div>
-            {/* Never offer the one action this conversation is going to refuse. */}
-            {!emptyGroupDm && <Button
-              variant="primary"
-              className="mt-1 gap-2"
-              onClick={() => {
-                const composer = document.querySelector<HTMLTextAreaElement>('textarea[data-composer-input]');
-                composer?.focus();
-              }}
-            >
-              <Send size={16} />
-              {emptyThread ? 'Send the first reply' : 'Send the first message'}
-            </Button>}
+        ) : empty ? (
+          // §1.3 `emptyState`: what the conversation says before anything is
+          // in it. `data-timeline-empty` is the send flight's: the first
+          // message flies in and it leaves.
+          <div data-timeline-empty className="ix-timeline__empty">
+            {emptyState ?? (
+              <div className="ix-tl-empty ix-tl-col">
+                <h3 className="ix-tl-empty__title">
+                  {emptyGroupDm
+                    ? 'Waiting on everyone’s encryption'
+                    : emptyThread
+                      ? 'No replies yet'
+                      : activeChannel?.name
+                        ? `${activeChannel.name} is ready`
+                        : 'Nothing here yet'}
+                </h3>
+                <p className="ix-tl-empty__line">
+                  {emptyGroupDm
+                    ? groupEnrollmentReason(groupPending)
+                    : emptyThread
+                      ? 'Nobody has replied in this thread yet.'
+                      : activeChannel?.topic || 'Nothing here yet.'}
+                </p>
+              </div>
+            )}
           </div>
         ) : (
-          // §3.2: a conversation reads from the bottom. `mt-auto` only has
-          // room to act when the timeline is shorter than the pane; past that
-          // it scrolls.
           <>
-            <div ref={timelineContentRef} className="glass-timeline__content mt-auto shrink-0" style={{ height: virtualizer.getTotalSize(), width: '100%', position: 'relative' }}>
+            <div
+              ref={timelineContentRef}
+              className="glass-timeline__content ix-timeline__content"
+              style={{ height: virtualizer.getTotalSize() }}
+            >
               {virtualItems.map((virtualRow) => {
                 const row = rows[virtualRow.index];
-                // Every virtual row is `transform`ed, and a transform opens a
-                // stacking context — so the actions menu's own `z-10` can only
-                // ever rank it inside its own row. Without this, the rows below
-                // (later in DOM order, transparent, full width) paint over the
-                // open menu and swallow its clicks: `document.elementFromPoint`
-                // on "Edit" returns the *next message's* div, and only the
-                // items that happen to hang past the last row are reachable.
-                // Lifting the row that owns the open menu above its siblings is
-                // what makes the menu clickable at all.
-                const ownsOpenMenu = row.type === 'message' && menuMessageId === row.message.id;
+                if (!row) return null;
                 return (
                   <div
                     key={virtualRow.key}
                     data-index={virtualRow.index}
+                    data-row-key={row.key}
                     ref={virtualizer.measureElement}
-                    style={{
-                      position: 'absolute',
-                      top: 0,
-                      left: 0,
-                      width: '100%',
-                      transform: `translateY(${virtualRow.start}px)`,
-                      ...(ownsOpenMenu ? { zIndex: 20 } : null),
-                    }}
+                    className="ix-timeline__row"
+                    style={{ transform: `translateY(${virtualRow.start}px)` }}
                   >
                     {renderRow(row)}
                   </div>
                 );
               })}
             </div>
-            {/* §5.1: "receipts fade in only after the server answers — never
-                before". In this app a row cannot exist any earlier than that:
-                the runtime publishes a message only once the authoritative
-                recovery feed has vouched for it, so this line and the row it
-                belongs to arrive together. It sits under the last row rather
-                than inside it so no message's height ever depends on it. */}
+            {/* §5.1: "receipts fade in only after the server answers, never
+                before". The runtime publishes a message only once the
+                authoritative recovery feed has vouched for it, so this line
+                and the row it belongs to arrive together. It sits under the
+                last row rather than inside it so no message's height ever
+                depends on it. */}
             {deliveredReceipt && (
-              <div
-                // `relative`, and no longer pulled a whole line up into the row
-                // above it. The timeline's rows are absolutely positioned, so
-                // they paint *over* any static element after them: with the old
-                // `-mt-4` the receipt was drawn behind the last row, and when
-                // that row ended in an attachment card the card's own background
-                // took the top 5px of the word, which read as "Jelivered".
-                className="glass-tl-receipt glass-tl-col"
-              >
-                <InstrumentText data-motion-receipt>
-                  Delivered
-                </InstrumentText>
+              <div className="glass-tl-receipt ix-tl-col">
+                <span data-motion-receipt>Delivered</span>
               </div>
             )}
           </>
@@ -4036,38 +3696,26 @@ function OwnedMessageList({
         </div>
       )}
 
-      {showScrollButton && (
-        <button
-          onClick={scrollToBottom}
-          className="pc-focusable absolute bottom-[calc(var(--safe-bottom)+0.75rem)] left-1/2 flex h-[var(--h-control)] -translate-x-1/2 items-center gap-2 rounded-[var(--radius-control)] bg-bg-raised px-4 text-label font-semibold text-text-primary shadow-[var(--shadow-lifted)] transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-strong"
-        >
-          <ArrowDown size={16} className="text-accent-primary" />
-          Jump to present
-        </button>
+      {showScrollButton && !empty && (
+        <div className="ix-jump-host">
+          <JumpToLatest count={newMessageCount} onJump={scrollToBottom} />
+        </div>
       )}
       {bulkDeleteMode && canManageMessages && (
-        <div className="absolute bottom-[calc(var(--safe-bottom)+0.75rem)] left-1/2 z-20 flex w-[min(95%,38rem)] -translate-x-1/2 flex-wrap items-center justify-between gap-2 rounded-[var(--radius-well)] bg-bg-raised px-4 py-2.5 shadow-[var(--shadow-lifted)]">
-          <span className="text-label font-semibold tabular-nums text-text-secondary">
-            {selectedMessageIds.length} selected
-          </span>
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              className="rounded-chip px-3 py-1.5 text-label font-semibold text-text-secondary transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-              onClick={cancelBulkDelete}
-              disabled={bulkDeleting}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              className="rounded-chip bg-danger-well px-3 py-1.5 text-label font-semibold text-text-on-danger shadow-[var(--shadow-chip)] transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-danger-well-hover focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
-              onClick={() => void executeBulkDelete()}
-              disabled={bulkDeleting || selectedMessageIds.length === 0}
-            >
-              {bulkDeleting ? 'Deleting...' : 'Delete selected'}
-            </button>
-          </div>
+        <div className="ix-bulk" role="toolbar" aria-label="Bulk delete">
+          <span className="ix-bulk__count">{selectedMessageIds.length} selected</span>
+          <button type="button" className="ix-bulk__btn" onClick={cancelBulkDelete} disabled={bulkDeleting}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="ix-bulk__btn"
+            data-danger
+            onClick={() => void executeBulkDelete()}
+            disabled={bulkDeleting || selectedMessageIds.length === 0}
+          >
+            {bulkDeleting ? 'Deleting…' : 'Delete selected'}
+          </button>
         </div>
       )}
       {reactionPicker.value && createPortal(
@@ -4098,12 +3746,21 @@ function OwnedMessageList({
         />,
         document.body
       )}
-      <ContextMenu
-        open={contextMenu.isOpen}
-        items={contextMenu.items}
-        position={contextMenu.position}
-        onClose={closeContextMenu}
-      />
+      {(() => {
+        const target = messageMenu ? drawn.find((entry) => entry.id === messageMenu.messageId) : undefined;
+        const at = messageMenu ? menuPoint(messageMenu.anchor) : { x: 0, y: 0 };
+        return (
+          <IxMenu
+            open={Boolean(messageMenu && target)}
+            anchor={messageMenu?.anchor ?? null}
+            onClose={closeMessageMenu}
+            label="Message actions"
+            width={232}
+            entries={target && messageMenu ? buildMessageMenu(target, at, 'x' in messageMenu.anchor) : []}
+            testId="ix-message-menu"
+          />
+        );
+      })()}
       <Modal
         open={deleteConfirmId !== null}
         onClose={() => setDeleteConfirmId(null)}

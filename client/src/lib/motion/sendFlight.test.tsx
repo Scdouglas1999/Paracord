@@ -208,6 +208,26 @@ describe('takeoff', () => {
     expect(on(picture!).keyframes.map((frame) => [frame.offset, frame.opacity])).toEqual([[0, 0], [0.14, 0], [0.22, 1], [1, 1]]);
   });
 
+  it('carries the Index reply line that sits above the bubble, in the row, with the row\'s own inks', () => {
+    const bubble = bubbleAt({ left: 900, top: 700, width: 254, height: 40 });
+    const row = bubble.parentElement!;
+    row.id = 'msg-sending:n1';
+    const line = document.createElement('button');
+    line.className = 'glass-tl-reply';
+    line.textContent = 'Jeremy: who is up for a run';
+    row.prepend(line);
+    rects.set(line, { left: 950, top: 680, width: 204, height: 17 });
+    flySend({ text: 'count me in', origin: ORIGIN, bubble: () => bubble, onLand: () => {} });
+    const picture = document.querySelector<HTMLElement>('.glass-flight__chip');
+    expect(picture).not.toBeNull();
+    // Above the bubble (a negative top inside the ghost), and not wrapped in the bubble's inks.
+    expect(picture?.style.top).toBe('-20px');
+    expect(picture?.style.left).toBe('50px');
+    expect(picture?.querySelector('.glass-bubble')).toBeNull();
+    expect(picture?.querySelector('.glass-tl-reply')?.textContent).toBe('Jeremy: who is up for a run');
+    expect(on(picture!).keyframes.map((frame) => [frame.offset, frame.opacity])).toEqual([[0, 0], [0.14, 0], [0.22, 1], [1, 1]]);
+  });
+
   it('leaves from the words\' own left edge and the box\'s middle', () => {
     const bubble = bubbleAt({ left: 900, top: 700, width: 254, height: 40 });
     flySend({ text: 'count me in', origin: ORIGIN, bubble: () => bubble, onLand: () => {} });

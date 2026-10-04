@@ -63,7 +63,7 @@ function reactionMark(emoji: string, guildId: string | null | undefined, size: n
       />
     );
   }
-  return <span aria-hidden className="glass-bite__emoji">{emoji}</span>;
+  return <span aria-hidden className="ix-bite__emoji">{emoji}</span>;
 }
 
 /** How a reaction reads to assistive tech: the emoji, how many, and whether one is yours. */
@@ -102,12 +102,12 @@ function ReactionSegment({
       ref={anchorRef}
       data-flip-key={emoji}
       data-flip-own={me || undefined}
-      className="glass-bite__seg-wrap"
+      className="ix-bite__seg-wrap"
       {...state.triggerProps}
     >
       <button
         type="button"
-        className="glass-bite__seg glass-focusable"
+        className="ix-bite__seg"
         data-me={me || undefined}
         aria-pressed={me}
         aria-label={reactionLabel(reaction)}
@@ -117,10 +117,10 @@ function ReactionSegment({
           onToggle();
         }}
       >
-        <span data-flip-glyph className="glass-bite__mark">
+        <span data-flip-glyph className="ix-bite__mark">
           {reactionMark(emoji, guildId, 13)}
         </span>
-        <span className="glass-bite__count">
+        <span className="ix-bite__count">
           <RollingNumber value={count} announce={false} />
         </span>
       </button>
@@ -163,7 +163,7 @@ export const ReactionBite = memo(function ReactionBite({
   // download ticket its URL needs is minted.
   useDownloadTicket();
   return (
-    <div ref={rowRef} className="glass-bite" role="group" aria-label="Reactions" data-placement={placement}>
+    <div ref={rowRef} className="ix-bite" role="group" aria-label="Reactions" data-placement={placement}>
       {reactions.map((reaction, index) => (
         <ReactionSegment
           key={`${reaction.emoji}-${index}`}

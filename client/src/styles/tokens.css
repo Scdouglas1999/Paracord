@@ -1013,6 +1013,11 @@
 
   /* A code block inside a message (§8.4, IX-8): one step below the bubble it sits in. */
   --ix-code: #18191c;
+  /* The timeline (§4.11, IX-11): the reactions chip that bites a bubble's corner,
+     and the near-solid action capsule and jump-to-latest capsule over the feed. */
+  --ix-react: #34353a;
+  --ix-capsule: rgba(30, 31, 35, 0.98);
+  --ix-shadow-capsule: 0 6px 18px rgba(0, 0, 0, 0.35);
 
   /* Every focus-visible ring: outline: var(--ix-focus); outline-offset: var(--ix-focus-offset). */
   --ix-focus: 2px solid rgba(255, 255, 255, 0.85);

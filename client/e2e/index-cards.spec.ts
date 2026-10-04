@@ -548,11 +548,11 @@ test.describe('files and media', () => {
     expect((await css(failure, ['color']))['color']).toBe('rgb(255, 179, 168)');
   });
 
-  test('the timeline\'s own file (until it is rebuilt) wears the same card', async ({ page }) => {
+  test('the timeline\'s own file wears the same card', async ({ page }) => {
     await open(page);
-    const file = cell(page, 'file-glass').locator('.glass-file');
+    const file = cell(page, 'file-glass').locator('.ix-file--timeline');
     expect(await css(file, ['background-color', 'border-top-left-radius'])).toEqual({ 'background-color': 'rgb(42, 43, 47)', 'border-top-left-radius': '20px' });
-    const icon = await file.locator('.glass-file__icon').boundingBox();
+    const icon = await file.locator('.ix-file__tile').boundingBox();
     expect([icon?.width, icon?.height]).toEqual([38, 38]);
   });
 });

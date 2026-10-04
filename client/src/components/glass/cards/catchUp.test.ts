@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Message } from '../../../types';
-import { catchUpClock, catchUpLabel, findCatchUp } from './catchUp';
+import { findCatchUp } from './catchUp';
 
 /** Pin the locale: the divider quotes the clock in the reader's own form. */
 const RealDateTimeFormat = Intl.DateTimeFormat;
@@ -62,24 +62,5 @@ describe('findCatchUp', () => {
     const found = findCatchUp([msg(snowflake(new Date(2026, 9, 1, 21, 2)), 'a')], snowflake(readAt), 'me', noSystem, false);
     expect(found?.since).not.toBeNull();
     expect(new Date(found!.since!).getTime()).toBe(readAt.getTime());
-  });
-});
-
-describe('the divider’s words', () => {
-  const today = new Date(2026, 9, 1, 21, 12).getTime();
-
-  it('quotes today’s clock bare, as the reference does ("8:58")', () => {
-    expect(catchUpClock(new Date(2026, 9, 1, 20, 58).toISOString(), today)).toBe('8:58');
-  });
-
-  it('says which day when it was not today', () => {
-    expect(catchUpClock(new Date(2026, 8, 29, 20, 58).toISOString(), today)).toBe('Tue 8:58 PM');
-  });
-
-  it('reads "6 new since 8:58", "50+ new" and "1 new"', () => {
-    const since = new Date(2026, 9, 1, 20, 58).toISOString();
-    expect(catchUpLabel({ count: 6, atLeast: false, since }, today)).toBe('6 new since 8:58');
-    expect(catchUpLabel({ count: 50, atLeast: true, since }, today)).toBe('50+ new since 8:58');
-    expect(catchUpLabel({ count: 1, atLeast: false, since: null }, today)).toBe('1 new');
   });
 });

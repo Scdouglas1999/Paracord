@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Message } from '../../types';
@@ -73,17 +73,12 @@ function makeMessage(over: Partial<Message> = {}): Message {
   };
 }
 
-// The light seam is stubbed here: this suite mocks the stores down to the
-// fields its subject needs, and light reads half a dozen more. Light itself is
-// covered in messageLight.test.tsx and TextRoom.test.tsx.
-vi.mock('./messageLight', () => import('../../test/messageLightMock'));
-vi.mock('../../hooks/useLights', () => import('../../test/messageLightMock'));
 vi.mock('@tanstack/react-virtual', () => ({
-  useVirtualizer: (options: { count: number }) => ({
+  useVirtualizer: (options: { count: number; getItemKey?: (index: number) => string | number }) => ({
     getVirtualItems: () =>
       Array.from({ length: options.count }, (_, index) => ({
         index,
-        key: index,
+        key: options.getItemKey?.(index) ?? index,
         start: index * 80,
       })),
     getTotalSize: () => options.count * 80,
@@ -268,6 +263,7 @@ describe('MessageList keyboard accessibility and error state', () => {
     mocks.useMessagesReturn.messages = [];
     mocks.useMessagesReturn.error = null;
     mocks.useMessagesReturn.isLoading = false;
+    mocks.useMessagesReturn.hasMore = false;
     mocks.readStateStoreState.markRead.mockReset();
     mocks.readStateStoreState.saveReadPosition.mockClear();
     mocks.scrollToIndex.mockClear();
@@ -302,7 +298,7 @@ describe('MessageList keyboard accessibility and error state', () => {
     await waitFor(() => expect(row).toHaveAttribute('data-jump', 'true'));
   });
 
-  it('reveals react, reply and more beside the name when a message row receives keyboard focus', async () => {
+  it('offers react, reply and more in one capsule at the bubble’s corner, inside the row', async () => {
     mocks.permissionsState.permissions = 1n << 6n; // ADD_REACTIONS
     mocks.useMessagesReturn.messages = [makeMessage()];
 
@@ -313,37 +309,32 @@ describe('MessageList keyboard accessibility and error state', () => {
     );
 
     const row = await screen.findByRole('article', { name: /Alice/ });
-
-    // The actions are hidden until the row is hovered or focused (§3.2:
-    // hover, and focus-within).
-    expect(screen.queryByRole('button', { name: 'React to Alice' })).toBeNull();
-
-    fireEvent.focus(row);
-
-    const react = screen.getByRole('button', { name: 'React to Alice' });
-    expect(react).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Reply to Alice' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'More actions' })).toBeInTheDocument();
-    // The first message of a group carries them in its header, beside the time.
-    expect(react.closest('.glass-msg__head')).not.toBeNull();
+    // Shown by hover or focus-within (ix-timeline.css): drawn in the row, so a
+    // keyboard user tabbing into the row reaches them.
+    const capsule = within(row).getByRole('toolbar', { name: /Actions for Alice/ });
+    expect(capsule.closest('.ix-msg__corner')).not.toBeNull();
+    expect(within(capsule).getByRole('button', { name: 'React to Alice' })).toBeInTheDocument();
+    expect(within(capsule).getByRole('button', { name: 'Reply to Alice' })).toBeInTheDocument();
+    const more = within(capsule).getByRole('button', { name: 'More actions' });
+    expect(more).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(more);
+    expect(await screen.findByRole('menu', { name: 'Message actions' })).toBeInTheDocument();
+    expect(more).toHaveAttribute('aria-expanded', 'true');
+    // The row keeps its capsule up while its menu is open.
+    expect(row).toHaveAttribute('data-menu-open', 'true');
   });
 
-  it('keeps the actions for a focused control inside the row (focus-within)', async () => {
-    mocks.permissionsState.permissions = 1n << 6n; // ADD_REACTIONS
+  it('names each bubble with its author and time for a screen reader', async () => {
     mocks.useMessagesReturn.messages = [makeMessage()];
-
     render(
       <MemoryRouter>
-        <MessageList channelId="ch1" onReply={vi.fn()} />
+        <MessageList channelId="ch1" />
       </MemoryRouter>,
     );
-
-    // The face and the name both open the profile; the name is in the header.
-    const profileButtons = await screen.findAllByRole('button', { name: 'Open profile for Alice' });
-    const name = profileButtons.find((button) => button.closest('.glass-msg__head'));
-    expect(name).toBeDefined();
-    fireEvent.focus(name!);
-    expect(screen.getByRole('button', { name: 'React to Alice' })).toBeInTheDocument();
+    const row = await screen.findByRole('article', { name: /Alice/ });
+    const label = document.getElementById(row.getAttribute('aria-labelledby')!);
+    expect(label).toHaveClass('sr-only');
+    expect(label?.textContent).toMatch(/^Alice, \d{1,2}:\d{2}/);
   });
 
   // Reading a room's overwrite list needs MANAGE_CHANNELS, so asking for it on
@@ -387,7 +378,7 @@ describe('MessageList keyboard accessibility and error state', () => {
 
     const banner = await screen.findByRole('alert');
     expect(banner).toHaveTextContent('Failed to load messages.');
-    expect(screen.queryByText('Nothing in general yet')).toBeNull();
+    expect(screen.queryByText('general is ready')).toBeNull();
 
     const retry = screen.getByRole('button', { name: /retry/i });
     fireEvent.click(retry);
@@ -405,8 +396,60 @@ describe('MessageList keyboard accessibility and error state', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText('Nothing in general yet')).toBeInTheDocument();
+    expect(await screen.findByText('general is ready')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).toBeNull();
+    // The send flight's hook: the first message flies in and the empty state leaves.
+    expect(screen.getByText('general is ready').closest('[data-timeline-empty]')).not.toBeNull();
+  });
+
+  it('draws the empty state it is given (the welcome) in place of the feed', async () => {
+    mocks.useMessagesReturn.messages = [];
+    mocks.useMessagesReturn.hasMore = false;
+    render(
+      <MemoryRouter>
+        <MessageList channelId="ch1" header={<h1>general</h1>} emptyState={<p>Fuel is ready</p>} />
+      </MemoryRouter>,
+    );
+    const welcome = await screen.findByText('Fuel is ready');
+    expect(welcome.closest('[data-timeline-empty]')).not.toBeNull();
+    expect(screen.queryByText('general is ready')).toBeNull();
+    // The title is the scroller's first item, above it.
+    const title = screen.getByRole('heading', { name: 'general' });
+    expect(screen.getByRole('feed').firstElementChild?.contains(title)).toBe(true);
+  });
+
+  it('puts the header above the history only once the start of the conversation is loaded', async () => {
+    mocks.useMessagesReturn.messages = [makeMessage()];
+    mocks.useMessagesReturn.hasMore = true;
+    const { rerender } = render(
+      <MemoryRouter>
+        <MessageList channelId="ch1" header={<h1>general</h1>} />
+      </MemoryRouter>,
+    );
+    await screen.findByRole('article', { name: /Alice/ });
+    expect(screen.queryByRole('heading', { name: 'general' })).toBeNull();
+    // Older history still to come: three static skeleton bubbles at the top.
+    expect(screen.getByRole('status', { name: 'Loading older messages' })).toBeInTheDocument();
+    mocks.useMessagesReturn.hasMore = false;
+    rerender(
+      <MemoryRouter>
+        <MessageList channelId="ch1" header={<h1>general</h1>} />
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole('heading', { name: 'general' })).toBeInTheDocument();
+    expect(screen.queryByRole('status', { name: 'Loading older messages' })).toBeNull();
+  });
+
+  it('hands the scroller to whoever folds the title', async () => {
+    mocks.useMessagesReturn.messages = [makeMessage()];
+    const onScroller = vi.fn();
+    render(
+      <MemoryRouter>
+        <MessageList channelId="ch1" onScroller={onScroller} />
+      </MemoryRouter>,
+    );
+    await screen.findByRole('article', { name: /Alice/ });
+    expect(onScroller).toHaveBeenCalledWith(screen.getByRole('feed'));
   });
 
   it('does not tell an empty thread it is a dark room', async () => {
@@ -422,9 +465,8 @@ describe('MessageList keyboard accessibility and error state', () => {
     );
 
     expect(await screen.findByText('No replies yet')).toBeInTheDocument();
-    expect(screen.getByText('Nobody has replied in this thread yet. Say the first thing.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Send the first reply/ })).toBeInTheDocument();
-    expect(screen.queryByText(/^Nothing in /)).toBeNull();
+    expect(screen.getByText('Nobody has replied in this thread yet.')).toBeInTheDocument();
+    expect(screen.queryByText(/is ready$/)).toBeNull();
   });
 
   it('marks a re-entered channel read even when the cached message count is unchanged', async () => {

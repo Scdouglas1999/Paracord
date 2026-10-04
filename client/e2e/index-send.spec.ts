@@ -273,14 +273,11 @@ test.describe('the send flight in the Index frame', () => {
   });
 
   test('the rows below the landing (someone typing) make room straight down, never sideways', async ({ page }) => {
-    // KNOWN DEFECT carried in from feat/send-flight (also in its own Glass frames):
-    // the timeline's virtual rows are keyed by index, so when the stand-in takes
-    // the typing row's index, React reuses the bottom sentinel's node for the
-    // typing row and the "make room" FLIP plays it from the sentinel's box: the
-    // typing bubble slides in ~150px from the left during the flight. IX-11 keys
-    // rows by identity (the stand-in and its delivered message sharing one key)
-    // and removes `test.fail` here. See docs/design/index-checkpoints/M1.md.
-    test.fail();
+    // Fixed by IX-11: the timeline keys its virtual rows by identity (the
+    // stand-in and its delivered message share one key), so a row added above
+    // the typing row never hands the typing row another row's DOM node, and the
+    // "make room" FLIP plays it from its own box. See docs/design/
+    // index-checkpoints/M1.md and IX-11.md.
     const text = 'typing below me';
     const h = await open(page);
     await h.step('typing', { channel: 'fuelGeneral', who: 'maya' });

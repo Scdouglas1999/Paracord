@@ -310,10 +310,10 @@ function FileStates() {
             note="Preview off"
             actions={
               <>
-                <button type="button" className="glass-file__action">
+                <button type="button" className="ix-file__action">
                   Download
                 </button>
-                <button type="button" className="glass-file__action">
+                <button type="button" className="ix-file__action">
                   Delete
                 </button>
               </>

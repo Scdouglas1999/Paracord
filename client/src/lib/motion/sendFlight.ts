@@ -139,11 +139,16 @@ const CORNERS = [
 ] as const;
 
 /**
- * A picture of the reply chip a bubble carries, set where the chip sits, inside
- * the same inks the bubble gives it (`.glass-msg[data-own] .glass-bubble`).
+ * A picture of the reply chip a message carries, set where the chip sits. A
+ * chip inside the bubble keeps the inks the bubble gives it
+ * (`.glass-msg[data-own] .glass-bubble`); the Index reply line sits above the
+ * bubble, in its row (`[id^="msg-"]`), and keeps the row's own inks.
  */
 function replyChip(target: HTMLElement, to: DOMRect): HTMLElement | null {
-  const source = target.querySelector<HTMLElement>('.glass-tl-reply');
+  const source =
+    target.querySelector<HTMLElement>('.glass-tl-reply') ??
+    target.closest<HTMLElement>('[id^="msg-"]')?.querySelector<HTMLElement>('.glass-tl-reply') ??
+    null;
   if (!source) return null;
   const box = source.getBoundingClientRect();
   if (box.width === 0 && box.height === 0) return null;
@@ -154,12 +159,16 @@ function replyChip(target: HTMLElement, to: DOMRect): HTMLElement | null {
   holder.style.left = `${box.left - to.left}px`;
   holder.style.top = `${box.top - to.top}px`;
   holder.style.width = `${box.width}px`;
-  const inks = document.createElement('div');
-  inks.className = 'glass-bubble';
   const copy = source.cloneNode(true) as HTMLElement;
   copy.style.margin = '0';
-  inks.append(copy);
-  holder.append(inks);
+  if (target.contains(source)) {
+    const inks = document.createElement('div');
+    inks.className = 'glass-bubble';
+    inks.append(copy);
+    holder.append(inks);
+  } else {
+    holder.append(copy);
+  }
   holder.style.opacity = '0';
   return holder;
 }

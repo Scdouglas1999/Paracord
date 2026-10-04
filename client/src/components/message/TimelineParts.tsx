@@ -1,95 +1,34 @@
 import * as React from 'react';
 
-import { Chip } from '../ui';
-import { FaceStack, initialsOf } from '../glass/places/Lead';
+import { Avatar, AvatarStack } from '../ix/identity';
+import { GlyphFrame, IxGlyph } from '../ix/glyphs';
 import { cn } from '../../lib/utils';
-import { getIdentityColor } from '../../lib/colors';
-import { resolveUserAvatarUrl } from '../../lib/userAvatar';
-import { useAuthenticatedImage } from '../../lib/authenticatedImage';
-import { useDownloadTicket } from '../../hooks/useDownloadTicket';
-import { nameList, type PersonLight } from '../../lib/attention/light';
-import { roomSharedName } from '../../lib/motion';
-import type { RoomLitEvent } from './messageLight';
+import { clockTime, timeDividerParts } from './timelineRows';
 
 /**
- * The small shapes of the Glass timeline (docs/glass-spec.md §3.2).
+ * The small shapes of the Index timeline (docs/index-spec.md §3.1, §4.11).
  *
- * Presentational only: tokens and the recipes in `styles/glass-timeline.css`.
- * No store reads and no product decisions — `MessageList` owns those and hands
- * these components what to draw.
+ * Presentational only: the recipes are in `styles/ix-timeline.css`. No store
+ * reads and no product decisions; `MessageList` owns those and hands these
+ * components what to draw. Each row-level part renders ONE element (the row the
+ * virtual list positions), so the send flight's "make room" measures and moves
+ * that element.
  */
 
-/**
- * The chip's words: "Today" and "Yesterday" where they are true, the full date
- * everywhere else.
- */
-export function dayDividerLabel(iso: string, nowMs = Date.now()): string {
-  try {
-    const date = new Date(iso);
-    if (Number.isNaN(date.getTime())) return iso;
-    const now = new Date(nowMs);
-    if (date.toDateString() === now.toDateString()) return 'Today';
-    const yesterday = new Date(now);
-    yesterday.setDate(yesterday.getDate() - 1);
-    if (date.toDateString() === yesterday.toDateString()) return 'Yesterday';
-    return date.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
-  } catch {
-    return iso;
-  }
-}
-
-/** Is this instant on the same calendar day as `nowMs`? */
-export function isToday(iso: string, nowMs = Date.now()): boolean {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return false;
-  return date.toDateString() === new Date(nowMs).toDateString();
-}
-
-/**
- * One formatter for every timeline clock. Building an `Intl.DateTimeFormat`
- * per call was a quarter of the JavaScript time in a 500-message scroll
- * profile (see `wallClock`), so it is made once.
- */
-let timelineClock: Intl.DateTimeFormat | null = null;
-
-/**
- * A message's own clock face: just the time, in the locale's own form
- * ("9:02 PM"). The day is stated by the divider above the message; the full
- * timestamp stays available as a title.
- */
+/** A message's own clock face: "9:41 PM" in the locale's own form. */
 export function timelineTime(iso: string): string {
-  try {
-    const date = new Date(iso);
-    if (Number.isNaN(date.getTime())) return iso;
-    timelineClock ??= new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
-    return timelineClock.format(date);
-  } catch {
-    return iso;
-  }
-}
-
-/** A day divider: a centered kicker ("TODAY", "MONDAY, SEPTEMBER 28"). */
-export function DayDivider({ label }: { label: string }) {
-  return (
-    <div className="glass-tl-day glass-tl-col" role="separator" aria-label={label}>
-      <span className="glass-kicker" aria-hidden>
-        {label}
-      </span>
-    </div>
-  );
+  return clockTime(iso) || iso;
 }
 
 /**
- * A face in the timeline (§3.2): 32px, the uploaded photo or the author's
- * initials on their identity color. Plain on purpose — the reference draws no
- * presence ring on timeline faces; what is live shows in the places panel and
- * the call pill.
+ * A person's face in the timeline: the Index avatar (§2.3). Kept under this
+ * name for the who-reacted list (`ReactionPeople`), which draws the same face.
  */
 export function TimelineAvatar({
   userId,
   name,
   avatar,
-  size = 32,
+  size = 30,
   className,
 }: {
   userId: string;
@@ -98,117 +37,173 @@ export function TimelineAvatar({
   size?: number;
   className?: string;
 }) {
-  // The avatar URL carries the download ticket, minted after the first paint.
-  useDownloadTicket();
-  const src = useAuthenticatedImage(resolveUserAvatarUrl(avatar ?? null));
-  return (
-    <span
-      className={cn('glass-tl-avatar', className)}
-      style={{
-        width: size,
-        height: size,
-        fontSize: Math.max(9, Math.round(size * 0.38)),
-        background: src ? undefined : getIdentityColor(userId),
-      }}
-      aria-hidden
-    >
-      {src ? <img src={src} alt="" draggable={false} /> : initialsOf(name)}
-    </span>
-  );
+  return <Avatar userId={userId} name={name} avatar={avatar ?? null} size={size} className={className} />;
 }
 
-/* ---- Glyphs for the hover actions (the prototype's own, 15px, 1.7 stroke) -- */
-
-function ActionGlyph({ children }: { children: React.ReactNode }) {
+/** "**Today** 9:41 PM", centered (§3.1 time divider). */
+export function TimeDivider({ at, nowMs }: { at: string; nowMs?: number }) {
+  const { day, time } = timeDividerParts(at, nowMs);
+  const label = [day, time].filter(Boolean).join(' ');
   return (
-    <svg
-      width="15"
-      height="15"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.7"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden
-    >
-      {children}
-    </svg>
+    <div className="ix-tl-divider ix-tl-col" role="separator" aria-label={label}>
+      <span aria-hidden>
+        {day && <b>{day}</b>} {time}
+      </span>
+    </div>
   );
 }
-
-const ReactGlyph = () => (
-  <ActionGlyph>
-    <path d="M20 12.5A8.5 8.5 0 1 1 11.5 4" />
-    <path d="M8.5 14a4.5 4.5 0 0 0 7 0M9 10h.01M14.5 10h.01M18 3v5M15.5 5.5h5" />
-  </ActionGlyph>
-);
-
-const ReplyGlyph = () => (
-  <ActionGlyph>
-    <path d="M9 14 4 9l5-5M4 9h10a6 6 0 0 1 6 6v3" />
-  </ActionGlyph>
-);
-
-const MoreGlyph = () => (
-  <ActionGlyph>
-    <path d="M6 12h.01M12 12h.01M18 12h.01" strokeWidth="2.6" />
-  </ActionGlyph>
-);
 
 /**
- * React / reply / more, as 26×22 text buttons (§3.2). They sit beside the
- * name and time of a group, or beside the bubble of a message that has no
- * header (a continuation, or your own).
+ * The New divider (§4.11): hairlines either side of "New" in white and "Mark
+ * read" at the right. It sits above the first message you had not read.
+ */
+export const NewDivider = React.forwardRef<HTMLDivElement, { onMarkRead: () => void }>(function NewDivider(
+  { onMarkRead },
+  ref,
+) {
+  return (
+    <div ref={ref} className="ix-tl-new ix-tl-col" role="group" aria-label="New messages" data-testid="new-divider">
+      <span className="ix-tl-new__rule" aria-hidden />
+      <span className="ix-tl-new__label">New</span>
+      <span className="ix-tl-new__rule" aria-hidden />
+      <button type="button" className="ix-tl-new__mark" onClick={onMarkRead}>
+        Mark read
+      </button>
+    </div>
+  );
+});
+
+/* ---- Glyphs the timeline draws that the Index set does not have ---------------------- */
+
+function PinGlyph({ size = 14 }: { size?: number }) {
+  return (
+    <GlyphFrame size={size}>
+      <path d="M15 3 21 9M18 6l-5.5 5.5M9.5 8.5l6 6M7 11l6 6M10 14l-6 6" />
+    </GlyphFrame>
+  );
+}
+
+function ThreadGlyph({ size = 15 }: { size?: number }) {
+  return (
+    <GlyphFrame size={size}>
+      <path d="M5 5h14v9h-7l-4 4v-4H5z" />
+      <path d="M9 9.5h6" />
+    </GlyphFrame>
+  );
+}
+
+function ReactGlyph({ size = 15 }: { size?: number }) {
+  return (
+    <GlyphFrame size={size}>
+      <path d="M20 12.5A8.5 8.5 0 1 1 11.5 4" />
+      <path d="M8.5 14a4.5 4.5 0 0 0 7 0M9 10h.01M14.5 10h.01M18 3v5M15.5 5.5h5" />
+    </GlyphFrame>
+  );
+}
+
+function ReplyGlyph({ size = 15 }: { size?: number }) {
+  return (
+    <GlyphFrame size={size}>
+      <path d="M9 14 4 9l5-5M4 9h10a6 6 0 0 1 6 6v3" />
+    </GlyphFrame>
+  );
+}
+
+export type SystemGlyph = 'voice' | 'call' | 'pin' | 'person' | 'thread' | 'info';
+
+function systemGlyph(kind: SystemGlyph) {
+  switch (kind) {
+    case 'voice':
+      return <IxGlyph name="speaker" size={14} />;
+    case 'call':
+      return <IxGlyph name="phone" size={14} />;
+    case 'pin':
+      return <PinGlyph size={14} />;
+    case 'person':
+      return <IxGlyph name="invite" size={14} />;
+    case 'thread':
+      return <ThreadGlyph size={14} />;
+    default:
+      return <IxGlyph name="hello" size={14} />;
+  }
+}
+
+/**
+ * A line about the conversation, not a bubble (§3.1): centered, 13 ink-3, a
+ * 14px glyph (amber for voice). "You joined General", "Nick pinned a message".
+ */
+export const SystemLine = React.forwardRef<
+  HTMLDivElement,
+  React.HTMLAttributes<HTMLDivElement> & { glyph: SystemGlyph; text: string; time?: string | null }
+>(function SystemLine({ glyph, text, time, className, ...rest }, ref) {
+  return (
+    <div ref={ref} className={cn('ix-tl-system ix-tl-col', className)} data-glyph={glyph} {...rest}>
+      <span className="ix-tl-system__glyph" aria-hidden>
+        {systemGlyph(glyph)}
+      </span>
+      <span>{text}</span>
+      {time && <time className="ix-tl-system__time">{time}</time>}
+    </div>
+  );
+});
+
+/**
+ * The action capsule (§4.11): react, reply, thread, more, at the bubble's top
+ * trailing corner on hover or focus. 28×26 each on a near-solid capsule.
  */
 export function MessageActions({
   authorName,
-  time,
   onReact,
   onReply,
+  onThread,
+  threadLabel = 'Start a thread',
   onMore,
   moreExpanded,
 }: {
   authorName: string;
-  /** Shown before the buttons where the row has no header to carry its time. */
-  time?: React.ReactNode;
   onReact?: (event: React.MouseEvent<HTMLButtonElement>) => void;
   onReply?: () => void;
-  onMore: () => void;
+  onThread?: () => void;
+  threadLabel?: string;
+  onMore: (event: React.MouseEvent<HTMLButtonElement>) => void;
   moreExpanded: boolean;
 }) {
   return (
-    <span className="glass-tl-acts">
-      {time}
+    <span className="ix-capsule" role="toolbar" aria-label={`Actions for ${authorName}’s message`}>
       {onReact && (
-        <button type="button" className="glass-tl-act" aria-label={`React to ${authorName}`} title="React" onClick={onReact}>
+        <button type="button" className="ix-capsule__btn" aria-label={`React to ${authorName}`} title="React" onClick={onReact}>
           <ReactGlyph />
         </button>
       )}
       {onReply && (
-        <button type="button" className="glass-tl-act" aria-label={`Reply to ${authorName}`} title="Reply" onClick={onReply}>
+        <button type="button" className="ix-capsule__btn" aria-label={`Reply to ${authorName}`} title="Reply" onClick={onReply}>
           <ReplyGlyph />
+        </button>
+      )}
+      {onThread && (
+        <button type="button" className="ix-capsule__btn" aria-label={threadLabel} title={threadLabel} onClick={onThread}>
+          <ThreadGlyph />
         </button>
       )}
       <button
         type="button"
-        className="glass-tl-act"
+        className="ix-capsule__btn"
         aria-label="More actions"
         aria-haspopup="menu"
         aria-expanded={moreExpanded}
         title="More"
         onClick={onMore}
       >
-        <MoreGlyph />
+        <IxGlyph name="dots" size={15} />
       </button>
     </span>
   );
 }
 
-/** Three dots in a bubble, beside the typist's face (§3.2). */
+/** Three dots in a bubble (§4.11). They tick only while the row is on screen. */
 export function TypingBubble() {
   return (
-    <span className="glass-tl-typing" aria-hidden>
+    <span className="ix-typing__bubble" aria-hidden>
       <span />
       <span />
       <span />
@@ -217,8 +212,8 @@ export function TypingBubble() {
 }
 
 /**
- * The sentence the typing bubbles stand for, for assistive tech: "Eric is
- * typing", "Eric and Nick are typing", "4 people are typing".
+ * The sentence the typing bubble stands for: "Eric is typing", "Eric and Nick
+ * are typing", "4 people are typing".
  */
 export function typingSentence(names: readonly string[]): string {
   if (names.length === 0) return '';
@@ -228,138 +223,160 @@ export function typingSentence(names: readonly string[]): string {
   return `${names.length} people are typing`;
 }
 
+export interface Typist {
+  id: string;
+  name: string;
+  avatar: string | null;
+}
+
 /**
- * The reply context at the top of a bubble: who is being answered and what
- * they said. Pressing it jumps to that message.
+ * Someone typing (§4.11): the dots beside the typist's 30px face at the bottom;
+ * two or more: their faces overlapped and "Nick and Maya are typing".
  */
-export function ReplyChip({
-  author,
-  preview,
-  onJump,
-}: {
-  author: string;
-  preview: string;
-  onJump: () => void;
-}) {
+export const TypingRow = React.forwardRef<HTMLDivElement, { typists: readonly Typist[] }>(function TypingRow(
+  { typists },
+  ref,
+) {
+  const visibleRef = React.useRef<HTMLDivElement | null>(null);
+  // The dots tick only while the row is on screen (§4.11).
+  React.useEffect(() => {
+    const node = visibleRef.current;
+    if (!node || typeof IntersectionObserver === 'undefined') {
+      node?.setAttribute('data-visible', '');
+      return undefined;
+    }
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry?.isIntersecting) node.setAttribute('data-visible', '');
+      else node.removeAttribute('data-visible');
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+  const sentence = typingSentence(typists.map((typist) => typist.name));
+  const many = typists.length > 1;
+  return (
+    <div
+      ref={(node) => {
+        visibleRef.current = node;
+        if (typeof ref === 'function') ref(node);
+        else if (ref) ref.current = node;
+      }}
+      className="glass-tl-typing-row ix-typing ix-tl-col"
+      data-many={many || undefined}
+    >
+      <span className="ix-typing__faces" aria-hidden>
+        {many ? (
+          <AvatarStack
+            people={typists.slice(0, 3).map((typist) => ({ userId: typist.id, name: typist.name, avatar: typist.avatar }))}
+            size={30}
+            overlap={10}
+            ring="var(--ix-main)"
+          />
+        ) : typists[0] ? (
+          <Avatar userId={typists[0].id} name={typists[0].name} avatar={typists[0].avatar} size={30} />
+        ) : null}
+      </span>
+      <span className="glass-msg__typing ix-typing__line">
+        <TypingBubble />
+        {many && <span className="ix-typing__words" aria-hidden>{sentence}</span>}
+      </span>
+      <span className="sr-only">{sentence}</span>
+    </div>
+  );
+});
+
+/**
+ * A reply's quoted line, above its bubble (§4.11): "↩ Jeremy: who's up for…",
+ * 13px ink-3, one line. Pressing it jumps to the original. `.glass-tl-reply` is
+ * the send flight's hook: the ghost carries a picture of it.
+ */
+export function ReplyLine({ author, preview, onJump }: { author: string; preview: string; onJump: () => void }) {
   return (
     <button
       type="button"
       onClick={onJump}
-      aria-label={`Jump to the message from ${author}`}
-      title="Jump to replied message"
-      className="glass-tl-reply"
+      aria-label={`Reply to ${author}: ${preview}. Jump to the original message`}
+      title="Jump to the original message"
+      className="glass-tl-reply ix-reply"
     >
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden className="shrink-0">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden className="ix-reply__glyph">
         <path d="M9 14 4 9l5-5M4 9h10a6 6 0 0 1 6 6v3" />
       </svg>
-      <span className="glass-tl-reply__author">{author}</span>
-      <span className="glass-tl-reply__preview">{preview}</span>
+      <span className="ix-reply__text">
+        <span className="ix-reply__author">{author}:</span> {preview}
+      </span>
     </button>
   );
 }
 
-/**
- * A voice channel that went live while you were reading. A client-side
- * observation, never a server message: the row exists only while people are
- * in there, so the Join it offers always leads somewhere with people in it.
- * Amber, because amber means live (§1.3).
- */
-export function RoomLitEventRow({
-  event,
-  onJoin,
-}: {
-  event: RoomLitEvent;
-  onJoin: (event: RoomLitEvent, origin?: Element | null) => void;
-}) {
-  return (
-    <div
-      role="status"
-      data-testid="room-lit-event"
-      // Last in the arrival's path: it fades in behind the face that caused it.
-      data-motion-event={event.channelId}
-      data-motion-shared={roomSharedName(event.channelId)}
-      className="glass-tl-event glass-tl-col"
-    >
-      <span className="glass-tl-event__dot" aria-hidden />
-      <span className="min-w-0">
-        {event.headline} <span aria-hidden>·</span> {event.detail}
-      </span>
-      <button
-        type="button"
-        onClick={(clicked) =>
-          onJoin(event, clicked.currentTarget.closest('[data-motion-shared]'))
-        }
-        className="glass-tl-event__join"
-      >
-        Join
-      </button>
-    </div>
-  );
-}
-
-/** A thread hanging off a message: faces, name, reply count, one action. */
-export function ThreadRow({
+/** Under a thread's starter: "3 replies · 9:41 PM" (§4.11). Opens the thread. */
+export function ThreadLine({
   name,
-  meta,
-  people,
+  replies,
+  time,
   archived,
   onOpen,
 }: {
   name: string;
-  meta: string;
-  people: readonly PersonLight[];
+  replies: number | null;
+  time: string | null;
   archived?: boolean;
   onOpen: () => void;
 }) {
+  const count = replies == null ? 'Thread' : `${replies} ${replies === 1 ? 'reply' : 'replies'}`;
+  const words = [count, time, archived ? 'archived' : null].filter(Boolean).join(' · ');
   return (
-    <button type="button" onClick={onOpen} className="glass-tl-thread">
-      {people.length > 0 && (
-        <>
-          <FaceStack
-            faces={people.slice(0, 3).map(({ userId, name: person, avatar }) => ({ userId, name: person, avatar }))}
-            size={20}
-            overlap={5}
-          />
-          {people.length > 3 && (
-            <span className="glass-tl-thread__meta" aria-hidden>
-              +{people.length - 3}
-            </span>
-          )}
-          {/* The faces are drawn, not read: one sentence says who is in the thread. */}
-          <span className="sr-only">{`${nameList(people.map((person) => person.name))} in ${name}`}</span>
-        </>
-      )}
-      <span className="glass-tl-thread__name">{name}</span>
-      <span className="glass-tl-thread__meta">{meta}</span>
-      {archived && (
-        <Chip size="sm" className="text-text-faint">
-          Archived
-        </Chip>
-      )}
-      <span className="glass-tl-thread__open">Open thread</span>
+    <button type="button" className="ix-thread-line" onClick={onOpen} aria-label={`${name}: ${words}. Open thread`}>
+      <ThreadGlyph size={14} />
+      <span>{words}</span>
     </button>
   );
 }
 
-/**
- * The frame an attachment sits in, shaped like a bubble: radius 20 with the
- * group's joined corner on the author's side (`glass-timeline.css` reads the
- * row's side and `data-join-top`). Media restyling proper is WP-G13; this only
- * gives the frame its place in a group.
- */
-export const AttachmentFrame = React.forwardRef<
-  HTMLDivElement,
-  React.HTMLAttributes<HTMLDivElement> & { footer?: React.ReactNode; joinTop?: boolean }
->(function AttachmentFrame({ footer, joinTop, className, children, ...props }, ref) {
+/** Three static skeleton bubbles (§4.11: no shimmer), where history is still to come. */
+export const HistorySkeleton = React.forwardRef<HTMLDivElement, { label?: string }>(function HistorySkeleton(
+  { label = 'Loading older messages' },
+  ref,
+) {
   return (
-    <div
-      ref={ref}
-      data-join-top={joinTop || undefined}
-      className={cn('glass-tl-media', className)}
-      {...props}
-    >
-      {children}
-      {footer && <div className="glass-tl-media__footer">{footer}</div>}
+    <div ref={ref} className="ix-tl-skeleton ix-tl-col" role="status" aria-label={label}>
+      {[208, 296, 148].map((width, index) => (
+        <span key={index} className="ix-tl-skeleton__row" data-first={index === 0 || undefined}>
+          <span className="ix-tl-skeleton__face" aria-hidden />
+          <span className="ix-tl-skeleton__bubble" style={{ width }} aria-hidden />
+        </span>
+      ))}
     </div>
   );
 });
+
+/** "Encrypted message": a bubble this device cannot read (§8.4). */
+export function EncryptedBubbleText() {
+  return (
+    <span className="ix-encrypted">
+      <IxGlyph name="lock" size={14} />
+      <span>Encrypted message</span>
+    </span>
+  );
+}
+
+/**
+ * The jump-to-latest capsule (§4.11): above the message box when you are more
+ * than a screen up, "↓ 12 new" or "↓ Latest".
+ */
+export function JumpToLatest({ count, onJump }: { count: number; onJump: () => void }) {
+  const label = count > 0 ? `${count} new` : 'Latest';
+  return (
+    <button
+      type="button"
+      className="ix-jump"
+      onClick={onJump}
+      aria-label={count > 0 ? `Jump to the ${count} new message${count === 1 ? '' : 's'}` : 'Jump to the latest message'}
+    >
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <path d="M12 5v14M6 13l6 6 6-6" />
+      </svg>
+      <span>{label}</span>
+    </button>
+  );
+}

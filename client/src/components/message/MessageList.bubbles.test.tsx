@@ -1,18 +1,24 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Member, Message } from '../../types';
 import { MessageType } from '../../types';
 import { entityScopeKey } from '../../lib/serverScope';
+import { configureMotion, resetMotionSwitchForTests } from '../../lib/motion';
+import { installWaapiStub, type WaapiStub } from '../../lib/motion/waapiStub';
+import { resetVoiceLinesForTests, useVoiceLineStore } from './voiceLines';
 import { parseMarkdown } from '../../lib/markdown';
 import { MessageList, isSystemMessage, systemMessageText } from './MessageList';
 
 /**
- * The Glass timeline (docs/glass-spec.md §2.4, §3.2; WP-G10): bubbles grouped
- * with joined corners, the face at the bottom of a group, the name and time
- * above its first bubble, yours on the right with no face, a mention of you
- * raised with a white chip, system lines, the typing bubble, and a row that
- * redraws only when something it draws changed.
+ * The Index timeline (docs/index-spec.md §3.1, §4.11; IX-11): bubbles grouped
+ * by author within five minutes with joined corners, the 30px face at the
+ * bottom of a group and the name over its first bubble, time dividers, yours
+ * cream on the right with no face, the white chip for a mention of you, system
+ * lines and your own voice joins, the typing bubble, the New divider, the
+ * reactions chip at the corner, media bubbles, the thread line, editing in
+ * place, the arrival of somebody else's message, and a row that redraws only
+ * when something it draws changed.
  */
 
 const SCOPE = { serverId: 'srv-a', userId: '42' };
@@ -56,6 +62,7 @@ const mocks = vi.hoisted(() => ({
   },
   avatarRenders: new Map<string, number>(),
   lowBandwidthMode: false,
+  compact: false,
   /** What `useGuildEvent` answers: the plan card and the event chip read it. */
   eventResult: {
     status: 'ready' as 'loading' | 'ready' | 'missing' | 'error',
@@ -79,12 +86,10 @@ vi.mock('./TimelineParts', async (importOriginal) => {
   };
 });
 
-vi.mock('./messageLight', () => import('../../test/messageLightMock'));
-vi.mock('../../hooks/useLights', () => import('../../test/messageLightMock'));
 vi.mock('@tanstack/react-virtual', () => ({
-  useVirtualizer: (options: { count: number }) => ({
+  useVirtualizer: (options: { count: number; getItemKey?: (index: number) => string | number }) => ({
     getVirtualItems: () =>
-      Array.from({ length: options.count }, (_, index) => ({ index, key: index, start: index * 80 })),
+      Array.from({ length: options.count }, (_, index) => ({ index, key: options.getItemKey?.(index) ?? index, start: index * 80 })),
     getTotalSize: () => options.count * 80,
     measureElement: vi.fn(),
     scrollToIndex: vi.fn(),
@@ -107,7 +112,15 @@ vi.mock('../../hooks/useMessageStore', () => ({
 vi.mock('../../stores/channelStore', () => {
   const state = {
     channelsByGuild: {
-      g1: [{ id: 'ch1', guild_id: 'g1', type: 0, channel_type: 0, name: 'general', position: 0 }],
+      g1: [
+        { id: 'ch1', guild_id: 'g1', type: 0, channel_type: 0, name: 'general', position: 0 },
+        { id: 'vc1', guild_id: 'g1', type: 2, channel_type: 2, name: 'General', position: 0 },
+        {
+          id: 'th1', guild_id: 'g1', type: 6, channel_type: 6, name: 'haz runs', position: 0, parent_id: 'ch1',
+          message_count: 3, created_at: new Date(2026, 9, 1, 21, 30).toISOString(),
+          thread_metadata: { starter_message_id: 'starter-1', archived: false },
+        },
+      ],
     },
     channelsById: {
       ch1: { id: 'ch1', guild_id: 'g1', type: 0, channel_type: 0, name: 'general', position: 0 },
@@ -143,7 +156,8 @@ vi.mock('../../stores/memberStore', () => {
   };
 });
 vi.mock('../../stores/authStore', () => ({
-  useAuthStore: (selector: (s: { user: { id: string } }) => unknown) => selector({ user: { id: '42' } }),
+  useAuthStore: (selector: (s: { user: { id: string }; settings: { message_display_compact: boolean } }) => unknown) =>
+    selector({ user: { id: '42' }, settings: { message_display_compact: mocks.compact } }),
 }));
 vi.mock('../../stores/readStateStore', () => ({
   useReadStateStore: Object.assign(
@@ -254,8 +268,15 @@ function rowOf(text: string): HTMLElement {
   return row as HTMLElement;
 }
 
+afterEach(() => {
+  resetVoiceLinesForTests();
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.useMessagesReturn.isLoading = false;
+  mocks.useMessagesReturn.hasMore = false;
+  mocks.compact = false;
   mocks.readStateStoreState.getReadState.mockReturnValue(undefined);
   mocks.readStateStoreState.refresh.mockResolvedValue(undefined);
   nextId = 1;
@@ -280,7 +301,7 @@ beforeEach(() => {
   });
 });
 
-describe('grouping (§2.4)', () => {
+describe('grouping (§4.11)', () => {
   it('names the first bubble of a group, joins the rest, and puts the face beside the last', async () => {
     mocks.useMessagesReturn.messages = [
       message('eric', todayAt(0), { content: 'permits came through for Saturday' }),
@@ -295,30 +316,45 @@ describe('grouping (§2.4)', () => {
     const last = rowOf('bring layers');
     const other = rowOf("I'll drive");
 
-    // Name and time above the first bubble only.
-    expect(within(first).getByText('Eric')).toBeInTheDocument();
-    expect(first.querySelector('.glass-msg__head')).not.toBeNull();
-    expect(middle.querySelector('.glass-msg__head')).toBeNull();
-    expect(last.querySelector('.glass-msg__head')).toBeNull();
+    // The name over the first bubble only (no time: that is the hover's).
+    expect(within(first).getByRole('button', { name: 'Eric' })).toBeInTheDocument();
+    expect(first.querySelector('.ix-msg__name')).not.toBeNull();
+    expect(middle.querySelector('.ix-msg__name')).toBeNull();
+    expect(last.querySelector('.ix-msg__name')).toBeNull();
 
-    // The join: continuation rows join the bubble above them.
-    expect(first).not.toHaveAttribute('data-grouped');
+    // Joined corners on the face's side: the first at the bottom, the middle
+    // both, the last at the top.
+    const bubble = (row: HTMLElement) => row.querySelector('.glass-bubble') as HTMLElement;
+    expect(bubble(first)).not.toHaveAttribute('data-join-top');
+    expect(bubble(first)).toHaveAttribute('data-join-bottom', 'true');
+    expect(bubble(middle)).toHaveAttribute('data-join-top', 'true');
+    expect(bubble(middle)).toHaveAttribute('data-join-bottom', 'true');
+    expect(bubble(last)).toHaveAttribute('data-join-top', 'true');
+    expect(bubble(last)).not.toHaveAttribute('data-join-bottom');
     expect(middle).toHaveAttribute('data-grouped', 'true');
-    expect(last).toHaveAttribute('data-grouped', 'true');
-    expect(first.querySelector('.glass-bubble')).not.toHaveAttribute('data-join-top');
-    expect(middle.querySelector('.glass-bubble')).toHaveAttribute('data-join-top', 'true');
 
-    // The face sits at the bottom of the group: only the last row draws one.
-    expect(first.querySelector('.glass-tl-avatar')).toBeNull();
-    expect(middle.querySelector('.glass-tl-avatar')).toBeNull();
-    expect(last.querySelector('.glass-tl-avatar')).not.toBeNull();
-    expect(last).toHaveAttribute('data-last', 'true');
-    expect(first).not.toHaveAttribute('data-last');
+    // The 30px face sits at the bottom of the group: only the last row draws one.
+    expect(first.querySelector('.ix-msg__face .ix-av')).toBeNull();
+    expect(middle.querySelector('.ix-msg__face .ix-av')).toBeNull();
+    const face = last.querySelector('.ix-msg__face .ix-av') as HTMLElement;
+    expect(face).not.toBeNull();
+    expect(face).toHaveStyle({ width: '30px', height: '30px' });
+    expect(face).toHaveTextContent('E');
 
     // A new author starts a new group.
     expect(other).not.toHaveAttribute('data-grouped');
-    expect(within(other).getByText('Nick')).toBeInTheDocument();
-    expect(other.querySelector('.glass-tl-avatar')).not.toBeNull();
+    expect(within(other).getByRole('button', { name: 'Nick' })).toBeInTheDocument();
+  });
+
+  it('groups within five minutes, not six', async () => {
+    mocks.useMessagesReturn.messages = [
+      message('eric', todayAt(0), { content: 'one' }),
+      message('eric', todayAt(4), { content: 'two' }),
+      message('eric', todayAt(10), { content: 'three' }),
+    ];
+    renderList();
+    expect(rowOf('two')).toHaveAttribute('data-grouped', 'true');
+    expect(rowOf('three')).not.toHaveAttribute('data-grouped');
   });
 
   it('moves the face down when the same author writes again (the memo sees the new edge)', async () => {
@@ -326,7 +362,7 @@ describe('grouping (§2.4)', () => {
     mocks.useMessagesReturn.messages = [earlier];
     const view = renderList();
     expect(rowOf('first words')).toHaveAttribute('data-last', 'true');
-    expect(rowOf('first words').querySelector('.glass-tl-avatar')).not.toBeNull();
+    expect(rowOf('first words').querySelector('.ix-msg__face .ix-av')).not.toBeNull();
 
     mocks.useMessagesReturn.messages = [earlier, message('eric', todayAt(1), { content: 'second words' })];
     view.rerender(
@@ -336,32 +372,12 @@ describe('grouping (§2.4)', () => {
     );
 
     await waitFor(() => expect(rowOf('first words')).not.toHaveAttribute('data-last'));
-    expect(rowOf('first words').querySelector('.glass-tl-avatar')).toBeNull();
+    expect(rowOf('first words').querySelector('.ix-msg__face .ix-av')).toBeNull();
     expect(rowOf('second words')).toHaveAttribute('data-last', 'true');
-    expect(rowOf('second words').querySelector('.glass-tl-avatar')).not.toBeNull();
+    expect(rowOf('second words').querySelector('.ix-msg__face .ix-av')).not.toBeNull();
   });
 
-  it('breaks a group at midnight and puts the day between them as a kicker', async () => {
-    const lateNight = new Date(2026, 4, 16, 23, 58).toISOString();
-    const pastMidnight = new Date(2026, 4, 17, 0, 1).toISOString();
-    mocks.useMessagesReturn.messages = [
-      message('eric', lateNight, { content: 'still up' }),
-      message('eric', pastMidnight, { content: 'now it is tomorrow' }),
-    ];
-    renderList();
-    expect(rowOf('now it is tomorrow')).not.toHaveAttribute('data-grouped');
-    // A day kicker above the oldest message (not today) and at the day change.
-    expect(screen.getAllByRole('separator')).toHaveLength(2);
-  });
-
-  it('opens a conversation from today with no day kicker above it', async () => {
-    mocks.useMessagesReturn.messages = [message('eric', todayAt(0), { content: 'hello' })];
-    renderList();
-    await screen.findByText('hello');
-    expect(screen.queryByRole('separator')).toBeNull();
-  });
-
-  it('starts a new group for a reply and carries its context inside the bubble', async () => {
+  it('starts a new group for a reply and puts the quoted line above its bubble', async () => {
     const parent = message('nick', todayAt(0), { content: 'new personal best btw' });
     mocks.useMessagesReturn.messages = [
       parent,
@@ -371,23 +387,62 @@ describe('grouping (§2.4)', () => {
     renderList();
     const reply = rowOf('nice run');
     expect(reply).not.toHaveAttribute('data-grouped');
-    const bubble = reply.querySelector('.glass-bubble') as HTMLElement;
-    expect(within(bubble).getByRole('button', { name: 'Jump to the message from Nick' })).toBeInTheDocument();
+    const line = within(reply).getByRole('button', { name: /^Reply to Nick: new personal best btw/ });
+    // The send flight carries a picture of this line (`.glass-tl-reply`); it is
+    // the row's, above the bubble, not inside it.
+    expect(line).toHaveClass('glass-tl-reply');
+    expect(reply.querySelector('.glass-bubble')).not.toContainElement(line);
+    expect(line).toHaveTextContent('Nick: new personal best btw');
   });
 });
 
-describe('whose bubble (§3.2)', () => {
-  it('puts your own message on the right with no face and no name', async () => {
+describe('time dividers (§4.11)', () => {
+  it('opens the conversation with its time: "Today 9:00 PM"', async () => {
+    mocks.useMessagesReturn.messages = [message('eric', todayAt(0), { content: 'hello' })];
+    renderList();
+    await screen.findByText('hello');
+    const dividers = screen.getAllByRole('separator');
+    expect(dividers).toHaveLength(1);
+    expect(dividers[0]).toHaveAccessibleName(/^Today 9:00/);
+    expect(dividers[0].querySelector('b')).toHaveTextContent('Today');
+  });
+
+  it('puts one between messages more than 30 minutes apart, and breaks the group there', async () => {
+    mocks.useMessagesReturn.messages = [
+      message('eric', todayAt(0), { content: 'early' }),
+      message('eric', todayAt(31), { content: 'later' }),
+      message('eric', todayAt(45), { content: 'later still' }),
+    ];
+    renderList();
+    expect(screen.getAllByRole('separator')).toHaveLength(2);
+    expect(rowOf('later')).not.toHaveAttribute('data-grouped');
+  });
+
+  it('breaks a group at midnight and says which day', async () => {
+    const lateNight = new Date(2026, 4, 16, 23, 58).toISOString();
+    const pastMidnight = new Date(2026, 4, 17, 0, 1).toISOString();
+    mocks.useMessagesReturn.messages = [
+      message('eric', lateNight, { content: 'still up' }),
+      message('eric', pastMidnight, { content: 'now it is tomorrow' }),
+    ];
+    renderList();
+    expect(rowOf('now it is tomorrow')).not.toHaveAttribute('data-grouped');
+    expect(screen.getAllByRole('separator')).toHaveLength(2);
+  });
+});
+
+describe('whose bubble (§4.11)', () => {
+  it('puts your own message on the right in cream, with no face and no name', async () => {
     mocks.useMessagesReturn.messages = [message('viewer', todayAt(0), { content: 'home in 20' })];
     renderList();
     const mine = rowOf('home in 20');
     expect(mine).toHaveAttribute('data-own', 'true');
-    expect(mine.querySelector('.glass-msg__face')).toBeNull();
-    expect(mine.querySelector('.glass-msg__head')).toBeNull();
-    expect(mine.querySelector('.glass-bubble')).not.toBeNull();
+    expect(mine.querySelector('.ix-msg__face')).toBeNull();
+    expect(mine.querySelector('.ix-msg__name')).toBeNull();
+    expect(mine.querySelector('.glass-bubble.ix-bubble')).not.toBeNull();
   });
 
-  it('raises a message that mentions you and makes your mention the white chip', async () => {
+  it('keeps the bubble and makes your mention the white chip', async () => {
     mocks.useMessagesReturn.messages = [
       message('jeremy', todayAt(0), { content: '<@42> is movie night still on? ask <@102>' }),
     ];
@@ -398,6 +453,25 @@ describe('whose bubble (§3.2)', () => {
     expect(chip).toHaveTextContent('@Sean');
     // Somebody else's mention in the same bubble is not yours.
     expect(within(row).getByText('@Nick')).not.toHaveClass('glass-mention-self');
+  });
+
+  it('shows a message this device cannot read as "Encrypted message"', async () => {
+    mocks.useMessagesReturn.messages = [
+      message('jeremy', todayAt(0), { content: '[Encrypted message]', e2ee: { version: 1 } } as unknown as Partial<Message>),
+    ];
+    renderList();
+    const text = await screen.findByText('Encrypted message');
+    expect(text.closest('.glass-bubble')).toHaveAttribute('data-muted', 'true');
+  });
+
+  it('marks an edited message "edited" after its words, and that opens its history', async () => {
+    mocks.useMessagesReturn.messages = [
+      message('jeremy', todayAt(0), { content: 'see you at 9', edited_timestamp: todayAt(2) } as Partial<Message>),
+    ];
+    renderList();
+    const edited = within(rowOf('see you at 9')).getByRole('button', { name: /^Edited/ });
+    expect(edited).toHaveTextContent('edited');
+    expect(edited.closest('.glass-bubble__text')).not.toBeNull();
   });
 });
 
@@ -425,14 +499,16 @@ describe('the mention chip', () => {
   });
 });
 
-describe('system messages', () => {
+describe('system lines (§4.11)', () => {
   it('reads as a centered line, not a bubble', async () => {
     mocks.useMessagesReturn.messages = [
       message('nick', todayAt(0), { content: '', type: MessageType.PinnedMessage }),
     ];
     renderList();
-    const line = await screen.findByRole('article', { name: 'System message: Nick pinned a message' });
+    const line = await screen.findByRole('article', { name: 'Nick pinned a message' });
     expect(line).toHaveTextContent('Nick pinned a message');
+    expect(line).toHaveClass('ix-tl-system');
+    expect(line).toHaveAttribute('data-glyph', 'pin');
     expect(line.querySelector('.glass-bubble')).toBeNull();
   });
 
@@ -444,17 +520,53 @@ describe('system messages', () => {
     expect(systemMessageText(message('eric', todayAt(0), { type: MessageType.ChannelNameChange, content: 'trips' }), 'Eric'))
       .toBe('Eric renamed the channel to trips');
   });
+
+  it('says "You joined General" where it happened, among the messages, in the server’s first channel', async () => {
+    mocks.useMessagesReturn.messages = [
+      message('jeremy', todayAt(0), { content: 'who is up for a run' }),
+      message('jeremy', todayAt(1), { content: 'I am in General' }),
+      message('nick', todayAt(10), { content: 'on my way' }),
+    ];
+    act(() => {
+      useVoiceLineStore.getState().add({ kind: 'joined', guildId: 'g1', channelId: 'vc1', at: todayAt(4) });
+      // Another server's voice channel is not this conversation's business.
+      useVoiceLineStore.getState().add({ kind: 'joined', guildId: 'g2', channelId: 'vc9', at: todayAt(5) });
+    });
+    renderList();
+    const line = await screen.findByText('You joined General');
+    const row = line.closest('.ix-tl-system') as HTMLElement;
+    expect(row).toHaveAttribute('data-glyph', 'voice');
+    const after = (a: Element, b: Element) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(after(rowOf('I am in General'), row)).toBe(true);
+    expect(after(row, rowOf('on my way'))).toBe(true);
+    expect(screen.getAllByText(/^You joined/)).toHaveLength(1);
+    // A system line breaks the group: Nick's message starts its own.
+    expect(rowOf('I am in General')).toHaveAttribute('data-last', 'true');
+  });
 });
 
-describe('typing (§3.2)', () => {
+describe('typing (§4.11)', () => {
   it('draws a bubble of dots beside the typist’s face and says who in words', async () => {
     mocks.useMessagesReturn.messages = [message('nick', todayAt(0), { content: 'hello' })];
     mocks.typingByChannel = { ch1: ['104'] };
     const { container } = renderList();
     expect(await screen.findByText('Eric is typing')).toHaveClass('sr-only');
     const typing = container.querySelector('.glass-tl-typing-row') as HTMLElement;
-    expect(typing.querySelector('.glass-tl-typing')).not.toBeNull();
-    expect(typing.querySelector('.glass-tl-avatar')).toHaveTextContent('E');
+    expect(typing.querySelector('.ix-typing__bubble')).not.toBeNull();
+    expect(typing.querySelector('.ix-av')).toHaveTextContent('E');
+  });
+
+  it('overlaps two typists’ faces and names them both', async () => {
+    mocks.useMessagesReturn.messages = [message('jeremy', todayAt(0), { content: 'hello' })];
+    mocks.typingByChannel = { ch1: ['102', '104'] };
+    const { container } = renderList();
+    const typing = await waitFor(() => {
+      const found = container.querySelector('.glass-tl-typing-row');
+      expect(found).not.toBeNull();
+      return found as HTMLElement;
+    });
+    expect(typing.querySelectorAll('.ix-faces .ix-av')).toHaveLength(2);
+    expect(within(typing).getAllByText('Nick and Eric are typing')).toHaveLength(2);
   });
 });
 
@@ -486,24 +598,21 @@ describe('a row redraws only when something it draws changed', () => {
       </MemoryRouter>,
     );
     expect(await screen.findByText('Eric is typing')).toBeInTheDocument();
-    expect(mocks.avatarRenders.get('104')).toBeGreaterThan(0);
     expect(faces()).toBe(before);
 
-    // Hovering one row redraws that row, not the list.
-    const hovered = rowOf('line 2');
-    act(() => {
-      fireEvent.mouseEnter(hovered);
-    });
-    await waitFor(() => expect(within(hovered).getByRole('button', { name: 'More actions' })).toBeInTheDocument());
+    // Opening one row's menu redraws that row (its capsule stays up), not the list.
+    const row = rowOf('line 2');
+    fireEvent.click(within(row).getByRole('button', { name: 'More actions' }));
+    await waitFor(() => expect(row).toHaveAttribute('data-menu-open', 'true'));
     expect(faces()).toBe(before + 1);
   }, 60_000);
 });
 
-describe('the catch-up divider (§3.2)', () => {
+describe('the New divider (§4.11)', () => {
   const readUpTo = (id: string) => mocks.readStateStoreState.getReadState.mockReturnValue({ last_message_id: id });
   const after = (a: Element, b: Element) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
 
-  it('says how many you missed and sits above the first of them', async () => {
+  it('says "New" above the first message you had not read, with Mark read', async () => {
     mocks.useMessagesReturn.messages = [
       message('viewer', todayAt(0), { id: '1001', content: 'home in 20' }),
       message('brendan', todayAt(4), { id: '1002', content: 'okay who is on' }),
@@ -513,8 +622,8 @@ describe('the catch-up divider (§3.2)', () => {
     ];
     readUpTo('1001');
     renderList();
-    const divider = await screen.findByTestId('catch-up-divider');
-    expect(within(divider).getByText(/^2 new since /)).toBeInTheDocument();
+    const divider = await screen.findByTestId('new-divider');
+    expect(within(divider).getByText('New')).toBeInTheDocument();
     expect(within(divider).getByRole('button', { name: 'Mark read' })).toBeInTheDocument();
     expect(after(rowOf('home in 20'), divider)).toBe(true);
     expect(after(divider, rowOf('okay who is on'))).toBe(true);
@@ -527,9 +636,9 @@ describe('the catch-up divider (§3.2)', () => {
     ];
     readUpTo('1001');
     renderList();
-    await screen.findByTestId('catch-up-divider');
+    await screen.findByTestId('new-divider');
     expect(rowOf('second words')).not.toHaveAttribute('data-grouped');
-    expect(within(rowOf('second words')).getByText('Brendan')).toBeInTheDocument();
+    expect(within(rowOf('second words')).getByRole('button', { name: 'Brendan' })).toBeInTheDocument();
     expect(rowOf('first words')).toHaveAttribute('data-last', 'true');
   });
 
@@ -540,7 +649,7 @@ describe('the catch-up divider (§3.2)', () => {
     ];
     readUpTo('1001');
     renderList();
-    await screen.findByTestId('catch-up-divider');
+    await screen.findByTestId('new-divider');
     expect(mocks.readStateStoreState.markRead).toHaveBeenCalled();
     expect(mocks.readStateStoreState.getReadState.mock.invocationCallOrder[0])
       .toBeLessThan(mocks.readStateStoreState.markRead.mock.invocationCallOrder[0]);
@@ -557,7 +666,7 @@ describe('the catch-up divider (§3.2)', () => {
     expect(mocks.readStateStoreState.refresh).toHaveBeenCalledWith(SCOPE);
     expect(mocks.readStateStoreState.markRead).not.toHaveBeenCalled();
     await act(async () => { readUpTo('1001'); finish(); });
-    expect(await screen.findByTestId('catch-up-divider')).toHaveTextContent('1 new');
+    expect(await screen.findByTestId('new-divider')).toHaveTextContent('New');
     expect(mocks.readStateStoreState.markRead).toHaveBeenCalledWith(SCOPE, 'ch1', '1002');
   });
 
@@ -565,7 +674,7 @@ describe('the catch-up divider (§3.2)', () => {
     mocks.useMessagesReturn.messages = [message('nick', todayAt(9), { id: '1002', content: 'first visit' })];
     renderList();
     await waitFor(() => expect(mocks.readStateStoreState.markRead).toHaveBeenCalledWith(SCOPE, 'ch1', '1002'));
-    expect(screen.queryByTestId('catch-up-divider')).toBeNull();
+    expect(screen.queryByTestId('new-divider')).toBeNull();
   });
 
   it('does not mark a conversation read after leaving while its snapshot loads', async () => {
@@ -585,8 +694,21 @@ describe('the catch-up divider (§3.2)', () => {
     ];
     readUpTo('1001');
     renderList();
-    fireEvent.click(within(await screen.findByTestId('catch-up-divider')).getByRole('button', { name: 'Mark read' }));
-    await waitFor(() => expect(screen.queryByTestId('catch-up-divider')).toBeNull());
+    fireEvent.click(within(await screen.findByTestId('new-divider')).getByRole('button', { name: 'Mark read' }));
+    await waitFor(() => expect(screen.queryByTestId('new-divider')).toBeNull());
+  });
+
+  it('leaves on its own two seconds after you reach the bottom', async () => {
+    mocks.useMessagesReturn.messages = [
+      message('brendan', todayAt(0), { id: '1001', content: 'read' }),
+      message('nick', todayAt(9), { id: '1002', content: 'unread' }),
+    ];
+    readUpTo('1001');
+    renderList();
+    await screen.findByTestId('new-divider');
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    expect(screen.getByTestId('new-divider')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByTestId('new-divider')).toBeNull(), { timeout: 2_000 });
   });
 
   it('is not there when nothing was missed, or when the channel was never read', async () => {
@@ -597,17 +719,17 @@ describe('the catch-up divider (§3.2)', () => {
     readUpTo('1002');
     const view = renderList();
     await screen.findByText('also read');
-    expect(screen.queryByTestId('catch-up-divider')).toBeNull();
+    expect(screen.queryByTestId('new-divider')).toBeNull();
     view.unmount();
 
     mocks.readStateStoreState.getReadState.mockReturnValue(undefined);
     renderList();
     await screen.findByText('also read');
-    expect(screen.queryByTestId('catch-up-divider')).toBeNull();
+    expect(screen.queryByTestId('new-divider')).toBeNull();
   });
 });
 
-describe('reactions bite the corner (§3.2)', () => {
+describe('reactions bite the corner (§4.11)', () => {
   const like = { emoji: '\u{1F44D}', count: 2, me: true };
   const image = {
     id: 'a1',
@@ -619,7 +741,7 @@ describe('reactions bite the corner (§3.2)', () => {
     height: 270,
   };
 
-  it('is ONE chip on the bubble of a message of words, with an icon and a count for each reaction', async () => {
+  it('is ONE chip at the bubble’s top trailing corner, with an icon and a count for each reaction', async () => {
     mocks.useMessagesReturn.messages = [
       message('nick', todayAt(0), { content: 'new personal best', reactions: [like, { emoji: '\u{1F525}', count: 5, me: false }] }),
     ];
@@ -627,12 +749,13 @@ describe('reactions bite the corner (§3.2)', () => {
     const row = rowOf('new personal best');
     const chips = within(row).getAllByRole('group', { name: 'Reactions' });
     expect(chips).toHaveLength(1);
-    // It hangs off the bubble's line, not under the message.
-    expect(chips[0].parentElement).toHaveClass('glass-msg__line');
+    // In the bubble's corner, beside the action capsule; the row makes room.
+    expect(chips[0].parentElement).toHaveClass('ix-msg__corner');
     expect(chips[0]).toHaveAttribute('data-placement', 'bubble');
-    expect(chips[0].parentElement).toHaveAttribute('data-bitten', 'true');
+    expect(row).toHaveAttribute('data-bitten', 'true');
     const thumbs = within(chips[0]).getByRole('button', { name: /2 reactions, including yours/ });
     expect(thumbs).toHaveAttribute('aria-pressed', 'true');
+    expect(thumbs).toHaveAttribute('data-me', 'true');
     expect(thumbs).toHaveTextContent('2');
     // The flame is Paracord's own line mark, not the emoji.
     const flame = within(chips[0]).getByRole('button', { name: /5 reactions/ });
@@ -640,23 +763,23 @@ describe('reactions bite the corner (§3.2)', () => {
     expect(flame).toHaveTextContent('5');
   });
 
-  it('bites the picture instead when the message has one, outside its clipping frame', async () => {
+  it('bites the picture instead when the message is only a picture, outside its clipping frame', async () => {
     mocks.useMessagesReturn.messages = [
       message('nick', todayAt(0), { content: '', attachments: [image], reactions: [like] }),
     ];
     const { container } = renderList();
     const media = await waitFor(() => {
-      const found = container.querySelector('.glass-media');
+      const found = container.querySelector('.ix-media');
       expect(found).not.toBeNull();
       return found as HTMLElement;
     });
     const chip = within(media).getByRole('group', { name: 'Reactions' });
     // A child of the host, not of the frame that clips the picture.
     expect(chip.parentElement).toBe(media);
-    expect(media.querySelector('.glass-media__frame')).not.toContainElement(chip);
-    expect(media.querySelector('.glass-media__frame')).toHaveAttribute('data-shaped');
+    expect(media.querySelector('.ix-media__frame')).not.toContainElement(chip);
+    // Fitted inside 360×360: 480×270 draws at 360×203.
+    expect(media.querySelector('.ix-media__frame')).toHaveStyle({ width: '360px', aspectRatio: '360 / 203' });
     // No footer: nothing about the file's name or size is written under it.
-    expect(container.querySelector('.glass-tl-media__footer')).toBeNull();
     expect(screen.queryByText('mission.png')).toBeNull();
   });
 
@@ -667,18 +790,15 @@ describe('reactions bite the corner (§3.2)', () => {
     await waitFor(() => expect(mocks.messageStoreState.removeReaction).toHaveBeenCalledWith('ch1', expect.any(String), like.emoji));
   });
 
-  it('keeps adding a reaction one gesture away, from the message’s React action', async () => {
+  it('keeps adding a reaction one gesture away, from the capsule’s React', async () => {
     mocks.useMessagesReturn.messages = [message('nick', todayAt(0), { content: 'hello there', reactions: [like] })];
     renderList();
     const row = rowOf('hello there');
-    act(() => {
-      fireEvent.mouseEnter(row);
-    });
-    expect(await within(row).findByRole('button', { name: 'React to Nick' })).toBeInTheDocument();
+    expect(within(row).getByRole('button', { name: 'React to Nick' }).closest('.ix-capsule')).not.toBeNull();
   });
 });
 
-describe('media (§3.2)', () => {
+describe('media bubbles (§4.11)', () => {
   const image = {
     id: 'a1',
     filename: 'mission.png',
@@ -704,11 +824,27 @@ describe('media (§3.2)', () => {
     expect(await screen.findByRole('button', { name: 'Delete mission.png' })).toBeInTheDocument();
   });
 
-  it('joins the corner under a bubble of the same group', async () => {
+  it('joins the bubble above it, and the bubble joins it', async () => {
     mocks.useMessagesReturn.messages = [message('nick', todayAt(0), { content: 'look at this', attachments: [image] })];
     const { container } = renderList();
     await screen.findByRole('button', { name: 'Open image preview: mission.png' });
-    expect(container.querySelector('.glass-media')).toHaveAttribute('data-join-top', 'true');
+    expect(container.querySelector('.ix-media')).toHaveAttribute('data-join-top', 'true');
+    expect(container.querySelector('.ix-media')).not.toHaveAttribute('data-join-bottom');
+    expect(rowOf('look at this').querySelector('.glass-bubble')).toHaveAttribute('data-join-bottom', 'true');
+  });
+
+  it('draws a file as a card bubble with its name, size and download', async () => {
+    const file = { id: 'f1', filename: 'notes.txt', size: 2048, content_type: 'text/plain', url: '/attachments/f1' };
+    mocks.useMessagesReturn.messages = [message('nick', todayAt(0), { content: '', attachments: [file] })];
+    const { container } = renderList();
+    const card = await waitFor(() => {
+      const found = container.querySelector('.ix-file--timeline');
+      expect(found).not.toBeNull();
+      return found as HTMLElement;
+    });
+    expect(within(card).getByRole('button', { name: 'notes.txt' })).toBeInTheDocument();
+    expect(within(card).getByText(/^2(\.0)? KB$/)).toBeInTheDocument();
+    expect(within(card).getByRole('button', { name: 'Download' })).toBeInTheDocument();
   });
 });
 
@@ -722,16 +858,16 @@ describe('a posted clip (§6.4)', () => {
   };
   const like = { emoji: '\u{1F44D}', count: 1, me: false };
 
-  it('is a 16:9 media bubble with a play button and its label, not a file row', async () => {
+  it('is a 16:9 media bubble with a play button and its label, not a file card', async () => {
     mocks.useMessagesReturn.messages = [message('eric', todayAt(0), { content: '', attachments: [clip] })];
     const { container } = renderList();
     const play = await screen.findByRole('button', { name: "Play clip, 0:30 from Vincent's screen" });
-    const media = container.querySelector('.glass-media') as HTMLElement;
+    const media = container.querySelector('.ix-media') as HTMLElement;
     expect(media).toContainElement(play);
-    expect(media.querySelector('.glass-media__frame')).toHaveStyle({ aspectRatio: '16 / 9' });
+    expect(media.querySelector('.ix-media__frame')).toHaveStyle({ aspectRatio: '360 / 203' });
     expect(within(media).getByText("0:30 from Vincent's screen")).toBeInTheDocument();
     expect(media.querySelector('video')).not.toBeNull();
-    expect(container.querySelector('.glass-file')).toBeNull();
+    expect(container.querySelector('.ix-file')).toBeNull();
     // A picture's tools: download for anyone, delete only for your own.
     expect(within(media).getByRole('button', { name: `Download ${clip.filename}` })).toBeInTheDocument();
     expect(within(media).queryByRole('button', { name: `Delete ${clip.filename}` })).toBeNull();
@@ -741,24 +877,24 @@ describe('a posted clip (§6.4)', () => {
     mocks.useMessagesReturn.messages = [message('viewer', todayAt(0), { content: 'that was close', attachments: [clip] })];
     const { container } = renderList();
     expect(await screen.findByRole('button', { name: `Delete ${clip.filename}` })).toBeInTheDocument();
-    expect(container.querySelector('.glass-media')).toHaveAttribute('data-join-top', 'true');
+    expect(container.querySelector('.ix-media')).toHaveAttribute('data-join-top', 'true');
   });
 
   it('takes the reactions chip on its corner, like a picture', async () => {
     mocks.useMessagesReturn.messages = [message('eric', todayAt(0), { content: '', attachments: [clip], reactions: [like] })];
     const { container } = renderList();
     await screen.findByRole('button', { name: "Play clip, 0:30 from Vincent's screen" });
-    const media = container.querySelector('.glass-media') as HTMLElement;
+    const media = container.querySelector('.ix-media') as HTMLElement;
     const chip = within(media).getByRole('group', { name: 'Reactions' });
     expect(chip.parentElement).toBe(media);
   });
 
-  it('leaves any other video a file row, and a clip too while previews are off', async () => {
+  it('leaves any other video a file card, and a clip too while previews are off', async () => {
     const other = { ...clip, id: 'v2', filename: 'holiday.webm' };
     mocks.useMessagesReturn.messages = [message('eric', todayAt(0), { content: '', attachments: [other] })];
     const first = renderList();
     expect(await screen.findByRole('button', { name: 'holiday.webm' })).toBeInTheDocument();
-    expect(first.container.querySelector('.glass-media')).toBeNull();
+    expect(first.container.querySelector('.ix-media')).toBeNull();
     first.unmount();
 
     mocks.lowBandwidthMode = true;
@@ -766,48 +902,125 @@ describe('a posted clip (§6.4)', () => {
       mocks.useMessagesReturn.messages = [message('eric', todayAt(0), { content: '', attachments: [clip] })];
       const { container } = renderList();
       const row = await waitFor(() => {
-        const found = container.querySelector('.glass-file');
+        const found = container.querySelector('.ix-file');
         expect(found).not.toBeNull();
         return found as HTMLElement;
       });
-      expect(within(row).getByText('Preview off')).toBeInTheDocument();
-      expect(container.querySelector('.glass-media')).toBeNull();
+      expect(within(row).getByText(/Preview off/)).toBeInTheDocument();
+      expect(container.querySelector('.ix-media')).toBeNull();
     } finally {
       mocks.lowBandwidthMode = false;
     }
   });
 });
 
-describe('events and channels in a message (§3.2)', () => {
-  const haz = {
-    id: '7001',
-    guildId: 'g1',
-    name: 'Haz 5 run',
-    startsAt: new Date(Date.now() + 3 * 60 * 60 * 1000),
-    endsAt: null,
-    channelId: null,
-    location: null,
-    creatorId: '101',
-    going: 3,
-    youAreGoing: false,
-    status: 1,
-  };
+describe('threads (§4.11)', () => {
+  it('hangs "3 replies · 9:30 PM" under the thread’s starter, and it opens the thread', async () => {
+    mocks.useMessagesReturn.messages = [message('brendan', todayAt(0), { id: 'starter-1', content: 'haz 5 tonight?' })];
+    renderList();
+    const line = await within(rowOf('haz 5 tonight?')).findByRole('button', { name: /^haz runs: 3 replies · 9:30/ });
+    expect(line).toHaveClass('ix-thread-line');
+    expect(line).toHaveTextContent(/^3 replies · 9:30/);
+    // The capsule's thread button opens the same thread.
+    expect(within(rowOf('haz 5 tonight?')).getByRole('button', { name: 'Open thread' })).toBeInTheDocument();
+  });
+});
 
-  it('draws a message that is only an event as a plan card, with no bubble', async () => {
-    mocks.eventResult = { ...mocks.eventResult, status: 'ready', event: haz };
-    mocks.useMessagesReturn.messages = [message('brendan', todayAt(0), { content: '<event:7001>' })];
-    const { container } = renderList();
-    const card = await screen.findByRole('group', { name: 'Event: Haz 5 run' });
-    expect(within(card).getByRole('button', { name: 'I’m in' })).toBeInTheDocument();
-    expect(container.querySelector('.glass-bubble')).toBeNull();
+describe('editing in place (§4.12)', () => {
+  it('edits your message in its place: Esc cancels', async () => {
+    mocks.useMessagesReturn.messages = [message('viewer', todayAt(0), { content: 'see you at 9' })];
+    renderList();
+    const row = rowOf('see you at 9');
+    fireEvent.click(within(row).getByRole('button', { name: 'More actions' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Edit' }));
+    const field = await within(row).findByRole('textbox', { name: 'Edit your message' });
+    expect(field).toHaveValue('see you at 9');
+    fireEvent.keyDown(field, { key: 'Escape' });
+    await waitFor(() => expect(within(row).queryByRole('textbox')).toBeNull());
+    expect(mocks.messageStoreState.editMessage).not.toHaveBeenCalled();
   });
 
-  it('keeps an event named inside a sentence as a chip in that sentence', async () => {
-    mocks.eventResult = { ...mocks.eventResult, status: 'ready', event: haz };
-    mocks.useMessagesReturn.messages = [message('jeremy', todayAt(0), { content: 'is <event:7001> still on? bring snacks' })];
-    const { container } = renderList();
-    const row = (await screen.findByText(/still on\? bring snacks/)).closest('[role="article"]') as HTMLElement;
-    expect(row.querySelector('.glass-bubble .ix-inline--event')).toHaveTextContent('Haz 5 run');
-    expect(container.querySelector('.glass-plan')).toBeNull();
+  it('offers what the menu promises (§4.11) and never a Mark unread it cannot keep', async () => {
+    mocks.useMessagesReturn.messages = [message('viewer', todayAt(0), { content: 'see you at 9' })];
+    renderList();
+    fireEvent.click(within(rowOf('see you at 9')).getByRole('button', { name: 'More actions' }));
+    const menu = await screen.findByRole('menu', { name: 'Message actions' });
+    const labels = within(menu).getAllByRole('menuitem').map((item) => item.textContent);
+    for (const label of ['Edit', 'Copy text', 'Forward', 'Remind me', 'Copy link', 'Delete']) {
+      expect(labels).toContain(label);
+    }
+    expect(labels).not.toContain('Mark unread');
+  });
+});
+
+describe('compact density (§6.13)', () => {
+  it('draws the group face at 24px', async () => {
+    mocks.compact = true;
+    mocks.useMessagesReturn.messages = [message('nick', todayAt(0), { content: 'tight' })];
+    renderList();
+    expect(rowOf('tight').querySelector('.ix-msg__face .ix-av')).toHaveStyle({ width: '24px' });
+  });
+});
+
+describe('a message arrives (§5.10)', () => {
+  let waapi: WaapiStub;
+  beforeEach(() => {
+    resetMotionSwitchForTests();
+    configureMotion('full');
+    waapi = installWaapiStub();
+  });
+  afterEach(() => {
+    waapi.restore();
+    resetMotionSwitchForTests();
+  });
+
+  const arrivals = () => waapi.played.filter((record) => record.animation.id === 'ix-timeline:arrive');
+
+  async function opened(messages: Message[]) {
+    // The history loads first: nothing in it arrives.
+    mocks.useMessagesReturn.isLoading = true;
+    mocks.useMessagesReturn.messages = messages;
+    const view = renderList();
+    mocks.useMessagesReturn.isLoading = false;
+    view.rerender(
+      <MemoryRouter>
+        <MessageList channelId="ch1" />
+      </MemoryRouter>,
+    );
+    await screen.findByText(messages[messages.length - 1].content ?? '');
+    return (next: Message[]) => {
+      mocks.useMessagesReturn.messages = next;
+      view.rerender(
+        <MemoryRouter>
+          <MessageList channelId="ch1" />
+        </MemoryRouter>,
+      );
+    };
+  }
+
+  it('rises from the avatar’s side when somebody else writes, and the history never does', async () => {
+    const history = [message('nick', todayAt(0), { content: 'already here' })];
+    const next = await opened(history);
+    expect(arrivals()).toHaveLength(0);
+    await act(async () => next([...history, message('jeremy', todayAt(1), { content: 'just arrived' })]));
+    await waitFor(() => expect(arrivals()).toHaveLength(1));
+    const [pop] = arrivals();
+    expect(pop.target).toBe(rowOf('just arrived'));
+    expect(pop.keyframes[0]).toMatchObject({ transform: 'translateY(14px) scale(0.96)', opacity: 0, transformOrigin: '0% 100%' });
+    expect(pop.options).toMatchObject({ duration: 550, easing: 'cubic-bezier(0.32, 0.72, 0, 1)' });
+    for (const frame of pop.keyframes) {
+      for (const property of Object.keys(frame)) {
+        expect(['transform', 'opacity', 'transformOrigin', 'offset', 'easing', 'composite']).toContain(property);
+      }
+    }
+  });
+
+  it('never touches your own message: the send flight is its only landing', async () => {
+    const history = [message('nick', todayAt(0), { content: 'already here' })];
+    const next = await opened(history);
+    await act(async () => next([...history, message('viewer', todayAt(1), { content: 'mine' })]));
+    await screen.findByText('mine');
+    await act(async () => { await Promise.resolve(); });
+    expect(arrivals()).toHaveLength(0);
   });
 });

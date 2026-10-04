@@ -1,1 +1,1454 @@
-/* IX-11: the message timeline (§4.11). Created empty by IX-1; the owner fills it. */
+/* =============================================================================
+   IX-11: the Index timeline (docs/index-spec.md §3.1, §4.11, §5.10).
+
+   Bottom-anchored in the conversation column (max 920 + the column padding),
+   the large title as the scroller's first item. Others' messages group by
+   author: the name (12.5 ink-3) over the group's first bubble, the 30px face
+   beside its last, bubbles 19 with 7px joined corners on the face's side. Yours
+   are cream on the right with the corners mirrored. Rows are spaced the
+   prototype's way: 3px inside a group, 9px between groups, dividers 17 above
+   and 8 below.
+
+   The hooks the send flight reads keep their Glass names on purpose
+   (docs/design/index-checkpoints/M1.md): the row `.glass-msg` (#msg-<id>,
+   [data-own], [data-flight]), its `.glass-bubble` and `.glass-bubble__text`,
+   the reply line `.glass-tl-reply`, the receipt `.glass-tl-receipt` and the
+   list `.glass-timeline__content`. Everything is styled here, by `ix-*` class.
+
+   Tokens only (the literal-color lint); only transform and opacity animate
+   (the motion lint). Unlayered and after every Glass sheet: an Index rule wins.
+   ============================================================================= */
+
+/* ---- The scroller and its column ---------------------------------------------------- */
+
+.ix-timeline {
+  /* A query container: a narrow host (the call view's chat column) takes a
+     narrow padding without knowing where it is. */
+  container: ix-timeline / inline-size;
+  min-height: 0;
+}
+
+.ix-timeline__scroller {
+  /* The column's side padding: the frame's, 16px in a narrow host. */
+  --ix-tl-pad: var(--ix-col-pad, 48px);
+  --ix-tl-face: 30px;
+  --ix-tl-gap: 3px;
+  --ix-tl-group: 6px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  height: 100%;
+  /* The toolbar floats over the top of the scroller when the page registers it (IX-15). */
+  padding-top: var(--ix-timeline-top, 0px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+
+.ix-timeline__scroller::-webkit-scrollbar {
+  display: none;
+}
+
+@container ix-timeline (max-width: 640px) {
+  .ix-timeline__scroller,
+  .ix-jump-host,
+  .ix-bulk {
+    --ix-tl-pad: 16px;
+  }
+}
+
+.ix-timeline__header {
+  flex: none;
+}
+
+.ix-timeline__content {
+  position: relative;
+  flex: none;
+  width: 100%;
+  /* §3.1: the feed sits on the message box when it is short. */
+  margin-top: auto;
+}
+
+.ix-timeline__row {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+}
+
+.ix-tl-col {
+  box-sizing: border-box;
+  width: min(100%, calc(var(--ix-col-max, 920px) + 2 * var(--ix-tl-pad, 48px)));
+  margin-inline: auto;
+  padding-inline: var(--ix-tl-pad, 48px);
+}
+
+.ix-tl-sentinel {
+  height: 0;
+}
+
+.ix-timeline__loading,
+.ix-timeline__error,
+.ix-timeline__empty {
+  display: flex;
+  flex: 1 0 auto;
+  flex-direction: column;
+}
+
+.ix-timeline__loading {
+  justify-content: flex-end;
+  padding-bottom: 16px;
+}
+
+.ix-timeline__error {
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+}
+
+/* The welcome (IX-15's `emptyState`) or the plain line: centered in what is left. */
+.ix-timeline__empty {
+  justify-content: center;
+}
+
+.ix-tl-empty {
+  display: grid;
+  justify-items: center;
+  padding-block: 24px;
+  text-align: center;
+}
+
+.ix-tl-empty__title {
+  margin: 0;
+  color: var(--ix-ink);
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.018em;
+}
+
+.ix-tl-empty__line {
+  max-width: 440px;
+  margin: 6px 0 0;
+  color: var(--ix-ink-3);
+  font-size: 15px;
+}
+
+/* ---- Lines that are not bubbles ------------------------------------------------------ */
+
+/* "Today 9:41 PM": 12/500 ink-3, the day 600 ink-2; 14 above (plus the feed's 3), 8 below. */
+.ix-tl-divider {
+  display: flex;
+  justify-content: center;
+  padding-top: 17px;
+  padding-bottom: 8px;
+  color: var(--ix-ink-3);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 15px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.ix-tl-divider b {
+  color: var(--ix-ink-2);
+  font-weight: 600;
+}
+
+/* New: hairlines either side of "New" in white, "Mark read" at the right. */
+.ix-tl-new {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding-top: 17px;
+  padding-bottom: 8px;
+}
+
+.ix-tl-new__rule {
+  height: 1px;
+  background: var(--ix-line);
+}
+
+.ix-tl-new__label {
+  color: var(--ix-ink);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 15px;
+}
+
+.ix-tl-new__mark {
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ix-ink-2);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 15px;
+  cursor: pointer;
+  transition: color 120ms var(--ix-ease), background-color 120ms var(--ix-ease);
+}
+
+.ix-tl-new__mark:hover {
+  background: var(--ix-fill);
+  color: var(--ix-ink);
+}
+
+/* "You joined General": centered, 13 ink-3, a 14px glyph (amber for voice), 8 above and below. */
+.ix-tl-system {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 2px 8px;
+  padding-top: 11px;
+  padding-bottom: 8px;
+  outline: none;
+  color: var(--ix-ink-3);
+  font-size: 13px;
+  line-height: 16px;
+  text-align: center;
+}
+
+.ix-tl-system__glyph {
+  display: inline-flex;
+  flex: none;
+}
+
+.ix-tl-system[data-glyph='voice'] .ix-tl-system__glyph {
+  color: var(--ix-amber);
+}
+
+.ix-tl-system__time {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0;
+  transition: opacity 120ms var(--ix-ease);
+}
+
+.ix-tl-system:hover .ix-tl-system__time,
+.ix-tl-system:focus-visible .ix-tl-system__time {
+  opacity: 1;
+}
+
+.ix-tl-system[data-jump] {
+  color: var(--ix-ink);
+}
+
+/* ---- A message row ------------------------------------------------------------------- */
+
+.ix-msg {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  /* 9px above a group (3 between rows + its 6), 3px inside one. */
+  padding-top: calc(var(--ix-tl-gap) + var(--ix-tl-group));
+  outline: none;
+  color: var(--ix-ink);
+}
+
+.ix-msg[data-grouped],
+.ix-msg[data-own] {
+  padding-top: var(--ix-tl-gap);
+}
+
+/* A reactions chip rides 13px over the bubble's top: the row makes room for it,
+   and so does a reply's quoted line above the bubble. */
+.ix-msg[data-bitten] {
+  padding-top: calc(var(--ix-tl-gap) + var(--ix-tl-group) + 10px);
+}
+
+.ix-msg[data-bitten] .ix-reply + .ix-msg__line {
+  margin-top: 10px;
+}
+
+.ix-msg:focus-visible,
+.ix-tl-system:focus-visible {
+  border-radius: 12px;
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+.ix-msg__check {
+  display: flex;
+  flex: none;
+  align-self: center;
+}
+
+/* The face column: the 30px face beside the group's last bubble, an empty
+   column beside the others so every bubble of a group lines up. */
+.ix-msg__face {
+  display: flex;
+  flex: none;
+  align-self: flex-end;
+  width: var(--ix-tl-face);
+}
+
+.ix-msg__face-button {
+  display: inline-flex;
+  flex: none;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+}
+
+.ix-msg__badge-face {
+  display: grid;
+  place-items: center;
+  width: var(--ix-tl-face);
+  height: var(--ix-tl-face);
+  border-radius: 50%;
+  background: var(--ix-fill-ctl);
+  color: var(--ix-ink-2);
+}
+
+.ix-msg__body {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--ix-tl-gap);
+  min-width: 0;
+}
+
+.ix-msg[data-own] .ix-msg__body {
+  align-items: flex-end;
+}
+
+/* The name over a group's first bubble: 12.5 ink-3, lined up with its words. */
+.ix-msg__name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  margin-left: 13px;
+  color: var(--ix-ink-3);
+  font-size: 12.5px;
+  line-height: 15px;
+  white-space: nowrap;
+}
+
+.ix-msg__name--own {
+  margin-right: 13px;
+  margin-left: 0;
+}
+
+.ix-msg__who {
+  min-width: 0;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+button.ix-msg__who:hover {
+  color: var(--ix-ink-2);
+}
+
+.ix-msg__tag {
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--ix-fill);
+  color: var(--ix-ink-2);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 14px;
+}
+
+.ix-msg__mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ix-msg__face-button:focus-visible,
+.ix-msg__who:focus-visible,
+.ix-capsule__btn:focus-visible,
+.ix-reply:focus-visible,
+.ix-thread-line:focus-visible,
+.ix-bubble__edited:focus-visible,
+.ix-tl-new__mark:focus-visible,
+.ix-media__open:focus-visible,
+.ix-media__tool:focus-visible,
+.ix-file__action:focus-visible,
+.ix-file__name--button:focus-visible,
+.ix-jump:focus-visible,
+.ix-bulk__btn:focus-visible,
+.ix-msg__edit-btn:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+/* ---- Bubbles ------------------------------------------------------------------------- */
+
+/* The bubble's line: the bubble, its hover time, and its corner. 520 at most,
+   or 78% of the column. */
+.ix-msg__line {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  max-width: min(520px, 78%);
+}
+
+.ix-bubble {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+  padding: 9px 14px;
+  border-radius: 19px;
+  background-color: var(--ix-bubble);
+  color: var(--ix-ink);
+  font-size: 15px;
+  line-height: 1.42;
+  overflow-wrap: anywhere;
+}
+
+/* Joined corners (7) on the face's side: the first of a group at the bottom,
+   the middle both, the last at the top. */
+.ix-bubble[data-join-top] {
+  border-top-left-radius: 7px;
+}
+
+.ix-bubble[data-join-bottom] {
+  border-bottom-left-radius: 7px;
+}
+
+/* Yours: cream, on the right, the joins mirrored. Everything drawn inside it
+   reads the ink tokens, so they point at the cream's ink here (the Glass and
+   legacy names too: markdown, code and chips still read some of them). */
+.ix-msg[data-own] .ix-bubble {
+  --ix-ink: var(--ix-cream-ink);
+  --ix-ink-2: color-mix(in srgb, var(--ix-cream-ink) 72%, var(--ix-cream));
+  --ix-ink-3: color-mix(in srgb, var(--ix-cream-ink) 64%, var(--ix-cream));
+  --ink-1: var(--ix-cream-ink);
+  --ink-2: color-mix(in srgb, var(--ix-cream-ink) 72%, var(--ix-cream));
+  --ink-3: color-mix(in srgb, var(--ix-cream-ink) 64%, var(--ix-cream));
+  --text-primary: var(--ix-cream-ink);
+  --text-body-ink: var(--ix-cream-ink);
+  --text-link: var(--ix-cream-ink);
+  --text-secondary: color-mix(in srgb, var(--ix-cream-ink) 72%, var(--ix-cream));
+  --text-muted: color-mix(in srgb, var(--ix-cream-ink) 64%, var(--ix-cream));
+  --text-faint: color-mix(in srgb, var(--ix-cream-ink) 64%, var(--ix-cream));
+  --color-text-primary: var(--ix-cream-ink);
+  --color-text-body: var(--ix-cream-ink);
+  --color-text-link: var(--ix-cream-ink);
+  --color-text-secondary: color-mix(in srgb, var(--ix-cream-ink) 72%, var(--ix-cream));
+  --color-text-muted: color-mix(in srgb, var(--ix-cream-ink) 64%, var(--ix-cream));
+  --color-text-faint: color-mix(in srgb, var(--ix-cream-ink) 64%, var(--ix-cream));
+  --accent-primary: var(--ix-cream-ink);
+  --color-accent-primary: var(--ix-cream-ink);
+  --bg-code: color-mix(in srgb, var(--ix-cream-ink) 8%, transparent);
+  --bg-mod-subtle: color-mix(in srgb, var(--ix-cream-ink) 6%, transparent);
+  --border-subtle: color-mix(in srgb, var(--ix-cream-ink) 16%, transparent);
+  border-radius: 19px;
+  background-color: var(--ix-cream);
+  color: var(--ix-cream-ink);
+}
+
+.ix-msg[data-own] .ix-bubble[data-join-top] {
+  border-top-right-radius: 7px;
+}
+
+.ix-msg[data-own] .ix-bubble[data-join-bottom] {
+  border-bottom-right-radius: 7px;
+}
+
+/* A message this device cannot read: the lock and "Encrypted message", ink-3. */
+.ix-bubble[data-muted] {
+  color: var(--ix-ink-3);
+}
+
+.ix-encrypted {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ix-bubble__edited {
+  margin-left: 6px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ix-ink-3);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.ix-bubble__edited:hover {
+  color: var(--ix-ink-2);
+}
+
+/* Decrypting: a skeleton bubble, static (no shimmer). */
+.ix-bubble__decrypting {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 220px;
+  max-width: 100%;
+  padding: 3px 0;
+}
+
+.ix-bubble__decrypting > span {
+  height: 11px;
+  border-radius: 4px;
+  background-color: var(--ix-fill-2);
+}
+
+.ix-bubble__decrypting > span + span {
+  width: 60%;
+}
+
+.ix-msg[data-jump] .ix-bubble,
+.ix-msg[data-jump] .ix-media__frame {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+/* The time, on hover or focus: outside the bubble on the far side. */
+.ix-msg__time {
+  position: absolute;
+  top: 50%;
+  left: calc(100% + 10px);
+  color: var(--ix-ink-3);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(-50%);
+  transition: opacity 120ms var(--ix-ease);
+}
+
+.ix-msg[data-own] .ix-msg__time {
+  right: calc(100% + 10px);
+  left: auto;
+}
+
+.ix-msg:hover .ix-msg__time,
+.ix-msg:focus-within .ix-msg__time,
+.ix-msg[data-menu-open] .ix-msg__time {
+  opacity: 1;
+}
+
+/* ---- The reply line (§4.11): above the bubble, 13 ink-3, one line ------------------- */
+
+.ix-reply {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  box-sizing: border-box;
+  max-width: min(520px, 100%);
+  margin: 0;
+  padding: 0 0 0 13px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ix-ink-3);
+  font: inherit;
+  font-size: 13px;
+  line-height: 16px;
+  text-align: left;
+  cursor: pointer;
+  transition: color 120ms var(--ix-ease);
+}
+
+.ix-msg[data-own] .ix-reply {
+  padding: 0 13px 0 0;
+}
+
+.ix-reply:hover {
+  color: var(--ix-ink-2);
+}
+
+.ix-reply__glyph {
+  flex: none;
+}
+
+.ix-reply__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ix-reply__author {
+  font-weight: 600;
+}
+
+/* ---- The corner: the action capsule and the reactions chip --------------------------- */
+
+.ix-msg__corner {
+  position: absolute;
+  /* Over the bubble's top edge: the capsule (30 tall) covers only its 9px
+     padding, never the words; the reactions chip (26) sits a little lower. */
+  top: -22px;
+  right: -8px;
+  z-index: 2;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.ix-msg__corner > * {
+  pointer-events: auto;
+}
+
+.ix-msg[data-own] .ix-msg__corner {
+  right: auto;
+  left: -8px;
+  flex-direction: row-reverse;
+}
+
+/* A message with no bubble (a picture, a card): the capsule over its top corner. */
+.ix-msg__corner--float {
+  top: -22px;
+  right: auto;
+  left: 260px;
+}
+
+.ix-msg[data-own] .ix-msg__corner--float {
+  right: 260px;
+  left: auto;
+}
+
+/* react · reply · thread · more: 28×26 on a near-solid capsule, on hover or focus. */
+.ix-capsule {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border-radius: 10px;
+  background: var(--ix-capsule);
+  box-shadow: inset 0 0 0 1px var(--ix-line), var(--ix-shadow-capsule);
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity 120ms var(--ix-ease), visibility 0s linear 120ms;
+}
+
+.ix-msg:hover .ix-capsule,
+.ix-msg:focus-within .ix-capsule,
+.ix-msg[data-menu-open] .ix-capsule {
+  visibility: visible;
+  opacity: 1;
+  transition: opacity 120ms var(--ix-ease), visibility 0s;
+}
+
+.ix-capsule__btn {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ix-ink-2);
+  cursor: pointer;
+  transition: color 120ms var(--ix-ease), background-color 120ms var(--ix-ease);
+}
+
+.ix-capsule__btn:hover,
+.ix-capsule__btn[aria-expanded='true'] {
+  background: var(--ix-fill-2);
+  color: var(--ix-ink);
+}
+
+.ix-msg[data-coarse] .ix-capsule__btn {
+  width: 40px;
+  height: 36px;
+}
+
+/* One chip biting the top trailing corner: #34353a with a 3px ring in the main
+   color, an emoji and a count for each reaction, yours with a white count. */
+.ix-msg__corner > .ix-bite {
+  margin-top: 9px;
+}
+
+.ix-bite {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  box-sizing: border-box;
+  min-height: 26px;
+  max-width: 320px;
+  padding: 1px 5px;
+  border-radius: 13px;
+  background-color: var(--ix-react);
+  box-shadow: 0 0 0 3px var(--ix-main);
+  color: var(--ix-ink-2);
+  font-size: 12.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+/* On a picture or a card: hung off its corner. */
+.ix-media > .ix-bite,
+.ix-msg__card > .ix-bite {
+  position: absolute;
+  top: -12px;
+  right: -8px;
+  z-index: 2;
+}
+
+.ix-msg[data-own] .ix-media > .ix-bite,
+.ix-msg[data-own] .ix-msg__card > .ix-bite {
+  right: auto;
+  left: -8px;
+}
+
+.ix-bite[data-placement='inline'] {
+  margin-top: 4px;
+  box-shadow: none;
+}
+
+.ix-bite__seg-wrap {
+  display: inline-flex;
+}
+
+.ix-bite__seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 5px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--ix-ink-2);
+  font: inherit;
+  cursor: pointer;
+  transition: background-color 120ms var(--ix-ease), color 120ms var(--ix-ease);
+}
+
+.ix-bite__seg[data-me] {
+  color: var(--ix-ink);
+}
+
+.ix-bite__seg[data-me] .ix-bite__count {
+  color: var(--ix-ink);
+}
+
+.ix-bite__seg:hover {
+  background: var(--ix-fill-2);
+}
+
+.ix-bite__seg:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: 0;
+}
+
+.ix-bite__mark {
+  display: inline-flex;
+  align-items: center;
+}
+
+.ix-bite__emoji {
+  font-size: 13px;
+  line-height: 1;
+}
+
+/* ---- Media, files and cards ---------------------------------------------------------- */
+
+.ix-msg__attachments,
+.ix-msg__extras,
+.ix-msg__threads {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--ix-tl-gap);
+  max-width: 100%;
+  min-width: 0;
+}
+
+.ix-msg[data-own] .ix-msg__attachments,
+.ix-msg[data-own] .ix-msg__extras,
+.ix-msg[data-own] .ix-msg__threads {
+  align-items: flex-end;
+}
+
+.ix-msg__stickers {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ix-sticker__img {
+  border-radius: 12px;
+  object-fit: contain;
+}
+
+.ix-sticker__name {
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: var(--ix-fill);
+  color: var(--ix-ink-2);
+  font-size: 12.5px;
+}
+
+/* A media bubble: no padding, radius 19 with the joined corners, inside 360×360. */
+.ix-media {
+  position: relative;
+  max-width: 100%;
+}
+
+.ix-media__frame {
+  position: relative;
+  max-width: min(360px, 100%);
+  overflow: hidden;
+  border-radius: 19px;
+  background: var(--ix-bubble);
+}
+
+.ix-media[data-join-top] .ix-media__frame {
+  border-top-left-radius: 7px;
+}
+
+.ix-media[data-join-bottom] .ix-media__frame {
+  border-bottom-left-radius: 7px;
+}
+
+.ix-msg[data-own] .ix-media__frame {
+  border-radius: 19px;
+}
+
+.ix-msg[data-own] .ix-media[data-join-top] .ix-media__frame {
+  border-top-right-radius: 7px;
+}
+
+.ix-msg[data-own] .ix-media[data-join-bottom] .ix-media__frame {
+  border-bottom-right-radius: 7px;
+}
+
+.ix-media__open {
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: zoom-in;
+}
+
+.ix-media__img {
+  display: block;
+  max-width: 360px;
+  max-height: 360px;
+  object-fit: cover;
+}
+
+.ix-media__frame[data-shaped] .ix-media__open,
+.ix-media__frame[data-shaped] .ix-media__img {
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  max-height: none;
+}
+
+.ix-media__pending {
+  display: grid;
+  place-items: center;
+  width: 240px;
+  max-width: 100%;
+  aspect-ratio: 16 / 9;
+  padding: 12px;
+  box-sizing: border-box;
+  color: var(--ix-ink-3);
+  font-size: 13px;
+  text-align: center;
+}
+
+.ix-media__frame[data-shaped] .ix-media__pending {
+  width: 100%;
+  height: 100%;
+  aspect-ratio: auto;
+}
+
+.ix-media__badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: var(--ix-capsule);
+  color: var(--ix-ink-2);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.ix-media__tools {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  display: flex;
+  gap: 6px;
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity 120ms var(--ix-ease), visibility 0s linear 120ms;
+}
+
+.ix-media:hover .ix-media__tools,
+.ix-media:focus-within .ix-media__tools,
+.ix-msg[data-coarse] .ix-media__tools {
+  visibility: visible;
+  opacity: 1;
+  transition: opacity 120ms var(--ix-ease), visibility 0s;
+}
+
+.ix-media__tool {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--ix-capsule);
+  color: var(--ix-ink-2);
+  cursor: pointer;
+  transition: color 120ms var(--ix-ease);
+}
+
+.ix-media__tool:hover:not(:disabled) {
+  color: var(--ix-ink);
+}
+
+.ix-media__tool:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* A file is a card bubble (§4.11): the card from styles/ix-cards.css, with its
+   actions as text and a 38px tile in the place's hue. */
+.ix-file--timeline .ix-file__tile {
+  background: hsl(var(--ix-hue) 50% 55% / calc(0.18 * var(--ix-tint)));
+  color: hsl(var(--ix-hue) 80% 80%);
+}
+
+.ix-file__name--button {
+  display: block;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 14.5px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ix-file__name--button:hover {
+  text-decoration: underline;
+}
+
+.ix-file__badge {
+  margin-left: 6px;
+}
+
+.ix-file__actions {
+  display: flex;
+  flex: none;
+  gap: 4px;
+}
+
+.ix-file__action {
+  height: 30px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--ix-ink-2);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 120ms var(--ix-ease), background-color 120ms var(--ix-ease);
+}
+
+.ix-file__action:hover:not(:disabled) {
+  background: var(--ix-fill-btn);
+  color: var(--ix-ink);
+}
+
+.ix-file__action:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Event, poll, score and feed cards: their own surface (styles/ix-cards.css),
+   on your side of the column for your own. */
+.ix-msg__card {
+  position: relative;
+  width: auto;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.ix-msg__card[data-bitten] {
+  margin-top: 10px;
+}
+
+.ix-msg__note {
+  margin: 0;
+  padding-inline: 14px;
+  color: var(--ix-ink-3);
+  font-size: 13px;
+}
+
+.ix-msg__note-strong {
+  color: var(--ix-ink-2);
+  font-weight: 600;
+}
+
+/* "3 replies · 9:41 PM", under the thread's starter: 12.5/600 ink-2. */
+.ix-thread-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 1px 13px 0;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ix-ink-2);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: color 120ms var(--ix-ease);
+}
+
+.ix-thread-line:hover {
+  color: var(--ix-ink);
+}
+
+/* ---- Editing in place (§4.12: Esc cancels, Enter saves) ------------------------------ */
+
+.ix-msg__edit {
+  box-sizing: border-box;
+  width: min(520px, 100%);
+  padding: 9px 14px 8px;
+  border-radius: 19px;
+  background: var(--ix-bubble);
+  box-shadow: inset 0 0 0 1px var(--ix-edge-open);
+}
+
+.ix-msg__edit-field {
+  display: block;
+  width: 100%;
+  max-height: 50vh;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--ix-ink);
+  font: inherit;
+  font-size: 15px;
+  line-height: 1.42;
+  resize: none;
+}
+
+.ix-msg__edit-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  color: var(--ix-ink-3);
+  font-size: 12px;
+}
+
+.ix-msg__edit-line > span {
+  margin-right: auto;
+}
+
+.ix-msg__edit-btn {
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 9px;
+  background: var(--ix-fill);
+  color: var(--ix-ink-2);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 120ms var(--ix-ease), background-color 120ms var(--ix-ease);
+}
+
+.ix-msg__edit-btn:hover:not(:disabled) {
+  background: var(--ix-fill-2);
+  color: var(--ix-ink);
+}
+
+.ix-msg__edit-btn[data-primary] {
+  background: var(--ix-cream);
+  color: var(--ix-cream-ink);
+}
+
+.ix-msg__edit-btn[data-primary]:hover:not(:disabled) {
+  background: var(--ix-cream-press);
+  color: var(--ix-cream-ink);
+}
+
+/* ---- Typing (§4.11): three dots beside the typist's face ------------------------------ */
+
+.ix-typing {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  padding-top: calc(var(--ix-tl-gap) + var(--ix-tl-group));
+}
+
+.ix-typing__faces {
+  display: flex;
+  flex: none;
+  min-width: var(--ix-tl-face);
+}
+
+.ix-typing__line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.ix-typing__bubble {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  box-sizing: border-box;
+  width: 58px;
+  height: 39px;
+  border-radius: 19px;
+  background-color: var(--ix-bubble);
+}
+
+/* The dots tick in 100ms steps on one grid (0.4s rises and falls in 4 steps;
+   the delays are whole steps): 10 pictures a second, on the same grid as the
+   waveform (the release check of 2026-10-04). Paused while off screen. */
+.ix-typing__bubble > span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: var(--ix-ink-2);
+  animation: ix-typing-dot 1.2s steps(4, jump-none) infinite;
+  animation-play-state: paused;
+}
+
+.ix-typing[data-visible] .ix-typing__bubble > span {
+  animation-play-state: running;
+}
+
+.ix-typing__bubble > span:nth-child(2) {
+  animation-delay: 0.1s;
+}
+
+.ix-typing__bubble > span:nth-child(3) {
+  animation-delay: 0.2s;
+}
+
+@keyframes ix-typing-dot {
+  0%,
+  66.667%,
+  100% {
+    opacity: 0.3;
+  }
+  33.333% {
+    opacity: 1;
+  }
+}
+
+:root[data-motion='reduced'] .ix-typing__bubble > span {
+  animation: none;
+  opacity: 0.8;
+}
+
+.ix-typing__words {
+  overflow: hidden;
+  color: var(--ix-ink-3);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- Loading history: three skeleton bubbles, static --------------------------------- */
+
+.ix-tl-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ix-tl-gap);
+  padding-top: 17px;
+  padding-bottom: 8px;
+}
+
+.ix-tl-skeleton__row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.ix-tl-skeleton__face {
+  flex: none;
+  width: var(--ix-tl-face);
+  height: var(--ix-tl-face);
+  border-radius: 50%;
+  background: var(--ix-fill);
+}
+
+.ix-tl-skeleton__row:not(:last-child) .ix-tl-skeleton__face {
+  visibility: hidden;
+}
+
+.ix-tl-skeleton__bubble {
+  max-width: 78%;
+  height: 39px;
+  border-radius: 19px;
+  background: var(--ix-fill);
+}
+
+.ix-tl-skeleton__row:not(:last-child) .ix-tl-skeleton__bubble {
+  border-bottom-left-radius: 7px;
+}
+
+.ix-tl-skeleton__row:not(:first-child) .ix-tl-skeleton__bubble {
+  border-top-left-radius: 7px;
+}
+
+/* ---- "Delivered", under your own last message ----------------------------------------- */
+
+.glass-tl-receipt {
+  position: relative;
+  flex: none;
+  margin-top: -12px;
+  padding-bottom: 12px;
+  color: var(--ix-ink-3);
+  font-size: 12px;
+  text-align: right;
+}
+
+/* ---- Jump to latest (§4.11): a capsule above the message box --------------------------- */
+
+.ix-jump-host {
+  position: absolute;
+  right: 0;
+  bottom: 12px;
+  left: 0;
+  z-index: 3;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.ix-jump {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 14px 0 12px;
+  border: 0;
+  border-radius: 17px;
+  background: var(--ix-capsule);
+  box-shadow: inset 0 0 0 1px var(--ix-line), var(--ix-shadow-capsule);
+  color: var(--ix-ink);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  pointer-events: auto;
+  cursor: pointer;
+  animation: ix-jump-in 300ms var(--ix-spring) both;
+  transition: background-color 120ms var(--ix-ease);
+}
+
+.ix-jump:hover {
+  background: var(--ix-pop-solid);
+}
+
+@keyframes ix-jump-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+:root[data-motion='reduced'] .ix-jump {
+  animation-duration: 150ms;
+}
+
+/* ---- Bulk delete (moderators) ----------------------------------------------------------- */
+
+.ix-bulk {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px 6px 14px;
+  border-radius: 14px;
+  background: var(--ix-capsule);
+  box-shadow: inset 0 0 0 1px var(--ix-line), var(--ix-shadow-capsule);
+  transform: translateX(-50%);
+}
+
+.ix-bulk__count {
+  margin-right: 6px;
+  color: var(--ix-ink-2);
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.ix-bulk__btn {
+  height: 30px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--ix-fill);
+  color: var(--ix-ink);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ix-bulk__btn[data-danger] {
+  background: var(--ix-danger-fill);
+  color: var(--ix-danger-ink);
+}
+
+.ix-bulk__btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* ---- Compact density (§6.13) ------------------------------------------------------------ */
+
+:root[data-density='compact'] .ix-timeline__scroller {
+  --ix-tl-face: 24px;
+  --ix-tl-gap: 2px;
+  --ix-tl-group: 4px;
+}
+
+:root[data-density='compact'] .ix-bubble {
+  padding: 6px 12px;
+  line-height: 1.35;
+}
+
+:root[data-density='compact'] .ix-typing__bubble,
+:root[data-density='compact'] .ix-tl-skeleton__bubble {
+  height: 32px;
+}
+
+/* ---- The send flight (docs/glass-spec.md §9; M1, docs/design/index-checkpoints/M1.md) ---
+   A message floating out of the message box into the conversation. The ghost
+   (`lib/motion/sendFlight.ts`) is a bubble the engine owns in the fixed ghost
+   layer; the row it lands on is a real row of the timeline, held out of sight
+   until the ghost arrives (`data-flight='air'`) and inert while the server has
+   not yet answered for it (`data-flight='held'`, visible: it is already where
+   the delivered row will be, so the swap never moves). Transform, opacity and
+   the words' color are all that animate, and only on the ghost. Moved here
+   from glass-timeline.css unchanged, but for the fill: the Index bubble is
+   cream with no shadow, so the ghost lands as exactly that. */
+.glass-msg[data-flight] {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.glass-msg[data-flight='held'] {
+  visibility: visible;
+}
+
+/* "Delivered" has its line reserved while the message is still on its way, so
+   the bubble's landing mark never moves when the server answers. */
+.glass-tl-receipt[data-flight-hold] {
+  visibility: hidden;
+}
+
+.glass-flight {
+  position: fixed;
+  margin: 0;
+  pointer-events: none;
+  will-change: transform;
+}
+
+.glass-flight__body {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  will-change: transform;
+}
+
+.glass-flight__shadow,
+.glass-flight__fill {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+}
+
+/* Airborne only: its own layer, so the shadow is a still picture whose opacity
+   comes up and goes again, never an animated box-shadow. */
+.glass-flight__shadow {
+  box-shadow: var(--sh-flight);
+}
+
+/* The bubble itself, exactly as the delivered row will wear it. */
+.glass-flight__fill {
+  background-color: var(--ix-cream);
+}
+
+.glass-flight__words {
+  position: absolute;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* A reply's line, as a picture inside the flying bubble. Inside a bubble (the
+   Glass chip) it keeps the bubble's inks without its fill, padding or corners;
+   the Index reply line sits above the bubble and keeps its own. */
+.glass-flight__chip.glass-msg {
+  position: absolute;
+  display: block;
+  padding: 0;
+}
+
+.glass-flight__chip.glass-msg[data-own] .glass-bubble {
+  padding: 0;
+  background-color: transparent;
+  box-shadow: none;
+}
+
+.glass-flight__chip .ix-reply {
+  max-width: none;
+  padding-right: 13px;
+  padding-left: 0;
+}

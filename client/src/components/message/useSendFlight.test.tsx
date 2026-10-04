@@ -11,7 +11,7 @@ import {
 } from '../../lib/motion';
 import { installWaapiStub, type RecordedAnimation, type WaapiStub } from '../../lib/motion/waapiStub';
 import { MessageType, type Message } from '../../types';
-import { useSendFlight } from './useSendFlight';
+import { sendRowKey, useSendFlight } from './useSendFlight';
 
 /**
  * The timeline's half of the send flight, on a small stand-in for the list: rows
@@ -88,6 +88,36 @@ function stubMatchMedia(matches: boolean) {
     dispatchEvent: () => true,
     onchange: null,
   }));
+}
+
+/**
+ * The Index timeline's way: rows keyed by identity (`sendRowKey`), with a typing
+ * row after the messages. The stand-in and its delivered message share a key.
+ */
+function KeyedList({ messages, grounded, measured, typing }: Props & { typing?: boolean }) {
+  const scroller = useRef<HTMLDivElement>(null);
+  const keys = useRef(new Map<string, string>());
+  const drawn = useSendFlight({ channelId: 'c1', me, messages, scroller, onGrounded: grounded, measureRow: measured, rowKeys: keys.current });
+  return (
+    <div ref={scroller} data-testid="scroller">
+      <div className="glass-timeline__content">
+        {drawn.map((entry) => (
+          <div key={sendRowKey(entry, keys.current)}>
+            <div id={`msg-${entry.id}`} className="glass-msg" data-own={entry.author.id === me.id || undefined}>
+              <div className="glass-bubble">
+                <div className="glass-bubble__text">{entry.content}</div>
+              </div>
+            </div>
+          </div>
+        ))}
+        {typing && (
+          <div key="typing">
+            <div className="glass-tl-typing-row" data-testid="typing" />
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function setup(messages: Message[] = history) {
@@ -290,6 +320,36 @@ describe('the hand-off', () => {
     expect(row('sending:n2')).toBeNull();
     expect(document.querySelectorAll('.glass-msg[data-own]')).toHaveLength(2);
     expect(document.querySelectorAll('.glass-msg[data-own][data-flight]')).toHaveLength(2);
+  });
+});
+
+describe('rows keyed by identity (the Index timeline)', () => {
+  it('keeps one node for the stand-in and its delivered message, and the typing row its own node', async () => {
+    const view = render(<KeyedList messages={history} grounded={grounded} measured={measured} typing />);
+    const typing = document.querySelector('[data-testid="typing"]');
+    await say('count me in');
+    // The stand-in is drawn before the typing row; the typing row is the same element.
+    expect(document.querySelector('[data-testid="typing"]')).toBe(typing);
+    const stand = row('sending:n1');
+    expect(stand).not.toBeNull();
+    const delivered = message('900', 'count me in', me);
+    await act(async () => view.rerender(<KeyedList messages={[...history, delivered]} grounded={grounded} measured={measured} typing />));
+    expect(row('900')).toBe(stand);
+    expect(document.querySelector('[data-testid="typing"]')).toBe(typing);
+    // The next send does not remount the delivered row: its key outlives the flight.
+    await land();
+    await say('again', 'n2');
+    expect(row('900')).toBe(stand);
+    expect(row('sending:n2')).not.toBeNull();
+    expect(document.querySelector('[data-testid="typing"]')).toBe(typing);
+  });
+
+  it('keys a stand-in by its own id and a delivered message by the stand-in it replaced', () => {
+    const keys = new Map([['900', 'sending:n1']]);
+    expect(sendRowKey({ id: 'sending:n2' }, keys)).toBe('sending:n2');
+    expect(sendRowKey({ id: '900' }, keys)).toBe('sending:n1');
+    expect(sendRowKey({ id: '901' }, keys)).toBe('901');
+    expect(sendRowKey({ id: '901' }, null)).toBe('901');
   });
 });
 

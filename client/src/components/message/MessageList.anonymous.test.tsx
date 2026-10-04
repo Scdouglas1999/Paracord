@@ -53,17 +53,12 @@ const messages: Message[] = [
   },
 ];
 
-// The light seam is stubbed here: this suite mocks the stores down to the
-// fields its subject needs, and light reads half a dozen more. Light itself is
-// covered in messageLight.test.tsx and TextRoom.test.tsx.
-vi.mock('./messageLight', () => import('../../test/messageLightMock'));
-vi.mock('../../hooks/useLights', () => import('../../test/messageLightMock'));
 vi.mock('@tanstack/react-virtual', () => ({
-  useVirtualizer: (options: { count: number }) => ({
+  useVirtualizer: (options: { count: number; getItemKey?: (index: number) => string | number }) => ({
     getVirtualItems: () =>
       Array.from({ length: options.count }, (_, index) => ({
         index,
-        key: index,
+        key: options.getItemKey?.(index) ?? index,
         start: index * 80,
       })),
     getTotalSize: () => options.count * 80,
@@ -281,7 +276,7 @@ describe('MessageList anonymous and disappearing message display', () => {
       clientX: 16,
       clientY: 16,
     });
-    await user.click(await screen.findByRole('menuitem', { name: /Pin message/ }));
+    await user.click(await screen.findByRole('menuitem', { name: /^Pin$/ }));
 
     expect(mocks.toastError).toHaveBeenCalledWith(
       'Failed to pin message: Missing manage messages',

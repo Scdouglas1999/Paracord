@@ -34,22 +34,22 @@ describe('shouldGroup', () => {
     expect(shouldGroup(prev, curr)).toBe(false);
   });
 
-  it('groups same author within the 7-minute window', () => {
+  it('groups same author within the 5-minute window (§4.11)', () => {
     const prev = mkMsg('a', { timestamp: T0 });
-    const curr = mkMsg('b', { timestamp: plus(T0, 6 * 60 * 1000) });
+    const curr = mkMsg('b', { timestamp: plus(T0, 4 * 60 * 1000 + 59_000) });
     expect(shouldGroup(prev, curr)).toBe(true);
   });
 
-  it('does not group at exactly the 7-minute boundary (diff must be strictly less)', () => {
+  it('does not group at exactly the 5-minute boundary (diff must be strictly less)', () => {
     const prev = mkMsg('a', { timestamp: T0 });
-    const curr = mkMsg('b', { timestamp: plus(T0, 7 * 60 * 1000) });
+    const curr = mkMsg('b', { timestamp: plus(T0, 5 * 60 * 1000) });
     expect(shouldGroup(prev, curr)).toBe(false);
   });
 
-  it('does not group beyond the 7-minute window', () => {
+  it('does not group beyond the 5-minute window, nor a message older than the one before it', () => {
     const prev = mkMsg('a', { timestamp: T0 });
-    const curr = mkMsg('b', { timestamp: plus(T0, 7 * 60 * 1000 + 1) });
-    expect(shouldGroup(prev, curr)).toBe(false);
+    expect(shouldGroup(prev, mkMsg('b', { timestamp: plus(T0, 6 * 60 * 1000) }))).toBe(false);
+    expect(shouldGroup(prev, mkMsg('b', { timestamp: plus(T0, -1000) }))).toBe(false);
   });
 
   it('falls back to created_at when timestamp is absent', () => {

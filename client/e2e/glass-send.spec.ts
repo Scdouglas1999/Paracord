@@ -389,13 +389,14 @@ test.describe('the send flight', () => {
       return route.fulfill({ status: 200, contentType: 'application/json', headers: { 'X-Paracord-History-Epoch': HISTORY_EPOCH }, body: '[]' });
     });
     await page.goto(basecampGeneral);
-    await expect(page.getByText('Nobody has posted here yet')).toBeVisible();
+    // The empty state's words are the Index timeline's now (IX-11); its hook is the flight's.
+    await expect(page.locator('[data-timeline-empty]')).toBeVisible();
     await page.waitForTimeout(1500);
     await type(page, text);
     const clip = await frameRegion(page);
     await film(page, 'desktop-first-message', clip);
     await expectLanded(page, text);
-    await expect(page.getByText('Nobody has posted here yet')).toHaveCount(0);
+    await expect(page.locator('[data-timeline-empty]')).toHaveCount(0);
   });
 
   test('a reply flies too, to a row that already has its chip', async ({ page }) => {

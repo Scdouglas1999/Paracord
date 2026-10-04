@@ -60,8 +60,8 @@ describe('ReactionChip', () => {
     expect(await within(dialog).findByText('Brendan')).toBeInTheDocument();
     expect(within(dialog).getByText('nick')).toBeInTheDocument();
     expect(within(dialog).getByText('2 people')).toBeInTheDocument();
-    // Faces are the timeline's own: initials on an identity color, no presence ring.
-    const faces = dialog.querySelectorAll('.glass-tl-avatar');
+    // Faces are the timeline's own (the Index avatar): one letter on the person's hue, no presence ring.
+    const faces = dialog.querySelectorAll('.ix-av');
     expect(faces).toHaveLength(2);
     expect(faces[0]).toHaveTextContent('B');
     expect(mocks.list).toHaveBeenCalledWith('c1', 'm1', '🔥', 100);

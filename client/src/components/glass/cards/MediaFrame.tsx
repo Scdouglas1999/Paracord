@@ -1,27 +1,31 @@
 import * as React from 'react';
 
 import { cn } from '../../../lib/utils';
-import { InstrumentText } from '../primitives';
 import { FileMark } from './CardGlyphs';
 
 /**
- * A picture in the timeline (docs/glass-spec.md §3.2): radius 20 with the
- * group's joined corner, a soft shadow and no outline, 240px wide (the
- * reference's 240 x 135 for a 16:9 picture), and no footer. What the old
- * footer offered is still one gesture away:
+ * A picture or a clip in the timeline: a media bubble (docs/index-spec.md
+ * §4.11). No padding, radius 19 with the group's joined corners on the
+ * author's side, fitted inside 360×360, no footer. What a footer would offer is
+ * one gesture away:
  *
- *   Open       press the picture (the lightbox, which also downloads)
- *   Download   the tools that appear over its corner on hover or focus, and
- *              always on a touch screen, where there is no hover
+ *   Open       press the picture (the media viewer, which also downloads)
+ *   Download   the tools over its bottom corner on hover or focus, and always
+ *              on a touch screen, where there is no hover
  *   Delete     the same tools, on your own pictures
  *
  * The frame clips its picture; the host around it does not, so the reactions
  * chip can bite the corner (`bite`) and the tools sit inside it.
  */
 
+/** The media bubble's box (§4.11): fitted inside this square. */
+export const MEDIA_MAX = 360;
+
 export interface GlassMediaProps extends React.HTMLAttributes<HTMLDivElement> {
-  /** Follows something in the same group (a bubble, another picture), so the top corner joins too. */
+  /** Follows something in the same group (a bubble, another picture): the top corner on the author's side joins. */
   joinTop?: boolean;
+  /** Something in the same group follows it: the bottom corner on the author's side joins. */
+  joinBottom?: boolean;
   /** The picture's own size when the server knows it, so the frame holds its shape while it loads. */
   width?: number;
   height?: number;
@@ -29,28 +33,41 @@ export interface GlassMediaProps extends React.HTMLAttributes<HTMLDivElement> {
   badge?: React.ReactNode;
   /** Icon buttons over the bottom corner: `MediaTool`s. */
   tools?: React.ReactNode;
-  /** The reactions chip, biting the top-right corner. */
+  /** The reactions chip, biting the top trailing corner. */
   bite?: React.ReactNode;
 }
 
+/** The size a picture is drawn at: its own, fitted inside 360×360. */
+export function fitMedia(width?: number, height?: number): { width: number; height: number } | null {
+  if (!width || !height || width <= 0 || height <= 0) return null;
+  const scale = Math.min(1, MEDIA_MAX / width, MEDIA_MAX / height);
+  return { width: Math.round(width * scale), height: Math.round(height * scale) };
+}
+
 export const GlassMedia = React.forwardRef<HTMLDivElement, GlassMediaProps>(function GlassMedia(
-  { joinTop, width, height, badge, tools, bite, className, children, ...rest },
+  { joinTop, joinBottom, width, height, badge, tools, bite, className, children, style, ...rest },
   ref,
 ) {
-  const shaped = width && height ? { aspectRatio: `${width} / ${height}` } : undefined;
+  const fitted = fitMedia(width, height);
   return (
     <div
       ref={ref}
-      className={cn('glass-media', className)}
+      className={cn('ix-media', className)}
       data-join-top={joinTop || undefined}
+      data-join-bottom={joinBottom || undefined}
       data-bitten={Boolean(bite) || undefined}
+      style={style}
       {...rest}
     >
-      <div className="glass-media__frame" style={shaped} data-shaped={shaped ? '' : undefined}>
+      <div
+        className="ix-media__frame"
+        style={fitted ? { width: fitted.width, aspectRatio: `${fitted.width} / ${fitted.height}` } : undefined}
+        data-shaped={fitted ? '' : undefined}
+      >
         {children}
-        {badge && <span className="glass-media__badge">{badge}</span>}
+        {badge && <span className="ix-media__badge">{badge}</span>}
       </div>
-      {tools && <div className="glass-media__tools">{tools}</div>}
+      {tools && <div className="ix-media__tools">{tools}</div>}
       {bite}
     </div>
   );
@@ -74,7 +91,7 @@ export function MediaTool({
   return (
     <button
       type="button"
-      className="glass-media__tool glass-focusable"
+      className="ix-media__tool"
       aria-label={label}
       title={busy ?? label}
       aria-busy={busy ? true : undefined}
@@ -87,8 +104,9 @@ export function MediaTool({
 }
 
 /**
- * A file that is not a picture (or a picture with previews off): a solid card
- * shaped like a bubble, the file's name and size, and its actions as text.
+ * A file that is not a picture (or a picture with previews off): a card bubble
+ * (§4.11) on `--ix-card`, a 38px glyph tile in the place's hue, the name, the
+ * size, and its actions as text.
  */
 export function GlassFile({
   name,
@@ -106,6 +124,7 @@ export function GlassFile({
   /** A quiet remark ("Preview off"). */
   note?: string;
   badge?: React.ReactNode;
+  /** Kept for callers; a card's corners never join (§2.5). */
   joinTop?: boolean;
   actions?: React.ReactNode;
   /** Pressing the name does this (a file's name downloads it). Plain text when omitted. */
@@ -113,27 +132,26 @@ export function GlassFile({
   className?: string;
 }) {
   return (
-    <div className={cn('glass-file', className)} data-join-top={joinTop || undefined}>
-      <span className="glass-file__icon" aria-hidden>
+    <div className={cn('ix-file ix-file--timeline', className)} data-join-top={joinTop || undefined}>
+      <span className="ix-file__tile" aria-hidden>
         <FileMark />
       </span>
-      <span className="glass-file__text">
+      <span className="ix-file__text">
         {onOpen ? (
-          <button type="button" className="glass-file__name glass-file__name--button glass-focusable" title={name} onClick={onOpen}>
+          <button type="button" className="ix-file__name ix-file__name--button" title={name} onClick={onOpen}>
             {name}
           </button>
         ) : (
-          <span className="glass-file__name" title={name}>
+          <span className="ix-file__name" title={name}>
             {name}
           </span>
         )}
-        <span className="glass-file__line">
-          {size && <InstrumentText>{size}</InstrumentText>}
-          {note && <span>{note}</span>}
-          {badge}
+        <span className="ix-file__size">
+          {[size, note].filter(Boolean).join(' · ')}
+          {badge && <span className="ix-file__badge">{badge}</span>}
         </span>
       </span>
-      {actions && <span className="glass-file__actions">{actions}</span>}
+      {actions && <span className="ix-file__actions">{actions}</span>}
     </div>
   );
 }
