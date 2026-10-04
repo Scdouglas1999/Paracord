@@ -96,6 +96,7 @@ function renderShell(initialPath = '/app') {
       <Routes>
         <Route path="/app" element={<AppShell />}>
           <Route index element={<div data-testid="outlet-content">home body</div>} />
+          <Route path="dms" element={<div data-testid="outlet-content">messages</div>} />
           <Route path="dms/:channelId" element={<div data-testid="outlet-content">dm body</div>} />
           <Route path="friends" element={<div data-testid="outlet-content">friends body</div>} />
           <Route
@@ -318,8 +319,8 @@ describe('AppShell', () => {
       expect(container.querySelector('.glass-phone__screen--places')).toHaveAttribute('inert');
     });
 
-    it('opens Home on places, which is the list of your messages', () => {
-      const { container } = renderShell('/app');
+    it('opens the messages index on places, which is the list of your messages', () => {
+      const { container } = renderShell('/app/dms');
       expect(frameScreen(container)).toBe('places');
       expect(container.querySelector('.glass-phone__screen--conversation')).toHaveAttribute('inert');
     });
@@ -389,12 +390,17 @@ describe('AppShell', () => {
 
     it('shows a call on the places screen, where the old on-air dock was out of reach of the drawer', () => {
       useVoiceStore.setState({ callId: 'call-1', callPhase: 'connected', channelId: 'lounge' });
-      const { container } = renderShell('/app');
+      const { container } = renderShell('/app/dms');
       expect(container.querySelector('.glass-phone__call')).not.toBeNull();
     });
 
+    it('opens Home on its welcome page, not on places', () => {
+      const { container } = renderShell('/app');
+      expect(frameScreen(container)).toBe('conversation');
+    });
+
     it('the skip link brings the conversation in when places is in front', () => {
-      renderShell('/app');
+      renderShell('/app/dms');
       expect(usePhoneNavStore.getState().screen).toBe('places');
       act(() => screen.getByRole('link', { name: 'Skip to content' }).click());
       expect(usePhoneNavStore.getState().screen).toBe('conversation');
