@@ -39,6 +39,12 @@ const AIMD_UP: f64 = 1.1;
 /// SSRC reuse) rather than a burst of tens of thousands of lost packets.
 const MAX_SEQ_GAP: u16 = 3000;
 
+/// Bound late-arrival reconciliation even for hostile sequence patterns.
+const MAX_PENDING_GAPS: usize = 4096;
+
+/// Give paced datagrams and reliable frames time to fill a gap before feedback.
+const REORDER_GRACE_BUCKETS: u64 = 3;
+
 /// Distinct SSRCs one publisher's loss estimator tracks a sequence number for.
 ///
 /// `ssrc` is read straight off the wire, so this map's key is attacker-chosen
@@ -90,6 +96,8 @@ struct PublisherIngress {
     last_seq: HashMap<u32, u16>,
     /// SSRCs in `last_seq` in insertion order, oldest first, for FIFO eviction.
     ssrc_order: VecDeque<u32>,
+    /// Missing sequence slots and the bucket that counted each one as lost.
+    pending_gaps: HashMap<(u32, u16), u64>,
     /// Last feedback bitrate emitted for this publisher (0 = never emitted).
     last_feedback_kbps: u32,
 }
@@ -100,6 +108,7 @@ impl PublisherIngress {
             buckets: VecDeque::new(),
             last_seq: HashMap::new(),
             ssrc_order: VecDeque::new(),
+            pending_gaps: HashMap::new(),
             last_feedback_kbps: 0,
         }
     }
@@ -116,6 +125,7 @@ impl PublisherIngress {
                 match self.ssrc_order.pop_front() {
                     Some(oldest) => {
                         self.last_seq.remove(&oldest);
+                        self.pending_gaps.retain(|(ssrc, _), _| *ssrc != oldest);
                     }
                     None => break,
                 }
@@ -129,6 +139,8 @@ impl PublisherIngress {
         while let Some(front) = self.buckets.front() {
             if front.epoch + NUM_BUCKETS <= current_epoch {
                 self.buckets.pop_front();
+                self.pending_gaps
+                    .retain(|_, epoch| *epoch + NUM_BUCKETS > current_epoch);
             } else {
                 break;
             }
@@ -137,8 +149,15 @@ impl PublisherIngress {
 
     /// Record a single ingress packet into the current bucket.
     fn record(&mut self, epoch: u64, ssrc: u32, sequence: u16, bytes: u64) {
-        let (expected, lost) = self.sequence_delta(ssrc, sequence);
         self.prune(epoch);
+        // Datagram pacing and whole-frame streams can both be overtaken. Only
+        // credit the exact missing slot, once, in its original live bucket.
+        if let Some(missing_epoch) = self.pending_gaps.remove(&(ssrc, sequence)) {
+            if let Some(bucket) = self.buckets.iter_mut().find(|b| b.epoch == missing_epoch) {
+                bucket.lost = bucket.lost.saturating_sub(1);
+            }
+        }
+        let (expected, lost) = self.sequence_delta(epoch, ssrc, sequence);
         match self.buckets.back_mut() {
             Some(back) if back.epoch == epoch => {
                 back.bytes += bytes;
@@ -156,84 +175,15 @@ impl PublisherIngress {
         }
     }
 
-    /// Record a single whole keyframe delivered on the reliable uni-stream path.
-    ///
-    /// Keyframes share the per-`(ssrc, epoch)` sequence counter with datagram
-    /// fragments (so AEAD nonces never collide) but are delivered reliably and
-    /// are usually recorded *late* — the relay reads the whole uni stream to FIN,
-    /// so the small delta datagram sent immediately after the keyframe overtakes
-    /// it. That follower delta scores the keyframe's own sequence slot as one lost
-    /// packet; the plain reorder path never credits it back, injecting ~+1 phantom
-    /// loss per keyframe. This records goodput bytes as usual but reconciles the
-    /// sequence so the keyframe's slot is not counted as loss in either arrival
-    /// order.
+    /// Reliable whole frames and datagrams share a sequence space and the same
+    /// reconciliation rules; neither arrival order nor duplicates imply loss.
     fn record_keyframe(&mut self, epoch: u64, ssrc: u32, sequence: u16, bytes: u64) {
-        let (expected, lost, credit) = self.keyframe_sequence_delta(ssrc, sequence);
-        self.prune(epoch);
-        match self.buckets.back_mut() {
-            Some(back) if back.epoch == epoch => {
-                back.bytes += bytes;
-                back.expected += expected;
-                back.lost += lost;
-            }
-            _ => {
-                self.buckets.push_back(WindowBucket {
-                    epoch,
-                    bytes,
-                    expected,
-                    lost,
-                });
-            }
-        }
-        if credit {
-            // The follower delta already counted this keyframe's slot as one lost
-            // packet. The window loss ratio sums lost/expected across all buckets,
-            // so decrementing any in-window bucket with a loss cancels exactly that
-            // phantom without needing to know which bucket scored it.
-            for bucket in self.buckets.iter_mut().rev() {
-                if bucket.lost > 0 {
-                    bucket.lost -= 1;
-                    break;
-                }
-            }
-        }
-    }
-
-    /// Keyframe variant of [`Self::sequence_delta`]. Returns
-    /// `(expected, lost, credit)` where `credit` asks the caller to remove one
-    /// previously-counted phantom loss because a late (overtaken) keyframe has now
-    /// arrived. In-order keyframes behave exactly like a normal arrival.
-    fn keyframe_sequence_delta(&mut self, ssrc: u32, sequence: u16) -> (u64, u64, bool) {
-        match self.observe_seq(ssrc, sequence) {
-            None => (1, 0, false),
-            Some(previous) => {
-                let forward = sequence.wrapping_sub(previous);
-                if forward == 0 {
-                    // Duplicate: no change, and leave `last_seq` as it was.
-                    self.last_seq.insert(ssrc, previous);
-                    (0, 0, false)
-                } else if forward <= MAX_SEQ_GAP {
-                    // In-order (the keyframe arrived before its follower): its slot
-                    // is consumed here, so the follower sees no gap. Any preceding
-                    // gap is genuine delta loss and still counts.
-                    (forward as u64, (forward - 1) as u64, false)
-                } else if forward > u16::MAX / 2 {
-                    // Late keyframe overtaken by the delta that followed it. Keep
-                    // the newer `last_seq` and credit back the phantom loss that
-                    // follower scored for this keyframe's slot.
-                    self.last_seq.insert(ssrc, previous);
-                    (0, 0, true)
-                } else {
-                    // Large forward jump: discontinuity, not loss.
-                    (1, 0, false)
-                }
-            }
-        }
+        self.record(epoch, ssrc, sequence, bytes);
     }
 
     /// Wrap-aware per-SSRC gap detection. Returns `(expected, lost)` packet
     /// counts to attribute to this arrival.
-    fn sequence_delta(&mut self, ssrc: u32, sequence: u16) -> (u64, u64) {
+    fn sequence_delta(&mut self, epoch: u64, ssrc: u32, sequence: u16) -> (u64, u64) {
         match self.observe_seq(ssrc, sequence) {
             None => (1, 0),
             Some(previous) => {
@@ -243,7 +193,14 @@ impl PublisherIngress {
                     // beyond what `insert` already did (idempotent here).
                     (0, 0)
                 } else if forward <= MAX_SEQ_GAP {
-                    // In-order or a plausible loss burst: `forward - 1` gaps.
+                    // Remember each inferred gap so late delivery can cancel it.
+                    for offset in 1..forward {
+                        if self.pending_gaps.len() >= MAX_PENDING_GAPS {
+                            break;
+                        }
+                        self.pending_gaps
+                            .insert((ssrc, previous.wrapping_add(offset)), epoch);
+                    }
                     (forward as u64, (forward - 1) as u64)
                 } else if forward > u16::MAX / 2 {
                     // Reordered / late packet (seq is behind the last seen).
@@ -252,6 +209,7 @@ impl PublisherIngress {
                     (0, 0)
                 } else {
                     // Large forward jump: treat as a discontinuity, not loss.
+                    self.pending_gaps.retain(|(source, _), _| *source != ssrc);
                     (1, 0)
                 }
             }
@@ -367,7 +325,22 @@ impl BandwidthEstimator {
             .publishers
             .entry(user_id)
             .or_insert_with(PublisherIngress::new);
-        let (goodput, loss, has_data) = entry.window_stats(current_epoch);
+        let (goodput, _, has_data) = entry.window_stats(current_epoch);
+        // A gap is provisional until arrivals have had 300 ms to settle. This
+        // prevents a feedback tick between two reordered packets from cutting
+        // bitrate even though the very next packet would cancel that loss.
+        let (expected, lost) = entry
+            .buckets
+            .iter()
+            .filter(|bucket| bucket.epoch + REORDER_GRACE_BUCKETS <= current_epoch)
+            .fold((0u64, 0u64), |(expected, lost), bucket| {
+                (expected + bucket.expected, lost + bucket.lost)
+            });
+        let loss = if expected == 0 {
+            0.0
+        } else {
+            lost as f64 / expected as f64
+        };
         let last = if entry.last_feedback_kbps == 0 {
             INITIAL_BANDWIDTH_KBPS
         } else {
@@ -863,6 +836,94 @@ mod tests {
         };
         assert!(has_data);
         assert_eq!(loss, 0.0, "in-order arrivals with one reorder are lossless");
+    }
+
+    #[test]
+    fn feedback_waits_for_reordered_packets_but_still_detects_real_loss() {
+        let est = BandwidthEstimator::new();
+        let at = est.base;
+        est.record_ingress_at(1, 7, 0, 1200, at);
+        let first = est.compute_feedback_at(1, at);
+        est.record_ingress_at(1, 7, 20, 1200, at + Duration::from_millis(100));
+        let pending = est.compute_feedback_at(1, at + Duration::from_millis(200));
+        assert!(
+            pending >= first,
+            "in-flight packets must not reduce bitrate"
+        );
+        let lost = est.compute_feedback_at(1, at + Duration::from_millis(500));
+        assert!(
+            lost < pending,
+            "settled real loss must still reduce bitrate"
+        );
+        for seq in 1..20 {
+            est.record_ingress_at(1, 7, seq, 1200, at + Duration::from_millis(600));
+        }
+        assert_eq!(
+            est.windowed_ingress_loss_at(1, at + Duration::from_millis(600)),
+            0.0
+        );
+    }
+
+    #[test]
+    fn pending_gap_memory_is_bounded_under_repeated_loss() {
+        let mut ingress = PublisherIngress::new();
+        for seq in (0u16..60_000).step_by(2999) {
+            ingress.record(0, 7, seq, 1200);
+        }
+        assert!(ingress.pending_gaps.len() <= MAX_PENDING_GAPS);
+        ingress.record(NUM_BUCKETS, 8, 1, 1200);
+        assert!(ingress.pending_gaps.is_empty());
+    }
+
+    #[test]
+    fn late_duplicates_do_not_hide_real_loss_on_another_ssrc() {
+        let est = BandwidthEstimator::new();
+        let at = est.base;
+        est.record_ingress_at(1, 7, 0, 1200, at);
+        est.record_ingress_at(1, 7, 3, 1200, at);
+        est.record_ingress_keyframe_at(1, 7, 1, 1200, at);
+        est.record_ingress_keyframe_at(1, 7, 1, 1200, at);
+        est.record_ingress_at(1, 8, 0, 1200, at);
+        est.record_ingress_at(1, 8, 2, 1200, at);
+        est.record_ingress_at(1, 7, 2, 1200, at);
+        assert!((est.windowed_ingress_loss_at(1, at) - 1.0 / 7.0).abs() < 0.0001);
+    }
+
+    #[test]
+    fn expired_late_packet_cannot_cancel_new_loss() {
+        let est = BandwidthEstimator::new();
+        let at = est.base;
+        est.record_ingress_at(1, 7, 0, 1200, at);
+        est.record_ingress_at(1, 7, 2, 1200, at);
+        let later = at + WINDOW + Duration::from_secs(1);
+        est.record_ingress_at(1, 7, 4, 1200, later);
+        est.record_ingress_keyframe_at(1, 7, 1, 1200, later);
+        assert_eq!(est.windowed_ingress_loss_at(1, later), 0.5);
+        est.record_ingress_at(1, 7, 3, 1200, later);
+        assert_eq!(est.windowed_ingress_loss_at(1, later), 0.0);
+    }
+
+    #[test]
+    fn paced_fragments_arriving_late_do_not_reduce_a_lossless_publishers_budget() {
+        let est = BandwidthEstimator::new();
+        let start = est.base;
+        // A small following frame overtakes the last two paced fragments of
+        // its predecessor. This is normal for independently paced frame tasks.
+        // Every packet arrives, including those behind the high-water mark.
+        for group in 0..100u16 {
+            let at = start + Duration::from_millis(u64::from(group) * 10);
+            let base = group * 4;
+            for offset in [0, 3, 1, 2] {
+                est.record_ingress_at(1, 7, base + offset, 1200, at);
+            }
+        }
+        let now = start + Duration::from_secs(1);
+        let loss = est.windowed_ingress_loss_at(1, now);
+        let budget = est.compute_feedback_at(1, now);
+        assert_eq!(
+            loss, 0.0,
+            "delivered paced fragments scored as loss={loss}, budget={budget} kbps"
+        );
     }
 
     #[test]
