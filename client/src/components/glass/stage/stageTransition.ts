@@ -10,9 +10,9 @@ import {
   type MorphFade,
   type MorphItem,
 } from '../../../lib/motion/sharedElement';
-import { createViewFrameSource } from '../../../lib/room/viewFrameSource';
 import { isTauri } from '../../../lib/tauriEnv';
 import { useGlassStore, type GlassState, type StageMode } from '../../../stores/glassStore';
+import { beginNativeMove } from './nativeUnderlay';
 
 /**
  * The stage's layout moves (docs/glass-spec.md §6, §6.2, §6.3, §9; WP-G15).
@@ -48,15 +48,24 @@ import { useGlassStore, type GlassState, type StageMode } from '../../../stores/
  * difference as one morph (lib/motion/sharedElement.ts). Nothing depends on
  * who called the store.
  *
- * NATIVE VIDEO (glass-plan §6). On the desktop app a stream may be drawn on a
- * platform surface under (Linux) or over (macOS) the webview, which follows its
- * element's box only when the box is reported, and never mid-animation. So for
- * the length of a move a transparent shield marked `data-native-overlay-occlude`
- * covers the window: every native surface reads it as an occluder and hides,
- * the stream box shows its poster (the last sampled frame, `useStreamPoster`)
- * while it travels, and when the shield comes off the surfaces report their
- * settled geometry and come back. The shield also takes the pointer for those
- * 650ms. On the web there are no native surfaces, and no shield.
+ * NATIVE VIDEO (docs/glass-spec.md §2, glass-plan §6). In the desktop app every
+ * video is drawn on a platform surface under the webview, which follows its
+ * element's box only when the box is reported, and never mid-animation. So a
+ * move, from its first frame:
+ *
+ *   - makes the bottom of the page opaque in the ground color
+ *     (`beginNativeMove`, `html[data-native-moving]`), which covers every
+ *     surface wherever it still is, with no visible change: the shell paints
+ *     the same color under the page;
+ *   - shows each native tile's poster (the latest still of its video, drawn in
+ *     its own canvas), which travels with the page like any picture;
+ *   - lays a transparent shield (`data-native-shield`) over the window: every
+ *     tile reads it as an occluder and hides its surface (still decoding).
+ *
+ * When the move settles the shield and the opaque ground go, and each tile
+ * reports its settled box and reopens its hole once the native side confirms a
+ * frame is drawn there (`NativeVideoTile`). The shield also takes the pointer
+ * for those 650ms. On the web there are no native surfaces, and none of this.
  */
 
 export const STAGE_MOVE_MS = 650;
@@ -231,8 +240,9 @@ function shield(layer: HTMLElement): HTMLElement {
   el.className = 'glass-morph__shield';
   el.setAttribute('aria-hidden', 'true');
   // Native surfaces read this as an occluder (nativeVideoTile.ts, isUnderlayOccluder)
-  // and hide until it is gone; then they report their settled geometry.
-  el.setAttribute('data-native-overlay-occlude', '');
+  // and hide until it is gone; then they report their settled geometry. Not
+  // `data-native-overlay-occlude`: layout.css paints those solid.
+  el.setAttribute('data-native-shield', '');
   layer.appendChild(el);
   return el;
 }
@@ -249,6 +259,8 @@ interface Capture {
   origin: Snap | null;
   clones: Map<Part, { clone: HTMLElement; at: Snap }>;
   shield: HTMLElement | null;
+  /** Ends the opaque ground of a native move (`beginNativeMove`). */
+  endNativeMove: (() => void) | null;
   /** Other packages' chrome on the stream (its direct children), where each was. */
   chrome: Map<HTMLElement, MorphBox>;
 }
@@ -258,6 +270,7 @@ interface Running {
   nodes: HTMLElement[];
   restore: Array<() => void>;
   timer: ReturnType<typeof setTimeout> | null;
+  endNativeMove: (() => void) | null;
 }
 
 let running: Running | null = null;
@@ -268,6 +281,8 @@ function settle(run: Running | null): void {
   for (const animation of run.animations) animation.cancel();
   for (const undo of run.restore) undo();
   for (const node of run.nodes) node.remove();
+  run.endNativeMove?.();
+  run.endNativeMove = null;
   run.animations = [];
   run.nodes = [];
   run.restore = [];
@@ -325,6 +340,7 @@ function capture(frame: HTMLElement, layers: MorphLayers, prev: StageLayoutKey, 
     }
   }
   const guard = isTauri() && layers.over ? shield(layers.over) : null;
+  const endNativeMove = isTauri() ? beginNativeMove() : null;
   const chrome = new Map<HTMLElement, MorphBox>();
   const stream = before.get('stream')?.el;
   if (stream) {
@@ -334,7 +350,7 @@ function capture(frame: HTMLElement, layers: MorphLayers, prev: StageLayoutKey, 
       if (rect.width > 0 && rect.height > 0) chrome.set(child, rect);
     }
   }
-  return { change, prev, next, reduced: prefersReducedMotion(), before, origin, clones, shield: guard, chrome };
+  return { change, prev, next, reduced: prefersReducedMotion(), before, origin, clones, shield: guard, endNativeMove, chrome };
 }
 
 const shift = (box: MorphBox, dx: number, dy = 0): MorphBox => ({ ...box, left: box.left + dx, top: box.top + dy });
@@ -663,6 +679,7 @@ function play(frame: HTMLElement, layers: MorphLayers, cap: Capture): void {
     nodes: cap.shield ? [...plan.nodes, cap.shield] : plan.nodes,
     restore: plan.restore,
     timer: null,
+    endNativeMove: cap.endNativeMove,
   };
   // Clones that no plan used still have to go.
   for (const { clone } of cap.clones.values()) if (!run.nodes.includes(clone)) run.nodes.push(clone);
@@ -719,62 +736,11 @@ export function useStageTransitions(
     if (!frame) {
       for (const { clone } of cap.clones.values()) clone.remove();
       cap.shield?.remove();
+      cap.endNativeMove?.();
       return;
     }
     // One microtask: the stage re-measures its own geometry in a layout effect,
     // and React commits that synchronously right after this one. Still before paint.
     queueMicrotask(() => play(frame, { over: overRef.current, under: underRef.current }, cap));
   }, [deps.mode, deps.browse, deps.chatHidden, frameRef, overRef, underRef]);
-}
-
-/* ---- The poster: the stream while its native surface cannot be shown ------------ */
-
-const POSTER_HZ = 1;
-
-/**
- * On the desktop app's native route no frame of the stream reaches the page,
- * so while its surface is hidden (a move, a dialog over it) the stream box
- * would be black. The shell keeps a 32x18 sample of what the surface presents
- * (`native_render_sample`, G8); this draws the latest one, once a second, into
- * `canvasRef`, scaled up (a soft picture of the frame, the "last sampled frame"
- * of glass-plan §6). `data-native` on the canvas says the poster is in use; CSS
- * shows it only while the stream box has no live surface (glass-stage-modes.css).
- *
- * On a route that draws in the page (WebCodecs) the stream moves with the page
- * and needs no poster, so the subscription stops at the first frame. On the
- * web there is no native route at all, and nothing is subscribed.
- */
-export function useStreamPoster(canvasRef: RefObject<HTMLCanvasElement | null>, streamerId: string): void {
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || !isTauri()) return;
-    const source = createViewFrameSource('watch', streamerId);
-    let stopped = false;
-    let stop: (() => void) | null = null;
-    const end = () => {
-      if (stopped) return;
-      stopped = true;
-      stop?.();
-    };
-    stop = source.subscribe((bitmap) => {
-      try {
-        if (stopped) return;
-        if (source.route !== 'native-surface') {
-          queueMicrotask(end);
-          return;
-        }
-        if (canvas.width !== bitmap.width) canvas.width = bitmap.width;
-        if (canvas.height !== bitmap.height) canvas.height = bitmap.height;
-        canvas.getContext('2d')?.drawImage(bitmap, 0, 0);
-        canvas.dataset.native = 'true';
-      } finally {
-        bitmap.close();
-      }
-    }, POSTER_HZ);
-    if (stopped) stop();
-    return () => {
-      end();
-      delete canvas.dataset.native;
-    };
-  }, [canvasRef, streamerId]);
 }

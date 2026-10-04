@@ -8,6 +8,10 @@
 //! - [`NullDecoder`] — a zero-dependency stub that treats incoming bytes as
 //!   raw I420 data. Useful for testing or platforms without libvpx.
 //!
+//! [`create_decoder`] also reaches the platform decoders for H.264 / AV1: lavc
+//! on Linux, VideoToolbox (H.264) on macOS, and Media Foundation on Windows
+//! (`windows_mf`, software MFTs with CPU I420 output).
+//!
 //! Each remote video stream gets its own decoder instance to maintain
 //! independent codec state.
 
@@ -16,6 +20,14 @@ use super::{DecodedFrame, DecoderConfig, EncodedFrame, VideoCodec, VideoError};
 
 #[cfg(feature = "vpx")]
 use super::PixelFormat;
+
+/// Parameter-set parsing and plane repacking for the Media Foundation decoders
+/// (pure, so it is unit tested on every platform).
+#[cfg(any(target_os = "windows", test))]
+mod bitstream;
+/// Windows: Media Foundation H.264 / AV1 decoders (software MFTs, CPU I420).
+#[cfg(target_os = "windows")]
+mod windows_mf;
 
 // ── Decode output mode ───────────────────────────────────────────────
 
@@ -134,7 +146,17 @@ pub fn create_decoder(
             VideoCodec::Av1,
             _config,
         )?)),
-        #[cfg(not(all(unix, not(target_os = "macos"), feature = "lavc")))]
+        // Windows: the first synchronous Media Foundation AV1 decoder MFT (the
+        // AV1 Video Extension); CodecUnavailable, saying so, when none exists.
+        #[cfg(target_os = "windows")]
+        VideoCodec::Av1 => Ok(Box::new(windows_mf::MfDecoder::new(
+            windows_mf::MfDecodeCodec::Av1,
+            _config,
+        )?)),
+        #[cfg(not(any(
+            all(unix, not(target_os = "macos"), feature = "lavc"),
+            target_os = "windows"
+        )))]
         VideoCodec::Av1 => Err(VideoError::CodecUnavailable(
             "av1 decoder backend requires the 'lavc' feature on this platform".into(),
         )),
@@ -150,8 +172,15 @@ pub fn create_decoder(
         VideoCodec::H264 => Ok(Box::new(
             crate::video::encoder::videotoolbox::VideoToolboxH264Decoder::new(_config)?,
         )),
+        // Windows: the in-box Microsoft H.264 decoder MFT, software output.
+        #[cfg(target_os = "windows")]
+        VideoCodec::H264 => Ok(Box::new(windows_mf::MfDecoder::new(
+            windows_mf::MfDecodeCodec::H264,
+            _config,
+        )?)),
         #[cfg(all(
             not(target_os = "macos"),
+            not(target_os = "windows"),
             not(all(unix, not(target_os = "macos"), feature = "lavc"))
         ))]
         VideoCodec::H264 => Err(VideoError::CodecUnavailable(

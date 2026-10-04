@@ -13,17 +13,12 @@ import type {
   ScreenShareThumbnail,
   TrackSubscriptionRequest,
   SubscribeVideoOptions,
+  VideoStill,
 } from './mediaEngine';
-import { MediaVideoDecoder, isWebCodecsDecodeSupported } from './video/videoDecoder';
-import { CanvasRenderer } from './video/canvasRenderer';
 import { NativeVideoTile } from './video/nativeVideoTile';
+import { NATIVE_STILL_COMMAND, nativeStillBitmap, parseNativeStill } from './video/nativeStill';
 import { logVoiceDiagnostic } from '../desktopDiagnostics';
 import { MediaKeyring } from './mediaKeyring';
-import {
-  parsePulledVideoFrameBinary,
-  type ParsedPulledVideoFrame,
-  type PulledVideoFrameFormat,
-} from './video/pulledVideoFrame';
 import {
   parseRoomIdFromToken,
   parseUserIdFromToken,
@@ -36,12 +31,9 @@ import {
   type RosterKind,
 } from './engineShared';
 
-import type { Channel as TauriChannel } from '@tauri-apps/api/core';
-
 // Tauri API imports - these resolve at runtime in the Tauri environment
 let invoke: (cmd: string, args?: Record<string, unknown> | ArrayBuffer | Uint8Array) => Promise<unknown>;
 let listen: (event: string, handler: (event: { payload: unknown }) => void) => Promise<() => void>;
-let ChannelCtor: typeof TauriChannel | undefined;
 
 // Dynamic import to avoid bundling issues in browser builds
 const tauriReady = (async () => {
@@ -50,33 +42,12 @@ const tauriReady = (async () => {
     const event = await import('@tauri-apps/api/event');
     invoke = core.invoke;
     listen = event.listen;
-    ChannelCtor = core.Channel;
   } catch {
     // Not in Tauri environment
   }
 })();
 
 type UnlistenFn = () => void;
-
-type PulledEncodedFrameResponse = ParsedPulledVideoFrame;
-
-/**
- * Payload delivered to a video subscription channel's `onmessage`. Tauri ships
- * `InvokeResponseBody::Raw` bodies as real ArrayBuffers over the custom-protocol
- * fetch path (even when normal IPC runs on postMessage); a JSON number array
- * only appears if the transport regresses.
- */
-type VideoFrameChannelMessage = ArrayBuffer | Uint8Array | number[];
-/** The concrete Tauri channel handed to `media_register_stream_video_subscription`. */
-type VideoFrameChannel = TauriChannel<VideoFrameChannelMessage>;
-/**
- * Minimal structural view of a frame channel so the subscription driver can be
- * unit-tested with a plain object (and so it never has to know the concrete
- * Tauri `Channel` type).
- */
-interface VideoFrameSink {
-  onmessage: (message: VideoFrameChannelMessage) => void;
-}
 
 type ExportedSenderKey = {
   epoch: number;
@@ -140,18 +111,12 @@ type SessionParticipantCapabilities = {
 };
 
 interface NativeVideoSubscription {
-  decoder?: MediaVideoDecoder;
-  renderer: CanvasRenderer;
-  /** Push channel the native side sends this track's frames over. Reused across
-   * re-registrations (layer/viewport/bandwidth changes) so there is exactly one
-   * channel per subscription; dropped on unregister. Present ONLY on the
-   * `webcodecs-passthrough` route — the `native-surface` route carries no frame
-   * channel (spec §2), which is what the channel-guarded re-register paths key
-   * off to skip a native subscription. */
-  channel?: VideoFrameChannel;
-  /** Native platform surface for the `native-surface` route (spec §3.6). Owns
-   * geometry/visibility reporting; frames never cross IPC. Mutually exclusive
-   * with {@link channel}. */
+  /** The tile's canvas: its box is what the native surface mirrors (and the
+   * relay's viewport hint), and it shows the poster while the hole is closed. */
+  canvas: HTMLCanvasElement;
+  /** The tile's native surface (spec §3.6): geometry, visibility and the
+   * poster. Frames never cross IPC. Absent on a headless (sampler) subscription
+   * and when the track has no route. */
   nativeTile?: NativeVideoTile;
   streamId?: string;
   trackId?: string;
@@ -159,134 +124,10 @@ interface NativeVideoSubscription {
   stop: () => void;
 }
 
-let nativeStreamCapabilitiesPromise: Promise<MediaStreamCapabilities> | null = null;
-
-type ViewerDecodeSupport = {
-  vp9: boolean;
-  h264: boolean;
-  av1: boolean;
-};
-
-let viewerDecodeSupportPromise: Promise<ViewerDecodeSupport> | null = null;
-
-function getViewerDecodeSupport(): Promise<ViewerDecodeSupport> {
-  if (!viewerDecodeSupportPromise) {
-    // Functional probes (real keyframe must actually decode), not just
-    // isConfigSupported claims — these capabilities drive codec negotiation,
-    // and WebKitGTK has approved H264 configs it then failed to decode.
-    viewerDecodeSupportPromise = Promise.all([
-      isWebCodecsDecodeSupported('vp9'),
-      isWebCodecsDecodeSupported('h264'),
-      isWebCodecsDecodeSupported('av1'),
-    ]).then(([vp9, h264, av1]) => ({ vp9, h264, av1 }));
-  }
-  return viewerDecodeSupportPromise;
-}
-
-async function mergeNativeAndViewerCapabilities(
-  nativeCapabilities: MediaStreamCapabilities,
-): Promise<MediaStreamCapabilities> {
-  const { vp9: vp9Decode, h264: h264Decode, av1: av1Decode } =
-    await getViewerDecodeSupport();
-  const webviewDecode = new Map<string, boolean>([
-    ['vp9', vp9Decode],
-    ['h264', h264Decode],
-    ['av1', av1Decode],
-  ]);
-  const nativeSurfaceAvailable = Boolean(nativeCapabilities.nativeDesktopRenderer);
-
-  return {
-    ...nativeCapabilities,
-    video: nativeCapabilities.video.map((capability) => {
-      const codec = String(capability.codec).toLowerCase();
-      const webview = webviewDecode.get(codec);
-      if (webview == null) {
-        return capability;
-      }
-      return {
-        ...capability,
-        // `decode` is advertised to the relay and used by local codec
-        // negotiation, so it must mean "this client can display this codec",
-        // not merely "Rust can decode it". A native decoder is displayable only
-        // when the native desktop renderer is available; otherwise the encoded
-        // WebCodecs/canvas path is the only visible route. This is what keeps a
-        // Linux host from choosing AV1 NVENC when its own webview cannot decode
-        // AV1 and the native GTK surface host is unavailable.
-        //
-        // Webview-contributed decode is decode-only and NOT hardware (contract
-        // C3): "unknown is not hardware". The native side's own hardware flags
-        // pass through the spread unchanged; we never fabricate acceleration
-        // from a WebCodecs decode claim.
-        decode: webview || (nativeSurfaceAvailable && capability.decode),
-      };
-    }),
-  };
-}
-
-let warnedPostMessageTransport = false;
-
-/** Raw (unencoded / natively-decoded) frame formats. These no longer cross the
- * subscription channel at all — the native-surface route owns them (spec §2). A
- * raw frame seen here is a native-route regression: hard-fail, never paint. */
-const RAW_FRAME_FORMATS = new Set<PulledVideoFrameFormat>(['i420', 'raw', 'bgra', 'rgba']);
-
-function normalizeChannelFrame(
-  message: unknown,
-  onRawFrameRegression?: (frame: PulledEncodedFrameResponse) => void,
-): PulledEncodedFrameResponse | null {
-  if (!message) {
-    return null;
-  }
-  let frame: PulledEncodedFrameResponse | null;
-  let overJsonTransport = false;
-  if (message instanceof Uint8Array) {
-    frame = parsePulledVideoFrameBinary(message);
-  } else if (message instanceof ArrayBuffer) {
-    frame = parsePulledVideoFrameBinary(message);
-  } else if (Array.isArray(message)) {
-    // Tauri channels deliver `InvokeResponseBody::Raw` bodies as real
-    // ArrayBuffers over the custom-protocol fetch path. A JSON number array only
-    // appears if that path regressed to serializing every frame through JSON;
-    // encoded frames survive the tax (a few KB), so keep decoding them with a
-    // one-time warning below.
-    frame = parsePulledVideoFrameBinary(Uint8Array.from(message as number[]));
-    overJsonTransport = true;
-  } else {
-    console.error(
-      '[media] video frame channel delivered an unrecognized payload; frame dropped',
-      typeof message,
-    );
-    return null;
-  }
-  if (!frame) {
-    return null;
-  }
-  // This channel is encoded-passthrough ONLY. Native decode and every raw pixel
-  // format now belong to the native-surface route, which owns delivery entirely
-  // on the native side — nothing but geometry/stats crosses IPC there (spec §2).
-  // A raw-format frame arriving here therefore means the native route regressed
-  // into pushing decoded frames over the channel again: fail loudly and drop,
-  // never paint a multi-MB frame (no silent fallback).
-  if (RAW_FRAME_FORMATS.has(frame.format)) {
-    onRawFrameRegression?.(frame);
-    return null;
-  }
-  if (overJsonTransport && !warnedPostMessageTransport) {
-    warnedPostMessageTransport = true;
-    console.warn(
-      '[media] video frame channel delivered a JSON number array instead of an ArrayBuffer. ' +
-        'The ipc custom-protocol fetch path is unavailable in this webview session — encoded ' +
-        'frame delivery works but pays a JSON serialization tax.',
-    );
-    logVoiceDiagnostic('[media] video frame channel on JSON-array transport (fetch path unavailable)');
-  }
-  return frame;
-}
-
-function rendererCanvasSize(renderer: CanvasRenderer): { width: number; height: number } {
-  const canvas = renderer.canvasElement;
-  const clientWidth = canvas?.clientWidth ?? canvas?.width ?? 0;
-  const clientHeight = canvas?.clientHeight ?? canvas?.height ?? 0;
+/** The relay's viewport hint for a tile: its box in physical pixels. */
+function canvasViewport(canvas: HTMLCanvasElement): { width: number; height: number } {
+  const clientWidth = canvas.clientWidth || canvas.width || 0;
+  const clientHeight = canvas.clientHeight || canvas.height || 0;
   const ratio = typeof window !== 'undefined' ? Math.max(1, window.devicePixelRatio || 1) : 1;
   return {
     width: Math.max(1, Math.round(clientWidth * ratio)),
@@ -315,221 +156,6 @@ function normalizeNativeRelayEndpoint(endpoint: string): string {
   } catch {
     return trimmed;
   }
-}
-
-/**
- * Render frames pushed by the native side over a Tauri {@link VideoFrameSink}.
- *
- * The native encoder/decoder pushes each packed binary frame the moment it is
- * stored (no polling); the channel's `onmessage` is this subscription's single
- * ingress. Natively-decoded frames (`format === 'i420'`) and local raw preview
- * frames (`format === 'bgra' | 'rgba'`) are drawn straight to the canvas,
- * bypassing WebCodecs entirely. Encoded frames are fed to a
- * {@link MediaVideoDecoder}.
- *
- * Backpressure/stale handling: channel messages arrive in order, but a
- * (re)subscribe replays the latest stored frame, so an already-rendered
- * sequence can arrive again — anything not strictly newer than the last
- * rendered sequence is dropped. Coalescing of a burst is handled downstream:
- * the renderer keeps only the latest pending frame and the WebCodecs decoder
- * drops frames once its queue is deep.
- */
-export function startPulledEncodedVideoSubscription(
-  label: string,
-  channel: VideoFrameSink,
-  decoderRef: { current: MediaVideoDecoder | null; codec: string | null },
-  renderer: CanvasRenderer,
-  onFrame?: () => void,
-  onDecodedFrame?: () => void,
-  getRenderingEnabled?: () => boolean,
-  requestKeyframe?: () => void,
-  tapFrame?: (frame: VideoFrame) => void,
-): () => void {
-  let stopped = false;
-  let lastSequence: number | null = null;
-  let sawDecodedFrame = false;
-  let reportedDecoderUnavailable = false;
-  let reportedRawFrameRegression = false;
-  const shouldRender = () => !stopped && (getRenderingEnabled?.() ?? true);
-
-  const onRawFrameRegression = (frame: PulledEncodedFrameResponse) => {
-    // Raw pixels no longer cross this channel — the native-surface route decodes
-    // and presents them natively (spec §2). A raw frame here is a native-route
-    // regression; fail loudly and drop rather than paint it (no silent fallback).
-    if (!reportedRawFrameRegression) {
-      reportedRawFrameRegression = true;
-      console.error(
-        '[media] raw frame on encoded-passthrough channel: native route regression — dropping frames',
-        { label, format: frame.format, width: frame.width, height: frame.height },
-      );
-      logVoiceDiagnostic('[media] raw frame on encoded-passthrough channel: native route regression', {
-        label,
-        codec: decoderRef.codec,
-        format: frame.format,
-        width: frame.width,
-        height: frame.height,
-      });
-    }
-  };
-
-  const attachDecoder = (decoder: MediaVideoDecoder) => {
-    decoder.onError((error) => {
-      logVoiceDiagnostic('[media] webview video decoder failed at runtime', {
-        label,
-        codec: decoderRef.codec,
-        error: error.message,
-      });
-    });
-    decoder.onKeyframeNeeded(() => {
-      requestKeyframe?.();
-    });
-    decoder.onDecoded((frame) => {
-      if (!shouldRender()) {
-        frame.close();
-        return;
-      }
-      if (!sawDecodedFrame) {
-        sawDecodedFrame = true;
-        logVoiceDiagnostic('[media] native video subscription received first decoded frame', {
-          label,
-          width: frame.displayWidth,
-          height: frame.displayHeight,
-          timestamp: frame.timestamp,
-        });
-        onDecodedFrame?.();
-      }
-      // Frame taps (room light, stage glow, clips) get their own reference
-      // before the renderer takes ownership of this one.
-      tapFrame?.(frame);
-      renderer.renderFrame(frame);
-      onFrame?.();
-    });
-  };
-
-  if (decoderRef.current) {
-    attachDecoder(decoderRef.current);
-  }
-
-  const processFrame = (frame: PulledEncodedFrameResponse) => {
-    lastSequence = frame.sequence;
-    // Encoded-passthrough only: raw/natively-decoded frames were filtered out in
-    // normalizeChannelFrame (spec §2), so every frame reaching here is an encoded
-    // bitstream headed for the WebCodecs decoder.
-    if (!decoderRef.current || frame.codec !== decoderRef.codec) {
-      decoderRef.current?.close();
-      try {
-        decoderRef.current = new MediaVideoDecoder({ codec: String(frame.codec) });
-      } catch (err) {
-        decoderRef.current = null;
-        decoderRef.codec = null;
-        // No silent route change: this codec was negotiated from advertised
-        // capabilities, so failing to configure a decoder for it is a real
-        // defect that must stay visible, not be papered over with a
-        // different decode path.
-        if (!reportedDecoderUnavailable) {
-          reportedDecoderUnavailable = true;
-          console.error(
-            `[media] webview video decoder failed to configure for negotiated codec "${frame.codec}"`,
-            err,
-          );
-          logVoiceDiagnostic('[media] webview video decoder unavailable for negotiated codec', {
-            label,
-            codec: frame.codec,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-        return;
-      }
-      decoderRef.codec = String(frame.codec);
-      sawDecodedFrame = false;
-      attachDecoder(decoderRef.current);
-      logVoiceDiagnostic('[media] native video decoder prepared codec', {
-        label,
-        codec: frame.codec,
-      });
-    }
-    decoderRef.current.decode(frame.data, frame.timestampUs, frame.isKeyframe);
-  };
-
-  channel.onmessage = (message) => {
-    if (stopped || !shouldRender()) {
-      return;
-    }
-    const frame = normalizeChannelFrame(message, onRawFrameRegression);
-    if (!frame) {
-      return;
-    }
-    // Drop a replayed/duplicate frame: a (re)subscribe re-pushes the latest
-    // stored frame, so ignore anything not strictly newer than what we drew.
-    if (lastSequence != null && frame.sequence <= lastSequence) {
-      return;
-    }
-    processFrame(frame);
-  };
-
-  return () => {
-    stopped = true;
-    // Detach so a replay or late push after teardown is ignored.
-    channel.onmessage = () => {};
-  };
-}
-
-function attachStreamVisibilityControls(
-  canvas: HTMLCanvasElement,
-  renderer: CanvasRenderer,
-  reportVisibility: (visible: boolean) => void,
-): { cleanup: () => void; isRenderingEnabled: () => boolean } {
-  let intersectionVisible = true;
-  let renderingEnabled = true;
-
-  const isRenderingEnabled = () => renderingEnabled;
-
-  const applyVisibility = () => {
-    const docVisible = typeof document === 'undefined' || document.visibilityState !== 'hidden';
-    const nextEnabled = docVisible && intersectionVisible;
-    if (nextEnabled === renderingEnabled) {
-      return;
-    }
-    renderingEnabled = nextEnabled;
-    renderer.setRenderingEnabled(nextEnabled);
-    // Report both directions so the native side can stop decoding/pushing frames
-    // for a hidden track and resume (re-pushing the stored frame) when shown
-    // again (contract C2).
-    reportVisibility(nextEnabled);
-  };
-
-  const onVisibilityChange = () => {
-    applyVisibility();
-  };
-
-  let intersectionObserver: IntersectionObserver | null = null;
-  if (typeof IntersectionObserver !== 'undefined') {
-    intersectionObserver = new IntersectionObserver(
-      (entries) => {
-        intersectionVisible = entries.some(
-          (entry) => entry.isIntersecting && entry.intersectionRatio > 0,
-        );
-        applyVisibility();
-      },
-      { threshold: 0 },
-    );
-    intersectionObserver.observe(canvas);
-  }
-
-  if (typeof document !== 'undefined') {
-    document.addEventListener('visibilitychange', onVisibilityChange);
-  }
-
-  return {
-    cleanup: () => {
-      intersectionObserver?.disconnect();
-      if (typeof document !== 'undefined') {
-        document.removeEventListener('visibilitychange', onVisibilityChange);
-      }
-      renderer.setRenderingEnabled(true);
-    },
-    isRenderingEnabled,
-  };
 }
 
 /**
@@ -771,6 +397,8 @@ export class TauriMediaEngine implements MediaEngine {
     this.rosterMembers.clear();
     this.participantLeaveListeners = [];
     this.frameTaps.clear();
+    this.shownListeners.clear();
+    this.shownListening = null;
     this.subscriptionRoutes.clear();
     for (const waiters of this.routeWaiters.values()) for (const settle of waiters) settle('no-track');
     this.routeWaiters.clear();
@@ -898,7 +526,7 @@ export class TauriMediaEngine implements MediaEngine {
     if (!resolvedCodec) {
       throw new Error(
         'No locally displayable screen-share codec is available. The native encoder can produce video, ' +
-          'but this desktop client cannot render any common codec with its current WebCodecs/native-surface routes.',
+          'but this desktop client has no native decoder and renderer for any codec it could send.',
       );
     }
 
@@ -1285,17 +913,24 @@ export class TauriMediaEngine implements MediaEngine {
     // watched stream because this client is sending little (or no) video.
   }
 
+  private capabilitiesPromise: Promise<MediaStreamCapabilities> | null = null;
+
   async getStreamCapabilities(): Promise<MediaStreamCapabilities> {
     await tauriReady;
-    if (!nativeStreamCapabilitiesPromise) {
-      nativeStreamCapabilitiesPromise = (async () => {
-        const nativeCapabilities = (await this.invokeOwned(
-          'media_get_stream_capabilities',
-        )) as MediaStreamCapabilities;
-        return mergeNativeAndViewerCapabilities(nativeCapabilities);
-      })();
+    if (!this.capabilitiesPromise) {
+      // The native side reports what this window can display: a codec's
+      // `decode` is a native decoder AND a native renderer to draw it on
+      // (capabilities.rs). The webview decodes nothing in the desktop app.
+      this.capabilitiesPromise = this.invokeOwned('media_get_stream_capabilities').then(
+        (capabilities) => capabilities as MediaStreamCapabilities,
+        (error: unknown) => {
+          // Not cached: the next caller asks again.
+          this.capabilitiesPromise = null;
+          throw error;
+        },
+      );
     }
-    return nativeStreamCapabilitiesPromise;
+    return this.capabilitiesPromise;
   }
 
   async getStreamingDiagnostics(): Promise<MediaStreamDiagnostics> {
@@ -1376,37 +1011,11 @@ export class TauriMediaEngine implements MediaEngine {
 
   private clearVideoSubscriptions(): void {
     for (const release of this.videoSubscriptionReleases.values()) release();
-    this.videoSubscriptionReleases.clear();    for (const [, sub] of this.videoSubscriptions) {
+    this.videoSubscriptionReleases.clear();
+    for (const [, sub] of this.videoSubscriptions) {
       sub.stop();
-      sub.decoder?.close();
-      sub.renderer.destroy();
     }
     this.videoSubscriptions.clear();
-    this.keyframeRequestAt.clear();
-  }
-
-  // Last keyframe request per `${streamId}:${trackId}`, so a flurry of decoder
-  // desync events collapses to at most one request per 500ms per track (W3/C2).
-  private keyframeRequestAt = new Map<string, number>();
-
-  /** Ask the publisher for a fresh keyframe (contract C2), debounced per track.
-   * The native side sets its force-keyframe flag for a locally-published track,
-   * or forwards a RequestKeyframe control message upstream otherwise. */
-  private requestKeyframe(streamId: string, trackId: string): void {
-    const key = `${streamId}:${trackId}`;
-    const now = Date.now();
-    const last = this.keyframeRequestAt.get(key) ?? 0;
-    if (now - last < 500) {
-      return;
-    }
-    this.keyframeRequestAt.set(key, now);
-    void this.invokeOwned('media_request_keyframe', { streamId, trackId }).catch((err) => {
-      logVoiceDiagnostic('[media] media_request_keyframe failed', {
-        streamId,
-        trackId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    });
   }
 
   private pickPublishedVideoTrack(
@@ -1565,7 +1174,7 @@ export class TauriMediaEngine implements MediaEngine {
       if (existing.trackId && existing.trackId !== track.trackId && this.videoSubscriptions.has(`${userId}:${existing.trackId}`)) {
         return;
       }
-      const viewport = rendererCanvasSize(existing.renderer);
+      const viewport = canvasViewport(existing.canvas);
       const selectedLayer = selectPublishedLayer(track, viewport.width, viewport.height);
       if (!selectedLayer) {
         return;
@@ -1573,20 +1182,6 @@ export class TauriMediaEngine implements MediaEngine {
       existing.streamId = track.streamId;
       existing.trackId = track.trackId;
       existing.activeLayer = selectedLayer.layerId;
-      const existingChannel = existing.channel;
-      if (existingChannel) {
-        void isWebCodecsDecodeSupported(track.codec ?? 'vp9')
-          .then((preferEncoded) =>
-            this.invokeOwned('media_register_stream_video_subscription', {
-              streamId: track.streamId,
-              trackId: track.trackId,
-              ssrc: selectedLayer.ssrc,
-              preferEncoded,
-              channel: existingChannel,
-            }),
-          )
-          .catch(() => {});
-      }
       void this.registerTrackSubscription({
         streamId: track.streamId,
         trackId: track.trackId,
@@ -1726,47 +1321,16 @@ export class TauriMediaEngine implements MediaEngine {
   }
 
   /**
-   * Re-register a subscription's stream channel to force the native side to
-   * re-push its latest stored frame. Used to repaint a stream that was hidden
-   * (its live frames were dropped) the instant it becomes visible again.
-   */
-  private replayStreamVideoFrame(userId: string): void {
-    const sub = this.videoSubscriptions.get(userId);
-    if (!sub?.streamId || !sub.trackId || !sub.channel) {
-      return;
-    }
-    const track = this.publishedTracks.get(`${sub.streamId}:${sub.trackId}`);
-    const ssrc =
-      (sub.activeLayer != null
-        ? track?.layers.find((layer) => layer.layerId === sub.activeLayer)?.ssrc
-        : undefined) ?? track?.layers[0]?.ssrc;
-    if (ssrc == null) {
-      return;
-    }
-    const { streamId, trackId, channel } = sub;
-    void isWebCodecsDecodeSupported(track?.codec ?? 'vp9')
-      .then((preferEncoded) =>
-        this.invokeOwned('media_register_stream_video_subscription', {
-          streamId,
-          trackId,
-          ssrc,
-          preferEncoded,
-          channel,
-        }),
-      )
-      .catch(() => {});
-  }
-
-  /**
-   * Decoded frames of one remote track (see `MediaEngine.tapVideoFrames`).
+   * A tap on one remote track (see `MediaEngine.tapVideoFrames`).
    *
-   * One subscription per track exists on this engine (the native side keeps
-   * one push channel per track), so a tap rides whatever subscription shows
-   * the track, and when none does it runs a headless one: no surface, lowest
-   * layer, paused only while the window is hidden. The route is the track's
-   * own, chosen once when its subscription starts: `frames` on the WebCodecs
-   * passthrough route; `native-surface` when the native side decodes and
-   * presents it (no frame ever reaches JavaScript there).
+   * In the desktop app every track is decoded and drawn natively, so no frame
+   * ever reaches JavaScript and `onFrame` is never called: the route is
+   * `native-surface` (or why there is none), and samplers read stills
+   * ({@link readVideoStill}). The tap still matters: it keeps the track
+   * decoded. One subscription per track exists on this engine, so a tap rides
+   * whatever subscription shows the track, and when none does it runs a
+   * headless one: a sampler with no surface, lowest layer, paused only while
+   * the window is hidden.
    */
   tapVideoFrames(
     userId: string,
@@ -1821,16 +1385,70 @@ export class TauriMediaEngine implements MediaEngine {
     for (const settle of waiters) settle(route);
   }
 
-  /** Hand every tap on `key` its own reference to a decoded frame. */
-  private dispatchTapFrame(key: string, frame: VideoFrame): void {
-    const taps = this.frameTaps.get(key);
-    if (!taps?.size) return;
-    for (const tap of taps) {
-      const copy = frame.clone();
-      try { tap(copy); } catch { copy.close(); }
-    }
+  /** A still of a natively drawn track (see `MediaEngine.readVideoStill`). */
+  readVideoStill(
+    userId: string,
+    trackId: 'camera' | 'screen',
+    maxWidth: number,
+    maxHeight: number,
+    afterSeq?: number,
+  ): Promise<VideoStill | null> {
+    const track = this.pickPublishedVideoTrack(userId, [...this.publishedTracks.values()], trackId);
+    if (!track) return Promise.resolve(null);
+    return this.readTrackStill(track.streamId, track.trackId, maxWidth, maxHeight, afterSeq);
   }
 
+  private async readTrackStill(
+    streamId: string,
+    trackId: string,
+    maxWidth: number,
+    maxHeight: number,
+    afterSeq?: number,
+  ): Promise<VideoStill | null> {
+    await tauriReady;
+    const raw = await invoke(NATIVE_STILL_COMMAND, {
+      streamId,
+      trackId,
+      maxWidth: Math.max(1, Math.round(maxWidth)),
+      maxHeight: Math.max(1, Math.round(maxHeight)),
+      afterSeq: afterSeq ?? null,
+    });
+    const still = parseNativeStill(raw);
+    if (still.status !== 'still') return null;
+    return { bitmap: await nativeStillBitmap(still), seq: still.seq };
+  }
+
+  /** Reveal confirmations (`native_render_shown`) by surface id. */
+  private shownListeners = new Map<number, (generation: number) => void>();
+  private shownListening: Promise<void> | null = null;
+
+  private ensureShownListener(): Promise<void> {
+    if (!this.shownListening) {
+      this.shownListening = this.listenOwned('native_render_shown', (event) => {
+        const payload = event.payload as { surfaceId?: number; generation?: number } | null;
+        if (typeof payload?.surfaceId !== 'number' || typeof payload.generation !== 'number') return;
+        this.shownListeners.get(payload.surfaceId)?.(payload.generation);
+      }).then((unlisten) => {
+        this.unlisteners.push(unlisten);
+      });
+    }
+    return this.shownListening;
+  }
+
+    /**
+   * Show one remote track (or our own, the self-view) in `canvas`'s box.
+   *
+   * The desktop app has one video route (docs/glass-spec.md §2): the native
+   * side decodes the track and draws it on a platform surface under the
+   * webview that mirrors `canvas`'s box ({@link NativeVideoTile}); the page
+   * shows it through a hole and the canvas carries the poster while the hole is
+   * closed. Nothing is decoded in the webview and no frame crosses IPC. A
+   * window whose renderer did not install has no route at all: the
+   * subscription fails loudly with the reason, and the tile shows its notice.
+   *
+   * A `headless` subscription (a tap with no tile) attaches a sampler instead:
+   * the track is decoded at the lowest layer and only its stills are kept.
+   */
   subscribeVideo(
     userId: string,
     canvas: HTMLCanvasElement,
@@ -1859,7 +1477,6 @@ export class TauriMediaEngine implements MediaEngine {
       const existing = this.videoSubscriptions.get(subscriptionKey);
       if (existing) {
         existing.stop();
-        existing.renderer.destroy();
         this.videoSubscriptions.delete(subscriptionKey);
       }
     } finally {
@@ -1879,7 +1496,7 @@ export class TauriMediaEngine implements MediaEngine {
         this.subscriptionRoutes.delete(subscriptionKey);
         if (headless) this.headlessKeys.delete(subscriptionKey);
         // The last surface went away while taps still sample this track: keep
-        // their frames coming on a headless subscription of their own.
+        // it decoded on a headless subscription of their own.
         if (!headless && !this.disposed && this.replacingKey !== subscriptionKey
             && preferredTrackId && this.frameTaps.get(subscriptionKey)?.size) {
           queueMicrotask(() => {
@@ -1894,19 +1511,8 @@ export class TauriMediaEngine implements MediaEngine {
       if (current && current === ownedSubscription) {
         if (current.streamId && current.trackId) {
           void this.unregisterTrackSubscription(current.streamId, current.trackId).catch(() => {});
-          // Only the passthrough route registered a stream video subscription;
-          // a native-surface subscription (no channel) is torn down via the
-          // tile's native_render_detach in current.stop() below (spec §3.6).
-          if (current.channel) {
-            void this.invokeCleanup('media_unregister_stream_video_subscription', {
-              streamId: current.streamId,
-              trackId: current.trackId,
-            }).catch(() => {});
-          }
         }
         current.stop();
-        current.decoder?.close();
-        current.renderer.destroy();
         this.videoSubscriptions.delete(subscriptionKey);
       }
     };
@@ -1919,29 +1525,6 @@ export class TauriMediaEngine implements MediaEngine {
           userId,
           preferredTrackId: preferredTrackId ?? null,
         });
-        const renderer = new CanvasRenderer(canvas, { fit, anchor });
-        own(() => renderer.destroy());
-        // A headless tap paints nothing: its frames go to the taps only.
-        if (headless) renderer.setRenderingEnabled(false);
-        // On becoming visible again, replay the latest stored frame by
-        // re-registering (the native side re-pushes it), so a paused/off-screen
-        // stream repaints immediately instead of waiting for the sender's next
-        // frame — which for a static screen share could be seconds away.
-        let resumeSubscription = () => {};
-        // Signals the native side to stop/resume decode+push for this track
-        // (contract C2). Set once streamId/trackId are known below; a no-op until
-        // then (the native side hasn't started this track's decode yet).
-        let notifyNativeVisibility = (_visible: boolean) => {};
-        const onVisibility = (visible: boolean) => {
-          notifyNativeVisibility(visible);
-          if (visible) {
-            resumeSubscription();
-          }
-        };
-        const visibility = headless
-          ? attachDocumentVisibilityControls(onVisibility)
-          : attachStreamVisibilityControls(canvas, renderer, onVisibility);
-        own(() => visibility.cleanup());
         const publishedTrack = await this.waitForPublishedVideoTrack(
           userId,
           10000,
@@ -1949,194 +1532,60 @@ export class TauriMediaEngine implements MediaEngine {
           cancellation.signal,
         );
         let subscription: NativeVideoSubscription;
-        // Teardowns that must survive a watchdog channel rebuild (W6): the
-        // visibility/resize observers and the stall timer are torn down only
-        // when the whole subscription stops, not when its channel is swapped.
-        let lastFrameAt = Date.now();
-        const markFrame = () => {
-          lastFrameAt = Date.now();
-          onFrame?.();
-        };
-        if (publishedTrack && !disposed && ChannelCtor) {
-          const ChannelCtorRef = ChannelCtor;
-          const viewport = rendererCanvasSize(renderer);
-          const selectedLayer = selectPublishedLayer(publishedTrack, viewport.width, viewport.height);
-          const streamId = publishedTrack.streamId;
-          const trackId = publishedTrack.trackId;
-          const label = `remote:${streamId}:${trackId}`;
-          // Route chosen ONCE at subscribe time (spec §2): the functional
-          // WebCodecs probe decides `webcodecs-passthrough` vs `native-surface`.
-          // No runtime switching, no silent fallback — a route that cannot be
-          // established is a loud error for this subscription (spec §0/§3.7).
-          const preferEncoded = await isWebCodecsDecodeSupported(
-            publishedTrack.codec ?? 'vp9',
-          );
-          const streamCaps = await this.getStreamCapabilities().catch(() => null);
-          const nativeSurfaceAvailable = Boolean(streamCaps?.nativeDesktopRenderer);
-          // Underlay (Linux GTK): the surface composites BELOW the webview, so
-          // the tile must punch a transparent hole in the DOM (via the event
-          // below). Do NOT run DOM occlusion blanking here: body portals
-          // (device picker, tooltips, topbar overlays with inset-0 backdrops)
-          // used to hide the entire GL tile → black stream, and visibility-flip
-          // repaints glued hover chrome into the video. Opaque portal/tooltip
-          // CSS keeps UI above the live underlay instead.
-          const nativeRenderUnderlay = Boolean(streamCaps?.nativeRenderUnderlay);
-          if (preferEncoded) {
-          let driverStop = () => {};
-          // A fresh decoder chain per channel: reattaching a driver to an
-          // existing decoder would double-register its onDecoded callback and
-          // render (then close) each frame twice. On a rebuild we close the old
-          // decoder and let the new channel lazily reconfigure — which also
-          // forces the keyframe resync a post-stall stream needs anyway.
-          let decoderRef = {
-            current: null as MediaVideoDecoder | null,
-            codec: null as string | null,
-          };
-          const startDriverOnChannel = (driverChannel: VideoFrameChannel) => {
-            driverStop();
-            decoderRef.current?.close();
-            decoderRef = { current: null, codec: null };
-            driverStop = startPulledEncodedVideoSubscription(
-              label,
-              driverChannel,
-              decoderRef,
-              renderer,
-              markFrame,
-              undefined,
-              visibility.isRenderingEnabled,
-              () => this.requestKeyframe(streamId, trackId),
-              (frame) => this.dispatchTapFrame(subscriptionKey, frame),
-            );
-          };
-          const registerStreamOnChannel = async (
-            registerChannel: VideoFrameChannel,
-            ssrc: number | undefined,
-          ) => {
-            await this.invokeOwned('media_register_stream_video_subscription', {
-              streamId,
-              trackId,
-              ssrc,
-              // Decode in the webview (GPU, tiny IPC payloads) whenever this
-              // webview supports the codec; native decode is the fallback.
-              preferEncoded: await isWebCodecsDecodeSupported(publishedTrack.codec ?? 'vp9'),
-              channel: registerChannel,
-            });
-          };
-
-          // One channel per subscription: the native side pushes this track's
-          // frames here and re-pushes the latest frame on every (re)register.
-          const channel = new ChannelCtorRef<VideoFrameChannelMessage>();
-          if (selectedLayer) {
-            await registerStreamOnChannel(channel, selectedLayer.ssrc);
-          }
-          await this.registerTrackSubscription({
-            streamId,
-            trackId,
-            requestedLayer: selectedLayer?.layerId,
-            viewport,
-          }).catch((error) => {
-            logVoiceDiagnostic('[media] failed to register native track subscription', {
-              userId,
-              streamId,
-              trackId,
+        const markFrame = () => onFrame?.();
+        const capabilities = publishedTrack && !disposed
+          ? await this.getStreamCapabilities().catch((error: unknown) => {
+            logVoiceDiagnostic('[media] stream capabilities unavailable', {
               error: error instanceof Error ? error.message : String(error),
             });
-          });
-          startDriverOnChannel(channel);
-          this.settleRoute(subscriptionKey, 'frames');
-          subscription = {
-            renderer,
-            channel,
-            streamId,
-            trackId,
-            activeLayer: selectedLayer?.layerId,
-            stop: () => {
-              driverStop();
-              decoderRef.current?.close();
-            },
-          };
-          resumeSubscription = () => this.replayStreamVideoFrame(userId);
-          notifyNativeVisibility = (visible: boolean) => {
-            void this.invokeOwned('media_set_stream_visibility', { streamId, trackId, visible }).catch(
-              (err) => {
-                logVoiceDiagnostic('[media] media_set_stream_visibility failed', {
-                  streamId,
-                  trackId,
-                  visible,
-                  error: err instanceof Error ? err.message : String(err),
-                });
-              },
-            );
-          };
-
-          // W6: index-ordered channel delivery means one lost __TAURI_CHANNEL__
-          // fetch stalls the subscription forever. If a visible, still-published
-          // track goes silent for 4s, rebuild it on a fresh channel and force a
-          // re-push. Invisible streams are intentionally quiet — don't rebuild.
-          const stallTimer = setInterval(() => {
-            if (this.videoSubscriptions.get(subscriptionKey) !== subscription) {
-              return;
-            }
-            if (!(visibility.isRenderingEnabled?.() ?? true)) {
-              lastFrameAt = Date.now();
-              return;
-            }
-            if (Date.now() - lastFrameAt < 4000) {
-              return;
-            }
-            const track = this.publishedTracks.get(`${streamId}:${trackId}`);
-            if (!track) {
-              return;
-            }
-            const ssrc =
-              (subscription.activeLayer != null
-                ? track.layers.find((layer) => layer.layerId === subscription.activeLayer)?.ssrc
-                : undefined) ?? track.layers[0]?.ssrc;
-            if (ssrc == null) {
-              return;
-            }
-            logVoiceDiagnostic('[media] video subscription stalled 4s; re-registering on a fresh channel', {
+            return null;
+          })
+          : null;
+        if (!publishedTrack || disposed) {
+          if (!disposed) {
+            logVoiceDiagnostic('[media] no published native track announced before subscription timeout', {
               userId,
-              streamId,
-              trackId,
             });
-            lastFrameAt = Date.now();
-            const freshChannel = new ChannelCtorRef<VideoFrameChannelMessage>();
-            subscription.channel = freshChannel;
-            startDriverOnChannel(freshChannel);
-            void registerStreamOnChannel(freshChannel, ssrc).catch(() => {});
-          }, 1000);
-          own(() => clearInterval(stallTimer));
-          } else if (nativeSurfaceAvailable && headless) {
-            // A tap cannot receive frames of a track the native side decodes:
-            // none ever reaches the webview on that route. The route is
-            // reported, not switched; the room samples it natively instead
-            // (`lib/room/nativeSample.ts`). With no surface showing the track
-            // (the room's ambient view), something has to decode it for the
-            // sampler to read: a sampler surface with no toolkit window
-            // (`native_render_attach_sampler`), fed by the relay subscription
-            // below at the layer the 1x1 viewport selects (the lowest).
-            let samplerSurfaceId: number | null = null;
-            let samplerStopped = false;
-            const detachSampler = () => {
-              samplerStopped = true;
-              if (samplerSurfaceId === null) return;
-              const surfaceId = samplerSurfaceId;
-              samplerSurfaceId = null;
-              void this.invokeCleanup('native_render_detach', { surfaceId }).catch(() => {});
-            };
-            own(detachSampler);
-            subscription = {
-              renderer,
-              streamId,
-              trackId,
-              activeLayer: selectedLayer?.layerId,
-              stop: detachSampler,
-            };
-            notifyNativeVisibility = (visible: boolean) => {
-              void this.invokeOwned('media_set_stream_visibility', { streamId, trackId, visible }).catch(() => {});
-            };
-            await this.registerTrackSubscription({
+            this.settleRoute(subscriptionKey, 'no-track');
+          }
+          subscription = { canvas, stop: () => {} };
+        } else if (!capabilities?.nativeDesktopRenderer) {
+          // No renderer, no route: the desktop app has no other way to draw
+          // video, so say so loudly instead of showing an empty tile.
+          const reason = capabilities?.nativeRendererError
+            ?? 'the native video renderer is not available in this window';
+          console.error(`[media] cannot show ${userId}'s ${publishedTrack.trackId}: ${reason}`);
+          logVoiceDiagnostic('[media] no render route for video track', {
+            userId,
+            streamId: publishedTrack.streamId,
+            trackId: publishedTrack.trackId,
+            reason,
+          });
+          this.settleRoute(subscriptionKey, 'no-route');
+          subscription = {
+            canvas,
+            streamId: publishedTrack.streamId,
+            trackId: publishedTrack.trackId,
+            stop: () => {},
+          };
+        } else {
+          const streamId = publishedTrack.streamId;
+          const trackId = publishedTrack.trackId;
+          // A sampler asks for the lowest layer: it only feeds stills.
+          const viewport = headless ? { width: 1, height: 1 } : canvasViewport(canvas);
+          const selectedLayer = selectPublishedLayer(publishedTrack, viewport.width, viewport.height);
+          const setDecoding = (visible: boolean) => {
+            void this.invokeOwned('media_set_stream_visibility', { streamId, trackId, visible }).catch((err) => {
+              logVoiceDiagnostic('[media] media_set_stream_visibility failed', {
+                streamId,
+                trackId,
+                visible,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            });
+          };
+          const registerRelay = () =>
+            this.registerTrackSubscription({
               streamId,
               trackId,
               requestedLayer: selectedLayer?.layerId,
@@ -2149,6 +1598,32 @@ export class TauriMediaEngine implements MediaEngine {
                 error: error instanceof Error ? error.message : String(error),
               });
             });
+
+          if (headless) {
+            // A tap with no tile: a sampler surface with no toolkit window
+            // (`native_render_attach_sampler`), fed by the relay subscription at
+            // the layer the 1x1 viewport selects (the lowest). Paused only
+            // while the window is hidden.
+            let samplerSurfaceId: number | null = null;
+            let samplerStopped = false;
+            const detachSampler = () => {
+              samplerStopped = true;
+              if (samplerSurfaceId === null) return;
+              const surfaceId = samplerSurfaceId;
+              samplerSurfaceId = null;
+              void this.invokeCleanup('native_render_detach', { surfaceId }).catch(() => {});
+            };
+            own(detachSampler);
+            const visibility = attachDocumentVisibilityControls(setDecoding);
+            own(() => visibility.cleanup());
+            subscription = {
+              canvas,
+              streamId,
+              trackId,
+              activeLayer: selectedLayer?.layerId,
+              stop: detachSampler,
+            };
+            await registerRelay();
             try {
               const attached = (await this.invokeOwned('native_render_attach_sampler', { streamId, trackId })) as {
                 surfaceId?: number;
@@ -2160,9 +1635,8 @@ export class TauriMediaEngine implements MediaEngine {
               // Stopped while the attach was in flight: let the late surface go.
               if (samplerStopped) detachSampler();
             } catch (err) {
-              // Loud, and the room says it is waiting (spec §3.7): never a
-              // raw-IPC or other quiet fallback.
-              console.error('[media] native_render_attach_sampler failed; the room cannot sample this stream', {
+              // Loud, and the room says it is waiting (spec §3.7): never a quiet fallback.
+              console.error('[media] native_render_attach_sampler failed; nothing can sample this stream', {
                 userId,
                 streamId,
                 trackId,
@@ -2180,22 +1654,11 @@ export class TauriMediaEngine implements MediaEngine {
             } else {
               this.settleRoute(subscriptionKey, 'native-surface');
             }
-          } else if (nativeSurfaceAvailable) {
-            // native-surface route (spec §2/§3.6): the functional WebCodecs
-            // probe failed for this codec, so the native side decodes and
-            // presents this track on a platform surface. Nothing but geometry
-            // and visibility crosses IPC — no frame channel and no raw-frame
-            // watchdog (the native side owns delivery). The relay track
-            // subscription below shares the keyframe/layer/viewport plumbing
-            // with the passthrough route; the tile owns visibility.
-            // Underlay hole-punch: tell the tile's component (the stage's stream box or camera tile)
-            // when the surface below is actually visible, so it can clear its
-            // backgrounds down to the GL underlay — and restore its opaque
-            // backdrop the moment the surface hides. Overlay platforms never
-            // dispatch this: there the surface floats above the webview and a
-            // transparent tile would just expose the page background.
+          } else {
+            // The tile tells its component (the stage's stream box or a camera
+            // tile) when the hole over its surface may open, and when it must
+            // close (styles/layout.css, stage/nativeUnderlay.ts).
             const dispatchUnderlayVisibility = (visible: boolean) => {
-              if (!nativeRenderUnderlay) return;
               canvas.dispatchEvent(
                 new CustomEvent('paracord:native-surface-visibility', {
                   detail: { visible },
@@ -2203,11 +1666,12 @@ export class TauriMediaEngine implements MediaEngine {
                 }),
               );
             };
+            await this.ensureShownListener();
             const nativeTile = new NativeVideoTile({
               element: canvas,
               streamId,
               trackId,
-              // The surface places the picture as the canvas would (cover for
+              // The surface places the picture as the tile asks (cover for
               // camera tiles, cropped around the anchor).
               fit,
               anchor,
@@ -2221,253 +1685,114 @@ export class TauriMediaEngine implements MediaEngine {
                 // if destroyed. Do not throw away that cleanup receipt here.
                 return this.invokeCleanup(command, args);
               },
-              // Underlay: stage chrome and body portals paint above the hole
-              // (solid CSS keeps them readable) and never blank the GL surface.
-              // Only a marked occluder over the tile's center hides it
-              // (`'underlay'`: center-only sampling of [data-native-overlay-occlude],
-              // dialogs and menus; see nativeVideoTile). That is how a stage
-              // move hides the surface under its shield and has it report the
-              // settled box when the shield comes off (stageTransition.ts).
-              // With sampling off, the surface stayed where the move's first
-              // frames put it: 18px off the stream box after pill to stage
-              // (WP-G23).
-              occlusion: nativeRenderUnderlay ? 'underlay' : true,
-              onAttached: () => {
-                // No per-frame IPC signal exists on this route: a created
-                // surface is the "track is live" edge, so reveal the tile
-                // region the native surface composites over.
-                markFrame();
+              listenShown: (surfaceId, onShown) => {
+                this.shownListeners.set(surfaceId, onShown);
+                return () => {
+                  if (this.shownListeners.get(surfaceId) === onShown) this.shownListeners.delete(surfaceId);
+                };
               },
+              readStill: async (maxWidth, maxHeight) =>
+                (await this.readTrackStill(streamId, trackId, maxWidth, maxHeight))?.bitmap ?? null,
               onVisibilityChange: (visible) => {
-                // The tile is the single source of visibility here (intersection
-                // + occlusion + document visibility); drive the native
-                // decode-pause exactly as the channel route does (contract C2).
-                // Flips are rare and load-bearing (an occluded tile means a
-                // hidden surface), so each one goes to the diagnostics log.
-                logVoiceDiagnostic('[media] native tile visibility', {
-                  streamId,
-                  trackId,
-                  visible,
-                });
+                // Flips are rare and load-bearing (a closed hole shows the
+                // poster), so each one goes to the diagnostics log.
+                logVoiceDiagnostic('[media] native tile visibility', { streamId, trackId, visible });
                 dispatchUnderlayVisibility(visible);
-                void this.invokeOwned('media_set_stream_visibility', {
-                  streamId,
-                  trackId,
-                  visible,
-                }).catch((err) => {
-                  logVoiceDiagnostic('[media] media_set_stream_visibility failed', {
-                    streamId,
-                    trackId,
-                    visible,
-                    error: err instanceof Error ? err.message : String(err),
-                  });
-                });
+              },
+              // Off screen or a hidden window pauses the decoder (contract C2);
+              // a covered tile keeps decoding so it comes back current.
+              onActiveChange: (active) => {
+                logVoiceDiagnostic('[media] native tile decoding', { streamId, trackId, active });
+                setDecoding(active);
               },
             });
-            // Relay track subscription (keyframe / layer / viewport plumbing) is
-            // identical to the passthrough route; only the final mile differs.
-            await this.registerTrackSubscription({
-              streamId,
-              trackId,
-              requestedLayer: selectedLayer?.layerId,
-              viewport,
-            }).catch((error) => {
-              logVoiceDiagnostic('[media] failed to register native track subscription', {
+            await registerRelay();
+            // The webview sees no frames on this route; the native side emits a
+            // one-time first-presented-frame event per surface. That is the
+            // tile's "the track is live" edge, and the moment its first poster
+            // can be read.
+            const firstFrameUnlisten = await this.listenOwned('media_native_render_first_frame', (event) => {
+              const payload = event.payload as { streamId?: string; trackId?: string } | null;
+              if (payload?.streamId !== streamId || payload?.trackId !== trackId) return;
+              markFrame();
+              nativeTile.refreshPoster();
+            });
+            this.unlisteners.push(firstFrameUnlisten);
+            // Failure law (spec §3.7): a surface that cannot be created or kept
+            // is a loud, user-visible subscription error. Tear the subscription
+            // down when the native side names this track.
+            const failureUnlisten = await this.listenOwned('media_native_render_failed', (event) => {
+              const payload = event.payload as { streamId?: string; trackId?: string; reason?: string } | null;
+              if (payload?.streamId !== streamId || payload?.trackId !== trackId) return;
+              const reason = payload?.reason ?? 'unknown native render failure';
+              console.error('[media] native video failed; the subscription is torn down', {
                 userId,
                 streamId,
                 trackId,
-                error: error instanceof Error ? error.message : String(error),
+                reason,
               });
+              logVoiceDiagnostic('[media] native surface render failed', { userId, streamId, trackId, reason });
+              const current = this.videoSubscriptions.get(subscriptionKey);
+              if (current === subscription) {
+                current.stop();
+                this.videoSubscriptions.delete(subscriptionKey);
+              }
             });
-            // Failure law (spec §3.7): a surface that cannot be created or kept
-            // is a loud, user-visible subscription error — never a raw-IPC
-            // fallback (that path is deleted). Tear the subscription down when
-            // the native side names this track.
-            // The webview sees no frames on this route; the native side emits a
-            // one-time first-presented-frame event per surface. Feed it to the
-            // same onFrame edge the passthrough route drives per frame, so
-            // "track is live" state reflects actual presentation, not merely a
-            // created surface.
-            let firstFrameUnlisten: UnlistenFn | null = null;
-            {
-              firstFrameUnlisten = await this.listenOwned('media_native_render_first_frame', (event) => {
-                const payload = event.payload as {
-                  streamId?: string;
-                  trackId?: string;
-                } | null;
-                if (payload?.streamId !== streamId || payload?.trackId !== trackId) {
-                  return;
-                }
-                markFrame();
-              });
-              this.unlisteners.push(firstFrameUnlisten);
-            }
-            let failureUnlisten: UnlistenFn | null = null;
-            {
-              failureUnlisten = await this.listenOwned('media_native_render_failed', (event) => {
-                const payload = event.payload as {
-                  streamId?: string;
-                  trackId?: string;
-                  reason?: string;
-                } | null;
-                if (payload?.streamId !== streamId || payload?.trackId !== trackId) {
-                  return;
-                }
-                const reason = payload?.reason ?? 'unknown native render failure';
-                console.error(
-                  '[media] native surface render failed — tearing down subscription (no raw-IPC fallback)',
-                  { userId, streamId, trackId, reason },
-                );
-                logVoiceDiagnostic('[media] native surface render failed', {
-                  userId,
-                  streamId,
-                  trackId,
-                  reason,
-                });
-                const current = this.videoSubscriptions.get(subscriptionKey);
-                if (current === subscription) {
-                  current.stop();
-                  current.renderer.destroy();
-                  this.videoSubscriptions.delete(subscriptionKey);
-                }
-              });
-              this.unlisteners.push(failureUnlisten);
-            }
+            this.unlisteners.push(failureUnlisten);
             subscription = {
-              renderer,
+              canvas,
               streamId,
               trackId,
               activeLayer: selectedLayer?.layerId,
               nativeTile,
               stop: () => {
-                if (firstFrameUnlisten) {
-                  firstFrameUnlisten();
-                }
-                if (failureUnlisten) {
-                  failureUnlisten();
-                }
-                // Close the underlay hole so the tile's opaque backdrop is
-                // back before (or as) the native surface disappears.
-                dispatchUnderlayVisibility(false);
+                firstFrameUnlisten();
+                failureUnlisten();
+                // Closes the hole (onVisibilityChange(false)) before the
+                // surface goes.
                 nativeTile.destroy();
               },
             };
             this.settleRoute(subscriptionKey, 'native-surface');
             // Create the surface now. A subscribe-time attach failure is loud and
-            // leaves the DOM poster/backdrop showing (spec §3.7) — never raw IPC.
+            // leaves the tile's notice/poster showing (spec §3.7).
             try {
               await nativeTile.attach();
             } catch (err) {
-              console.error(
-                '[media] native_render_attach failed — no raw-IPC fallback (spec §3.7)',
-                {
+              const message = err instanceof Error ? err.message : String(err);
+              if (!disposed) {
+                console.error('[media] native_render_attach failed; this video cannot be shown (spec §3.7)', {
                   userId,
                   streamId,
                   trackId,
-                  error: err instanceof Error ? err.message : String(err),
-                },
-              );
-              logVoiceDiagnostic('[media] native_render_attach failed', {
-                userId,
-                streamId,
-                trackId,
-                error: err instanceof Error ? err.message : String(err),
-              });
+                  error: message,
+                });
+              }
+              logVoiceDiagnostic('[media] native_render_attach failed', { userId, streamId, trackId, error: message });
             }
-          } else {
-            const codec = publishedTrack.codec ?? 'unknown';
-            logVoiceDiagnostic('[media] no render route for published video track', {
-              userId,
-              streamId,
-              trackId,
-              codec,
-              webCodecsDecode: false,
-              nativeDesktopRenderer: false,
-            });
-            console.error(
-              `[media] no render route for ${codec} video track: WebCodecs cannot decode it and native desktop rendering is unavailable`,
-              { userId, streamId, trackId },
-            );
-            this.settleRoute(subscriptionKey, 'no-route');
-            subscription = {
-              renderer,
-              streamId,
-              trackId,
-              activeLayer: selectedLayer?.layerId,
-              stop: () => {},
-            };
           }
-        } else {
-          logVoiceDiagnostic('[media] no published native track announced before subscription timeout', {
-            userId,
-          });
-          this.settleRoute(subscriptionKey, 'no-track');
-          subscription = {
-            renderer,
-            stop: () => {},
-          };
         }
-        let resizeObserver: ResizeObserver | null = null;
-        let resizeTimer: ReturnType<typeof setTimeout> | null = null;
-        const updateViewportSubscription = () => {
-          const current = this.videoSubscriptions.get(subscriptionKey);
-          if (!current?.streamId || !current.trackId) {
-            return;
-          }
-          const track = this.publishedTracks.get(`${current.streamId}:${current.trackId}`);
-          if (!track) {
-            return;
-          }
-          const viewport = rendererCanvasSize(current.renderer);
-          // Always refresh the relay's viewport hint so its per-viewer layer
-          // selection is capped to the tile size (spec §4.2/I4). This is
-          // independent of the client's local layer guess and applies to BOTH the
-          // passthrough and native-surface routes — the native-surface route has
-          // no frame channel to swap, but the relay still needs the tile dims.
-          void this.registerTrackSubscription({
-            streamId: current.streamId,
-            trackId: current.trackId,
-            viewport,
-          }).catch(() => {});
-
-          // Passthrough route only: when the client's local layer guess changes,
-          // swap the stream channel's ssrc so the native decoder is fed the newly
-          // selected layer. (Relay-driven selection still owns forwarding; this
-          // just keeps the receive-side channel's expected ssrc current.)
-          if (!current.channel) {
-            return;
-          }
-          const selectedLayer = selectPublishedLayer(track, viewport.width, viewport.height);
-          if (!selectedLayer || current.activeLayer === selectedLayer.layerId) {
-            return;
-          }
-          current.activeLayer = selectedLayer.layerId;
-          const { streamId: currentStreamId, trackId: currentTrackId, channel: currentChannel } = current;
-          void isWebCodecsDecodeSupported(track.codec ?? 'vp9')
-            .then((preferEncoded) =>
-              this.invokeOwned('media_register_stream_video_subscription', {
-                streamId: currentStreamId,
-                trackId: currentTrackId,
-                ssrc: selectedLayer.ssrc,
-                preferEncoded,
-                channel: currentChannel,
-              }),
-            )
-            .catch(() => {});
-        };
+        // The relay's per-viewer layer choice is capped by the tile's size
+        // (spec §4.2/I4): keep its viewport hint current as the tile resizes.
         if (!disposed && !headless && typeof ResizeObserver !== 'undefined') {
-          resizeObserver = new ResizeObserver(() => {
-            if (resizeTimer) {
-              clearTimeout(resizeTimer);
-            }
+          let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+          const updateViewportSubscription = () => {
+            const current = this.videoSubscriptions.get(subscriptionKey);
+            if (!current?.streamId || !current.trackId || !current.nativeTile) return;
+            void this.registerTrackSubscription({
+              streamId: current.streamId,
+              trackId: current.trackId,
+              viewport: canvasViewport(canvas),
+            }).catch(() => {});
+          };
+          const resizeObserver = new ResizeObserver(() => {
+            if (resizeTimer) clearTimeout(resizeTimer);
             resizeTimer = setTimeout(updateViewportSubscription, 120);
           });
           resizeObserver.observe(canvas);
           own(() => {
-            if (resizeTimer) {
-              clearTimeout(resizeTimer);
-            }
-            resizeObserver?.disconnect();
+            if (resizeTimer) clearTimeout(resizeTimer);
+            resizeObserver.disconnect();
           });
         }
         const originalStop = subscription.stop;
@@ -2479,12 +1804,10 @@ export class TauriMediaEngine implements MediaEngine {
         };
         // The consumer may have unsubscribed while the async setup above was in
         // flight (waitForPublishedVideoTrack can block up to 10s). The
-        // unsubscribe closure already ran and found no map entry to stop, so if
-        // we store this subscription now its renderer RAF / frame-poll loop
-        // would run forever against a detached canvas. Drop it instead.
+        // unsubscribe closure already ran and found no map entry to stop, so
+        // drop this subscription instead of storing it.
         if (disposed) {
           subscription.stop();
-          subscription.renderer.destroy();
           return;
         }
         ownedSubscription = subscription;
@@ -2510,7 +1833,9 @@ export class TauriMediaEngine implements MediaEngine {
     if (!this.localUserId) {
       return () => {};
     }
-    // Self-preview uses the same channel-push path as any other tile.
+    // The self-view is a tile like any other: the native side decodes the
+    // exact bitstream viewers receive (from the encoder, never the relay) and
+    // draws it on a surface.
     return this.subscribeVideo(this.localUserId, canvas, onFrame);
   }
 

@@ -12,10 +12,10 @@ import type { PillTarget } from './model';
  * this stream is the one being watched, else the room's ambient view of it
  * (`subscribeViewFrames`, docs/design/glass-g6-checkpoint.md). It never opens a
  * view of its own: an ambient view is one per client and belongs to the room
- * light (WP-G8), and a watch belongs to the stage (WP-G14). With no frames (no
- * view of this stream, the desktop app's native surface route, or a view that is
- * still connecting) it shows the room's tint, and the label still says whose
- * screen it is.
+ * light (WP-G8), and a watch belongs to the stage (WP-G14). In the desktop app
+ * the frames are stills of the natively drawn stream (`readVideoStill`). With no
+ * frames (no view of this stream, or a view that is still connecting) it shows
+ * the room's tint, and the label still says whose screen it is.
  *
  * It is the second door to an action the bar's Watch button already opens, so a
  * screen reader hears one button, not two with the same name (glass-g22

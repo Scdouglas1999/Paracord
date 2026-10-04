@@ -1,22 +1,32 @@
-//! Native surface rendering (spec §3.1, §3.6, §3.7).
+//! Native surface rendering (spec §3.1, §3.6, §3.7; Glass spec §2).
 //!
-//! A native video surface renders a native-decoded track's frames directly on
-//! the GPU, composited over the WebKit webview, so **nothing crosses the Tauri
-//! IPC boundary but geometry and stats** (spec §0/§2). The raw-I420-over-IPC
-//! path is deleted; a subscription whose functional WebCodecs probe failed takes
-//! the `native-surface` route instead, calling [`native_render_attach`] in place
-//! of the frame-channel registration.
+//! In the desktop app every remote video, and the self-view, takes this route:
+//! the native side decodes the track and draws it on a platform surface UNDER
+//! the webview, and the page shows it through a transparent hole. **Nothing
+//! crosses the Tauri IPC boundary but geometry, stills and stats.** There is no
+//! WebCodecs route in the desktop app and no probe choosing one; the browser
+//! client (the web UI a server serves) is the only place WebCodecs draws video.
+//!
+//! One backend per platform, all underlays to the same contract:
+//! - Linux: a `gtk::GLArea` per surface in a `gtk::Fixed` below the reparented
+//!   WebKitGTK webview ([`linux`]).
+//! - macOS: an `NSView` hosting an `AVSampleBufferDisplayLayer` below the
+//!   WKWebView (`macos`, review-only on the Linux toolchain).
+//! - Windows: a DirectComposition visual tree composed behind the WebView2
+//!   child window (`windows`, compile-checked here, not run).
 //!
 //! This module owns the platform-agnostic pieces:
 //! - the [`VideoSurface`] trait every backend implements,
 //! - the [`SurfaceGeometry`] the TS reporter drives (physical px + dpr + corner
-//!   radius + visibility),
+//!   radius + visibility + reveal generation),
+//! - the [`ShownNotifier`] a backend fires once a revealed surface has drawn a
+//!   frame where the page asked for it, so the page opens its hole only over
+//!   video that is already there,
 //! - the [`SurfaceRegistry`] mapping `SurfaceId → surface`,
-//! - the three geometry/occlusion commands (`native_render_attach`,
-//!   `native_render_update_geometry`, `native_render_detach`).
-//!
-//! The Linux zero-copy backend lives in [`linux`]; the macOS backend (review
-//! only on this toolchain) in `macos`.
+//! - whether this process has a working renderer at all ([`renderer_status`]),
+//! - the commands (`native_render_attach`, `native_render_attach_sampler`,
+//!   `native_render_update_geometry`, `native_render_still`,
+//!   `native_render_detach`, `native_render_set_ground_color`).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -30,7 +40,10 @@ pub mod linux;
 #[cfg(target_os = "macos")]
 pub mod macos;
 
-pub mod sample;
+#[cfg(target_os = "windows")]
+pub mod windows;
+
+pub mod still;
 
 /// Opaque identity for one native surface. Allocated by the [`SurfaceRegistry`],
 /// carried to the TS side so its geometry reporter can address the surface.
@@ -50,6 +63,16 @@ pub struct SurfaceGeometry {
     pub dpr: f64,
     pub corner_radius: f32,
     pub visible: bool,
+    /// The page's count of reveals for this surface. Each time the page shows a
+    /// hidden surface it raises this; once the backend has drawn a frame at a
+    /// visible geometry of a generation it has not yet confirmed, it fires the
+    /// surface's [`ShownNotifier`] with it, exactly once per generation. The
+    /// page keeps the tile opaque (its poster showing) until then, so the hole
+    /// never opens over a surface that is not in place yet.
+    pub generation: u64,
+    /// Draw the frame flipped left to right (the self-view camera, which the
+    /// page mirrors the same way).
+    pub mirrored: bool,
 }
 
 impl SurfaceGeometry {
@@ -143,6 +166,17 @@ pub struct UvWindow {
     pub center: [f32; 2],
 }
 
+impl UvWindow {
+    /// The same window flipped left to right: sampling runs from the frame's
+    /// right edge to its left, about the window's center.
+    pub fn mirrored(self) -> Self {
+        Self {
+            scale: [-self.scale[0], self.scale[1]],
+            center: self.center,
+        }
+    }
+}
+
 impl SurfaceFit {
     /// Read what the webview asked for: the renderer's `fit` (`contain`, the
     /// default, or `cover`) and, for `cover`, where its crop falls. Anything
@@ -225,6 +259,70 @@ fn crop_center(scale: f32, anchor: f32) -> f32 {
     }
 }
 
+/// Tells the page that a revealed surface has drawn a frame in place (see
+/// [`SurfaceGeometry::generation`]). Emits `native_render_shown`
+/// `{ surfaceId, generation }`, scoped to the session owner like every media
+/// event. Cheap to clone; callable from any thread.
+#[derive(Clone)]
+pub struct ShownNotifier {
+    sink: Option<super::CallEventSink>,
+    surface_id: SurfaceId,
+}
+
+impl ShownNotifier {
+    pub fn new(sink: super::CallEventSink, surface_id: SurfaceId) -> Self {
+        Self {
+            sink: Some(sink),
+            surface_id,
+        }
+    }
+
+    /// A notifier that tells nobody (backend unit tests).
+    #[allow(dead_code)]
+    pub fn silent(surface_id: SurfaceId) -> Self {
+        Self {
+            sink: None,
+            surface_id,
+        }
+    }
+
+    // Read by the Windows and macOS backends.
+    #[cfg_attr(target_os = "linux", allow(dead_code))]
+    pub fn surface_id(&self) -> SurfaceId {
+        self.surface_id
+    }
+
+    pub fn fire(&self, generation: u64) {
+        if let Some(sink) = self.sink.as_ref() {
+            let _ = sink.emit(
+                "native_render_shown",
+                serde_json::json!({ "surfaceId": self.surface_id.0, "generation": generation }),
+            );
+        }
+    }
+}
+
+/// Whether this process has a native renderer, and if not, why. Set once by the
+/// platform's host install in the Tauri `setup` hook. Until then (and on a
+/// platform with no backend) it reads as not installed.
+static RENDERER_STATUS: OnceLock<Result<&'static str, String>> = OnceLock::new();
+
+/// Record the outcome of the platform's host install (first call wins).
+pub fn record_renderer_status(status: Result<&'static str, String>) {
+    let _ = RENDERER_STATUS.set(status);
+}
+
+/// `Ok(backend name)` when native video can be drawn in this process,
+/// otherwise the reason it cannot. Remote video in the desktop app has no
+/// other route: when this is an error, every video subscription fails loudly
+/// with this reason.
+pub fn renderer_status() -> Result<&'static str, String> {
+    match RENDERER_STATUS.get() {
+        Some(status) => status.clone(),
+        None => Err("the native video renderer was not installed in this window".to_string()),
+    }
+}
+
 /// A platform surface that renders one native-decoded video track (spec §3.1).
 ///
 /// Implementations are `Send` (moved to the render thread as an owned handle);
@@ -240,11 +338,18 @@ fn crop_center(scale: f32, anchor: f32) -> f32 {
 /// webview host; a bare `Window` would only be used to fetch the same handle.
 pub trait VideoSurface: Send {
     /// Attach to the app window; created hidden at a zero rect, drawing frames
-    /// with `fit`.
-    fn new(app: &tauri::AppHandle, surface_id: SurfaceId, fit: SurfaceFit) -> Result<Self, String>
+    /// with `fit`. `shown` is fired as [`SurfaceGeometry::generation`] describes.
+    fn new(
+        app: &tauri::AppHandle,
+        surface_id: SurfaceId,
+        fit: SurfaceFit,
+        shown: ShownNotifier,
+    ) -> Result<Self, String>
     where
         Self: Sized;
-    /// Update geometry / corner radius / visibility (physical px + dpr).
+    /// Update geometry / corner radius / visibility / reveal generation
+    /// (physical px + dpr). A hidden surface is not drawn; the decoder keeps
+    /// running unless the page also paused the track (`media_set_stream_visibility`).
     fn update_geometry(&mut self, geometry: SurfaceGeometry) -> Result<(), String>;
     /// Present one decoded frame. Called from the decode worker thread; the
     /// implementation marshals to its render loop itself.
@@ -354,31 +459,65 @@ pub fn registry() -> &'static SurfaceRegistry {
 #[derive(Default)]
 pub struct NativeRenderState;
 
-/// Construct the platform surface for this build (spec route matrix §2): Linux →
-/// GTK GLArea zero-copy backend; macOS → `AVSampleBufferDisplayLayer`; every
-/// other target has no native-surface backend and returns a loud error (Windows
-/// is passthrough-only, so `native_render_attach` must never be reached there).
+/// Install this platform's video host under the main window's webview: make
+/// the webview transparent and put the layer surfaces are drawn on below it.
+/// Called once from the Tauri `setup` hook; its outcome goes to
+/// [`record_renderer_status`].
+pub fn install_platform_host(app: &tauri::AppHandle) -> Result<&'static str, String> {
+    #[cfg(target_os = "linux")]
+    {
+        linux::install_render_host(app)?;
+        Ok("GTK GLArea underlay, CPU I420 upload")
+    }
+    #[cfg(target_os = "macos")]
+    {
+        macos::install_render_host(app)?;
+        Ok("AVSampleBufferDisplayLayer underlay")
+    }
+    #[cfg(target_os = "windows")]
+    {
+        windows::install_render_host(app)?;
+        Ok("DirectComposition underlay, Direct3D 11")
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        let _ = app;
+        Err("no native video backend on this platform".to_string())
+    }
+}
+
+/// Construct the platform surface for this build: Linux → GTK GLArea; macOS →
+/// `AVSampleBufferDisplayLayer`; Windows → DirectComposition. A process whose
+/// host did not install refuses with the reason it did not (no other route).
 fn create_surface(
     app: &tauri::AppHandle,
     id: SurfaceId,
     fit: SurfaceFit,
+    shown: ShownNotifier,
 ) -> Result<Box<dyn VideoSurface>, String> {
+    renderer_status()?;
     #[cfg(target_os = "linux")]
     {
-        Ok(Box::new(linux::LinuxVideoSurface::new(app, id, fit)?))
+        Ok(Box::new(linux::LinuxVideoSurface::new(
+            app, id, fit, shown,
+        )?))
     }
     #[cfg(target_os = "macos")]
     {
-        Ok(Box::new(macos::MacosVideoSurface::new(app, id, fit)?))
+        Ok(Box::new(macos::MacosVideoSurface::new(
+            app, id, fit, shown,
+        )?))
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(target_os = "windows")]
     {
-        let _ = (app, id, fit);
-        Err(
-            "no native-surface backend on this platform (passthrough is the only \
-             route here)"
-                .to_string(),
-        )
+        Ok(Box::new(windows::WindowsVideoSurface::new(
+            app, id, fit, shown,
+        )?))
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        let _ = (app, id, fit, shown);
+        Err("no native video backend on this platform".to_string())
     }
 }
 
@@ -389,12 +528,11 @@ pub struct AttachResponse {
     pub surface_id: u64,
 }
 
-/// Create a native surface for `stream_id:track_id` and flip the subscription
-/// onto the `native-surface` route (spec §3.6 contract S1). Called **instead of**
-/// the frame-channel registration when the route is native-surface. The keyframe
-/// request / visibility / stats plumbing is shared with the existing
-/// subscription bookkeeping. `fit` is `contain` (the default) or `cover`, and
-/// `anchor` (`cover` only) says where its crop falls.
+/// Create a native surface for `stream_id:track_id` and bind the track's
+/// decoded frames to it (spec §3.6 contract S1). The relay subscription, the
+/// keyframe requests and the visibility plumbing are the track's own. `fit` is
+/// `contain` (the default) or `cover`, and `anchor` (`cover` only) says where
+/// its crop falls.
 #[tauri::command]
 pub async fn native_render_attach(
     stream_id: String,
@@ -412,11 +550,12 @@ pub async fn native_render_attach(
     let fit = SurfaceFit::parse(fit.as_deref(), anchor)?;
     let app = super::CallEventSink::new(app, owner_id.clone());
     let id = registry().allocate_id();
+    let shown = ShownNotifier::new(app.clone(), id);
 
-    // Surface creation marshals to the GTK/AppKit main thread and blocks for the
-    // result; keep it off the async worker.
+    // Surface creation marshals to the toolkit's main (or render) thread and
+    // blocks for the result; keep it off the async worker.
     let create_app = app.clone();
-    let surface = tokio::task::spawn_blocking(move || create_surface(&create_app, id, fit))
+    let surface = tokio::task::spawn_blocking(move || create_surface(&create_app, id, fit, shown))
         .await
         .map_err(|err| format!("native surface create task failed: {err}"))?;
 
@@ -431,9 +570,8 @@ pub async fn native_render_attach(
     };
 
     slot.owners.check(&owner_id)?;
-    // Every surface keeps the room light's sample of what it presents (taken
-    // only while the room asks; see `sample`).
-    let surface: Box<dyn VideoSurface> = Box::new(sample::SampledSurface::wrap(
+    // Every surface keeps stills of what it presents (see `still`).
+    let surface: Box<dyn VideoSurface> = Box::new(still::StillSurface::wrap(
         Some(surface),
         &stream_id,
         &track_id,
@@ -441,7 +579,14 @@ pub async fn native_render_attach(
     ));
     let shared: SharedSurface = Arc::new(Mutex::new(surface));
     registry().insert(id, shared.clone());
-    super::video_pipeline::attach_native_surface(&stream_id, &track_id, id, shared, app.clone());
+    super::video_pipeline::attach_native_surface(
+        &stream_id,
+        &track_id,
+        id,
+        shared,
+        app.clone(),
+        true,
+    );
     super::video_pipeline::native_diag(
         Some(&app),
         &format!(
@@ -453,11 +598,11 @@ pub async fn native_render_attach(
 }
 
 /// Attach a sampler to `stream_id:track_id`: a native-surface binding with
-/// nothing on screen, so the native side decodes the track and keeps only the
-/// room light's downsample of it (Glass spec §4). For a stream the webview
-/// samples but does not show (the room's ambient view) on the native-surface
-/// route. Detach it with [`native_render_detach`] like any surface. A surface
-/// attached later for the same track takes the binding over (one per track).
+/// nothing on screen, so the native side decodes the track and keeps only its
+/// stills (Glass spec §4). For a stream the page samples but does not show (the
+/// room's ambient view, the pill's preview of it). Detach it with
+/// [`native_render_detach`] like any surface. A surface attached later for the
+/// same track takes the binding over (one per track).
 #[tauri::command]
 pub async fn native_render_attach_sampler(
     stream_id: String,
@@ -471,12 +616,18 @@ pub async fn native_render_attach_sampler(
     slot.owners.check(&owner_id)?;
     let app = super::CallEventSink::new(app, owner_id.clone());
     let id = registry().allocate_id();
-    let surface: Box<dyn VideoSurface> = Box::new(sample::SampledSurface::wrap(
-        None, &stream_id, &track_id, id,
-    ));
+    let surface: Box<dyn VideoSurface> =
+        Box::new(still::StillSurface::wrap(None, &stream_id, &track_id, id));
     let shared: SharedSurface = Arc::new(Mutex::new(surface));
     registry().insert(id, shared.clone());
-    super::video_pipeline::attach_native_surface(&stream_id, &track_id, id, shared, app.clone());
+    super::video_pipeline::attach_native_surface(
+        &stream_id,
+        &track_id,
+        id,
+        shared,
+        app.clone(),
+        false,
+    );
     super::video_pipeline::native_diag(
         Some(&app),
         &format!(
@@ -487,23 +638,34 @@ pub async fn native_render_attach_sampler(
     Ok(AttachResponse { surface_id: id.0 })
 }
 
-/// The room light's sample of a natively presented track (Glass spec §4): the
-/// latest 32×18 RGB downsample of what its surface presented, `waiting` until
-/// one exists, or `noSurface` when nothing on this device decodes the track.
-/// Each call keeps the track sampled for two more seconds; nothing is sampled
-/// for a track nobody asks about. A surface whose frames cannot be read back
-/// (a GPU-resident handle) is an error, not a quiet `waiting`.
+/// A still of what a track's surface presented (see `still`): the latest copy
+/// scaled to fit `max_width`x`max_height` as binary RGBA (layout in
+/// [`still::STILL_HEADER`]), `unchanged` when that copy is `after_seq`,
+/// `waiting` until a frame was presented, or `no surface` when nothing on this
+/// device decodes the track. Asking keeps the
+/// track's copies fresh for a few seconds. A frame that cannot be read back is
+/// an error, never a quiet `waiting`.
 #[tauri::command]
-pub async fn native_render_sample(
+pub async fn native_render_still(
     stream_id: String,
     track_id: String,
-) -> Result<sample::SampleResponse, String> {
-    sample::board().read(&sample::track_key(&stream_id, &track_id))
+    max_width: u32,
+    max_height: u32,
+    after_seq: Option<u64>,
+) -> Result<tauri::ipc::Response, String> {
+    let source = still::board().latest(&still::track_key(&stream_id, &track_id))?;
+    // The scale runs on the blocking pool: a 960-wide still is a few ms of work.
+    let bytes = tokio::task::spawn_blocking(move || {
+        still::encode_still(&source, max_width, max_height, after_seq)
+    })
+    .await
+    .map_err(|err| format!("still task failed: {err}"))??;
+    Ok(tauri::ipc::Response::new(bytes))
 }
 
-/// Update a surface's geometry / corner radius / visibility (spec §3.6). Physical
-/// pixels relative to the window's client area, coalesced TS-side through one
-/// rAF-throttled reporter.
+/// Update a surface's geometry / corner radius / visibility / reveal generation
+/// (spec §3.6). Physical pixels relative to the window's client area, coalesced
+/// TS-side through one rAF-throttled reporter.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn native_render_update_geometry(
@@ -515,6 +677,8 @@ pub async fn native_render_update_geometry(
     dpr: f64,
     corner_radius: f32,
     visible: bool,
+    generation: u64,
+    mirrored: bool,
 ) -> Result<(), String> {
     let id = SurfaceId(surface_id);
     let Some(surface) = registry().get(id) else {
@@ -530,6 +694,8 @@ pub async fn native_render_update_geometry(
         dpr,
         corner_radius,
         visible,
+        generation,
+        mirrored,
     };
     let mut guard = surface.lock().unwrap_or_else(|e| e.into_inner());
     guard.update_geometry(geometry)
@@ -538,25 +704,61 @@ pub async fn native_render_update_geometry(
 /// Tell the shell what the app's ground color is — `--bg-base`, as the
 /// renderer resolved it, `#rrggbb`.
 ///
-/// Only the Linux underlay has anywhere to put it: there the webview's own
-/// background is cleared so video can show through, and whatever the DOM leaves
-/// transparent falls through to the GTK toplevel. The base is user-chosen
-/// (`oklch`, with the hue and the tint on `<html>`), so the shell cannot hold a
-/// literal — it repeats what the renderer says, on mount and on every change.
-/// A no-op on the platforms whose shells paint nothing of their own.
+/// Every backend is an underlay: the webview's own background is cleared so
+/// video can show through, and whatever the DOM leaves transparent falls
+/// through to what the shell paints below it (the GTK toplevel, the NSWindow,
+/// the DirectComposition ground visual). The base is user-chosen (`oklch`, with
+/// the hue and the tint on `<html>`), so the shell cannot hold a literal — it
+/// repeats what the renderer says, on mount and on every change.
 #[tauri::command]
 pub async fn native_render_set_ground_color(
     #[allow(unused_variables)] app: tauri::AppHandle,
     #[allow(unused_variables)] color: String,
 ) -> Result<(), String> {
+    let color = validated_ground_color(&color)?;
     #[cfg(target_os = "linux")]
     {
         linux::set_ground_color(&app, &color)
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     {
+        macos::set_ground_color(&app, &color)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        windows::set_ground_color(&app, &color)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        let _ = color;
         Ok(())
     }
+}
+
+/// `#rrggbb`, normalized to lower case, and nothing else.
+///
+/// The string crosses the IPC boundary and is handed to a toolkit (pasted into
+/// a GTK stylesheet on Linux), so it is validated as a color and not merely
+/// trusted to be one; anything else is a loud error (spec §3.7), never a
+/// quietly ignored one.
+pub fn validated_ground_color(color: &str) -> Result<String, String> {
+    let trimmed = color.trim();
+    let hex = trimmed.strip_prefix('#').unwrap_or("");
+    if hex.len() == 6 && hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Ok(format!("#{}", hex.to_ascii_lowercase()));
+    }
+    Err(format!(
+        "ground color {trimmed:?} is not #rrggbb; the shell will not paint a color it cannot read"
+    ))
+}
+
+/// The RGB bytes of a color [`validated_ground_color`] accepted (the Windows
+/// and macOS backends paint with numbers, not a stylesheet).
+#[cfg_attr(target_os = "linux", allow(dead_code))]
+pub fn ground_rgb(color: &str) -> [u8; 3] {
+    let hex = color.trim_start_matches('#');
+    let byte = |at: usize| u8::from_str_radix(hex.get(at..at + 2).unwrap_or("00"), 16).unwrap_or(0);
+    [byte(0), byte(2), byte(4)]
 }
 
 /// Destroy a native surface (spec §3.6): removes it from the registry and the
@@ -583,6 +785,8 @@ mod tests {
             dpr,
             corner_radius: radius,
             visible: true,
+            generation: 0,
+            mirrored: false,
         }
     }
 
@@ -698,6 +902,26 @@ mod tests {
         let half: AnchorArg = serde_json::from_str(r#"{ "y": 0.2 }"#).unwrap();
         assert_eq!(half.x, None);
         assert_eq!(half.y, Some(0.2));
+    }
+
+    #[test]
+    fn a_mirrored_window_samples_the_frame_right_to_left() {
+        let window = SurfaceFit::Contain.uv_window(320.0, 180.0, 1280.0, 720.0);
+        let flipped = window.mirrored();
+        assert!(close(
+            sample_at(flipped, [0.0, 0.5]),
+            sample_at(window, [1.0, 0.5])
+        ));
+        assert!(close(
+            sample_at(flipped, [1.0, 0.25]),
+            sample_at(window, [0.0, 0.25])
+        ));
+        // An anchored cover crop keeps its window, read the other way.
+        let faces = cover_at(0.2, 0.35).uv_window(400.0, 400.0, 1280.0, 720.0);
+        assert!(close(
+            sample_at(faces.mirrored(), [0.0, 0.0]),
+            sample_at(faces, [1.0, 0.0])
+        ));
     }
 
     #[test]
@@ -847,6 +1071,30 @@ mod tests {
         }
         // A frame of no size yet reads as square rather than dividing by zero.
         assert_eq!(COVER.uv_window(0.0, 0.0, 0.0, 0.0).scale, [1.0, 1.0]);
+    }
+
+    #[test]
+    fn the_ground_color_is_read_as_a_color_not_trusted_as_one() {
+        // The renderer's answer is pasted into a toolkit stylesheet, so it is
+        // read before it is repeated, and normalized so a re-report of the same
+        // color in different case is the same color.
+        assert_eq!(validated_ground_color("#0A0C10").unwrap(), "#0a0c10");
+        assert_eq!(validated_ground_color("  #100f0c  ").unwrap(), "#100f0c");
+        assert_eq!(ground_rgb("#0a0c10"), [0x0a, 0x0c, 0x10]);
+        for refused in [
+            "",
+            "#0a0c1",
+            "#0a0c100",
+            "0a0c10",
+            "red",
+            "oklch(16.5% 0.007 65)",
+            "#0a0c10; } * { background-image: url(http://x/) ",
+        ] {
+            assert!(
+                validated_ground_color(refused).is_err(),
+                "{refused:?} is not #rrggbb and must be refused, not painted"
+            );
+        }
     }
 
     #[test]

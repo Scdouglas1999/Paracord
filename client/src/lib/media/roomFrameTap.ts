@@ -15,7 +15,7 @@
  * | Situation                                       | Thumbnail | Reason |
  * |-------------------------------------------------|-----------|--------|
  * | Room you are **in**, publisher's frames land in a DOM canvas | **live ≤ 2 fps** | — |
- * | Room you are in, platform composites **below** the webview (Linux GTK underlay) | still + LIVE | `native-surface` |
+ * | Room you are in, in the desktop app (video drawn **below** the webview) | still + LIVE | `native-surface` |
  * | Room you are in, nobody is publishing video      | still     | `no-publisher` |
  * | Room you are **not** in                          | still + LIVE | `not-joined` |
  * | No call at all                                   | still     | `no-engine` |
@@ -24,9 +24,10 @@
  * absence of one. A room you have not joined has **no decoder running** for it
  * anywhere on this device; frames for it do not exist to be sampled, and
  * fabricating a subscription to make a thumbnail move would be a second media
- * session opened behind the user's back. On the Linux underlay the frames exist
- * but are composited by GTK *below* the webview, so the DOM canvas is a
- * transparent hole with nothing to read back. In both cases the model says so
+ * session opened behind the user's back. In the desktop app the frames exist
+ * but are drawn natively *below* the webview, so the DOM canvas is a
+ * transparent hole with nothing to read back (the Glass room reads stills of
+ * them instead: `tapEngineFrames`). In both cases the model says so
  * (`RoomThumbnailState.reason`) and the component draws the still and the LIVE
  * dot rather than pretending. There is no silent fallback here: every
  * non-live state is named.
@@ -96,8 +97,8 @@ export function stillReasonFor(
 ): ThumbnailStillReason | null {
   if (!joined) return 'no-engine';
   if (joined.roomKey !== request.roomKey) return 'not-joined';
-  // Linux GTK underlay: the surface composites BELOW the webview, so the DOM
-  // canvas is a deliberate transparent hole. There are no pixels to read back.
+  // The desktop app draws video BELOW the webview, so the DOM canvas is a
+  // deliberate transparent hole. There are no pixels to read back.
   if (joined.capabilities?.nativeRenderUnderlay) return 'native-surface';
   if (!request.userId) return 'no-publisher';
   return null;
@@ -184,7 +185,8 @@ export const MAX_VIEW_SAMPLE_FPS = 4;
 export const AMBIENT_SAMPLE_MAX_FPS = 1;
 
 export interface EngineFrameTap {
-  /** Where the frames come from; `frames` is the only route that delivers any. */
+  /** Where the frames come from: `frames` (decoded in the page) or
+   * `native-surface` (stills of the desktop app's native video). */
   readonly route: Promise<VideoTapRoute>;
   release(): void;
 }
@@ -193,6 +195,9 @@ export interface EngineFrameTapDeps {
   now: () => number;
   /** Decoded frame to bitmap. Injected so the tap is testable in jsdom. */
   toBitmap: (frame: VideoFrame) => Promise<ImageBitmap>;
+  /** Timers for the native route's still polling. Injected for tests. */
+  setTimeout?: (callback: () => void, ms: number) => ReturnType<typeof setTimeout>;
+  clearTimeout?: (timer: ReturnType<typeof setTimeout>) => void;
 }
 
 const defaultTapDeps: EngineFrameTapDeps = {
@@ -200,15 +205,22 @@ const defaultTapDeps: EngineFrameTapDeps = {
   toBitmap: (frame) => createImageBitmap(frame),
 };
 
+/** The size a sampler gets its stills at unless it asks (the pill's preview). */
+export const DEFAULT_STILL_SIZE = { width: 512, height: 288 } as const;
+
 /**
- * Sample one remote track's decoded frames at no more than `fps` (capped at
+ * Sample one remote track at no more than `fps` (capped at
  * {@link MAX_VIEW_SAMPLE_FPS}), as `ImageBitmap`s the subscriber owns and must
  * `close()`. Rides `MediaEngine.tapVideoFrames`: no canvas, no second decoder
  * when a surface already shows the track, and never a layer change for it.
  *
- * Frames arriving faster than the rate, or while a conversion is still in
- * flight, are closed at once, so a 60 fps stream costs one `createImageBitmap`
- * per sample and nothing else.
+ * Two routes, one per engine:
+ *   - `frames` (the browser): decoded frames arrive here; ones faster than
+ *     the rate, or while a conversion is in flight, are closed at once, so a
+ *     60 fps stream costs one `createImageBitmap` per sample and nothing else.
+ *   - `native-surface` (the desktop app): no frame reaches the page, so the tap
+ *     reads the native side's stills at the rate, at most `size` (proportions
+ *     kept), skipping a still it already has (a still screen costs nothing).
  */
 export function tapEngineFrames(
   engine: MediaEngine,
@@ -217,12 +229,17 @@ export function tapEngineFrames(
   onFrame: (frame: RoomFrame) => void,
   fps: number,
   deps: EngineFrameTapDeps = defaultTapDeps,
+  size: { width: number; height: number } = DEFAULT_STILL_SIZE,
 ): EngineFrameTap {
   const rate = Math.max(0.1, Math.min(fps, MAX_VIEW_SAMPLE_FPS));
   const interval = 1000 / rate;
+  const schedule = deps.setTimeout ?? ((callback: () => void, ms: number) => setTimeout(callback, ms));
+  const unschedule = deps.clearTimeout ?? ((timer: ReturnType<typeof setTimeout>) => clearTimeout(timer));
   let stopped = false;
   let converting = false;
   let lastAt = -Infinity;
+  let stillTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastSeq: number | undefined;
   const tap = engine.tapVideoFrames(userId, track, (frame) => {
     const at = deps.now();
     if (stopped || converting || at - lastAt < interval) {
@@ -248,11 +265,40 @@ export function tapEngineFrames(
         converting = false;
       });
   });
+
+  const pollStill = async () => {
+    stillTimer = null;
+    if (stopped || !engine.readVideoStill) return;
+    try {
+      const still = await engine.readVideoStill(userId, track, size.width, size.height, lastSeq);
+      if (still) {
+        lastSeq = still.seq;
+        if (stopped) still.bitmap.close();
+        else onFrame({ bitmap: still.bitmap, width: still.bitmap.width, height: still.bitmap.height, capturedAt: Date.now() });
+      }
+    } catch (error) {
+      // The shell could not read the frame back: loud, and the sampler stops
+      // (a retry would fail the same way at the same rate).
+      console.error('[media] the native video still could not be read; sampling stops', {
+        userId,
+        track,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+    if (!stopped) stillTimer = schedule(() => void pollStill(), interval);
+  };
+  void tap.route.then((route) => {
+    if (route === 'native-surface' && !stopped) void pollStill();
+  });
+
   return {
     route: tap.route,
     release: () => {
       if (stopped) return;
       stopped = true;
+      if (stillTimer !== null) unschedule(stillTimer);
+      stillTimer = null;
       tap.release();
     },
   };

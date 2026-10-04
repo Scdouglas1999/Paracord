@@ -36,18 +36,17 @@
 //! reaching `present()` is a loud error (§3.7), never a silent drop or fake.
 //! The decision is logged once at host install.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::os::raw::{c_char, c_float, c_int, c_uchar, c_uint, c_void};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant};
 
 use gtk::prelude::*;
 use paracord_codec::video::{ColorSpace, DecodedFrameHandle, PixelFormat};
 
-use super::{SurfaceFit, SurfaceGeometry, SurfaceId, VideoSurface};
+use super::{ShownNotifier, SurfaceFit, SurfaceGeometry, SurfaceId, VideoSurface};
 
 // ── GL scalar + entry-point types ────────────────────────────────────────────
 
@@ -575,6 +574,8 @@ impl GlRenderer {
 
     /// Render one frame into the current GLArea framebuffer (physical px). A
     /// `Some(handle)` uploads first; `None` repaints the retained frame.
+    /// Returns whether a frame was drawn (false until the first one arrives).
+    #[allow(clippy::too_many_arguments)]
     fn render(
         &mut self,
         gl: &GlFns,
@@ -582,8 +583,9 @@ impl GlRenderer {
         phys_h: u32,
         radius: f32,
         fit: SurfaceFit,
+        mirrored: bool,
         handle: Option<DecodedFrameHandle>,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         unsafe {
             if let Some(handle) = handle {
                 match handle {
@@ -611,7 +613,7 @@ impl GlRenderer {
             (gl.glClearColor)(0.0, 0.0, 0.0, 0.0);
             (gl.glClear)(GL_COLOR_BUFFER_BIT);
             if !self.has_frame {
-                return Ok(());
+                return Ok(false);
             }
             (gl.glEnable)(GL_BLEND);
             (gl.glBlendFunc)(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
@@ -630,12 +632,15 @@ impl GlRenderer {
             let matrix = yuv_to_rgb_matrix(self.colorspace);
             (gl.glUniformMatrix3fv)(self.u_mat, 1, GL_FALSE, matrix.as_ptr());
             (gl.glUniform2f)(self.u_size, phys_w as f32, phys_h as f32);
-            let window = fit.uv_window(
+            let mut window = fit.uv_window(
                 phys_w as f32,
                 phys_h as f32,
                 self.tex_w as f32,
                 self.tex_h as f32,
             );
+            if mirrored {
+                window = window.mirrored();
+            }
             (gl.glUniform2f)(self.u_uv_scale, window.scale[0], window.scale[1]);
             (gl.glUniform2f)(self.u_uv_center, window.center[0], window.center[1]);
             (gl.glUniform1f)(self.u_radius, radius);
@@ -643,7 +648,7 @@ impl GlRenderer {
             (gl.glBindVertexArray)(self.vao);
             (gl.glDrawArrays)(GL_TRIANGLE_STRIP, 0, 4);
         }
-        Ok(())
+        Ok(true)
     }
 }
 
@@ -717,12 +722,19 @@ struct MainSurface {
     geometry: Rc<RefCell<SurfaceGeometry>>,
 }
 
+/// What the render callback needs to confirm a reveal (see
+/// [`SurfaceGeometry::generation`]): the notifier and the last generation it
+/// confirmed.
+struct ShownState {
+    notifier: ShownNotifier,
+    confirmed: Cell<u64>,
+}
+
 /// Main-thread widgets that make up the native-video underlay stack.
 struct RenderHost {
     fixed: gtk::Fixed,
     overlay: gtk::Overlay,
     webview: gtk::Widget,
-    last_configure_pulse: RefCell<Option<Instant>>,
     /// The provider that paints the toplevel the app's ground color. Held so
     /// a later `--bg-base` change can reload it in place (see [`GROUND_COLOR`]).
     ground: gtk::CssProvider,
@@ -749,22 +761,6 @@ struct RenderHost {
 /// nothing rather than inventing a color.
 static GROUND_COLOR: Mutex<Option<String>> = Mutex::new(None);
 
-/// `#rrggbb`, and nothing else.
-///
-/// The string crosses the IPC boundary and is pasted into a GTK stylesheet, so
-/// it is validated as a color and not merely trusted to be one; anything else
-/// is a loud error (spec §3.7), never a quietly ignored one.
-fn validated_ground_color(color: &str) -> Result<String, String> {
-    let trimmed = color.trim();
-    let hex = trimmed.strip_prefix('#').unwrap_or("");
-    if hex.len() == 6 && hex.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Ok(format!("#{}", hex.to_ascii_lowercase()));
-    }
-    Err(format!(
-        "ground color {trimmed:?} is not #rrggbb; the shell will not paint a color it cannot read"
-    ))
-}
-
 /// Load `color` into the toplevel's provider. Main thread.
 fn paint_ground_on_main(app: &tauri::AppHandle, color: &str) {
     RENDER_HOST.with(|host| {
@@ -783,10 +779,11 @@ fn paint_ground_on_main(app: &tauri::AppHandle, color: &str) {
     });
 }
 
-/// The renderer's answer for `--bg-base`. Remembered even when no host is
+/// The renderer's answer for `--bg-base`, already validated as `#rrggbb`
+/// (`super::validated_ground_color`). Remembered even when no host is
 /// installed yet, so the color is already in hand when one is.
 pub fn set_ground_color(app: &tauri::AppHandle, color: &str) -> Result<(), String> {
-    let color = validated_ground_color(color)?;
+    let color = color.to_string();
     {
         let mut slot = GROUND_COLOR.lock().unwrap_or_else(|e| e.into_inner());
         if slot.as_deref() == Some(color.as_str()) {
@@ -820,8 +817,9 @@ thread_local! {
 /// (`Failed to create GBM buffer of size …: Invalid argument`), so the probe is
 /// not theoretical. Ask GDK for a context up front and decline to install the
 /// host at all when it refuses: the app then keeps an opaque webview and renders
-/// normally, and native video falls back to the DOM path rather than taking the
-/// whole window down with it.
+/// normally. It cannot show video then, and says so: every video subscription
+/// fails with this reason (`super::renderer_status`) rather than taking the
+/// whole window down with it. There is no other video route in the desktop app.
 fn gl_context_is_usable(window: &gtk::gdk::Window) -> Result<(), String> {
     match window.create_gl_context() {
         Ok(context) => {
@@ -873,8 +871,8 @@ pub fn install_render_host(app: &tauri::AppHandle) -> Result<(), String> {
     if let Some(toplevel_window) = vbox.toplevel().and_then(|t| t.window()) {
         if let Err(reason) = gl_context_is_usable(&toplevel_window) {
             return Err(format!(
-                "no usable GL context for the video underlay ({reason}) — \
-                 keeping an opaque webview; native video will use the DOM path"
+                "no usable GL context for the video underlay ({reason}); the \
+                 webview stays opaque and this window cannot show video"
             ));
         }
     }
@@ -925,7 +923,6 @@ pub fn install_render_host(app: &tauri::AppHandle) -> Result<(), String> {
             fixed,
             overlay,
             webview,
-            last_configure_pulse: RefCell::new(None),
             ground,
         })
     });
@@ -984,47 +981,6 @@ fn queue_underlay_repaint() {
     });
 }
 
-/// Force the same compositor configure path that a tiny manual window resize
-/// triggers. GTK/WebKit can otherwise keep the transparent webview backing
-/// layer stale even after both `queue_draw` and `invalidate_rect`, leaving a
-/// correctly-rendering GLArea invisible until the user resizes the app. This is
-/// deliberately throttled and called only from geometry/overlay transitions.
-fn pulse_toplevel_configure() {
-    RENDER_HOST.with(|host| {
-        let host = host.borrow();
-        let Some(host) = host.as_ref() else {
-            return;
-        };
-
-        let now = Instant::now();
-        {
-            let mut last = host.last_configure_pulse.borrow_mut();
-            if last
-                .map(|instant| now.duration_since(instant) < Duration::from_millis(250))
-                .unwrap_or(false)
-            {
-                return;
-            }
-            *last = Some(now);
-        }
-
-        let Some(toplevel_widget) = host.overlay.toplevel() else {
-            return;
-        };
-        let Ok(window) = toplevel_widget.downcast::<gtk::Window>() else {
-            return;
-        };
-        let width = window.allocated_width().max(1);
-        let height = window.allocated_height().max(1);
-        let pulse_width = width.saturating_add(1);
-        window.resize(pulse_width, height);
-        glib::timeout_add_local_once(Duration::from_millis(16), move || {
-            window.resize(width, height);
-            window.queue_draw();
-        });
-    });
-}
-
 /// Build one GLArea on the GTK main thread and register it (spec §3.3).
 ///
 /// `error_slot` is the shared failure channel back to [`LinuxVideoSurface::present`]
@@ -1037,6 +993,7 @@ fn create_surface_on_main(
     slot: Arc<Mutex<Option<DecodedFrameHandle>>>,
     error_slot: Arc<Mutex<Option<String>>>,
     fit: SurfaceFit,
+    shown: ShownNotifier,
 ) -> Result<(), String> {
     RENDER_HOST.with(|host| {
         let host = host.borrow();
@@ -1062,15 +1019,29 @@ fn create_surface_on_main(
             dpr: 1.0,
             corner_radius: 0.0,
             visible: false,
+            generation: 0,
+            mirrored: false,
         }));
         let renderer: Rc<RefCell<Option<GlRenderer>>> = Rc::new(RefCell::new(None));
+        let shown = Rc::new(ShownState {
+            notifier: shown,
+            confirmed: Cell::new(0),
+        });
 
         let slot_cb = slot.clone();
         let geometry_cb = geometry.clone();
         let renderer_cb = renderer.clone();
         let error_cb = error_slot.clone();
         glarea.connect_render(move |area, _ctx| {
-            render_callback(area, &slot_cb, &geometry_cb, &renderer_cb, &error_cb, fit);
+            render_callback(
+                area,
+                &slot_cb,
+                &geometry_cb,
+                &renderer_cb,
+                &error_cb,
+                &shown,
+                fit,
+            );
             glib::Propagation::Stop
         });
         // The GL objects die with the context; drop the renderer handle when the
@@ -1108,6 +1079,7 @@ fn render_callback(
     geometry: &Rc<RefCell<SurfaceGeometry>>,
     renderer: &Rc<RefCell<Option<GlRenderer>>>,
     error_slot: &Arc<Mutex<Option<String>>>,
+    shown: &ShownState,
     fit: SurfaceFit,
 ) {
     // Record a fatal GL-thread failure (first one wins) so `present()` can route
@@ -1144,12 +1116,23 @@ fn render_callback(
     let phys_w = (area.allocated_width().max(1) * scale) as u32;
     let phys_h = (area.allocated_height().max(1) * scale) as u32;
     let radius = geometry.borrow().physical_corner_radius();
+    let mirrored = geometry.borrow().mirrored;
     let handle = slot.lock().unwrap_or_else(|e| e.into_inner()).take();
 
     let mut slot_renderer = renderer.borrow_mut();
     if let Some(renderer) = slot_renderer.as_mut() {
-        if let Err(err) = renderer.render(gl, phys_w, phys_h, radius, fit, handle) {
-            fail(format!("native surface render failed: {err}"));
+        match renderer.render(gl, phys_w, phys_h, radius, fit, mirrored, handle) {
+            Ok(drawn) => {
+                // Confirm a reveal once a frame is drawn where the page asked:
+                // the GTK frame this render belongs to puts it on screen, and
+                // only then may the page open its hole over it.
+                let geometry = *geometry.borrow();
+                if drawn && geometry.visible && geometry.generation > shown.confirmed.get() {
+                    shown.confirmed.set(geometry.generation);
+                    shown.notifier.fire(geometry.generation);
+                }
+            }
+            Err(err) => fail(format!("native surface render failed: {err}")),
         }
     }
 }
@@ -1182,10 +1165,18 @@ fn update_geometry_on_main(id: u64, geometry: SurfaceGeometry) {
                 geometry.width, geometry.height, geometry.dpr
             );
         }
-        // Only invalidate the full underlay stack / pulse the toplevel when
-        // visibility flips. Per-tick geometry updates (scroll) and every
-        // present() already queue_render on the GLArea; re-rasterizing the
-        // webview on those paths glued DOM overlays into the stream.
+        // Only invalidate the full underlay stack when visibility flips.
+        // Per-tick geometry updates (scroll) and every present() already
+        // queue_render on the GLArea; re-rasterizing the webview on those paths
+        // glued DOM overlays into the stream.
+        //
+        // There used to be a toplevel "configure pulse" here too (resize the
+        // window by a pixel and back) for a surface that rendered but stayed
+        // invisible until the window was resized. The page now opens its hole
+        // only once this surface has drawn a frame in place (the reveal
+        // confirmation in `render_callback`), and the pulse resized the whole
+        // page on every reveal: a one-pixel jolt at the end of every stage
+        // move, and a window that crept wider as pulses overlapped.
         let visibility_flipped = geometry.visible != was_visible;
         if geometry.visible {
             surface.glarea.queue_resize();
@@ -1193,9 +1184,6 @@ fn update_geometry_on_main(id: u64, geometry: SurfaceGeometry) {
         }
         if visibility_flipped {
             queue_underlay_repaint();
-            if geometry.visible {
-                pulse_toplevel_configure();
-            }
         }
     });
 }
@@ -1234,7 +1222,12 @@ pub struct LinuxVideoSurface {
 }
 
 impl VideoSurface for LinuxVideoSurface {
-    fn new(app: &tauri::AppHandle, surface_id: SurfaceId, fit: SurfaceFit) -> Result<Self, String> {
+    fn new(
+        app: &tauri::AppHandle,
+        surface_id: SurfaceId,
+        fit: SurfaceFit,
+        shown: ShownNotifier,
+    ) -> Result<Self, String> {
         let slot: Arc<Mutex<Option<DecodedFrameHandle>>> = Arc::new(Mutex::new(None));
         let slot_main = slot.clone();
         let error_slot: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
@@ -1245,7 +1238,13 @@ impl VideoSurface for LinuxVideoSurface {
         // runs inside `spawn_blocking`, so blocking is fine).
         let (tx, rx) = std::sync::mpsc::channel();
         app.run_on_main_thread(move || {
-            let _ = tx.send(create_surface_on_main(id, slot_main, error_slot_main, fit));
+            let _ = tx.send(create_surface_on_main(
+                id,
+                slot_main,
+                error_slot_main,
+                fit,
+                shown,
+            ));
         })
         .map_err(|e| format!("run_on_main_thread (surface create) failed: {e}"))?;
         rx.recv()
@@ -1333,29 +1332,6 @@ impl Drop for LinuxVideoSurface {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_ground_color_is_read_as_a_color_not_trusted_as_one() {
-        // The renderer's answer is pasted into a GTK stylesheet, so it is read
-        // before it is repeated, and normalized so a re-report of the same
-        // color in different case is the same color.
-        assert_eq!(validated_ground_color("#0A0C10").unwrap(), "#0a0c10");
-        assert_eq!(validated_ground_color("  #100f0c  ").unwrap(), "#100f0c");
-        for refused in [
-            "",
-            "#0a0c1",
-            "#0a0c100",
-            "0a0c10",
-            "red",
-            "oklch(16.5% 0.007 65)",
-            "#0a0c10; } * { background-image: url(http://x/) ",
-        ] {
-            assert!(
-                validated_ground_color(refused).is_err(),
-                "{refused:?} is not #rrggbb and must be refused, not painted"
-            );
-        }
-    }
 
     #[test]
     fn bt709_matrix_matches_cpu_converter_reference() {

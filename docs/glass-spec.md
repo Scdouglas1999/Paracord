@@ -330,6 +330,47 @@ for everyone watching, each with the sender's face in its corner, rising about
 270px and fading. Sent as small gateway events scoped to the voice channel,
 limited to one per second per person and merged when busy.
 
+### 6.6 How video is drawn
+
+One route per platform, never chosen at runtime (owner decision, 2026-10-04):
+
+- **Desktop app (Linux, macOS, Windows): native, always.** Every remote video
+  and the self-view is decoded natively and drawn on a native layer UNDER a
+  transparent webview: a `gtk::GLArea` (Linux), an `AVSampleBufferDisplayLayer`
+  (macOS), a DirectComposition visual (Windows). The page shows it through a
+  hole in the tile (`data-native-underlay`). The webview decodes nothing and no
+  frame crosses IPC. There is no WebCodecs probe and no WebCodecs route in the
+  desktop app. A window whose native host could not install has no video at
+  all and says why (a loud subscription error, `nativeRendererError`); it never
+  falls back to drawing in the page.
+- **Browser client (the web UI a server serves): WebCodecs.** There is no
+  native layer in a browser, so it decodes with WebCodecs into a canvas.
+
+On the desktop app the stage states keep the video exactly under its tile:
+
+- **Revealing is confirmed.** A tile asks for its surface at its box and keeps
+  the hole closed (its poster showing) until the native side reports a frame
+  drawn there (`native_render_shown`). Hiding closes the hole first and hides
+  the surface after the page has painted.
+- **Moves (650ms) do not drag the surface along.** From a move's first frame
+  the bottom of the page turns opaque in the ground color the shell paints
+  under it (`html[data-native-moving]`), so nothing visibly changes, and every
+  native tile shows its poster: the latest still of its video, drawn in its own
+  canvas with the surface's fit and crop. A shield hides the surfaces (they keep
+  decoding). When the move settles each tile reveals its surface at the
+  settled box, confirmed as above.
+- **Covered is not paused.** A dialog, sheet or menu over a tile's center
+  hides its surface (the tile shows its poster under the dialog) and decoding
+  continues, so it comes back current. Only a tile off screen or a hidden
+  window pauses decoding; resuming waits for a keyframe.
+- **Stills, not frames.** The room light, the stage's glow, the pill's
+  preview, posters and clip thumbnails read stills of what the native side drew
+  (`native_render_still`, scaled to the size asked for, binary RGBA; unchanged
+  stills cost nothing). Clips keep their 30-second ring in the native process.
+- **Camera tiles** fill their tile (`cover`) and crop around the upper third
+  (anchor `y: 0.35`) on the native surface exactly as on the page; the
+  self-view is mirrored like the page mirrors it.
+
 ## 7. Listen in
 
 Hear a voice channel quietly before joining (receive only, never send). Other

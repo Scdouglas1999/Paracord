@@ -10,10 +10,11 @@ import { layerFor, useWatchQualityStore } from './StreamSound';
  * The watched stream, 16:9, radius 18 (docs/glass-spec.md §6.1).
  *
  * It draws through the renderers the media layer already has: it hands its
- * `<canvas>` to `engine.subscribeVideo(streamerId, canvas, onFrame, { preferredTrackId: 'screen' })`,
- * which decides the route once for the track (WebCodecs into this canvas's WebGL
- * context, or a native surface that mirrors this canvas's box) and never
- * switches it. The engine is the watch's (`watchView.engine`): its own view
+ * `<canvas>` to `engine.subscribeVideo(streamerId, canvas, onFrame, { preferredTrackId: 'screen' })`.
+ * In the browser that is WebCodecs into this canvas's WebGL context; in the
+ * desktop app it is always a native surface under the page that mirrors this
+ * canvas's box, with the canvas carrying the surface's poster while its hole is
+ * closed (docs/glass-spec.md §6.6). The engine is the watch's (`watchView.engine`): its own view
  * session, or the call when this client is in it. When the watch moves between
  * the two (joining or leaving the watched call) the engine changes and the
  * subscription is made again on the new one; nothing else re-subscribes (a name

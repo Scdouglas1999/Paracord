@@ -10,7 +10,6 @@ import {
   STAGE_CROSSFADE_MS,
   STAGE_MOVE_MS,
   useStageTransitions,
-  useStreamPoster,
 } from './stageTransition';
 
 /**
@@ -22,10 +21,8 @@ import {
 
 const reduced = vi.hoisted(() => ({ value: false }));
 vi.mock('../../../lib/motion/reducedMotion', () => ({ prefersReducedMotion: () => reduced.value }));
-const frames = vi.hoisted(() => ({ subscribe: vi.fn(() => () => {}) }));
-vi.mock('../../../lib/room/viewFrameSource', () => ({
-  createViewFrameSource: () => ({ kind: 'stream', width: 0, height: 0, route: null, subscribe: frames.subscribe }),
-}));
+const desktop = vi.hoisted(() => ({ value: false }));
+vi.mock('../../../lib/tauriEnv', () => ({ isTauri: () => desktop.value }));
 
 const LOUNGE: StageTarget = { serverId: '__local__', guildId: 'g1', channelId: 'lounge', streamerId: 'vincent' };
 
@@ -187,8 +184,11 @@ describe('useStageTransitions', () => {
       const match = /scale\(([-\d.]+), ([-\d.]+)\)/.exec(String(frame.transform))!;
       expect(Number(match[1])).toBeCloseTo(Number(match[2]), 5);
     }
-    // Its corners go from 18 to 0 on the way (seen), and the conversation moves to 1044.
-    expect(played('conversation')).toHaveLength(1);
+    // Its corners go from 18 to 0 on the way (seen). Theater hides the chat
+    // (19db3e60): the conversation steps aside with its own CSS transition
+    // (glass-layout.css) instead of being morphed to a new box.
+    expect(useGlassStore.getState().chatHidden).toBe(true);
+    expect(played('conversation')).toHaveLength(0);
   });
 
   it('reduced motion: every move is a 150ms crossfade in place', async () => {
@@ -222,14 +222,37 @@ describe('useStageTransitions', () => {
   });
 });
 
-describe('useStreamPoster', () => {
-  it('subscribes to nothing on the web, where no stream is drawn under the page', () => {
-    function Poster() {
-      const ref = useRef<HTMLCanvasElement | null>(null);
-      useStreamPoster(ref, 'vincent');
-      return <canvas ref={ref} />;
-    }
-    render(<Poster />);
-    expect(frames.subscribe).not.toHaveBeenCalled();
+describe('native video during a move (the desktop app)', () => {
+  afterEach(() => {
+    desktop.value = false;
+  });
+
+  it('turns the page opaque under the video from the first frame of a move, and back when it settles', async () => {
+    desktop.value = true;
+    render(<Frame />);
+    act(() => useGlassStore.getState().openStage(LOUNGE));
+    await flush();
+    settleStageMove();
+    expect(document.documentElement).not.toHaveAttribute('data-native-moving');
+    act(() => useGlassStore.getState().setStageMode('theater'));
+    // Set by the store listener, before React commits the new layout.
+    expect(document.documentElement).toHaveAttribute('data-native-moving');
+    const shield = document.querySelector('.glass-morph__shield');
+    expect(shield).toHaveAttribute('data-native-shield');
+    // Not the marker layout.css paints solid.
+    expect(shield).not.toHaveAttribute('data-native-overlay-occlude');
+    await flush();
+    settleStageMove();
+    expect(document.documentElement).not.toHaveAttribute('data-native-moving');
+    expect(document.querySelector('.glass-morph__shield')).toBeNull();
+  });
+
+  it('leaves the page alone on the web', async () => {
+    render(<Frame />);
+    act(() => useGlassStore.getState().openStage(LOUNGE));
+    expect(document.documentElement).not.toHaveAttribute('data-native-moving');
+    expect(document.querySelector('.glass-morph__shield')).toBeNull();
+    await flush();
+    settleStageMove();
   });
 });

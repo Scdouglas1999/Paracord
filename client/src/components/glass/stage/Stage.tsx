@@ -23,7 +23,6 @@ import { StagePeople } from './StagePeople';
 import { StreamSoundButton } from './StreamSound';
 import { StreamSurface } from './StreamSurface';
 import { SurfacingMessages } from './SurfacingMessages';
-import { useStreamPoster } from './stageTransition';
 import { TheaterPeople } from './TheaterPeople';
 import { useStageData } from './useStageData';
 import { useStageGlow } from './useStageGlow';
@@ -71,7 +70,6 @@ export function Stage({ target, mode }: StageProps) {
 function StreamStage({ target, mode }: { target: StreamStageTarget; mode: OpenStageMode }) {
   const layout = useGlassLayout();
   const rootRef = useRef<HTMLDivElement | null>(null);
-  const posterRef = useRef<HTMLCanvasElement | null>(null);
   const { model, watchers } = useStageData(target);
   const { view, watchAgain } = useStageWatch(target);
   const callEngine = useVoiceStore((state) => state.mediaEngine);
@@ -87,7 +85,6 @@ function StreamStage({ target, mode }: { target: StreamStageTarget; mode: OpenSt
   const theater = mode === 'theater' && !phone;
 
   useStageGlow(rootRef, target.streamerId);
-  useStreamPoster(posterRef, target.streamerId);
   useGlassKeybinds({ enabled: true, phone, onStop: stopWatching });
 
   /* ---- Geometry: the stream takes what the pane allows at 16:9 ------------------ */
@@ -256,7 +253,6 @@ function StreamStage({ target, mode }: { target: StreamStageTarget; mode: OpenSt
         onPicture={setHasPicture}
         style={streamStyle}
       >
-        <canvas ref={posterRef} className="glass-stage__poster" aria-hidden="true" width={32} height={18} />
         {!phone && <span className="glass-stage__scrim" aria-hidden="true" />}
         {overlay}
         <ClipToast target={clipTarget} />

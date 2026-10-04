@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { StrictMode } from 'react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import type { MediaEngine } from '../../../lib/media/mediaEngine';
 import { entityScopeKey } from '../../../lib/serverScope';
@@ -15,7 +15,7 @@ import { useJoinMuteStore } from '../pill/muteStore';
 import { Stage } from './Stage';
 import { useWatchQualityStore } from './StreamSound';
 import { useShareQualityStore } from './useShareScreen';
-import { underlayHoleCount } from './nativeUnderlay';
+import { resetNativeUnderlay, UNDERLAY_GRACE_MS, underlayHoleCount } from './nativeUnderlay';
 
 /**
  * The stage, side by side (docs/glass-spec.md §6.1). What it draws is held by
@@ -190,6 +190,7 @@ beforeEach(() => {
 afterEach(() => {
   useVoiceStore.setState({ ...original, watchView: null, channelParticipants: new Map(), callId: null, connected: false });
   useGlassStore.getState().reset();
+  resetNativeUnderlay();
 });
 
 describe('the watch', () => {
@@ -385,6 +386,10 @@ describe('people', () => {
   });
 
   it('opens and closes a native underlay hole with the surface under the stream', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const session = fakeEngine();
     useVoiceStore.setState({ watchView: watchView('live', { engine: session }) });
     const { container } = renderStage();
@@ -397,8 +402,15 @@ describe('people', () => {
     act(() => {
       canvas.dispatchEvent(new CustomEvent('paracord:native-surface-visibility', { bubbles: true, detail: { visible: false } }));
     });
-    expect(document.documentElement).not.toHaveAttribute('data-native-underlay');
+    expect(container.querySelector('.glass-stage__stream')).not.toHaveAttribute('data-underlay');
     expect(underlayHoleCount()).toBe(0);
+    // The page keeps its underlay look a moment after the last hole closed, so
+    // a hole reopening after a stage move or a menu does not flash the page.
+    expect(document.documentElement).toHaveAttribute('data-native-underlay');
+    act(() => {
+      vi.advanceTimersByTime(UNDERLAY_GRACE_MS);
+    });
+    expect(document.documentElement).not.toHaveAttribute('data-native-underlay');
   });
 });
 

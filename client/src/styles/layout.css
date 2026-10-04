@@ -117,9 +117,10 @@ pre, code,
    order: an important inside a layer would beat an unlayered one, so layering
    one of them would flip which wins on a Linux underlay. */
 
-/* Native video underlay hole (Linux desktop only).
-   While a stream tile is composited on the native GL surface BELOW the
-   webview, StreamViewer sets `data-native-underlay` on <html> (refcounted).
+/* Native video underlay hole (the desktop app, every platform).
+   Remote video is drawn on a native surface BELOW the webview. While a tile's
+   hole is open, nativeUnderlay.ts sets `data-native-underlay` on <html>
+   (refcounted, and held a moment after the last hole closes).
    The base backgrounds on the ancestor chain above the tile then go
    transparent — html/body/#root plus the AppShell wrappers marked
    `data-native-underlay-clear` — so the tile's cleared pixels form a real
@@ -129,8 +130,7 @@ pre, code,
    (`lib/nativeGround.ts` → `native_render_set_ground_color`) on every theme,
    base-hue and base-tint change, because the ground is the person's to pick
    and the shell cannot hold a literal for it. So punched regions read as the
-   app's own background. Never set in the browser build or on overlay
-   platforms (macOS).
+   app's own background. Never set in the browser build.
 
    Floating overlays that cover the hole must stay opaque: translucent
    backdrop-blur panels over a live underlay visually merge into the stream.
@@ -141,6 +141,23 @@ html[data-native-underlay] body,
 html[data-native-underlay] #root,
 html[data-native-underlay] [data-native-underlay-clear] {
   background: transparent;
+}
+
+/* A stage move (stageTransition.ts, nativeUnderlay.ts `beginNativeMove`): the
+   bottom of the page turns opaque in the same ground color the shell paints
+   under it (`--native-ground`, the color last reported to it, nativeGround.ts), so every native surface is covered from the move's first frame
+   wherever it still is, with nothing visibly changing, and each native tile
+   shows its poster (the latest still, drawn in its own canvas) while it
+   travels with the page. */
+html[data-native-moving] {
+  background: var(--native-ground, var(--bg-base)) !important;
+}
+
+html[data-native-moving] canvas[data-poster] {
+  visibility: visible !important;
+  opacity: 1 !important;
+  /* At once: a fade-in would show the ground for its length. */
+  transition: none !important;
 }
 
 /* Force solid paint on floating chrome over the underlay hole. Translucent

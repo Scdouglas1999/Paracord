@@ -227,3 +227,30 @@ The brief allowed a fast-forward of `main` only if it still pointed at
 - `17af7324` and this document are only on `design/glass`.
 - This pass did not touch `main` or its working tree (still only
   `test-results/` untracked). Nothing was pushed.
+
+## Addendum: native video only (`feat/native-video`, 2026-10-04)
+
+The owner decided the first open item: in the desktop app every remote video,
+and the self-view, takes the native-surface route on every platform; WebCodecs
+stays only in the browser client (docs/glass-spec.md §6.6,
+docs/streaming-native-render-spec.md §2). Measured the same way as above
+(nested KWin, 1440x900, `top -b -d 1`, 20 s per state, glass scene without
+typing). "Before" is `cd6239c9` (WebCodecs route), "after" is the native-only
+build; the runs alternated (after, before, after, before, after). The host was
+shared with other jobs (load 5 to 58 during the runs), so single runs vary; the
+table gives the mean of the runs.
+
+| State | WebKitWebProcess before | after | App before | after | Both before | after |
+|---|---|---|---|---|---|---|
+| A idle conversation | 8.0 | 7.6 | 4.9 | 4.5 | 12.9 | 12.1 |
+| B room light, live stream | 7.2 | 7.2 | 4.4 | 4.8 | 11.6 | 12.0 |
+| C stage, side by side | 30.3 (29.4, 31.2) | **11.5** (9.9, 8.9, 15.6) | 15.4 | 16.4 | 45.7 | **27.9** |
+| D theater | 39.1 (37.6, 40.5) | **13.3** (9.4, 14.4, 16.2) | 15.7 | 21.5 | 54.8 | **34.8** |
+| E stage moves (transient) | 70.9 | **46.8** | 23.0 | 32.6 | 93.9 | 79.4 |
+
+- Watching side by side keeps WebKitWebProcess at about 9 to 16% of a core,
+  under the 30% budget. The decode and GL upload moved to the app process.
+- A 42-minute watch on the native route logged four gaps between presented
+  frames (1.7 to 4.2 s, during host load above 30); each ended on its own with
+  no re-registration, and no freeze needed the old 4 s stall detector (which no
+  longer exists: it belonged to the WebCodecs channel).
