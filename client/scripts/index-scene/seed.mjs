@@ -42,6 +42,7 @@ export async function signInPeople(api, { tag = '', known = null, log = () => {}
       await api.request(person.token, 'PATCH', '/users/@me', { display_name: person.name });
     }
     people[account.key] = person;
+    api.keepSignedIn(person);
     if (CAST[account.key]) {
       log(`  ${person.name.padEnd(8)} ${person.username.padEnd(12)} id=${person.id}${session.created ? '  (new)' : ''}`);
     }
@@ -56,6 +57,7 @@ export async function refreshTokens(api, people, keys) {
     const person = people[key];
     const session = await api.account(person, { likelyExists: true });
     person.token = session.token;
+    api.keepSignedIn(person);
   }
 }
 

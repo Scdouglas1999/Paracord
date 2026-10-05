@@ -162,12 +162,26 @@ export async function setMic(session, on) {
   if (!(await cardMic.isVisible().catch(() => false))) {
     throw new Error(`${session.person.name} has no room card microphone (ix-card-mic) on screen`);
   }
+  // A fresh join can still apply the join-muted preference after the card has
+  // drawn, so the state has to hold for two seconds, not just appear once.
   const want = on ? 'false' : 'true';
-  if ((await cardMic.getAttribute('data-muted')) !== want) await cardMic.click({ timeout: 5000 });
-  const deadline = Date.now() + 15_000;
-  while ((await cardMic.getAttribute('data-muted').catch(() => null)) !== want) {
-    if (Date.now() > deadline) throw new Error(`the card's microphone did not turn ${on ? 'on' : 'off'} within 15s`);
-    await session.page.waitForTimeout(300);
+  const deadline = Date.now() + 20_000;
+  let steadySince = null;
+  let pressedAt = 0;
+  for (;;) {
+    const state = await cardMic.getAttribute('data-muted').catch(() => null);
+    if (state === want) {
+      steadySince ??= Date.now();
+      if (Date.now() - steadySince >= 2000) return;
+    } else {
+      steadySince = null;
+      if (Date.now() - pressedAt > 3000) {
+        await cardMic.click({ timeout: 5000 });
+        pressedAt = Date.now();
+      }
+    }
+    if (Date.now() > deadline) throw new Error(`the card's microphone did not stay ${on ? 'on' : 'off'} within 20s`);
+    await session.page.waitForTimeout(250);
   }
 }
 

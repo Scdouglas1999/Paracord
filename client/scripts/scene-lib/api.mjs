@@ -12,6 +12,12 @@ export class ApiError extends Error {
 
 export function createApi(base) {
   const root = base.replace(/\/+$/, '');
+  /**
+   * People whose session this driver may renew, by their current token. A
+   * holder outlives an access token (about 40 minutes), and the relay probes
+   * must not read an expired token's 401 as "nobody is in the room".
+   */
+  const renewable = new Map();
 
   async function request(token, method, path, body, { raw = false, headers = {} } = {}) {
     const url = path.startsWith('http') ? path : `${root}${path.startsWith('/api/') ? '' : '/api/v1'}${path}`;
@@ -25,8 +31,19 @@ export function createApi(base) {
     }
     // One short retry on 429 so a burst against a stricter instance (pc-lab)
     // does not fail the whole seed; anything else fails loudly.
+    let renewed = false;
     for (let attempt = 0; ; attempt++) {
       const response = await fetch(url, init);
+      if (response.status === 401 && token && !renewed && renewable.has(token)) {
+        const person = renewable.get(token);
+        renewable.delete(token);
+        const session = await api.account(person, { likelyExists: true });
+        person.token = session.token;
+        renewable.set(person.token, person);
+        init.headers.Authorization = `Bearer ${person.token}`;
+        renewed = true;
+        continue;
+      }
       if (response.status === 429 && attempt < 5) {
         const wait = Number(response.headers.get('retry-after') ?? '1');
         await new Promise(resolve => setTimeout(resolve, Math.min(10, Math.max(1, wait)) * 1000));
@@ -41,9 +58,13 @@ export function createApi(base) {
     }
   }
 
-  return {
+  const api = {
     base: root,
     request,
+    /** Sign `person` in again when their token expires (they need `email` and `password`). */
+    keepSignedIn(person) {
+      renewable.set(person.token, person);
+    },
     health: () => fetch(`${root}/api/v1/health`).then(r => r.ok).catch(() => false),
 
     /**
@@ -92,6 +113,7 @@ export function createApi(base) {
       return request(token, 'POST', path, form);
     },
   };
+  return api;
 }
 
 /**

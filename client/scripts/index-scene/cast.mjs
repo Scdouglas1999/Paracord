@@ -184,9 +184,9 @@ export class Cast {
     return readRoom(this.api, viewer.token, this.roomChannelId(serverKey, roomKey));
   }
 
-  /** The user ids the relay has in a room. */
+  /** The user ids the relay has in a room. A failed read throws: it says nothing about who is there. */
   async occupants(serverKey, roomKey) {
-    const room = await this.room(serverKey, roomKey).catch(() => null);
+    const room = await this.room(serverKey, roomKey);
     return new Set((room?.participants ?? []).map(p => String(p.user_id)));
   }
 
@@ -241,7 +241,7 @@ export class Cast {
       for (const [roomKey, channelId] of Object.entries(server.channels)) {
         const spec = SERVERS.find(s => s.key === serverKey).channels.find(c => c.key === roomKey);
         if (spec.type !== 2) continue;
-        const room = await readRoom(this.api, this.people.sean.token, channelId).catch(() => null);
+        const room = await readRoom(this.api, this.people.sean.token, channelId);
         const here = (room?.participants ?? []).map(p => {
           const id = String(p.user_id);
           const who = Object.values(this.people).find(x => x.id === id)?.name ?? id;
