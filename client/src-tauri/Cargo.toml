@@ -113,6 +113,9 @@ libpulse-simple-binding = "2"
 # runtime via libloading (no GL-loader crate exists in the tree).
 gtk = "0.18"
 gdk = "0.18"
+# The main window's wl_surface for frame pacing (linux_frame_clock.rs). tao
+# already links it, so this adds nothing to the graph.
+gdkwayland-sys = "0.18"
 glib = "0.18"
 libloading = "0.8"
 # Now playing: read MPRIS players on the session bus (now_playing/mpris.rs).

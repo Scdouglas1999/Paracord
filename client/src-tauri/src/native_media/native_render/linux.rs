@@ -5,7 +5,8 @@
 //! # Underlay compositing (spec §3.3, 2026-07-07 revision)
 //! The `Overlay`'s main child is an [`UnderlayFixed`] (a `gtk::Fixed` that
 //! requests no size) hosting the GLAreas; the webview is the overlay child on top with its background cleared to
-//! transparent. The DOM punches a transparent hole at each stream tile
+//! transparent while any surface exists (opaque in the ground color otherwise,
+//! see [`sync_webview_background`]). The DOM punches a transparent hole at each stream tile
 //! (`data-native-underlay` + tile-local transparency), so the video shows
 //! through while every piece of DOM chrome — control bars, badges, modals,
 //! context menus — naturally renders ABOVE the video and receives input
@@ -813,6 +814,9 @@ struct RenderHost {
     fixed: UnderlayFixed,
     overlay: gtk::Overlay,
     webview: gtk::Widget,
+    /// The same webview as a `WebKitWebView`, for its background color
+    /// ([`sync_webview_background`]).
+    view: webkit2gtk::WebView,
     /// The provider that paints the toplevel the app's ground color. Held so
     /// a later `--bg-base` change can reload it in place (see [`GROUND_COLOR`]).
     ground: gtk::CssProvider,
@@ -832,15 +836,61 @@ struct RenderHost {
 /// knows what the ground is, so the renderer says
 /// (`native_render_set_ground_color`) and the shell repeats it.
 ///
-/// `None` until the renderer has spoken. The toplevel is only ever visible once
-/// the webview's own background has been cleared, which happens at host install
-/// — and the renderer reports on mount, long before any video — so in practice
-/// the color is in hand before a hole can open. If it is not, the shell paints
-/// nothing rather than inventing a color.
+/// `None` until the renderer has spoken. The toplevel is only ever visible
+/// while the webview's own background is cleared, which happens when the first
+/// native surface is created ([`sync_webview_background`]) — and the renderer
+/// reports on mount, long before any video — so in practice the color is in
+/// hand before a hole can open. If it is not, the shell paints nothing rather
+/// than inventing a color. The same color is the webview's opaque background
+/// while no surface exists.
 static GROUND_COLOR: Mutex<Option<String>> = Mutex::new(None);
+
+/// The webview is see-through only while a native surface exists.
+///
+/// A transparent webview costs every frame of the window, video or not. WebKit
+/// then renders into buffers with alpha, and GTK 3 cannot simply put such a
+/// frame on screen: it first paints the toplevel's ground with cairo into a
+/// window-sized image and uploads it as a texture to blend the page over
+/// (`gdk_cairo_draw_from_gl`). At 5120x1412 that is about 29 MB painted and
+/// uploaded per frame, on the UI thread, which held the window near 60 frames a
+/// second and to about 43% of a core during motion
+/// (docs/design/desktop-framerate.md). With an opaque background WebKit picks
+/// an opaque buffer format and GTK draws its frame straight to the window.
+///
+/// So: opaque in the ground color while there is no surface, transparent from
+/// the moment the first surface is created (before its GLArea can draw, and so
+/// before the page can open a hole over it) until the last one is gone. The
+/// page itself is opaque except over open holes (`layout.css`, "Native video
+/// underlay hole"), so the color only shows where the page leaves a pixel
+/// transparent, and it is the same ground the toplevel is painted. With no
+/// ground reported yet the background is left as it is: the shell does not
+/// invent a color.
+fn sync_webview_background() {
+    let any_surface = SURFACES.with(|surfaces| !surfaces.borrow().is_empty());
+    let wanted = if any_surface {
+        Some(gtk::gdk::RGBA::new(0.0, 0.0, 0.0, 0.0))
+    } else {
+        GROUND_COLOR
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_deref()
+            .and_then(|color| gtk::gdk::RGBA::parse(color).ok())
+    };
+    let Some(wanted) = wanted else {
+        return;
+    };
+    RENDER_HOST.with(|host| {
+        if let Some(host) = host.borrow().as_ref() {
+            if webkit2gtk::WebViewExt::background_color(&host.view) != wanted {
+                webkit2gtk::WebViewExt::set_background_color(&host.view, &wanted);
+            }
+        }
+    });
+}
 
 /// Load `color` into the toplevel's provider. Main thread.
 fn paint_ground_on_main(app: &tauri::AppHandle, color: &str) {
+    sync_webview_background();
     RENDER_HOST.with(|host| {
         if let Some(host) = host.borrow().as_ref() {
             let css = format!("window {{ background-color: {color}; }}");
@@ -973,16 +1023,16 @@ pub fn install_render_host(app: &tauri::AppHandle) -> Result<(), String> {
     vbox.pack_start(&overlay, true, true, 0);
     overlay.show_all();
 
-    // Clear the webview's own base background. Without this WebKit paints an
-    // opaque backing color under the page and the GL underlay can never show
-    // through, no matter what the DOM does. The underlay is unusable without
-    // it, so a non-WebKit child is a hard install error (spec §3.7).
-    let Some(wk_view) = webview.downcast_ref::<webkit2gtk::WebView>() else {
+    // The webview's own base background is cleared while a native surface
+    // exists, so the DOM's holes reach the GL underlay, and is the opaque
+    // ground otherwise ([`sync_webview_background`]). The underlay is unusable
+    // without that control, so a non-WebKit child is a hard install error
+    // (spec §3.7).
+    let Some(view) = webview.downcast_ref::<webkit2gtk::WebView>().cloned() else {
         return Err(
             "reparented vbox child is not a WebKitWebView; cannot install the underlay host".into(),
         );
     };
-    webkit2gtk::WebViewExt::set_background_color(wk_view, &gtk::gdk::RGBA::new(0.0, 0.0, 0.0, 0.0));
 
     // Paint the toplevel window the app's own ground color — see
     // [`GROUND_COLOR`]. The provider is attached empty and filled in when the
@@ -1001,6 +1051,7 @@ pub fn install_render_host(app: &tauri::AppHandle) -> Result<(), String> {
             fixed,
             overlay,
             webview,
+            view,
             ground,
         })
     });
@@ -1015,7 +1066,7 @@ pub fn install_render_host(app: &tauri::AppHandle) -> Result<(), String> {
     }
     tracing::info!(
         "native surface backend installed: GTK GLArea UNDERLAY (webview \
-         transparent above), tier-2 (CPU I420 → glTexSubImage2D). Tier-1 GPU \
+         transparent above while a surface exists), tier-2 (CPU I420 → glTexSubImage2D). Tier-1 GPU \
          interop (CUDA-GL / EGL-dmabuf) is NOT engaged this pass — it cannot \
          be made sound without a live GL/CUDA session; decoders run in \
          CPU-output mode (spec §3.4)."
@@ -1146,6 +1197,7 @@ fn create_surface_on_main(
                 .borrow_mut()
                 .insert(id, MainSurface { glarea, geometry });
         });
+        sync_webview_background();
         Ok(())
     })
 }
@@ -1279,6 +1331,7 @@ fn destroy_surface_on_main(id: u64) {
             // GTK destroy the widget and its GL context.
         }
     });
+    sync_webview_background();
 }
 
 // ── Send handle ──────────────────────────────────────────────────────────────

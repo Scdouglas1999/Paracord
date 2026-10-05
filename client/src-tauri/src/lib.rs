@@ -9,6 +9,8 @@
 mod audio_capture;
 mod commands;
 #[cfg(target_os = "linux")]
+mod linux_frame_clock;
+#[cfg(target_os = "linux")]
 mod linux_webkit;
 mod native_media;
 mod now_playing;
@@ -1597,6 +1599,49 @@ fn use_compositor_titlebar(app: &tauri::AppHandle) {
     }
 }
 
+/// Pace the main window's painting by the compositor (`linux_frame_clock`),
+/// once its GdkWindow exists, and say so in the client log.
+#[cfg(target_os = "linux")]
+fn pace_main_window(app: &tauri::AppHandle) {
+    use gtk::prelude::WidgetExt;
+    use tauri::Manager;
+
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let gtk_window = match window.gtk_window() {
+        Ok(gtk_window) => gtk_window,
+        Err(err) => {
+            eprintln!("[window] could not reach the GTK window to pace it: {err}");
+            return;
+        }
+    };
+    let install = {
+        let app = app.clone();
+        move |gtk_window: &gtk::ApplicationWindow| {
+            let line = match linux_frame_clock::install(gtk_window) {
+                Ok(what) => format!("[window] frame pacing: {what}"),
+                Err(err) => format!("[window] frame pacing NOT installed: {err}"),
+            };
+            eprintln!("{line}");
+            let _ = commands::append_client_log(
+                app.clone(),
+                format!("{} {line}", chrono_like_timestamp_utc()),
+            );
+        }
+    };
+    if gtk_window.is_realized() {
+        install(&gtk_window);
+    } else {
+        let once = std::cell::Cell::new(Some(install));
+        gtk_window.connect_realize(move |gtk_window| {
+            if let Some(install) = once.take() {
+                install(gtk_window);
+            }
+        });
+    }
+}
+
 /// Route the native layers' `tracing` events to stderr, which is where the
 /// desktop log already collects everything else this process prints.
 ///
@@ -1699,6 +1744,8 @@ pub fn run() {
             configure_webview2_overrides(app);
             #[cfg(target_os = "linux")]
             use_compositor_titlebar(app.handle());
+            #[cfg(target_os = "linux")]
+            pace_main_window(app.handle());
 
             // Native video (Glass spec §2): every remote video in the desktop
             // app is decoded and drawn natively under a transparent webview.

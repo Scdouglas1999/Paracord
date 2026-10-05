@@ -5730,6 +5730,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "gdk",
+ "gdkwayland-sys",
  "glib",
  "gtk",
  "image",
