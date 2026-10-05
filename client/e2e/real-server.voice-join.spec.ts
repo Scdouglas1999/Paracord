@@ -17,8 +17,8 @@ import {
 //
 // It asserts four separate things, because each one has failed on its own:
 //
-//   1. the UI reaches a connected call and reports no error (the call pill in
-//      the voice channel's chat offers Leave, and no refusal is toasted);
+//   1. the UI reaches a connected call and reports no error (the room card in
+//      the sidebar becomes yours and offers Leave, and no refusal is toasted);
 //   2. the *server* agrees — the relay names this account as a live participant
 //      of the room, on the `webtransport` path, under the same media-session
 //      receipt the REST join issued;
@@ -34,9 +34,11 @@ import {
 
 const PORT = process.env.PARACORD_E2E_PORT ?? '18150';
 const BASE = `http://127.0.0.1:${PORT}`;
-// The voice channel every case here creates. Its route is that channel's chat,
-// and the call pill in the chat's header is the door to the call (Join, Leave,
-// the microphone, who is in it), so every control below is found through it.
+// The voice channel every case here creates. Its route is that channel's chat;
+// the door to the call is the sidebar (index-spec §4.3): the room's row in the
+// Voice channels list while nobody is in it, the live room card once somebody is.
+// The card then carries Join, Leave, the microphone and who is in it, so every
+// control below is found through it.
 const ROOM = 'lounge';
 
 // Joining runs a real handshake, a real getUserMedia, a WebCodecs Opus encoder
@@ -453,138 +455,112 @@ async function signIn(page: Page, account: Account): Promise<void> {
   await page.locator('input[autocomplete="current-password"]').fill(account.password);
   await page.getByRole('button', { name: 'Log in', exact: true }).click();
   await expect(page).toHaveURL(/\/app/);
-
-  await dismissFirstRunOverlays(page);
 }
 
 /**
- * The per-space welcome screen appears the first time a member opens a guild
- * and sits on top of the app, swallowing clicks. It is dismissible and is not
- * what these cases are about.
- *
- * It renders only once the guild's channels have loaded, so it can appear
- * *after* the pill's Join button is already on screen — dismissing once on
- * arrival is a race.
+ * The room card in the sidebar (index-spec §4.3): who is in the voice channel
+ * right now and the one thing to do about it. `yours` is a call this browser
+ * holds (mic, camera, screen, Open call, Leave); `live` is a room somebody else
+ * is in (Join). A room nobody is in has no card: it is a row in the sidebar's
+ * Voice channels list, and a click on the row joins.
  */
-async function dismissFirstRunOverlays(page: Page): Promise<void> {
-  const button = page.getByRole('button', { name: 'Close welcome screen', exact: true });
-  if (await button.isVisible().catch(() => false)) {
-    await button.click().catch(() => {});
-    await expect(button).toHaveCount(0);
-  }
-}
+const cardOf = (page: Page, state?: 'yours' | 'live'): Locator =>
+  page
+    .locator(`[data-testid="ix-room-card"]${state ? `[data-state="${state}"]` : ''}`)
+    .filter({ has: page.getByText(ROOM, { exact: true }) });
 
 /**
- * The call pill in a voice channel's chat header: the region named
- * "<Channel>, live voice channel". It is drawn for the channel whose chat is
- * open even while nobody is in it, which is how a call is joined.
+ * The channel's row in the sidebar's Voice channels list (an empty room). A new
+ * server has its own default "Lounge" voice channel too, so the name is matched
+ * whole and case-sensitively.
  */
-const pillOf = (page: Page): Locator =>
-  page.getByRole('main').getByRole('region', { name: `${ROOM}, live voice channel`, exact: true });
+const roomRowOf = (page: Page): Locator =>
+  page.getByTestId('ix-room-row').filter({ has: page.getByText(ROOM, { exact: true }) });
 
-/** The call view (the call itself, or a watched screen) over main: the region "Call: <channel>" (index-spec §10). */
+/** What joins the room from the sidebar: the live card's Join, or the empty room's row. */
+const joinControlOf = (page: Page): Locator => page.getByTestId('ix-card-join').or(roomRowOf(page));
+
+/** The call view (the call itself, or a watched screen) over main: the region "Call: <channel>" (index-spec §7). */
 const stagePane = (page: Page): Locator => page.getByRole('region', { name: /^Call: / });
 
 /**
- * Click a control, clearing the welcome screen if it lands between the page
- * rendering the control and the click (it mounts once the guild's channels load).
+ * The card's people (the list "People here"): one row per person, in a stable
+ * order, with "You" for this browser. Always drawn, so there is nothing to open.
  */
-async function clickPastOverlays(page: Page, control: Locator): Promise<void> {
-  let failure: unknown;
-  for (let attempt = 0; attempt < 8; attempt++) {
-    await dismissFirstRunOverlays(page);
-    try {
-      await control.click({ timeout: 3_000 });
-      return;
-    } catch (error) {
-      failure = error;
-    }
-  }
-  throw failure;
-}
-
-/** "Show who's in <Channel>" expands the pill into its roster: one row per person, with their state. */
 async function openRoster(page: Page): Promise<Locator> {
-  const pill = pillOf(page);
-  const who = pill.getByRole('button', { name: `Show who's in ${ROOM}`, exact: true });
-  if ((await who.getAttribute('aria-expanded')) !== 'true') await clickPastOverlays(page, who);
-  const roster = pill.getByRole('list', { name: `In ${ROOM}`, exact: true });
+  const roster = cardOf(page).getByRole('list', { name: 'People here', exact: true });
   await expect(roster).toBeVisible();
   return roster;
 }
 
 /**
- * Join the voice channel whose chat is open, through the pill.
+ * Settings › Voice & video › Join calls muted (index-spec §8.5, default on): the
+ * preference a join applies. These cases are about audio leaving the browser, so
+ * it is set through the real Settings page first, and its state is asserted, so
+ * a join that silently kept the default fails here rather than as "no audio
+ * datagrams" sixty seconds later.
+ */
+async function setJoinMuted(page: Page, muted: boolean): Promise<void> {
+  await page.getByRole('button', { name: 'Your account', exact: true }).click();
+  await page.getByRole('menuitem', { name: /^Settings/ }).click();
+  const dialog = page.getByRole('dialog', { name: 'User settings' });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: 'Voice & video', exact: true }).click();
+  const preference = dialog.getByRole('switch', { name: /Join calls muted/ });
+  if ((await preference.getAttribute('aria-checked')) !== String(muted)) await preference.click();
+  await expect(preference).toHaveAttribute('aria-checked', String(muted));
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+}
+
+/**
+ * Join the voice channel whose chat is open, from the sidebar: the live card's
+ * Join, or the empty room's row.
  *
- * A call starts muted: the pill's "Microphone on when you join" is the
- * preference the join applies, and it defaults to off. These cases are about
- * audio leaving the browser, so the preference is turned on first (and its state
- * is asserted, so a join that silently kept the default fails here rather than
- * as "no audio datagrams" sixty seconds later).
- *
- * The welcome screen can mount a beat after the room renders, so clear it, then
- * look for the button, and repeat until the click lands.
+ * A call starts muted by default, so "Join calls muted" is turned off first.
  */
 async function joinVoice(page: Page, options: { micOn?: boolean } = {}): Promise<void> {
   const { micOn = true } = options;
-  const pill = pillOf(page);
-  const joinButton = pill.getByRole('button', { name: `Join ${ROOM}`, exact: true });
-  const preference = pill.getByRole('button', { name: 'Microphone on when you join', exact: true });
-  let clicked = false;
-  for (let attempt = 0; attempt < 8 && !clicked; attempt++) {
-    await dismissFirstRunOverlays(page);
-    if (await joinButton.isVisible().catch(() => false)) {
-      try {
-        if ((await preference.getAttribute('aria-pressed', { timeout: 3_000 })) !== String(micOn)) {
-          await preference.click({ timeout: 3_000 });
-        }
-        await expect(preference).toHaveAttribute('aria-pressed', String(micOn), { timeout: 3_000 });
-        await joinButton.click({ timeout: 3_000 });
-        clicked = true;
-      } catch {
-        // An overlay landed between the visibility check and the click.
-      }
-    } else {
-      await page.waitForTimeout(500);
-    }
-  }
-  expect(clicked, 'the pill\'s Join button never became clickable').toBe(true);
+  await expect(joinControlOf(page)).toBeVisible({ timeout: 60_000 });
+  await setJoinMuted(page, !micOn);
+  await joinControlOf(page).click();
 }
 
-/** Wait for the pill to say the call is connected: Leave is offered, and nothing was refused. */
+/**
+ * Wait for the card to say the call is connected: it is yours (Leave is on it),
+ * and nothing was refused.
+ */
 async function expectJoined(page: Page): Promise<void> {
-  await expect(pillOf(page).getByRole('button', { name: `Leave ${ROOM}`, exact: true })).toBeVisible({
+  await expect(cardOf(page, 'yours').getByRole('button', { name: `Leave ${ROOM}`, exact: true })).toBeVisible({
     timeout: 60_000,
   });
   // A refused or failed join is toasted: "Could not join lounge: …".
   await expect(page.getByText(/Could not (join|listen in to)/)).toHaveCount(0);
 }
 
-/** Leave through the pill, and wait for it to offer Join again. */
+/** Leave from the card, and wait for the sidebar to offer Join again. */
 async function leaveVoice(page: Page): Promise<void> {
-  await pillOf(page).getByRole('button', { name: `Leave ${ROOM}`, exact: true }).click();
-  await expect(pillOf(page).getByRole('button', { name: `Join ${ROOM}`, exact: true })).toBeVisible({
-    timeout: 30_000,
-  });
-  await expect(pillOf(page).getByRole('button', { name: `Leave ${ROOM}`, exact: true })).toHaveCount(0);
+  await cardOf(page, 'yours').getByRole('button', { name: `Leave ${ROOM}`, exact: true }).click();
+  await expect(joinControlOf(page)).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole('button', { name: `Leave ${ROOM}`, exact: true })).toHaveCount(0);
 }
 
 /**
- * Open the call itself on the stage, where its controls (camera, share, More)
- * live, and return the control row. "Show the call" is the pill's door to it
- * when nobody else is sharing; if somebody is, the stage is already open (a test
- * switches to their stream from it) or the pill offers their stream instead.
+ * Open the call itself over main, where its controls (camera, share, More)
+ * live, and return the control row. "Open call" on the card is the door to it;
+ * when somebody is sharing the view may already be open on their stream, and
+ * the control row is the same.
  */
 async function openCallStage(page: Page): Promise<Locator> {
   const controls = stagePane(page).getByRole('group', { name: 'Call controls', exact: true });
   if (!(await controls.isVisible().catch(() => false))) {
-    await pillOf(page).getByRole('button', { name: 'Show the call', exact: true }).click();
+    await cardOf(page, 'yours').getByTestId('ix-card-open-call').click();
   }
   await expect(controls).toBeVisible();
   return controls;
 }
 
-/** Press a stage toggle (Camera, Microphone) until its aria-pressed says `on`. */
+/** Press a call toggle (Camera, Microphone) until its aria-pressed says `on`. */
 async function setStageToggle(controls: Locator, name: string, on: boolean): Promise<void> {
   const toggle = controls.getByRole('button', { name, exact: true });
   if ((await toggle.getAttribute('aria-pressed')) !== String(on)) await toggle.click();
@@ -687,18 +663,14 @@ test('a browser joins a guild voice room, its audio reaches the relay, and leavi
     const voiceSessionId = joinBody.session_id as string;
     expect(typeof voiceSessionId).toBe('string');
 
-    // 1. The UI reaches a connected call. The pill offers Leave only once the
-    //    call is connected (it offers Join before that, and a refused join is
-    //    toasted "Could not join lounge: …"), so assert the absence of that too,
-    //    otherwise a failed join that re-renders quickly could slip through. The
-    //    microphone toggle is on: the join took the "Microphone on when you
-    //    join" preference.
+    // 1. The UI reaches a connected call. The card is yours (it offers Leave)
+    //    only once the call is connected (a refused join is toasted "Could not
+    //    join lounge: …"), so assert the absence of that too, otherwise a failed
+    //    join that re-renders quickly could slip through. The microphone is on:
+    //    the join took "Join calls muted" turned off.
     await expectJoined(page);
-    await expect(pillOf(page).getByRole('button', { name: 'Microphone', exact: true })).toHaveAttribute(
-      'aria-pressed',
-      'true',
-    );
-    // The pill's roster (the faces, expanded) names the one person in the room: you.
+    await expect(cardOf(page, 'yours').getByTestId('ix-card-mic')).toHaveAttribute('data-muted', 'false');
+    // The card's people name the one person in the room: you.
     const ownRoster = await openRoster(page);
     await expect(ownRoster.getByRole('listitem')).toHaveCount(1);
     await expect(ownRoster.getByRole('listitem')).toContainText('You');
@@ -868,7 +840,7 @@ test('two browsers in one room exchange audio through the relay', async ({ playw
       15_000,
     );
     expect(remaining.participants[0].session_id).not.toBe('');
-    await expect(pillOf(host).getByRole('button', { name: `Leave ${ROOM}`, exact: true })).toBeVisible();
+    await expect(cardOf(host, 'yours').getByRole('button', { name: `Leave ${ROOM}`, exact: true })).toBeVisible();
 
     await leaveVoice(host);
     await waitForRelay(
@@ -920,9 +892,8 @@ test('a participant who closes their tab stops being in the room for everyone el
       await expectJoined(page);
     }
     await waitForRelay(host, channelId, 'two connected participants', (room) => room.connected_participants === 2);
-    // The host's pill, opened on its roster, lists two people before the guest
-    // disappears, so the assertion below is a transition and not a state that
-    // was never true.
+    // The host's card lists two people before the guest disappears, so the
+    // assertion below is a transition and not a state that was never true.
     const hostRoster = await openRoster(host);
     await expect(hostRoster.getByRole('listitem')).toHaveCount(2, { timeout: 30_000 });
 
@@ -938,10 +909,10 @@ test('a participant who closes their tab stops being in the room for everyone el
     // the room stayed lit with a ghost in it until the server was restarted.
     // The host must see the room empty out.
     await expect(hostRoster.getByRole('listitem')).toHaveCount(1, { timeout: 15_000 });
-    await expect(pillOf(host).getByRole('button', { name: `Leave ${ROOM}`, exact: true })).toBeVisible();
+    await expect(cardOf(host, 'yours').getByRole('button', { name: `Leave ${ROOM}`, exact: true })).toBeVisible();
 
     // And a member who was never in the call sees a room with one person in it,
-    // not two — their pill reads the same voice state.
+    // not two — their card reads the same voice state.
     const bystander = await newParticipant();
     const bystanderAccount = await register(bystander.request);
     const joined = await bystander.request.post(`${BASE}/api/v1/invites/${inviteCode}`, {
@@ -954,10 +925,9 @@ test('a participant who closes their tab stops being in the room for everyone el
     expect(joined.ok(), `bystander invite accept: ${await joined.text()}`).toBeTruthy();
     await signIn(bystander, bystanderAccount);
     await bystander.goto(`${BASE}/app/guilds/${guildId}/channels/${channelId}`);
-    await dismissFirstRunOverlays(bystander);
     const bystanderRoster = await openRoster(bystander);
     await expect(bystanderRoster.getByRole('listitem')).toHaveCount(1, { timeout: 30_000 });
-    await expect(pillOf(bystander).getByRole('button', { name: `Join ${ROOM}`, exact: true })).toBeVisible();
+    await expect(cardOf(bystander, 'live').getByTestId('ix-card-join')).toBeVisible();
   });
 });
 
@@ -1036,11 +1006,9 @@ test('two browsers in one room see each other — one on camera, one sharing a s
     // way, and the guest's own share preview is off by default — so every video
     // frame the *guest* decodes came from the host's camera and nothing else.
     //
-    // Camera and share are the stage's controls. Nobody is sharing yet, so each
-    // browser puts the call itself on the stage ("Show the call" on its pill) and
-    // turns its own on from the control row; both stages stay open for the case.
-    await dismissFirstRunOverlays(host);
-    await dismissFirstRunOverlays(guest);
+    // Camera and share are the call view's controls. Nobody is sharing yet, so each
+    // browser opens the call itself over main ("Open call" on its card) and
+    // turns its own on from the control row; both views stay open for the case.
     const hostControls = await openCallStage(host);
     const guestControls = await openCallStage(guest);
     await setStageToggle(hostControls, 'Camera', true);
@@ -1139,26 +1107,17 @@ test('two browsers in one room see each other — one on camera, one sharing a s
     await host.waitForTimeout(2_000);
     const beforeWatching = (await readVideoProbe(host)).decodedFrames;
 
-    // The guest is sharing. The call view goes away (Close; the call stays), and
-    // the host's pill now says so: its roster lists the guest as "Sharing
-    // screen", and it offers their stream ("Watch …") in place of "Show the
-    // call". Watching is the stage's and never joins: the host is already in the
-    // call, so the stream rides it.
+    // The guest is sharing. The call view goes away (Back to chat; the call
+    // stays), and the host's card now says so: its row for the guest reads
+    // "sharing a screen" and carries the button that opens their stream.
+    // Watching never joins: the host is already in the call, so the stream
+    // rides it.
     await stagePane(host).getByRole('button', { name: 'Back to chat', exact: true }).click();
     await expect(stagePane(host)).toHaveCount(0);
-    const hostPill = pillOf(host);
-    await expect(hostPill.getByRole('button', { name: 'Show the call', exact: true })).toHaveCount(0);
     const hostRoster = await openRoster(host);
-    await expect(hostRoster.getByRole('listitem').filter({ hasText: guestAccount.username })).toContainText(
-      'Sharing screen',
-      { timeout: 30_000 },
-    );
-    // Expanded, the pill's stream preview is a second way to the same stream; the
-    // bar's own Watch comes first.
-    await hostPill
-      .getByRole('button', { name: `Watch ${guestAccount.username}'s screen`, exact: true })
-      .first()
-      .click();
+    const guestRow = hostRoster.getByRole('listitem').filter({ hasText: guestAccount.username });
+    await expect(guestRow.getByRole('button', { name: /sharing a screen/ })).toBeVisible({ timeout: 30_000 });
+    await guestRow.getByRole('button', { name: `Watch ${guestAccount.username}'s screen`, exact: true }).click();
     const shareStream = stagePane(host).locator('.glass-stage__stream');
     await expect(shareStream).toBeVisible({ timeout: 30_000 });
     await expect(

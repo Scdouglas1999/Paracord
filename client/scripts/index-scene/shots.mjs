@@ -21,7 +21,7 @@
 // specified to carry (docs/design/index-plan.md 1.3); on Glass it asserts
 // nothing beyond "the text the state is about is on screen".
 
-import { CONTROLS, freshFrame, sceneOnScreen } from '../glass-scene/ui.mjs';
+import { CONTROLS, freshFrame, sceneOnScreen } from '../scene-lib/ui.mjs';
 import { IX, backToChat, dismissOverlays, findControl, openCall, press, uiKind } from './ui.mjs';
 import { ENCRYPTION_PASSWORD } from './scene.mjs';
 
@@ -240,7 +240,7 @@ export const DIAGNOSTICS = {
   /**
    * Vincent's share reaches a viewer's screen as pixels: the viewer watches it
    * from Game Night without joining, and the teal crystal light and amber glow
-   * of his canvas scene (glass-scene/media-init.mjs) are counted in a fresh
+   * of his canvas scene (scene-lib/media-init.mjs) are counted in a fresh
    * screenshot. DOM state alone has been wrong about "the share is on screen".
    */
   'x-lounge-share': {

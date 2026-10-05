@@ -2,7 +2,7 @@
 // through the app's own login page, joined to rooms through the app's own
 // controls, publishing over the app's own media engine. Held until closed.
 //
-// What is reused from the Glass scene, by import (`../glass-scene/`): the
+// What is shared with the other scene drivers, by import (`../scene-lib/`): the
 // synthetic media (`media-init.mjs`, through `openAs`: Vincent's canvas share,
 // a speech-like microphone, silence), and the relay probes (`call.mjs`:
 // `readRoom`, `leaveCall`, `mediaProbe`). `call.mjs`'s own `startCall` is not
@@ -11,9 +11,9 @@
 // and move at a step, and this file runs them through `ui.mjs`, which speaks
 // both Glass and Index.
 
-import { leaveCall, mediaProbe, readRoom } from '../glass-scene/call.mjs';
-import { FACES, STREAM_SCENE } from '../glass-scene/art.mjs';
-import { launchBrowser, openAs } from '../glass-scene/ui.mjs';
+import { leaveCall, mediaProbe, readRoom } from '../scene-lib/call.mjs';
+import { FACES, STREAM_SCENE } from '../scene-lib/art.mjs';
+import { launchBrowser, openAs } from '../scene-lib/ui.mjs';
 import { SERVERS } from './scene.mjs';
 import { guildPath, isJoined, joinRoom, leaveRoom, navigate, setMic, startShare } from './ui.mjs';
 

@@ -2,9 +2,13 @@ import { defineConfig, devices } from '@playwright/test';
 
 // Two mutually exclusive E2E modes, selected by PARACORD_E2E_REAL:
 //
-//   unset  -> fast mocked smoke (smoke.spec.ts) against `npm run dev`. Every
-//             /api call is intercepted with page.route, so it never touches a
-//             real server. This is the fast CI gate; `npm run test:e2e` runs it.
+//   unset  -> fast mocked smoke (smoke.spec.ts, the Index product) against
+//             `npm run dev`. Every /api call is intercepted with page.route, so
+//             it never touches a real server. This is the fast CI gate;
+//             `npm run test:e2e` runs it. The Index review specs (every
+//             `e2e/index-*.spec.ts`: each surface, state and moment) run through
+//             their own config, `e2e/index-review.config.ts`
+//             (`npm run test:e2e:index`).
 //
 //   "1"    -> real-server smoke (real-server.smoke.spec.ts) against the actual
 //             release paracord-server binary (launched by
@@ -25,13 +29,6 @@ const REAL_SERVER = process.env.PARACORD_E2E_REAL === '1';
 // crossfade. Gated out of the default run: it deliberately sits and watches,
 // which is the opposite of what a fast CI smoke should do. `npm run test:motion`.
 const MOTION_GATE = !REAL_SERVER && process.env.PARACORD_E2E_MOTION === '1';
-// Glass review screenshots (glass-review.spec.ts): opt-in, mocked like the
-// smoke, output under output/design-reference/glass-build/<WP>/. It renders the
-// Glass reference scene from fixtures (e2e/fixtures/glass) with no server, so a
-// package can shoot its surface and hold it against the reference PNGs.
-//   PARACORD_E2E_GLASS=1 PARACORD_E2E_GLASS_WP=g9 npx playwright test e2e/glass-review.spec.ts
-// Gated out of the default run for the same reason the motion gate is.
-const GLASS_REVIEW = !REAL_SERVER && !MOTION_GATE && process.env.PARACORD_E2E_GLASS === '1';
 const REAL_SERVER_PORT = process.env.PARACORD_E2E_PORT ?? '18150';
 
 export default defineConfig({
@@ -77,20 +74,6 @@ export default defineConfig({
             // measurement with the recorder attached, which costs frames in
             // exactly the moment being measured.
             trace: 'off',
-          },
-        },
-      ]
-    : GLASS_REVIEW
-    ? [
-        {
-          name: 'glass-review',
-          testMatch: /[\\/]glass-review\.spec\.ts$/,
-          use: {
-            ...devices['Desktop Chrome'],
-            // Fixed so every label in a frame ("9:09 PM", "Fri") is the same on
-            // every machine; the scene clock itself is pinned in fixtures/glass.
-            timezoneId: 'America/Chicago',
-            locale: 'en-US',
           },
         },
       ]

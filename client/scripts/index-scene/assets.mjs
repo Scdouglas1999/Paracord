@@ -2,7 +2,7 @@
 // recorded in the page from a canvas (MediaRecorder, VP8 WebM). Real bytes
 // through the real attachment upload; nothing is stubbed.
 
-import { launchBrowser } from '../glass-scene/ui.mjs';
+import { launchBrowser } from '../scene-lib/ui.mjs';
 
 export async function makeClip() {
   const browser = await launchBrowser();

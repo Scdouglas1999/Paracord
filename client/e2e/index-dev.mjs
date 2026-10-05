@@ -2,7 +2,7 @@
  * The dev server for index-review.config.ts (docs/design/index-plan.md §3, IX-0),
  * started through Vite's API instead of the `vite` command, so its process is
  * not named "vite" and another checkout's cleanup (`pkill -f vite`) cannot take
- * it down mid-run. Same trick as glass-stage-dev.mjs.
+ * it down mid-run.
  *
  *   node e2e/index-dev.mjs <port>
  *

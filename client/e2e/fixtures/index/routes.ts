@@ -4,11 +4,9 @@
  * that matches, so a spec can call `installIndexScene` and then add its own
  * `page.route` for one endpoint (the way a package mocks its own POST).
  *
- * The routes are built on the Glass harness's (`fixtures/glass/install.ts`),
- * which was modeled on a real server, with two differences: they read the live
- * world instead of a constant, so a step's change shows up in the next request,
- * and a few writes the Index packages need are real (read position, sending a
- * message, typing).
+ * The routes are modeled on a real server's, and read the live world instead of
+ * a constant, so a step's change shows up in the next request. A few writes the
+ * Index packages need are real (read position, sending a message, typing).
  */
 import type { Page, Route } from '@playwright/test';
 import { guildDetailFixture, guildSummaryFixture } from '../../../src/test/guildContractFixtures';

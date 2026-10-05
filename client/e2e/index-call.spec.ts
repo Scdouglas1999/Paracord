@@ -197,7 +197,7 @@ test.describe('IX-13 call view', () => {
     await shoot(page, 'call-theater-chat');
 
     await page.keyboard.press('Escape');
-    await expect(page.locator('.ix-frame')).toHaveAttribute('data-stage', 'side');
+    await expect(page.locator('.ix-frame')).toHaveAttribute('data-stage', 'main');
     await callSettles(page);
     // The chat column stays where it was.
     await expect(chat).toBeVisible();
@@ -206,7 +206,7 @@ test.describe('IX-13 call view', () => {
     // Typing in the chat column keeps every letter (T does nothing there).
     await chat.getByRole('textbox').first().click();
     await page.keyboard.type('tt');
-    await expect(page.locator('.ix-frame')).toHaveAttribute('data-stage', 'side');
+    await expect(page.locator('.ix-frame')).toHaveAttribute('data-stage', 'main');
     await page.locator('.ix-call-head__name').click();
 
     await page.keyboard.press('Escape');

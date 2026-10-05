@@ -9,7 +9,7 @@
 // Enrolling an identity revokes every other session of the account, so the REST
 // tokens are renewed afterwards (`refreshTokens`).
 
-import { launchBrowser, openAs, dismissOverlays } from '../glass-scene/ui.mjs';
+import { launchBrowser, openAs, dismissOverlays } from '../scene-lib/ui.mjs';
 import { openPersistentSession } from './ui.mjs';
 import { DMS, ENCRYPTION_PASSWORD } from './scene.mjs';
 import { refreshTokens } from './seed.mjs';

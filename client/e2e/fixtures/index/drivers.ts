@@ -320,8 +320,11 @@ export async function walkStates(h: IndexHarness, options: WalkOptions = {}): Pr
   await page.waitForTimeout(SETTLE_MS);
   if (await reached('s0-message-box-open')) return;
 
-  // The story starts again from a quiet Fuel, with an empty message box.
+  // The story starts again from a quiet Fuel, with an empty message box. The
+  // draft is saved a beat after it changes: a reload straight after the box is
+  // emptied would bring the old draft back (the saved one), into a later state.
   await clearComposer(page);
+  await page.waitForTimeout(1500);
   await h.reload();
 
   await h.step('arrive');

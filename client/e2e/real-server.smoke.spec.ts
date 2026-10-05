@@ -23,29 +23,12 @@ const PORT = process.env.PARACORD_E2E_PORT ?? '18150';
 const BASE = `http://127.0.0.1:${PORT}`;
 
 /**
- * Click away the welcome screen, which a member's first visit to a server puts
- * on top of it a beat after the channels load: keep looking until it has not
- * appeared for a while.
- */
-async function dismissFirstRunOverlays(page: Page, quietMs = 2_500, deadlineMs = 30_000): Promise<void> {
-  const deadline = Date.now() + deadlineMs;
-  let lastSeen = Date.now();
-  while (Date.now() < deadline && Date.now() - lastSeen < quietMs) {
-    const control = page.getByRole('button', { name: 'Close welcome screen', exact: true });
-    if (await control.isVisible().catch(() => false)) {
-      await control.click();
-      lastSeen = Date.now();
-    }
-    await page.waitForTimeout(250);
-  }
-}
-
-/**
- * Your face at the conversation header's right edge (on Home, in its header
- * too) opens the account menu: status, Reminders, Settings, Sign out.
+ * Your face in the conversation toolbar's right corner (in the sidebar header
+ * on a phone) opens the account menu: status, Profile, Reminders, Settings,
+ * Sign out (docs/index-spec.md §6.5).
  */
 async function openAccountMenu(page: Page): Promise<void> {
-  await page.getByRole('button', { name: /^Your profile, / }).first().click();
+  await page.getByRole('button', { name: 'Your account' }).first().click();
   await expect(page.getByRole('menu', { name: 'Account' })).toBeVisible();
 }
 
@@ -178,7 +161,7 @@ test('real identity setup survives rejected credentials and reload, then adopts 
   });
   async function logout() {
     await openAccountMenu(page);
-    await page.getByRole('menuitem', { name: 'Sign out', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Sign out' }).click();
     await expect(page.getByRole('heading', { name: 'Welcome back' })).toBeVisible();
     // A device that holds an identity is asked to unlock it after a sign-out,
     // not to sign in. "Welcome back" heads both screens; the way on to another
@@ -212,7 +195,7 @@ test('real identity setup survives rejected credentials and reload, then adopts 
   await page.getByRole('button', { name: 'Log in', exact: true }).click();
   await expect(page).toHaveURL(/\/app/);
   await openAccountMenu(page);
-  await page.getByRole('menuitem', { name: 'Settings', exact: true }).click();
+  await page.getByRole('menuitem', { name: /^Settings/ }).click();
   expect(implicitAttachments).toEqual([]);
   expect(await page.evaluate(() => localStorage.getItem('paracord:encrypted-identity:v1'))).toBe(original);
 
@@ -298,9 +281,7 @@ test('real message edits retain readable history after reload', async ({ page, r
     await page.getByRole('button', { name: 'Log in', exact: true }).click();
     await expect(page).toHaveURL(/\/app/);
     await page.goto(`/app/guilds/${guild.id}/channels/${channel.id}`);
-    // The welcome screen arrives a beat after the channels load, so keep
-    // dismissing it until it has not appeared for a while.
-    await dismissFirstRunOverlays(page);
+    await expect(page.getByPlaceholder('Message edit-history', { exact: true })).toBeVisible();
     const original = 'First version from the real composer';
     await page.getByPlaceholder('Message edit-history', { exact: true }).fill(original);
     const creation = page.waitForResponse(response => response.request().method() === 'POST' && response.url().endsWith(`/channels/${channel.id}/messages`));
@@ -313,8 +294,8 @@ test('real message edits retain readable history after reload', async ({ page, r
     const feed = page.getByLabel('Message history');
     for (const content of ['Second version from the real editor', 'Final version after two edits']) {
       await feed.getByText(preceding, { exact: true }).click({ button: 'right' });
-      await page.getByRole('menuitem', { name: 'Edit message', exact: true }).click();
-      await page.getByRole('textbox', { name: /Edit message from/ }).fill(content);
+      await page.getByRole('menuitem', { name: 'Edit', exact: true }).click();
+      await page.getByRole('textbox', { name: 'Edit your message' }).fill(content);
       const update = page.waitForResponse(response => response.request().method() === 'PATCH' && response.url().endsWith(`/messages/${message.id}`));
       await page.getByRole('button', { name: 'Save', exact: true }).click();
       expect((await update).status()).toBe(200);
@@ -323,30 +304,32 @@ test('real message edits retain readable history after reload', async ({ page, r
     }
     await page.reload();
     await expect(feed.getByText(preceding, { exact: true })).toBeVisible();
+    // An edited message wears "edited"; the mark is the way into its history.
+    const editedMark = feed.getByRole('button', { name: 'Edited. Show the edit history', exact: true });
     const historyResponse = page.waitForResponse(response => response.url().endsWith(`/messages/${message.id}/edits`));
-    await page.getByRole('button', { name: `Show edit history for message ${message.id}`, exact: true }).click();
+    await editedMark.click();
     expect((await historyResponse).status()).toBe(200);
     const history = page.getByRole('dialog', { name: 'Edit history', exact: true });
     await expect(history.getByText(original, { exact: true })).toBeVisible();
     await expect(history.getByText('Second version from the real editor', { exact: true })).toBeVisible();
-    // WP7 restyled the dialog: each version is "Version N · <time>" in the mono meta face.
+    // Each version is a quiet row: "Version N · <time>" over its words.
     await expect(history.getByText(/Version [12] ·/)).toHaveCount(2);
     await page.screenshot({ path: testInfo.outputPath('edit-history.png'), fullPage: true });
     await page.keyboard.press('Escape'); await expect(history).not.toBeVisible();
     // Real network loss must report failure, never an empty successful history.
     await page.context().setOffline(true);
-    await page.getByRole('button', { name: `Show edit history for message ${message.id}`, exact: true }).click();
+    await editedMark.click();
     await expect(history.getByRole('alert')).toContainText('Couldn’t load edit history');
     await expect(history.getByText('No earlier versions are available.', { exact: true })).not.toBeVisible();
     for (const width of [320, 768, 320]) {
       await page.setViewportSize({ width, height: 640 });
-      // The window swaps frames across the phone breakpoint (phone below 768,
-      // the conversation alone from there), and the conversation it remounts
-      // does not keep a dialog its predecessor held open. So the dialog is opened
-      // afresh at each width, still offline: Escape clears one that did survive.
+      // The Index frame keeps a dialog open across the phone breakpoint
+      // (e2e/index-continuity.spec.ts); here the dialog is opened afresh at
+      // each width, still offline, so each width's own bounds are measured:
+      // Escape clears the one that survived the resize.
       await page.keyboard.press('Escape');
       await expect(history).toHaveCount(0);
-      await page.getByRole('button', { name: `Show edit history for message ${message.id}`, exact: true }).click();
+      await editedMark.click();
       await expect(history.getByRole('alert')).toContainText('Couldn’t load edit history');
       const bounds = await history.boundingBox();
       expect(bounds!.x).toBeGreaterThanOrEqual(8); expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width - 8);
@@ -407,7 +390,7 @@ test('the release HTTP/2 server multiplexes requests and preserves authenticated
   } finally { session.destroy(); }
 });
 
-test('Home follows live mention creation, edits and deletion and opens the surviving exact message', async ({ page, playwright }, testInfo) => {
+test('the Inbox follows live mention creation, edits and deletion and opens the surviving exact message', async ({ page, playwright }, testInfo) => {
   const unique = Date.now();
   const password = 'Attention-Password-123!';
   const register = async (label: string) => {
@@ -459,81 +442,85 @@ test('Home follows live mention creation, edits and deletion and opens the survi
     await page.locator('input[autocomplete="current-password"]').fill(password);
     await page.getByRole('button', { name: 'Log in', exact: true }).click();
     await expect(page).toHaveURL(/\/app/);
-    await page.goto('/app');
-    const home = page.getByRole('main');
-    await expect(home.getByRole('heading', { level: 1 })).toBeVisible();
+    // Index has no Home: what needs you is the People place's Inbox
+    // (docs/index-spec.md §6.6), its Mentions tab, one row per conversation.
+    await page.goto('/app/inbox');
+    const inbox = page.getByTestId('ix-inbox');
+    await expect(page.getByTestId('ix-title')).toHaveText('Inbox');
+    const rows = inbox.getByTestId('ix-inbox-row');
     // Give the live transport an observed authenticated READY before emitting
     // the mention. No reload or mocked gateway event is used for this check.
     // The server the member just joined is the landmark that is always there:
-    // its circle in the server row (named for the server, then its mention
-    // count once it has one). It is enough to know Home has rendered before the
-    // wire check below.
+    // its mark in the dock (named for the server, then its mention count once
+    // it has one). It is enough to know the dock has rendered before the wire
+    // check below.
     await expect(
-      page.getByRole('navigation', { name: 'Servers' }).getByRole('button', { name: /^Attention verification/ }),
+      page.getByRole('toolbar', { name: 'Servers' }).getByRole('button', { name: /^Attention verification/ }),
     ).toBeVisible();
     await page.waitForFunction(id => (window as unknown as { attentionWire: { readyUser: string } }).attentionWire.readyUser === id, member.user.id);
-    const sent = await ownerApi.post(`${BASE}/api/v1/channels/${channel.id}/messages`, { data: { content: `<@${member.user.id}> Please review the original design`, nonce: 'real-home-attention' } });
+    const sent = await ownerApi.post(`${BASE}/api/v1/channels/${channel.id}/messages`, { data: { content: `<@${member.user.id}> Please review the original design`, nonce: 'real-inbox-attention' } });
     expect(sent.status()).toBe(201);
     const message = await sent.json();
-    const tail = await ownerApi.post(`${BASE}/api/v1/channels/${channel.id}/messages`, { data: { content: 'Later unrelated chatter', nonce: 'real-home-tail' } });
+    const tail = await ownerApi.post(`${BASE}/api/v1/channels/${channel.id}/messages`, { data: { content: 'Later unrelated chatter', nonce: 'real-inbox-tail' } });
     expect(tail.status()).toBe(201);
-    const attention = home.getByRole('region', { name: 'For you' });
     await page.waitForFunction(id => (window as unknown as { attentionWire: { mentions: string[] } }).attentionWire.mentions.includes(id), message.id);
-    // §7.5 names WHO, not how many: "<author> mentioned you", with the count
-    // kept only when the author cannot be named (`needsYouReason`).
-    await expect(attention.getByText(/mentioned you/)).toBeVisible();
-    await expect(attention.getByText(/@you Please review the original design/)).toBeVisible();
-    await expect(attention.getByText(/Later unrelated chatter/)).toHaveCount(0);
-    await page.screenshot({ path: testInfo.outputPath('home-exact-mention.png'), fullPage: true });
-    const second = await ownerApi.post(`${BASE}/api/v1/channels/${channel.id}/messages`, { data: { content: `<@${member.user.id}> The surviving design decision`, nonce: 'real-home-second' } });
+    // The row names the room, says who said what, and counts the mentions;
+    // it previews the mention itself, not the chatter after it.
+    await expect(rows).toHaveCount(1);
+    await expect(rows.first()).toContainText('decisions');
+    await expect(rows.first().getByText(/@you Please review the original design/)).toBeVisible();
+    await expect(rows.first().locator('.ix-ib__badge')).toHaveText('1');
+    await expect(inbox.getByText(/Later unrelated chatter/)).toHaveCount(0);
+    // The dock says the same thing from anywhere: a count on the server's mark.
+    await expect(
+      page.getByRole('toolbar', { name: 'Servers' }).getByRole('button', { name: 'Attention verification, 1 mention' }),
+    ).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath('inbox-exact-mention.png'), fullPage: true });
+    const second = await ownerApi.post(`${BASE}/api/v1/channels/${channel.id}/messages`, { data: { content: `<@${member.user.id}> The surviving design decision`, nonce: 'real-inbox-second' } });
     expect(second.status()).toBe(201);
     const survivor = await second.json();
-    const later = await ownerApi.post(`${BASE}/api/v1/channels/${channel.id}/messages`, { data: { content: 'Still later unrelated chatter', nonce: 'real-home-later' } });
+    const later = await ownerApi.post(`${BASE}/api/v1/channels/${channel.id}/messages`, { data: { content: 'Still later unrelated chatter', nonce: 'real-inbox-later' } });
     expect(later.status()).toBe(201);
     // A second mention in the same room is the same row, still previewing the
-    // oldest unread mention — the row is one piece of work, not two.
-    await expect(attention.getByRole('listitem')).toHaveCount(1);
-    await expect(attention.getByText(/@you Please review the original design/)).toBeVisible();
+    // oldest unread mention, its count now two: the row is one piece of work,
+    // not two.
+    await expect(rows.first().locator('.ix-ib__badge')).toHaveText('2');
+    await expect(rows).toHaveCount(1);
+    await expect(rows.first().getByText(/@you Please review the original design/)).toBeVisible();
     const edited = await ownerApi.patch(`${BASE}/api/v1/channels/${channel.id}/messages/${message.id}`, { data: { content: `<@${member.user.id}> Review the revised original design` } });
     expect(edited.ok(), await edited.text()).toBe(true);
-    await expect(attention.getByText(/Review the revised original design/)).toBeVisible();
+    await expect(rows.first().getByText(/Review the revised original design/)).toBeVisible();
     const deleted = await ownerApi.delete(`${BASE}/api/v1/channels/${channel.id}/messages/${message.id}`);
     expect(deleted.ok(), await deleted.text()).toBe(true);
-    await expect(attention.getByText(/mentioned you/)).toBeVisible();
-    await expect(attention.getByText(/The surviving design decision/)).toBeVisible();
-    await expect(attention.getByText(/Review the revised original design/)).toHaveCount(0);
-    await expect(attention.getByText(/Still later unrelated chatter/)).toHaveCount(0);
-    await page.screenshot({ path: testInfo.outputPath('home-surviving-mention.png'), fullPage: true });
+    await expect(rows.first().getByText(/The surviving design decision/)).toBeVisible();
+    await expect(rows.first().locator('.ix-ib__badge')).toHaveText('1');
+    await expect(rows.first().getByText(/Review the revised original design/)).toHaveCount(0);
+    await expect(inbox.getByText(/Still later unrelated chatter/)).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath('inbox-surviving-mention.png'), fullPage: true });
     const jump = page.waitForURL(new RegExp(`/channels/${channel.id}\\?message=${survivor.id}`));
-    // §7.5: a Needs-you row carries one action, labeled for the room it opens.
-    await attention.getByRole('button', { name: 'Open decisions', exact: true }).click();
+    // A row is one action: it opens the room at the message that needs you.
+    await rows.first().locator('.ix-ib__body').click();
     await jump;
-    const welcome = page.getByRole('button', { name: 'Close welcome screen', exact: true });
-    if (await welcome.isVisible()) await welcome.click();
     await expect(page.getByText(/The surviving design decision/).last()).toBeVisible();
     // Establish a read cursor for the existing history, then verify that a new
     // unread tail disappears live when its only message is deleted.
     const read = await memberApi.put(`${BASE}/api/v1/channels/${channel.id}/read`, { data: { last_message_id: (await later.json()).id } });
     expect(read.ok(), await read.text()).toBe(true);
-    await page.goto('/app');
+    await page.goto('/app/inbox');
     await page.waitForFunction(id => (window as unknown as { attentionWire: { readyUser: string } }).attentionWire.readyUser === id, member.user.id);
-    // §7.5 keeps the Needs-you section on the surface and lets it say so:
-    // "Nothing new for you right now." It is no longer removed when
-    // empty, because an absent section cannot tell you it checked.
-    await expect(page.getByRole('main').getByRole('region', { name: 'For you' }).getByRole('listitem')).toHaveCount(0);
-    await expect(page.getByRole('main').getByText('Nothing new for you right now.')).toBeVisible();
-    const finalSend = await ownerApi.post(`${BASE}/api/v1/channels/${channel.id}/messages`, { data: { content: `<@${member.user.id}> Only unread tail`, nonce: 'real-home-only-tail' } });
+    // The Inbox keeps its page on the surface and says so when it is empty:
+    // an absent list cannot tell you it checked.
+    await expect(rows).toHaveCount(0);
+    await expect(inbox.getByText('Nothing is waiting for you')).toBeVisible();
+    const finalSend = await ownerApi.post(`${BASE}/api/v1/channels/${channel.id}/messages`, { data: { content: `<@${member.user.id}> Only unread tail`, nonce: 'real-inbox-only-tail' } });
     expect(finalSend.status()).toBe(201);
     const finalMessage = await finalSend.json();
-    await expect(page.getByRole('main').getByRole('region', { name: 'For you' }).getByText(/Only unread tail/)).toBeVisible();
+    await expect(rows.first().getByText(/Only unread tail/)).toBeVisible();
     const finalDelete = await ownerApi.delete(`${BASE}/api/v1/channels/${channel.id}/messages/${finalMessage.id}`);
     expect(finalDelete.ok(), await finalDelete.text()).toBe(true);
-    // §7.5 keeps the Needs-you section on the surface and lets it say so:
-    // "Nothing new for you right now." It is no longer removed when
-    // empty, because an absent section cannot tell you it checked.
-    await expect(page.getByRole('main').getByRole('region', { name: 'For you' }).getByRole('listitem')).toHaveCount(0);
-    await expect(page.getByRole('main').getByText('Nothing new for you right now.')).toBeVisible();
-    await page.screenshot({ path: testInfo.outputPath('home-deleted-tail-cleared.png'), fullPage: true });
+    await expect(rows).toHaveCount(0);
+    await expect(inbox.getByText('Nothing is waiting for you')).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath('inbox-deleted-tail-cleared.png'), fullPage: true });
 
   } finally {
     await ownerApi.dispose();
@@ -541,7 +528,7 @@ test('Home follows live mention creation, edits and deletion and opens the survi
   }
 });
 
-test('real guild contracts keep the welcome member count correct after join and reload', async ({ page, playwright }, testInfo) => {
+test('real guild contracts keep the member count correct after join and reload', async ({ page, playwright }, testInfo) => {
   const unique = Date.now();
   const password = 'Welcome-Password-123!';
   async function account(label: string) {
@@ -592,12 +579,14 @@ test('real guild contracts keep the welcome member count correct after join and 
     await page.getByRole('button', { name: 'Log in', exact: true }).click();
     await expect(page).toHaveURL(/\/app/);
     await page.goto(`/app/guilds/${guild.id}/channels/${channel.id}`);
-    await expect(page.getByText('Welcome aboard', { exact: true })).toBeVisible();
-    await expect(page.getByText('2 members', { exact: true })).toBeVisible();
-    await expect(page.getByText("2 people are already here. Say hi when you're ready.", { exact: true })).toBeVisible();
+    // The sidebar's header counts the server: "2 members · N here now"
+    // (docs/index-spec.md §4.1), from the guild contract the client validated.
+    const header = page.getByTestId('ix-sidebar');
+    await expect(header.getByText('Welcome count verification', { exact: true })).toBeVisible();
+    await expect(header.getByText(/^2 members/)).toBeVisible();
     await page.reload();
-    await expect(page.getByText('Welcome aboard', { exact: true })).toBeVisible();
-    await expect(page.getByText('2 members', { exact: true })).toBeVisible();
+    await expect(header.getByText('Welcome count verification', { exact: true })).toBeVisible();
+    await expect(header.getByText(/^2 members/)).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath('welcome-member-count.png'), fullPage: true });
     expect(pageErrors).toEqual([]);
   } finally {

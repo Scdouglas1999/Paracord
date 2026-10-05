@@ -21,10 +21,8 @@ import {
  *   PARACORD_E2E_INDEX_RT_PORT=4525 PARACORD_E2E_INDEX_WP=ix4 \
  *     npx playwright test -c e2e/index-review.config.ts
  *
- * The sidebar, dock, card, call and sheets are stubs until wave C fills them
- * (the sidebar shows the Glass places panel, the call the Glass stage), so this
- * holds the GEOMETRY the slots will sit in, the place slide and tint, the
- * toolbar, and the large-title fold, not what fills them.
+ * The frame's GEOMETRY (the slots' hosts), the place slide and tint, the
+ * toolbar, and the large-title fold; what fills the slots has its own specs.
  */
 
 const MOTION_GONE_MS = 2_000;
@@ -89,7 +87,7 @@ async function mountLargeTitlePage(page: Page, lines: number): Promise<void> {
     host.style.cssText = 'position:absolute;inset:0;display:flex;flex-direction:column;z-index:2;background:transparent';
     document.querySelector('.ix-main__content')?.appendChild(host);
     // Hide today's page under it (it still holds the toolbar's place: legacy).
-    const legacy = document.querySelector<HTMLElement>('.ix-main__content > .glass-outlet');
+    const legacy = document.querySelector<HTMLElement>('.ix-main__content > .ix-outlet');
     if (legacy) legacy.style.visibility = 'hidden';
     const h = React.createElement;
     const body = Array.from({ length: count }, (_, i) =>
@@ -219,9 +217,8 @@ test.describe('IX-4 shell', () => {
     expect(await page.locator('#ix-call-host').evaluate((element) => getComputedStyle(element).pointerEvents)).toBe('none');
     await expect(page.locator('#ix-call-host')).toBeEmpty();
 
-    // Vincent's stream in Lounge (the Glass stage, until IX-13) on the Index surface.
-    // A stream, not the call: the Glass call stage has no theater.
-    const stage = (mode: 'side' | 'theater' | null) =>
+    // Vincent's stream in Lounge on the call surface.
+    const stage = (mode: 'main' | 'theater' | null) =>
       page.evaluate(
         async ({ mode, guildId, channelId, streamerId }) => {
           const { useGlassStore } = (await import(/* @vite-ignore */ '/src/stores/glassStore.ts')) as {
@@ -232,7 +229,7 @@ test.describe('IX-4 shell', () => {
         },
         { mode, guildId: GUILD.gameNight.id, channelId: CH.gnRoomLounge, streamerId: PEOPLE.vincent.id },
       );
-    await stage('side');
+    await stage('main');
     const surface = page.getByRole('region', { name: 'Call' });
     await expect(surface).toBeVisible();
     await callSettled(page);

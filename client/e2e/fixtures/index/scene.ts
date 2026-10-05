@@ -12,7 +12,7 @@
  * six people appear in the same places on every reference state.
  *
  * THE CLOCK. The scene is set on Thursday 1 October 2026 in Central time (CDT,
- * UTC-5), the same day Glass used. The prototype's weekday labels (Sat, Mon,
+ * UTC-5). The prototype's weekday labels (Sat, Mon,
  * Tue, Sun) are all within six days of a Thursday, "Friday" is tomorrow, and
  * the story runs from 9:38 PM to 10:02 PM. `harness.ts` pins the page's Date to
  * `CLOCK.start` and moves it as steps run, so every label ("9:41 PM", "Today",

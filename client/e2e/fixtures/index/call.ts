@@ -16,7 +16,7 @@
  *     state alone;
  *   - the waveform's voice levels are published for whoever is talking.
  *
- * The same fakes the Glass specs use (`glass-calls.spec.ts`, `glass-pill.spec.ts`),
+ * The fakes the call specs use (state-only voice actions and a fake engine),
  * in one place. Real media is `scripts/index-scene.mjs`'s job (IX-3).
  *
  * THE FIXTURE FRAME SOURCE. Video is the DEV fixture (`FIXTURE_MODULE`): a
@@ -26,7 +26,7 @@
  */
 import type { Page } from '@playwright/test';
 
-export const FIXTURE_MODULE = '/src/lib/room/fixtureFrameSource.ts';
+export const FIXTURE_MODULE = '/src/lib/media/fixtureFrameSource.ts';
 
 export interface FakeVoiceIds {
   /** Your user id. */

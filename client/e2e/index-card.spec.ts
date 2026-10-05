@@ -77,8 +77,7 @@ async function open(page: Page): Promise<IndexHarness> {
 }
 
 /**
- * Animations running in the sidebar now. (Main still has the Glass call pill
- * until IX-15 retires it; it shows Game Night's live Lounge with its own loop.)
+ * Animations running in the sidebar now.
  */
 const sidebarAnimations = (page: Page) =>
   page.evaluate(() =>

@@ -606,6 +606,45 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  e2e-index:
+    name: E2E Index (review specs and motion gate)
+    runs-on: ubuntu-latest
+    needs: client
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: client/package-lock.json
+      - name: Install dependencies
+        working-directory: client
+        run: npm ci
+      - name: Install Playwright browser
+        working-directory: client
+        run: npx playwright install --with-deps chromium
+      # Every e2e/index-*.spec.ts on the mocked Index scene (e2e/fixtures/index):
+      # each surface, state and moment of docs/index-spec.md, the review walk of
+      # the ten reference states included.
+      - name: Run the Index review specs
+        working-directory: client
+        run: npm run test:e2e:index
+      # §5: every moment holds its duration and curve, moves only transform and
+      # opacity, and is quiet two seconds after it settles.
+      - name: Run the motion gate
+        working-directory: client
+        run: npm run test:motion
+      - name: Upload Playwright artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-index
+          path: |
+            client/playwright-report
+            client/test-results
+          if-no-files-found: ignore
+          retention-days: 7
+
   e2e-real-server:
     name: Real-Server E2E Smoke
     runs-on: ubuntu-latest

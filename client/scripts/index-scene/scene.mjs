@@ -151,7 +151,7 @@ export const DMS = [
   { with: 'jeremy', lines: [['jeremy', 'made the server yet?'], ['sean', 'doing it now'], ['jeremy', 'see you tonight']] },
 ];
 
-/** Images posted as attachments, by name (assets.mjs of the Glass scene renders them). */
+/** Images posted as attachments, by name (scene-lib/assets.mjs renders them). */
 export const IMAGE_NAMES = ['photo-0', 'photo-1', 'photo-2', 'photo-3'];
 
 // -------------------------------------------------------------- the story

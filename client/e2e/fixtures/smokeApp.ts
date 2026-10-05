@@ -7,9 +7,9 @@ import { isGuildDetail, isGuildSummaryList } from '../../src/api/generated/valid
  *
  * Every `/api` call is intercepted with `page.route`, so the gate never touches
  * a real server. One account, one server with a deliberately long name (the
- * places panel has to truncate it without breaking the layout), three channels
- * (a text channel with a long name, a voice channel, and a second text channel
- * with something unread), two more servers for Home, and two direct messages.
+ * sidebar has to truncate it without breaking the layout), three channels (a
+ * text channel with a long name, a voice channel, and a second text channel
+ * with something unread), and two direct messages.
  *
  * What is proved here that a fixture could quietly stop proving:
  *   - the account is the real `CurrentUser` projection, because the client
@@ -60,8 +60,6 @@ export interface SmokeApp {
   compositionRevoked: boolean;
   /** What the read states say about the `updates` channel. */
   headerAttention: HeaderAttention;
-  /** Serves two more servers (and their channels) so Home has somewhere to point. */
-  showHomeFixtures: boolean;
   /** Serves the two direct messages. */
   showDmFixtures: boolean;
   /** Everything the fixture has accepted as a message. */
@@ -76,8 +74,6 @@ export interface SmokeApp {
   readonly pageErrors: string[];
   readonly user: typeof userPayload;
   readonly peer: typeof peerPayload;
-  readonly homeSpaces: Array<ReturnType<typeof guildSummaryFixture>>;
-  readonly homeChannels: Array<Record<string, unknown> & { id: string; guild_id: string; name: string; last_message_id: string }>;
   readonly dmFixtures: Array<Record<string, unknown> & { id: string; type: number }>;
 }
 
@@ -111,17 +107,7 @@ const userPayload = {
 
 const peerPayload = { ...userPayload, id: '43', username: 'Ada with a long name for header coverage' };
 
-export interface SmokeOptions {
-  /**
-   * Whether this browser has already dismissed the server's welcome screen.
-   * Default true: the welcome is a first-visit dialog that traps focus, and only
-   * the test that is about it should see it.
-   */
-  welcomed?: boolean;
-}
-
-export async function installSmokeApp(page: Page, options: SmokeOptions = {}): Promise<SmokeApp> {
-  const welcomed = options.welcomed ?? true;
+export async function installSmokeApp(page: Page): Promise<SmokeApp> {
   const served = new Map<string, Record<string, unknown>>();
   let messageCounter = 1;
 
@@ -136,16 +122,6 @@ export async function installSmokeApp(page: Page, options: SmokeOptions = {}): P
     created_at: nowIso,
     last_message_id: '4000',
   };
-  const homeSpaces = ['Design', 'Support'].map((name, index) =>
-    guildSummaryFixture({ id: String(1100 + index), name, owner_id: userPayload.id, member_count: 8, created_at: nowIso }),
-  );
-  const homeChannels = homeSpaces.map((space, index) => ({
-    ...attentionChannel,
-    id: String(2100 + index),
-    guild_id: space.id,
-    name: index ? 'questions' : 'feedback',
-    last_message_id: String(4100 + index),
-  }));
   const dmFixtures = [
     { id: '2004', type: 1, channel_type: 1, recipient: peerPayload, recipients: [peerPayload], position: 0, nsfw: false, created_at: nowIso },
     {
@@ -164,7 +140,6 @@ export async function installSmokeApp(page: Page, options: SmokeOptions = {}): P
     serverTheme: 'glass',
     compositionRevoked: false,
     headerAttention: 'read',
-    showHomeFixtures: false,
     showDmFixtures: false,
     messages: [],
     adminStatsRequests: 0,
@@ -173,8 +148,6 @@ export async function installSmokeApp(page: Page, options: SmokeOptions = {}): P
     pageErrors: [],
     user: userPayload,
     peer: peerPayload,
-    homeSpaces,
-    homeChannels,
     dmFixtures,
   };
 
@@ -193,7 +166,7 @@ export async function installSmokeApp(page: Page, options: SmokeOptions = {}): P
   // guild list (this READY carries no guilds, the real server's does), and the
   // places panel would say "This server is not available" until a reload.
   await page.addInitScript(
-    ({ epoch, scopeKey, welcomed: seen, guildId }) => {
+    ({ epoch, scopeKey, guildId }) => {
       try {
         localStorage.setItem('paracord:auth:session-seen', '1');
         localStorage.setItem(`paracord:database-history:${scopeKey}`, epoch);
@@ -201,12 +174,13 @@ export async function installSmokeApp(page: Page, options: SmokeOptions = {}): P
         localStorage.setItem('paracord:v2:layout-tour-shell', 'done');
         localStorage.setItem('paracord:v2:layout-tour-guild-home', 'done');
         localStorage.setItem('paracord:v2:onboarding-complete', '1');
-        if (seen) localStorage.setItem(`paracord:v2:guild-welcomed:${guildId}`, '1');
+        // The server's own welcome (a first visit) is not what this gate is about.
+        localStorage.setItem(`paracord:v2:guild-welcomed:${guildId}`, '1');
       } catch {
         // A browser refusing storage keeps the old ask-and-see behavior anyway.
       }
     },
-    { epoch: HISTORY_EPOCH, scopeKey: JSON.stringify(['__local__', userPayload.id]), welcomed, guildId: GUILD_ID },
+    { epoch: HISTORY_EPOCH, scopeKey: JSON.stringify(['__local__', userPayload.id]), guildId: GUILD_ID },
   );
 
   page.on('pageerror', (error) => {
@@ -279,26 +253,8 @@ export async function installSmokeApp(page: Page, options: SmokeOptions = {}): P
     }
     if (path.endsWith('/messages/attention') && method === 'GET') {
       const id = path.split('/')[4];
-      const extra = homeChannels.find((channel) => channel.id === id);
-      const message = extra
-        ? { id: extra.last_message_id, channel_id: id, author: peerPayload, content: `Could you review ${extra.name}?`, attachments: [], reactions: [] }
-        : { id: '4000', channel_id: id, author: userPayload, content: 'An update waiting for you.', attachments: [], reactions: [] };
+      const message = { id: '4000', channel_id: id, author: userPayload, content: 'An update waiting for you.', attachments: [], reactions: [] };
       return json(200, { channel_id: id, user_id: userPayload.id, kind: url.searchParams.get('kind'), message });
-    }
-    if (app.showHomeFixtures && method === 'GET') {
-      const visible = homeChannels.find((item) => path === `/api/v1/guilds/${item.guild_id}/channels/visible`);
-      if (visible) return json(200, { channel_ids: [visible.id] });
-      const channel = homeChannels.find(
-        (item) => path === `/api/v1/guilds/${item.guild_id}/channels` || path === `/api/v1/channels/${item.id}/messages`,
-      );
-      if (channel) {
-        return json(
-          200,
-          path.endsWith('/messages')
-            ? [{ id: channel.last_message_id, channel_id: channel.id, author: peerPayload, content: `Could you review ${channel.name}?`, created_at: nowIso, attachments: [], reactions: [] }]
-            : [channel],
-        );
-      }
     }
     if (path === '/api/v1/auth/refresh' && method === 'POST') {
       return json(200, { token: 'smoke-token', refresh_token: 'smoke-refresh', user: userPayload });
@@ -369,7 +325,6 @@ export async function installSmokeApp(page: Page, options: SmokeOptions = {}): P
           member_count: 4,
           created_at: nowIso,
         }),
-        ...(app.showHomeFixtures ? homeSpaces : []),
       ]);
     }
     if (path === `/api/v1/guilds/${GUILD_ID}/channels/visible` && method === 'GET') {

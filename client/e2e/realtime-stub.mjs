@@ -7,8 +7,7 @@
 // It also has a back door. Two of WP9b's three signature moments — the lights
 // coming on and somebody walking into a room — are things the SERVER does, and
 // a gate that pokes the store directly would be measuring a fiction: the whole
-// point of `MotionDirector` is that the edge is detected from real gateway
-// traffic. So `POST /__emit` takes a gateway frame and writes it to every open
+// point is that the edge is detected from real gateway traffic. So `POST /__emit` takes a gateway frame and writes it to every open
 // stream, which is the same path a real `PRESENCE_UPDATE` takes.
 import { createServer } from 'node:http';
 

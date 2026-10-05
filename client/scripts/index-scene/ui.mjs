@@ -11,7 +11,7 @@
 //           the components exist; the first run against a real Index build
 //           (IX-7 onward) is its proof, and a control that is missing then is
 //           reported by name, never worked around.
-//   glass   today's build, through glass-scene/ui.mjs (its pill and stage).
+//   glass   today's build, through scene-lib/ui.mjs (its pill and stage).
 //           Deleted when IX-19 retires Glass.
 //
 // Moving between places never reloads the page: a reload would drop the call
@@ -20,10 +20,10 @@
 
 import { chromium } from '@playwright/test';
 
-import { mediaInitScript } from '../glass-scene/media-init.mjs';
+import { mediaInitScript } from '../scene-lib/media-init.mjs';
 import {
   MEDIA_ARGS, CONTROLS, closeCallStage, dismissOverlays, findControl, openCallStage, press, setToggle, waitForControl,
-} from '../glass-scene/ui.mjs';
+} from '../scene-lib/ui.mjs';
 
 export { dismissOverlays, findControl, press, waitForControl };
 

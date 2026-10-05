@@ -7,6 +7,7 @@ import path from 'node:path';
  * lands on another package's dev server.
  *
  *   cd client
+ *   npm run test:e2e:index                  # every index-*.spec.ts (CI runs this)
  *   PARACORD_E2E_INDEX_SPEC=index-smoke \
  *   PARACORD_E2E_INDEX_PORT=4513 PARACORD_E2E_INDEX_RT_PORT=4515 \
  *   PARACORD_E2E_INDEX_WP=ix0 \
@@ -43,6 +44,7 @@ export default defineConfig({
   testMatch: testMatch(),
   fullyParallel: false,
   workers: 1,
+  retries: process.env.CI ? 1 : 0,
   timeout: 90_000,
   expect: { timeout: 10_000 },
   reporter: [['list']],

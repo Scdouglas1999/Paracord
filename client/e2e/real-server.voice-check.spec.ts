@@ -20,7 +20,7 @@ import { expect, test, type Browser, type Page } from '@playwright/test';
 //
 // The check has two doors, and each is exercised: Settings, Voice & video (from
 // your face, the account menu) for someone not in a call, and "More call
-// actions", Connection check on the stage for someone who is.
+// actions", Connection check in the call view for someone who is.
 
 const PORT = process.env.PARACORD_E2E_PORT ?? '18150';
 const MEDIA_PORT = process.env.PARACORD_E2E_MEDIA_PORT ?? '8443';
@@ -128,22 +128,27 @@ async function signIn(page: Page): Promise<void> {
 }
 
 /**
- * Settings open from your face: the account face at the conversation header's
- * right edge (on a phone, at the top of the places screen, which is its own
- * screen there), then "Settings" in the account menu it opens.
+ * Settings open from your face: the avatar at the toolbar's right edge (on a
+ * phone, in the sidebar's header, which is its own root screen there), then
+ * "Settings" in the account menu it opens.
  */
 async function openSettings(page: Page): Promise<void> {
-  const face = page.getByRole('button', { name: /^Your profile, / }).first();
-  const back = page.getByRole('button', { name: 'Back to places', exact: true });
-  // A phone that opened on a page (Home opens its own page there) is one tap
-  // from its places screen, where the face is; a window wide enough for the
-  // panes shows it on the header. Wait for whichever the layout draws before
-  // choosing. Test the way back first: on a phone the places screen stays laid
-  // out (inert) beneath the page, so its face reads as visible while covered.
-  await expect(face.or(back).first()).toBeVisible();
-  if (await back.isVisible()) await back.click();
-  await face.click();
-  await page.getByRole('menuitem', { name: 'Settings', exact: true }).click();
+  const frame = page.locator('.ix-frame');
+  await expect(frame).toHaveAttribute('data-layout', /^(wide|narrow|phone)$/);
+  if ((await frame.getAttribute('data-layout')) === 'phone') {
+    // A phone that opened on a conversation is one tap from its sidebar, where
+    // the face is. The sidebar stays laid out (inert) beside the pushed screen,
+    // so wait for the screen itself rather than for the face to be "visible".
+    if ((await frame.getAttribute('data-screen')) === 'conversation') {
+      await page.getByTestId('ix-toolbar').getByRole('button', { name: 'Back to the sidebar', exact: true }).click();
+    }
+    await expect(frame).toHaveAttribute('data-screen', 'places');
+    await page.getByTestId('ix-phone-account').click();
+  } else {
+    await page.getByTestId('ix-toolbar').getByRole('button', { name: 'Your account', exact: true }).click();
+  }
+  // The row carries its shortcut as a hint ("Settings  Ctrl ,"), so match the label's start.
+  await page.getByRole('menu', { name: 'Account' }).getByRole('menuitem', { name: /^Settings\b/ }).click();
 }
 
 async function openConnectionCheck(page: Page): Promise<void> {
@@ -314,7 +319,7 @@ test.describe('voice connection check with the media UDP path blocked', () => {
 });
 
 test.describe('voice connection check from inside a call', () => {
-  test('More call actions on the stage opens the same check and leaves the call running', async ({
+  test('More call actions in the call view opens the same check and leaves the call running', async ({
     playwright,
   }) => {
     await withChromium(playwright, MEDIA_LAUNCH_ARGS, {}, async (page) => {
@@ -347,27 +352,20 @@ test.describe('voice connection check from inside a call', () => {
       await page.getByRole('button', { name: 'Log in', exact: true }).click();
       await expect(page).toHaveURL(/\/app/);
 
-      // A voice channel's route is its chat, with the call pill in its header.
+      // A voice channel's route is its chat; its row in the sidebar joins it, and
+      // once you are in, the room's card in the sidebar is yours.
       await page.goto(`${BASE}/app/guilds/${guildId}/channels/${channelId}`);
-      const pill = page.getByRole('main').getByRole('region', { name: 'lounge, live voice channel', exact: true });
-      const welcome = page.getByRole('button', { name: 'Close welcome screen', exact: true });
-      const join = pill.getByRole('button', { name: 'Join lounge', exact: true });
-      // The per-server welcome screen mounts a beat after the channels load and
-      // covers the pill: clear it, then press Join, until the press lands.
-      for (let attempt = 0; attempt < 8; attempt++) {
-        if (await welcome.isVisible().catch(() => false)) await welcome.click().catch(() => {});
-        try {
-          await join.click({ timeout: 3_000 });
-          break;
-        } catch {
-          // Not rendered yet, or the welcome screen landed between the look and the click.
-        }
-      }
-      await expect(pill.getByRole('button', { name: 'Leave lounge', exact: true })).toBeVisible({ timeout: 60_000 });
+      // (A new server comes with a "Lounge" of its own: pick ours by its id.)
+      const row = page.locator(`[data-testid="ix-room-row"][data-channel-id="${channelId}"]`);
+      await row.click();
+      const card = page.getByTestId('ix-room-card').and(page.locator('[data-state="yours"]'));
+      await expect(card).toBeVisible({ timeout: 60_000 });
 
-      // The call's own controls are the stage's: "Show the call" puts the call there.
-      await pill.getByRole('button', { name: 'Show the call', exact: true }).click();
-      const controls = page.getByRole('region', { name: 'Stage', exact: true }).getByRole('group', { name: 'Call controls', exact: true });
+      // The call's own controls are the call view's: "Open call" puts the call there.
+      await card.getByTestId('ix-card-open-call').click();
+      const call = page.getByTestId('ix-call');
+      await expect(call).toBeVisible();
+      const controls = call.getByRole('group', { name: 'Call controls', exact: true });
       await expect(controls).toBeVisible();
       await controls.getByRole('button', { name: 'More call actions', exact: true }).click();
       await page.getByRole('menu', { name: 'More call actions' }).getByRole('menuitem', { name: 'Connection check', exact: true }).click();
@@ -382,9 +380,15 @@ test.describe('voice connection check from inside a call', () => {
       // Closing it puts the person back in the call, which is still there.
       await dialog.getByText('Close', { exact: true }).click();
       await expect(dialog).toHaveCount(0);
+      await expect(call).toBeVisible();
       await expect(controls.getByRole('button', { name: 'Leave lounge', exact: true })).toBeVisible();
+      await expect(card).toBeVisible();
+
+      // Leaving ends the call for real: the call view goes with it, and so does your card.
       await controls.getByRole('button', { name: 'Leave lounge', exact: true }).click();
-      await expect(controls.getByRole('button', { name: 'Join lounge', exact: true })).toBeVisible({ timeout: 30_000 });
+      await expect(call).toHaveCount(0, { timeout: 30_000 });
+      await expect(page.getByTestId('ix-room-card')).toHaveCount(0);
+      await expect(row).toBeVisible();
     });
   });
 });

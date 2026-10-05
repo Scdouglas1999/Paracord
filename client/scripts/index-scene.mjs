@@ -9,7 +9,7 @@
 // real end-to-end encrypted DMs, and real calls: Vincent (sharing a canvas
 // scene and talking), Brendan and Nick (muted) each hold Game Night's Lounge in
 // their own Chromium, joined through the app's own controls, with the Glass
-// scene's fake media (glass-scene/media-init.mjs).
+// scene's fake media (scene-lib/media-init.mjs).
 //
 //   node scripts/live-env.mjs                          # an instance, :18420
 //   node client/scripts/index-scene.mjs                # seed, bring Lounge up, hold
@@ -69,9 +69,9 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { createApi } from './glass-scene/api.mjs';
-import { createRenderer } from './glass-scene/assets.mjs';
-import { launchBrowser } from './glass-scene/ui.mjs';
+import { createApi } from './scene-lib/api.mjs';
+import { createRenderer } from './scene-lib/assets.mjs';
+import { launchBrowser } from './scene-lib/ui.mjs';
 import { Cast } from './index-scene/cast.mjs';
 import { checkScene } from './index-scene/check.mjs';
 import { controlFile, findHolder, sendCommand, serveControl } from './index-scene/control.mjs';

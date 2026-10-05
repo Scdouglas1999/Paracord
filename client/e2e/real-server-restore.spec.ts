@@ -261,17 +261,6 @@ async function login(page: Page, base: string, email: string, password: string) 
   await expect(page).toHaveURL(/\/app/);
 }
 
-async function dismissOnboarding(page: Page) {
-  // The per-server welcome screen is the only first-run panel left.
-  try {
-    const button = page.getByRole('button', { name: 'Close welcome screen', exact: true });
-    await button.waitFor({ state: 'visible', timeout: 1500 });
-    await button.click();
-  } catch {
-    // Overlay never appeared.
-  }
-}
-
 const UUID_EPOCH = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 test('restored backup replaces live history for connected browsers without a reload', async ({ browser, playwright }, testInfo) => {
@@ -394,7 +383,7 @@ test('restored backup replaces live history for connected browsers without a rel
 
     // Two baseline messages (mention + chatter) leave the channel at
     // message_revision 2. The member never opens the channel, so the mention
-    // is unread and pinned on Home.
+    // stays unread and waits in the member's Inbox.
     const mentionPhrase = `restore-anchor-citadel-${unique}`;
     const ledgerPhrase = `baseline-ledger-${unique}`;
     const baselineMention = await ownerApi.post(`${BASE}/api/v1/channels/${channel.id}/messages`, {
@@ -444,17 +433,22 @@ test('restored backup replaces live history for connected browsers without a rel
     const sourceEpoch = ownerEpoch!;
     expect(memberEpoch).toBe(sourceEpoch);
 
-    // Owner watches the channel; member stays on Home to observe unread
-    // previews. The unread baseline mention must already be visible.
+    // Owner watches the channel; member stays in the People place, on its
+    // Inbox, to observe the unread mention (docs/index-spec.md §6.6). The Inbox
+    // is opened by the sidebar's own row, so nothing reloads and the wire the
+    // clients hold stays the one observed above. The unread baseline mention
+    // must already be visible.
     await ownerPage.goto(`${BASE}/app/guilds/${guild.id}/channels/${channel.id}`);
-    await dismissOnboarding(ownerPage);
     await expect(ownerPage.getByText(ledgerPhrase).first()).toBeVisible();
-    const memberHome = memberPage.getByRole('main');
-    const memberAttention = memberHome.getByRole('region', { name: 'For you' });
-    await expect(memberAttention).toBeVisible();
-    await expect(memberAttention.getByText(/mentioned you|1 mention for you/)).toBeVisible();
-    await expect(memberAttention.getByText(new RegExp(`@you ${mentionPhrase}`))).toBeVisible();
-    await dismissOnboarding(memberPage);
+    // A launch with no memory opens the member's first server; People is the
+    // dock's first place, and its sidebar's Inbox row opens the page.
+    await memberPage.getByRole('toolbar', { name: 'Servers' }).getByRole('button', { name: /^People/ }).click();
+    await memberPage.getByRole('link', { name: /^Inbox/ }).click();
+    const memberInbox = memberPage.getByTestId('ix-inbox');
+    const memberRows = memberInbox.getByTestId('ix-inbox-row');
+    await expect(memberRows).toHaveCount(1);
+    await expect(memberRows.first().locator('.ix-ib__badge')).toHaveText('1');
+    await expect(memberRows.first().getByText(new RegExp(`@you ${mentionPhrase}`))).toBeVisible();
 
     // ── Real backup through the admin API; archive lands in the configured
     //    backup directory. ──
@@ -490,14 +484,15 @@ test('restored backup replaces live history for connected browsers without a rel
 
     // Newer activity is actually live in both clients before the cutover.
     // The newest message is on screen twice now: in the conversation's feed, and
-    // as the preview line under the channel's name in the places panel. Both are
+    // as the preview line under the channel's name in the sidebar. Both are
     // live state, so each is asserted where it is drawn.
     await expect(ownerPage.getByLabel('Message history').getByText(new RegExp(signalPhrase))).toBeVisible();
     await expect(
-      ownerPage.getByRole('navigation', { name: 'Channels' }).getByRole('link', { name: /^anchor/ }).getByText(new RegExp(signalPhrase)),
+      ownerPage.getByTestId('ix-sidebar').getByTestId('ix-channel-row').filter({ hasText: /^anchor/ }).getByText(new RegExp(signalPhrase)),
     ).toBeVisible();
     await expect(ownerPage.getByText('after-backup').first()).toBeVisible();
-    await expect(memberAttention.getByText(/mentioned you|2 mentions for you/)).toBeVisible();
+    // The Inbox row is one conversation whose count follows the new mention.
+    await expect(memberRows.first().locator('.ix-ib__badge')).toHaveText('2');
     await ownerPage.screenshot({ path: testInfo.outputPath('restore-before-owner.png'), fullPage: true });
     await memberPage.screenshot({ path: testInfo.outputPath('restore-before-member.png'), fullPage: true });
 
@@ -555,12 +550,11 @@ test('restored backup replaces live history for connected browsers without a rel
     await expect(ownerPage.getByText(new RegExp(signalPhrase))).toHaveCount(0);
     await expect(ownerPage.getByText(new RegExp(`post-backup-drift-\\d-${unique}`))).toHaveCount(0);
     await expect(ownerPage.getByText('after-backup')).toHaveCount(0);
-    await expect(memberAttention.getByText(/mentioned you|1 mention for you/)).toBeVisible();
-    await expect(memberAttention.getByText(new RegExp(`@you ${mentionPhrase}`))).toBeVisible();
-    // The post-backup mention is gone with its message, so the room is one row
-    // again. §7.5 names the author rather than the count, so the count itself is
-    // no longer on the surface to assert — the row's preview above is.
-    await expect(memberAttention.getByRole('listitem')).toHaveCount(1);
+    // The post-backup mention is gone with its message: the row counts one
+    // mention again and previews the baseline one.
+    await expect(memberRows.first().locator('.ix-ib__badge')).toHaveText('1');
+    await expect(memberRows.first().getByText(new RegExp(`@you ${mentionPhrase}`))).toBeVisible();
+    await expect(memberRows).toHaveCount(1);
     await expect(memberPage.getByText(new RegExp(signalPhrase))).toHaveCount(0);
 
     // Both clients are still signed in: URLs never left /app, READY carried
@@ -587,8 +581,8 @@ test('restored backup replaces live history for connected browsers without a rel
 
     // ── Lower-revision proof: deleting both baseline messages moves the
     //    restored channel to revisions 3/4 — still below the abandoned 9 —
-    //    and member Home goes quiet live, so a stale revision-9 view cannot
-    //    remain pinned. ──
+    //    and the member's Inbox goes quiet live, so a stale revision-9 view
+    //    cannot remain pinned. ──
     const deleteMention = await ownerApi.delete(
       `${BASE}/api/v1/channels/${channel.id}/messages/${mentionMessage.id}`,
     );
@@ -599,11 +593,10 @@ test('restored backup replaces live history for connected browsers without a rel
     expect(deleteLedger.ok(), await deleteLedger.text()).toBe(true);
     const afterDeletes = await (await ownerApi.get(`${BASE}/api/v1/channels/${channel.id}`)).json();
     expect(afterDeletes.message_revision).toBe('4');
-    // §7.5 keeps the Needs-you section on the surface and lets it say so:
-    // "Nothing new for you right now." It is no longer removed when
-    // empty, because an absent section cannot tell you it checked.
-    await expect(memberHome.getByRole('region', { name: 'For you' }).getByRole('listitem')).toHaveCount(0);
-    await expect(memberHome.getByText('Nothing new for you right now.')).toBeVisible();
+    // The Inbox stays on the surface and says so when nothing is waiting: an
+    // absent list cannot tell you it checked.
+    await expect(memberRows).toHaveCount(0);
+    await expect(memberInbox.getByText('Nothing is waiting for you')).toBeVisible();
     await expect(ownerPage.getByText(ledgerPhrase)).toHaveCount(0);
     await memberPage.screenshot({ path: testInfo.outputPath('restore-quiet-member.png'), fullPage: true });
 

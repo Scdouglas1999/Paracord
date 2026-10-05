@@ -5,10 +5,9 @@ import { HISTORY_EPOCH, installIndexScene, outDir, type IndexHarness } from './f
 
 /**
  * M1 (send-flight merge): the send flight (docs/glass-spec.md §9, the owner's
- * protected signature gesture) in the Index frame, on the Index scene. The
- * Glass spec (`glass-send.spec.ts`) films it on the Glass scene and goes when
- * IX-19 retires the Glass specs; this one stays, so the flight keeps coverage
- * through IX-11 (timeline rebuild) and IX-12 (message box rebuild).
+ * protected signature gesture) in the Index frame, on the Index scene. It is the
+ * flight's e2e coverage (the Glass spec that filmed it on the Glass scene was
+ * retired by IX-19).
  *
  *   cd client
  *   PARACORD_E2E_INDEX_SPEC=index-send PARACORD_E2E_INDEX_PORT=4683 \
