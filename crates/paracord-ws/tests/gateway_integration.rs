@@ -1960,9 +1960,14 @@ async fn ready_carries_the_server_hue_and_voice_joined_at() {
         .unwrap();
     let ready: Value = serde_json::from_str(ready.to_text().unwrap()).unwrap();
     assert_eq!(ready["t"], "READY");
+    let guild_id_text = guild_id.to_string();
     let guild = ready["d"]["guilds"]
         .as_array()
-        .and_then(|guilds| guilds.iter().find(|g| g["id"] == guild_id.to_string()))
+        .and_then(|guilds| {
+            guilds
+                .iter()
+                .find(|g| g["id"].as_str() == Some(guild_id_text.as_str()))
+        })
         .unwrap_or_else(|| panic!("READY lists the server: {ready}"));
     serde_json::from_value::<paracord_contracts::guild::ReadyGuildCore>(guild.clone())
         .unwrap_or_else(|error| panic!("READY guild core ({error}): {guild}"));
