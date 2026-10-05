@@ -2,7 +2,7 @@ import { useCallback, useLayoutEffect, useMemo, useRef, useState, type MouseEven
 import { createPortal } from 'react-dom';
 
 import { activityLine, currentItem } from '../../../lib/together/model';
-import { useTogetherStore } from '../../../stores/togetherStore';
+import { useTogetherActivity, useTogetherStore } from '../../../stores/togetherStore';
 import { useVoiceStore } from '../../../stores/voiceStore';
 import { ContextMenu, type ContextMenuItem } from '../../ui/ContextMenu';
 import { UserProfilePopup } from '../../user/UserProfile';
@@ -71,6 +71,7 @@ export function RoomCard({ card, position, mayAnimate, exiting = false, onExited
   const now = useMinuteTick();
   const systemAudio = useVoiceStore((state) => state.systemAudioCaptureActive);
   const together = useTogetherStore((state) => state.calls[card.channelId]?.session ?? null);
+  const activity = useTogetherActivity(card.channelId);
 
   const action = useMemo<PillActionTarget>(
     () => ({ serverId: card.serverId, guildId: card.guildId, channelId: card.channelId, title: card.title }),
@@ -210,8 +211,18 @@ export function RoomCard({ card, position, mayAnimate, exiting = false, onExited
     else toggleSheet('people');
   };
 
+  // Under the head, what the room plays together (§7.2, §8.5). In a call you hear, the
+  // listen-together "now playing" line from the call's own session (a watch plays in the
+  // call view); for a room you are not in, the server's summary: "Watching ..." or
+  // "Listening to ...".
   const playing = card.heard && together ? currentItem(together) : null;
-  const nowPlaying = playing && together?.kind === 'listen' ? activityLine('listen', playing.title) : null;
+  const nowPlaying = card.heard
+    ? playing && together?.kind === 'listen'
+      ? activityLine('listen', playing.title)
+      : null
+    : activity
+      ? activityLine(activity.kind, activity.title)
+      : null;
   const label = cardLabel(card, now);
 
   return (

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import { useLocation, useNavigate } from 'react-router';
 
 import { extractApiError } from '../../../api/client';
+import { useGuildTogether } from '../../../hooks/useGuildTogether';
 import { useAvailableGuilds } from '../../../hooks/useGuilds';
 import { activateGuild } from '../../../lib/guildNavigation';
 import { serverHue } from '../../../lib/identityHue';
@@ -57,6 +58,8 @@ export function ServerSidebar({ guildId, leaving = false }: ServerSidebarProps) 
   // The roster and channel list of a server the pane is about to show: the route's page loads them
   // for the server you are in, and nothing else does for one you are sliding to.
   useServerRoster(guild);
+  // What each room plays together, for the room card's line (RoomCard).
+  useGuildTogether(leaving ? null : guild?.id);
   if (!guild) {
     return (
       <div className="ix-sb">

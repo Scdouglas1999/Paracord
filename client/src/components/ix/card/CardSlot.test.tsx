@@ -11,6 +11,7 @@ import { useGuildStore } from '../../../stores/guildStore';
 import { useMemberStore } from '../../../stores/memberStore';
 import { useRemoteSpeakingStore } from '../../../stores/remoteSpeakingStore';
 import { useToastStore } from '../../../stores/toastStore';
+import { useTogetherStore } from '../../../stores/togetherStore';
 import { useVoiceStore } from '../../../stores/voiceStore';
 import type { VoiceState } from '../../../types';
 import { useJoinMuteStore } from '../../glass/pill/muteStore';
@@ -134,6 +135,7 @@ beforeEach(() => {
   useAuthStore.setState({ user: { id: 'me', username: 'sean', display_name: 'Sean', avatar_hash: null } } as never);
   useGlassStore.getState().reset();
   useToastStore.setState({ toasts: [] });
+  useTogetherStore.getState().reset();
   useListenBlockStore.setState({ blocked: {} });
   useJoinMuteStore.setState({ joinMuted: false });
   useRemoteSpeakingStore.setState({ byChannel: new Map() });
@@ -191,6 +193,30 @@ describe('the inline card', () => {
     expect(names()).toEqual(['Vincent', 'Brendan']);
     // Listen appears once the server says the room admits listeners.
     expect(await within(card()).findByTestId('ix-card-listen')).toHaveAccessibleName('Listen in to Lounge');
+  });
+
+  it('says what a room you are not in plays together, under the head', () => {
+    useVoiceStore.setState({ channelParticipants: new Map([['lounge', [VINCENT, BRENDAN]]]) });
+    renderSlot('inline');
+    expect(card().querySelector('.ix-room-card__line')).toBeNull();
+    const activity = {
+      session_id: 's1',
+      kind: 'watch' as const,
+      started_by: 'vincent',
+      playing: true,
+      title: 'Big Buck Bunny',
+      source: 'url' as const,
+      thumbnail: null,
+      item_count: 1,
+    };
+    act(() => useTogetherStore.getState().applyActivityUpdate({ guild_id: 'g1', channel_id: 'lounge', revision: 1, activity }));
+    expect(within(card()).getByText('Watching Big Buck Bunny')).toHaveClass('ix-room-card__line');
+    act(() =>
+      useTogetherStore.getState().applyActivityUpdate({ guild_id: 'g1', channel_id: 'lounge', revision: 2, activity: { ...activity, kind: 'listen', title: null } }),
+    );
+    expect(within(card()).getByText('Listening together')).toBeInTheDocument();
+    act(() => useTogetherStore.getState().applyActivityUpdate({ guild_id: 'g1', channel_id: 'lounge', revision: 3, activity: null }));
+    expect(card().querySelector('.ix-room-card__line')).toBeNull();
   });
 
   it('Join and Listen call the voice store (Join applies the mute preference first)', async () => {
