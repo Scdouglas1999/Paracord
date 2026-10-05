@@ -189,6 +189,8 @@ test.describe('IX-7 live room card', () => {
     await cardOpenCall(yours).click();
     await expect(page.locator('#ix-call-host > *')).toHaveCount(1);
     await expect(cardOpenCall(yours)).toHaveAccessibleName('Back to chat');
+    await page.waitForTimeout(400);
+    await crop(yours, 'card-s2-back-to-chat');
     expect(await page.evaluate(async () => {
       const glass = (await import('/src/stores/glassStore.ts' as string)) as any;
       return glass.useGlassStore.getState().stage;
@@ -406,6 +408,20 @@ test.describe('IX-7 live room card', () => {
     await h.step('arrive');
     await h.step('join');
     await cardMotionSettles(page);
+    // Both labels read in full (never "Back to ch..."): at 1280 with the 316px sidebar here,
+    // and at 900 with the 280px one below.
+    const labels = () =>
+      roomCard(page, 'yours').evaluate((card) =>
+        [...card.querySelectorAll<HTMLElement>('[data-testid="ix-card-open-call"] .ix-swap > span')].map((label) => ({
+          text: label.textContent,
+          clipped: label.scrollWidth > label.clientWidth,
+        })),
+      );
+    const whole = [
+      { text: 'Open call', clipped: false },
+      { text: 'Back to chat', clipped: false },
+    ];
+    expect(await labels()).toEqual(whole);
     await shoot(page, 's2-joined', { size: 'desktop' });
     await shoot(page, 's2-joined', { size: 'narrow' });
     // The 280px sidebar: the wide control keeps its words inside it, open or closed.
@@ -417,6 +433,7 @@ test.describe('IX-7 live room card', () => {
         return wide.right <= leave.left;
       });
     expect(await fits()).toBe(true);
+    expect(await labels()).toEqual(whole);
     await crop(yours, 'card-narrow');
     await cardOpenCall(yours).click();
     await page.waitForTimeout(400);

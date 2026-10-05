@@ -334,6 +334,13 @@
   margin-top: 10px;
 }
 
+/* The wide control's label is centered, so its side padding is only a minimum:
+   8px leaves "Back to chat" whole between three icon controls and Leave in the
+   316px sidebar (12px clipped it to "Back to ch..."). */
+.ix-room-card .ix-ctl--wide {
+  padding: 0 8px;
+}
+
 /* "Open call" and "Back to chat" crossfade in place (§5.8, 200ms). Both sit in
    one cell, which may be narrower than the longer label: each label centers
    and, in a narrow sidebar, ellipsizes rather than spill over its neighbors. */
