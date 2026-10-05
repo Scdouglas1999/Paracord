@@ -365,7 +365,7 @@ States:
 Section label "Channels" (or the category name, sentence case, for channels in
 a category; uncategorized first). A hover-revealed `+` at the label's right
 creates a channel (Manage Channels only). Clicking a category label collapses
-it (chevron appears only on hover/focus, rotates 90° in 90ms); collapsed
+it (chevron appears only on hover/focus, rotates 90° in 60ms); collapsed
 categories still show unread rows.
 
 Rows: name (no `#`), time of the last message (today: "9:41 PM"; this week:
@@ -405,7 +405,7 @@ list.
 People first (your avatar, 34px circle), separator, servers in the user's
 order, then `+` (Join or create a server). Behavior:
 
-- Click switches place (§5.1). Hover: lift −2px (160ms spring) and a name
+- Click switches place (§5.1). Hover: lift −2px (105ms spring) and a name
   tooltip above after 400ms (near-solid, radius 8, 12.5/600).
 - Current: indicator under it, mark at `scale(1.08)`; others at opacity .82.
 - Live dot (amber) when any room in that server has people; pings once (§5)
@@ -435,7 +435,7 @@ large title. In a DM: a call button (phone glyph) joins the left of search;
 in a channel with threads, pins etc. those live in the channel menu, not the
 toolbar. Until the conversation has scrolled 40px the toolbar is transparent;
 past that it takes `rgba(16,17,19,.92)` and a bottom hairline (color
-transition 135ms; no blur, §1.9).
+transition 90ms; no blur, §1.9).
 
 ### 4.10 Calls in People (DMs)
 
@@ -546,7 +546,7 @@ is the only send motion. Index does not change send behavior.
 - **Any other empty channel**: "`<channel>` is ready", the topic or "Nothing
   here yet." as the line, and the cards that fit (Say hello; Plan a night in a
   channel the user may post events to). The welcome replaces itself once the
-  first message lands (crossfade 135ms).
+  first message lands (crossfade 90ms).
 - **New DM**: the person's 76px avatar, their name (24/600), "You're friends"
   or "You share Game Night", one card: Say hello.
 - **Nothing selected** (People with no DMs): the Friends page.
@@ -556,43 +556,48 @@ is the only send motion. Index does not change send behavior.
 ## 5. Motion
 
 Curves: **spring** `cubic-bezier(.32,.72,0,1)`; **ease** `cubic-bezier(.2,.8,.2,1)`.
-Every duration below is 1/2.2 of the prototype's (the owner, after living in the
-app: "the animations are too slow ... maybe 2x faster, maybe slightly beyond").
+Every duration below is 1/3.3 of the prototype's: the owner, after living in the
+app, found them too slow ("maybe 2x faster, maybe slightly beyond"), so they went
+to 1/2.2, and then, "still too slow", another 1/1.5 (each step rounded to 5ms).
+Nothing visible is shorter than 40ms (a hover color change, a menu leaving).
 Curves, distances, scales and stagger shapes are the prototype's, only the clock
-moved; delays and staggers scale with it. Not scaled: the talking ring's fades
-(§5.19) and the waveform's grid (they are continuous indicators, tuned for CPU
-cost), the tooltip's 400ms show delay (an intent delay, not an animation), and
-the 2s, 4s read times. The send flight (§5.11) is 280ms (was 620ms) with its
-colour handoff, overshoot and the composer's press and the send control's release
-scaled with it (the handoff window is widened from 14-22% to 12-24% of the flight so it stays two frames at 60Hz).
+moved; delays and staggers scale with it. The spring in code (stiffness 2835,
+damping 112.5) is the prototype's clock too, same damping ratio. Not scaled:
+the talking ring's fades (§5.19) and the waveform's grid (they are continuous
+indicators, tuned for CPU cost), the tooltip's 400ms show delay (an intent
+delay, not an animation), long-press and hover-intent delays, the 2s, 4s read
+times and the soundboard burst. The send flight (§5.11) is 185ms (was 620ms)
+with its overshoot, the composer's press and the send control's release scaled
+with it; the colour handoff window is widened from the prototype's 14-22% to
+10-28% of the flight so it stays two frames (33ms) at 60Hz.
 All durations below are for full motion; reduced motion replaces every move
-with a 100ms opacity crossfade, removes pings and lifts, and stills the
+with a 65ms opacity crossfade, removes pings and lifts, and stills the
 waveform. Every animation is transform/opacity (Web Animations or CSS) and is
 triggered by an event; nothing loops at rest. Animations are canceled and
 committed if a newer event of the same kind starts (no queueing).
 
 | # | Moment | Motion |
 |---|---|---|
-| 5.1 | **Switch place** (dock) | Old sidebar pane `translateX(−dir×40%)`, opacity 1→0, 205ms spring, then removed; new pane from `translateX(dir×60%)`, opacity 0→1, 250ms spring (`dir` = sign of the dock index change). The pinned call card does not slide (§5.4). Window tint: the new hue's sidebar background and main glow are separate layers that fade in over the old ones, 410ms ease, then the old layers are removed. Dock indicator glides to the new item, 250ms spring; marks scale 1↔1.08, 205ms spring. Main: title and feed enter as 5.2 with `dir` = 0, as the prototype plays a server switch (the sidebar is already sliding across; IX-18) |
-| 5.2 | **Switch channel** | Selection highlight `translateY` to the new row, 205ms spring (fixed row height, so no height animation). Main title from `translateY(dir×14+4px)` + fade, 190ms spring; feed from `translateY(dir×22px)` + fade, 220ms spring (`dir` = sign of the row index change; 0 for a jump from elsewhere) |
-| 5.3 | **Preview changes** (new message in another channel) | The preview line from `translateY(9px)`, opacity 0, 235ms spring; time fades in 180ms. Unread dot scales 0→1, 205ms spring (also 1→0 when read) |
-| 5.4 | **Pinned call card** | When the card is above the header (another place), switching between other places leaves it still. Switching to or from the call's own server moves it between "above the header" and "under the search" with a FLIP translate, 250ms spring, while the panes slide beneath |
-| 5.5 | **Room goes live / someone joins** | The card enters: `translateY(−8px) scale(.97)`, opacity 0 → none, 275ms spring, 55ms after the content below it starts to move down with a FLIP translate, 275ms spring (the card is translucent: the rows must not slide through it; IX-18). A person row enters the same way, 225ms spring. A person leaving: row fades and scales to .97, 115ms ease, then rows below FLIP up, 205ms spring. The room emptying: the card reverses (135ms ease) and the list FLIPs up. Dock: live dot scales in, 205ms spring, and **pings once**: an amber 2px ring around the dot from `scale(1)`, opacity 1 to `scale(2.2)`, opacity 0, 545ms ease (only when that server is not current) |
-| 5.6 | **Plan a night** | The draft event card grows out of the clicked action card: FLIP from the action card's rect (translate + scale), opacity .5→1, 295ms spring; the welcome crossfades out (135ms) |
+| 5.1 | **Switch place** (dock) | Old sidebar pane `translateX(−dir×40%)`, opacity 1→0, 135ms spring, then removed; new pane from `translateX(dir×60%)`, opacity 0→1, 165ms spring (`dir` = sign of the dock index change). The pinned call card does not slide (§5.4). Window tint: the new hue's sidebar background and main glow are separate layers that fade in over the old ones, 275ms ease, then the old layers are removed. Dock indicator glides to the new item, 165ms spring; marks scale 1↔1.08, 135ms spring. Main: title and feed enter as 5.2 with `dir` = 0, as the prototype plays a server switch (the sidebar is already sliding across; IX-18) |
+| 5.2 | **Switch channel** | Selection highlight `translateY` to the new row, 135ms spring (fixed row height, so no height animation). Main title from `translateY(dir×14+4px)` + fade, 125ms spring; feed from `translateY(dir×22px)` + fade, 145ms spring (`dir` = sign of the row index change; 0 for a jump from elsewhere) |
+| 5.3 | **Preview changes** (new message in another channel) | The preview line from `translateY(9px)`, opacity 0, 155ms spring; time fades in 120ms. Unread dot scales 0→1, 135ms spring (also 1→0 when read) |
+| 5.4 | **Pinned call card** | When the card is above the header (another place), switching between other places leaves it still. Switching to or from the call's own server moves it between "above the header" and "under the search" with a FLIP translate, 165ms spring, while the panes slide beneath |
+| 5.5 | **Room goes live / someone joins** | The card enters: `translateY(−8px) scale(.97)`, opacity 0 → none, 185ms spring, 35ms after the content below it starts to move down with a FLIP translate, 185ms spring (the card is translucent: the rows must not slide through it; IX-18). A person row enters the same way, 150ms spring. A person leaving: row fades and scales to .97, 75ms ease, then rows below FLIP up, 135ms spring. The room emptying: the card reverses (90ms ease) and the list FLIPs up. Dock: live dot scales in, 135ms spring, and **pings once**: an amber 2px ring around the dot from `scale(1)`, opacity 1 to `scale(2.2)`, opacity 0, 365ms ease (only when that server is not current) |
+| 5.6 | **Plan a night** | The draft event card grows out of the clicked action card: FLIP from the action card's rect (translate + scale), opacity .5→1, 195ms spring; the welcome crossfades out (90ms) |
 | 5.7 | **Join** | The card swaps to "yours": the yours layer (stronger tint, edge and glow, drawn as a second background layer) fades in 180ms ease. Your row flies from the toolbar avatar to its place: translate + scale from the avatar's rect, 340ms spring, above the other rows; your name holds at opacity 0 until 45% then fades in, and the new controls are there at once, as in the prototype (IX-18). No line is added to any conversation (§4.11) |
-| 5.8 | **Open call / Back to chat** | Open: the call surface grows out of the card: from the card's rect (translate + non-uniform scale, `transform-origin: 0 0`), opacity .3→1, 275ms spring; the tiles and controls fade in from 40% to 75% (they do not scale with the surface; they are in a counter-layer that only fades; whole by 75% so the call is drawn when the surface arrives, as the prototype; IX-18). Back to chat: the reverse into the card, 205ms spring, then hidden. The card's wide control label crossfades between "Open call" and "Back to chat", 90ms. Native video surfaces show their poster frame during the move and attach after it settles (§7.6) |
-| 5.9 | **Theater** (T) | The call surface FLIPs from main's inset to the window's inset 10 over the sidebar, 275ms spring; the sidebar dims to opacity .4 beneath. Reverse the same |
-| 5.10 | **Message arrives** (from others) | The new group or bubble from `translateY(14px) scale(.96)`, opacity 0, 250ms spring, `transform-origin` at the avatar side; earlier content FLIPs up when it was at the bottom |
-| 5.11 | **Send** | Owned by `feat/send-flight` (arc out of the message box, 280ms; the words become the bubble between 12% and 24% of it, 34ms, two frames at 60Hz). Index composes with it and changes nothing in its path or timing; the ghost flies in the conversation's own layer, under the timeline's rows, so where it crosses the last bubble early in the flight it passes behind it (IX-18) |
-| 5.12 | **Message box opens** | The capsule is three slices (top cap, stretchable middle, bottom row) so the corners never distort: the top cap translates up 46px and the middle scales from 0 to 1 in Y, 225ms spring; the tools row from `translateY(6px)`, opacity 0, 135ms opacity with 35ms delay and 205ms spring translate. The layout height changes once at the start; the feed above it FLIPs from its old position, 225ms spring, so nothing jumps. Closing reverses in 160ms. The focus edge and halo fade in (opacity of a ring layer), 115ms |
-| 5.13 | **Send button** | Quiet → cream when text appears: background color transition 90ms (color transitions are allowed) |
-| 5.14 | **Title fold** | Scroll-linked, no timer: `t = min(1, scrollTop/60)`; large title `scale(1 − .1t)`, opacity `1 − .9t`, `transform-origin: 0 50%`. Past 40px the folded title enters from `translateY(6px)` + fade (115ms opacity, 160ms spring) and the toolbar background appears (135ms color). Updates on `scroll` with one `requestAnimationFrame` per frame at most |
-| 5.15 | **Hover lifts** | Dock items −2px (160ms spring); action cards −3px (180ms spring); rows and controls: background one step lighter, 55ms ease (color only) |
-| 5.16 | **Copy feedback** | Label crossfade 90ms ("Link copied"), back after 2s |
-| 5.17 | **Sheets** | People, search, channel pages slide in from the right edge of main: `translateX(24px)`, opacity 0 → none, 175ms spring; out 115ms ease. Menus and popovers: `scale(.97)` + fade from their anchor, 80ms ease; out 55ms |
-| 5.18 | **Toasts** | Top center of main under the toolbar: from `translateY(−8px)` + fade, 135ms spring; out 90ms; 4s default |
+| 5.8 | **Open call / Back to chat** | Open: the call surface grows out of the card: from the card's rect (translate + non-uniform scale, `transform-origin: 0 0`), opacity .3→1, 185ms spring; the tiles and controls fade in from 40% to 75% (they do not scale with the surface; they are in a counter-layer that only fades; whole by 75% so the call is drawn when the surface arrives, as the prototype; IX-18). Back to chat: the reverse into the card, 135ms spring, then hidden. The card's wide control label crossfades between "Open call" and "Back to chat", 60ms. Native video surfaces show their poster frame during the move and attach after it settles (§7.6) |
+| 5.9 | **Theater** (T) | The call surface FLIPs from main's inset to the window's inset 10 over the sidebar, 185ms spring; the sidebar dims to opacity .4 beneath. Reverse the same |
+| 5.10 | **Message arrives** (from others) | The new group or bubble from `translateY(14px) scale(.96)`, opacity 0, 165ms spring, `transform-origin` at the avatar side; earlier content FLIPs up when it was at the bottom |
+| 5.11 | **Send** | Owned by `feat/send-flight` (arc out of the message box, 185ms; the words become the bubble between 10% and 28% of it, 33ms, two frames at 60Hz). Index composes with it and changes nothing in its path or timing; the ghost flies in the conversation's own layer, under the timeline's rows, so where it crosses the last bubble early in the flight it passes behind it (IX-18) |
+| 5.12 | **Message box opens** | The capsule is three slices (top cap, stretchable middle, bottom row) so the corners never distort: the top cap translates up 46px and the middle scales from 0 to 1 in Y, 150ms spring; the tools row from `translateY(6px)`, opacity 0, 90ms opacity with 25ms delay and 135ms spring translate. The layout height changes once at the start; the feed above it FLIPs from its old position, 150ms spring, so nothing jumps. Closing reverses in 105ms. The focus edge and halo fade in (opacity of a ring layer), 75ms |
+| 5.13 | **Send button** | Quiet → cream when text appears: background color transition 60ms (color transitions are allowed) |
+| 5.14 | **Title fold** | Scroll-linked, no timer: `t = min(1, scrollTop/60)`; large title `scale(1 − .1t)`, opacity `1 − .9t`, `transform-origin: 0 50%`. Past 40px the folded title enters from `translateY(6px)` + fade (75ms opacity, 105ms spring) and the toolbar background appears (90ms color). Updates on `scroll` with one `requestAnimationFrame` per frame at most |
+| 5.15 | **Hover lifts** | Dock items −2px (105ms spring); action cards −3px (120ms spring); rows and controls: background one step lighter, 40ms ease (color only) |
+| 5.16 | **Copy feedback** | Label crossfade 60ms ("Link copied"), back after 2s |
+| 5.17 | **Sheets** | People, search, channel pages slide in from the right edge of main: `translateX(24px)`, opacity 0 → none, 115ms spring; out 75ms ease. Menus and popovers: `scale(.97)` + fade from their anchor, 55ms ease; out 40ms |
+| 5.18 | **Toasts** | Top center of main under the toolbar: from `translateY(−8px)` + fade, 90ms spring; out 60ms; 4s default |
 | 5.19 | **Talking ring** | Opacity 150ms in, 300ms out (§4.4) |
-| 5.20 | **Category collapse** | Rows fade (70ms) and the rest of the sidebar FLIPs up, 205ms spring; chevron rotates 90ms |
+| 5.20 | **Category collapse** | Rows fade (45ms) and the rest of the sidebar FLIPs up, 135ms spring; chevron rotates 60ms |
 
 The motion lint's existing allowances keep applying; any new allowance needs a
 named reason in `scripts/motion-lint.mjs`. The FLIP helpers in `lib/motion`
@@ -706,7 +711,7 @@ servers as 24px marks, actions: **Message** (cream), Call (control), "…"
 ### 6.10 Media viewer
 
 The existing lightbox restyled: `rgba(8,8,10,.96)` full window, the image
-grows out of its bubble (FLIP, 205ms spring) and shrinks back on close; close
+grows out of its bubble (FLIP, 135ms spring) and shrinks back on close; close
 and arrows as 40px controls; caption line at the bottom.
 
 ### 6.11 Pickers and popovers
@@ -721,7 +726,7 @@ picker: the same popover anchored to the action capsule. Tooltips: near-solid
 Centered, max 440 wide, radius 20, `--ix-card`, title 17/700, body 14 ink-2,
 actions right-aligned: a text Cancel and one cream confirm; destructive
 confirms use `--ix-danger-ink` text on `--ix-danger-fill` instead of cream.
-Enter: `scale(.97)` + fade, 100ms spring; scrim `rgba(0,0,0,.5)` fades 90ms.
+Enter: `scale(.97)` + fade, 65ms spring; scrim `rgba(0,0,0,.5)` fades 60ms.
 
 ### 6.13 Density
 
@@ -868,7 +873,7 @@ big".
   and a filmstrip of 64px faces (no cameras: one fewer native surface under a
   stream that fills the window; the talker's ring, no waveform) float over the
   stream on dark scrims (`--ix-chrome-scrim`), near-solid buttons. They show
-  on a pointer move, a tap or a key, and go after **2 s** of stillness: an 80ms
+  on a pointer move, a tap or a key, and go after **2 s** of stillness: a 55ms
   fade (`--duration-normal`) and a 6px slide, then not painted at all, the
   cursor hidden over the stream. They stay while the pointer rests on one of
   their controls, while a menu they opened is up, or while the keyboard is on
@@ -1029,8 +1034,8 @@ breakpoint; `data-layout="phone"` switches screens and the hidden screen is
   (account menu), with "…" left of it.
 - The live room card and the pinned call card sit at the top, as on desktop.
 - **Conversation is pushed**: tapping a channel, DM, Friends, Inbox or an
-  add-on slides the page in from the right (165ms spring; the root moves
-  −30% beneath; reduced motion 100ms fade). The dock goes with the root. The
+  add-on slides the page in from the right (110ms spring; the root moves
+  −30% beneath; reduced motion 65ms fade). The dock goes with the root. The
   page has a 52px toolbar (back chevron, folded title, search, members), a
   30/700 large title that folds the same way, and the message box above the
   safe area. Edge swipe or the back chevron returns.
@@ -1040,7 +1045,7 @@ breakpoint; `data-layout="phone"` switches screens and the hidden screen is
   uses the same strip with Decline / Accept.
 - **Call as a sheet**: Open call / Watch / the strip present the call view as a
   bottom sheet over everything (top inset: safe area + 8, radius 24 on the top
-  corners, grab handle), rising from the card or strip (190ms spring). Drag
+  corners, grab handle), rising from the card or strip (125ms spring). Drag
   down or Back to chat dismisses it. People tiles in one column (two above two
   people); a stream sits 16:9 at the top with people below; controls at the
   bottom above the safe area. Landscape or the fullscreen control shows the

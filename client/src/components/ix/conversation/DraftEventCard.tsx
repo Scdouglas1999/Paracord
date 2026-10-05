@@ -4,8 +4,8 @@ import { EventButton, EventCard } from '../../glass/cards/EventCard';
 import { flipFromRect } from '../motion';
 import { draftMeta, draftTile, type DraftPlan } from './draftEvent';
 
-/** §5.6: the draft grows out of the action card, 295ms on the spring, from half opacity. */
-export const DRAFT_MORPH_MS = 295;
+/** §5.6: the draft grows out of the action card, 195ms on the spring, from half opacity. */
+export const DRAFT_MORPH_MS = 195;
 export const DRAFT_MORPH_OPACITY = 0.5;
 
 export interface DraftEventCardProps {

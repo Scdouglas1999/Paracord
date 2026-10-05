@@ -472,7 +472,7 @@ export function EmojiPicker({ onSelect, onClose, position, guildId, leaving = fa
   // ---------------------------------------------------------------------------
 
   const emojiCellClass =
-    'pc-focusable flex aspect-square items-center justify-center rounded-[10px] text-[22px] leading-none outline-none transition-colors duration-[55ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill)] active:bg-[var(--ix-fill-2)] ';
+    'pc-focusable flex aspect-square items-center justify-center rounded-[10px] text-[22px] leading-none outline-none transition-colors duration-[40ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill)] active:bg-[var(--ix-fill-2)] ';
 
   const pickerContent = (
     <div
@@ -492,7 +492,7 @@ export function EmojiPicker({ onSelect, onClose, position, guildId, leaving = fa
                 setCustomizeMode(false);
                 setCustomizeSlot(null);
               }}
-              className="pc-focusable rounded-[8px] px-2 py-1 text-[13px] font-semibold text-[var(--ix-ink)] outline-none transition-colors duration-[55ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill)] active:bg-[var(--ix-fill-2)] "
+              className="pc-focusable rounded-[8px] px-2 py-1 text-[13px] font-semibold text-[var(--ix-ink)] outline-none transition-colors duration-[40ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill)] active:bg-[var(--ix-fill-2)] "
             >
               Done
             </button>
@@ -500,7 +500,7 @@ export function EmojiPicker({ onSelect, onClose, position, guildId, leaving = fa
             <button
               type="button"
               onClick={() => setCustomizeMode(true)}
-              className="pc-focusable rounded-[8px] px-2 py-1 text-[13px] font-medium text-[var(--ix-ink-2)] outline-none transition-colors duration-[55ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill)] hover:text-[var(--ix-ink)] active:bg-[var(--ix-fill-2)] "
+              className="pc-focusable rounded-[8px] px-2 py-1 text-[13px] font-medium text-[var(--ix-ink-2)] outline-none transition-colors duration-[40ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill)] hover:text-[var(--ix-ink)] active:bg-[var(--ix-fill-2)] "
             >
               Customize
             </button>
@@ -520,7 +520,7 @@ export function EmojiPicker({ onSelect, onClose, position, guildId, leaving = fa
                 }
               }}
               className={cn(
-                'pc-focusable flex h-9 flex-1 items-center justify-center rounded-[10px] text-2xl leading-none outline-none transition-colors duration-[55ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill)] active:bg-[var(--ix-fill-2)] ',
+                'pc-focusable flex h-9 flex-1 items-center justify-center rounded-[10px] text-2xl leading-none outline-none transition-colors duration-[40ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill)] active:bg-[var(--ix-fill-2)] ',
                 customizeMode && customizeSlot === i && 'bg-[var(--ix-fill-2)]',
               )}
               style={{
@@ -546,7 +546,7 @@ export function EmojiPicker({ onSelect, onClose, position, guildId, leaving = fa
               type="button"
               onClick={() => setActiveTab(tab)}
               className={cn(
-                'pc-focusable h-7 rounded-[8px] px-2.5 text-[13px] font-semibold outline-none transition-colors duration-[55ms] ease-[var(--ix-ease)]',
+                'pc-focusable h-7 rounded-[8px] px-2.5 text-[13px] font-semibold outline-none transition-colors duration-[40ms] ease-[var(--ix-ease)]',
                 activeTab === tab
                   ? 'bg-[var(--ix-fill)] text-[var(--ix-ink)]'
                   : 'text-[var(--ix-ink-3)] hover:text-[var(--ix-ink)]',
@@ -614,7 +614,7 @@ export function EmojiPicker({ onSelect, onClose, position, guildId, leaving = fa
                     type="button"
                     title={`:${emoji.name}:`}
                     onClick={() => handleServerEmojiClick(emoji)}
-                    className="pc-focusable flex min-h-[56px] flex-col items-center justify-center gap-1 rounded-[10px] px-1 py-1 outline-none transition-colors duration-[55ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill)] active:bg-[var(--ix-fill-2)] "
+                    className="pc-focusable flex min-h-[56px] flex-col items-center justify-center gap-1 rounded-[10px] px-1 py-1 outline-none transition-colors duration-[40ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill)] active:bg-[var(--ix-fill-2)] "
                   >
                     <CustomEmojiImage
                       guildId={guildId}
@@ -675,7 +675,7 @@ export function EmojiPicker({ onSelect, onClose, position, guildId, leaving = fa
                 aria-pressed={active}
                 onClick={() => scrollToCategory(i)}
                 className={cn(
-                  'pc-focusable flex h-8 flex-1 items-center justify-center rounded-[10px] outline-none transition-colors duration-[55ms] ease-[var(--ix-ease)] ',
+                  'pc-focusable flex h-8 flex-1 items-center justify-center rounded-[10px] outline-none transition-colors duration-[40ms] ease-[var(--ix-ease)] ',
                   active
                     ? 'bg-[var(--ix-fill-2)] text-[var(--ix-ink)]'
                     : 'text-[var(--ix-ink-3)] hover:bg-[var(--ix-fill)] hover:text-[var(--ix-ink)] active:bg-[var(--ix-fill-2)]',

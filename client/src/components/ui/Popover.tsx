@@ -179,7 +179,7 @@ export const MenuItem = React.forwardRef<HTMLButtonElement, MenuItemProps>(funct
       className={cn(
         'pc-focusable flex w-full items-center gap-2.5 rounded-[10px] px-2.5 text-left',
         'h-9 text-[14px] font-medium',
-        'transition-[background-color,color] duration-[55ms] ease-[var(--ix-ease)]',
+        'transition-[background-color,color] duration-[40ms] ease-[var(--ix-ease)]',
         danger
           ? 'text-[var(--ix-danger-ink)] hover:bg-[var(--ix-danger-fill)]'
           : 'text-[var(--ix-ink)] hover:bg-[var(--ix-fill)] active:bg-[var(--ix-fill-2)]',

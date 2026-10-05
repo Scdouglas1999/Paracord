@@ -46,7 +46,7 @@ const TONES: Record<IconButtonTone, string> = {
 /**
  * IconButton: an icon-only control (docs/index-spec.md §3.1), 28 / 36 / 44, and
  * 46 for a call control. Pass the icon as the child and its name as `label`.
- * Hover is one step lighter, press one step darker, 55ms; nothing scales.
+ * Hover is one step lighter, press one step darker, 40ms; nothing scales.
  */
 export const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(
   function IconButton(
@@ -62,7 +62,7 @@ export const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(
         aria-pressed={active || undefined}
         className={cn(
           'pc-focusable inline-flex shrink-0 select-none items-center justify-center',
-          'transition-[background-color,color] duration-[55ms] ease-[var(--ix-ease)]',
+          'transition-[background-color,color] duration-[40ms] ease-[var(--ix-ease)]',
           'disabled:pointer-events-none disabled:opacity-[.45]',
           SIZES[size],
           TONES[tone],

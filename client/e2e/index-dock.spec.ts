@@ -194,7 +194,7 @@ test.describe('the dock at rest (§4.8)', () => {
 });
 
 test.describe('switching (§5.1)', () => {
-  test('the indicator glides to the new place in 250ms on the spring while the mark scales', async ({ page }) => {
+  test('the indicator glides to the new place in 165ms on the spring while the mark scales', async ({ page }) => {
     const h = await open(page);
     // s1 first, so the dock is the prototype's s4: Fuel live with something unread.
     await h.step('arrive');
@@ -214,7 +214,7 @@ test.describe('switching (§5.1)', () => {
         to: frames[frames.length - 1]?.transform,
       };
     });
-    expect(glide.duration).toBe(250);
+    expect(glide.duration).toBe(165);
     expect(glide.easing).toBe('cubic-bezier(0.32, 0.72, 0, 1)');
     expect(glide.props).toEqual(['transform']);
     expect(glide.from).not.toBe(glide.to);
@@ -265,7 +265,7 @@ test.describe('the ping (§5.5)', () => {
 
     await h.step('arrive');
     await expect(dockItem(page, 'fuel')).toHaveAttribute('data-live', '');
-    // The ring: a 2px amber ring from scale(1), opacity 1 to scale(2.2), opacity 0, 545ms ease.
+    // The ring: a 2px amber ring from scale(1), opacity 1 to scale(2.2), opacity 0, 365ms ease.
     await expect.poll(async () => (await running(page)).includes('ix-dock:ping')).toBe(true);
     const ping = await page.evaluate(() => {
       const animation = document.getAnimations().find((candidate) => candidate.id === 'ix-dock:ping');
@@ -280,7 +280,7 @@ test.describe('the ping (§5.5)', () => {
       };
     });
     expect(ping.target).toBe(GUILD.fuel.id);
-    expect(ping.duration).toBe(545);
+    expect(ping.duration).toBe(365);
     expect(ping.easing).toBe('cubic-bezier(0.2, 0.8, 0.2, 1)');
     expect(ping.keys.sort()).toEqual(['opacity', 'transform']);
     expect(ping.frames).toEqual([
@@ -296,7 +296,7 @@ test.describe('the ping (§5.5)', () => {
 });
 
 test.describe('reduced motion (§5)', () => {
-  test('no lift, no ping, and the glide is a 100ms fade', async ({ page }) => {
+  test('no lift, no ping, and the glide is a 65ms fade', async ({ page }) => {
     await page.emulateMedia({ reducedMotion: 'reduce' });
     const h = await open(page, routes.channel('gnLounge'));
     await expect(page.locator('html')).toHaveAttribute('data-motion', 'reduced');
@@ -315,7 +315,7 @@ test.describe('reduced motion (§5)', () => {
     await page.waitForTimeout(300);
     expect(await running(page)).not.toContain('ix-dock:ping');
 
-    // The indicator moves with a 100ms opacity fade, not a glide.
+    // The indicator moves with a 65ms opacity fade, not a glide.
     await dockItem(page, 'basecamp').click();
     await expect.poll(async () => (await running(page)).includes('ix-dock:indicator')).toBe(true);
     const fade = await page.evaluate(() => {
@@ -326,7 +326,7 @@ test.describe('reduced motion (§5)', () => {
         props: [...new Set(frames.flatMap((frame) => Object.keys(frame).filter((key) => !['offset', 'easing', 'composite', 'computedOffset'].includes(key))))],
       };
     });
-    expect(fade).toEqual({ duration: 100, props: ['opacity'] });
+    expect(fade).toEqual({ duration: 65, props: ['opacity'] });
     await page.waitForTimeout(SETTLE);
     const bar = await box(indicator(page));
     const base = await box(dockItem(page, 'basecamp'));
@@ -573,7 +573,7 @@ test.describe('Add a server (§4.8, §6.1)', () => {
     await add(page).click();
     const sheet = page.getByRole('dialog', { name: 'Add a server' });
     await expect(sheet).toBeVisible();
-    // Its entrance (24px, 380ms) has played before anything is measured.
+    // Its entrance (24px, 115ms) has played before anything is measured.
     await page.waitForTimeout(500);
     return sheet;
   }

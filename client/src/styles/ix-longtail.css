@@ -19,7 +19,7 @@
 
    Every color is a token (tokens.css, the Index block) or a hue built from a
    number; `npm run test:tokens` fails on a literal. Only transform and opacity
-   animate (the motion lint); hover and press are color changes over 55ms.
+   animate (the motion lint); hover and press are color changes over 40ms.
    ============================================================================= */
 
 /* ---- 1. The scope --------------------------------------------------------------- */
@@ -636,7 +636,7 @@
    the shared Modal (primitives.css `.pc-dialog`); the pickers' insides are Tailwind
    on Index tokens in components/ui/EmojiPicker and components/message/{Gif,Sticker}Picker. */
 
-/* A button label that crossfades to its done word and back (§5.16, 90ms; the owner
+/* A button label that crossfades to its done word and back (§5.16, 60ms; the owner
    holds `data-on` for 2s). Both words share one grid cell, so the button keeps the
    width of the longer one and nothing beside it moves. Opacity only. */
 .ix-copy {
@@ -650,7 +650,7 @@
   justify-content: center;
   gap: 6px;
   white-space: nowrap;
-  transition: opacity 90ms var(--ix-ease);
+  transition: opacity 60ms var(--ix-ease);
 }
 
 .ix-copy > span[data-on='false'] {
@@ -753,7 +753,7 @@
   font-weight: 500;
   text-align: left;
   cursor: pointer;
-  transition: background-color 55ms var(--ix-ease), color 55ms var(--ix-ease);
+  transition: background-color 40ms var(--ix-ease), color 40ms var(--ix-ease);
 }
 
 .ix-rp__more:hover {

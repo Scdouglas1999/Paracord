@@ -7,10 +7,10 @@ import type { WelcomeAction } from './welcomeModel';
 /**
  * The welcome's action cards (docs/index-spec.md §3.1 "Action card", §4.13): a
  * glyph tile in the place's hue, a 15/700 title and a 13 line, on a quiet card
- * that lifts 3px under the pointer (180ms spring). Each is one button.
+ * that lifts 3px under the pointer (120ms spring). Each is one button.
  *
  * The invite card is the one that talks back: its title crossfades to "Link
- * copied" for two seconds (§5.16, 90ms). Both words stay in the card (one is
+ * copied" for two seconds (§5.16, 60ms). Both words stay in the card (one is
  * `aria-hidden`), so the card never changes size, and a polite status line says
  * the same to a screen reader.
  */

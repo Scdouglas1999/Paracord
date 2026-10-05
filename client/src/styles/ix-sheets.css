@@ -6,7 +6,7 @@
 
    Every color is a token (tokens.css, the Index block) or a hue built from a
    number; `npm run test:tokens` fails on a literal. Only transform and opacity
-   animate (the motion lint); hover and press are color changes over 55ms.
+   animate (the motion lint); hover and press are color changes over 40ms.
 
    Unlayered and imported after the Glass sheets, so a rule here wins a tie with
    the Glass rule it replaces. Content classes that other components still carry
@@ -117,20 +117,20 @@
   }
 }
 
-/* In 175ms on the spring, out 115ms on the ease (§5.17). */
+/* In 115ms on the spring, out 75ms on the ease (§5.17). */
 .ix-sheet.is-entering {
-  animation: ix-sheet-in 175ms var(--ix-spring) backwards;
+  animation: ix-sheet-in 115ms var(--ix-spring) backwards;
 }
 
 .ix-sheet.is-leaving {
   pointer-events: none;
-  animation: ix-sheet-out 115ms var(--ix-ease) forwards;
+  animation: ix-sheet-out 75ms var(--ix-ease) forwards;
 }
 
 :root[data-motion='reduced'] .ix-sheet.is-entering {
   /* `!important`: the app's reduced-motion switch zeroes every animation with one
-     (utilities.css); this is the 70ms crossfade §5 puts in its place (IX-18). */
-  animation: ix-fade-in 100ms var(--ix-ease) backwards !important;
+     (utilities.css); this is the 65ms crossfade §5 puts in its place (IX-18). */
+  animation: ix-fade-in 65ms var(--ix-ease) backwards !important;
 }
 
 /* ---- Header: 58px, the title 17/700 and a line under it (§6.1) --------------------- */
@@ -195,7 +195,7 @@
   color: var(--ix-ink-2);
   background-color: transparent;
   cursor: pointer;
-  transition: background-color 55ms var(--ix-ease);
+  transition: background-color 40ms var(--ix-ease);
 }
 
 .ix-sheet__btn:hover:not(:disabled) {
@@ -257,7 +257,7 @@
 
 /* ---- Menus (§6.2-6.5, §5.17) -------------------------------------------------------------
    A popover over the window: near-solid --ix-pop, radius 14, rows 36 (14/500, glyph 16
-   ink-3), hairline separators. In from scale(.97) + fade, 80ms ease; out 55ms. */
+   ink-3), hairline separators. In from scale(.97) + fade, 55ms ease; out 40ms. */
 .ix-menu {
   position: fixed;
   z-index: 1100;
@@ -291,18 +291,18 @@
 }
 
 .ix-menu.is-entering {
-  animation: ix-pop-in 80ms var(--ix-ease) backwards;
+  animation: ix-pop-in 55ms var(--ix-ease) backwards;
 }
 
 .ix-menu.is-leaving {
   pointer-events: none;
-  animation: ix-pop-out 55ms var(--ix-ease) forwards;
+  animation: ix-pop-out 40ms var(--ix-ease) forwards;
 }
 
 :root[data-motion='reduced'] .ix-menu.is-entering {
   /* `!important`: the app's reduced-motion switch zeroes every animation with one
-     (utilities.css); this is the 70ms crossfade §5 puts in its place (IX-18). */
-  animation: ix-fade-in 100ms var(--ix-ease) backwards !important;
+     (utilities.css); this is the 65ms crossfade §5 puts in its place (IX-18). */
+  animation: ix-fade-in 65ms var(--ix-ease) backwards !important;
 }
 
 .ix-menu__item {
@@ -321,7 +321,7 @@
   color: var(--ix-ink);
   background-color: transparent;
   cursor: pointer;
-  transition: background-color 55ms var(--ix-ease);
+  transition: background-color 40ms var(--ix-ease);
 }
 
 .ix-menu__item:hover:not(:disabled) {
@@ -408,7 +408,7 @@
   place-items: center;
   color: var(--ix-ink-3);
   transform: rotate(-90deg);
-  transition: transform 90ms var(--ix-ease);
+  transition: transform 60ms var(--ix-ease);
 }
 
 .ix-menu__caret[data-open] {
@@ -522,7 +522,7 @@
   color: var(--ix-ink-2);
   background-color: var(--ix-fill-ctl);
   cursor: pointer;
-  transition: background-color 55ms var(--ix-ease);
+  transition: background-color 40ms var(--ix-ease);
 }
 
 .ix-menu__set:hover {
@@ -561,7 +561,7 @@
   background-color: var(--ix-fill-field);
   box-shadow: inset 0 0 0 1px var(--ix-edge-lit);
   outline: none;
-  transition: background-color 55ms var(--ix-ease);
+  transition: background-color 40ms var(--ix-ease);
 }
 
 .ix-field::placeholder {
@@ -652,7 +652,7 @@
   color: var(--ix-ink-2);
   background: transparent;
   cursor: pointer;
-  transition: background-color 55ms var(--ix-ease);
+  transition: background-color 40ms var(--ix-ease);
 }
 
 .ix-dialog__cancel:hover {
@@ -752,18 +752,18 @@
 }
 
 .ix-switcher.is-entering {
-  animation: ix-pop-in 80ms var(--ix-ease) backwards;
+  animation: ix-pop-in 55ms var(--ix-ease) backwards;
 }
 
 .ix-switcher.is-leaving {
   pointer-events: none;
-  animation: ix-pop-out 55ms var(--ix-ease) forwards;
+  animation: ix-pop-out 40ms var(--ix-ease) forwards;
 }
 
 :root[data-motion='reduced'] .ix-switcher.is-entering {
   /* `!important`: the app's reduced-motion switch zeroes every animation with one
-     (utilities.css); this is the 70ms crossfade §5 puts in its place (IX-18). */
-  animation: ix-fade-in 100ms var(--ix-ease) backwards !important;
+     (utilities.css); this is the 65ms crossfade §5 puts in its place (IX-18). */
+  animation: ix-fade-in 65ms var(--ix-ease) backwards !important;
 }
 
 /* A phone gets the whole screen (§9). */
@@ -843,7 +843,7 @@
   color: var(--ix-ink-2);
   background-color: transparent;
   cursor: pointer;
-  transition: background-color 55ms var(--ix-ease);
+  transition: background-color 40ms var(--ix-ease);
 }
 
 .ix-switcher__row[aria-selected='true'] {
@@ -932,18 +932,18 @@
 }
 
 .ix-profile.is-entering {
-  animation: ix-pop-in 80ms var(--ix-ease) backwards;
+  animation: ix-pop-in 55ms var(--ix-ease) backwards;
 }
 
 .ix-profile.is-leaving {
   pointer-events: none;
-  animation: ix-pop-out 55ms var(--ix-ease) forwards;
+  animation: ix-pop-out 40ms var(--ix-ease) forwards;
 }
 
 :root[data-motion='reduced'] .ix-profile.is-entering {
   /* `!important`: the app's reduced-motion switch zeroes every animation with one
-     (utilities.css); this is the 70ms crossfade §5 puts in its place (IX-18). */
-  animation: ix-fade-in 100ms var(--ix-ease) backwards !important;
+     (utilities.css); this is the 65ms crossfade §5 puts in its place (IX-18). */
+  animation: ix-fade-in 65ms var(--ix-ease) backwards !important;
 }
 
 .ix-profile__banner {
@@ -1108,7 +1108,7 @@
   font-size: 13px;
   text-decoration: none;
   color: var(--ix-ink-2);
-  transition: background-color 55ms var(--ix-ease);
+  transition: background-color 40ms var(--ix-ease);
 }
 
 .ix-profile__link:hover {
@@ -1150,7 +1150,7 @@
   color: var(--ix-ink);
   background-color: var(--ix-fill-ctl);
   cursor: pointer;
-  transition: background-color 55ms var(--ix-ease);
+  transition: background-color 40ms var(--ix-ease);
 }
 
 .ix-profile__verify:hover {

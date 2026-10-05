@@ -113,11 +113,11 @@ test.describe('IX-13 call view', () => {
     await expect(view).toHaveAccessibleName('Call: General');
     await expect(cardOpenCall(card)).toHaveAccessibleName('Back to chat');
 
-    // §5.8: from the card's rect, translate + non-uniform scale, .3 -> 1, 275ms spring; the content fades from 40%.
+    // §5.8: from the card's rect, translate + non-uniform scale, .3 -> 1, 185ms spring; the content fades from 40%.
     const open = await played(page);
     expect(open.map((entry) => entry.id)).toEqual(expect.arrayContaining(['ix-call:open', 'ix-call:open-content']));
     const grow = open.find((entry) => entry.id === 'ix-call:open')!;
-    expect(grow.duration).toBe(275);
+    expect(grow.duration).toBe(185);
     expect(grow.easing).toBe('cubic-bezier(0.32, 0.72, 0, 1)');
     expect(grow.keyframes[0].opacity).toBe(0.3);
     await callSettles(page);
@@ -156,7 +156,7 @@ test.describe('IX-13 call view', () => {
     await backToChat(page);
     const close = await played(page);
     expect(close.map((entry) => entry.id)).toEqual(expect.arrayContaining(['ix-call:close', 'ix-call:close-content']));
-    expect(close.find((entry) => entry.id === 'ix-call:close')!.duration).toBe(205);
+    expect(close.find((entry) => entry.id === 'ix-call:close')!.duration).toBe(135);
     onlyTransformAndOpacity(close);
     await expect(page.locator('.ix-call-ghost')).toHaveCount(0, { timeout: 3_000 });
     await expect(cardOpenCall(card)).toHaveAccessibleName('Open call');
@@ -177,7 +177,7 @@ test.describe('IX-13 call view', () => {
     await expect(page.locator('.ix-frame')).toHaveAttribute('data-stage', 'theater');
     const flip = await played(page);
     expect(flip.map((entry) => entry.id)).toEqual(expect.arrayContaining(['ix-call:theater']));
-    expect(flip.find((entry) => entry.id === 'ix-call:theater')!.duration).toBe(275);
+    expect(flip.find((entry) => entry.id === 'ix-call:theater')!.duration).toBe(185);
     onlyTransformAndOpacity(flip);
     await callSettles(page);
     const theaterBox = (await view.boundingBox())!;
@@ -314,7 +314,7 @@ test.describe('IX-13 call view', () => {
     await page.waitForTimeout(300);
     await shoot(page, 'call-fullscreen-chrome');
 
-    // Two still seconds: the chrome fades (80ms) and is gone, the cursor too; nothing runs at rest.
+    // Two still seconds: the chrome fades (55ms) and is gone, the cursor too; nothing runs at rest.
     await expect.poll(chrome, { timeout: 4_000 }).toBe('gone');
     await expect(view.locator('.ix-call-head')).toHaveCSS('visibility', 'hidden');
     await expect(view.locator('.ix-call-controls')).toHaveCSS('visibility', 'hidden');

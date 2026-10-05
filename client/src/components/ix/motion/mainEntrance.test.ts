@@ -26,7 +26,7 @@ describe('main’s entrance (index-spec §5.1, §5.2)', () => {
     expect(entranceKeyframes('title', 1, true)).toEqual([{ opacity: 0 }, { opacity: 1 }]);
   });
 
-  it('plays 190ms (title) and 220ms (feed) on the spring, nothing filling after', () => {
+  it('plays 125ms (title) and 145ms (feed) on the spring, nothing filling after', () => {
     const el = document.createElement('div');
     const animate = vi.fn((_keyframes: Keyframe[], _options: KeyframeAnimationOptions) => ({ id: '' }) as unknown as Animation);
     (el as unknown as { animate: typeof animate }).animate = animate;
@@ -36,8 +36,8 @@ describe('main’s entrance (index-spec §5.1, §5.2)', () => {
     expect(title?.id).toBe('ix-main:title');
     expect(animate.mock.calls[0][1]).toEqual({ duration: MAIN_TITLE_IN_MS, easing: IX_SPRING, fill: 'backwards' });
     expect(animate.mock.calls[1][1]).toEqual({ duration: MAIN_FEED_IN_MS, easing: IX_SPRING, fill: 'backwards' });
-    expect(animate.mock.calls[2][1]).toMatchObject({ duration: 100 });
-    expect([MAIN_TITLE_IN_MS, MAIN_FEED_IN_MS]).toEqual([190, 220]);
+    expect(animate.mock.calls[2][1]).toMatchObject({ duration: 65 });
+    expect([MAIN_TITLE_IN_MS, MAIN_FEED_IN_MS]).toEqual([125, 145]);
   });
 
   it('finds the title and the feed of a conversation and of a page', () => {

@@ -37,11 +37,11 @@ import { pushSheet } from '../../ix/shell/phone/pushedSheets';
  * test, a page rendered alone) it falls back to the window too. There is no call
  * pill: the Index call lives in the sidebar's card (index-spec §4.3).
  *
- * Motion (§5.17): in from `translateX(24px)` + fade, 175ms spring; out 115ms
- * ease. Transform and opacity only; reduced motion is a 100ms fade.
+ * Motion (§5.17): in from `translateX(24px)` + fade, 115ms spring; out 75ms
+ * ease. Transform and opacity only; reduced motion is a 65ms fade.
  *
  * On a phone (index-spec §9; IX-16) a sheet is a pushed page: it slides in from
- * the right over the whole screen, 165ms on the spring, while the screen it
+ * the right over the whole screen, 110ms on the spring, while the screen it
  * covers moves 30% left beneath it (`pushSheet`); its header leads with a back
  * chevron (which closes it) instead of the close button, and the edge swipe
  * drags it away.

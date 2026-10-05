@@ -24,7 +24,7 @@ import type { TimelineRow } from './timelineRows';
  * Arrivals are told from everything else that adds rows: the first list of a
  * conversation, older history above it, a jump, and a reload of the newest
  * page are not arrivals (they are not at the end, the reader is not at the
- * bottom, or there are too many at once). Reduced motion: a 100ms fade, nothing moves.
+ * bottom, or there are too many at once). Reduced motion: a 65ms fade, nothing moves.
  *
  * Measuring: the rows are measured where they stand during the render that
  * brings the new one (before React touches the DOM), and again after the new
@@ -34,7 +34,7 @@ import type { TimelineRow } from './timelineRows';
 
 /** More new rows than this at once is a page of history, not a conversation. */
 const MAX_ARRIVALS = 3;
-const ARRIVE_MS = 250;
+const ARRIVE_MS = 165;
 
 export interface ArrivalHost {
   rows: readonly TimelineRow[];

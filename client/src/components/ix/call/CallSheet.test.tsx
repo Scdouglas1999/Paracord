@@ -50,7 +50,7 @@ function renderSheet() {
 }
 
 describe('the call sheet', () => {
-  it('rises in 190ms on the spring (from the bottom when no strip or card is on screen), over a scrim', () => {
+  it('rises in 125ms on the spring (from the bottom when no strip or card is on screen), over a scrim', () => {
     renderSheet();
     const open = waapi.played.find((record) => record.animation.id === 'ix-call-sheet:open');
     expect(open?.target).toBe(screen.getByTestId('ix-call-sheet'));

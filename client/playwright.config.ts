@@ -25,7 +25,7 @@ const REAL_SERVER = process.env.PARACORD_E2E_REAL === '1';
 // It records every animation each moment of docs/index-spec.md §5 starts and
 // fails one that does not run the spec's duration and curve, a property other
 // than transform and opacity (colors may step) moving, anything still animating
-// two seconds after a moment settles, and reduced motion that is not a 100ms
+// two seconds after a moment settles, and reduced motion that is not a 65ms
 // crossfade. Gated out of the default run: it deliberately sits and watches,
 // which is the opposite of what a fast CI smoke should do. `npm run test:motion`.
 const MOTION_GATE = !REAL_SERVER && process.env.PARACORD_E2E_MOTION === '1';

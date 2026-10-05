@@ -4,39 +4,39 @@ import { IX_EASE, IX_REDUCED_MS, IX_SPRING, canAnimate, ixReduced, invertTransfo
  * The card's moments (docs/index-spec.md §5.4, §5.5, §5.7). Web Animations on
  * `transform` and `opacity` only, each with an id (`ix-card:<part>`) so the
  * motion gate can find it, none filling forwards on an element that stays
- * mounted. Reduced motion turns every move into a 100ms fade, or into nothing
+ * mounted. Reduced motion turns every move into a 65ms fade, or into nothing
  * for content that was merely pushed.
  *
  *   enter        the card or a person row arrives: translateY(-8px) scale(.97),
- *                opacity 0 -> none (card 275ms, row 225ms, spring)
- *   leave        the card or a row goes: the reverse (card 135ms, row 115ms, ease)
+ *                opacity 0 -> none (card 185ms, row 150ms, spring)
+ *   leave        the card or a row goes: the reverse (card 90ms, row 75ms, ease)
  *   push         content displaced by a card or row arriving or going: a
- *                translateY FLIP (275ms down, 205ms up, spring)
+ *                translateY FLIP (185ms down, 135ms up, spring)
  *   fly          your face from the toolbar avatar into your row, a ghost on
- *                the document so the sidebar does not clip it (340ms spring);
+ *                the document so the sidebar does not clip it (225ms spring);
  *                the card's new content holds at 0 until 45% then fades in
  *   pin          your call card between "above the header" and "under the
- *                search" (250ms spring, translate only)
+ *                search" (165ms spring, translate only)
  */
 
-export const CARD_IN_MS = 275;
+export const CARD_IN_MS = 185;
 /**
  * The card waits this long while what it pushes makes room (IX-18). The card is
- * translucent: entering on the same beat as the 275ms push, the rows still
+ * translucent: entering on the same beat as the 185ms push, the rows still
  * sliding down showed through it for the first frames (the prototype does not
- * push at all, so never had them under it). By 55ms the spring has moved the
+ * push at all, so never had them under it). By 35ms the spring has moved the
  * rows two thirds of the way.
  */
-export const CARD_IN_DELAY_MS = 55;
-export const CARD_OUT_MS = 135;
-export const ROW_IN_MS = 225;
-export const ROW_OUT_MS = 115;
-export const PUSH_DOWN_MS = 275;
-export const PUSH_UP_MS = 205;
-export const FLY_MS = 340;
-export const PIN_MS = 250;
+export const CARD_IN_DELAY_MS = 35;
+export const CARD_OUT_MS = 90;
+export const ROW_IN_MS = 150;
+export const ROW_OUT_MS = 75;
+export const PUSH_DOWN_MS = 185;
+export const PUSH_UP_MS = 135;
+export const FLY_MS = 225;
+export const PIN_MS = 165;
 /** The yours layer (stronger tint, edge and glow) fades in (CSS transition, ix-card.css). */
-export const YOURS_FADE_MS = 180;
+export const YOURS_FADE_MS = 120;
 
 const ARRIVE = 'translateY(-8px) scale(0.97)';
 
@@ -46,7 +46,7 @@ function fade(element: HTMLElement, from: number, to: number, id: string, fill: 
   return animation;
 }
 
-/** The card (275ms) or a person row (225ms) arriving. */
+/** The card (185ms) or a person row (150ms) arriving. */
 export function playEnter(element: HTMLElement | null, kind: 'card' | 'row'): Animation | null {
   if (!canAnimate(element)) return null;
   const id = `ix-card:${kind}-in`;
@@ -65,7 +65,7 @@ export function playEnter(element: HTMLElement | null, kind: 'card' | 'row'): An
 }
 
 /**
- * The card (135ms) or a row (115ms) going: it fills forwards, because the caller
+ * The card (90ms) or a row (75ms) going: it fills forwards, because the caller
  * removes the element when it settles (it never stays mounted at rest).
  */
 export function playLeave(element: HTMLElement | null, kind: 'card' | 'row'): Animation | null {
@@ -124,7 +124,7 @@ export function contentBelow(element: Element | null): Element[] {
   return below;
 }
 
-/** Inside a sidebar pane that is sliding out (it renders the old place for 205ms). */
+/** Inside a sidebar pane that is sliding out (it renders the old place for 135ms). */
 export function inLeavingPane(element: Element | null): boolean {
   return Boolean(element?.closest('[data-leaving]'));
 }
@@ -163,8 +163,8 @@ export interface FlightResult {
 
 /**
  * Your face flies from the toolbar's avatar (`from`) into its row (`face`, now
- * laid out at its place), translate and one scale, 340ms spring, above the
- * other rows. `holds` (your name) wait at opacity 0 until 45% and fade in. Reduced motion: they fade in over 100ms, nothing flies.
+ * laid out at its place), translate and one scale, 225ms spring, above the
+ * other rows. `holds` (your name) wait at opacity 0 until 45% and fade in. Reduced motion: they fade in over 65ms, nothing flies.
  */
 export function playFlight(face: HTMLElement | null, from: RectLike | null, holds: readonly HTMLElement[]): FlightResult {
   const animations: Animation[] = [];

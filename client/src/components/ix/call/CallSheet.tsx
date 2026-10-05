@@ -14,7 +14,7 @@ import { CALL_CLOSE_MS, beginCallMove, counterKeyframes, findCallCard, ghostOf, 
  *   - Top inset: the safe area + 8; radius 24 on the top corners; a grab
  *     handle; the view's own header, content and controls inside it (the
  *     controls above the safe area, ix-phone.css). No chat column on a phone.
- *   - It rises out of what opened it, 190ms on the spring: the call strip on a
+ *   - It rises out of what opened it, 125ms on the spring: the call strip on a
  *     pushed page, the room card on the root; from the bottom edge otherwise.
  *     Back to chat (or Leave, or the call ending) shrinks it back into the
  *     strip or the card.
@@ -32,11 +32,11 @@ import { CALL_CLOSE_MS, beginCallMove, counterKeyframes, findCallCard, ghostOf, 
  *
  * The view itself (`CallView`) is the desktop's, unchanged: this is its frame.
  * Moves are transform and opacity only (ids `ix-call-sheet:*`); none fills
- * forwards on anything that stays. Reduced motion: a 100ms fade.
+ * forwards on anything that stays. Reduced motion: a 65ms fade.
  */
 
-export const CALL_SHEET_OPEN_MS = 190;
-export const CALL_SHEET_DISMISS_MS = 165;
+export const CALL_SHEET_OPEN_MS = 125;
+export const CALL_SHEET_DISMISS_MS = 110;
 /** Let go past this share of the sheet's height and it goes. */
 const DISMISS_SHARE = 1 / 3;
 /** A downward release faster than this (px/ms) dismisses. */
@@ -252,7 +252,7 @@ export function CallSheet({ channelId, mode, children }: CallSheetProps) {
     paint(0);
     if (sheet && canAnimate(sheet) && y > 0) {
       const back = sheet.animate([{ transform: `translateY(${Math.round(y)}px)` }, { transform: 'none' }], {
-        duration: ixReduced() ? IX_REDUCED_MS : 135,
+        duration: ixReduced() ? IX_REDUCED_MS : 90,
         easing: IX_SPRING,
       });
       back.id = 'ix-call-sheet:return';
@@ -262,7 +262,7 @@ export function CallSheet({ channelId, mode, children }: CallSheetProps) {
     }
     const scrim = scrimRef.current;
     if (scrim && canAnimate(scrim) && y > 0) {
-      const brighten = scrim.animate([{ opacity: Math.max(0, 1 - y / height) }, { opacity: 1 }], { duration: 135, easing: IX_SPRING });
+      const brighten = scrim.animate([{ opacity: Math.max(0, 1 - y / height) }, { opacity: 1 }], { duration: 90, easing: IX_SPRING });
       brighten.id = 'ix-call-sheet:scrim-return';
     }
   };

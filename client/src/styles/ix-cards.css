@@ -160,7 +160,7 @@
   font-weight: 600;
   white-space: nowrap;
   cursor: pointer;
-  transition: background-color 55ms var(--ix-ease);
+  transition: background-color 40ms var(--ix-ease);
 }
 
 .ix-event__btn:hover:not(:disabled) {
@@ -247,7 +247,7 @@
   line-height: 16px;
   white-space: nowrap;
   cursor: pointer;
-  transition: background-color 55ms var(--ix-ease);
+  transition: background-color 40ms var(--ix-ease);
 }
 
 .ix-plan__action:hover:not(:disabled) {
@@ -370,7 +370,7 @@
   font-size: 14.5px;
   text-align: left;
   cursor: default;
-  transition: background-color 55ms var(--ix-ease);
+  transition: background-color 40ms var(--ix-ease);
 }
 
 .ix-poll__option[data-votable] {
@@ -398,7 +398,7 @@
   background: var(--ix-fill-2);
   transform: scaleX(var(--share, 0));
   transform-origin: left;
-  transition: transform 180ms var(--ix-spring);
+  transition: transform 120ms var(--ix-spring);
   pointer-events: none;
 }
 
@@ -488,7 +488,7 @@
   box-shadow: var(--ix-shadow-event);
   color: var(--ix-ink);
   text-decoration: none;
-  transition: background-color 55ms var(--ix-ease);
+  transition: background-color 40ms var(--ix-ease);
 }
 
 a.ix-file:hover {
@@ -530,7 +530,7 @@ a.ix-file:hover {
 .ix-file__dl {
   flex: none;
   color: var(--ix-ink-3);
-  transition: color 55ms var(--ix-ease);
+  transition: color 40ms var(--ix-ease);
 }
 
 a.ix-file:hover .ix-file__dl {
@@ -690,8 +690,8 @@ a.ix-file:hover .ix-file__dl {
   font-weight: 600;
   cursor: pointer;
   transition:
-    background-color 55ms var(--ix-ease),
-    color 55ms var(--ix-ease);
+    background-color 40ms var(--ix-ease),
+    color 40ms var(--ix-ease);
 }
 
 .ix-captions__load:hover,
@@ -1008,7 +1008,7 @@ a.ix-feed__title:hover {
   font-size: 13px;
   font-weight: 600;
   text-decoration: none;
-  transition: background-color 55ms var(--ix-ease);
+  transition: background-color 40ms var(--ix-ease);
 }
 
 a.ix-feed-more:hover {
@@ -1123,8 +1123,8 @@ a.ix-score:hover {
   font-weight: 500;
   cursor: pointer;
   transition:
-    background-color 55ms var(--ix-ease),
-    color 55ms var(--ix-ease);
+    background-color 40ms var(--ix-ease),
+    color 40ms var(--ix-ease);
 }
 
 .ix-code__copy:hover,
@@ -1252,8 +1252,8 @@ a.ix-score:hover {
   white-space: nowrap;
   cursor: pointer;
   transition:
-    background-color 55ms var(--ix-ease),
-    color 55ms var(--ix-ease);
+    background-color 40ms var(--ix-ease),
+    color 40ms var(--ix-ease);
 }
 
 .ix-bot-btn:hover:not(:disabled) {
@@ -1348,7 +1348,7 @@ a.ix-score:hover {
   font-size: 14px;
   text-align: left;
   cursor: pointer;
-  transition: background-color 55ms var(--ix-ease);
+  transition: background-color 40ms var(--ix-ease);
 }
 
 .ix-bot-select__btn:hover:not(:disabled) {
@@ -1379,7 +1379,7 @@ a.ix-score:hover {
 .ix-bot-select__chevron {
   flex: none;
   color: var(--ix-ink-3);
-  transition: transform 90ms var(--ix-ease);
+  transition: transform 60ms var(--ix-ease);
 }
 
 .ix-bot-select__btn[aria-expanded='true'] .ix-bot-select__chevron {
@@ -1419,7 +1419,7 @@ a.ix-score:hover {
   font-size: 14px;
   text-align: left;
   cursor: pointer;
-  transition: background-color 55ms var(--ix-ease);
+  transition: background-color 40ms var(--ix-ease);
 }
 
 .ix-bot-select__opt:hover,
@@ -1502,7 +1502,7 @@ a.ix-score:hover {
   font-size: 13.5px;
   font-weight: 700;
   cursor: pointer;
-  transition: background-color 55ms var(--ix-ease);
+  transition: background-color 40ms var(--ix-ease);
 }
 
 .ix-bot-select__confirm:hover:not(:disabled) {
@@ -1558,7 +1558,7 @@ a.ix-score:hover {
 
 button.ix-inline {
   cursor: pointer;
-  transition: background-color 55ms var(--ix-ease);
+  transition: background-color 40ms var(--ix-ease);
 }
 
 button.ix-inline:hover {

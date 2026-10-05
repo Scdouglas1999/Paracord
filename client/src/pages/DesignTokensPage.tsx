@@ -760,7 +760,7 @@ function MotionSection() {
     <Section
       id="motion"
       title="Motion"
-      blurb="Only light and the things people do animate. Every recipe below is Web Animations over the tokens beside it — transform and opacity, plus box-shadow on the small light elements. Nothing runs longer than 225ms except breathing."
+      blurb="Only light and the things people do animate. Every recipe below is Web Animations over the tokens beside it — transform and opacity, plus box-shadow on the small light elements. Nothing runs longer than 150ms except breathing."
     >
       <p className="max-w-[70ch] text-meta leading-relaxed text-text-faint">
         The switch is one place: Settings › Appearance › Motion, folded with the
@@ -768,10 +768,10 @@ function MotionSection() {
         It is currently <span className="text-text-primary">{reduced ? 'reduced — every recipe below lands its end state instantly' : 'on'}</span>.
         Everything arrives on <code className="pc-mono">--ease-out</code> and leaves on the quicker{' '}
         <code className="pc-mono">--ease-in</code>; nothing overshoots. Only an interrupted animation
-        uses the spring (<code className="pc-mono">--spring-stiffness</code> 1260 /{' '}
-        <code className="pc-mono">--spring-damping</code> 75, critically damped), to carry its velocity:{' '}
+        uses the spring (<code className="pc-mono">--spring-stiffness</code> 2835 /{' '}
+        <code className="pc-mono">--spring-damping</code> 112.5, critically damped), to carry its velocity:{' '}
         <code className="pc-mono break-all text-text-faint">
-          {supportsLinearEasing() ? springEasing({ ...springTokens(), velocity: 4 }, { durationMs: 110 }).slice(0, 96) : '--ease-out'}
+          {supportsLinearEasing() ? springEasing({ ...springTokens(), velocity: 4 }, { durationMs: 75 }).slice(0, 96) : '--ease-out'}
         </code>
       </p>
 
@@ -799,7 +799,7 @@ function MotionSection() {
         <Recipe
           id="motion-flicker"
           name="Flicker"
-          tokens="two 18ms pulses · --ease-out"
+          tokens="two 12ms pulses · --ease-out"
           model="Reading light flickers once when a message lands. This is the only thing in the product that flickers, and it means one thing."
           onPlay={() => flicker(flickerRef.current)}
         >
@@ -825,7 +825,7 @@ function MotionSection() {
           id="motion-press"
           name="Press"
           tokens="0.98 · --duration-fast · --ease-out · --bg-mod-subtle"
-          model="Controls are tactile: hover takes a faint wash, and the thing you press gives way 2% under the finger and comes back, 55ms each way. A row darkens a step instead of shrinking. It answers on the same frame as the pointer. The left one is the engine's recipe, called by hand — the composer's send control uses it. The right one is `.pc-pressable`, which every Button, IconButton, NavRow and Chip in the product carries: hover it and press it rather than replaying it."
+          model="Controls are tactile: hover takes a faint wash, and the thing you press gives way 2% under the finger and comes back, 40ms each way. A row darkens a step instead of shrinking. It answers on the same frame as the pointer. The left one is the engine's recipe, called by hand — the composer's send control uses it. The right one is `.pc-pressable`, which every Button, IconButton, NavRow and Chip in the product carries: hover it and press it rather than replaying it."
           onPlay={() => press(pressRef.current)}
         >
           <div className="flex items-center gap-3">
@@ -846,8 +846,8 @@ function MotionSection() {
         <Recipe
           id="motion-stagger"
           name="Stagger"
-          tokens="--stagger-light 15ms"
-          model="Neighboring lights are 15ms apart, so a server comes on as a sequence rather than a switch."
+          tokens="--stagger-light 10ms"
+          model="Neighboring lights are 10ms apart, so a server comes on as a sequence rather than a switch."
           onPlay={() => stagger(staggerRef.current?.querySelectorAll('span') ?? [])}
         >
           <div ref={staggerRef} className="flex gap-1.5" aria-hidden>
@@ -860,7 +860,7 @@ function MotionSection() {
         <Recipe
           id="motion-roll"
           name="Roll"
-          tokens="--duration-roll 80ms"
+          tokens="--duration-roll 55ms"
           model="Any count that changes flips: old up and out, new up and in. It only ever moves on a change — a number that is merely rendered has not been caused by anybody."
           onPlay={() => setRolled((value) => value + 1)}
         >
@@ -947,7 +947,7 @@ function MotionSection() {
           id="motion-plate"
           name="Contextual plate"
           tokens="--duration-slow · --ease-out in · --duration-exit-slow · --ease-in out"
-          model="A pane eases 8px in from the edge it opens against and 6px back the way it came. The surface stays mounted for the 75ms the leave takes and is scenery the whole way — the desktop right rail and the profile card run on this."
+          model="A pane eases 8px in from the edge it opens against and 6px back the way it came. The surface stays mounted for the 50ms the leave takes and is scenery the whole way — the desktop right rail and the profile card run on this."
           onPlay={() => setPlateOpen((value) => !value)}
         >
           <div className="relative h-24 w-full overflow-hidden rounded-[var(--radius-well)] bg-bg-base">
@@ -1114,7 +1114,7 @@ export default function DesignTokensPage() {
           </div>
         </Section>
 
-        <Section id="metrics" title="Spacing, radii, sizes, motion" blurb="A 4px grid; plates on a 12px gutter. Light is the only thing that animates on its own — everything else is a plain 55–75ms ease-out.">
+        <Section id="metrics" title="Spacing, radii, sizes, motion" blurb="A 4px grid; plates on a 12px gutter. Light is the only thing that animates on its own — everything else is a plain 40–55ms ease-out.">
           <div className="flex flex-wrap gap-10">
             <ScaleTable names={RADII} label="Radii" />
             <ScaleTable names={HEIGHTS} label="Control heights" />

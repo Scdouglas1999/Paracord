@@ -10,8 +10,8 @@ import { ms } from './tokens';
  * CSS can describe an element arriving and an element leaving, but it cannot
  * keep a React node in the tree for the beat a leave takes. That is the one
  * job of this hook: `open` drops, the element keeps rendering with
- * `exiting = true` for `--duration-exit-slow` (75ms, the longest leave in the
- * choreography — a small surface's 60ms leave simply finishes first and holds
+ * `exiting = true` for `--duration-exit-slow` (50ms, the longest leave in the
+ * choreography — a small surface's 40ms leave simply finishes first and holds
  * its end state), then it unmounts. Enter and exit are
  * the shared `pc-enter` / `pc-exit` classes — this hook owns only the timing.
  *
@@ -61,7 +61,7 @@ export function usePresence(open: boolean): Presence {
   // a consumer's layout effect has something to measure. Closing: the exit
   // class is on the element on the same commit that closed it, so the leave
   // starts on that frame rather than one render later. Deciding either in an
-  // effect costs a frame, and a 55ms leave has seven of them. React re-runs
+  // effect costs a frame, and a 40ms leave has only two or three of them. React re-runs
   // this render before touching the DOM, and each guard clears itself, so each
   // branch runs exactly once.
   if (open) {

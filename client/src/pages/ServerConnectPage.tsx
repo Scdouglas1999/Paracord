@@ -546,7 +546,7 @@ export function ServerConnectPage() {
                   return (
                     <li key={server.id}>
                       {index > 0 && <Divider className="mx-2 w-auto" />}
-                      <div className="flex items-center gap-3 rounded-[12px] px-2 py-3 transition-colors duration-[55ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill)]">
+                      <div className="flex items-center gap-3 rounded-[12px] px-2 py-3 transition-colors duration-[40ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill)]">
                         <span
                           className="pc-well flex h-9 w-9 shrink-0 items-center justify-center text-[var(--ix-ink-2)]"
                           aria-hidden

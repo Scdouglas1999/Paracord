@@ -141,7 +141,7 @@
   color: var(--ix-ink-2);
   background: none;
   cursor: pointer;
-  transition: background-color 55ms var(--ix-ease), color 55ms var(--ix-ease);
+  transition: background-color 40ms var(--ix-ease), color 40ms var(--ix-ease);
 }
 
 .ix-composer__text-btn:hover {
@@ -185,7 +185,7 @@
   color: var(--ix-ink-3);
   background: none;
   cursor: pointer;
-  transition: background-color 55ms var(--ix-ease), color 55ms var(--ix-ease);
+  transition: background-color 40ms var(--ix-ease), color 40ms var(--ix-ease);
 }
 
 .ix-composer__icon:hover:not(:disabled) {
@@ -336,7 +336,7 @@
   border-color: var(--ix-edge-open-over);
   box-shadow: 0 0 0 4px hsl(var(--ix-hue) 60% 60% / calc(0.14 * var(--ix-tint)));
   opacity: 0;
-  transition: opacity 115ms var(--ix-ease);
+  transition: opacity 75ms var(--ix-ease);
 }
 
 .ix-composer__edges > .ix-composer__slice--top::before,
@@ -367,7 +367,7 @@
   clip-path: inset(0 -6px -6px -6px);
 }
 
-/* The focus edge and halo: the open box's ring, by opacity (115ms). */
+/* The focus edge and halo: the open box's ring, by opacity (75ms). */
 .ix-composer__box[data-open='true'] .ix-composer__slice::after,
 .ix-composer[data-drag-over='true'] .ix-composer__slice::after {
   opacity: 1;
@@ -484,7 +484,7 @@
   color: var(--ix-ink);
   background: var(--ix-pop);
   cursor: pointer;
-  transition: background-color 55ms var(--ix-ease);
+  transition: background-color 40ms var(--ix-ease);
 }
 
 .ix-composer__unqueue:hover {
@@ -572,7 +572,7 @@
 .ix-composer__emoji {
   color: var(--ix-ink-3);
   background-color: transparent;
-  transition: background-color 55ms var(--ix-ease), color 55ms var(--ix-ease);
+  transition: background-color 40ms var(--ix-ease), color 40ms var(--ix-ease);
 }
 
 .ix-composer__emoji:hover:not(:disabled),
@@ -587,7 +587,7 @@
 }
 
 /* Send (§3.1, §5.13): a quiet circle, cream with dark ink once there is
-   something to send, a 90ms color transition. The send flight's release
+   something to send, a 60ms color transition. The send flight's release
    (`releaseSend`, lib/motion/sendFlight.ts) reads the quiet look from
    --ix-send-quiet and --ix-send-quiet-ink on this element; keep both. */
 .ix-composer__send {
@@ -595,7 +595,7 @@
   --ix-send-quiet-ink: var(--ix-ink-3);
   color: var(--ix-send-quiet-ink);
   background-color: var(--ix-send-quiet);
-  transition: background-color 90ms var(--ix-ease), color 90ms var(--ix-ease);
+  transition: background-color 60ms var(--ix-ease), color 60ms var(--ix-ease);
 }
 
 .ix-composer__send[data-ready='true']:not(:disabled) {
@@ -623,7 +623,7 @@
 
 /* ---- The tools row (§4.12): Attach, GIF, Poll, Event, Format ------------------
    Laid out in the 46px under the input row, clipped at the box's foot. Opening:
-   from translateY(6px), opacity 135ms after 35ms, translate 205ms on the spring
+   from translateY(6px), opacity 90ms after 25ms, translate 135ms on the spring
    (§5.12). Closing: it fades fast while composerShape pushes it out through the
    foot with the input row coming down. */
 .ix-composer__tools-clip {
@@ -658,8 +658,8 @@
   opacity: 0;
   transform: translateY(6px);
   transition:
-    opacity 70ms var(--ix-ease),
-    transform 160ms var(--ix-spring);
+    opacity 45ms var(--ix-ease),
+    transform 105ms var(--ix-spring);
 }
 
 .ix-composer__tools::-webkit-scrollbar {
@@ -670,14 +670,14 @@
   opacity: 1;
   transform: none;
   transition:
-    opacity 135ms var(--ix-ease) 35ms,
-    transform 205ms var(--ix-spring);
+    opacity 90ms var(--ix-ease) 25ms,
+    transform 135ms var(--ix-spring);
 }
 
 :root[data-motion='reduced'] .ix-composer__tools,
 :root[data-motion='reduced'] .ix-composer__box[data-open='true'] .ix-composer__tools {
   transform: none;
-  transition: opacity 100ms linear;
+  transition: opacity 65ms linear;
 }
 
 /* The chips: 27px (12.5 on a 15px line, padding 6 10), as the prototype. */
@@ -718,7 +718,7 @@
   color: var(--ix-ink-3);
   background: none;
   cursor: pointer;
-  transition: background-color 55ms var(--ix-ease), color 55ms var(--ix-ease);
+  transition: background-color 40ms var(--ix-ease), color 40ms var(--ix-ease);
 }
 
 .ix-composer__reply-x:hover {
@@ -770,7 +770,7 @@
   color: var(--ix-ink-2);
   background: none;
   cursor: pointer;
-  transition: background-color 55ms var(--ix-ease), color 55ms var(--ix-ease);
+  transition: background-color 40ms var(--ix-ease), color 40ms var(--ix-ease);
 }
 
 .ix-format__btn:hover {
@@ -847,7 +847,7 @@
     0 0 0 1px var(--ix-edge-lit),
     var(--ix-shadow-room);
   transform-origin: 0% 100%;
-  animation: ix-composer-pop 80ms var(--ix-ease) backwards;
+  animation: ix-composer-pop 55ms var(--ix-ease) backwards;
   cursor: default;
   scrollbar-width: thin;
 }
@@ -991,12 +991,12 @@
     0 0 0 1px var(--ix-edge-lit),
     var(--ix-shadow-room);
   transform-origin: calc(100% - 62px) 100%;
-  animation: ix-composer-pop 80ms var(--ix-ease) backwards;
+  animation: ix-composer-pop 55ms var(--ix-ease) backwards;
   cursor: default;
 }
 
 .ix-picker.is-leaving {
-  animation: ix-composer-pop-out 55ms var(--ix-ease) forwards;
+  animation: ix-composer-pop-out 40ms var(--ix-ease) forwards;
 }
 
 .ix-picker__tabs {
@@ -1021,7 +1021,7 @@
   color: var(--ix-ink-3);
   background: none;
   cursor: pointer;
-  transition: background-color 55ms var(--ix-ease), color 55ms var(--ix-ease);
+  transition: background-color 40ms var(--ix-ease), color 40ms var(--ix-ease);
 }
 
 .ix-picker__tab:hover {
@@ -1077,7 +1077,7 @@
   color: inherit;
   background: none;
   cursor: pointer;
-  transition: background-color 55ms var(--ix-ease);
+  transition: background-color 40ms var(--ix-ease);
 }
 
 .ix-role-mention:hover {
@@ -1247,7 +1247,7 @@
   color: var(--ix-ink-3);
   background: none;
   cursor: pointer;
-  transition: background-color 55ms var(--ix-ease), color 55ms var(--ix-ease);
+  transition: background-color 40ms var(--ix-ease), color 40ms var(--ix-ease);
 }
 
 .ix-scheduled__btn:hover:not(:disabled) {

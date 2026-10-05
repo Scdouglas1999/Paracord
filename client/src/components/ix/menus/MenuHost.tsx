@@ -21,14 +21,14 @@ import { PeopleMenuView } from './PeopleMenu';
 import { ServerMenuView } from './ServerMenu';
 
 /**
- * How long a closed menu stays rendered: longer than any menu's leave (55ms, or
+ * How long a closed menu stays rendered: longer than any menu's leave (40ms, or
  * an action sheet's on a phone), which `IxMenu` plays and then unmounts itself.
  */
-const MENU_KEEP_MS = 205;
+const MENU_KEEP_MS = 135;
 
 /**
  * The menu to render: the open one, or the one that just closed while its leave
- * plays (§5.17 "out 55ms"). Unmounting it with the store's slot would cut the
+ * plays (§5.17 "out 40ms"). Unmounting it with the store's slot would cut the
  * leave: the menu would vanish.
  */
 function useKeptMenu<T>(menu: T | null): { shown: T | null; open: boolean } {

@@ -23,7 +23,7 @@ import { useEffect, type RefObject } from 'react';
 /** Stillness before the chrome goes, ms. */
 export const CHROME_IDLE_MS = 2000;
 /** The chrome's fade, ms: `--duration-normal` (ix-call.css). */
-export const CHROME_FADE_MS = 80;
+export const CHROME_FADE_MS = 55;
 
 /** The parts of the surface that are chrome. */
 const ZONES = '.ix-call-head, .ix-call-controls, .ix-call-strip, .ix-call-chat';

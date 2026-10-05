@@ -5,8 +5,8 @@ import { IX_SPRING, canAnimate, flipMoved, measureRects, onSettle } from '../mot
 /**
  * Closing and opening a category (docs/index-spec.md §4.5, §5.20).
  *
- * Closing: the rows fade (70ms) while the rest of the sidebar FLIPs up (205ms
- * spring); the chevron's quarter turn is the label's own transition (90ms).
+ * Closing: the rows fade (45ms) while the rest of the sidebar FLIPs up (135ms
+ * spring); the chevron's quarter turn is the label's own transition (60ms).
  * Opening is the same in reverse: the rows fade in as what is below them FLIPs
  * down. A closed category still shows the rows that matter (unread, mention, the
  * open one: `data-keep`).
@@ -17,8 +17,8 @@ import { IX_SPRING, canAnimate, flipMoved, measureRects, onSettle } from '../mot
  * React removes the real one at once.
  */
 
-export const COLLAPSE_FADE_MS = 70;
-export const COLLAPSE_MOVE_MS = 205;
+export const COLLAPSE_FADE_MS = 45;
+export const COLLAPSE_MOVE_MS = 135;
 export const FLIP_ATTRIBUTE = 'data-ix-flip';
 export const GROUP_ATTRIBUTE = 'data-ix-group';
 

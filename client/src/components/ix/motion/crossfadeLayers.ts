@@ -14,11 +14,11 @@ import { IX_EASE, IX_REDUCED_MS, canAnimate, ixReduced } from './curves';
  * ends on `--ix-side-end`).
  */
 
-/** The window tint crossfade, 410ms ease (§5.1). */
-export const TINT_FADE_MS = 410;
+/** The window tint crossfade, 275ms ease (§5.1). */
+export const TINT_FADE_MS = 275;
 
 export interface CrossfadeOptions {
-  /** Default 410ms (the tint). Reduced motion always uses 100ms. */
+  /** Default 275ms (the tint). Reduced motion always uses 65ms. */
   duration?: number;
   easing?: string;
   reduced?: boolean;

@@ -12,7 +12,7 @@ import { motionToken, num } from './tokens';
  *   - a fresh animation (no velocity to carry) gets the `--ease-out` token;
  *   - a retarget gets a WAAPI `linear()` easing sampled from the real
  *     solution of a critically damped spring (the `--spring-*` tokens:
- *     stiffness 1260 / damping 75 / mass 1), which never overshoots;
+ *     stiffness 2835 / damping 112.5 / mass 1), which never overshoots;
  *   - a webview without `linear()` gets `--ease-out` either way.
  */
 
@@ -71,16 +71,17 @@ export function springProgress(tMs: number, config: SpringConfig): number {
 }
 
 const REST_DISPLACEMENT = 0.001;
-const MAX_DURATION_MS = 225;
+const MAX_DURATION_MS = 150;
 
 /**
  * How long the spring takes to come to rest, rounded up to the next 5ms and
- * capped at §5.3's ceiling (500ms before the 2.2× speed-up, 225ms now).
+ * capped at §5.3's ceiling (500ms at first, 225ms after the 2.2× speed-up, 150ms
+ * after the next 1.5×).
  */
 export function springDuration(config: SpringConfig): number {
   for (let t = 5; t <= MAX_DURATION_MS; t += 5) {
     let settled = true;
-    for (let probe = t; probe <= Math.min(MAX_DURATION_MS, t + 25); probe += 5) {
+    for (let probe = t; probe <= Math.min(MAX_DURATION_MS, t + 15); probe += 5) {
       if (Math.abs(springDisplacement(probe, config)) > REST_DISPLACEMENT) {
         settled = false;
         break;
@@ -181,7 +182,7 @@ export function sampleRunning(animation: Animation | null | undefined): Retarget
   const spring = springTokens();
   // Central difference on the spring itself: the animation we are interrupting
   // was driven by this same solution, so its slope is the honest velocity.
-  const step = 4;
+  const step = 3;
   const before = springProgress(Math.max(0, elapsed - step), spring);
   const after = springProgress(elapsed + step, spring);
   const velocity = ((after - before) / (2 * step)) * 1000;

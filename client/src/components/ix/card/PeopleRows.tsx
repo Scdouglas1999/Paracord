@@ -18,9 +18,9 @@ import { Wave } from './Wave';
  * mic-off while they are muted. A seventh person turns the sixth row into
  * "and N more".
  *
- * A row that arrives plays in (225ms spring) and pushes what is below it down;
- * a row that goes fades and shrinks (115ms ease), then what was below it
- * closes up (205ms spring). Rows that were there when the card mounted, and
+ * A row that arrives plays in (150ms spring) and pushes what is below it down;
+ * a row that goes fades and shrinks (75ms ease), then what was below it
+ * closes up (135ms spring). Rows that were there when the card mounted, and
  * rows in a pane that is sliding out, do not move.
  */
 

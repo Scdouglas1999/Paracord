@@ -10,7 +10,7 @@
    Flat tonal identity (§1.7): a surface is a fill and a hairline, never a glow.
    Fields are `--ix-fill-field` with a hairline, cards are `--ix-card`, what
    floats over text (a menu, a picker) is near-solid `--ix-pop`. Hover is one
-   step lighter and press one step darker, in 55ms, and nothing scales on
+   step lighter and press one step darker, in 40ms, and nothing scales on
    press. Only color animates on a control; a surface that arrives does so on
    transform and opacity.
 
@@ -50,7 +50,7 @@
   background: var(--ix-fill-field);
   border-radius: 12px;
   box-shadow: inset 0 0 0 1px var(--ix-line);
-  transition: background-color 55ms var(--ix-ease);
+  transition: background-color 40ms var(--ix-ease);
 }
 
 .pc-field[aria-invalid='true'],
@@ -249,7 +249,7 @@
    read as a loading chip. Its light is two still layers over it, white
    (talking) on `::before` and amber (reading, writing) on `::after`, each
    carrying its own fill and glow. A state change crossfades their OPACITY:
-   warm-up is 100ms `--ease-out`, the dim lingers 180ms on `--ease-in`, and
+   warm-up is 65ms `--ease-out`, the dim lingers 120ms on `--ease-in`, and
    talking → reading is a crossfade from one light to the other. Nothing
    animates a background or a shadow, so a room lighting up is a compositor
    job rather than a repaint of every window around it. */
@@ -365,11 +365,11 @@
    Three sizes of surface, three recipes, one curve in and one curve out:
 
      pop     menus, popovers, tooltips, pickers  opacity + scale .96 from the
-             anchor (`--pc-origin`), 80ms in / 60ms out
+             anchor (`--pc-origin`), 55ms in / 40ms out
      enter   dialogs, panels, cards, page content  opacity + 6px rise + scale
-             .98, 110ms in / 75ms out
+             .98, 75ms in / 50ms out
      drawer  side panels and phone sheets  opacity + 8px from their edge,
-     /sheet  110ms in / 75ms out
+     /sheet  75ms in / 50ms out
 
    Backdrops fade on the same clock as the surface they hold. Everything
    arrives on `--ease-out` and leaves on the quicker `--ease-in`; nothing
@@ -415,8 +415,8 @@
   }
 }
 
-/* A dialog (§6.12): scale(.97) and fade in on the spring, 100ms; out on the ease
-   in 70ms (inside the 75ms `usePresence` holds it for). The scrim fades with it. */
+/* A dialog (§6.12): scale(.97) and fade in on the spring, 65ms; out on the ease
+   in 45ms (inside the 50ms `usePresence` holds it for). The scrim fades with it. */
 @keyframes pc-dialog-in {
   from {
     opacity: 0;
@@ -431,7 +431,7 @@
   }
 }
 
-/* A toast (§5.18): from 8px above and a fade, 135ms on the spring; out 90ms. */
+/* A toast (§5.18): from 8px above and a fade, 90ms on the spring; out 60ms. */
 @keyframes pc-toast-in {
   from {
     opacity: 0;
@@ -535,35 +535,35 @@
 }
 
 .pc-pop-in {
-  animation: pc-pop 80ms var(--ix-ease) backwards;
+  animation: pc-pop 55ms var(--ix-ease) backwards;
 }
 
 .pc-pop-out {
-  animation: pc-pop-out 55ms var(--ix-ease) forwards;
+  animation: pc-pop-out 40ms var(--ix-ease) forwards;
 }
 
 .pc-dialog-enter {
-  animation: pc-dialog-in 100ms var(--ix-spring) backwards;
+  animation: pc-dialog-in 65ms var(--ix-spring) backwards;
 }
 
 .pc-dialog-exit {
-  animation: pc-dialog-out 70ms var(--ix-ease) forwards;
+  animation: pc-dialog-out 45ms var(--ix-ease) forwards;
 }
 
 .pc-scrim-in {
-  animation: pc-fade 90ms var(--ix-ease) backwards;
+  animation: pc-fade 60ms var(--ix-ease) backwards;
 }
 
 .pc-scrim-out {
-  animation: pc-fade-out 70ms var(--ix-ease) forwards;
+  animation: pc-fade-out 45ms var(--ix-ease) forwards;
 }
 
 .pc-toast-in {
-  animation: pc-toast-in 135ms var(--ix-spring) backwards;
+  animation: pc-toast-in 90ms var(--ix-spring) backwards;
 }
 
 .pc-toast-out {
-  animation: pc-toast-out 90ms var(--ix-ease) forwards;
+  animation: pc-toast-out 60ms var(--ix-ease) forwards;
 }
 
 .pc-content-in {
@@ -606,7 +606,7 @@
   animation: pc-drawer-out-right var(--duration-exit-slow) var(--ease-in) forwards;
 }
 
-/* Message search: result rows fade up 4px over 80ms, the first eight
+/* Message search: result rows fade up 4px over 55ms, the first eight
    staggered by the light step. */
 @keyframes pc-search-row {
   from {
@@ -698,7 +698,7 @@
 
 /* -----------------------------------------------------------------------------
    §9 Hover and press. Hover is one step lighter (a 4% white wash), press is one
-   step darker (a darker wash over the same fill), both over 55ms on the one
+   step darker (a darker wash over the same fill), both over 40ms on the one
    ease-out. NOTHING scales on press.
 
    `.pc-pressable` is that gesture for a chip or any control that keeps its own
@@ -737,7 +737,7 @@
 }
 
 /* A card that deepens under the pointer. The lifted shadow is a still layer
-   that fades in over 80ms — never a box-shadow transition, which repaints the
+   that fades in over 55ms — never a box-shadow transition, which repaints the
    card on every frame and, in a scrolling list under a resting pointer, on
    every card the pointer crosses. */
 .pc-hover-lift {

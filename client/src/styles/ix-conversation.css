@@ -198,10 +198,10 @@
   line-height: normal;
   text-align: left;
   cursor: pointer;
-  /* Hover lifts 3px (180ms spring, §5.15); the fill is a color transition. */
+  /* Hover lifts 3px (120ms spring, §5.15); the fill is a color transition. */
   transition:
-    transform 180ms var(--ix-spring),
-    background-color 90ms var(--ix-ease);
+    transform 120ms var(--ix-spring),
+    background-color 60ms var(--ix-ease);
 }
 
 .ix-way:hover {
@@ -238,7 +238,7 @@
   line-height: 1.4;
 }
 
-/* "Bring your people" and "Link copied" share one cell, so the card never changes size (§5.16, 90ms). */
+/* "Bring your people" and "Link copied" share one cell, so the card never changes size (§5.16, 60ms). */
 .ix-way__title--swap {
   display: grid;
 }
@@ -246,7 +246,7 @@
 .ix-way__a,
 .ix-way__b {
   grid-area: 1 / 1;
-  transition: opacity 90ms var(--ix-ease);
+  transition: opacity 60ms var(--ix-ease);
 }
 
 .ix-way__b {
@@ -360,7 +360,7 @@
   z-index: 6;
   background: var(--ix-drop);
   pointer-events: none;
-  animation: ix-drop-in 75ms var(--ix-ease) both;
+  animation: ix-drop-in 50ms var(--ix-ease) both;
 }
 
 .ix-drop__box {
@@ -589,7 +589,7 @@
   text-decoration: underline;
   text-underline-offset: 3px;
   cursor: pointer;
-  transition: background-color 55ms var(--ix-ease);
+  transition: background-color 40ms var(--ix-ease);
 }
 
 .ix-banner-strip__action:hover:not(:disabled) {
@@ -619,7 +619,7 @@
   background: none;
   color: var(--ix-ink-2);
   cursor: pointer;
-  transition: background-color 55ms var(--ix-ease);
+  transition: background-color 40ms var(--ix-ease);
 }
 
 .ix-banner-strip__dismiss:hover {

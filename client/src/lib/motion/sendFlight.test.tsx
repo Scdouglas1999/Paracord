@@ -96,19 +96,19 @@ afterEach(() => {
 });
 
 describe('the approved flight, pinned', () => {
-  it('is the prototype\'s: 280ms, an arc on two curves, a 3px overshoot at 70%', () => {
-    expect(SEND_FLIGHT.duration).toBe(280);
+  it('is the prototype\'s: 185ms, an arc on two curves, a 3px overshoot at 70%', () => {
+    expect(SEND_FLIGHT.duration).toBe(185);
     expect(SEND_FLIGHT.easeX).toBe('cubic-bezier(0.3, 0.05, 0.2, 1)');
     expect(SEND_FLIGHT.easeY).toBe('cubic-bezier(0.22, 1, 0.36, 1)');
     expect(SEND_FLIGHT.glide).toBe('cubic-bezier(0.32, 0.72, 0, 1)');
     expect(SEND_FLIGHT.fromScale).toBe(0.95);
     expect(SEND_FLIGHT.overshoot).toEqual({ y: -3, scale: 1.01, at: 0.7 });
-    expect([SEND_FLIGHT.fillFrom, SEND_FLIGHT.fillTo]).toEqual([0.12, 0.24]);
-    expect(RELAX_MS).toBe(135);
+    expect([SEND_FLIGHT.fillFrom, SEND_FLIGHT.fillTo]).toEqual([0.1, 0.28]);
+    expect(RELAX_MS).toBe(90);
   });
 
-  it('does not obey the quiet system\'s ceilings, and says so: more than 8px, longer than 225ms', () => {
-    // §5.2 ("4-8px", "225ms") governs every other recipe. The flight is a
+  it('does not obey the quiet system\'s ceilings, and says so: more than 8px, longer than 150ms', () => {
+    // §5.2 ("4-8px", "150ms") governs every other recipe. The flight is a
     // protected signature gesture (docs/glass-spec.md §9) and must not be
     // clamped back to the lift it was.
     const bubble = bubbleAt({ left: 900, top: 700, width: 254, height: 40 });
@@ -119,8 +119,8 @@ describe('the approved flight, pinned', () => {
     const travelled = Math.abs(Number(/translate3d\(0(?:px)?, (-?[\d.]+)px/.exec(start)?.[1]));
     expect(travelled).toBeGreaterThan(8);
     expect(travelled).toBeCloseTo(800 + 18 - (700 + 20), 5);
-    expect(Number(on(shell).options.duration)).toBe(280);
-    expect(Number(on(shell).options.duration)).toBeGreaterThan(225);
+    expect(Number(on(shell).options.duration)).toBe(185);
+    expect(Number(on(shell).options.duration)).toBeGreaterThan(150);
   });
 });
 
@@ -150,14 +150,14 @@ describe('takeoff', () => {
     expect(readSendOrigin(textarea)).toEqual({ left: 420, top: 812, width: 640, height: 36, inset: 10, color: 'rgb(1, 2, 3)' });
   });
 
-  it('plays one 280ms flight on five layers, and only transform, opacity and color move', () => {
+  it('plays one 185ms flight on five layers, and only transform, opacity and color move', () => {
     const bubble = bubbleAt({ left: 900, top: 700, width: 254, height: 40 });
     flySend({ text: 'count me in', origin: ORIGIN, bubble: () => bubble, onLand: () => {} });
     const layers = ghostLayers();
     expect(flight()).toHaveLength(5);
     const allowed = new Set(['transform', 'opacity', 'color', 'offset', 'easing', 'composite']);
     for (const record of flight()) {
-      expect(Number(record.options.duration)).toBe(280);
+      expect(Number(record.options.duration)).toBe(185);
       for (const frame of record.keyframes) for (const property of Object.keys(frame)) expect(allowed.has(property), property).toBe(true);
     }
     // x on its curve, y and scale on another.
@@ -177,15 +177,15 @@ describe('takeoff', () => {
     const { fill, words, shadow } = ghostLayers();
     expect(words.textContent).toBe('count me in');
     expect(words.style.color).toBe('rgb(243, 245, 245)');
-    expect(on(fill).keyframes.map((frame) => [frame.offset, frame.opacity])).toEqual([[0, 0], [0.12, 0], [0.24, 1], [1, 1]]);
+    expect(on(fill).keyframes.map((frame) => [frame.offset, frame.opacity])).toEqual([[0, 0], [0.1, 0], [0.28, 1], [1, 1]]);
     expect(on(words).keyframes.map((frame) => [frame.offset, frame.color])).toEqual([
       [0, 'rgb(243, 245, 245)'],
-      [0.12, 'rgb(243, 245, 245)'],
-      [0.24, 'rgb(20, 21, 22)'],
+      [0.1, 'rgb(243, 245, 245)'],
+      [0.28, 'rgb(20, 21, 22)'],
       [1, 'rgb(20, 21, 22)'],
     ]);
     // A soft shadow while airborne, on its own layer, that settles away.
-    expect(on(shadow).keyframes.map((frame) => [frame.offset, frame.opacity])).toEqual([[0, 0], [0.24, 1], [0.4, 1], [1, 0]]);
+    expect(on(shadow).keyframes.map((frame) => [frame.offset, frame.opacity])).toEqual([[0, 0], [0.28, 1], [0.4, 1], [1, 0]]);
   });
 
   it('carries a reply\'s chip as a picture that comes in with the fill, and puts the words below it', () => {
@@ -205,7 +205,7 @@ describe('takeoff', () => {
     expect(picture?.querySelector('.glass-tl-reply')?.textContent).toBe('Nick new personal best');
     expect(picture?.style.top).toBe('9px');
     expect(words.style.top).toBe('30px');
-    expect(on(picture!).keyframes.map((frame) => [frame.offset, frame.opacity])).toEqual([[0, 0], [0.12, 0], [0.24, 1], [1, 1]]);
+    expect(on(picture!).keyframes.map((frame) => [frame.offset, frame.opacity])).toEqual([[0, 0], [0.1, 0], [0.28, 1], [1, 1]]);
   });
 
   it('carries the Index reply line that sits above the bubble, in the row, with the row\'s own inks', () => {
@@ -225,7 +225,7 @@ describe('takeoff', () => {
     expect(picture?.style.left).toBe('50px');
     expect(picture?.querySelector('.glass-bubble')).toBeNull();
     expect(picture?.querySelector('.glass-tl-reply')?.textContent).toBe('Jeremy: who is up for a run');
-    expect(on(picture!).keyframes.map((frame) => [frame.offset, frame.opacity])).toEqual([[0, 0], [0.12, 0], [0.24, 1], [1, 1]]);
+    expect(on(picture!).keyframes.map((frame) => [frame.offset, frame.opacity])).toEqual([[0, 0], [0.1, 0], [0.28, 1], [1, 1]]);
   });
 
   it('leaves from the words\' own left edge and the box\'s middle', () => {
@@ -346,18 +346,18 @@ describe('the rows that make room, and the composer', () => {
     expect(played).toHaveLength(1);
     const record = waapi.played.find((entry) => entry.target === row)!;
     expect(record.keyframes[0].transform).toBe('translate3d(0px, 60px, 0)');
-    expect(Number(record.options.duration)).toBe(255);
+    expect(Number(record.options.duration)).toBe(170);
     expect(record.options.easing).toBe(SEND_FLIGHT.glide);
     expect(record.animation.id).toBe('data-motion-recipe:send-room');
   });
 
-  it('presses the composer: .992 and back over 135ms', () => {
+  it('presses the composer: .992 and back over 90ms', () => {
     const capsule = document.createElement('div');
     document.body.append(capsule);
     pressComposer(capsule);
     const record = waapi.played.find((entry) => entry.target === capsule)!;
     expect(record.keyframes.map((frame) => frame.transform)).toEqual(['scale(1)', 'scale(0.992)', 'scale(1)']);
-    expect(Number(record.options.duration)).toBe(135);
+    expect(Number(record.options.duration)).toBe(90);
   });
 
   it('releases the send control from the cream look to the quiet one, in colors only', () => {
@@ -372,7 +372,7 @@ describe('the rows that make room, and the composer', () => {
     const record = waapi.played.find((entry) => entry.target === button)!;
     expect(Object.keys(record.keyframes[0]).sort()).toEqual(['backgroundColor', 'color']);
     expect(record.keyframes[1]).toEqual({ backgroundColor: 'rgba(255, 255, 255, 0.08)', color: 'rgba(235, 238, 242, 0.62)' });
-    expect(Number(record.options.duration)).toBe(190);
+    expect(Number(record.options.duration)).toBe(125);
     expect(record.animation.id).toBe('data-motion-recipe:send-release');
   });
 

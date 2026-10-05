@@ -430,7 +430,7 @@ export function RegisterPage() {
 
           {stepId === 'password' && (
               <div>
-                <label className="flex cursor-pointer items-start gap-3 rounded-[12px] bg-[var(--ix-fill-card)] px-4 py-3.5 shadow-[inset_0_0_0_1px_var(--ix-line)] transition-colors duration-[55ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill-card-hover)]">
+                <label className="flex cursor-pointer items-start gap-3 rounded-[12px] bg-[var(--ix-fill-card)] px-4 py-3.5 shadow-[inset_0_0_0_1px_var(--ix-line)] transition-colors duration-[40ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill-card-hover)]">
                   <input
                     type="checkbox"
                     checked={draft.agreed}

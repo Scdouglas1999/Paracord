@@ -160,7 +160,7 @@ export function OnboardingWizard({ onComplete, onTryDemo }: OnboardingWizardProp
               <span
                 key={i}
                 aria-hidden
-                className={`h-1.5 rounded-[var(--radius-full)] transition-colors duration-[90ms] ease-[var(--ix-ease)] ${
+                className={`h-1.5 rounded-[var(--radius-full)] transition-colors duration-[60ms] ease-[var(--ix-ease)] ${
                   i <= step ? 'bg-[var(--ix-cream)]' : 'bg-[var(--ix-fill-2)]'
                 }`}
                 style={{ width: i === step ? 26 : 8 }}
@@ -225,7 +225,7 @@ export function OnboardingWizard({ onComplete, onTryDemo }: OnboardingWizardProp
           <button
             type="button"
             onClick={handleComplete}
-            className="pc-focusable self-start rounded-[8px] text-[13px] font-medium text-[var(--ix-ink-3)] transition-colors duration-[55ms] ease-[var(--ix-ease)] hover:text-[var(--ix-ink-2)]"
+            className="pc-focusable self-start rounded-[8px] text-[13px] font-medium text-[var(--ix-ink-3)] transition-colors duration-[40ms] ease-[var(--ix-ease)] hover:text-[var(--ix-ink-2)]"
           >
             Skip introduction
           </button>

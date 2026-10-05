@@ -43,7 +43,7 @@ export const NavRow = React.forwardRef<HTMLElement, NavRowProps>(function NavRow
         'pc-focusable flex w-full select-none items-center gap-2.5 text-left',
         'h-[var(--h-nav-row)] rounded-[10px] px-2.5',
         'text-[14px] font-medium',
-        'transition-[background-color,color] duration-[55ms] ease-[var(--ix-ease)]',
+        'transition-[background-color,color] duration-[40ms] ease-[var(--ix-ease)]',
         // The selected row is the hue wash with its hairline (`.ix-hue-selected`);
         // the others are quiet until the pointer is on them.
         active

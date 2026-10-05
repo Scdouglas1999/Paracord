@@ -208,7 +208,7 @@ test.describe('the welcome (§4.13)', () => {
     await card.click();
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('https://paracord.example/invite/fuelfuel');
     expect(JSON.parse(made[0])).toEqual({ max_age: 0, max_uses: 0 });
-    // The title crossfades to "Link copied" (90ms, opacity), the card keeps its size.
+    // The title crossfades to "Link copied" (60ms, opacity), the card keeps its size.
     await expect(card.locator('.ix-way__title--swap')).toHaveAttribute('data-copied', 'true');
     await page.waitForTimeout(350);
     expect(await card.locator('.ix-way__b').evaluate((el) => getComputedStyle(el).opacity)).toBe('1');
@@ -263,8 +263,8 @@ test.describe('the welcome (§4.13)', () => {
     });
     const from = await box(actionCard(page, 'plan'));
     await clickActionCard(page, 'plan');
-    // The morph: the draft grows out of the card (295ms), the welcome fades out (135ms); transform and opacity only.
-    await page.waitForTimeout(120);
+    // The morph: the draft grows out of the card (195ms), the welcome fades out (90ms); transform and opacity only.
+    await page.waitForTimeout(30);
     const playing = await page.evaluate(() =>
       document
         .getAnimations()
@@ -279,10 +279,10 @@ test.describe('the welcome (§4.13)', () => {
         }),
     );
     const grow = playing.find((animation) => animation.id === 'ix-conversation:draft');
-    expect(grow?.duration).toBe(295);
+    expect(grow?.duration).toBe(195);
     expect(grow?.properties).toEqual(['opacity', 'transform', 'transformOrigin']);
-    expect(playing.find((animation) => animation.id === 'ix-conversation:welcome-out')?.duration).toBe(135);
-    await crop(page, 'plan-morph-120ms');
+    expect(playing.find((animation) => animation.id === 'ix-conversation:welcome-out')?.duration).toBe(90);
+    await crop(page, 'plan-morph-30ms');
     await page.waitForTimeout(1500);
     expect(await running(page)).toEqual([]);
     await expect(welcome(page)).toHaveCount(0);
@@ -479,7 +479,7 @@ test.describe('the drop target (§4.12)', () => {
 });
 
 test.describe('the feed follows the message box (§5.12)', () => {
-  test('opening the box moves the feed 225ms on the spring; closing, 160ms; transform only; nothing runs after', async ({ page }) => {
+  test('opening the box moves the feed 150ms on the spring; closing, 105ms; transform only; nothing runs after', async ({ page }) => {
     const h = await open(page);
     await busy(page, h);
     const bottom = page.getByText('yep, bringing the projector', { exact: true });
@@ -503,7 +503,7 @@ test.describe('the feed follows the message box (§5.12)', () => {
         }),
     );
     expect(grow.length).toBeGreaterThan(0);
-    expect(grow[0].duration).toBe(225);
+    expect(grow[0].duration).toBe(150);
     expect(grow[0].composite).toBe('add');
     expect(grow[0].easing).toBe('cubic-bezier(0.32, 0.72, 0, 1)');
     expect(grow[0].properties).toEqual(['transform']);
@@ -515,7 +515,7 @@ test.describe('the feed follows the message box (§5.12)', () => {
     expect(opened.y + opened.height).toBeLessThan((await box(composer(page))).y);
     expect(await running(page)).toEqual([]);
     await crop(page, 'feed-follows-open');
-    // Closing: 160ms.
+    // Closing: 105ms.
     await page.getByRole('main').click({ position: { x: 40, y: 300 } });
     await page.keyboard.press('Escape');
     await composerInput(page).evaluate((el) => (el as HTMLElement).blur());
@@ -526,7 +526,7 @@ test.describe('the feed follows the message box (§5.12)', () => {
         .filter((animation) => animation.id === 'ix-conversation:feed')
         .map((animation) => (animation.effect as KeyframeEffect).getComputedTiming().duration),
     );
-    if (shrink.length > 0) expect(shrink[0]).toBe(160);
+    if (shrink.length > 0) expect(shrink[0]).toBe(105);
     await page.waitForTimeout(900);
     expect(await running(page)).toEqual([]);
     const closed = await box(bottom);

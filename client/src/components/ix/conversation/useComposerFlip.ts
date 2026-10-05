@@ -5,8 +5,8 @@ import { IX_SPRING, ixReduced } from '../motion';
 
 /**
  * The feed follows the message box (docs/index-spec.md §5.12): "the layout height
- * changes once at the start; the feed above it FLIPs from its old position, 225ms
- * spring, so nothing jumps. Closing reverses in 160ms."
+ * changes once at the start; the feed above it FLIPs from its old position, 150ms
+ * spring, so nothing jumps. Closing reverses in 105ms."
  *
  * The box (and the cards above it: a queue, a recovery notice) changes height in
  * one layout; the feed's scroller, which fills what is left, changes by the
@@ -30,11 +30,11 @@ import { IX_SPRING, ixReduced } from '../motion';
  */
 
 /** Growing, and the box opening (§5.12). */
-export const FEED_GROW_MS = 225;
+export const FEED_GROW_MS = 150;
 /** Shrinking, and the box closing. */
-export const FEED_SHRINK_MS = 160;
+export const FEED_SHRINK_MS = 105;
 /** The send flight's own span (`SEND_FLIGHT.duration` plus its handoff): box changes inside it are not the feed's to animate. */
-export const FEED_SEND_QUIET_MS = 410;
+export const FEED_SEND_QUIET_MS = 275;
 
 /** A box change of less than this is layout noise (a subpixel). */
 const MIN_DELTA = 1;

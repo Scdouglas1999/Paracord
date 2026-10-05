@@ -239,7 +239,7 @@ export function ContextMenu({ items, position, open = true, onClose, label = 'Co
             role={item.selected === undefined ? 'menuitem' : 'menuitemradio'}
             aria-checked={item.selected === undefined ? undefined : item.selected}
             className={cn(
-              'flex min-h-9 w-full items-center justify-between gap-3 rounded-[10px] px-2.5 py-1.5 text-left text-[14px] font-medium outline-none transition-colors duration-[55ms] ease-[var(--ix-ease)] [@media(pointer:coarse)]:min-h-11',
+              'flex min-h-9 w-full items-center justify-between gap-3 rounded-[10px] px-2.5 py-1.5 text-left text-[14px] font-medium outline-none transition-colors duration-[40ms] ease-[var(--ix-ease)] [@media(pointer:coarse)]:min-h-11',
               // A destructive item takes the one danger INK on its fill, never a
               // red surface (§1.4). Hover is one step lighter, press one darker.
               item.danger ? 'text-[var(--ix-danger-ink)]' : 'text-[var(--ix-ink)]',

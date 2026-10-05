@@ -35,7 +35,7 @@ import { CreamButton, WideControl } from '../../primitives';
  * Test id `ix-call-strip` (`data-state`: `yours` | `incoming`).
  */
 
-export const CALL_STRIP_IN_MS = 165;
+export const CALL_STRIP_IN_MS = 110;
 
 export function CallStrip() {
   const world = useCardWorld();

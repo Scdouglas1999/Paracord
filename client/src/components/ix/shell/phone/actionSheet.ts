@@ -10,8 +10,8 @@
  */
 
 /** The action sheet's rise (ms). */
-export const ACTION_SHEET_IN_MS = 165;
+export const ACTION_SHEET_IN_MS = 110;
 /** Its drop (ms): the CSS animation. */
-export const ACTION_SHEET_OUT_MS = 110;
+export const ACTION_SHEET_OUT_MS = 75;
 /** How long a closing action sheet stays mounted: a little longer than the drop. */
-export const ACTION_SHEET_EXIT_MS = 120;
+export const ACTION_SHEET_EXIT_MS = 80;

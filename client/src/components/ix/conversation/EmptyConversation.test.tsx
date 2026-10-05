@@ -265,13 +265,13 @@ describe('Plan a night', () => {
     expect(net.sendMessage).not.toHaveBeenCalled();
   });
 
-  it('grows out of the action card (295ms, from half opacity) while the welcome fades out (135ms)', async () => {
+  it('grows out of the action card (195ms, from half opacity) while the welcome fades out (90ms)', async () => {
     await plan();
     const grow = waapi.played.find((record) => record.animation.id === 'ix-conversation:draft');
-    expect(grow?.options.duration).toBe(295);
+    expect(grow?.options.duration).toBe(195);
     expect(grow?.keyframes.map((frame) => frame.opacity)).toEqual([0.5, 1]);
     const out = waapi.played.find((record) => record.animation.id === 'ix-conversation:welcome-out');
-    expect(out?.options.duration).toBe(135);
+    expect(out?.options.duration).toBe(90);
     expect(out?.keyframes.map((frame) => frame.opacity)).toEqual([1, 0]);
     // Transform and opacity only.
     const properties = new Set(waapi.played.flatMap((record) => record.keyframes.flatMap((frame) => Object.keys(frame))));

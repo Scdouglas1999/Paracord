@@ -168,8 +168,8 @@ test.describe('dialogs and confirms (§6.12)', () => {
       title: 'Mark everything in Fuel as read?',
       confirmLabel: 'Mark read',
     });
-    // Mid-enter: the panel and the scrim are animating, transform and opacity only.
-    await page.waitForTimeout(60);
+    // Mid-enter: the panel and the scrim are animating (65ms and 60ms), transform and opacity only.
+    await page.waitForTimeout(10);
     const running = await page.evaluate(() =>
       document
         .getAnimations()
@@ -185,9 +185,9 @@ test.describe('dialogs and confirms (§6.12)', () => {
     const dialog = running.find((entry) => entry.name === 'pc-dialog-in');
     const scrim = running.find((entry) => entry.name === 'pc-fade');
     expect(dialog, 'the dialog animates in').toBeTruthy();
-    expect(dialog?.duration).toBe(100);
+    expect(dialog?.duration).toBe(65);
     expect(dialog?.properties.sort()).toEqual(['opacity', 'transform']);
-    expect(scrim?.duration).toBe(90);
+    expect(scrim?.duration).toBe(60);
     await page.waitForTimeout(500);
     const dialogEl = page.getByRole('alertdialog');
     const cream = await dialogEl.getByRole('button').evaluateAll((buttons) =>
@@ -207,7 +207,7 @@ test.describe('toasts (§5.18, §6.8)', () => {
     test.setTimeout(60_000);
     await open(page);
     await callStore(page, '/src/stores/toastStore.ts', 'useToastStore', 'addToast', 'info', 'Link copied');
-    await page.waitForTimeout(60);
+    await page.waitForTimeout(10);
     const entering = await page.evaluate(() =>
       document
         .getAnimations()
@@ -220,7 +220,7 @@ test.describe('toasts (§5.18, §6.8)', () => {
         })),
     );
     expect(entering).toHaveLength(1);
-    expect(entering[0].duration).toBe(135);
+    expect(entering[0].duration).toBe(90);
     expect(entering[0].properties.sort()).toEqual(['opacity', 'transform']);
     await page.waitForTimeout(450);
     const toast = page.getByRole('status').filter({ hasText: 'Link copied' });

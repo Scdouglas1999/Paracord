@@ -5,7 +5,7 @@ import { Avatar, ServerMark } from '../identity';
 import { cappedCount, dockLabel, type DockEntry } from './dockModel';
 
 /** The ping: an amber ring leaves the live dot and fades, once (§5.5). */
-export const PING_MS = 545;
+export const PING_MS = 365;
 export const PING_SCALE = 2.2;
 
 export interface DockItemProps {

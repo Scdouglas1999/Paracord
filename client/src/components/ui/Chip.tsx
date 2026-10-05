@@ -45,7 +45,7 @@ export const Chip = React.forwardRef<HTMLSpanElement, ChipProps>(function Chip(
           : 'h-[var(--h-chip)] px-2 text-[12.5px]',
         TONES[tone],
         as === 'button' &&
-          'pc-focusable cursor-pointer transition-[background-color,color] duration-[55ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill-2)] hover:text-[var(--ix-ink)]',
+          'pc-focusable cursor-pointer transition-[background-color,color] duration-[40ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill-2)] hover:text-[var(--ix-ink)]',
         className,
       )}
       {...props}

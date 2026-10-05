@@ -3,7 +3,7 @@
    `.dock` / `.dk` rules). Components: components/ix/dock.
 
    Every color is a token; only transform and opacity animate (hover and the
-   dots are transforms, color is a 55ms transition, the indicator's glide and
+   dots are transforms, color is a 40ms transition, the indicator's glide and
    the ping are Web Animations in the component). Reduced motion is the one
    `data-motion` switch: no lifts, no ping, no spring on the mark. */
 
@@ -34,8 +34,8 @@
   color: var(--ix-ink-3);
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
-  /* Hover lifts it 2px (§5.15): 160ms on the spring. */
-  transition: transform 160ms var(--ix-spring);
+  /* Hover lifts it 2px (§5.15): 105ms on the spring. */
+  transition: transform 105ms var(--ix-spring);
 }
 
 @media (hover: hover) {
@@ -50,12 +50,12 @@
 }
 
 /* The mark: the current place at scale 1.08 and full strength, the others at .82
-   (§4.8). The scale is the spring (205ms), the dimming a plain fade (opacity). */
+   (§4.8). The scale is the spring (135ms), the dimming a plain fade (opacity). */
 .ix-dock__mark {
   opacity: 0.82;
   transition:
-    transform 205ms var(--ix-spring),
-    opacity 135ms var(--ix-ease);
+    transform 135ms var(--ix-spring),
+    opacity 90ms var(--ix-ease);
 }
 
 .ix-dock__item[data-current] .ix-dock__mark {
@@ -64,7 +64,7 @@
 }
 
 /* ---- Live, unread, mentions ---------------------------------------------------- */
-/* All three are always drawn and scale in and out (205ms spring); each wears the
+/* All three are always drawn and scale in and out (135ms spring); each wears the
    sidebar's own foot color as a 2.5px ring so it bites the mark (§3.1). */
 .ix-dock__live,
 .ix-dock__unread,
@@ -72,7 +72,7 @@
   position: absolute;
   pointer-events: none;
   transform: scale(0);
-  transition: transform 205ms var(--ix-spring);
+  transition: transform 135ms var(--ix-spring);
   box-shadow: 0 0 0 2.5px var(--ix-side-end);
 }
 
@@ -194,7 +194,7 @@
   height: 34px;
   border-radius: 11px;
   box-shadow: inset 0 0 0 1.5px var(--ix-edge-strong);
-  transition: color 55ms var(--ix-ease);
+  transition: color 40ms var(--ix-ease);
 }
 
 @media (hover: hover) {
@@ -245,8 +245,8 @@
   opacity: 0;
   transform: translateY(3px);
   transition:
-    opacity 55ms var(--ix-ease),
-    transform 80ms var(--ix-ease);
+    opacity 40ms var(--ix-ease),
+    transform 55ms var(--ix-ease);
 }
 
 .ix-dock__tip[data-open] {
@@ -263,11 +263,11 @@
 :root[data-motion='reduced'] .ix-dock__unread,
 :root[data-motion='reduced'] .ix-dock__chip,
 :root[data-motion='reduced'] .ix-dock__tip {
-  transition-duration: 100ms;
+  transition-duration: 65ms;
 }
 
 :root[data-motion='reduced'] .ix-dock__mark {
-  transition: opacity 100ms var(--ix-ease);
+  transition: opacity 65ms var(--ix-ease);
 }
 
 :root[data-motion='reduced'] .ix-dock__tip {
@@ -307,8 +307,8 @@
   font-weight: 600;
   cursor: pointer;
   transition:
-    background-color 55ms var(--ix-ease),
-    color 55ms var(--ix-ease);
+    background-color 40ms var(--ix-ease),
+    color 40ms var(--ix-ease);
 }
 
 .ix-add__tab:hover {
@@ -432,7 +432,7 @@
   font: inherit;
   text-align: left;
   cursor: pointer;
-  transition: background-color 55ms var(--ix-ease);
+  transition: background-color 40ms var(--ix-ease);
 }
 
 .ix-add__option:hover {

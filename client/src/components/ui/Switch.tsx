@@ -18,7 +18,7 @@ export interface SwitchProps
  * Off is a quiet capsule (the control fill, a muted knob). On is cream with a dark
  * knob: cream is the one action, the way the send circle turns cream (§5.13).
  * Amber stays with what is live, so the knob carries no glow. Hover is one step
- * lighter, press one step darker, over 55ms; nothing scales.
+ * lighter, press one step darker, over 40ms; nothing scales.
  *
  * `role="switch"` + `aria-checked` give assistive tech the state; the knob is
  * only the visual half of it.
@@ -50,7 +50,7 @@ export const Switch = React.forwardRef<HTMLButtonElement, SwitchProps>(function 
       onClick={() => onChange(!checked)}
       className={cn(
         'pc-focusable relative inline-flex shrink-0 items-center rounded-[var(--radius-full)]',
-        'transition-colors duration-[55ms] ease-[var(--ix-ease)]',
+        'transition-colors duration-[40ms] ease-[var(--ix-ease)]',
         'disabled:cursor-not-allowed disabled:opacity-[.45]',
         track,
         checked

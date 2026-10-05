@@ -83,7 +83,7 @@ describe('onSettle and commit', () => {
 });
 
 describe('slidePanes (§5.1)', () => {
-  it('slides the old pane out to -dir×40% in 205ms and the new one in from dir×60% in 250ms, on the spring', () => {
+  it('slides the old pane out to -dir×40% in 135ms and the new one in from dir×60% in 165ms, on the spring', () => {
     const { outgoing, incoming } = slidePanes(el(), el(), 1);
     expect(outgoing).not.toBeNull();
     expect(incoming).not.toBeNull();
@@ -92,12 +92,12 @@ describe('slidePanes (§5.1)', () => {
       { transform: 'none', opacity: 1 },
       { transform: 'translateX(-40%)', opacity: 0 },
     ]);
-    expect(out.options).toMatchObject({ duration: 205, easing: IX_SPRING, fill: 'forwards' });
+    expect(out.options).toMatchObject({ duration: 135, easing: IX_SPRING, fill: 'forwards' });
     expect(into.keyframes).toEqual([
       { transform: 'translateX(60%)', opacity: 0 },
       { transform: 'none', opacity: 1 },
     ]);
-    expect(into.options).toMatchObject({ duration: 250, easing: IX_SPRING });
+    expect(into.options).toMatchObject({ duration: 165, easing: IX_SPRING });
     expect(into.options.fill).toBeUndefined();
   });
 
@@ -107,10 +107,10 @@ describe('slidePanes (§5.1)', () => {
     expect(waapi.played[1].keyframes[0]).toMatchObject({ transform: 'translateX(-60%)' });
   });
 
-  it('crossfades in place with reduced motion (100ms) and for an unknown direction', () => {
+  it('crossfades in place with reduced motion (65ms) and for an unknown direction', () => {
     configureMotion('reduced');
     slidePanes(el(), el(), 1);
-    expect(waapi.played.map((record) => record.options.duration)).toEqual([100, 100]);
+    expect(waapi.played.map((record) => record.options.duration)).toEqual([65, 65]);
     expect(animatedProperties()).toEqual(new Set(['opacity']));
     configureMotion('full');
     waapi.played.length = 0;
@@ -120,13 +120,13 @@ describe('slidePanes (§5.1)', () => {
 });
 
 describe('crossfadeLayers (§5.1 tint)', () => {
-  it('fades only the new layer in, 410ms ease; 100ms under reduced motion', () => {
+  it('fades only the new layer in, 275ms ease; 65ms under reduced motion', () => {
     crossfadeLayers(el());
     expect(waapi.played[0].keyframes).toEqual([{ opacity: 0 }, { opacity: 1 }]);
     expect(waapi.played[0].options).toMatchObject({ duration: TINT_FADE_MS, easing: IX_EASE });
     configureMotion('reduced');
     crossfadeLayers(el());
-    expect(waapi.played[1].options.duration).toBe(100);
+    expect(waapi.played[1].options.duration).toBe(65);
   });
 
   it('plays nothing without an element (jsdom, an unmounted layer)', () => {
@@ -151,7 +151,7 @@ describe('flipFromRect', () => {
   it('plays from the old rect to the element, transform and opacity only', () => {
     const node = el();
     vi.spyOn(node, 'getBoundingClientRect').mockReturnValue(new DOMRect(100, 100, 400, 300));
-    flipFromRect(node, rect(20, 40, 200, 150), { duration: 275, opacityFrom: 0.3 });
+    flipFromRect(node, rect(20, 40, 200, 150), { duration: 185, opacityFrom: 0.3 });
     const [played] = waapi.played;
     expect(played.keyframes[0]).toMatchObject({
       transform: 'translate(-80px, -60px) scale(0.5, 0.5)',
@@ -159,22 +159,22 @@ describe('flipFromRect', () => {
       opacity: 0.3,
     });
     expect(played.keyframes[1]).toMatchObject({ transform: 'none', opacity: 1 });
-    expect(played.options).toMatchObject({ duration: 275, easing: IX_SPRING });
+    expect(played.options).toMatchObject({ duration: 185, easing: IX_SPRING });
     expect(animatedProperties()).toEqual(new Set(['transform', 'transformOrigin', 'opacity']));
   });
 
-  it('becomes a 100ms fade under reduced motion, or nothing for displaced content', () => {
+  it('becomes a 65ms fade under reduced motion, or nothing for displaced content', () => {
     configureMotion('reduced');
     const node = el();
-    flipFromRect(node, rect(0, 0, 10, 10), { duration: 275 });
+    flipFromRect(node, rect(0, 0, 10, 10), { duration: 185 });
     expect(waapi.played[0].keyframes).toEqual([{ opacity: 0 }, { opacity: 1 }]);
-    expect(waapi.played[0].options.duration).toBe(100);
-    const moved = flipMoved(new Map([[node, new DOMRect(0, 0, 10, 10)]]), { duration: 275 });
+    expect(waapi.played[0].options.duration).toBe(65);
+    const moved = flipMoved(new Map([[node, new DOMRect(0, 0, 10, 10)]]), { duration: 185 });
     expect(moved).toEqual([]);
   });
 
   it('skips an element that is not in the document', () => {
     const loose = document.createElement('div');
-    expect(flipFromRect(loose, rect(0, 0, 10, 10), { duration: 275 })).toBeNull();
+    expect(flipFromRect(loose, rect(0, 0, 10, 10), { duration: 185 })).toBeNull();
   });
 });

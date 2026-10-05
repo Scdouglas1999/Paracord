@@ -206,7 +206,7 @@ test.describe('the phone (index-spec §9)', () => {
     await expect(menu).toHaveCount(0);
   });
 
-  test('a channel is pushed: from the right in 165ms on the spring, the root 30% left and dimmed beneath', async ({ page }) => {
+  test('a channel is pushed: from the right in 110ms on the spring, the root 30% left and dimmed beneath', async ({ page }) => {
     await open(page);
     await backToRoot(page);
     await page.evaluate(() => {
@@ -239,7 +239,7 @@ test.describe('the phone (index-spec §9)', () => {
     expect(byId['ix-phone:under'].keyframes).toEqual([{ transform: 'none' }, { transform: 'translateX(-30%)' }]);
     expect(byId['ix-phone:shade'].keyframes).toEqual([{ opacity: 0 }, { opacity: 1 }]);
     for (const record of played) {
-      expect(record.duration).toBe(165);
+      expect(record.duration).toBe(110);
       expect(record.easing).toBe('cubic-bezier(0.32, 0.72, 0, 1)');
     }
 
@@ -375,7 +375,7 @@ test.describe('the phone (index-spec §9)', () => {
       const keyframes = (open.effect as KeyframeEffect).getKeyframes();
       return { duration: (open.effect as KeyframeEffect).getTiming().duration, transform: keyframes[0].transform as string };
     });
-    expect(first?.duration).toBe(190);
+    expect(first?.duration).toBe(125);
     const scaled = first?.transform.match(/scale\(([\d.]+), ([\d.]+)\)/);
     expect(Number(scaled?.[2])).toBeCloseTo(from.height / (PHONE.height - SAFE_TOP - 8), 1);
     await page.waitForTimeout(700);

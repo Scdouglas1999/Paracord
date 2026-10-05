@@ -5,7 +5,7 @@ import { commit, crossfadeLayers, onSettle } from '../motion';
 /**
  * The window tint (docs/index-spec.md §2.2, §5.1): the current place's hue as a
  * stack of layers behind a column. A hue change adds a new layer ABOVE the old
- * one and fades it in (410ms ease); when the fade settles, the layers under it
+ * one and fades it in (275ms ease); when the fade settles, the layers under it
  * are removed. `--ix-hue` is set once per layer and never animated.
  *
  *   kind="side"  the sidebar's three-stop gradient (`.ix-hue-side`)

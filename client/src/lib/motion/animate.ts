@@ -79,7 +79,7 @@ export function scaleShadow(shadow: string, { spread = 1, alpha = 1 } = {}): str
 }
 
 /**
- * A light coming on: it warms up from 55% to full over 100ms, `--ease-out`
+ * A light coming on: it warms up from 55% to full over 65ms, `--ease-out`
  * (§5.1 "light has a source and a speed"). Opacity only — the glow itself is
  * a still layer the stylesheet already crossfaded in.
  */
@@ -108,13 +108,13 @@ export function dim(el: Element | null | undefined, _from?: string): Animation |
 
 /**
  * Reading light flickers once when a message lands — two short opacity
- * pulses, 90ms in all (§5.1). The room's amber window is the only thing in
+ * pulses, 60ms in all (§5.1). The room's amber window is the only thing in
  * the product that does this.
  */
 export function flicker(el: Element | null | undefined): Animation | null {
   if (!animatable(el)) return null;
   if (prefersReducedMotion()) return landed(el);
-  // 90ms total: pulse (18) · rise (18) · pulse (22) · settle (32).
+  // 60ms total: pulse (12) · rise (12) · pulse (15) · settle (21).
   return run(
     el,
     'flicker',
@@ -125,7 +125,7 @@ export function flicker(el: Element | null | undefined): Animation | null {
       { opacity: 0.7, offset: 0.65 },
       { opacity: 1, offset: 1 },
     ],
-    { duration: 90, easing: motionToken('--ease-out'), fill: 'none' },
+    { duration: 60, easing: motionToken('--ease-out'), fill: 'none' },
   );
 }
 
@@ -185,7 +185,7 @@ export function stagger(
   return [...elements].map((el, index) => settleIn(el, { ...options, delay: base + index * step }));
 }
 
-/** A control under a finger: 0.98 over 55ms, and back over 55ms (§5.1). */
+/** A control under a finger: 0.98 over 40ms, and back over 40ms (§5.1). */
 export function press(el: Element | null | undefined): Animation | null {
   if (!animatable(el)) return null;
   if (prefersReducedMotion()) return landed(el);
@@ -209,14 +209,14 @@ export function press(el: Element | null | undefined): Animation | null {
  * element whose `className` is recomputed on the very next render (the send
  * makes it busy), which would wipe a class the engine added microseconds
  * earlier. React does not own this element's `style`, so the beat survives. It
- * is removed after 35ms, or if the animation is canceled.
+ * is removed after 40ms, or if the animation is canceled.
  *
  * The light is a state, not an animation: it is on for the beat and off
  * after it. Only the press is animated, and only in transform.
  */
 const FLASH_LIGHT: ReadonlyArray<readonly [string, string]> = [
   // A beat, not a fade: the control almost always carries a color transition
-  // for its hover state, and leaving it on turns the flash into a 65ms ramp
+  // for its hover state, and leaving it on turns the flash into a 40ms ramp
   // that never reaches the light. Removing the properties restores the
   // transition, so it comes ON like a light and goes off like one.
   ['transition', 'none'],
@@ -237,7 +237,7 @@ export function flash(el: Element | null | undefined): Animation | null {
     for (const [property] of FLASH_LIGHT) el.style.removeProperty(property);
   };
   if (animation) {
-    window.setTimeout(unlight, 35);
+    window.setTimeout(unlight, 40);
     animation.addEventListener('cancel', unlight);
   } else unlight();
   return animation;
@@ -281,9 +281,9 @@ export function fadeIn(el: Element | null | undefined, options: { delay?: number
 /**
  * The composer relaxing 0.8% under the send and springing back (§5.1). It is
  * one beat of the send flight (`sendFlight.ts`, docs/glass-spec.md §9), which
- * names its own length, so this is 135ms rather than `--duration-slow`.
+ * names its own length, so this is 90ms rather than `--duration-slow`.
  */
-export const RELAX_MS = 135;
+export const RELAX_MS = 90;
 
 export function relax(el: Element | null | undefined): Animation | null {
   if (!animatable(el)) return null;

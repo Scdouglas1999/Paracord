@@ -202,7 +202,7 @@ test.describe('IX-5 sidebar', () => {
     await shoot(page, 's5-busy');
   });
 
-  test('clicking a channel moves the selection by transform alone, 205ms spring, and opens it', async ({ page }) => {
+  test('clicking a channel moves the selection by transform alone, 135ms spring, and opens it', async ({ page }) => {
     const h = await open(page);
     await h.step('arrive');
     await page.waitForTimeout(MOTION_GONE_MS);
@@ -216,7 +216,7 @@ test.describe('IX-5 sidebar', () => {
       const t = animation?.effect?.getTiming();
       return { duration: t?.duration, easing: t?.easing };
     });
-    expect(timing).toEqual({ duration: 205, easing: 'cubic-bezier(0.32, 0.72, 0, 1)' });
+    expect(timing).toEqual({ duration: 135, easing: 'cubic-bezier(0.32, 0.72, 0, 1)' });
     // Only transform moves: no animation of the selection touches another property.
     const properties = await page.evaluate(() => {
       const animation = document.getAnimations().find((a) => a.id === 'ix-select:glide');

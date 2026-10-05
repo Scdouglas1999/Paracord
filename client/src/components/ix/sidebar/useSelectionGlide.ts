@@ -4,19 +4,19 @@ import { IX_REDUCED_MS, IX_SPRING, canAnimate, commit, ixReduced } from '../moti
 
 /**
  * The selection's glide (docs/index-spec.md §5.2): one highlight element for the
- * whole list, moved to the selected row by a `translateY`, 205ms spring. Rows have
+ * whole list, moved to the selected row by a `translateY`, 135ms spring. Rows have
  * a fixed height, so nothing but a translate is ever needed (no height animation).
  *
  * The element is positioned in the list's own coordinate space (`offsetTop` of the
  * row against the positioned container), so it follows the rows when a category
- * closes and they FLIP up: both run 205ms on the same curve and arrive together.
+ * closes and they FLIP up: both run 135ms on the same curve and arrive together.
  *
  * - First placement, and a pane that is sliding out: put in place, no motion.
  * - Selection appears from nothing: fades in at the row (CSS opacity transition).
- * - Reduced motion: put in place and crossfade 100ms.
+ * - Reduced motion: put in place and crossfade 65ms.
  */
 
-export const GLIDE_MS = 205;
+export const GLIDE_MS = 135;
 export const SELECTED_ATTRIBUTE = 'data-ix-selected';
 
 export function useSelectionGlide(

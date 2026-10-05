@@ -136,7 +136,8 @@ test.describe('IX-4 shell', () => {
     await page.waitForTimeout(800);
     await dockItem(page, 'gameNight').click();
     // Mid-move: both panes mounted, the new one coming from the right (Game Night is right of Fuel in the dock).
-    await expect.poll(async () => (await census(page)).panes.length).toBe(2);
+    // The slide is 165ms: poll every 5ms, so the read lands inside it.
+    await expect.poll(async () => (await census(page)).panes.length, { intervals: [5] }).toBe(2);
     const moving = await page.evaluate(() =>
       document.getAnimations().map((animation) => ({
         id: animation.id,
@@ -160,7 +161,7 @@ test.describe('IX-4 shell', () => {
 
     // Back to the left: the new pane comes from the left.
     await dockItem(page, 'fuel').click();
-    await expect.poll(async () => (await census(page)).panes.length).toBe(2);
+    await expect.poll(async () => (await census(page)).panes.length, { intervals: [5] }).toBe(2);
     const back = await page.evaluate(() =>
       document.getAnimations().filter((a) => a.id === 'ix-pane:in').map((a) => (a.effect as KeyframeEffect).getKeyframes()[0].transform),
     );

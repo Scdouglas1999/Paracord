@@ -298,7 +298,7 @@ export function ForwardPicker({
               <li key={target.key}>
                 <button
                   type="button"
-                  className="pc-focusable inline-flex h-7 max-w-[14rem] items-center gap-1 rounded-[8px] bg-[var(--ix-fill-2)] pl-2.5 pr-1.5 text-[12.5px] font-semibold text-[var(--ix-ink)] transition-colors duration-[55ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill-ctl-hover)]"
+                  className="pc-focusable inline-flex h-7 max-w-[14rem] items-center gap-1 rounded-[8px] bg-[var(--ix-fill-2)] pl-2.5 pr-1.5 text-[12.5px] font-semibold text-[var(--ix-ink)] transition-colors duration-[40ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill-ctl-hover)]"
                   onClick={() => toggle(target)}
                   aria-label={`Remove ${target.label}`}
                 >
@@ -328,7 +328,7 @@ export function ForwardPicker({
                 type="button"
                 aria-pressed={on}
                 className={cn(
-                  'pc-focusable flex w-full items-center gap-3 rounded-[12px] px-2.5 py-2 text-left transition-colors duration-[55ms] ease-[var(--ix-ease)]',
+                  'pc-focusable flex w-full items-center gap-3 rounded-[12px] px-2.5 py-2 text-left transition-colors duration-[40ms] ease-[var(--ix-ease)]',
                   on ? 'bg-[var(--ix-fill-2)]' : 'hover:bg-[var(--ix-fill)]',
                 )}
                 onClick={() => toggle(target)}
@@ -343,7 +343,7 @@ export function ForwardPicker({
                 </span>
                 <span
                   className={cn(
-                    'flex h-5 w-5 shrink-0 items-center justify-center rounded-full transition-colors duration-[55ms] ease-[var(--ix-ease)]',
+                    'flex h-5 w-5 shrink-0 items-center justify-center rounded-full transition-colors duration-[40ms] ease-[var(--ix-ease)]',
                     on
                       ? 'bg-[var(--ix-cream)] text-[var(--ix-cream-ink)]'
                       : 'shadow-[inset_0_0_0_1.5px_var(--ix-edge-strong)]',

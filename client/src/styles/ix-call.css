@@ -91,7 +91,7 @@
   background: transparent;
   color: var(--ix-ink-2);
   cursor: pointer;
-  transition: background-color 55ms var(--ix-ease), color 55ms var(--ix-ease);
+  transition: background-color 40ms var(--ix-ease), color 40ms var(--ix-ease);
 }
 
 .ix-call-head__tool:hover {
@@ -115,7 +115,7 @@
   font-weight: 600;
   color: var(--ix-ink);
   cursor: pointer;
-  transition: background-color 70ms var(--ix-ease);
+  transition: background-color 45ms var(--ix-ease);
 }
 
 .ix-call-head__back:hover {
@@ -248,7 +248,7 @@ button.ix-call-tile__button {
   width: 100%;
   height: 100%;
   pointer-events: none;
-  transition: opacity 90ms var(--ix-ease);
+  transition: opacity 60ms var(--ix-ease);
 }
 
 /* Your own camera reads as a mirror, as it always has (the native surface is told). */
@@ -453,7 +453,7 @@ button.ix-call-tile__button {
   gap: 12px;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 90ms var(--ix-ease);
+  transition: opacity 60ms var(--ix-ease);
 }
 
 .ix-call-stream:hover > .ix-call-stream__overlay,
@@ -633,7 +633,7 @@ button.ix-call-tile__button {
   color: var(--ix-ink);
   white-space: nowrap;
   cursor: pointer;
-  transition: background-color 55ms var(--ix-ease), color 55ms var(--ix-ease);
+  transition: background-color 40ms var(--ix-ease), color 40ms var(--ix-ease);
 }
 
 .ix-call-btn--icon {
@@ -867,7 +867,7 @@ html[data-native-moving] .ix-call-ghost {
    aspect (contain, black bars: the native surface's, the canvas's, or this
    ground's). The header, the controls and a row of faces are chrome over it:
    `data-chrome` (useIdleChrome.ts) shows them on a pointer move and lets them go
-   after two still seconds, fading `--duration-normal` (80ms); once gone they are not painted at all
+   after two still seconds, fading `--duration-normal` (55ms); once gone they are not painted at all
    and the cursor hides over the stream. Over native video the chrome is near-solid
    or a dark scrim, never blurred (§7.6). */
 .ix-frame[data-call-fill='true'] .ix-call-host {

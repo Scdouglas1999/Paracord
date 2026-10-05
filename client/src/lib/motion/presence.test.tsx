@@ -159,7 +159,7 @@ describe('useSettleIn', () => {
     rerender(<Street keys={['a', 'b', 'c']} />);
     expect(waapi.played).toHaveLength(1);
     expect(waapi.played[0].keyframes[0].transform).toBe('translate3d(0, 8px, 0)');
-    expect(Number(waapi.played[0].options.duration)).toBe(110);
+    expect(Number(waapi.played[0].options.duration)).toBe(75);
   });
 
   it('does not animate a whole street arriving in one commit', async () => {
@@ -283,7 +283,7 @@ describe('useFlipList', () => {
     const b = waapi.played.find((record) => (record.target as HTMLElement).dataset.flipKey === 'b')!;
     expect(b.keyframes[0].transform).toBe('translate3d(0px, 10px, 0)');
     expect(b.keyframes[1].transform).toBe('translate3d(0, 0, 0)');
-    expect(Number(b.options.duration)).toBe(110);
+    expect(Number(b.options.duration)).toBe(75);
   });
 
   it('fades and rises a row that arrived', () => {

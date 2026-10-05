@@ -173,7 +173,7 @@ describe('TintLayers (§2.2, §5.1)', () => {
     expect(waapi.played).toHaveLength(1);
     expect(waapi.played[0].target).toBe(next);
     expect(waapi.played[0].keyframes).toEqual([{ opacity: 0 }, { opacity: 1 }]);
-    expect(waapi.played[0].options.duration).toBe(410);
+    expect(waapi.played[0].options.duration).toBe(275);
 
     act(() => waapi.played[0].animation.finish());
     await flush();

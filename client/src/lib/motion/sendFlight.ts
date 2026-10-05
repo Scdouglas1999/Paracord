@@ -36,17 +36,18 @@ import { motionToken } from './tokens';
 
 /**
  * The approved prototype's numbers (a documented exception to §5.2), played
- * 2.2× faster than the prototype plays them: the owner found the first
- * 620ms flight too slow once the app was in daily use. The shape did not
- * change (the curves, the 3px overshoot and the shadow hold are offsets of the
- * duration), only the clock. One thing is not a pure scale: the words become
- * the bubble between 0.12 and 0.24 (it was 0.14 to 0.22), so the handoff is
- * 34ms, two frames at 60Hz, where a straight scale left it 22ms, one frame:
- * a pop, not a dissolve.
+ * 3.3× faster than the prototype plays them (2.2×, then another 1.5×): the
+ * owner found the first 620ms flight too slow once the app was in daily use,
+ * and the 280ms one still slow. The shape did not change (the curves, the 3px
+ * overshoot and the shadow hold are offsets of the duration), only the clock.
+ * One thing is not a pure scale: the words become the bubble between 0.10 and
+ * 0.28 (the prototype has 0.14 to 0.22), so the handoff is 33ms, two frames at
+ * 60Hz, where a straight scale left it 15ms, under one frame: a pop, not a
+ * dissolve.
  */
 export const SEND_FLIGHT = {
   /** The whole flight. */
-  duration: 280,
+  duration: 185,
   /** x: slow to leave, then across. */
   easeX: 'cubic-bezier(0.3, 0.05, 0.2, 1)',
   /** y and scale: up fast, settling. The overshoot below is in progress, not time. */
@@ -54,20 +55,20 @@ export const SEND_FLIGHT = {
   /** Everything already in the conversation gliding up to make room. */
   glide: 'cubic-bezier(0.32, 0.72, 0, 1)',
   /** The glide ends this much before the flight does. */
-  glideTrim: 25,
+  glideTrim: 15,
   fromScale: 0.95,
   overshoot: { y: -3, scale: 1.01, at: 0.7 },
   /** The words become the bubble between these two offsets. */
-  fillFrom: 0.12,
-  fillTo: 0.24,
+  fillFrom: 0.1,
+  fillTo: 0.28,
   /** The airborne shadow holds until here, then settles away. */
   shadowHold: 0.4,
   /** The send control releasing from the cream "on" look to the quiet one. */
-  releaseMs: 190,
+  releaseMs: 125,
   /** A bubble that is not where the flight aimed (scrolled, resized) is walked there. */
-  correctMs: 65,
+  correctMs: 45,
   /** A bubble let go of before it landed (the send failed). */
-  retireMs: 75,
+  retireMs: 50,
 } as const;
 
 /** The composer's press is `relax` (scale .992 and back, `RELAX_MS`). */
@@ -462,14 +463,14 @@ export function makeRoom(capture: FlipCapture): Animation[] {
 /* The composer and the send control                                           */
 /* -------------------------------------------------------------------------- */
 
-/** The composer's tiny press: scale .992 and back over 135ms. */
+/** The composer's tiny press: scale .992 and back over 90ms. */
 export function pressComposer(capsule: Element | null | undefined): Animation | null {
   return relax(capsule);
 }
 
 /**
  * The send control releasing once: from the cream "on" look it is wearing to
- * the quiet one it is about to settle into, over 190ms. Colors only, and only
+ * the quiet one it is about to settle into, over 125ms. Colors only, and only
  * on the control; the target colors are read from its own tokens, never typed
  * here: the Index message box declares its quiet look on the control as
  * `--ix-send-quiet` (fill) and `--ix-send-quiet-ink` (glyph), in

@@ -15,8 +15,8 @@ import { useToolbarStore } from './toolbarStore';
  *
  * Transparent until the page's large title has scrolled 40px away; then the
  * near-solid fill and a bottom hairline (a color transition and an opacity
- * fade, 135ms; no blur). The folded title enters from translateY(6px) + fade
- * (115ms opacity, 160ms spring), §5.14. What it says is the page's
+ * fade, 90ms; no blur). The folded title enters from translateY(6px) + fade
+ * (75ms opacity, 105ms spring), §5.14. What it says is the page's
  * (`useToolbar`); the buttons it always has are the frame's.
  *
  * Test id `ix-toolbar`; the folded title is inside it.

@@ -2,12 +2,12 @@
    The Overview's entrance (docs/index-spec.md §5.2: the page's sections enter as the
    feed does on a channel switch).
 
-   Its sections rise into place one after another: from 14px below with a fade, 220ms
-   on the spring, 20ms apart. Everything else the page draws is `ix-pages.css`.
+   Its sections rise into place one after another: from 14px below with a fade, 145ms
+   on the spring, 15ms apart. Everything else the page draws is `ix-pages.css`.
    Imported into `@layer components`, so a utility at the call site still wins.
 
    Reduced motion is the `data-motion` switch (utilities.css): the move becomes a
-   70ms fade (§5), with no stagger. Only transform and opacity move, once, on mount.
+   45ms fade (§5), with no stagger. Only transform and opacity move, once, on mount.
    ============================================================================= */
 
 @keyframes ix-ov-enter {
@@ -26,11 +26,11 @@
 /* The keyframe only declares where a section comes FROM, and `backwards` holds it
    there for its stagger delay. At rest nothing runs (no `forwards`). */
 .ix-enter {
-  animation: ix-ov-enter 220ms var(--ix-spring) backwards;
-  animation-delay: calc(var(--enter-index, 0) * 20ms);
+  animation: ix-ov-enter 145ms var(--ix-spring) backwards;
+  animation-delay: calc(var(--enter-index, 0) * 15ms);
 }
 
 :root[data-motion='reduced'] .ix-enter {
-  animation: ix-ov-fade 100ms linear backwards;
+  animation: ix-ov-fade 65ms linear backwards;
   animation-delay: 0ms;
 }

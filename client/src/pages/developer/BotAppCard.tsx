@@ -149,7 +149,7 @@ export function BotAppCard({
             href={installUrl}
             target="_blank"
             rel="noreferrer"
-            className="pc-focusable inline-flex h-[var(--h-control-sm)] items-center gap-1.5 rounded-[10px] px-2.5 text-meta font-medium text-[var(--ix-ink-2)] transition-colors duration-[55ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill)] hover:text-[var(--ix-ink)]"
+            className="pc-focusable inline-flex h-[var(--h-control-sm)] items-center gap-1.5 rounded-[10px] px-2.5 text-meta font-medium text-[var(--ix-ink-2)] transition-colors duration-[40ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill)] hover:text-[var(--ix-ink)]"
           >
             <ExternalLink size={13} aria-hidden /> Open
           </a>

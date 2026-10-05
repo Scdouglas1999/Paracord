@@ -13,8 +13,8 @@ const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 4;
 const ZOOM_STEP = 0.25;
 
-/** The picture grows out of its bubble, and shrinks back into it (§6.10, §5: 205ms on the spring). */
-const VIEWER_FLIP_MS = 205;
+/** The picture grows out of its bubble, and shrinks back into it (§6.10, §5: 135ms on the spring). */
+const VIEWER_FLIP_MS = 135;
 /** How long a press stays "what opened the viewer" (an attachment may be fetched first). */
 const SOURCE_WINDOW_MS = 10_000;
 
@@ -101,7 +101,7 @@ type Phase = 'closed' | 'open' | 'closing';
 /**
  * The media viewer (docs/index-spec.md §6.10): near-black (`--ix-viewer`) over the
  * whole window; the picture grows out of the bubble that was pressed (a FLIP,
- * 205ms on the spring) and shrinks back into it on close; close, download and
+ * 135ms on the spring) and shrinks back into it on close; close, download and
  * the arrows are 40px controls; the caption line sits at the bottom. Escape and
  * the arrow keys keep working; the wheel and +/- zoom.
  */
@@ -227,7 +227,7 @@ export function ImageLightbox() {
     const animations: Animation[] = [];
     if (backdrop && canAnimate(backdrop)) {
       const fade = backdrop.animate([{ opacity: 1 }, { opacity: 0 }], {
-        duration: ixReduced() ? IX_REDUCED_MS : 135,
+        duration: ixReduced() ? IX_REDUCED_MS : 90,
         easing: 'ease-out',
         fill: 'forwards',
       });
@@ -286,7 +286,7 @@ export function ImageLightbox() {
   // A 40px control over the viewer's near-black: the quiet fill and the ink,
   // one step lighter on hover (§6.10).
   const controlClass =
-    'pc-focusable flex h-10 w-10 items-center justify-center rounded-[12px] bg-[var(--ix-fill-ctl)] text-[var(--ix-ink-2)] transition-colors duration-[55ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill-ctl-hover)] hover:text-[var(--ix-ink)]';
+    'pc-focusable flex h-10 w-10 items-center justify-center rounded-[12px] bg-[var(--ix-fill-ctl)] text-[var(--ix-ink-2)] transition-colors duration-[40ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill-ctl-hover)] hover:text-[var(--ix-ink)]';
 
   return createPortal(
     <div
@@ -307,7 +307,7 @@ export function ImageLightbox() {
         <div className="pointer-events-auto flex h-10 items-center gap-0.5 rounded-[12px] bg-[var(--ix-fill-ctl)] px-1">
           <button
             onClick={() => setZoom((z) => Math.max(z - ZOOM_STEP, MIN_ZOOM))}
-            className="pc-focusable flex h-8 w-8 items-center justify-center rounded-[9px] text-[var(--ix-ink-2)] transition-colors duration-[55ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill-2)] hover:text-[var(--ix-ink)]"
+            className="pc-focusable flex h-8 w-8 items-center justify-center rounded-[9px] text-[var(--ix-ink-2)] transition-colors duration-[40ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill-2)] hover:text-[var(--ix-ink)]"
             title="Zoom out"
             aria-label="Zoom out"
           >
@@ -318,7 +318,7 @@ export function ImageLightbox() {
           </span>
           <button
             onClick={() => setZoom((z) => Math.min(z + ZOOM_STEP, MAX_ZOOM))}
-            className="pc-focusable flex h-8 w-8 items-center justify-center rounded-[9px] text-[var(--ix-ink-2)] transition-colors duration-[55ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill-2)] hover:text-[var(--ix-ink)]"
+            className="pc-focusable flex h-8 w-8 items-center justify-center rounded-[9px] text-[var(--ix-ink-2)] transition-colors duration-[40ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill-2)] hover:text-[var(--ix-ink)]"
             title="Zoom in"
             aria-label="Zoom in"
           >
@@ -401,7 +401,7 @@ export function ImageLightbox() {
               draggable={false}
               style={{
                 transform: `scale(${zoom})`,
-                transition: 'transform 55ms var(--ix-ease)',
+                transition: 'transform 40ms var(--ix-ease)',
                 maxWidth: '90vw',
                 maxHeight: '82vh',
                 objectFit: 'contain',
