@@ -271,21 +271,24 @@
   animation: ix-eq 1s steps(5, jump-none) infinite;
 }
 
+/* Every bar steps every 200ms, and the phases are whole steps apart, so the
+   four bars change together: five paints a second, not ten. On the Linux
+   desktop each paint copies the whole window. */
 .ix-wave > i:nth-child(2) {
   animation-duration: 0.8s;
   animation-timing-function: steps(4, jump-none);
-  animation-delay: -0.1s;
+  animation-delay: -0.2s;
 }
 
 .ix-wave > i:nth-child(3) {
   animation-duration: 1.2s;
   animation-timing-function: steps(6, jump-none);
-  animation-delay: -0.3s;
+  animation-delay: -0.6s;
 }
 
 .ix-wave > i:nth-child(4) {
   animation-duration: 1s;
-  animation-delay: -0.2s;
+  animation-delay: -0.4s;
 }
 
 @keyframes ix-eq {
