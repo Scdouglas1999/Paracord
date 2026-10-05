@@ -145,7 +145,7 @@ export const CallView = forwardRef(function CallView(
   const toggleChat = useCallback(() => useGlassStore.getState().toggleChat(), []);
   const toggleTheater = useCallback(() => {
     const glass = useGlassStore.getState();
-    glass.setStageMode(glass.stage.mode === 'theater' ? 'side' : 'theater');
+    glass.setStageMode(glass.stage.mode === 'theater' ? 'main' : 'theater');
   }, []);
 
   /* ---- Together ----------------------------------------------------------------- */

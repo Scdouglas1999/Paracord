@@ -3,9 +3,7 @@ import type { VoiceMode, VoiceState } from '../types';
 import { createCallVoiceApi, type VoiceJoinResponse, type VoiceWatchers } from '../api/voice';
 import { LISTEN_IN_DISABLED, voiceErrorCode, voiceErrorMessage } from './voice/errors';
 import { captureOperationContext, type OperationContext } from '../lib/operationContext';
-import { accountScopeKey, entityKeyBelongsToScope, LOCAL_SERVER_ID, type AccountScope } from '../lib/serverScope';
-import { useServerListStore } from './serverListStore';
-import { useGuildStore } from './guildStore';
+import { accountScopeKey, entityKeyBelongsToScope, type AccountScope } from '../lib/serverScope';
 import {
   applyWatchersSnapshot,
   dropScopeWatchers,
@@ -17,11 +15,8 @@ import {
   initViewSessions,
   onCallClosed,
   onCallCommitted,
-  reconcileAmbient,
   resetViewSessions,
-  startAmbient as startAmbientView,
   startWatch as startWatchView,
-  stopAmbient as stopAmbientView,
   stopWatch as stopWatchView,
   type MediaViewState,
   type MediaViewTarget,
@@ -1956,7 +1951,6 @@ export type VoiceErrorCode = typeof LISTEN_IN_DISABLED;
 export type { MediaViewKind, MediaViewState, MediaViewTarget } from './voice/viewSessions';
 export type {
   MediaViewEndReason,
-  MediaViewPauseReason,
   MediaViewPhase,
   MediaViewRoute,
 } from './voice/viewSessions';
@@ -1987,8 +1981,6 @@ export interface VoiceStoreState {
   connectionErrorCode: VoiceErrorCode | null;
   /** Watching a stream (with or without the call). Null when not watching. */
   watchView: MediaViewState | null;
-  /** The room light's ambient view. Null when the room asked for none. */
-  ambientView: MediaViewState | null;
   /**
    * Watcher counts per voice channel (keyed by `watcherKey(scope, channelId)`),
    * from `VOICE_WATCHERS_UPDATE` and `fetchWatchers`. Read with
@@ -2017,10 +2009,10 @@ export interface VoiceStoreState {
    *
    * §5.3 forbids animating what the user did not cause and presence did not
    * cause, and "the picture arrived" is neither: a READY that hands over three
-   * people already in a room is not three people walking in. The arrival
-   * director (`components/motion/MotionDirector`) re-baselines whenever this
-   * number moves, which is the only way a diff of memberships can tell a
-   * snapshot from an event.
+   * people already in a room is not three people walking in. Anything that
+   * diffs memberships to tell who walked in re-baselines whenever this
+   * number moves, which is the only way such a diff can tell a snapshot from
+   * an event.
    */
   voiceSnapshotSeq: number;
   // Set of user IDs currently speaking (from LiveKit)
@@ -2097,14 +2089,6 @@ export interface VoiceStoreState {
   startWatch: (target: MediaViewTarget) => Promise<void>;
   /** Stop watching. Never leaves the call. */
   stopWatch: () => Promise<void>;
-  /**
-   * Light the room with `target`'s stream (lowest layer, at most one frame a
-   * second, no audio, never counted). One per client: a new target replaces
-   * the old; the same target again is a no-op. Closed while the window is
-   * hidden or its server is not the current one. The state is `ambientView`.
-   */
-  startAmbient: (target: MediaViewTarget) => void;
-  stopAmbient: () => void;
   /** Playback gain (0..2) of the watched stream's own audio. */
   setWatchVolume: (gain: number) => void;
   /**
@@ -2139,7 +2123,7 @@ export interface VoiceStoreState {
 export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
   callId: null, callScope: null, callPhase: 'idle',
   callMode: null, modeSwitching: false, modeError: null, connectionErrorCode: null,
-  watchView: null, ambientView: null, watchers: new Map(),
+  watchView: null, watchers: new Map(),
   publishVoiceState: () => {
     const owner = currentCall;
     if (!owner?.current || owner.phase !== 'connected') return;
@@ -2216,8 +2200,6 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
 
   startWatch: (target) => startWatchView(target),
   stopWatch: () => stopWatchView(),
-  startAmbient: (target) => { watchAmbientEnvironment(); startAmbientView(target); },
-  stopAmbient: () => stopAmbientView(),
 
   watchVolume: 1,
   setWatchVolume: (gain) => {
@@ -2255,7 +2237,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
     dmCallChannelsByScope.clear();
     set({ channelParticipants: new Map(), participants: new Map(), speakingUsers: new Set(),
       showSystemAudioPrivacyWarning: false, pttEngaged: false, watchers: new Map(),
-      watchView: null, ambientView: null, modeError: null, connectionErrorCode: null });
+      watchView: null, modeError: null, connectionErrorCode: null });
     return release;
   },
 
@@ -3348,7 +3330,7 @@ function connectedCallMedia(call: CallSession): { engine: MediaEngine; sessionId
 }
 
 initViewSessions({
-  publish: (kind, state) => useVoiceStore.setState(kind === 'watch' ? { watchView: state } : { ambientView: state }),
+  publish: (state) => useVoiceStore.setState({ watchView: state }),
   callIn: (scope, channelId) => {
     const call = currentCall;
     if (!call?.current || call.context.key !== accountScopeKey(scope) || call.target.channelId !== channelId) return null;
@@ -3362,33 +3344,8 @@ initViewSessions({
   callReleased: (call) => call.membershipReleased ?? Promise.resolve(),
   createEngine: () => createMediaEngine(),
   captureContext: (serverId) => captureOperationContext(serverId),
-  windowVisible: () => typeof document === 'undefined' || document.visibilityState !== 'hidden',
-  serverCurrent: (scope, guildId) => {
-    const active = useServerListStore.getState().activeServerId ?? LOCAL_SERVER_ID;
-    if (active !== scope.serverId) return false;
-    const selected = useGuildStore.getState().selectedGuild;
-    return !!selected && selected.id === guildId && accountScopeKey(selected.scope) === accountScopeKey(scope);
-  },
   streamVolume: () => useVoiceStore.getState().watchVolume,
 });
-
-// The ambient view follows the window and the server on screen. Subscribed
-// on first use: `guildStore` imports reach back into this module through the
-// gateway, so it may not be initialized while this module evaluates.
-let ambientEnvironmentWatched = false;
-function watchAmbientEnvironment(): void {
-  if (ambientEnvironmentWatched) return;
-  ambientEnvironmentWatched = true;
-  if (typeof document !== 'undefined') {
-    document.addEventListener('visibilitychange', () => reconcileAmbient());
-  }
-  useServerListStore.subscribe((next, previous) => {
-    if (next.activeServerId !== previous.activeServerId) reconcileAmbient();
-  });
-  useGuildStore.subscribe((next, previous) => {
-    if (next.selectedGuild !== previous.selectedGuild) reconcileAmbient();
-  });
-}
 
 /** How many people watch `streamerId` in `channelId` ("2 watching"). */
 export function selectWatcherCount(

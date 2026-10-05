@@ -11,7 +11,6 @@ import { cn } from '../lib/utils';
 import { CommandPalette } from '../components/layout/CommandPalette';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
 import { TogetherHost } from '../components/voice/together/TogetherHost';
-import { MotionDirector } from '../components/motion/MotionDirector';
 import { usePhoneNavigation, usePhoneNavStore } from '../components/glass/shell/phoneNav';
 import { IxFrame } from '../components/ix/shell/IxFrame';
 import { useEdgeSwipe } from '../components/ix/shell/phone/useEdgeSwipe';
@@ -136,15 +135,9 @@ export function AppShell() {
          content moves down instead of disappearing under a banner. */
       <div
         data-native-underlay-clear=""
-        data-glass-layout={layout}
-        className="glass-shell"
+        className="ix-app"
         style={{ paddingTop: 'var(--pc-banner-inset, 0px)' }}
       >
-        {/* The two moments nobody clicks: "lights on" and "someone arrives"
-            (§5.1). It renders nothing — it is one subscription and two effects,
-            mounted once so four subtrees cannot each grow their own copy. */}
-        <MotionDirector />
-
         {/* The shared Watch/Listen together player of the call you are in:
             one for the whole app, laid over the Stage when you are there and
             still playing when you are not. */}
@@ -172,7 +165,7 @@ export function AppShell() {
               (index-spec §5.1, §5.2: the title and the feed, from the
               direction the selection moved; IxFrame's useMainEntrance). */}
           <div
-            className={cn('glass-outlet min-h-0 w-full flex-1 overflow-hidden', isSettingsRoute && 'p-3')}
+            className={cn('ix-outlet min-h-0 w-full flex-1 overflow-hidden', isSettingsRoute && 'p-3')}
           >
             <Outlet />
           </div>

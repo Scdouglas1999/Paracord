@@ -11,7 +11,7 @@ import { useChannelStore } from '../../../stores/channelStore';
 import { useMemberStore } from '../../../stores/memberStore';
 import type { Message } from '../../../types';
 import { messageMentionsUser } from '../../message/MessageList';
-import { Face } from '../places/Lead';
+import { Avatar } from '../../ix/identity';
 import type { FaceModel } from '../places/model';
 
 /**
@@ -156,7 +156,7 @@ export function SurfacingMessages({ active, onShowChat }: SurfacingMessagesProps
         >
           {shown.map((item) => (
             <span key={item.id} className="glass-surfacing__bubble" data-mention={item.mention ? 'true' : undefined}>
-              <Face face={item.face} size={28} className="glass-surfacing__face" />
+              <Avatar userId={item.face.userId} name={item.face.name} avatar={item.face.avatar} size={28} className="glass-surfacing__face" />
               <span className="glass-surfacing__text">
                 <span className="glass-surfacing__who">
                   {item.name} <span className="glass-surfacing__where">{item.where}</span>

@@ -63,9 +63,8 @@ describe('useGlassKeybinds', () => {
     press('H');
     expect(useGlassStore.getState().stage.chat).toBe(false);
     press('T');
-    expect(useGlassStore.getState().stage.mode).toBe('side');
+    expect(useGlassStore.getState().stage.mode).toBe('main');
     press('s');
-    expect(useGlassStore.getState().browseOpen).toBe(false);
     expect(onStop).not.toHaveBeenCalled();
   });
 
@@ -74,7 +73,7 @@ describe('useGlassKeybinds', () => {
     render(<Keys onStop={onStop} />);
     useGlassStore.getState().openStage(LOUNGE, 'theater');
     press('Escape');
-    expect(useGlassStore.getState().stage.mode).toBe('side');
+    expect(useGlassStore.getState().stage.mode).toBe('main');
     expect(onStop).not.toHaveBeenCalled();
     press('Escape');
     expect(onStop).toHaveBeenCalledTimes(1);
@@ -104,7 +103,7 @@ describe('useGlassKeybinds', () => {
     press('c', {}, box);
     press('Escape', {}, box);
     expect(useGlassStore.getState().stage.chat).toBe(false);
-    expect(useGlassStore.getState().stage.mode).toBe('side');
+    expect(useGlassStore.getState().stage.mode).toBe('main');
     expect(clip.triggerClip).not.toHaveBeenCalled();
     expect(onStop).not.toHaveBeenCalled();
     box.remove();
@@ -117,7 +116,7 @@ describe('useGlassKeybinds', () => {
     press('Escape');
     press('t');
     expect(onStop).not.toHaveBeenCalled();
-    expect(useGlassStore.getState().stage.mode).toBe('side');
+    expect(useGlassStore.getState().stage.mode).toBe('main');
     menu.remove();
 
     useGlassStore.getState().openSheet('search');
@@ -135,7 +134,7 @@ describe('useGlassKeybinds', () => {
     press('t');
     document.body.removeEventListener('keydown', claim);
     expect(onStop).not.toHaveBeenCalled();
-    expect(useGlassStore.getState().stage.mode).toBe('side');
+    expect(useGlassStore.getState().stage.mode).toBe('main');
   });
 
   it('the phone answers Esc and C, not T or H (no theater, no chat column)', () => {
@@ -144,7 +143,7 @@ describe('useGlassKeybinds', () => {
     useGlassStore.getState().openStage(LOUNGE);
     press('t');
     press('h');
-    expect(useGlassStore.getState().stage.mode).toBe('side');
+    expect(useGlassStore.getState().stage.mode).toBe('main');
     expect(useGlassStore.getState().stage.chat).toBe(false);
     press('c');
     expect(clip.triggerClip).toHaveBeenCalledTimes(1);
@@ -163,7 +162,7 @@ describe('useGlassKeybinds', () => {
     press('h');
     expect(useGlassStore.getState().stage.chat).toBe(true);
     press('Escape');
-    expect(useGlassStore.getState().stage.mode).toBe('side');
+    expect(useGlassStore.getState().stage.mode).toBe('main');
     press('Escape');
     expect(onStop).toHaveBeenCalledTimes(1);
   });

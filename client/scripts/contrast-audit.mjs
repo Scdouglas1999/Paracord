@@ -1,21 +1,18 @@
 /**
  * The contrast audit (docs/glass-spec.md §2, §9).
  *
- * Glass is the only look, and there are two themes: `glass` (the default) and
- * `glass-contrast` (High contrast). Neither is a fixed ramp. Every surface is
- * a `color-mix()` of one channel triplet, `--room-rgb`, into a neutral step,
- * and the room controller (WP-G8) writes that triplet from whatever is live in
- * the current server. So this script resolves the real tokens, for BOTH
- * themes, and sweeps the room over the two reference tints (spec §2.1), the
- * default room, and a hue x saturation x value grid over exactly the clamp box
- * the room controller enforces (read from `src/lib/room/color.ts`).
- * At every one of those it requires:
+ * There are two themes: `glass` (the default) and `glass-contrast` (High
+ * contrast; the stored ids are kept, docs/index-spec.md §13.14). The Glass-named
+ * surfaces the long tail still reads are a `color-mix()` of one channel
+ * triplet, `--room-rgb`, into a neutral step. Room light is retired, so that
+ * triplet is the one `:root` declares and nothing writes it; this script
+ * resolves the real tokens, for BOTH themes, at that value. It requires:
  *
- *   - the Glass ink set (spec §2.2) on every Glass surface: 7:1 for `--ink-1`,
- *     4.5:1 for the rest, panes measured over the brightest backdrop the room
- *     can draw;
+ *   - the Glass ink set (docs/glass-spec.md §2.2) on every Glass surface: 7:1
+ *     for `--ink-1`, 4.5:1 for the rest, panes measured over the brightest
+ *     backdrop;
  *   - the Lantern-named tokens the screens nobody has rebuilt yet still read
- *     (`--text-*` on `--bg-*`, the semantic accents, identity inks), because
+ *     (`--text-*` on `--bg-*`, the semantic accents), because
  *     they are mapped onto the Glass ones and must keep clearing 4.5:1 there;
  *   - for High contrast, the higher floors it exists for: opaque panes, 12:1
  *     for the first ink step and 7:1 for the other two, and 3:1 for every edge.
@@ -30,10 +27,9 @@
  * a change to the stylesheet is audited and cannot drift from this script.
  *
  * It also fails on a token that lands outside sRGB (a browser would gamut-map
- * it and the measured color would no longer be the one written down), on a
+ * it and the measured color would no longer be the one written down), and on a
  * second declaration of the danger ink (there is exactly one, and every other
- * danger token is made from it), and, for the default theme, when the two
- * reference tints in spec §2.1 stop being reproduced.
+ * danger token is made from it).
  *
  * Run: `npm run test:contrast`
  */
@@ -304,10 +300,7 @@ function contrastRatio(foreground, background) {
 /* ---- The checks ------------------------------------------------------------ */
 
 const themeBase = extractBlocks('@theme');
-// The Glass surfaces are derived per subtree (`:root, [data-theme=…], .glass-room`),
-// which the `:root {` pattern does not see; read that block by its last selector.
-const glassRoom = extractBlocks('.glass-room');
-const rootBase = { ...extractBlocks(':root'), ...glassRoom };
+const rootBase = extractBlocks(':root');
 // Glass is what `:root` declares. High contrast is its own block laid over that,
 // which is exactly the cascade the selectors in tokens.css give it.
 const highContrast = extractBlocks("[data-theme='glass-contrast']");
@@ -318,7 +311,6 @@ const isHighContrast = (themeName) => themeName === 'high contrast';
 // Body text is held to 7:1, and every ramp step is checked against every ground
 // it can land on: a token that only passes on the darkest surface is not passing.
 const GROUNDS = ['--bg-base', '--bg-plate', '--bg-raised', '--bg-well'];
-const IDENTITY_INKS = Array.from({ length: 8 }, (_, i) => `--identity-ink-${i + 1}`);
 
 const checks = [
   // The text ramp. `--text-body-ink` is the body step (the name `--text-body`
@@ -348,7 +340,6 @@ const checks = [
   { fg: '--text-primary', bg: '--thumb-frame-lit', min: 7 },
   // An author's name is written in their identity's ink. Eight hues x four
   // grounds: a name is a name, so 4.5:1 is the floor.
-  ...IDENTITY_INKS.flatMap((fg) => GROUNDS.map((bg) => ({ fg, bg, min: 4.5 }))),
   // Ink on the row you are on: the selection is a solid step, but a row inside
   // a server's group writes its own wash, so the real question is the ink over
   // the selection over the plate.
@@ -393,68 +384,16 @@ let comparisons = 0;
   }
 }
 
-/* ---- The room tints to sweep ------------------------------------------------ */
+/* ---- The room ----------------------------------------------------------------
+   Room light is retired (docs/index-spec.md §12): nothing writes `--room-rgb`,
+   so the one value `:root` declares is the room every Glass-named surface is
+   mixed with. */
+const roomRgb = rootBase['--room-rgb'];
+if (!roomRgb) throw new Error('[contrast] --room-rgb is not declared on :root in tokens.css');
+const tints = { room: roomRgb };
 
-const hsvToRgb = (h, sat, v) => {
-  const c = v * sat;
-  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
-  const m = v - c;
-  const [r, g, b] = [[c, x, 0], [x, c, 0], [0, c, x], [0, x, c], [x, 0, c], [c, 0, x]][Math.floor(h / 60) % 6];
-  return [r + m, g + m, b + m].map((channel) => Math.round(channel * 255)).join(', ');
-};
-
-/* The clamp box. The room controller (WP-G8, `src/lib/room/color.ts`) writes
-   only colors inside an HSV box: any hue, saturation 0..ROOM_CLAMP.saturationMax,
-   value ROOM_CLAMP.valueMin..valueMax. The edges are read from that file, so
-   the audit sweeps exactly what the room can write and the two cannot drift:
-   every 15 degrees of hue at the box's low, middle and high saturation and
-   value, plus the default room (ROOM_DEFAULT) and the two reference samples,
-   which must lie inside the box too. */
-const roomColorSource = fs.readFileSync(path.join(path.dirname(tokensPath), '..', 'lib', 'room', 'color.ts'), 'utf8');
-const readRoomNumber = (name) => {
-  const match = roomColorSource.match(new RegExp(`${name}:\\s*([0-9.]+)`));
-  if (!match) throw new Error(`[contrast] ${name} not found in src/lib/room/color.ts`);
-  return Number(match[1]);
-};
-const CLAMP = {
-  saturationMax: readRoomNumber('saturationMax'),
-  valueMin: readRoomNumber('valueMin'),
-  valueMax: readRoomNumber('valueMax'),
-};
-const defaultMatch = roomColorSource.match(/ROOM_DEFAULT: Rgb = \[(\d+), (\d+), (\d+)\]/);
-if (!defaultMatch) throw new Error('[contrast] ROOM_DEFAULT not found in src/lib/room/color.ts');
-const rgbToHsv = (triplet) => {
-  const [r, g, b] = triplet.split(',').map((c) => Number(c) / 255);
-  const max = Math.max(r, g, b);
-  const min = Math.min(r, g, b);
-  return { s: max === 0 ? 0 : (max - min) / max, v: max };
-};
-
-const namedTints = {
-  'warm (spec §2.1)': extractBlocks('.glass-tint-warm')['--room-rgb'],
-  'cool (spec §2.1)': extractBlocks('.glass-tint-cool')['--room-rgb'],
-  'default room': defaultMatch.slice(1, 4).join(', '),
-};
-for (const [name, triplet] of Object.entries(namedTints)) {
-  const { s, v } = rgbToHsv(triplet);
-  if (s > CLAMP.saturationMax + 0.006 || v < CLAMP.valueMin - 0.006 || v > CLAMP.valueMax + 0.006) {
-    failures += 1;
-    console.error(`[contrast] ${name} (${triplet}) lies outside the room's clamp box (s ${s.toFixed(3)}, v ${v.toFixed(3)})`);
-  }
-}
-const tints = { ...namedTints };
-const boxSaturations = [0, CLAMP.saturationMax / 2, CLAMP.saturationMax];
-const boxValues = [CLAMP.valueMin, (CLAMP.valueMin + CLAMP.valueMax) / 2, CLAMP.valueMax];
-for (let hue = 0; hue < 360; hue += 15) {
-  for (const sat of boxSaturations) {
-    // Saturation 0 has no hue: sweep it once.
-    if (sat === 0 && hue > 0) continue;
-    for (const v of boxValues) tints[`hue ${hue} s${sat.toFixed(3)} v${v.toFixed(2)}`] = hsvToRgb(hue, sat, v);
-  }
-}
-
-// Panes are translucent over the room. The backdrop is drawn at brightness .6
-// (spec §4), so the brightest thing a pane can be over is 60% white.
+// Panes are translucent. The brightest thing a pane can be over is taken to be
+// 60% white (the old room backdrop's brightness).
 const WORST_BACKDROP = { r: 153, g: 153, b: 153, a: 1 };
 const SURFACES = ['--pane', '--bub', '--raise', '--sel', '--deep', '--solid', '--street', '--well'];
 const INKS = [
@@ -974,60 +913,6 @@ function ixRecord(setting, fgName, bgName, ratio, min) {
   }
 }
 
-/* ---- Glass reference tints (spec §2.1) --------------------------------------
-   The default theme's derivation has to reproduce the two reference tints, not
-   merely look like them. CIE76 delta-E in Lab (D65) on the resolved sRGB, under
-   2; alpha within .005; the glow, which is 7% opaque, is compared as it lands on
-   its own pane. Set PARACORD_AUDIT_VERBOSE=1 for the table. */
-const glassVars = (room) => ({ ...themeBase, ...rootBase, '--room-rgb': room });
-const REFERENCE = {
-  'warm (spec §2.1)': {
-    '--pane': [28, 25, 23, 0.94], '--bub': [45, 41, 38], '--raise': [56, 51, 47], '--sel': [54, 49, 45],
-    '--deep': [20, 18, 16, 0.96], '--solid': [28, 25, 23], '--glow': [255, 168, 88, 0.07],
-  },
-  'cool (spec §2.1)': {
-    '--pane': [23, 27, 31, 0.94], '--bub': [39, 45, 52], '--raise': [49, 56, 64], '--sel': [47, 54, 63],
-    '--deep': [16, 18, 21, 0.96], '--solid': [24, 28, 32], '--glow': [150, 190, 230, 0.07],
-  },
-};
-const toLab = ({ r, g, b }) => {
-  const [R, G, B] = [r, g, b].map((c) => linearFromSrgb(c / 255));
-  const f = (t) => (t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116);
-  const x = f((0.4124 * R + 0.3576 * G + 0.1805 * B) / 0.95047);
-  const y = f(0.2126 * R + 0.7152 * G + 0.0722 * B);
-  const z = f((0.0193 * R + 0.1192 * G + 0.9505 * B) / 1.08883);
-  return [116 * y - 16, 500 * (x - y), 200 * (y - z)];
-};
-const deltaE = (p, q) => Math.hypot(...toLab(p).map((v, i) => v - toLab(q)[i]));
-let worstDelta = 0;
-for (const [tintName, expected] of Object.entries(REFERENCE)) {
-  const vars = glassVars(namedTints[tintName]);
-  const solid = parseColor(resolveVar('--solid', vars), '--solid');
-  for (const [name, [r, g, b, a = 1]] of Object.entries(expected)) {
-    const setting = `glass ${tintName}: ${name}`;
-    try {
-      const got = parseColor(resolveVar(name, vars), setting);
-      // Browsers round each channel to 8 bits when they paint.
-      const rounded = { r: Math.round(got.r), g: Math.round(got.g), b: Math.round(got.b) };
-      const target = { r, g, b };
-      const seenGot = name === '--glow' ? blend({ ...rounded, a: got.a }, solid) : rounded;
-      const seenWant = name === '--glow' ? blend({ ...target, a }, solid) : target;
-      const delta = deltaE(seenGot, seenWant);
-      worstDelta = Math.max(worstDelta, delta);
-      if (process.env.PARACORD_AUDIT_VERBOSE) {
-        console.log(`[glass] ${tintName.padEnd(17)} ${name.padEnd(8)} got ${rounded.r},${rounded.g},${rounded.b} a=${got.a.toFixed(2)}  want ${r},${g},${b} a=${a}  dE ${delta.toFixed(2)}`);
-      }
-      if (delta >= 2 || Math.abs(got.a - a) > 0.005) {
-        failures += 1;
-        console.error(`[contrast] ${setting} misses the reference: dE ${delta.toFixed(2)}, alpha ${got.a.toFixed(3)} vs ${a}`);
-      }
-    } catch (error) {
-      failures += 1;
-      console.error(`[contrast] ${setting}: ${error.message}`);
-    }
-  }
-}
-
 if (failures > 0) {
   console.error(`\n[contrast] ${failures} failing pair(s).`);
   process.exit(1);
@@ -1035,16 +920,13 @@ if (failures > 0) {
 
 console.log(
   `[contrast] ${comparisons} comparisons passed — ${Object.keys(THEMES).length} themes `
-    + `(${Object.keys(THEMES).join(', ')}) x ${Object.keys(tints).length} room tints `
-    + `(${Object.keys(namedTints).join(', ')}, and the clamp box: s 0..${CLAMP.saturationMax}, `
-    + `v ${CLAMP.valueMin}..${CLAMP.valueMax}, every 15 degrees).`,
+    + `(${Object.keys(THEMES).join(', ')}) at the room \`:root\` declares (${roomRgb}).`,
 );
 console.log(
   `[contrast] index: ${ixComparisons} comparisons passed over ${IX_HUES.length} hues (0-359 in 15 degree steps, the ${PALETTE.length} palette hues) x 2 themes; `
     + `tightest: ${ixWorst.fg} on ${ixWorst.bg} at ${ixWorst.setting} — ${ixWorst.ratio.toFixed(2)} against a floor of ${ixWorst.min}.`,
 );
 console.log('[contrast] one danger ink: --accent-danger is declared once and every other danger token is made from it.');
-console.log(`[contrast] glass reference tints reproduced: worst delta-E ${worstDelta.toFixed(2)} (limit 2).`);
 console.log(
   `[contrast] tightest margin: ${worst.fg} on ${worst.bg} at ${worst.setting} — `
     + `${worst.ratio.toFixed(2)} against a floor of ${worst.min}.`,

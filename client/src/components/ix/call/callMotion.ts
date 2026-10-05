@@ -1,4 +1,4 @@
-import { cubicBezier } from '../../../lib/motion/sharedElement';
+import { cubicBezier } from '../../../lib/motion/cubicBezier';
 import { isTauri } from '../../../lib/tauriEnv';
 import { beginNativeMove } from '../../glass/stage/nativeUnderlay';
 import { IX_REDUCED_MS, IX_SPRING, canAnimate, invertTransform, ixReduced, type RectLike } from '../motion';

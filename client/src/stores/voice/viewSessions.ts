@@ -1,20 +1,19 @@
 /**
- * View sessions: watching a stream without joining its call, and the ambient
- * view that lights the room (docs/glass-spec.md §4, §6; docs/design/glass-plan.md
- * §1.2 and §3 "View-session design constraints"; docs/design/glass-g5-checkpoint.md).
+ * View sessions: watching a stream without joining its call (docs/glass-spec.md
+ * §6; docs/design/glass-plan.md §1.2 and §3 "View-session design constraints";
+ * docs/design/glass-g5-checkpoint.md).
  *
  * The rules this module keeps, all deterministic:
  *
  * - **Watch** = the stream's video and its own audio, never the voices. It is
- *   counted ("2 watching"). **Ambient** = the stream's lowest layer, keyframes
- *   only, at most one frame a second, no audio, never counted or shown.
+ *   counted ("2 watching"). (The server also knows an `ambient` view kind, the
+ *   stream's lowest layer, for the retired room light; the client no longer
+ *   asks for one.)
  * - **One view per account** on the server (a new view replaces the old one,
- *   anywhere). So a watch and an ambient view never both hold a session: when
- *   they would, the watch wins and the ambient view either rides the watch
- *   (same stream) or is `blocked`, said so, until the watch ends.
+ *   anywhere).
  * - **A view on a channel whose call this client is in rides the call**
  *   (`route: 'call'`): no second connection. The server says so for a watch
- *   (`via_membership`) and counts it; an ambient view needs no request at all.
+ *   (`via_membership`) and counts it.
  *   Joining a call in the channel you are watching carries the watch over
  *   (the relay moves it to the membership); leaving it moves the watch back
  *   onto a session of its own. Watching never joins the call and stopping
@@ -24,11 +23,8 @@
  *   viewer may no longer see the channel), one that did
  *   not connect within {@link VIEW_CONNECT_DEADLINE_MS}, or one refused by the
  *   server stays down with its reason until someone asks again.
- * - **Ambient is closed when the window is hidden or its server is not the
- *   current one**, and reopens (a fresh view) when that changes back.
  *
- * The store owns the state (`watchView`, `ambientView`); this module owns the
- * connections. It never imports the store: `voiceStore` hands it a
+ * The store owns the state (`watchView`); this module owns the connections. It never imports the store: `voiceStore` hands it a
  * {@link ViewHost} at start-up.
  */
 import { createCallVoiceApi, type VoiceViewKind, type VoiceViewSession } from '../../api/voice';
@@ -45,7 +41,8 @@ import type { CallSession } from './callSession';
  */
 export const VIEW_CONNECT_DEADLINE_MS = 20_000;
 
-export type MediaViewKind = VoiceViewKind;
+/** The only kind of view the client opens. */
+export type MediaViewKind = Extract<VoiceViewKind, 'watch'>;
 
 /**
  * What to view: one person's stream in one voice channel. `serverId` is the
@@ -63,22 +60,18 @@ export interface MediaViewTarget {
  * How a view receives its frames:
  * - `session`: its own view-session connection (receive-only).
  * - `call`: the call this client holds in that channel.
- * - `watch`: (ambient only) the watch of the same stream.
  */
-export type MediaViewRoute = 'session' | 'call' | 'watch';
+export type MediaViewRoute = 'session' | 'call';
 
 /**
  * - `starting`: asking the server.
  * - `connecting`: connecting its media (or waiting for the call it rides).
  * - `live`: frames can arrive; `engine` renders it.
- * - `paused`: (ambient) closed because the window is hidden or its server is
- *   not current; reopens by itself when that changes back.
- * - `blocked`: (ambient) the account's one view is a watch of another stream.
  * - `ended`: the relay superseded, ended or revoked it (`endReason` says
  *   which). Not retried.
  * - `failed`: refused, broken, or past its connect deadline. Not retried.
  */
-export type MediaViewPhase = 'starting' | 'connecting' | 'live' | 'paused' | 'blocked' | 'ended' | 'failed';
+export type MediaViewPhase = 'starting' | 'connecting' | 'live' | 'ended' | 'failed';
 
 /**
  * Why a view stopped: the relay's own reason (`superseded` by a newer view of
@@ -86,7 +79,6 @@ export type MediaViewPhase = 'starting' | 'connecting' | 'live' | 'paused' | 'bl
  * channel), the connect deadline, or a failure.
  */
 export type MediaViewEndReason = 'superseded' | 'ended' | 'revoked' | 'deadline' | 'failed';
-export type MediaViewPauseReason = 'hidden' | 'server-not-current';
 
 export interface MediaViewState {
   /** Changes whenever the view is replaced (never reused across targets). */
@@ -108,14 +100,13 @@ export interface MediaViewState {
   /** The view session's receipt (route `session`). */
   sessionId: string | null;
   endReason: MediaViewEndReason | null;
-  pauseReason: MediaViewPauseReason | null;
   /** What went wrong, in the server's or the transport's words. */
   error: string | null;
 }
 
 /** What `voiceStore` gives this module. */
 export interface ViewHost {
-  publish(kind: MediaViewKind, state: MediaViewState | null): void;
+  publish(state: MediaViewState | null): void;
   /** The call this account holds in `channelId` (joining or connected). */
   callIn(scope: AccountScope, channelId: string): CallSession | null;
   /** The call's engine once it is connected; null if it ends first. */
@@ -126,10 +117,6 @@ export interface ViewHost {
   callReleased(call: CallSession): Promise<void>;
   createEngine(): Promise<MediaEngine>;
   captureContext(serverId?: string): OperationContext;
-  /** Whether the window is visible now. */
-  windowVisible(): boolean;
-  /** Whether this instance and guild are the ones on screen now. */
-  serverCurrent(scope: AccountScope, guildId: string): boolean;
   /** Playback gain for a watched stream's audio (0..2). */
   streamVolume(streamerId: string): number;
 }
@@ -183,13 +170,13 @@ class ViewOwner {
     readonly kind: MediaViewKind,
     readonly target: ResolvedTarget,
     readonly context: OperationContext,
-    /** Whether this owner disposes the context when it ends (watch: yes). */
+    /** Whether this owner disposes the context when it ends. */
     private readonly ownsContext: boolean,
   ) {
     this.state = {
       id: this.id, kind, scope: target.scope, guildId: target.guildId, channelId: target.channelId,
       streamerId: target.streamerId, route: null, phase: 'starting', engine: null, sessionId: null,
-      endReason: null, pauseReason: null, error: null,
+      endReason: null, error: null,
     };
   }
 
@@ -228,22 +215,6 @@ class ViewOwner {
 
 let host: ViewHost | null = null;
 let watchOwner: ViewOwner | null = null;
-let ambientOwner: ViewOwner | null = null;
-/** What the room light asked for, and the context its requests go through. */
-let ambientRequest: { target: ResolvedTarget; context: OperationContext } | null = null;
-/**
- * Calls that have closed but whose membership the server may still hold.
- * Until it is released, the server would answer a view on that channel with
- * `via_membership` for a call that is gone, so views on it wait.
- */
-const releasingCalls = new Set<CallSession>();
-
-function releasingIn(target: ResolvedTarget): boolean {
-  for (const call of releasingCalls) {
-    if (call.context.key === target.scopeKey && call.target.channelId === target.channelId) return true;
-  }
-  return false;
-}
 
 function requireHost(): ViewHost {
   if (!host) throw new Error('View sessions are not ready.');
@@ -256,11 +227,8 @@ export function initViewSessions(value: ViewHost): void {
 
 function publish(owner: ViewOwner, patch: Partial<MediaViewState>): void {
   owner.state = { ...owner.state, ...patch };
-  const isCurrent = owner.kind === 'watch' ? watchOwner === owner : ambientOwner === owner;
-  if (!isCurrent) return;
-  host?.publish(owner.kind, owner.state);
-  // What the watch does decides what the ambient view may do.
-  if (owner.kind === 'watch') reconcileAmbient();
+  if (watchOwner !== owner) return;
+  host?.publish(owner.state);
 }
 
 function resolveTarget(target: MediaViewTarget, context: OperationContext): ResolvedTarget {
@@ -299,8 +267,7 @@ function stopReceipt(owner: ViewOwner): string | null {
 /** Tell the server this view is over (scoped to its receipt), then let the context go. */
 function stopOnServer(owner: ViewOwner): void {
   const receipt = stopReceipt(owner);
-  // An ambient view that rides a call or a watch was never registered.
-  const registered = !owner.isSelfPreview && (owner.route === 'session' || (owner.route === 'call' && owner.kind === 'watch'));
+  const registered = !owner.isSelfPreview && (owner.route === 'session' || owner.route === 'call');
   if (!receipt || !registered) { owner.disposeContext(); return; }
   void createCallVoiceApi(owner.context).stopView(owner.target.channelId, receipt)
     .catch((error) => console.warn('[voice] Stopping a view failed:', error))
@@ -344,8 +311,7 @@ export function stopWatch(): Promise<void> {
   const owner = watchOwner;
   if (!owner) return Promise.resolve();
   endWatch(owner);
-  host?.publish('watch', null);
-  reconcileAmbient();
+  host?.publish(null);
   return Promise.resolve();
 }
 
@@ -491,7 +457,7 @@ function onViewLost(owner: ViewOwner, engine: MediaEngine, reason: string): void
   // Joining the call in the channel being watched moves the watch onto the
   // membership, and the relay then ends the view session: expected, and the
   // call takes over (see onCallCommitted).
-  const call = owner.kind === 'watch' ? h.callIn(owner.target.scope, owner.target.channelId) : null;
+  const call = h.callIn(owner.target.scope, owner.target.channelId);
   if (call) {
     releaseAudio(owner);
     releaseOwnEngine(owner);
@@ -516,7 +482,6 @@ function onViewLost(owner: ViewOwner, engine: MediaEngine, reason: string): void
     error: relayReason ? null : reason,
     engine: null,
   });
-  if (owner.kind === 'ambient') reconcileAmbient();
 }
 
 // ── The call moving under a view ───────────────────────────────────────────
@@ -536,7 +501,6 @@ export function onCallCommitted(call: CallSession): void {
       owner.promise = attemptWatch(owner).catch(() => {});
     }
   }
-  reconcileAmbient();
 }
 
 /**
@@ -551,7 +515,6 @@ export function onCallClosed(call: CallSession): void {
   const rodeIt = !!owner && owner.current && !owner.finished && (owner.call === call
     || (owner.route === 'call' && owner.target.scopeKey === call.context.key
       && owner.target.channelId === call.target.channelId));
-  releasingCalls.add(call);
   if (owner && rodeIt) {
     releaseAudio(owner);
     owner.attempt += 1;
@@ -567,164 +530,11 @@ export function onCallClosed(call: CallSession): void {
       publish(owner, { phase: 'connecting', route: null, engine: null, sessionId: null });
     }
   }
-  reconcileAmbient();
   void h.callReleased(call).catch(() => {}).then(() => {
-    releasingCalls.delete(call);
     if (owner && rodeIt && watchOwner === owner && owner.current && !owner.finished) {
       owner.promise = attemptWatch(owner).catch(() => {});
     }
-    reconcileAmbient();
   });
-}
-
-// ── Ambient ─────────────────────────────────────────────────────────────────
-
-/**
- * Light the room with a stream: layer 0, keyframes, at most one frame a
- * second, no audio, never counted. One per client; the same target again is a
- * no-op. Closed while the window is hidden or its server is not current.
- */
-export function startAmbient(target: MediaViewTarget): void {
-  const h = requireHost();
-  const context = h.captureContext(target.serverId);
-  let resolved: ResolvedTarget;
-  try { resolved = resolveTarget(target, context); } catch (error) { context.dispose(); throw error; }
-  if (ambientRequest && sameTarget(ambientRequest.target, resolved)) {
-    context.dispose();
-    return;
-  }
-  const previous = ambientRequest;
-  ambientRequest = { target: resolved, context };
-  if (ambientOwner) endAmbient(ambientOwner);
-  previous?.context.dispose();
-  reconcileAmbient();
-}
-
-export function stopAmbient(): void {
-  const request = ambientRequest;
-  ambientRequest = null;
-  if (ambientOwner) endAmbient(ambientOwner);
-  host?.publish('ambient', null);
-  request?.context.dispose();
-}
-
-function endAmbient(owner: ViewOwner): void {
-  teardown(owner);
-  if (!owner.finished) stopOnServer(owner);
-  if (ambientOwner === owner) ambientOwner = null;
-}
-
-/**
- * Bring the ambient view in line with everything it depends on: the request,
- * the window, the current server, the call and the watch. Idempotent; called
- * whenever any of those change.
- */
-export function reconcileAmbient(): void {
-  const h = host;
-  if (!h) return;
-  const request = ambientRequest;
-  if (!request) {
-    if (ambientOwner) { endAmbient(ambientOwner); h.publish('ambient', null); }
-    return;
-  }
-  const { target } = request;
-  const pauseReason: MediaViewPauseReason | null = !h.windowVisible()
-    ? 'hidden'
-    : !h.serverCurrent(target.scope, target.guildId) ? 'server-not-current' : null;
-
-  const current = ambientOwner && sameTarget(ambientOwner.target, target) ? ambientOwner : null;
-  // Superseded, ended or failed for this request: it stays down (no retry).
-  if (current?.finished) return;
-
-  if (pauseReason) {
-    if (current?.state.phase === 'paused' && current.state.pauseReason === pauseReason) return;
-    if (ambientOwner) endAmbient(ambientOwner);
-    const paused = new ViewOwner('ambient', target, request.context, false);
-    paused.close();
-    ambientOwner = paused;
-    publish(paused, { phase: 'paused', pauseReason });
-    return;
-  }
-
-  // A call in this channel just closed and the server may still hold its
-  // membership: wait for the release (onCallClosed reconciles again).
-  if (releasingIn(target)) {
-    if (ambientOwner && ambientOwner.route === 'call') {
-      endAmbient(ambientOwner);
-      const waiting = new ViewOwner('ambient', target, request.context, false);
-      waiting.close();
-      ambientOwner = waiting;
-      publish(waiting, { phase: 'connecting' });
-    }
-    return;
-  }
-
-  const call = h.callIn(target.scope, target.channelId);
-  const callMedia = call ? h.connectedCallMedia(call) : null;
-  const watch = watchOwner && watchOwner.current && !watchOwner.finished ? watchOwner : null;
-  const watchSameStream = !!watch && sameTarget(watch.target, target);
-  const desired: MediaViewRoute | 'blocked' = callMedia
-    ? 'call'
-    : watchSameStream
-      ? 'watch'
-      : watch && watch.route !== 'call' ? 'blocked' : 'session';
-
-  if (current && desired === 'blocked' && current.state.phase === 'blocked') return;
-  if (current && current.current) {
-    if (desired === 'call' && current.route === 'call' && current.engine === callMedia?.engine) return;
-    if (desired === 'watch' && current.route === 'watch') {
-      if (current.engine !== watch!.engine) {
-        current.engine = watch!.engine;
-        publish(current, { engine: watch!.engine, phase: watch!.engine ? 'live' : 'connecting' });
-      }
-      return;
-    }
-    if (desired === 'session' && (current.route === 'session' || current.state.phase === 'starting')) return;
-  }
-
-  if (ambientOwner) endAmbient(ambientOwner);
-  const owner = new ViewOwner('ambient', target, request.context, false);
-  ambientOwner = owner;
-  switch (desired) {
-    case 'call':
-      owner.route = 'call';
-      owner.call = call;
-      owner.engine = callMedia!.engine;
-      publish(owner, { route: 'call', phase: 'live', engine: callMedia!.engine });
-      return;
-    case 'watch':
-      owner.route = 'watch';
-      owner.engine = watch!.engine;
-      publish(owner, { route: 'watch', phase: watch!.engine ? 'live' : 'connecting', engine: watch!.engine });
-      return;
-    case 'blocked':
-      owner.close();
-      publish(owner, { phase: 'blocked' });
-      return;
-    case 'session':
-      publish(owner, { phase: 'starting' });
-      owner.promise = attemptAmbient(owner, h).catch(() => {});
-      return;
-  }
-}
-
-async function attemptAmbient(owner: ViewOwner, h: ViewHost): Promise<void> {
-  const attempt = ++owner.attempt;
-  const { channelId, streamerId } = owner.target;
-  try {
-    const { data } = await createCallVoiceApi(owner.context).startView(channelId, 'ambient', streamerId);
-    owner.assertCurrent(attempt);
-    if (data.via_membership) {
-      // The server has this client in the call already; the call carries it.
-      await rideCall(owner, h, attempt);
-      return;
-    }
-    await connectSession(owner, data, h, attempt);
-  } catch (error) {
-    if (!owner.leads(attempt)) return;
-    fail(owner, error);
-    throw error;
-  }
 }
 
 // ── Lifetime ────────────────────────────────────────────────────────────────
@@ -732,20 +542,13 @@ async function attemptAmbient(owner: ViewOwner, h: ViewHost): Promise<void> {
 /** Close every view (sign-out). */
 export function resetViewSessions(): void {
   if (watchOwner) endWatch(watchOwner);
-  stopAmbient();
-  host?.publish('watch', null);
+  host?.publish(null);
 }
 
 /** Close the views that belong to an instance being disconnected. */
 export function closeViewsForServer(serverId: string): void {
   if (watchOwner && watchOwner.target.scope.serverId === serverId) {
     endWatch(watchOwner);
-    host?.publish('watch', null);
+    host?.publish(null);
   }
-  if (ambientRequest && ambientRequest.target.scope.serverId === serverId) stopAmbient();
-}
-
-/** For tests: the engine a view's own session runs on. */
-export function viewOwnEngineForTest(kind: MediaViewKind): MediaEngine | null {
-  return (kind === 'watch' ? watchOwner : ambientOwner)?.ownEngine ?? null;
 }

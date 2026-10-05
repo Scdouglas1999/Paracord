@@ -6,7 +6,7 @@ import { RollingNumber, useFlipList } from '../../../lib/motion';
 import { ReactionPeopleList, useReactionPeople } from '../../message/ReactionPeople';
 import { CustomEmojiImage } from '../../ui/ResourceImage';
 import { HeartMark } from './CardGlyphs';
-import { Glyph } from '../primitives';
+import { IxGlyph } from '../../ix/glyphs';
 
 /**
  * A message's reactions as ONE chip biting the corner of what they are on
@@ -47,7 +47,7 @@ const HEART = new Set(['❤️', '❤', '\u{1F90D}', '♥️']);
 
 /** What a reaction looks like inside the chip. */
 function reactionMark(emoji: string, guildId: string | null | undefined, size: number): ReactNode {
-  if (FLAME.has(emoji)) return <Glyph name="flame" size={size} />;
+  if (FLAME.has(emoji)) return <IxGlyph name="flame" size={size} />;
   if (HEART.has(emoji)) return <HeartMark size={size} />;
   const custom = guildId ? parseCustomEmojiToken(emoji) : null;
   if (custom && guildId) {

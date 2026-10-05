@@ -42,9 +42,8 @@ import { controlSet } from './callModel';
  * pill's `joinCall` / `leaveCall` / `toggleMic`, `toggleVoiceVideo`,
  * `useShareScreen`, `useClip`, `useStageChannel`); only the look is new.
  *
- * The stream reactions (flame, heart) stay retired: 1bc00a09 removed them from
- * the Glass stage before Index, and index-spec §7.2 keeps Glass's behavior for
- * them (glass-spec §6.5).
+ * There are no stream reactions (flame, heart): the owner removed them in
+ * 1bc00a09 and IX-19 deleted the route, the event and the code (index-spec §7.2).
  */
 
 const LONG_PRESS_MS = 520;

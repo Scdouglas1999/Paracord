@@ -1,16 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useLocation, useParams } from 'react-router';
 
 import { useStore } from 'zustand';
 
 import { previewFromMessage, useChannelPreviews, type ChannelPreviewEntry } from '../../../hooks/useChannelPreviews';
 import { useCurrentAccountScope } from '../../../hooks/useCurrentUser';
-import { useAvailableGuilds } from '../../../hooks/useGuilds';
 import { useCurrentMessageStoreApi } from '../../../hooks/useMessageStore';
 import { useMutedGuilds } from '../../../hooks/useMutedGuilds';
-import { useUnreadCounts } from '../../../hooks/useUnreadCounts';
-import { useUnifiedConversations } from '../../../hooks/useUnifiedConversations';
-import type { BuildingLight, RoomLight } from '../../../lib/attention/light';
 import { accountScopeKey, entityScopeKey } from '../../../lib/serverScope';
 import { displayName } from '../../../lib/displayName';
 import type { Channel, Message, VoiceState } from '../../../types';
@@ -22,33 +17,15 @@ import { ENCRYPTED_DM_PLACEHOLDER } from '../../../stores/messageStore';
 import { EMPTY_READ_STATES, useReadStateStore } from '../../../stores/readStateStore';
 import { useVoiceStore } from '../../../stores/voiceStore';
 import { useUpcomingEvents, type HomeEvent } from '../../rooms/lobby/useUpcomingEvents';
-import type { FaceModel, PreviewContext } from './model';
-import { isPlaceChannel, isVoiceChannel, orderChannels } from './model';
-import {
-  attentionOf,
-  buildChannelRows,
-  buildSidebarGroups,
-  buildSidebarRooms,
-  type ChannelRowModel,
-  type RoomOccupant,
-  type SidebarGroup,
-  type SidebarRoom,
-} from './rows';
-import type { ServerCircle } from './ServerRow';
-import { unreadKey, useUnreadMessageCounts, type UnreadTarget } from './useUnreadMessageCounts';
+import type { PreviewContext } from './model';
+import { isPlaceChannel, isVoiceChannel } from './model';
+import { buildSidebarGroups, buildSidebarRooms, type RoomOccupant, type SidebarGroup, type SidebarRoom } from './rows';
 
 /**
- * What the places panel reads from the app's stores (docs/glass-spec.md §3.1).
+ * What the sidebar reads from the app's stores (docs/index-spec.md §4.1 to §4.7).
  * Read-only: every store here is used as data, and every rule about what a row
  * says lives in `model.ts` and `rows.ts`, where it is tested without React.
  */
-
-/** Where the route puts you: inside a server, or in Home (Home, Messages, Friends). */
-export function usePlacesRoute() {
-  const { guildId, channelId } = useParams();
-  const { pathname } = useLocation();
-  return { guildId: guildId ?? null, channelId: channelId ?? null, pathname, mode: guildId ? ('server' as const) : ('home' as const) };
-}
 
 /** `Date.now()`, refreshed once a minute: enough for "LIVE 42 MIN" and a row's time. */
 export function useMinuteClock(): number {
@@ -60,36 +37,7 @@ export function useMinuteClock(): number {
   return now;
 }
 
-/* ---- The server row ---------------------------------------------------------- */
-
-export function useServerCircles(currentGuildId: string | null, buildings: readonly BuildingLight[]) {
-  const scope = useCurrentAccountScope();
-  const guilds = useAvailableGuilds();
-  const { mutedGuildKeys } = useMutedGuilds();
-  const { guildUnreads } = useUnreadCounts(mutedGuildKeys);
-
-  return useMemo<ServerCircle[]>(() => {
-    const lights = new Map(buildings.map((building) => [building.key, building]));
-    const scopeKey = scope ? accountScopeKey(scope) : null;
-    return guilds.map((guild) => {
-      const light = lights.get(guild.key);
-      const unread = guildUnreads.get(guild.key);
-      return {
-        key: guild.key,
-        scope: guild.scope,
-        guildId: guild.id,
-        name: guild.name,
-        icon: guild.icon_hash ?? guild.icon ?? null,
-        current: Boolean(currentGuildId) && guild.id === currentGuildId && scopeKey === accountScopeKey(guild.scope),
-        live: Boolean(light?.rooms.some((room) => room.kind === 'voice' && room.lit)),
-        mentions: unread?.mentionCount ?? 0,
-        unreadChannels: unread?.unreadCount ?? 0,
-      };
-    });
-  }, [guilds, buildings, guildUnreads, currentGuildId, scope]);
-}
-
-/* ---- Shared by the Glass panel and the Index sidebar ---------------------------- */
+/* ---- Shared by the sidebar's hooks ---------------------------------------------- */
 
 const NO_MUTED = new Set<string>();
 
@@ -109,18 +57,13 @@ function useChannelAttention(scopeKey: string | null, guildKey: string | null) {
   return { readStates, mutedChannelIds, guildMuted };
 }
 
-/** The server's people by id: a face for each, and the name a mention of them reads as. */
+/** The server's members, and the name a mention of each reads as. */
 function useServerPeople(guildKey: string | null) {
   const members = useMemberStore((state) => (guildKey ? state.members.get(guildKey) : undefined));
   return useMemo(() => {
-    const faces = new Map<string, FaceModel>();
     const names = new Map<string, string>();
-    for (const member of members ?? []) {
-      const name = displayName(member.user, member.nick);
-      faces.set(member.user.id, { userId: member.user.id, name, avatar: member.user.avatar_hash ?? null });
-      names.set(member.user.id, name);
-    }
-    return { people: faces, memberNames: names, members };
+    for (const member of members ?? []) names.set(member.user.id, displayName(member.user, member.nick));
+    return { memberNames: names, members };
   }, [members]);
 }
 
@@ -128,126 +71,8 @@ function useServerPeople(guildKey: string | null) {
 
 const NO_CHANNELS: Channel[] = [];
 
-/** The unread state that decides whether a channel needs counting. */
-function countTargets(
-  channels: readonly Channel[],
-  readStates: Record<string, { last_message_id: string; mention_count: number } | undefined>,
-  muted: (channelId: string) => boolean,
-  scope: ReturnType<typeof useCurrentAccountScope>,
-  openChannelId: string | null,
-): UnreadTarget[] {
-  if (!scope) return [];
-  const targets: UnreadTarget[] = [];
-  for (const channel of channels) {
-    const readState = readStates[channel.id] as Parameters<typeof attentionOf>[1];
-    const { unread, mentions } = attentionOf(channel, readState);
-    // A mention has its own badge, a muted channel has none, and the channel you
-    // are reading is about to be read: none of them is worth a request.
-    if (!unread || mentions > 0 || muted(channel.id) || channel.id === openChannelId || !channel.last_message_id) continue;
-    targets.push({ channelId: channel.id, scope, cursor: readState?.last_message_id || null, tail: channel.last_message_id });
-  }
-  return targets;
-}
-
 /** Whether the server's channel list is in: rows, still coming, could not be read, or none. */
 export type ChannelListStatus = 'ready' | 'loading' | 'error' | 'empty';
-
-export interface ServerPlaces {
-  rows: ChannelRowModel[];
-  listStatus: ChannelListStatus;
-  listError: string | null;
-  channels: readonly Channel[];
-  rooms: ReadonlyMap<string, RoomLight>;
-  events: HomeEvent[];
-  eventRoomName: (event: HomeEvent) => string | null;
-  nowMs: number;
-  selfUserId: string | null;
-}
-
-export function useServerPlaces(guildId: string, building: BuildingLight | null, selectedChannelId: string | null): ServerPlaces {
-  const scope = useCurrentAccountScope();
-  const scopeKey = scope ? accountScopeKey(scope) : null;
-  const guildKey = scope ? entityScopeKey(scope, guildId) : null;
-  const nowMs = useMinuteClock();
-
-  const stored = useChannelStore((state) => (guildKey ? state.channelsByGuild[guildKey] : undefined)) ?? NO_CHANNELS;
-  const listLoaded = useChannelStore((state) => Boolean(guildKey && state.guildChannelsLoaded[guildKey]));
-  const listError = useChannelStore((state) => (guildKey ? state.errors[guildKey] ?? null : null));
-  const channels = useMemo(() => orderChannels(stored), [stored]);
-  const channelNames = useMemo(() => new Map(stored.map((channel) => [channel.id, channel.name ?? ''])), [stored]);
-
-  const previews = useChannelPreviews(guildId, scope, channels);
-
-  const { readStates, mutedChannelIds, guildMuted } = useChannelAttention(scopeKey, guildKey);
-  const { people, memberNames } = useServerPeople(guildKey);
-
-  const targets = useMemo(
-    () => countTargets(channels, readStates, (id) => guildMuted || mutedChannelIds.has(id), scope, selectedChannelId),
-    [channels, readStates, guildMuted, mutedChannelIds, scope, selectedChannelId],
-  );
-  const countsByKey = useUnreadMessageCounts(targets);
-  // Rows are one server's channels, so they are looked up by channel id alone.
-  const counts = useMemo(
-    () => new Map(targets.map((target) => [target.channelId, countsByKey.get(unreadKey(target.scope, target.channelId)) ?? null])),
-    [targets, countsByKey],
-  );
-
-  const channelParticipants = useVoiceStore((state) => state.channelParticipants);
-  const rooms = useMemo(
-    () => new Map((building?.rooms ?? []).map((room) => [room.channelId, room])),
-    [building],
-  );
-
-  // The server's calendar, for "Coming up" and for the name a shared event has in a
-  // preview (`<event:id>` reads as "Movie night" when the calendar has it).
-  const { events } = useUpcomingEvents(guildId);
-  const eventNames = useMemo(() => new Map(events.map((event) => [event.id, event.name])), [events]);
-
-  const selfUserId = scope?.userId ?? null;
-  const context = useMemo<PreviewContext>(
-    () => ({ selfUserId, memberNames, channelNames, eventNames }),
-    [selfUserId, memberNames, channelNames, eventNames],
-  );
-
-  const rows = useMemo(
-    () =>
-      buildChannelRows({
-        guildId,
-        channels,
-        rooms,
-        previews: previews.previews,
-        previewError: previews.status === 'error' ? previews.error : null,
-        recentAuthors: previews.recentAuthors,
-        readStates,
-        mutedChannelIds,
-        guildMuted,
-        people,
-        counts,
-        context,
-        selectedChannelId,
-        nowMs,
-        // The wire will carry when a stream began (`self_stream_started_at`,
-        // glass-plan §3). Until it does there is no start time, and the kicker
-        // says "LIVE" and nothing it cannot back.
-        streamStartedAt: (channelId, userId) => {
-          const state = channelParticipants.get(channelId)?.find((entry) => entry.user_id === userId);
-          const started = (state as { self_stream_started_at?: string | null } | undefined)?.self_stream_started_at;
-          return typeof started === 'string' ? started : null;
-        },
-      }),
-    [guildId, channels, rooms, previews, readStates, mutedChannelIds, guildMuted, people, counts, context, selectedChannelId, nowMs, channelParticipants],
-  );
-
-  const eventRoomName = useMemo(
-    () => (event: HomeEvent) => (event.channelId ? channelNames.get(event.channelId) || null : null),
-    [channelNames],
-  );
-
-  const listStatus: ChannelListStatus =
-    channels.length > 0 ? 'ready' : listError ? 'error' : listLoaded ? 'empty' : 'loading';
-
-  return { rows, listStatus, listError, channels, rooms, events, eventRoomName, nowMs, selfUserId };
-}
 
 /* ---- The Index sidebar's server ------------------------------------------------- */
 
@@ -441,11 +266,4 @@ export function useServerSidebar(guildId: string, selectedChannelId: string | nu
     nowMs,
     selfUserId,
   };
-}
-
-/* ---- Home ---------------------------------------------------------------------- */
-
-export function useHomeConversations() {
-  const { mutedGuildKeys } = useMutedGuilds();
-  return useUnifiedConversations(mutedGuildKeys);
 }

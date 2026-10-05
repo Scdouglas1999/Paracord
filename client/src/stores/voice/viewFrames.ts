@@ -1,18 +1,17 @@
 import {
-  AMBIENT_SAMPLE_MAX_FPS,
   MAX_VIEW_SAMPLE_FPS,
   tapEngineFrames,
   type EngineFrameTapDeps,
-  type RoomFrame,
-} from '../../lib/media/roomFrameTap';
+  type StreamFrame,
+} from '../../lib/media/engineFrameTap';
 import type { MediaEngine, VideoTapRoute } from '../../lib/media/mediaEngine';
 import { useVoiceStore } from '../voiceStore';
-import type { MediaViewKind, MediaViewState } from './viewSessions';
+import type { MediaViewState } from './viewSessions';
 
-export { AMBIENT_SAMPLE_MAX_FPS, MAX_VIEW_SAMPLE_FPS };
+export { MAX_VIEW_SAMPLE_FPS };
 
 export interface ViewFrameOptions {
-  /** Frames a second wanted (capped: ambient 1, watch 4). */
+  /** Frames a second wanted (capped at 4). */
   fps?: number;
   /**
    * Where the frames come from, each time the view (re)attaches: `frames` (the
@@ -28,21 +27,18 @@ export interface ViewFrameOptions {
 }
 
 /**
- * Sample the watched stream or the ambient view as `ImageBitmap`s (the
- * subscriber owns each and must `close()` it). Follows the view across its
- * engines: when a call joined or left moves a watch from its own session onto
- * the call (or back), the tap moves with it. Nothing is delivered while the
- * view is not live.
- *
- * WP-G8 samples `ambient` (room light) and `watch` (the stage's glow) here;
- * WP-G14 renders the watched stream with `watchView.engine.subscribeVideo`.
+ * Sample the watched stream as `ImageBitmap`s (the subscriber owns each and
+ * must `close()` it): a clip's thumbnail reads one. Follows the view across
+ * its engines: when a call joined or left moves a watch from its own session
+ * onto the call (or back), the tap moves with it. Nothing is delivered while
+ * the view is not live. The call view renders the stream itself with
+ * `watchView.engine.subscribeVideo`.
  */
 export function subscribeViewFrames(
-  kind: MediaViewKind,
-  onFrame: (frame: RoomFrame) => void,
+  onFrame: (frame: StreamFrame) => void,
   options: ViewFrameOptions = {},
 ): () => void {
-  const cap = kind === 'ambient' ? AMBIENT_SAMPLE_MAX_FPS : MAX_VIEW_SAMPLE_FPS;
+  const cap = MAX_VIEW_SAMPLE_FPS;
   const fps = Math.min(options.fps ?? cap, cap);
   let current: { engine: MediaEngine; streamerId: string; release: () => void } | null = null;
   let stopped = false;
@@ -61,8 +57,7 @@ export function subscribeViewFrames(
     }
   };
 
-  const select = (state: ReturnType<typeof useVoiceStore.getState>) =>
-    kind === 'watch' ? state.watchView : state.ambientView;
+  const select = (state: ReturnType<typeof useVoiceStore.getState>) => state.watchView;
   sync(select(useVoiceStore.getState()));
   const unsubscribe = useVoiceStore.subscribe((state, previous) => {
     if (select(state) !== select(previous)) sync(select(state));

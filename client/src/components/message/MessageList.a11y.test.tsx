@@ -294,7 +294,7 @@ describe('MessageList keyboard accessibility and error state', () => {
 
     const row = await screen.findByRole('article', { name: /Alice/ });
     await waitFor(() => expect(mocks.scrollToIndex).toHaveBeenCalled());
-    // The jump target's bubble is ringed (glass-timeline.css reads `data-jump`).
+    // The jump target's bubble is ringed (ix-timeline.css reads `data-jump`).
     await waitFor(() => expect(row).toHaveAttribute('data-jump', 'true'));
   });
 

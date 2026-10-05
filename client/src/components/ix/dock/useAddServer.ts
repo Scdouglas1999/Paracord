@@ -9,10 +9,8 @@ import { isAllowedImageMimeType } from '../../../lib/security';
 import { useGuildStore } from '../../../stores/guildStore';
 
 /**
- * What the Add a server sheet and the older Create / Join / Template dialog
- * (`components/guild/CreateGuildModal.tsx`, until its last caller goes) both do:
- * make a server, join one with an invite, make one from a template. The sheet
- * draws the Index layout and the dialog its own; the rules live here once.
+ * What the Add a server sheet does: make a server, join one with an invite,
+ * make one from a template. The sheet draws the layout; the rules live here.
  */
 
 export interface GuildTemplate {

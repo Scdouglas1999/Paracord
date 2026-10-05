@@ -96,8 +96,8 @@ export function isConversationRoute(pathname: string): boolean {
  *     is gone; the request is taken here, turned into the places screen, and
  *     the flag is put back, so nothing else ever sees a phone drawer open.
  *
- * Picking something in the list is the list's own business (`PhonePlaces`): it
- * knows which tap was a pick.
+ * Picking something in the list is the list's own business (the sidebar's rows):
+ * they know which tap was a pick.
  */
 export function usePhoneNavigation(enabled: boolean): void {
   const { pathname } = useLocation();

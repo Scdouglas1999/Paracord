@@ -1,17 +1,15 @@
 /**
- * The frame source contract (docs/design/glass-plan.md §1.2, "Frame source
- * contract").
+ * The frame source contract.
  *
- * Room light, the stream thumbnail, the ambient spill behind the stage and the
- * pill's preview all want the same thing: a small, steady trickle of decoded
+ * A clip's thumbnail wants a still of the stream being watched, and the review
+ * harness wants a looping scene in place of one: a small trickle of decoded
  * frames from somewhere, at a rate the CONSUMER picks. This is the seam. A
  * consumer never asks where the frames come from; a source never asks who is
  * looking.
  *
- * Implementations (each owned by the package that has the pixels):
- *   - stream   the joined call's screen share or camera (WP-G6's tap, at most
- *              4 Hz, extending `lib/media/roomFrameTap.ts`)
- *   - image    a still, such as a server banner or icon
+ * Implementations:
+ *   - stream   the watched stream (`viewFrameSource.ts`: the tap in
+ *              `engineFrameTap.ts`, at most 4 Hz)
  *   - fixture  a looping canvas scene for review shots with no media server
  *              (`fixtureFrameSource.ts`, DEV builds only)
  *
@@ -22,7 +20,7 @@
  */
 export interface FrameSource {
   /** Where the pixels come from. Consumers may show it; they never branch on it. */
-  readonly kind: 'stream' | 'image' | 'fixture';
+  readonly kind: 'stream' | 'fixture';
   /** Intrinsic size of every frame this source produces, in pixels. */
   readonly width: number;
   readonly height: number;

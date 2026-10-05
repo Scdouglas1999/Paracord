@@ -3,8 +3,8 @@ import type { OperationContext } from '../lib/operationContext';
 import type { MediaEngine } from '../lib/media/mediaEngine';
 
 // The Glass media contract of the voice store (docs/design/glass-g6-checkpoint.md):
-// listen, the in-place upgrade, watch (with and without the call), ambient,
-// watcher counts and the Glass voice-state fields.
+// listen, the in-place upgrade, watch (with and without the call), watcher
+// counts and the Glass voice-state fields.
 
 const fixture = vi.hoisted(() => ({
   selected: 'A', user: '1',
@@ -42,7 +42,6 @@ vi.mock('../lib/media/mediaEngine', () => ({ createMediaEngine: () => fixture.fa
 import { selectWatcherCount, useVoiceStore } from './voiceStore';
 import { accountScopeKey } from '../lib/serverScope';
 import { useServerListStore } from './serverListStore';
-import { useGuildStore } from './guildStore';
 import { isListeningIn, liveMinutes } from './voice/selectors';
 import { VIEW_CONNECT_DEADLINE_MS } from './voice/viewSessions';
 
@@ -99,7 +98,6 @@ function queueEngines(count: number): Fake[] {
   return created;
 }
 
-let visibility: DocumentVisibilityState = 'visible';
 beforeEach(async () => {
   await useVoiceStore.getState().reset(); await flush();
   fixture.selected = 'A'; fixture.user = '1'; engines = [];
@@ -113,19 +111,11 @@ beforeEach(async () => {
   fixture.publish.mockReset();
   useVoiceStore.setState({ useNativeMedia: true, selfMute: false, selfDeaf: false });
   useServerListStore.setState({ activeServerId: 'A' });
-  useGuildStore.setState({ selectedGuild: { id: 'guild', scope: SCOPE } });
-  visibility = 'visible';
-  Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => visibility });
 });
 afterEach(async () => {
   vi.useRealTimers();
   await useVoiceStore.getState().reset(); await flush();
 });
-
-function setVisibility(value: DocumentVisibilityState) {
-  visibility = value;
-  document.dispatchEvent(new Event('visibilitychange'));
-}
 
 // ── Listen ──────────────────────────────────────────────────────────────────
 
@@ -437,100 +427,6 @@ describe('watch', () => {
     // The same target again is the running watch.
     await useVoiceStore.getState().startWatch({ ...WATCH, streamerId: 'brendan' });
     expect(fixture.startView).toHaveBeenCalledTimes(2);
-  });
-});
-
-// ── Ambient ─────────────────────────────────────────────────────────────────
-
-describe('ambient', () => {
-  it('opens one lightweight view for the room, once per target', async () => {
-    const [view] = queueEngines(1);
-    useVoiceStore.getState().startAmbient(WATCH);
-    await flush();
-    expect(fixture.startView).toHaveBeenCalledWith('lounge', 'ambient', 'vincent');
-    expect(view.mock.connect).toHaveBeenCalledWith('https://media.example', 'ambient-media-token', 'pin',
-      expect.objectContaining({ role: 'view' }));
-    expect(view.mock.subscribeScreenShareAudio).not.toHaveBeenCalled();
-    expect(useVoiceStore.getState().ambientView).toMatchObject({ phase: 'live', route: 'session' });
-    useVoiceStore.getState().startAmbient(WATCH);
-    await flush();
-    expect(fixture.startView).toHaveBeenCalledTimes(1);
-
-    useVoiceStore.getState().stopAmbient();
-    await flush();
-    expect(fixture.stopView).toHaveBeenCalledWith('lounge', 'view-receipt');
-    expect(view.mock.disconnect).toHaveBeenCalled();
-    expect(useVoiceStore.getState().ambientView).toBeNull();
-  });
-
-  it('closes while the window is hidden and opens a fresh view when it is shown', async () => {
-    const [first, second] = queueEngines(2);
-    useVoiceStore.getState().startAmbient(WATCH);
-    await flush();
-    setVisibility('hidden');
-    await flush();
-    expect(first.mock.disconnect).toHaveBeenCalled();
-    expect(fixture.stopView).toHaveBeenCalledWith('lounge', 'view-receipt');
-    expect(useVoiceStore.getState().ambientView).toMatchObject({ phase: 'paused', pauseReason: 'hidden', engine: null });
-    setVisibility('visible');
-    await flush();
-    expect(fixture.startView).toHaveBeenCalledTimes(2);
-    expect(useVoiceStore.getState().ambientView?.engine).toBe(second.engine);
-  });
-
-  it('stays closed while its server is not the current one', async () => {
-    useGuildStore.setState({ selectedGuild: { id: 'basecamp', scope: SCOPE } });
-    useVoiceStore.getState().startAmbient(WATCH);
-    await flush();
-    expect(fixture.startView).not.toHaveBeenCalled();
-    expect(useVoiceStore.getState().ambientView).toMatchObject({ phase: 'paused', pauseReason: 'server-not-current' });
-    const [view] = queueEngines(1);
-    useGuildStore.setState({ selectedGuild: { id: 'guild', scope: SCOPE } });
-    await flush();
-    expect(useVoiceStore.getState().ambientView?.engine).toBe(view.engine);
-  });
-
-  it('rides the call in its channel without asking the server', async () => {
-    const [call] = queueEngines(1);
-    await useVoiceStore.getState().joinChannel('lounge', 'guild');
-    useVoiceStore.getState().startAmbient(WATCH);
-    await flush();
-    expect(fixture.startView).not.toHaveBeenCalled();
-    expect(useVoiceStore.getState().ambientView).toMatchObject({ phase: 'live', route: 'call' });
-    expect(useVoiceStore.getState().ambientView?.engine).toBe(call.engine);
-  });
-
-  it('rides a watch of the same stream, and is blocked by a watch of another', async () => {
-    const [watchEngine] = queueEngines(1);
-    await useVoiceStore.getState().startWatch(WATCH);
-    useVoiceStore.getState().startAmbient(WATCH);
-    await flush();
-    expect(useVoiceStore.getState().ambientView).toMatchObject({ phase: 'live', route: 'watch' });
-    expect(useVoiceStore.getState().ambientView?.engine).toBe(watchEngine.engine);
-    expect(fixture.startView).toHaveBeenCalledTimes(1);
-
-    useVoiceStore.getState().startAmbient({ ...WATCH, streamerId: 'brendan' });
-    await flush();
-    expect(useVoiceStore.getState().ambientView).toMatchObject({ phase: 'blocked' });
-    expect(fixture.startView).toHaveBeenCalledTimes(1);
-
-    const [ambientEngine] = queueEngines(1);
-    await useVoiceStore.getState().stopWatch();
-    await flush();
-    expect(fixture.startView).toHaveBeenLastCalledWith('lounge', 'ambient', 'brendan');
-    expect(useVoiceStore.getState().ambientView?.engine).toBe(ambientEngine.engine);
-  });
-
-  it('stays down after being superseded until the room asks again', async () => {
-    const [view] = queueEngines(1);
-    useVoiceStore.getState().startAmbient(WATCH);
-    await flush();
-    view.callbacks.lost?.('superseded by a newer media connection');
-    await flush();
-    setVisibility('hidden'); setVisibility('visible');
-    await flush();
-    expect(useVoiceStore.getState().ambientView).toMatchObject({ phase: 'ended', endReason: 'superseded' });
-    expect(fixture.startView).toHaveBeenCalledTimes(1);
   });
 });
 

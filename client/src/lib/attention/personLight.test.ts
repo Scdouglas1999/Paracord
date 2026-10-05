@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { countLightsOn, mergePersonLights, personLight } from './personLight';
+import { personLight } from './personLight';
 
 function person(over: Partial<Parameters<typeof personLight>[0]> = {}) {
   return personLight({ userId: '1', name: 'Mara', status: 'online', ...over });
@@ -31,31 +31,4 @@ describe('personLight', () => {
     expect(person({ status: 'online' }).label).toBe('Online');
   });
 
-  it('counts who is online', () => {
-    const people = [
-      person({ userId: '1', status: 'online' }),
-      person({ userId: '2', status: 'idle' }),
-      person({ userId: '3', status: 'streaming' }),
-      person({ userId: '4', status: 'offline' }),
-    ];
-    expect(countLightsOn(people)).toBe(2);
-  });
-
-  it('merges the same human seen twice, brightest observation winning', () => {
-    const merged = mergePersonLights([
-      person({ userId: '1', status: 'offline' }),
-      person({ userId: '1', status: 'online' }),
-      person({ userId: '2', status: 'idle' }),
-    ]);
-    expect(merged).toHaveLength(2);
-    expect(merged.find((p) => p.userId === '1')?.level).toBe('on');
-  });
-
-  it('prefers a speaking observation at the same level', () => {
-    const merged = mergePersonLights([
-      person({ userId: '1', status: 'online' }),
-      person({ userId: '1', status: 'online', speaking: true, inRoom: true }),
-    ]);
-    expect(merged[0].speaking).toBe(true);
-  });
 });

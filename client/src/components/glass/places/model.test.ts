@@ -3,34 +3,17 @@ import { describe, expect, it } from 'vitest';
 import type { ChannelPreviewEntry } from '../../../hooks/useChannelPreviews';
 import { ChannelType } from '../../../types';
 import {
-  BADGE_CAP,
-  QUIET_AFTER_MS,
-  badgeFor,
-  badgeWords,
-  capped,
-  clockDigits,
   clockShort,
   comingUpLine,
   dateTile,
-  eventLine,
-  eventTile,
   formatRowTime,
   fullWhen,
   headerLine,
-  glyphFor,
   isPlaceChannel,
-  isQuietChannel,
-  leadFaces,
-  liveKicker,
-  liveLine,
-  mentionBadge,
   orderChannels,
   previewLine,
   previewText,
-  serverLine,
   shortWhen,
-  thumbnailOf,
-  unreadBadge,
 } from './model';
 
 /** Thursday 1 October 2026, 9:12 PM in whatever zone the test runs in. */
@@ -70,67 +53,6 @@ describe('formatRowTime', () => {
   });
 });
 
-describe('clockDigits', () => {
-  it('drops the AM or PM for a date tile that says TODAY', () => {
-    expect(clockDigits(at(9, 1, 21, 30))).toBe('9:30');
-    expect(clockDigits(at(9, 1, 7, 5))).toBe('7:05');
-  });
-});
-
-describe('quiet channels', () => {
-  it('is quiet after a week with nothing unread', () => {
-    const lastMessageMs = NOW - QUIET_AFTER_MS - 1;
-    expect(isQuietChannel({ lastMessageMs, nowMs: NOW, unread: false, mentions: 0 })).toBe(true);
-  });
-
-  it('is not quiet inside the week, at the boundary or after', () => {
-    expect(isQuietChannel({ lastMessageMs: NOW - QUIET_AFTER_MS, nowMs: NOW, unread: false, mentions: 0 })).toBe(false);
-    expect(isQuietChannel({ lastMessageMs: NOW - 2 * 24 * 3600_000, nowMs: NOW, unread: false, mentions: 0 })).toBe(false);
-  });
-
-  it('is never quiet with something unread or a mention, however old', () => {
-    const old = NOW - 90 * 24 * 3600_000;
-    expect(isQuietChannel({ lastMessageMs: old, nowMs: NOW, unread: true, mentions: 0 })).toBe(false);
-    expect(isQuietChannel({ lastMessageMs: old, nowMs: NOW, unread: false, mentions: 1 })).toBe(false);
-  });
-
-  it('is quiet when a channel has never had a message', () => {
-    expect(isQuietChannel({ lastMessageMs: null, nowMs: NOW, unread: false, mentions: 0 })).toBe(true);
-  });
-});
-
-describe('badges', () => {
-  it('writes a single mention as a bare @ and more as @N', () => {
-    expect(mentionBadge(1)).toEqual({ kind: 'mention', count: 1, label: '@' });
-    expect(mentionBadge(2)).toEqual({ kind: 'mention', count: 2, label: '@2' });
-    expect(mentionBadge(250)).toMatchObject({ label: '@99+' });
-  });
-
-  it('writes a known unread count, and a dot when it is not known', () => {
-    expect(unreadBadge(4)).toEqual({ kind: 'count', count: 4, label: '4' });
-    expect(unreadBadge(null)).toEqual({ kind: 'dot' });
-    expect(capped(BADGE_CAP)).toBe('99');
-    expect(capped(BADGE_CAP + 1)).toBe('99+');
-  });
-
-  it('lets a mention outrank a count, and a muted channel say nothing', () => {
-    expect(badgeFor({ muted: false, mentions: 1, unread: true, unreadCount: 6 })).toMatchObject({ kind: 'mention' });
-    expect(badgeFor({ muted: false, mentions: 0, unread: true, unreadCount: 6 })).toMatchObject({ kind: 'count', label: '6' });
-    expect(badgeFor({ muted: false, mentions: 0, unread: true, unreadCount: null })).toEqual({ kind: 'dot' });
-    expect(badgeFor({ muted: false, mentions: 0, unread: false, unreadCount: null })).toBeNull();
-    expect(badgeFor({ muted: true, mentions: 3, unread: true, unreadCount: 2 })).toBeNull();
-  });
-
-  it('gives every badge words for a screen reader', () => {
-    expect(badgeWords(mentionBadge(1))).toBe('1 mention');
-    expect(badgeWords(mentionBadge(3))).toBe('3 mentions');
-    expect(badgeWords(unreadBadge(4))).toBe('4 unread');
-    expect(badgeWords(unreadBadge(100))).toBe('more than 99 unread');
-    expect(badgeWords({ kind: 'dot' })).toBe('unread');
-    expect(badgeWords(null)).toBeNull();
-  });
-});
-
 describe('channel order', () => {
   const channel = (id: string, type: ChannelType, position: number, parent_id: string | null = null) => ({ id, type, position, parent_id });
 
@@ -163,14 +85,6 @@ describe('channel order', () => {
   it('treats a channel whose category is gone as uncategorized', () => {
     const ordered = orderChannels([channel('orphan', ChannelType.Text, 0, 'missing-category')]);
     expect(ordered.map((entry) => entry.id)).toEqual(['orphan']);
-  });
-
-  it('gives each kind of channel its glyph', () => {
-    expect(glyphFor(ChannelType.Text)).toBe('chat');
-    expect(glyphFor(ChannelType.Voice)).toBe('voice');
-    expect(glyphFor(ChannelType.Stage)).toBe('stage');
-    expect(glyphFor(ChannelType.Announcement)).toBe('announcement');
-    expect(glyphFor(ChannelType.Forum)).toBe('forum');
   });
 });
 
@@ -290,119 +204,6 @@ describe('previewLine', () => {
   it('exposes the text step on its own', () => {
     expect(previewText('hi <@42>', CONTEXT)).toBe('hi @Sean');
     expect(previewText('hi <@777>', CONTEXT)).toBe('hi @someone');
-  });
-});
-
-describe('thumbnailOf', () => {
-  const image = { attachmentId: 'a1', contentType: 'image/png', filename: 'mission.png', width: 480, height: 270 };
-
-  it('is the latest picture', () => {
-    expect(thumbnailOf(preview({ media: image }))).toEqual({ attachmentId: 'a1', label: 'mission.png' });
-  });
-
-  it('is nothing for a video, a file, no media, an encrypted message or no message', () => {
-    expect(thumbnailOf(preview({ media: { ...image, contentType: 'video/mp4' } }))).toBeNull();
-    expect(thumbnailOf(preview({ media: { ...image, contentType: null } }))).toBeNull();
-    expect(thumbnailOf(preview({ media: null }))).toBeNull();
-    expect(thumbnailOf(preview({ media: image, encrypted: true }))).toBeNull();
-    expect(thumbnailOf(null)).toBeNull();
-  });
-});
-
-describe('leadFaces', () => {
-  const face = (id: string) => ({ userId: id, name: id, avatar: null });
-
-  it('puts the earlier speaker behind and the latest in front', () => {
-    // Newest first in, back to front out.
-    expect(leadFaces([face('jeremy'), face('nick'), face('luke')]).map((entry) => entry.userId)).toEqual(['nick', 'jeremy']);
-  });
-
-  it('skips a repeated speaker and can be one face', () => {
-    expect(leadFaces([face('nick'), face('nick'), face('luke')]).map((entry) => entry.userId)).toEqual(['luke', 'nick']);
-    expect(leadFaces([face('nick')]).map((entry) => entry.userId)).toEqual(['nick']);
-    expect(leadFaces([])).toEqual([]);
-  });
-});
-
-describe('serverLine', () => {
-  it('names the busiest voice channel while somebody is in one', () => {
-    expect(serverLine({ rosterKnown: true, memberCount: 8, online: 8, live: [{ name: 'Lounge', occupants: 3 }] })).toBe('8 online, 3 in Lounge');
-  });
-
-  it('counts voice channels together when there are several', () => {
-    expect(
-      serverLine({ rosterKnown: true, memberCount: 8, online: 6, live: [{ name: 'Lounge', occupants: 3 }, { name: 'Pit', occupants: 2 }] }),
-    ).toBe('6 online, 5 in voice');
-  });
-
-  it('is members and online when nothing is live, singular for one', () => {
-    expect(serverLine({ rosterKnown: true, memberCount: 5, online: 2, live: [] })).toBe('5 members, 2 online');
-    expect(serverLine({ rosterKnown: true, memberCount: 1, online: 1, live: [] })).toBe('1 member, 1 online');
-  });
-
-  it('claims nothing about who is online before the roster is known', () => {
-    expect(serverLine({ rosterKnown: false, memberCount: 24, online: 0, live: [] })).toBe('24 members');
-  });
-});
-
-describe('live rows', () => {
-  it('says what is going on, most interesting first', () => {
-    expect(liveLine({ streamerName: 'Vincent', talkingNames: ['Brendan'], occupantNames: ['Vincent', 'Brendan'], occupants: 2 })).toBe('Vincent is streaming');
-    expect(liveLine({ streamerName: null, talkingNames: ['Brendan'], occupantNames: ['Brendan', 'Nick'], occupants: 2 })).toBe('Brendan is talking');
-    expect(liveLine({ streamerName: null, talkingNames: ['Brendan', 'Nick'], occupantNames: [], occupants: 3 })).toBe('2 talking');
-    expect(liveLine({ streamerName: null, talkingNames: [], occupantNames: ['Nick'], occupants: 1 })).toBe('Nick is in');
-    expect(liveLine({ streamerName: null, talkingNames: [], occupantNames: [], occupants: 3 })).toBe('3 in here');
-  });
-
-  it('writes the minutes only when the stream’s start time is known', () => {
-    const started = new Date(NOW - 42 * 60_000 - 5_000).toISOString();
-    expect(liveKicker(started, NOW)).toBe('LIVE 42 MIN');
-    expect(liveKicker(null, NOW)).toBe('LIVE');
-    expect(liveKicker(undefined, NOW)).toBe('LIVE');
-    expect(liveKicker('garbage', NOW)).toBe('LIVE');
-    // A start in the future is a clock disagreement, not a negative age.
-    expect(liveKicker(new Date(NOW + 60_000).toISOString(), NOW)).toBe('LIVE');
-  });
-});
-
-describe('events', () => {
-  const event = (over: Partial<Parameters<typeof eventTile>[0] & Parameters<typeof eventLine>[0]> = {}) => ({
-    startsAt: new Date(at(9, 1, 21, 30)),
-    happeningNow: false,
-    channelId: null,
-    location: null,
-    creatorId: null,
-    going: 0,
-    ...over,
-  });
-
-  it('shows TODAY with the time, a weekday with the day of the month, and NOW while it runs', () => {
-    expect(eventTile(event(), NOW)).toEqual({ top: 'Today', bottom: '9:30' });
-    expect(eventTile(event({ startsAt: new Date(at(9, 2, 21, 0)) }), NOW)).toEqual({ top: 'Fri', bottom: '2' });
-    expect(eventTile(event({ startsAt: new Date(at(9, 3, 7, 0)) }), NOW)).toEqual({ top: 'Sat', bottom: '3' });
-    expect(eventTile(event({ happeningNow: true, startsAt: new Date(at(9, 1, 21, 0)) }), NOW)).toEqual({ top: 'Now', bottom: '9:00' });
-  });
-
-  it('shows the month once it is a week or more away', () => {
-    expect(eventTile(event({ startsAt: new Date(at(9, 14, 20, 0)) }), NOW)).toEqual({ top: 'Oct', bottom: '14' });
-  });
-
-  it('leaves the time to the tile today, and writes it in the line otherwise', () => {
-    const context = { nowMs: NOW, selfUserId: 'u1', roomName: null };
-    expect(eventLine(event({ channelId: 'l' }), { ...context, roomName: 'Lounge' })).toBe('Lounge');
-    expect(eventLine(event({ channelId: 'l', going: 3 }), { ...context, roomName: 'Lounge' })).toBe('Lounge, 3 going');
-    expect(eventLine(event({ startsAt: new Date(at(9, 2, 21, 0)), creatorId: 'u1', going: 6 }), context)).toBe("9:00 PM, you're hosting, 6 going");
-    expect(eventLine(event({ startsAt: new Date(at(9, 3, 7, 0)), location: 'the north lot', going: 4 }), context)).toBe('7:00 AM at the north lot, 4 going');
-    expect(eventLine(event({ startsAt: new Date(at(9, 2, 21, 0)), channelId: 'l' }), { ...context, roomName: 'Lounge' })).toBe('9:00 PM in Lounge');
-  });
-
-  it('never claims a spot count the server does not have', () => {
-    const line = eventLine(event({ going: 3 }), { nowMs: NOW, selfUserId: null, roomName: 'Lounge' });
-    expect(line).not.toMatch(/spot/i);
-  });
-
-  it('has something to say for an event with nothing else to say', () => {
-    expect(eventLine(event(), { nowMs: NOW, selfUserId: null, roomName: null })).toBe('Scheduled');
   });
 });
 

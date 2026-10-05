@@ -21,7 +21,7 @@ import { create } from 'zustand';
 import { extractApiError } from '../../../api/client';
 import { fileApi } from '../../../api/files';
 import { formatFileSize, wallClock } from '../../formatters';
-import { createViewFrameSource } from '../../room/viewFrameSource';
+import { createViewFrameSource } from '../viewFrameSource';
 import type { MessageState } from '../../../stores/messageStore';
 import type { MediaViewState } from '../../../stores/voice/viewSessions';
 import { useVoiceStore } from '../../../stores/voiceStore';
@@ -181,8 +181,8 @@ export function startClipLifecycle(): () => void {
 let clipIds = 0;
 
 /** A still of the stream now, as an object URL (cover-cropped 16:9), or null. */
-async function sampleThumbnail(streamerId: string): Promise<string | null> {
-  const bitmap = await createViewFrameSource('watch', streamerId, { width: THUMB_WIDTH * 2, height: THUMB_HEIGHT * 2 }).getLatestFrame();
+async function sampleThumbnail(): Promise<string | null> {
+  const bitmap = await createViewFrameSource({ width: THUMB_WIDTH * 2, height: THUMB_HEIGHT * 2 }).getLatestFrame();
   if (!bitmap) return null;
   try {
     const canvas = document.createElement('canvas');
@@ -246,7 +246,7 @@ export async function saveClip(target: { streamerId: string; streamerName: strin
       postedTo: null,
     });
     // The still arrives when the next frame does; the toast shows without waiting for it.
-    void sampleThumbnail(target.streamerId)
+    void sampleThumbnail()
       .then((thumbnailUrl) => {
         if (!thumbnailUrl) return;
         const saved = useClipStore.getState().saved;

@@ -35,7 +35,7 @@ afterEach(() => {
 function renderSheet() {
   return render(
     <div className="ix-call-host">
-      <CallSheet channelId="lounge" mode={useGlassStore.getState().stage.mode === 'theater' ? 'theater' : 'side'}>
+      <CallSheet channelId="lounge" mode={useGlassStore.getState().stage.mode === 'theater' ? 'theater' : 'main'}>
         <section className="ix-inset-surface ix-call" aria-label="Call: lounge">
           <div className="ix-call__layer">
             <header className="ix-call-head">
@@ -110,7 +110,7 @@ describe('the call sheet', () => {
     fireEvent.pointerDown(head, { pointerId: 2, button: 0, clientY: 60 });
     fireEvent.pointerMove(sheet, { pointerId: 2, clientY: 120 });
     fireEvent.pointerUp(sheet, { pointerId: 2, clientY: 120 });
-    expect(useGlassStore.getState().stage.mode).toBe('side');
+    expect(useGlassStore.getState().stage.mode).toBe('main');
     expect(sheet.style.transform).toBe('');
     expect(waapi.played.find((record) => record.animation.id === 'ix-call-sheet:return')).toBeDefined();
   });
@@ -136,11 +136,11 @@ describe('the call sheet', () => {
     expect(sheet()).toHaveAttribute('data-fullscreen', 'true');
     // Exit full screen puts the stage back in main.
     fireEvent.click(screen.getByTestId('ix-call-sheet-exit-full'));
-    expect(useGlassStore.getState().stage.mode).toBe('side');
+    expect(useGlassStore.getState().stage.mode).toBe('main');
 
     landscape.value = true;
     view.rerender(
-      <CallSheet channelId="lounge" mode="side">
+      <CallSheet channelId="lounge" mode="main">
         <section className="ix-call" />
       </CallSheet>,
     );

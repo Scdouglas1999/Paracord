@@ -3,9 +3,10 @@ import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-rou
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useGlassStore } from '../../../stores/glassStore';
 import { useUIStore } from '../../../stores/uiStore';
-import type { GlassLayout } from '../shell/useGlassLayout';
-import { Sheets } from './Sheets';
+import { Sheets, type SheetsProps } from './Sheets';
 import { closeSheets, openChannelSheet, openReminders, toggleSheet, useSheetPages } from './sheetStore';
+
+type GlassLayout = SheetsProps['layout'];
 
 /**
  * The sheets slot: which sheet is on screen, and the rules around it. The sheets

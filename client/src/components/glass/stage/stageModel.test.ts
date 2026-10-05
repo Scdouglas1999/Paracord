@@ -3,14 +3,11 @@ import { describe, expect, it } from 'vitest';
 import type { VoiceState } from '../../../types';
 import {
   buildStageModel,
-  controlsFit,
   liveFor,
-  stageGeometry,
   watchingLabel,
   watchNotice,
   type StageInput,
 } from './stageModel';
-import { averageColumns, glowColors } from './useStageGlow';
 
 const NOW = Date.parse('2026-10-01T02:12:00Z');
 const minutesAgo = (m: number) => new Date(NOW - m * 60_000).toISOString();
@@ -166,49 +163,5 @@ describe('watchNotice', () => {
 
   it('says so when the person stopped sharing', () => {
     expect(watchNotice({ ...base, phase: 'ended', streamerSharing: false }).text).toBe('Vincent stopped sharing.');
-  });
-});
-
-describe('stageGeometry', () => {
-  it('reproduces the reference: 972x868 gives a 948x533 stream and a 223px row', () => {
-    expect(stageGeometry({ width: 972, height: 868, cameras: 2, chips: 2 })).toEqual({ streamW: 948, streamH: 533, rowH: 223 });
-  });
-
-  it('browsing (1076 wide) grows the stream and shortens the row, like screens/06', () => {
-    expect(stageGeometry({ width: 1076, height: 868, cameras: 2, chips: 1 })).toEqual({ streamW: 1052, streamH: 592, rowH: 164 });
-  });
-
-  it('shrinks the stream, never the row below its minimum, on a short window', () => {
-    const g = stageGeometry({ width: 972, height: 600, cameras: 1, chips: 1 });
-    expect(g.rowH).toBe(120);
-    expect(g.streamH).toBe(600 - 24 - 64 - 24 - 120);
-    expect(g.streamW).toBe(Math.round((g.streamH * 16) / 9));
-  });
-
-  it('gives the stream the row when nobody is in it', () => {
-    const g = stageGeometry({ width: 972, height: 600, cameras: 0, chips: 0 });
-    expect(g.rowH).toBe(0);
-    expect(g.streamH).toBe(600 - 24 - 64 - 12);
-  });
-});
-
-describe('controlsFit', () => {
-  it('gives up the Clip label, then the reactions, as the pane narrows', () => {
-    expect(controlsFit(948, 'joined')).toBe(0);
-    expect(controlsFit(620, 'joined')).toBe(1);
-    expect(controlsFit(400, 'joined')).toBe(2);
-    expect(controlsFit(948, 'not-joined')).toBe(0);
-  });
-});
-
-describe('the glow sample', () => {
-  it('averages the columns at each edge and lights them the way the room would', () => {
-    // 4x1: teal, teal, amber, amber.
-    const data = [40, 200, 180, 255, 40, 200, 180, 255, 240, 150, 60, 255, 240, 150, 60, 255];
-    expect(averageColumns(data, 4, 1, 0, 2)).toEqual([40, 200, 180]);
-    const { left, right } = glowColors(data, 4, 1);
-    // Teal stays teal-leaning (green/blue over red), amber stays amber (red over blue).
-    expect(left[1]).toBeGreaterThan(left[0]);
-    expect(right[0]).toBeGreaterThan(right[2]);
   });
 });

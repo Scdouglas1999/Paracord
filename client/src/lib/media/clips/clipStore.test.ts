@@ -25,7 +25,7 @@ import { ebmlChild, ebmlFloat, readEbml } from './__fixtures__/readContainers';
 
 const upload = vi.hoisted(() => vi.fn());
 vi.mock('../../../api/files', () => ({ fileApi: { upload } }));
-vi.mock('../../room/viewFrameSource', () => ({
+vi.mock('../viewFrameSource', () => ({
   createViewFrameSource: () => ({ getLatestFrame: async () => null }),
 }));
 
@@ -46,7 +46,6 @@ function watch(phase: MediaViewState['phase'], over: Partial<MediaViewState> = {
     engine: phase === 'live' ? sessionEngine : null,
     sessionId: 'rcpt',
     endReason: null,
-    pauseReason: null,
     error: null,
     ...over,
   };

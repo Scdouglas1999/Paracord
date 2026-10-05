@@ -96,8 +96,7 @@ describe('Glass recipes', () => {
     expect(glass).toMatch(/\.glass-instrument\s*\{[^}]*font-stretch:\s*82%[^}]*font-size:\s*max\(12px/s);
   });
 
-  it('stills the waveform through the data-motion switch, not a media query', () => {
-    expect(glass).toMatch(/:root\[data-motion='reduced'\]\s+\.glass-wave/);
+  it('stills nothing through a media query: reduced motion is the data-motion switch', () => {
     expect(glass).not.toMatch(/prefers-reduced-motion/);
   });
 

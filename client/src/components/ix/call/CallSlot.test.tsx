@@ -116,7 +116,6 @@ const actions = {
         engine: engine.api,
         sessionId: 'v',
         endReason: null,
-        pauseReason: null,
         error: null,
       },
     } as never);
@@ -132,9 +131,11 @@ const actions = {
 const engine = vi.hoisted(() => {
   const live = new Map<string, number>();
   const unsubscribed: string[] = [];
+  const asked = new Map<string, unknown>();
   const api = {
     subscribeVideo: (userId: string, _canvas: HTMLCanvasElement, _onFrame?: () => void, options?: { preferredTrackId?: string }) => {
       const key = `${userId}:${options?.preferredTrackId ?? 'screen'}`;
+      asked.set(key, options);
       live.set(key, (live.get(key) ?? 0) + 1);
       return () => {
         live.set(key, (live.get(key) ?? 1) - 1);
@@ -149,6 +150,8 @@ const engine = vi.hoisted(() => {
     api: api as unknown as MediaEngine,
     live,
     unsubscribed,
+    /** The options a subscription was made with. */
+    optionsOf: (key: string) => asked.get(key),
     subscribed: () => [...live.entries()].filter(([, count]) => count > 0).map(([key]) => key).sort(),
   };
 });
@@ -319,6 +322,18 @@ describe('IX-13 call view', () => {
     expect(useGlassStore.getState().stage.streamerId).toBe('vincent');
   });
 
+  it('a camera is drawn cropped from about a third down, so faces stay in frame', () => {
+    holdCall([JEREMY, voiceState('brendan', { joined_at: at(5), self_video: true }), ME]);
+    renderSlot();
+    act(() => useGlassStore.getState().openStage(GENERAL));
+    // A portrait camera in a wide tile loses its bottom first, not its forehead.
+    expect(engine.optionsOf('brendan:camera')).toEqual({
+      preferredTrackId: 'camera',
+      fit: 'cover',
+      anchor: { x: 0.5, y: 0.35 },
+    });
+  });
+
   it('a camera in the grid focuses on a click; the other people go to the filmstrip', () => {
     holdCall([JEREMY, voiceState('brendan', { joined_at: at(5), self_video: true }), ME]);
     renderSlot();
@@ -371,7 +386,7 @@ describe('IX-13 call view', () => {
     act(() => press('c'));
     expect(clip.triggerClip).toHaveBeenCalledTimes(1);
     act(() => press('Escape'));
-    expect(useGlassStore.getState().stage.mode).toBe('side');
+    expect(useGlassStore.getState().stage.mode).toBe('main');
     act(() => press('Escape'));
     expect(useGlassStore.getState().stage.mode).toBe('none');
   });
@@ -412,7 +427,7 @@ describe('IX-13 call view', () => {
     expect(within(view()).queryByTestId('ix-call-theater')).toBeNull();
     act(() => press('t'));
     act(() => press('h'));
-    expect(useGlassStore.getState().stage.mode).toBe('side');
+    expect(useGlassStore.getState().stage.mode).toBe('main');
     expect(within(view()).queryByRole('complementary')).toBeNull();
   });
 });

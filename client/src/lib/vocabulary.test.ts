@@ -273,9 +273,9 @@ describe('the community is a server', () => {
   });
 
   it('names it a server where you make or join one', () => {
-    const copy = copyOf('components/guild/CreateGuildModal.tsx');
-    expect(copy).toContain('Create a server');
-    expect(copy).toContain('Join a server');
+    const copy = copyOf('components/ix/dock/AddServerSheet.tsx');
+    expect(copy).toContain('Create server');
+    expect(copy).toContain('Join server');
     expect(copy).toContain('Server name');
   });
 });
@@ -292,8 +292,8 @@ describe('the thing inside a server is a channel', () => {
   });
 
   it('joins a voice channel by joining it, not by entering a room', () => {
-    // The call pill names what you join: "Join Lounge".
-    const copy = copyOf('components/glass/pill/CallPill.tsx');
+    // The room card names what you join: "Join Lounge".
+    const copy = copyOf('components/ix/card/CardActions.tsx');
     expect(copy).toMatch(/^Join\b/m);
     expect(copy).not.toMatch(/enter (?:the )?room/i);
   });

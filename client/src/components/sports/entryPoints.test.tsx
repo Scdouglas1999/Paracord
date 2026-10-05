@@ -2,7 +2,8 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { sportsApi, type SportsBoard, type SportsGame, type SportsSettings, type SportsTeam } from '../../api/sports';
-import { AddonRows, useAddons } from '../glass/places/AddonRows';
+import { AddonList } from '../ix/sidebar/AddonList';
+import { useAddons } from '../ix/sidebar/useAddons';
 import { useSportsStore } from '../../stores/sportsStore';
 
 vi.mock('../../api/sports', async () => {
@@ -18,7 +19,7 @@ vi.mock('../../api/sports', async () => {
   };
 });
 
-// The other two add-ons the places panel lists are off: this file is about sports.
+// The other two add-ons the sidebar lists are off: this file is about sports.
 vi.mock('../../hooks/useDailyWord', () => ({ useDailyWordSettings: () => ({ enabled: false }) }));
 vi.mock('../../hooks/useGameServers', () => ({ useGameServers: () => ({ servers: [] }) }));
 
@@ -88,15 +89,15 @@ function board(games: SportsGame[]): SportsBoard {
 }
 
 /**
- * The places panel lists a server's add-ons as rows under its channels
- * (`glass/places/AddonRows.tsx`). The rows are the only door to the sports
+ * The sidebar lists a server's add-ons as rows under its voice channels
+ * (`ix/sidebar/AddonList.tsx`). The rows are the only door to the sports
  * page, so these hold that it opens, shows where you are, and says what is live.
  */
 function Rows({ pathname = '/app/guilds/g1', onOpen }: { pathname?: string; onOpen: (id: string) => void }) {
-  const addons = useAddons('g1', 'Kestrel Robotics', pathname);
+  const addons = useAddons('g1', pathname);
   return (
     <nav aria-label="Places">
-      <AddonRows addons={addons} focusOf={(id) => ({ tabIndex: id === 'addon:sports' ? 0 : -1, onFocus: () => {} })} onOpen={(addon) => onOpen(addon.id)} />
+      <AddonList addons={addons} focusOf={(id) => ({ tabIndex: id === 'addon:sports' ? 0 : -1, onFocus: () => {} })} onOpen={(addon) => onOpen(addon.id)} />
     </nav>
   );
 }
@@ -147,7 +148,7 @@ describe('sports entry points', () => {
     } as never);
     renderRows('/app/guilds/g1/sports');
     const row = await screen.findByRole('link', { name: /Sports/ });
-    expect(row).toHaveAttribute('data-selected');
+    expect(row).toHaveAttribute('data-ix-selected');
     expect(row).toHaveAttribute('aria-current', 'page');
   });
 

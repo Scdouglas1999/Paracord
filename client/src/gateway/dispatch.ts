@@ -8,7 +8,6 @@ import { usePresenceStore } from '../stores/presenceStore';
 import { republishPresenceAfterReconnect } from '../lib/presenceActivities';
 import { useVoiceStore } from '../stores/voiceStore';
 import { isVoiceWatchersUpdate } from '../stores/voice/watchers';
-import { isStreamReactions, useStreamReactionStore } from '../stores/streamReactionStore';
 import { useTogetherStore } from '../stores/togetherStore';
 import { isVoiceSpeakingUpdate, useRemoteSpeakingStore } from '../stores/remoteSpeakingStore';
 import type { TogetherActivityUpdate, TogetherSessionUpdate } from '../lib/together/model';
@@ -610,14 +609,6 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
         useVoiceStore.getState().handleWatchersUpdate(data, memberScope);
       } else {
         warnDispatchParseFailure(event, 'missing guild_id, channel_id or streams');
-      }
-      break;
-
-    case GatewayEvents.STREAM_REACTIONS:
-      if (isStreamReactions(data)) {
-        useStreamReactionStore.getState().receive(serverId, data);
-      } else {
-        warnDispatchParseFailure(event, 'missing guild_id, channel_id or reactions');
       }
       break;
 

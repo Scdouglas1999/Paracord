@@ -410,7 +410,7 @@ function renderInline(text: string, guildId?: string, mentionMap?: Map<string, s
         const userId = token.mentionUserId ?? '';
         const displayName = mentionMap?.get(userId) ?? `<@${userId}>`;
         // A mention is a chip (glass-cards.css). It names who it is for in
-        // `data-user-id`; the reader's own is the white chip (glass-timeline.css).
+        // `data-user-id`; the reader's own is the white chip (ix-cards.css).
         return createElement(
           'span',
           {

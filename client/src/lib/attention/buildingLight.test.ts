@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  aroundNowSentence,
   brightnessOf,
   buildingLight,
   orderBuildingsByBrightness,
@@ -166,58 +165,5 @@ describe('brightest first', () => {
       'Alder',
       'Zephyr',
     ]);
-  });
-});
-
-describe('around now', () => {
-  it('names who is where in one sentence', () => {
-    const sentence = aroundNowSentence({
-      rooms: [
-        voice('v1', 'Shop floor', [MARA, PRIYA, REN]),
-        text('t1', 'build-log', [TOMAS, AISHA]),
-      ],
-      people: [DEVON],
-    });
-    expect(sentence).toBe(
-      // Names inside a clause are alphabetical, so the sentence is stable
-      // between ticks rather than reshuffling with the typing order.
-      'Mara, Priya and Ren are in Shop floor · Aisha and Tomas are in #build-log · Devon is away',
-    );
-  });
-
-  it('uses the singular for one person', () => {
-    expect(
-      aroundNowSentence({ rooms: [voice('v1', 'Shop floor', [MARA])], people: [] }),
-    ).toBe('Mara is in Shop floor');
-  });
-
-  it('never says somebody is away while they are in a room', () => {
-    const room = voice('v1', 'Shop floor', [MARA]);
-    expect(aroundNowSentence({ rooms: [room], people: [MARA, DEVON] })).toBe(
-      'Mara is in Shop floor · Devon is away',
-    );
-  });
-
-  it('caps the clauses — the window map carries the rest', () => {
-    const sentence = aroundNowSentence({
-      rooms: [
-        voice('v1', 'Shop floor', [MARA, PRIYA]),
-        voice('v2', 'Lounge', [REN]),
-        text('t1', 'build-log', [TOMAS]),
-        text('t2', 'general', [AISHA]),
-      ],
-      people: [DEVON],
-      maxClauses: 2,
-    });
-    expect(sentence.split(' · ')).toHaveLength(2);
-  });
-
-  it('says plainly that nobody is online', () => {
-    expect(aroundNowSentence({ rooms: [], people: [] })).toBe(
-      'Nobody is online right now',
-    );
-    expect(aroundNowSentence({ rooms: [], people: [], empty: 'Nobody is around' })).toBe(
-      'Nobody is around',
-    );
   });
 });

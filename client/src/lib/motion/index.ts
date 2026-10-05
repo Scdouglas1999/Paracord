@@ -1,5 +1,6 @@
 /**
- * The motion engine (docs/lantern-stage-spec.md §5).
+ * The motion engine (docs/lantern-stage-spec.md §5; the Index moments are
+ * `components/ix/motion`).
  *
  * "Only light and the things people do animate." This module is how the app
  * obeys that: every animation in the product goes through one of these recipes,
@@ -9,19 +10,16 @@
  *   tokens ........ the §5 custom properties, read from the document
  *   reducedMotion . the ONE switch (OS setting + user setting + `data-motion`)
  *   spring ........ the critically damped spring a retarget carries velocity on
+ *   cubicBezier ... a CSS curve as a function of time
  *   animate ....... bloom · dim · flicker · settleIn · stagger · press ·
  *                   flash · relax
- *   sharedElement . "the thing you click becomes the thing you look at"
  *   marks ......... what a surface tells the engine it is holding
- *   lightsOn ...... "lights on" — the building waking up
- *   lights ........ the theme changing, and the power going
- *   arrive ........ "someone arrives / leaves" — one path, one burst
- *   walk .......... "walk into a room / back to the pill"
+ *   lights ........ the theme changing
  *   flip .......... the things an arrival pushed out of the way
  *   voiceLevel .... "speaking is a breath" — the ring takes the voice
  *   visibility .... a hidden window pauses every animation that loops
  *   flipCounter ... `<RollingNumber>` — "numbers re-roll"
- *   presence ...... staying mounted for the exit; settling onto the street
+ *   presence ...... staying mounted for the exit
  *   flipList ...... a reordered list travels on the spring, never snaps; a tab
  *                   indicator slides to its mark
  *   sendFlight .... the message floating out of the composer into the
@@ -53,55 +51,14 @@ export {
   type SettleOptions,
   type StaggerOptions,
 } from './animate';
-export {
-  ARRIVAL_SEQUENCE_BUDGET_MS,
-  BURST_WINDOW_MS,
-  RIM_AFTER_ROOM_MS,
-  arrivalStep,
-  captureArrival,
-  facesFor,
-  playArrivals,
-  playDepartures,
-  type RoomPersonEvent,
-} from './arrive';
 export { captureFlip, type FlipCapture } from './flip';
 export {
-  LIGHTS_ON_BUDGET_MS,
-  lightsOnStep,
-  playLightsOn,
-  playRelight,
-  type LightsOnOptions,
-  type LightsOnSequence,
-} from './lightsOn';
-export {
-  buildingIsDim,
   changeLights,
-  clearLightsForTests,
-  dimBuilding,
-  relightBuilding,
-  takeDimmedPlates,
-  OUTAGE_DIM,
   type LightsChangeEngine,
   type LightsChangeOptions,
   type LightsChangeResult,
-  type OutageResult,
 } from './lights';
-export {
-  EVENT_MARK,
-  SPEAKING_MARK,
-  LAMP_MARK,
-  LIT_MARK,
-  PERSON_MARK,
-  PLATE_MARK,
-  RECEDE_MARK,
-  RIM_MARK,
-  ROOM_MARK,
-  STRIP_MARK,
-  WINDOW_MARK,
-  lightMarks,
-  markSelector,
-} from './marks';
-export { recedeAround, roomSharedName, walkIntoRoom, walkOutOfRoom, type WalkOptions } from './walk';
+export { PERSON_MARK, SPEAKING_MARK } from './marks';
 export { emitMotion, onMotion, resetMotionBusForTests, type MotionEvents } from './bus';
 export {
   RELAX_MS,
@@ -161,11 +118,7 @@ export {
   supportsLinearEasing,
   type SpringConfig,
 } from './spring';
-export {
-  transitionWith,
-  type SharedTransitionOptions,
-  type SharedTransitionResult,
-} from './sharedElement';
+export { cubicBezier } from './cubicBezier';
 export { motionToken, ms, num, parseDuration, rawToken, MOTION_TOKEN_FALLBACKS } from './tokens';
 export { installVisibilityPause, resetVisibilityPauseForTests } from './visibility';
 export {

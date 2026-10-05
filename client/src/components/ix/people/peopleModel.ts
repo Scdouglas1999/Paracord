@@ -63,6 +63,11 @@ const NO_NAMES: Pick<PreviewContext, 'memberNames' | 'channelNames' | 'eventName
   eventNames: new Map(),
 };
 
+/** What a line knows about names: nobody's but your own, whom a mention reads as "@you", not "@someone". */
+function namesFor(selfUserId: string | null): Pick<PreviewContext, 'memberNames' | 'channelNames' | 'eventNames'> {
+  return selfUserId ? { ...NO_NAMES, memberNames: new Map([[selfUserId, 'you']]) } : NO_NAMES;
+}
+
 /**
  * A message as an Inbox line, the way a channel's last line words it: "Maya: need one for
  * ranked", "Jeremy posted a video", "You: ...". An end-to-end encrypted message says so and
@@ -71,7 +76,7 @@ const NO_NAMES: Pick<PreviewContext, 'memberNames' | 'channelNames' | 'eventName
 export function messageLine(message: Message, selfUserId: string | null): string {
   const entry = previewFromMessage(message);
   if (entry.encrypted) return `${authorLabel(entry, selfUserId)}: Encrypted message`;
-  return previewLine(entry, { selfUserId, ...NO_NAMES }) ?? 'New activity';
+  return previewLine(entry, { selfUserId, ...namesFor(selfUserId) }) ?? 'New activity';
 }
 
 /**

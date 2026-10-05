@@ -2,9 +2,9 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 
 import { paletteHue } from '../../../lib/identityHue';
 import type { MediaEngine } from '../../../lib/media/mediaEngine';
+import type { VideoAnchor } from '../../../lib/media/video/canvasRenderer';
 import { cn } from '../../../lib/utils';
 import { useNativeUnderlay } from '../../glass/stage/nativeUnderlay';
-import { CAMERA_ANCHOR } from '../../glass/stage/StagePeople';
 import { personState, type StagePerson } from '../../glass/stage/stageModel';
 import { SoundboardBurst } from '../../voice/SoundboardBurst';
 import { Wave } from '../card/Wave';
@@ -19,10 +19,8 @@ import { Avatar } from '../identity';
  * a third down so faces stay in frame), name and waveform bottom-left. The
  * talker wears the amber inner edge and glow.
  *
- * The video route is the Glass stage's camera tile, ported as is
- * (`StagePeople.tsx` `CameraTile`, with the native-video branch's rules): the
- * tile hands its `<canvas>` to `engine.subscribeVideo(..., { preferredTrackId:
- * 'camera', fit: 'cover', anchor })`. In the browser that is WebCodecs into the
+ * The tile hands its `<canvas>` to `engine.subscribeVideo(..., {
+ * preferredTrackId: 'camera', fit: 'cover', anchor })`. In the browser that is WebCodecs into the
  * canvas; in the desktop app it is a native surface under the page that
  * mirrors the canvas's box, and the canvas carries the surface's poster while
  * its hole is closed (a move, a dialog over it). The tile is the surface's
@@ -33,6 +31,17 @@ import { Avatar } from '../identity';
  * A camera is drawn from the call this client is in: before you join, a
  * camera tile shows the face where the picture will be.
  */
+
+/**
+ * Where a camera's crop falls when its picture is taller than its tile: about a
+ * third down, so people's faces stay in frame. A camera is a person sitting
+ * back from a screen; their face is in the upper part of the picture, and
+ * centering a 4:3 or portrait camera in a wide tile cuts it off at the
+ * forehead. The anchor is CSS `object-position`'s: 0.35 crops 35% of what has
+ * to go from the top and 65% from the bottom. A picture wider than its tile is
+ * cropped at the sides, which stay centered.
+ */
+const CAMERA_ANCHOR: Readonly<Required<VideoAnchor>> = { x: 0.5, y: 0.35 };
 
 export interface CallTileProps {
   person: StagePerson;

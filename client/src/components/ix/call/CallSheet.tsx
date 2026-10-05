@@ -267,7 +267,7 @@ export function CallSheet({ channelId, mode, children }: CallSheetProps) {
     }
   };
 
-  const exitFullScreen = () => useGlassStore.getState().setStageMode('side');
+  const exitFullScreen = () => useGlassStore.getState().setStageMode('main');
 
   return (
     <>

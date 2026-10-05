@@ -87,13 +87,13 @@ export function useGlassKeybinds({ enabled, phone, stream = true, onStop }: Glas
         case 'stop':
           event.preventDefault();
           // Theater steps back to main first; the next Esc closes the view.
-          if (glass.stage.mode === 'theater' && !phone) glass.setStageMode('side');
+          if (glass.stage.mode === 'theater' && !phone) glass.setStageMode('main');
           else onStop();
           return;
         case 'theater':
           if (phone) return;
           event.preventDefault();
-          glass.setStageMode(glass.stage.mode === 'theater' ? 'side' : 'theater');
+          glass.setStageMode(glass.stage.mode === 'theater' ? 'main' : 'theater');
           return;
         case 'chat':
           if (phone) return;

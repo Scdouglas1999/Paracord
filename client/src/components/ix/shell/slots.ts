@@ -84,7 +84,7 @@ export interface CardSlotProps {
  * ALWAYS mounted, so it can play its own open and close (§5.8) and decide when
  * to render nothing. Its host (`.ix-call-host`) is geometry only, pointer-events
  * none (the slot's root takes them back): over main at inset 10 while
- * `stage.mode` is 'side' (Index "main"), over the whole window at inset 10 in
+ * `stage.mode` is 'main', over the whole window at inset 10 in
  * 'theater'. The surface itself (radius 24, `--ix-call`, the call shadow) is the
  * slot's: `.ix-inset-surface` gives it.
  */

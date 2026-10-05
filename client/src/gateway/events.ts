@@ -62,9 +62,6 @@ export const GatewayEvents = {
   // How many people watch each stream in a voice channel (a complete snapshot
   // per channel; ambient viewers are never counted).
   VOICE_WATCHERS_UPDATE: 'VOICE_WATCHERS_UPDATE',
-  // Reactions on a stream (flame, heart), coalesced per voice channel; only
-  // the channel's members and the people watching it receive them.
-  STREAM_REACTIONS: 'STREAM_REACTIONS',
 
   // Invite events
   INVITE_CREATE: 'INVITE_CREATE',

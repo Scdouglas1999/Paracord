@@ -1,8 +1,8 @@
 /**
- * The sheets slot (owner: WP-G18). Contract: `SheetsProps` in
- * components/glass/shell/slots.ts. Mounted by the shell after the conversation
- * pane; it renders whichever sheet `glassStore.sheet` names as a solid page over
- * the pane (a full-screen page on a phone), and nothing when none is open.
+ * The sheets (docs/index-spec.md §6.1). Contract: `SheetsProps` in ./Sheets.tsx.
+ * Mounted by `SheetSlot` (components/ix/sheets) inside main; it renders
+ * whichever sheet `glassStore.sheet` names in the frame's sheet host (the whole
+ * screen on a phone), and nothing when none is open.
  *
  * To open one: `useGlassStore.getState().openSheet('search' | 'people' |
  * 'account' | 'channel' | 'server')`, or, for a page of the channel sheet,
@@ -10,7 +10,7 @@
  * 'notifications')`.
  */
 export { Sheets } from './Sheets';
-export type { SheetsProps } from '../shell/slots';
+export type { SheetsProps } from './Sheets';
 export { SheetFrame } from './SheetFrame';
 export type { SheetFrameProps } from './SheetFrame';
 export {

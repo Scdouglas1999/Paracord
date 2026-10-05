@@ -170,7 +170,6 @@ beforeEach(() => {
     speakingUsers: new Set(),
     watchers: new Map(),
     watchView: null,
-    ambientView: null,
     systemAudioCaptureActive: false,
     mediaEngine: null,
   });

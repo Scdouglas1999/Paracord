@@ -35,7 +35,7 @@ vi.mock('../../../stores/instanceStore', () => {
   const state = { getActiveMaxUploadSize: () => 50 * 1024 * 1024, fetchInstanceInfo: async () => undefined };
   return { useInstanceStore: (select: (value: typeof state) => unknown) => select(state) };
 });
-vi.mock('../../../lib/room/viewFrameSource', () => ({ createViewFrameSource: () => ({ getLatestFrame: async () => null }) }));
+vi.mock('../../../lib/media/viewFrameSource', () => ({ createViewFrameSource: () => ({ getLatestFrame: async () => null }) }));
 
 const runtimeStore = createStore(() => ({}));
 const TARGET = { serverId: 's1', guildId: 'g1', channelId: 'lounge', streamerId: '7', streamerName: 'Vincent' };

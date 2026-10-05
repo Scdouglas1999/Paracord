@@ -34,17 +34,12 @@ import { useVoiceStore } from '../stores/voiceStore';
 import { useRemoteSpeakingStore } from '../stores/remoteSpeakingStore';
 
 import { getAccountChannelView } from '../lib/channelView';
-import { displayName } from '../lib/displayName';
 import type { LocalCall } from '../lib/voice/speakingSource';
-import { accountScopeKey, entityScopeKey, type AccountScope } from '../lib/serverScope';
+import { accountScopeKey, entityScopeKey } from '../lib/serverScope';
 import {
-  aroundNowSentence,
-  countLightsOn,
-  hereNowCaption,
   orderBuildingsByBrightness,
   roomLitHistory,
   type BuildingLight,
-  type PersonLight,
   type RoomLight,
 } from '../lib/attention/light';
 import {
@@ -67,7 +62,6 @@ const CLOCK_INTERVAL_MS = 1_000;
 const NO_MEMBERS: Member[] = [];
 const NO_CHANNELS: LightChannel[] = [];
 const NO_ROOMS: RoomLight[] = [];
-const NO_PEOPLE: PersonLight[] = [];
 const NO_MESSAGES: Record<string, LightMessage[]> = {};
 
 /**
@@ -350,32 +344,6 @@ export function useRoomLights(guildId: string | null | undefined): RoomLight[] {
   return building?.rooms ?? NO_ROOMS;
 }
 
-/** One room's light. */
-export function useRoomLight(
-  guildId: string | null | undefined,
-  channelId: string | null | undefined,
-): RoomLight | null {
-  const rooms = useRoomLights(guildId);
-  return useMemo(
-    () => rooms.find((room) => room.channelId === channelId) ?? null,
-    [rooms, channelId],
-  );
-}
-
-/** One building's people, as light. */
-export function useBuildingPeople(guildId: string | null | undefined): PersonLight[] {
-  const building = useBuildingLight(guildId);
-  return useMemo(() => {
-    if (!building) return NO_PEOPLE;
-    const byId = new Map<string, PersonLight>();
-    for (const room of building.rooms) {
-      for (const occupant of room.occupants) byId.set(occupant.person.userId, occupant.person);
-      for (const reader of room.readers) byId.set(reader.person.userId, reader.person);
-    }
-    return [...byId.values()];
-  }, [building]);
-}
-
 /**
  * Every building on every connected server, brightest first (§7.1, §7.5).
  *
@@ -431,216 +399,3 @@ export function useBuildingLights(): BuildingLight[] {
   }, [guilds, channelsByGuild, channelsLoaded, members, membersLoaded, sources]);
 }
 
-/**
- * "+17 online" across every building (§7.3).
- *
- * Counted **per person, not per building**: somebody who is in three of your
- * buildings on one server is one person with their lights on, and summing the
- * per-building counts made Home claim three (and contradict the Around-now well
- * one line below it).
- *
- * A person visible through two *connected servers* is still two accounts as far
- * as the client can prove — the key is scoped to the account, so those stay
- * separate. When account linking lands, this is the single place that changes.
- */
-export function useLightsOnAcrossBuildings(buildings: readonly BuildingLight[]): number {
-  return useMemo(() => {
-    const lit = new Set<string>();
-    for (const building of buildings) {
-      const account = accountScopeKey(building.scope);
-      for (const person of building.people) {
-        if (person.level === 'on') lit.add(`${account}:${person.userId}`);
-      }
-    }
-    return lit.size;
-  }, [buildings]);
-}
-
-/** The one-sentence "Around now" summary for one building, or for all of them. */
-export function useAroundNow(
-  buildings: readonly BuildingLight[],
-  maxClauses = 3,
-  empty?: string,
-): string {
-  return useMemo(() => {
-    const rooms = buildings.flatMap((building) => building.rooms);
-    // Everybody the buildings can see — not just the people already standing in
-    // a room — so the sentence can say "away" and can say "is online"
-    // instead of denying a light the title bar is counting.
-    const byId = new Map<string, PersonLight>();
-    for (const building of buildings) {
-      for (const person of building.people) byId.set(person.userId, person);
-    }
-    for (const room of rooms) {
-      for (const occupant of room.occupants) byId.set(occupant.person.userId, occupant.person);
-      for (const reader of room.readers) byId.set(reader.person.userId, reader.person);
-    }
-    return aroundNowSentence({ rooms, people: [...byId.values()], maxClauses, empty });
-  }, [buildings, maxClauses, empty]);
-}
-
-export interface HereNow {
-  /** The people in this room right now — occupants, or readers. */
-  people: PersonLight[];
-  here: number;
-  /** How many people in the building have their lights on. */
-  lightsOn: number;
-  /** "4 here · 20 online" — the DOM text equivalent (§9). */
-  caption: string;
-}
-
-/** The lit strip in a room header (§7.2, §7.4). Never a docked member list. */
-export function useHereNow(
-  guildId: string | null | undefined,
-  channelId: string | null | undefined,
-): HereNow {
-  const building = useBuildingLight(guildId);
-  const scope = useCurrentAccountScope();
-  // A thread has no room of its own: it is part of the room it lives in.
-  const parentId = useChannelStore((state) =>
-    scope && channelId ? state.channelsById[entityScopeKey(scope, channelId)]?.parent_id ?? null : null,
-  );
-  return useMemo(() => {
-    const room = building?.rooms.find((entry) => entry.channelId === channelId)
-      ?? (parentId ? building?.rooms.find((entry) => entry.channelId === parentId) ?? null : null);
-    const present = room
-      ? room.kind === 'voice'
-        ? room.occupants.map((occupant) => occupant.person)
-        : room.readers.map((reader) => reader.person)
-      : [];
-    const everyone = new Map<string, PersonLight>();
-    for (const entry of building?.rooms ?? []) {
-      for (const occupant of entry.occupants) everyone.set(occupant.person.userId, occupant.person);
-      for (const reader of entry.readers) everyone.set(reader.person.userId, reader.person);
-    }
-    const lightsOn = building?.lightsOn ?? countLightsOn([...everyone.values()]);
-    return {
-      people: present,
-      here: present.length,
-      lightsOn,
-      caption: hereNowCaption(present.length, lightsOn),
-    };
-  }, [building, channelId, parentId]);
-}
-
-/** Somebody else on the call, for the on-air pill. */
-export interface OnAirPerson {
-  userId: string;
-  name: string;
-  speaking: boolean;
-}
-
-export interface OnAir {
-  room: RoomLight | null;
-  roomName: string;
-  /**
-   * A direct message rather than a room in a building. A DM has no
-   * `BuildingLight`, so the old label fell through to the literal "the room":
-   * the caller was told nothing about who they had rung.
-   */
-  isDirectMessage: boolean;
-  /**
-   * Everybody else on the call. Empty means nobody has joined yet — the one
-   * thing the caller of a DM most needs to know and previously could not tell.
-   */
-  others: OnAirPerson[];
-  /** Where the room is — "Kestrel Robotics". */
-  buildingName: string | null;
-  durationMs: number | null;
-  micOn: boolean;
-  deafened: boolean;
-  sharing: boolean;
-  /**
-   * Somebody in the room has the floor right now — you or anybody else.
-   * §5.1/§6.7: the pill's dot breathes only while this is true. A dot that
-   * breathes because a call is connected is decoration, and decoration does
-   * not move.
-   */
-  speaking: boolean;
-}
-
-/**
- * The on-air pill's model (§7.7): you are in a room and looking at something
- * else.
- */
-export function useOnAir(): OnAir | null {
-  const scope = useCurrentAccountScope();
-  const channelId = useVoiceStore((state) => state.channelId);
-  const guildId = useVoiceStore((state) => state.guildId);
-  const connected = useVoiceStore((state) => state.connected);
-  const selfMute = useVoiceStore((state) => state.selfMute);
-  const selfDeaf = useVoiceStore((state) => state.selfDeaf);
-  const selfStream = useVoiceStore((state) => state.selfStream);
-  const speakingUsers = useVoiceStore((state) => state.speakingUsers);
-  const participants = useVoiceStore((state) => state.participants);
-  const selfUserId = useAuthStore((state) => state.user?.id ?? null);
-  const building = useBuildingLight(guildId);
-  const channel = useChannelStore((state) =>
-    scope && channelId ? (getAccountChannelView(scope, state).channelsById[channelId] ?? null) : null,
-  );
-  const isDirectMessage = guildId === 'dm';
-  // A DM's duration has no `RoomLight` to come from, so it uses the same
-  // observation log §7.2 uses for a room: time since *this* client saw the call
-  // lit, never a guess. Without it the readout sat at a frozen 0:00.
-  const nowMs = useLightClock(connected);
-  const litSinceMs =
-    scope && channelId && isDirectMessage
-      ? roomLitHistory.observe(entityScopeKey(scope, channelId), connected, nowMs).litSinceMs
-      : null;
-
-  return useMemo(() => {
-    if (!connected || !channelId) return null;
-    const room = building?.rooms.find((entry) => entry.channelId === channelId) ?? null;
-    const dmPersonName = (userId: string): string | null => {
-      const person = channel?.recipients?.find((candidate) => candidate.id === userId)
-        ?? (channel?.recipient?.id === userId ? channel.recipient : null);
-      return person ? displayName(person) : null;
-    };
-    const others: OnAirPerson[] = room
-      ? room.occupants
-          .filter((occupant) => occupant.person.userId !== selfUserId)
-          .map((occupant) => ({
-            userId: occupant.person.userId,
-            name: occupant.person.name,
-            speaking: occupant.speaking,
-          }))
-      : [...participants.values()]
-          .filter((state) => state.user_id !== selfUserId)
-          .map((state) => ({
-            userId: state.user_id,
-            // A DM voice state carries no username (`routes/dms.rs` announces the
-            // call, not the person), so `displayName` fell through to "Unknown
-            // user" and the chip showed a "U" for the friend it had just named
-            // in the same sentence. The conversation already knows who they are.
-            name: dmPersonName(state.user_id) ?? displayName(state),
-            speaking: speakingUsers.has(state.user_id),
-          }));
-    const dmName = channel?.name
-      ?? (channel?.recipient ? displayName(channel.recipient) : null)
-      ?? (channel?.recipients?.length
-        ? channel.recipients.filter((person) => person.id !== selfUserId).map((person) => displayName(person)).join(', ')
-        : null)
-      // The channel may not be loaded on this surface yet; the call itself
-      // still knows who answered.
-      ?? (others.length ? others.map((person) => person.name).join(', ') : null);
-    return {
-      room,
-      roomName: room?.name
-        ?? (isDirectMessage ? (dmName ?? 'this conversation') : (channel?.name ?? 'the channel')),
-      isDirectMessage,
-      others,
-      buildingName: building?.name ?? null,
-      durationMs: room?.durationMs ?? (litSinceMs != null ? Math.max(0, nowMs - litSinceMs) : null),
-      micOn: !selfMute,
-      deafened: selfDeaf,
-      sharing: selfStream,
-      speaking: speakingUsers.size > 0,
-    };
-  }, [connected, channelId, building, channel, isDirectMessage, participants, selfUserId,
-    litSinceMs, nowMs, selfMute, selfDeaf, selfStream, speakingUsers]);
-}
-
-/** Test seam: the account key a hook is scoped to. */
-export function accountKeyOf(scope: AccountScope | null): string | null {
-  return scope ? accountScopeKey(scope) : null;
-}

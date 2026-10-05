@@ -110,6 +110,12 @@ describe('messageLine and inboxNewestLine', () => {
     expect(messageLine(message({ author: { id: 'me', username: 'sean', display_name: 'Sean' } }), 'me')).toBe('You: need one for ranked');
   });
 
+  it('reads a mention of you as "@you" and one of somebody it does not know as "@someone"', () => {
+    expect(messageLine(message({ content: '<@42> look at this' }), '42')).toBe('Maya: @you look at this');
+    expect(messageLine(message({ content: '<@43> look at this' }), '42')).toBe('Maya: @someone look at this');
+    expect(messageLine(message({ content: '<@42> look at this' }), null)).toBe('Maya: @someone look at this');
+  });
+
   it('words media with no text as what was posted', () => {
     const photos = message({
       content: '',

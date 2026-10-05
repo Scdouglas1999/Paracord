@@ -52,15 +52,12 @@ import { presenceLight } from '../lib/presence';
 import { toast } from '../stores/toastStore';
 import {
   bloom,
-  buildingIsDim,
   changeLights,
   clearVoiceLevels,
   dim,
-  dimBuilding,
   flicker,
   press,
   publishVoiceLevels,
-  relightBuilding,
   RollingNumber,
   settleIn,
   springEasing,
@@ -68,7 +65,6 @@ import {
   SPEAKING_MARK,
   stagger,
   supportsLinearEasing,
-  transitionWith,
   useFlipList,
   usePresence,
   useReducedMotion,
@@ -76,7 +72,6 @@ import {
 import { cn } from '../lib/utils';
 import { useMobile } from '../hooks/useMobile';
 import { useUIStore } from '../stores/uiStore';
-import { GlassShowcase } from '../components/glass/primitives/GlassShowcase';
 import { IndexShowcase } from '../components/ix/primitives/IndexShowcase';
 
 /**
@@ -174,16 +169,6 @@ const LIGHTS = ['--light-white', '--light-amber', '--accent-primary'];
 const SEMANTIC = ['--accent-danger', '--accent-warning', '--accent-info', '--danger-well'];
 const TEXT_RAMP = ['--text-primary', '--text-body-ink', '--text-secondary', '--text-muted', '--text-faint'];
 const ON_FILLS = ['--text-on-light', '--text-on-accent', '--text-on-danger'];
-const AVATARS = [
-  '--color-avatar-1',
-  '--color-avatar-2',
-  '--color-avatar-3',
-  '--color-avatar-4',
-  '--color-avatar-5',
-  '--color-avatar-6',
-  '--color-avatar-7',
-  '--color-avatar-8',
-];
 const DEPTH = ['--shadow-plate', '--shadow-well', '--shadow-raised', '--shadow-lifted', '--shadow-composer', '--shadow-chip', '--shadow-tile'];
 const GLOWS = ['--ring-lit', '--ring-speaking', '--ring-lit-plate', '--glow-light-fill', '--glow-control-on', '--glow-window-white', '--glow-window-amber'];
 
@@ -270,7 +255,7 @@ function LightSection() {
               <span className={light.dnd ? 'pc-dnd rounded-full' : undefined}>
                 <span
                   className={`${light.avatarClass} pc-display flex h-10 w-10 items-center justify-center rounded-full text-meta font-bold text-text-on-light`}
-                  style={{ background: 'var(--color-avatar-1)' }}
+                  style={{ background: 'var(--bg-mod-strong)' }}
                   aria-hidden
                 >
                   MO
@@ -283,7 +268,7 @@ function LightSection() {
         <div className="flex w-[9rem] flex-col items-center gap-2">
           <span
             className="pc-speaking pc-display flex h-10 w-10 items-center justify-center rounded-full text-meta font-bold text-text-on-light"
-            style={{ background: 'var(--color-avatar-2)' }}
+            style={{ background: 'var(--bg-mod-strong)' }}
             aria-hidden
           >
             PR
@@ -628,7 +613,7 @@ function ThemePreview({ theme, label }: { theme: string; label: string }) {
       <Raised bare className="flex items-center gap-2 p-2">
         <span
           className="pc-lit pc-display flex h-6 w-6 items-center justify-center rounded-full text-[9px] font-bold text-text-on-light"
-          style={{ background: 'var(--color-avatar-3)' }}
+          style={{ background: 'var(--bg-mod-strong)' }}
           aria-hidden
         />
         <span className="text-meta text-text-secondary">Mara · online</span>
@@ -748,10 +733,7 @@ function MotionSection() {
   const settleRef = useRef<HTMLDivElement>(null);
   const pressRef = useRef<HTMLButtonElement>(null);
   const staggerRef = useRef<HTMLDivElement>(null);
-  const stageRef = useRef<HTMLDivElement>(null);
   const [rolled, setRolled] = useState(4);
-  const [walkedIn, setWalkedIn] = useState(false);
-  const [engine, setEngine] = useState<string | null>(null);
   const [order, setOrder] = useState(REORDER_ROWS);
   const reorderRef = useFlipList<HTMLDivElement>();
   // WP9d: the reaction pop row, the writing pulse, and a plate from its edge.
@@ -763,7 +745,6 @@ function MotionSection() {
   const platePresence = usePresence(plateOpen);
   const [speaking, setSpeaking] = useState(0);
   const [lightsEngine, setLightsEngine] = useState<string | null>(null);
-  const [dark, setDark] = useState(false);
   const themeOf = useUIStore((state) => state.theme);
   const setThemeOf = useUIStore((state) => state.setTheme);
 
@@ -773,22 +754,6 @@ function MotionSection() {
       engine: force ?? 'auto',
       applied: () => document.documentElement.getAttribute('data-theme') === next,
     }).then((result) => setLightsEngine(result.engine));
-  };
-
-  const cutPower = () => {
-    if (buildingIsDim()) {
-      void relightBuilding().then(() => setDark(false));
-      return;
-    }
-    dimBuilding();
-    setDark(true);
-  };
-
-  const walk = (force?: 'flip') => {
-    void transitionWith(() => setWalkedIn((value) => !value), {
-      root: stageRef.current ?? undefined,
-      engine: force ?? 'auto',
-    }).then((result) => setEngine(result.engine));
   };
 
   return (
@@ -1008,18 +973,6 @@ function MotionSection() {
           <SpeakingRingDemo take={speaking} />
         </Recipe>
 
-        <Recipe
-          id="motion-outage"
-          name="The power goes"
-          tokens="--duration-dim · --ease-in / --ease-out"
-          model="A gateway that is away is drawn on the whole server: it dims 30% and holds there until it is back. Never a spinner — a spinner says wait; going dark says what is true."
-          onPlay={cutPower}
-        >
-          <span className="text-meta text-text-faint">
-            {dark ? 'The lights are out. Replay brings them back.' : 'The lights are on.'}
-          </span>
-        </Recipe>
-
         <div
           id="motion-lights-change"
           className="flex min-w-0 flex-col gap-3 rounded-[var(--radius-card)] bg-bg-well p-4 shadow-[var(--shadow-well)]"
@@ -1034,10 +987,9 @@ function MotionSection() {
             </span>
           </div>
           <p className="text-meta leading-relaxed text-text-faint">
-            Changing the theme is the lights changing: the whole shell crosses over
-            <code className="pc-mono"> --duration-dim</code>, and the windows, lamps and rims
-            re-bloom once the new ground has settled. View Transitions where the webview has
-            them, a crossfade everywhere else.{' '}
+            Changing the theme crosses the whole shell over
+            <code className="pc-mono"> --duration-dim</code>. View Transitions where the webview
+            has them, a crossfade everywhere else.{' '}
             {lightsEngine && <span className="text-text-secondary">Last run: {lightsEngine}.</span>}
           </p>
           <div className="flex flex-wrap gap-2">
@@ -1050,56 +1002,6 @@ function MotionSection() {
           </div>
         </div>
 
-        <div
-          id="motion-shared"
-          className="flex min-w-0 flex-col gap-3 rounded-[var(--radius-card)] bg-bg-well p-4 shadow-[var(--shadow-well)] sm:col-span-2"
-        >
-          <div className="flex items-baseline gap-2">
-            <span className="pc-display text-name text-text-primary">Shared element</span>
-            <code className="pc-mono ml-auto shrink-0 text-meta text-text-faint">
-              --duration-move · --ease-out · --stagger-chrome
-            </code>
-          </div>
-          <div ref={stageRef} className="relative min-h-[9rem] overflow-hidden rounded-[var(--radius-well)] bg-bg-base p-3">
-            {walkedIn ? (
-              <div className="flex flex-col gap-2">
-                <div
-                  data-motion-shared="tokens-room"
-                  className="h-20 w-full rounded-[var(--radius-card)] bg-bg-raised shadow-[var(--ring-lit-plate)]"
-                />
-                <div data-motion-chrome className="flex gap-2">
-                  {[0, 1, 2].map((index) => (
-                    <span key={index} className="h-5 flex-1 rounded-[var(--radius-window)] bg-bg-raised" />
-                  ))}
-                </div>
-                <div data-motion-chrome className="h-7 w-24 self-center rounded-[var(--radius-control)] bg-bg-raised" />
-              </div>
-            ) : (
-              <div className="flex gap-2">
-                <div
-                  data-motion-shared="tokens-room"
-                  className="h-24 w-28 rounded-[var(--radius-card)] bg-bg-raised shadow-[var(--ring-lit-plate)]"
-                />
-                <div className="h-24 flex-1 rounded-[var(--radius-card)] bg-bg-plate" />
-              </div>
-            )}
-          </div>
-          <p className="text-meta leading-relaxed text-text-faint">
-            The thing you click becomes the thing you look at: the lit card moves from the Lobby to
-            the Stage and the supporting chrome rises 80ms later, staggered. View Transitions where
-            the webview has them, a Web Animations FLIP everywhere else — the same choreography on
-            both, which is why both buttons are here.{' '}
-            {engine && <span className="text-text-secondary">Last run: {engine}.</span>}
-          </p>
-          <div className="flex flex-wrap gap-2">
-            <Button variant="secondary" size="sm" onClick={() => walk()}>
-              {walkedIn ? 'Back to the Lobby' : 'Walk into the channel'}
-            </Button>
-            <Button variant="ghost" size="sm" onClick={() => walk('flip')}>
-              {walkedIn ? 'Back to the Lobby (FLIP)' : 'Walk into the channel (FLIP)'}
-            </Button>
-          </div>
-        </div>
       </div>
     </Section>
   );
@@ -1124,14 +1026,6 @@ export default function DesignTokensPage() {
           blurb="The interface docs/index-spec.md describes: ground, ink and cream tokens, a window tint from one hue, flat tonal avatars and server marks with a lighter letter and a hairline, presence as ink, the primitives and the glyph set. Drawn on Index's own ground, in the default theme and in High contrast."
         >
           <IndexShowcase />
-        </Section>
-
-        <Section
-          id="glass"
-          title="Glass"
-          blurb="The interface docs/glass-spec.md describes, and what the default theme resolves to. Content is solid, controls are glass; what is live behind the panes supplies a ~5% tint to every surface (one channel triplet, mixed into neutral steps). Both reference tints are shown side by side."
-        >
-          <GlassShowcase />
         </Section>
 
         <Section
@@ -1197,7 +1091,6 @@ export default function DesignTokensPage() {
         >
           <TokenGrid names={TEXT_RAMP} kind="ink" />
           <TokenGrid names={ON_FILLS} kind="ink" />
-          <TokenGrid names={AVATARS} kind="fill" />
         </Section>
 
         <Section id="type" title="Type" blurb="Gabarito for names and titles, Onest for everything else, JetBrains Mono for meta. Tabular numerals everywhere a number can change.">

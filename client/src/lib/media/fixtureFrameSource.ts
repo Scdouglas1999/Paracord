@@ -1,14 +1,14 @@
 /**
- * A looping canvas scene that stands in for a live stream, so the stream tile,
- * the stage, the ambient spill and room light can be reviewed without a media
- * server (docs/design/glass-plan.md WP-G2, §5.1 "Mocked states").
+ * A looping canvas scene that stands in for a live stream, so the stream tile
+ * and the call view can be reviewed without a media server (the review
+ * harness, `e2e/fixtures/index/call.ts`).
  *
  * DEV ONLY. Nothing may import this statically. A consumer reaches it the same
- * way `App.tsx` reaches `StagePreviewPage`, so Rollup folds it to `null` and the
+ * way `App.tsx` reaches `IxCardsGallery`, so Rollup folds it to `null` and the
  * module never ships:
  *
  *   const fixtureFrames = import.meta.env.DEV
- *     ? () => import('@/lib/room/fixtureFrameSource')
+ *     ? () => import('@/lib/media/fixtureFrameSource')
  *     : null;
  *
  * As a second line of defence, `createFixtureFrameSource` throws outside a DEV

@@ -2,13 +2,8 @@ import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
-  useAroundNow,
   useBuildingLight,
   useBuildingLights,
-  useHereNow,
-  useLightsOnAcrossBuildings,
-  useOnAir,
-  useRoomLight,
 } from './useLights';
 import { useAuthStore } from '../stores/authStore';
 import { useChannelStore } from '../stores/channelStore';
@@ -194,72 +189,7 @@ describe('useBuildingLight', () => {
   });
 });
 
-describe('useRoomLight and useHereNow', () => {
-  it('finds one room and names who is in it', () => {
-    act(() => {
-      useVoiceStore.setState({
-        channelParticipants: new Map([
-          ['v1', [voiceState({ user_id: '1' }), voiceState({ user_id: '2' })]],
-        ]),
-        // You are in this call: its engine's flags are the speaking truth.
-        speakingUsers: new Set(['1']),
-        connected: true,
-        callScope: SCOPE,
-        guildId: GUILD,
-        channelId: 'v1',
-      });
-    });
-    const { result } = renderHook(() => useRoomLight(GUILD, 'v1'));
-    expect(result.current?.occupants.map((occupant) => occupant.person.name)).toEqual([
-      'mara',
-      'priya',
-    ]);
-    expect(result.current?.talkingCount).toBe(1);
-  });
-
-  it('shows who is talking in a call you are not in, from the relayed signal', () => {
-    act(() => {
-      useVoiceStore.setState({
-        channelParticipants: new Map([
-          ['v1', [voiceState({ user_id: '1' }), voiceState({ user_id: '2' })]],
-        ]),
-      });
-      useRemoteSpeakingStore.getState().applyUpdate({
-        guild_id: GUILD, channel_id: 'v1', user_id: '2', speaking: true,
-      });
-    });
-    const { result } = renderHook(() => useRoomLight(GUILD, 'v1'));
-    expect(result.current?.occupants.filter((o) => o.speaking).map((o) => o.person.name)).toEqual(['priya']);
-    expect(result.current?.occupants.find((o) => o.person.name === 'priya')?.person.speaking).toBe(true);
-
-    act(() => {
-      useRemoteSpeakingStore.getState().applyUpdate({
-        guild_id: GUILD, channel_id: 'v1', user_id: '2', speaking: false,
-      });
-    });
-    expect(result.current?.talkingCount).toBe(0);
-  });
-
-  it('writes the here-now caption', () => {
-    act(() => {
-      useVoiceStore.setState({
-        channelParticipants: new Map([['v1', [voiceState({ user_id: '1' })]]]),
-      });
-    });
-    const { result } = renderHook(() => useHereNow(GUILD, 'v1'));
-    expect(result.current.here).toBe(1);
-    expect(result.current.lightsOn).toBe(2);
-    expect(result.current.caption).toBe('1 here · 2 online');
-  });
-
-  it('reports an empty room without pretending anybody is there', () => {
-    const { result } = renderHook(() => useHereNow(GUILD, 'v2'));
-    expect(result.current.people).toEqual([]);
-    expect(result.current.caption).toBe('0 here · 2 online');
-  });
-});
-
-describe('useServerLights across servers', () => {
+describe('useBuildingLights across servers', () => {
   it('orders servers brightest first', () => {
     act(() => {
       useGuildStore.getState().setGuilds(
@@ -278,48 +208,6 @@ describe('useServerLights across servers', () => {
       'Kestrel Robotics',
       'Saltmarsh Sailing',
     ]);
-  });
-
-  it('sums who is online across every server', () => {
-    const { result } = renderHook(() => {
-      const buildings = useBuildingLights();
-      return useLightsOnAcrossBuildings(buildings);
-    });
-    expect(result.current).toBe(2);
-  });
-
-  it('writes one "Around now" sentence for everything that is lit', () => {
-    act(() => {
-      useVoiceStore.setState({
-        channelParticipants: new Map([['v1', [voiceState({ user_id: '1' })]]]),
-      });
-    });
-    const { result } = renderHook(() => useAroundNow(useBuildingLights()));
-    expect(result.current).toBe('mara is in Shop floor · ren is away');
-  });
-
-  it('names the lights that are on when nobody is in a room', () => {
-    // The title bar counts mara and priya; the well one line below it must not
-    // answer "Nobody's lights are on right now".
-    const { result } = renderHook(() => useAroundNow(useBuildingLights()));
-    expect(result.current).toBe('mara and priya are online · ren is away');
-  });
-
-  it('stays in the metaphor when nothing is lit', () => {
-    act(() => {
-      usePresenceStore.getState().setPresences(
-        [
-          { user_id: '1', status: 'offline', activities: [] },
-          { user_id: '2', status: 'offline', activities: [] },
-          { user_id: '3', status: 'offline', activities: [] },
-        ],
-        SERVER,
-      );
-    });
-    const { result } = renderHook(() =>
-      useAroundNow(useBuildingLights(), 3, 'Nobody is around'),
-    );
-    expect(result.current).toBe('Nobody is around');
   });
 
   it('says it has not looked rather than claiming a server is empty', () => {
@@ -343,88 +231,5 @@ describe('useServerLights across servers', () => {
     expect(kestrel?.rosterKnown).toBe(true);
   });
 
-  it('counts a person in two servers on one server once', () => {
-    act(() => {
-      useGuildStore.getState().setGuilds(
-        [
-          { id: GUILD, name: 'Kestrel Robotics', owner_id: 'viewer', member_count: 61, created_at: '' },
-          { id: 'g2', name: 'Saltmarsh Sailing', owner_id: 'viewer', member_count: 12, created_at: '' },
-        ],
-        SCOPE,
-      );
-      useMemberStore.setState({
-        members: new Map([
-          [entityScopeKey(SCOPE, GUILD), [member('1', 'mara')]],
-          [entityScopeKey(SCOPE, 'g2'), [member('1', 'mara')]],
-        ]),
-        membersLoaded: {
-          [entityScopeKey(SCOPE, GUILD)]: true,
-          [entityScopeKey(SCOPE, 'g2')]: true,
-        },
-      });
-      useChannelStore.getState().setChannels('g2', [], SCOPE);
-    });
-    const { result } = renderHook(() => useLightsOnAcrossBuildings(useBuildingLights()));
-    expect(result.current).toBe(1);
-  });
-});
 
-describe('useOnAir', () => {
-  it('is null until you are actually in a room', () => {
-    const { result } = renderHook(() => useOnAir());
-    expect(result.current).toBeNull();
-  });
-
-  it('names the room, the server and the mic state', () => {
-    act(() => {
-      useVoiceStore.setState({
-        connected: true,
-        channelId: 'v1',
-        guildId: GUILD,
-        selfMute: true,
-        channelParticipants: new Map([['v1', [voiceState({ user_id: 'viewer' })]]]),
-      });
-    });
-    const { result } = renderHook(() => useOnAir());
-    expect(result.current).toMatchObject({
-      roomName: 'Shop floor',
-      buildingName: 'Kestrel Robotics',
-      micOn: false,
-      sharing: false,
-    });
-  });
-
-  // A DM voice state carries no username — the server announces the call, not
-  // the person (`routes/dms.rs`) — so `displayName` fell through to "Unknown
-  // user" and the chip drew a "U" beside the friend's own name.
-  it('names a direct-message caller from the conversation, not "Unknown user"', () => {
-    act(() => {
-      useChannelStore.getState().setChannels(
-        'dm',
-        [chan({
-          id: 'd1', type: ChannelType.DM, guild_id: undefined,
-          recipients: [
-            { id: 'viewer', username: 'viewer' },
-            { id: 'ada', username: 'ada', display_name: 'Ada Lovelace' },
-          ],
-        } as never)],
-        SCOPE,
-      );
-      useVoiceStore.setState({
-        connected: true,
-        channelId: 'd1',
-        guildId: 'dm',
-        participants: new Map([
-          ['viewer', voiceState({ user_id: 'viewer', guild_id: undefined })],
-          ['ada', voiceState({ user_id: 'ada', guild_id: undefined })],
-        ]),
-        channelParticipants: new Map(),
-      });
-    });
-    const { result } = renderHook(() => useOnAir());
-    expect(result.current?.isDirectMessage).toBe(true);
-    expect(result.current?.others).toEqual([
-      { userId: 'ada', name: 'Ada Lovelace', speaking: false },
-    ]);
-  });
 });

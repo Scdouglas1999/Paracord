@@ -1,27 +1,23 @@
 /**
- * The stage as data (docs/glass-spec.md §6, §6.1).
+ * The call view as data (docs/index-spec.md §7).
  *
  * Pure functions and plain types: who is in the channel being watched and what
- * each person is doing, who gets a camera tile and who a chip, what the stream's
- * overlay says, which control set the row shows, and how the pane's height is
- * shared between the stream and the people row. Nothing here reads a store or
- * renders; `useStageData.ts` feeds it and the components draw what it returns.
+ * each person is doing, who has a camera, what the stream's overlay says and
+ * which control set applies. Nothing here reads a store or renders;
+ * `useStageData.ts` feeds it and the call view (`components/ix/call`) draws what
+ * it returns.
  *
- * WHO GOES WHERE (§6.1):
- *   - a camera tile for everyone who joined with their camera on (equal widths);
- *   - a 200x52 chip, in a column at the end of the row, for everyone else in the
- *     channel: joined without a camera, listening in, and you.
- *   Others come first in the server's order, then you, the way the reference
- *   draws it ("Nick", then "You").
+ * WHO GOES WHERE: everyone who joined with their camera on has a camera tile;
+ * everyone else in the channel (joined without a camera, listening in, and you)
+ * is a chip. Others come first in the server's order, then you.
  *
  * The person being watched is kept even after they leave the channel, so the
  * overlay can still say whose stream this was ("Vincent stopped sharing").
  *
  * THE CALL ITSELF (`target.streamerId === null`, `view: 'call'`): nobody's
- * screen is on the stage. The people take the stage (camera tiles fill it,
- * chips at the end), the title is the call's name and the subtitle says who is
- * in it; the row keeps the call's controls and drops the stream's (reactions,
- * Clip). A direct message call (`target.guildId === null`) is named for the
+ * screen is on the stage. The people take the stage, the title is the call's
+ * name and the subtitle says who is in it; the controls drop the stream's
+ * (Clip). A direct message call (`target.guildId === null`) is named for the
  * people in it, and has no server.
  */
 
@@ -212,7 +208,7 @@ export function watchingLabel(count: number): string | null {
 
 /* ---- The watch, as the overlay tells it ------------------------------------- */
 
-export type WatchPhase = 'starting' | 'connecting' | 'live' | 'paused' | 'blocked' | 'ended' | 'failed';
+export type WatchPhase = 'starting' | 'connecting' | 'live' | 'ended' | 'failed';
 
 export interface WatchNotice {
   /** What the stream area says instead of a picture; null while frames can show. */
@@ -252,10 +248,6 @@ export function watchNotice(args: {
       return args.hasPicture
         ? { text: null, retry: false, pending: false }
         : { text: `Waiting for ${whose}…`, retry: false, pending: true };
-    case 'paused':
-      return { text: 'Paused while the window is hidden.', retry: false, pending: true };
-    case 'blocked':
-      return { text: 'Another view on this account is holding the stream.', retry: true, pending: false };
     case 'ended':
       if (args.endReason === 'superseded') {
         return { text: 'You started watching on another device.', retry: true, pending: false };
@@ -267,61 +259,4 @@ export function watchNotice(args: {
     case 'failed':
       return { text: args.error ?? `Could not open ${whose}.`, retry: true, pending: false };
   }
-}
-
-/* ---- Geometry ----------------------------------------------------------------- */
-
-/** §6.1 and the prototype's side-by-side numbers (GlassV14Side.dc.html). */
-export const STAGE_INSET = 12;
-export const STAGE_GAP = 12;
-export const STAGE_CONTROLS_H = 64;
-/** The smallest people row that still reads as faces and names. */
-export const STAGE_ROW_MIN = 120;
-export const STAGE_CHIP_H = 52;
-export const STAGE_CHIP_GAP = 8;
-
-export interface StageGeometry {
-  /** The stream box: 16:9, as wide as the pane allows (minus 24), shrunk only when the height is short. */
-  streamW: number;
-  streamH: number;
-  /** The people row under it (0 when nobody is in the row). */
-  rowH: number;
-}
-
-/**
- * Share the pane between the stream, the people row and the controls. The
- * stream takes the full width minus 24 at 16:9 whenever the height allows (at
- * 972x868 that is 948x533 and a 223px row, the reference); a short window
- * shrinks the stream, never the row below its minimum.
- */
-export function stageGeometry(args: { width: number; height: number; cameras: number; chips: number }): StageGeometry {
-  const innerW = Math.max(0, args.width - 2 * STAGE_INSET);
-  const hasRow = args.cameras > 0 || args.chips > 0;
-  const chipColumn = args.chips > 0 ? args.chips * STAGE_CHIP_H + (args.chips - 1) * STAGE_CHIP_GAP : 0;
-  const rowMin = !hasRow ? 0 : args.cameras > 0 ? STAGE_ROW_MIN : Math.min(chipColumn, STAGE_ROW_MIN);
-  const avail = Math.max(
-    0,
-    args.height - 2 * STAGE_INSET - STAGE_CONTROLS_H - STAGE_GAP - (hasRow ? STAGE_GAP : 0),
-  );
-  const byWidth = Math.round((innerW * 9) / 16);
-  const streamH = Math.max(0, Math.min(byWidth, avail - rowMin));
-  const streamW = streamH === byWidth ? innerW : Math.round((streamH * 16) / 9);
-  return { streamW, streamH, rowH: hasRow ? Math.max(0, avail - streamH) : 0 };
-}
-
-/**
- * How much of the control row fits (§5's "give up in order", applied to the
- * stage): 0 everything; 1 Clip keeps its glyph and loses its label; 2 flame and
- * heart move into More. Measured against the pane's inner width.
- */
-export type ControlsFit = 0 | 1 | 2;
-
-export function controlsFit(innerWidth: number, controls: 'joined' | 'not-joined', view: 'stream' | 'call' = 'stream'): ControlsFit {
-  // The call itself draws no reactions and no Clip: nothing to give up.
-  if (view === 'call') return 0;
-  // Widths of the full rows at 44px buttons, 10px gaps (the prototype's).
-  const full = controls === 'joined' ? 640 : 420;
-  if (!(innerWidth > 0) || innerWidth >= full) return 0;
-  if (innerWidth >= full - 48) return 1;
-  return 2;
 }

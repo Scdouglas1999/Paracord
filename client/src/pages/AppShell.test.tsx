@@ -6,7 +6,7 @@ import { AppShell } from './AppShell';
 import { useUIStore } from '../stores/uiStore';
 import { useVoiceStore } from '../stores/voiceStore';
 import { useGlassStore } from '../stores/glassStore';
-import { usePhoneNavStore } from '../components/glass/shell';
+import { usePhoneNavStore } from '../components/glass/shell/phoneNav';
 import { useIxPlaceStore } from '../components/ix/shell';
 import { useMobile } from '../hooks/useMobile';
 import { useEdgeSwipe } from '../components/ix/shell/phone/useEdgeSwipe';
@@ -64,7 +64,6 @@ vi.mock('./SettingsPage', () => ({
 vi.mock('./GuildSettingsPage', () => ({
   GuildSettingsPage: () => <div data-testid="guild-settings-page" />,
 }));
-vi.mock('../components/motion/MotionDirector', () => ({ MotionDirector: () => null }));
 vi.mock('../components/voice/together/TogetherHost', () => ({ TogetherHost: () => null }));
 
 // Side-effectful hooks that touch window/DOM — no-op them so the frame renders.
@@ -264,7 +263,7 @@ describe('AppShell', () => {
     expect(host).toBeEmptyDOMElement();
 
     act(() => useGlassStore.getState().openStage(LOUNGE));
-    expect(frameOf(container)).toHaveAttribute('data-stage', 'side');
+    expect(frameOf(container)).toHaveAttribute('data-stage', 'main');
     const surface = screen.getByRole('region', { name: 'Call: lounge' });
     expect(host).toContainElement(surface);
     expect(surface).toHaveClass('ix-inset-surface');

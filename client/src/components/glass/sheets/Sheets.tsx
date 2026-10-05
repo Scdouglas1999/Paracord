@@ -5,7 +5,6 @@ import { useCurrentChannelStore } from '../../../hooks/useChannels';
 import { useGlassStore, type GlassSheet } from '../../../stores/glassStore';
 import { useUIStore } from '../../../stores/uiStore';
 import { SearchOverlay } from '../../layout/overlays/SearchOverlay';
-import type { SheetsProps } from '../shell/slots';
 import { ChannelSheet } from './ChannelSheet';
 import { PeopleSheet } from './PeopleSheet';
 import { RemindersSheet } from './RemindersSheet';
@@ -35,6 +34,14 @@ import { closeSheets, openForContextMode, restoreSheetTrigger, useSheetPages } f
  * conversation (the page under it changes, so a sheet left over it would stay
  * about the old one). On a phone the sheet is the whole screen.
  */
+
+export interface SheetsProps {
+  /** The route's server and channel (either may be null: a direct message has no server). */
+  guildId: string | null;
+  channelId: string | null;
+  /** `phone` makes a sheet the whole screen; anything else is the frame's sheet host. */
+  layout: 'wide' | 'phone';
+}
 
 type Shown = 'search' | 'people' | 'channel' | 'reminders' | null;
 
