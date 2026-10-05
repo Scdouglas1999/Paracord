@@ -1,5 +1,12 @@
 # Glass: what shipped
 
+> **Glass was replaced by Index** (2026-10-04, branch `feat/index-ui`): see
+> [`index-summary.md`](index-summary.md) for what is built and where it lives, and
+> [`docs/index-spec.md`](../index-spec.md) for the contract. IX-19 deleted the
+> Glass frame, places panel, call pill, room light, stage shells, Home, the Glass
+> e2e specs and the Glass CSS that nothing uses. This page stays as the record of
+> what Glass shipped; its follow-up lists are history.
+
 Branch `design/glass`, based on `main` at `c10eb4da`. Contract:
 [`docs/glass-spec.md`](../glass-spec.md). Plan:
 [`glass-plan.md`](glass-plan.md). This page summarizes the checkpoints; each

@@ -80,8 +80,9 @@ runtime, nothing falls back.
   (`media_set_stream_visibility`). A tile merely covered (a dialog, a stage
   move) keeps decoding with its surface hidden. A resumed decoder drops deltas
   until the keyframe it asks for.
-- Everything in the page that needs a picture of a video (room light, the
-  stage's glow, the pill's preview, tile posters, clip thumbnails) reads stills:
+- Everything in the page that needs a picture of a video (tile posters, clip
+  thumbnails) reads stills (room light, the stage's glow and the pill's preview
+  are retired, docs/index-spec.md §12):
   `native_render_still { streamId, trackId, maxWidth, maxHeight, afterSeq? }`,
   binary RGBA of the latest presented frame (§3.6).
 

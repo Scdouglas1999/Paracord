@@ -217,8 +217,8 @@ surface `0 0 0 1px rgba(255,255,255,.07), 0 30px 70px rgba(0,0,0,.55)`.
 24×24, stroke 1.7, round caps and joins (the prototype's set). Speaker (rooms),
 mic, camera, screen, x, search, people, dots, invite (person-plus), plan
 (calendar), hello (speech), attach, poll, event, send (arrow up), plus. The
-Glass verb glyphs (listen, watch, clip, flame, theater) stay for the call view
-and are restroked to 1.7.
+Glass verb glyphs (listen, watch, clip, theater) stay for the call view and are
+restroked to 1.7; the flame stays as the line mark a message's 🔥 reaction wears.
 
 ---
 
@@ -758,18 +758,22 @@ The call surface (§3.1) over main at inset 10:
 - **Controls** (centered capsule buttons, §3.1):
   - joined: mic (right-click/long-press: device menu with Deafen), camera,
     screen (when sharing: "Stop sharing" text), then, when a stream is in
-    focus, flame, heart and **Clip**, then **More** (Soundboard, Watch
+    focus, **Clip**, then **More** (Soundboard, Watch
     together, Invite people, Microphone and speaker, Stream volume and quality,
     Connection check), then **Leave** (danger).
-  - watching, not joined: flame, heart, Clip, then **Join** (cream).
+  - watching, not joined: Clip, then **Join** (cream).
   - stage channels: speakers as tiles, the audience as one "12 listening" row
     of faces; members without Speak see **Request to speak**; moderators see
     requests in the chat column header (the existing `StageChannelPanel`).
 - **Theater** (T): §5.9, the surface over the whole window at inset 10; the
   chat column, when on, stays inside it; when chat is off, new messages surface
   over the stream bottom-left (the existing `SurfacingMessages`).
-- Clip toast, stream reactions and the Together stage keep their Glass
-  behavior (glass-spec §6.4, §6.5) inside the call surface. The Together stage
+- The clip toast and the Together stage keep their Glass behavior
+  (glass-spec §6.4) inside the call surface. **There are no stream reactions**
+  (the flame and heart over a stream): the owner removed them on purpose
+  (`1bc00a09`) and they were deleted for good in IX-19, with the server route,
+  the `STREAM_REACTIONS` event and the contracts; message emoji reactions are a
+  different feature and stay. The Together stage
   replaces the people grid while a watch-together session plays; a
   listen-together "now playing" line also shows under the room card's head.
 
@@ -806,8 +810,7 @@ On the desktop, video draws into native surfaces beneath the webview
 - No native surface is visible while the call surface morphs (§5.8, §5.9):
   each tile shows its poster frame (last decoded frame, or the avatar) during
   the move and the surface attaches when the move settles.
-- Anything drawn over native video (controls, toasts, reactions, the clip
-  toast) is legible without `backdrop-filter`: near-solid fills.
+- Anything drawn over native video (controls, toasts, the clip toast) is legible without `backdrop-filter`: near-solid fills.
 - The `data-native-underlay-clear` contract on the shell root is kept.
 
 ---
@@ -917,7 +920,8 @@ data are unchanged and the surface is restyled to Index tokens.
 | `StageMenus` (mic menu with Deafen, More) | Kept, restyled (§7.2) |
 | Browse (S), side by side with a 420px conversation | **Retired**; chat column (H) instead |
 | `StreamSound` | Stream overlay on hover and More › Stream volume and quality |
-| `ClipToast`, `StreamReactionsLayer`, `SurfacingMessages`, clips (C) | Kept in the call view |
+| `ClipToast`, `SurfacingMessages`, clips (C) | Kept in the call view |
+| `StreamReactionsLayer` | **Deleted** (stream reactions are gone for good; see §7.2) |
 | `StageChannelPanel` | Call view chat column header (moderators) |
 | `ScreenSharePickerModal`, `useShareScreen` | Kept, restyled |
 | Soundboard (`SoundboardPopover`, burst) | More › Soundboard |
@@ -1008,7 +1012,7 @@ breakpoint; `data-layout="phone"` switches screens and the hidden screen is
 |---|---|
 | Server hue | `spaces.hue INTEGER NULL` (CHECK 0–359) on SQLite and PostgreSQL; `PATCH /guilds/{id}` accepts `hue` (null clears; Manage Server); guild objects, READY and `GUILD_UPDATE` carry it; contract and generated types; route tests on both engines |
 | "live N min" on the card | `voice_states.joined_at TEXT NULL`, set on every join and listen join (moving channels resets it), carried on voice states in READY and `VOICE_STATE_UPDATE`; existing rows backfilled to the migration time (voice states are short-lived). The room's start is the earliest `joined_at` among its current members |
-| Everything else | Exists: channel previews (G4), listen and view sessions (G5), `VOICE_SPEAKING` fan-out, stream reactions (G17), scheduled events and RSVP, invites, polls, read states |
+| Everything else | Exists: channel previews (G4), listen and view sessions (G5), `VOICE_SPEAKING` fan-out, scheduled events and RSVP, invites, polls, read states |
 
 Both columns ship in one migration pair (`migrations/` and `migrations_pg/`,
 prefix `20261004000001`), `TEXT` timestamps, constant defaults then backfill,
@@ -1029,11 +1033,20 @@ fixed column and floating panes with 16px gutters; Home's sections;
 two-letter identity monograms and `--color-avatar-1..8`.
 
 **Glass sections that still hold** (Index references them): glass-spec §2.3
-font family and self-hosting, §6.4 clips (behavior), §6.5 reactions on the
-stream, §7 listen in, §10 and glass-plan §8 (owner decisions that remain:
-Watch = the stream, Listen = the voices; one danger color; Split pane retired;
-events and polls as cards). Everything else in glass-spec is superseded by
-this document.
+font family and self-hosting, §6.4 clips (behavior), §7 listen in, §10 and
+glass-plan §8 (owner decisions that remain: Watch = the stream, Listen = the
+voices; one danger color; Split pane retired; events and polls as cards).
+Everything else in glass-spec is superseded by this document. (§6.5, reactions
+on the stream, is gone: see §7.2.)
+
+**Status after IX-19.** Everything in the "Retired" list above is deleted from
+the tree, not hidden: the Glass frame, places panel, call pill, room light (the
+backdrop, `lib/room`, the client's ambient view), the stage shells, `Home`, the
+Glass e2e specs and configs, and the Glass CSS no component uses. What still
+carries a `glass` name is live code that Index composes and that keeps its path
+(the sheets, the cards, the stage internals the call view uses, the pill's
+data and actions, the places model, the layout store); see
+`docs/design/index-summary.md` for where each piece lives.
 
 ---
 

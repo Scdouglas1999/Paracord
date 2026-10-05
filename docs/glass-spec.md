@@ -4,10 +4,11 @@
 > layout, surfaces, colors (including the 2026-10-03 slate-blue primary, which
 > returns to cream), room light, call pill, stage layout, phone frame and
 > motion. These sections still hold and Index references them: §2.3 (font
-> family and self-hosting), §6.4 clips (behavior), §6.5 reactions on the
-> stream, §7 listen in, §10 (server-side features that shipped). The owner
+> family and self-hosting), §6.4 clips (behavior), §7 listen in, §10 (server-side features that shipped). The owner
 > decisions in `docs/design/glass-plan.md` §8 remain in force except where
 > index-spec §13 says otherwise. Read the rest of this document as history.
+> (§6.5, reactions on the stream, was removed by the owner and deleted for good
+> in IX-19; the code is gone, client and server.)
 
 This is the contract for the "Glass" redesign, approved on 2026-09-29 after
 fourteen rounds of design review. Where this document and the reference
