@@ -8,8 +8,8 @@
 // avatars, so the monograms show. Real accounts, real channels and messages,
 // real end-to-end encrypted DMs, and real calls: Vincent (sharing a canvas
 // scene and talking), Brendan and Nick (muted) each hold Game Night's Lounge in
-// their own Chromium, joined through the app's own controls, with the Glass
-// scene's fake media (scene-lib/media-init.mjs).
+// their own Chromium, joined through the app's own controls, with synthetic
+// media (scene-lib/media-init.mjs).
 //
 //   node scripts/live-env.mjs                          # an instance, :18420
 //   node client/scripts/index-scene.mjs                # seed, bring Lounge up, hold
@@ -51,8 +51,7 @@
 //   --check             check the scene's own data for consistency (offline) and exit
 //   --seed-only         find or build the scene, print it, exit
 //   --reseed            delete the three servers and build them again
-//   --lenient           a missing Index test id is listed on the shot instead of failing it (a build
-//                       that is half Glass and half Index while the packages land)
+//   --lenient           a missing Index test id is listed on the shot instead of failing it
 //   --no-lounge         do not bring Game Night's Lounge up (a build whose sidebar has no room card yet
 //                       cannot be joined through; shots of the places themselves still work)
 //   --no-dms            skip the Direct messages (the one slow part of a first seed, ~2 min)

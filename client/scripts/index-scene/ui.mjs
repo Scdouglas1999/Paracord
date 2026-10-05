@@ -1,18 +1,7 @@
-// Driving the app itself, for whichever interface the build under it has.
-//
-// The scene is meant to outlive the redesign it was written for: today the app
-// is Glass, and from IX-4 on it is Index. Every action here has two paths and
-// chooses by looking at the page, never by a flag:
-//
-//   index   the Index build, found by the sidebar's test id. Controls are the
-//           docs/design/index-plan.md 1.3 test ids (`ix-card-join`,
-//           `ix-room-row`, `ix-card-open-call`, `ix-card-leave`, ...) and the
-//           accessible names the spec gives them. Written to the plan before
-//           the components exist; the first run against a real Index build
-//           (IX-7 onward) is its proof, and a control that is missing then is
-//           reported by name, never worked around.
-//   glass   today's build, through scene-lib/ui.mjs (its pill and stage).
-//           Deleted when IX-19 retires Glass.
+// Driving the app itself: the Index build, through the docs/design/index-plan.md
+// 1.3 test ids (`ix-card-join`, `ix-room-row`, `ix-card-open-call`,
+// `ix-card-leave`, ...) and the accessible names the spec gives its controls. A
+// control that is missing is reported by name, never worked around.
 //
 // Moving between places never reloads the page: a reload would drop the call
 // the viewer is in and lock their encryption again. The router is told the URL
@@ -21,9 +10,7 @@
 import { chromium } from '@playwright/test';
 
 import { mediaInitScript } from '../scene-lib/media-init.mjs';
-import {
-  MEDIA_ARGS, CONTROLS, closeCallStage, dismissOverlays, findControl, openCallStage, press, setToggle, waitForControl,
-} from '../scene-lib/ui.mjs';
+import { MEDIA_ARGS, dismissOverlays, findControl, press, waitForControl } from '../scene-lib/ui.mjs';
 
 export { dismissOverlays, findControl, press, waitForControl };
 
@@ -82,17 +69,9 @@ export const IX = {
   callLeave: '[data-testid="ix-call-leave"]',
 };
 
-/** Which interface is on screen: 'index' when the Index sidebar is, else 'glass'. */
-export async function uiKind(page) {
-  return (await page.locator(IX.sidebar).count()) > 0 ? 'index' : 'glass';
-}
-
-/** Names the mic, camera and screen controls answer to in the Index card and call view. */
-const INDEX_NAMES = {
-  microphone: ['Microphone', 'Mute', 'Unmute', 'Mute microphone', 'Unmute microphone'],
-  share: ['Share your screen', 'Share screen'],
-  stopShare: ['Stop sharing your screen', 'Stop sharing'],
-};
+/** Names the card's screen control answers to. */
+const SHARE = ['Share your screen'];
+const STOP_SHARE = ['Stop sharing your screen'];
 
 /** Go to an app path without reloading the page (see the header). */
 export async function navigate(page, path, { settleMs = 600 } = {}) {
@@ -114,12 +93,7 @@ export function guildPath(ids, serverKey, channelKey) {
   return `/app/guilds/${server.id}/channels/${channelId}`;
 }
 
-/**
- * The first of several candidate controls to be on screen, polling. Which
- * interface a control belongs to is decided by which one is there, not by what
- * the page is: while the build is half Glass and half Index (IX-4 to IX-19) the
- * Index frame is on screen with Glass's pill still in it.
- */
+/** The first of several candidate controls to be on screen, polling. */
 async function firstVisible(page, probes, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -132,37 +106,28 @@ async function firstVisible(page, probes, timeoutMs) {
   }
 }
 
-/** True once this page is connected to a call (Leave is on offer, in either interface). */
+/** True once this page is connected to a call (the card offers Leave). */
 export async function isJoined(page) {
-  if ((await page.locator(IX.cardLeave).count()) > 0) return true;
-  return Boolean(await findControl(page, CONTROLS.leave));
+  return (await page.locator(IX.cardLeave).count()) > 0;
 }
 
 /**
  * Join a room through the app's own controls and wait until the call is
- * connected. `textPath` is a text channel of the room's server (Index joins
- * from its card or room row there, Glass from its pill when the room is live);
- * `roomPath` is the room's own route (Glass joins an empty room from the pill
- * on it); `roomName` is what the UI calls the room.
+ * connected: from the room card when it is the busiest room, else from its row
+ * under Voice channels. `textPath` is a text channel of the room's server;
+ * `roomName` is what the UI calls the room.
  */
-export async function joinRoom(session, { roomPath, textPath, roomName, log = () => {} }) {
+export async function joinRoom(session, { textPath, roomName, log = () => {} }) {
   const { page } = session;
   if (await isJoined(page)) throw new Error(`${session.person.name} is already in a call; leave it before joining ${roomName}`);
-  // The busiest room is the card; any other occupied or empty room is a row.
   const probes = {
     'ix-card-join': () => page.locator(IX.card).filter({ hasText: roomName }).locator(IX.cardJoin).first(),
     'ix-room-row': () => page.locator(IX.roomRow).filter({ hasText: roomName }).first(),
-    'pill': () => page.getByRole('button', { name: `Join ${roomName}`, exact: true }).first(),
   };
   await navigate(page, textPath);
-  let found = await firstVisible(page, probes, 8000);
+  const found = await firstVisible(page, probes, 45_000);
   if (!found) {
-    // An empty room has no card and no live pill: Glass joins it on its own route.
-    await navigate(page, roomPath);
-    found = await firstVisible(page, probes, 45_000);
-  }
-  if (!found) {
-    throw new Error(`no way to join "${roomName}" appeared: neither ix-room-card/ix-card-join, ix-room-row, nor a "Join ${roomName}" button`);
+    throw new Error(`no way to join "${roomName}" appeared: neither ix-room-card/ix-card-join nor ix-room-row`);
   }
   await found.locator.click({ timeout: 5000 });
   const until = Date.now() + 60_000;
@@ -180,12 +145,7 @@ export async function joinRoom(session, { roomPath, textPath, roomName, log = ()
 /** Leave whatever call this page is in, and wait until Leave is gone. */
 export async function leaveRoom(session) {
   const { page } = session;
-  const leave = page.locator(IX.cardLeave).first();
-  if (await leave.isVisible().catch(() => false)) await leave.click({ timeout: 5000 });
-  else {
-    const glass = await findControl(page, CONTROLS.leave);
-    if (glass) await glass.click({ timeout: 5000 });
-  }
+  await page.locator(IX.cardLeave).first().click({ timeout: 5000 });
   const deadline = Date.now() + 20_000;
   while (await isJoined(page)) {
     if (Date.now() > deadline) throw new Error(`${session.person.name} is still in the call 20s after pressing Leave`);
@@ -193,68 +153,47 @@ export async function leaveRoom(session) {
   }
 }
 
-/** Switch the microphone on or off (a toggle whose state is `aria-pressed`). */
+/**
+ * Switch the microphone on or off with the room card's mic, which is named for
+ * what it does ("Mute" / "Unmute") and carries its state in `data-muted`.
+ */
 export async function setMic(session, on) {
-  // The Index room card's mic is named for what it does ("Mute" / "Unmute") and
-  // carries its state in `data-muted`, not `aria-pressed`.
   const cardMic = session.page.locator('[data-testid="ix-card-mic"]').first();
-  if (await cardMic.isVisible().catch(() => false)) {
-    const want = on ? 'false' : 'true';
-    if ((await cardMic.getAttribute('data-muted')) !== want) await cardMic.click({ timeout: 5000 });
-    const deadline = Date.now() + 15_000;
-    while ((await cardMic.getAttribute('data-muted').catch(() => null)) !== want) {
-      if (Date.now() > deadline) throw new Error(`the card's microphone did not turn ${on ? 'on' : 'off'} within 15s`);
-      await session.page.waitForTimeout(300);
-    }
-    return;
+  if (!(await cardMic.isVisible().catch(() => false))) {
+    throw new Error(`${session.person.name} has no room card microphone (ix-card-mic) on screen`);
   }
-  await setToggle(session.page, [...INDEX_NAMES.microphone, ...CONTROLS.microphone], on, { timeoutMs: 15_000 });
+  const want = on ? 'false' : 'true';
+  if ((await cardMic.getAttribute('data-muted')) !== want) await cardMic.click({ timeout: 5000 });
+  const deadline = Date.now() + 15_000;
+  while ((await cardMic.getAttribute('data-muted').catch(() => null)) !== want) {
+    if (Date.now() > deadline) throw new Error(`the card's microphone did not turn ${on ? 'on' : 'off'} within 15s`);
+    await session.page.waitForTimeout(300);
+  }
 }
 
-/**
- * Start sharing the (canvas) screen. Index: the card's screen control, which
- * needs no stage. Glass: the stage's control row, then put the stage away again.
- */
+/** Start sharing the (canvas) screen with the card's screen control. */
 export async function startShare(session) {
   const { page } = session;
-  if (await findControl(page, INDEX_NAMES.share)) {
-    await press(page, INDEX_NAMES.share);
-    await waitForControl(page, INDEX_NAMES.stopShare, 30_000);
-    return;
-  }
-  await openCallStage(page);
-  await press(page, CONTROLS.share);
-  await waitForControl(page, CONTROLS.stopShare, 30_000);
-  await closeCallStage(page);
+  await press(page, SHARE);
+  await waitForControl(page, STOP_SHARE, 30_000);
 }
 
-/** Open the call over the conversation (Index: Open call; Glass: Show the call). */
+/** Open the call over the conversation (the card's Open call). */
 export async function openCall(page) {
-  const open = page.locator(IX.cardOpenCall).first();
-  if (await open.isVisible().catch(() => false)) {
-    await open.click({ timeout: 10_000 });
-    await page.locator(IX.call).first().waitFor({ state: 'visible', timeout: 15_000 });
-  } else {
-    await press(page, [...CONTROLS.showCall, ...CONTROLS.watch], { timeoutMs: 30_000 });
-    await page.getByRole('group', { name: 'Call controls' }).waitFor({ state: 'visible', timeout: 30_000 });
-  }
+  await page.locator(IX.cardOpenCall).first().click({ timeout: 10_000 });
+  await page.locator(IX.call).first().waitFor({ state: 'visible', timeout: 15_000 });
 }
 
-/** Put the call away again, still in it (Index: Back to chat; Glass: Close). */
+/** Put the call view away again (Back to chat), still in the call. */
 export async function backToChat(page) {
-  const back = page.locator(IX.callBack).first();
-  if (await back.isVisible().catch(() => false)) {
-    await back.click({ timeout: 10_000 });
-    await page.locator(IX.call).first().waitFor({ state: 'hidden', timeout: 15_000 });
-  } else {
-    await closeCallStage(page);
-  }
+  await page.locator(IX.callBack).first().click({ timeout: 10_000 });
+  await page.locator(IX.call).first().waitFor({ state: 'hidden', timeout: 15_000 });
 }
 
 /**
  * No Web Animation still running, for a screenshot of a settled state: every
  * Index motion is a WAAPI animation (spec 5), so "nothing running" is also the
- * fixture's answer to "has it finished". Glass animations count the same way.
+ * fixture's answer to "has it finished".
  */
 export async function settle(page, { timeoutMs = 4000, minMs = 500 } = {}) {
   await page.waitForTimeout(minMs);

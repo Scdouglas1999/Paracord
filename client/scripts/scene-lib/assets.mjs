@@ -2,7 +2,16 @@
 // already uses: one blank page, the SVG as its only content, a screenshot.
 
 import * as art from './art.mjs';
-import { IMAGES } from './scene.mjs';
+
+/** Images posted as attachments, by name → art source. */
+const IMAGES = {
+  'mission-complete': { art: 'MISSION_COMPLETE', width: 1280, height: 720 },
+  'triple-revive': { art: 'TRIPLE_REVIVE', width: 1280, height: 720 },
+  'photo-0': { art: 'trailPhoto', variant: 0, width: 1280, height: 720 },
+  'photo-1': { art: 'trailPhoto', variant: 1, width: 1280, height: 720 },
+  'photo-2': { art: 'trailPhoto', variant: 2, width: 1280, height: 720 },
+  'photo-3': { art: 'trailPhoto', variant: 3, width: 1280, height: 720 },
+};
 
 export async function createRenderer(browser) {
   const context = await browser.newContext({ deviceScaleFactor: 1 });

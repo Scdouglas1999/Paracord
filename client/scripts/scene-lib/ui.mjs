@@ -1,11 +1,7 @@
 // Driving the app itself in Chromium: signing a cast member in, clearing the
 // first-run panels, and pressing the call controls.
 //
-// Controls are found by their accessible names. Each action lists every name
-// it answers to; when a package renames a control, add the new name here rather
-// than reaching for CSS selectors. Since WP-G22 these are the Glass controls
-// only: a voice channel's route is its chat with the call pill, and the call's
-// own controls (camera, share, More) are the stage's.
+// Controls are found by their accessible names, never CSS selectors.
 
 import { chromium } from '@playwright/test';
 import { mediaInitScript } from './media-init.mjs';
@@ -20,31 +16,6 @@ export const MEDIA_ARGS = [
   '--disable-renderer-backgrounding',
   '--disable-backgrounding-occluded-windows',
 ];
-
-export const CONTROLS = {
-  // The call pill (WP-G12): "Join Lounge", "Leave Lounge".
-  join: [/^Join \w+$/],
-  leave: [/^Leave \w+$/],
-  // The stage's control row (WP-G14): camera and the microphone are toggles
-  // named "Camera" and "Microphone" whose state is aria-pressed.
-  share: ['Share your screen'],
-  stopShare: ['Stop sharing your screen'],
-  camera: ['Camera'],
-  microphone: ['Microphone'],
-  // The pill's Watch (never joins), and its door to the call itself when
-  // nobody else is sharing (WP-G22).
-  watch: [/^Watch \w+'s screen$/i],
-  showCall: ['Show the call'],
-  closeCall: ['Close'],
-  // The Glass stage (WP-G14).
-  stopWatching: ['Stop watching'],
-  browse: ['Show servers and channels'],
-  // Theater and the chat over it (WP-G15).
-  theater: ['Theater mode'],
-  sideBySide: ['Show side by side with chat'],
-  hideChat: ['Hide chat'],
-  showChat: ['Show chat'],
-};
 
 const OVERLAYS = ['Close welcome screen', 'Got it', 'Maybe later', 'Dismiss'];
 
@@ -125,96 +96,6 @@ export async function press(page, names, { timeoutMs = 30_000 } = {}) {
     await page.waitForTimeout(400);
   }
   throw new Error(`could not press ${names.map(String).join(' / ')}${lastError ? `: ${lastError.message.split('\n')[0]}` : ''}`);
-}
-
-export function channelPath(ids, serverKey, channelKey) {
-  const server = ids.servers[serverKey];
-  if (!server) throw new Error(`scene has no server ${serverKey}`);
-  const channelId = server.channels[channelKey];
-  if (!channelId) throw new Error(`${server.name} has no channel ${channelKey}`);
-  return `/app/guilds/${server.id}/channels/${channelId}`;
-}
-
-/**
- * Wait until the call is connected (the pill offers Leave). A join the app
- * refuses is a failure, reported with the reason the app gave (the pill's toast,
- * "Could not join Lounge: …"): the driver does not retry. Rejoining a running call used to be refused
- * (docs/design/glass-fix-rejoin.md), and this used to paper over it with
- * retries and a 15s pause; that fix landed, so a refusal now is a finding.
- */
-export async function awaitJoined(session, { timeoutMs = 60_000, log = () => {} } = {}) {
-  const { page, person } = session;
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (await findControl(page, CONTROLS.leave)) return;
-    await page.waitForTimeout(400);
-  }
-  const reason = (await page.locator('text=/could not|couldn.t|failed/i').allTextContents().catch(() => []))
-    .map(t => t.trim()).filter(Boolean).slice(0, 3).join(' / ') || `no connected call within ${timeoutMs / 1000}s`;
-  log(`  ${person.name}: join failed: ${reason}`);
-  throw new Error(`${person.name} could not join the call: ${reason}`);
-}
-
-/** Join a voice channel through the UI (its chat's pill) and wait for the call to connect. */
-export async function joinVoice(session, path, { log = () => {} } = {}) {
-  const { page } = session;
-  await page.goto(path);
-  await dismissOverlays(page, 800, 8000);
-  await press(page, CONTROLS.join, { timeoutMs: 45_000 });
-  return awaitJoined(session, { log });
-}
-
-/**
- * Put the call on the stage, where its controls are: "Show the call" when
- * nobody else is sharing, else the pill's Watch (the stream's stage has the
- * same call controls). Resolves once the stage's control row is on screen.
- */
-export async function openCallStage(page) {
-  await press(page, [...CONTROLS.showCall, ...CONTROLS.watch], { timeoutMs: 30_000 });
-  await page.getByRole('group', { name: 'Call controls' }).waitFor({ state: 'visible', timeout: 30_000 });
-}
-
-/** Put the stage away again (Close, or Stop watching). The call stays. */
-export async function closeCallStage(page) {
-  await press(page, [...CONTROLS.closeCall, ...CONTROLS.stopWatching], { timeoutMs: 15_000 });
-}
-
-/** Press a toggle (Camera, Microphone) until its aria-pressed says `on`. */
-export async function setToggle(page, names, on, { timeoutMs = 30_000 } = {}) {
-  const control = await waitForControl(page, names, timeoutMs);
-  if ((await control.getAttribute('aria-pressed')) !== String(on)) await control.click({ timeout: 5000 });
-  const deadline = Date.now() + timeoutMs;
-  while ((await control.getAttribute('aria-pressed').catch(() => null)) !== String(on)) {
-    if (Date.now() > deadline) throw new Error(`${names[0]} did not turn ${on ? 'on' : 'off'} within ${timeoutMs / 1000}s`);
-    await page.waitForTimeout(300);
-  }
-}
-
-/**
- * Whether an element shows a picture rather than an empty well: screenshot it
- * and count its colors in the page (the app's CSP refuses a data: fetch, so the
- * PNG goes in through a Blob). A canvas nobody painted is one or two colors.
- */
-export async function pictureIn(page, locator) {
-  const png = (await locator.screenshot()).toString('base64');
-  return page.evaluate(async base64 => {
-    const binary = atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
-    const canvas = document.createElement('canvas');
-    canvas.width = bitmap.width; canvas.height = bitmap.height;
-    const context = canvas.getContext('2d');
-    context.drawImage(bitmap, 0, 0);
-    const { data } = context.getImageData(0, 0, canvas.width, canvas.height);
-    const colors = new Set();
-    let lit = 0;
-    for (let i = 0; i < data.length; i += 4) {
-      if (0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2] > 24) lit += 1;
-      colors.add(((data[i] >> 3) << 10) | ((data[i + 1] >> 3) << 5) | (data[i + 2] >> 3));
-    }
-    return { distinctColors: colors.size, litFraction: lit / (data.length / 4) };
-  }, png);
 }
 
 /**

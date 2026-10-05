@@ -11,18 +11,11 @@
 //     async after(ctx) { ... },      // undo anything the state left behind
 //   }
 //
-// `run` may return `{ pending: '...' }` when the interface under it cannot show
-// the state yet (a control only Index carries); the state is then reported
-// pending, not failed, and not shot. Every shot records which interface was on
-// screen (`ui: 'glass' | 'index'`) so a run against today's build is never
-// mistaken for a run against Index.
-//
-// Where the Index build is on screen the state asserts the test ids it is
-// specified to carry (docs/design/index-plan.md 1.3); on Glass it asserts
-// nothing beyond "the text the state is about is on screen".
+// Each state asserts the test ids the Index build is specified to carry
+// (docs/design/index-plan.md 1.3).
 
-import { CONTROLS, freshFrame, sceneOnScreen } from '../scene-lib/ui.mjs';
-import { IX, backToChat, dismissOverlays, findControl, openCall, press, uiKind } from './ui.mjs';
+import { freshFrame, sceneOnScreen } from '../scene-lib/ui.mjs';
+import { IX, backToChat, dismissOverlays, openCall } from './ui.mjs';
 import { ENCRYPTION_PASSWORD } from './scene.mjs';
 
 /** Wait for text on screen, then let entrance motion finish. */
@@ -33,9 +26,8 @@ async function settleOn(ctx, text, timeoutMs = 30_000) {
 }
 
 /**
- * Wait until somebody is on screen as talking: Glass says "X is talking"; Index
- * runs its waveform loop only while a person talks (spec 4.4), which shows as an
- * animation with no end. A synthetic voice speaks in phrases with pauses
+ * Wait until somebody is on screen as talking: Index runs its waveform loop only
+ * while a person talks (spec 4.4), which shows as an animation with no end. A synthetic voice speaks in phrases with pauses
  * between, so a shot taken at a random moment can land in a pause; waiting for
  * the cue makes the talking ring part of the frame. Best effort: it reports
  * whether the cue was seen, never fails the shot.
@@ -44,8 +36,7 @@ async function waitForTalking(page, timeoutMs = 15_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const seen = await page.evaluate(() =>
-      /\b(is|are) talking\b/i.test(document.body.innerText)
-      || document.getAnimations().some(a => a.playState === 'running' && a.effect?.getTiming().iterations === Infinity),
+      document.getAnimations().some(a => a.playState === 'running' && a.effect?.getTiming().iterations === Infinity),
     ).catch(() => false);
     if (seen) return true;
     await page.waitForTimeout(120);
@@ -54,12 +45,10 @@ async function waitForTalking(page, timeoutMs = 15_000) {
 }
 
 /**
- * On Index, a selector the spec promises must be there; on Glass it is not
- * asked for. With `--lenient` (a build that is half Glass, half Index) a
- * missing one is listed on the shot instead of failing it.
+ * A selector the spec promises must be there. With `--lenient` a missing one is
+ * listed on the shot instead of failing it.
  */
 async function expectIndex(ctx, selector, what, timeoutMs = 10_000) {
-  if ((await uiKind(ctx.page)) !== 'index') return;
   const there = await ctx.page.locator(selector).first().waitFor({ state: 'visible', timeout: timeoutMs }).then(() => true).catch(() => false);
   if (there) return;
   const message = `the Index build has no ${what} (${selector}) in this state`;
@@ -116,15 +105,11 @@ export const STATES = {
     at: 'quiet',
     async run(ctx) {
       await ctx.viewer.go('fuel', 'general');
-      if ((await uiKind(ctx.page)) !== 'index') {
-        return { pending: 'Plan a night is an Index action card (ix-action-card, IX-15); Glass has no such card' };
-      }
       await ctx.page.locator(`${IX.actionCard}[data-action="plan"]`).first().click({ timeout: 10_000 });
       await ctx.viewer.settle({ minMs: 1500 });
     },
     async after(ctx) {
       // The draft is the client's; going somewhere else and back drops it.
-      if ((await uiKind(ctx.page)) !== 'index') return;
       await ctx.viewer.go('fuel', 'clips', { settleMs: 300 });
       await ctx.viewer.go('fuel', 'general', { settleMs: 300 });
     },
@@ -248,11 +233,7 @@ export const DIAGNOSTICS = {
     async run(ctx) {
       await ctx.viewer.go('gameNight', 'lounge');
       await settleOn(ctx, 'streaming in Lounge if anyone wants to watch');
-      if ((await uiKind(ctx.page)) === 'index') {
-        await ctx.page.getByRole('button', { name: /^Watch Vincent/ }).first().click({ timeout: 15_000 });
-      } else {
-        await press(ctx.page, CONTROLS.watch, { timeoutMs: 30_000 });
-      }
+      await ctx.page.getByRole('button', { name: /^Watch Vincent/ }).first().click({ timeout: 15_000 });
       const deadline = Date.now() + 60_000;
       let seen = { teal: 0, amber: 0 };
       for (;;) {
@@ -265,8 +246,8 @@ export const DIAGNOSTICS = {
       return { png: seen.png };
     },
     async after(ctx) {
-      const stop = await findControl(ctx.page, CONTROLS.stopWatching);
-      if (stop) await stop.click().catch(() => {});
+      // Back to chat closes the call view, and closing it stops watching.
+      await backToChat(ctx.page).catch(() => {});
       await ctx.viewer.go('fuel', 'general', { settleMs: 300 });
     },
   },
@@ -289,7 +270,7 @@ export function resolveStates(arg) {
 export async function shoot(ctx, name, { out, writeFile, join, viewport }) {
   const state = ALL_STATES[name];
   const { story, viewer, log } = ctx;
-  const record = { name, status: 'ok', ui: null, path: join(out, `${name}.png`), at: state.at };
+  const record = { name, status: 'ok', path: join(out, `${name}.png`), at: state.at };
   try {
     record.stage = 'scene';
     await story.ensure(state.at);
@@ -301,27 +282,19 @@ export async function shoot(ctx, name, { out, writeFile, join, viewport }) {
       record.missing = ctx.missing;
       for (const message of ctx.missing) log(`  ${' '.repeat(22)} (missing: ${message})`);
     }
-    record.ui = await uiKind(ctx.page);
-    if (outcome?.pending) {
-      record.status = 'pending';
-      record.reason = outcome.pending;
-      delete record.path;
-      log(`  ${name.padEnd(22)} pending — ${outcome.pending}`);
-    } else {
-      if (outcome?.png) {
-        writeFile(record.path, outcome.png);
-        log(`  ${name.padEnd(22)} ${record.path}  [${record.ui}]`);
-        return record;
-      }
-      if (state.talking) {
-        record.talking = await waitForTalking(ctx.page);
-        if (!record.talking) log(`  ${' '.repeat(22)} (nobody showed as talking within 15s; the frame has no ring)`);
-      }
-      const lag = await freshFrame(ctx.page);
-      if (lag > 1000) log(`  ${' '.repeat(22)} (waited ${lag}ms for a fresh frame)`);
-      await ctx.page.screenshot({ path: record.path });
-      log(`  ${name.padEnd(22)} ${record.path}  [${record.ui}]`);
+    if (outcome?.png) {
+      writeFile(record.path, outcome.png);
+      log(`  ${name.padEnd(22)} ${record.path}`);
+      return record;
     }
+    if (state.talking) {
+      record.talking = await waitForTalking(ctx.page);
+      if (!record.talking) log(`  ${' '.repeat(22)} (nobody showed as talking within 15s; the frame has no ring)`);
+    }
+    const lag = await freshFrame(ctx.page);
+    if (lag > 1000) log(`  ${' '.repeat(22)} (waited ${lag}ms for a fresh frame)`);
+    await ctx.page.screenshot({ path: record.path });
+    log(`  ${name.padEnd(22)} ${record.path}`);
   } catch (error) {
     record.status = 'failed';
     record.error = error.message.split('\n')[0];

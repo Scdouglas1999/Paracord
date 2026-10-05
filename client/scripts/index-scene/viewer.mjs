@@ -7,7 +7,7 @@
 // again, and the Direct messages in People are unreadable while it is locked.
 
 import { takeAnyUnlockOffer } from './dms.mjs';
-import { dismissOverlays, guildPath, isJoined, joinRoom, leaveRoom, navigate, openPersistentSession, settle, uiKind } from './ui.mjs';
+import { dismissOverlays, guildPath, isJoined, joinRoom, leaveRoom, navigate, openPersistentSession, settle } from './ui.mjs';
 import { SERVERS } from './scene.mjs';
 
 export class Viewer {
@@ -72,8 +72,6 @@ export class Viewer {
     await this.page.setViewportSize(viewport);
   }
 
-  async uiKind() { return uiKind(this.page); }
-
   /** A text channel of a server, without a reload. */
   async go(serverKey, channelKey, opts) {
     await navigate(this.page, guildPath(this.ids, serverKey, channelKey), opts);
@@ -90,7 +88,6 @@ export class Viewer {
     const room = spec.channels.find(c => c.key === roomKey);
     const text = spec.channels.find(c => c.type === 0);
     await joinRoom(this.session, {
-      roomPath: guildPath(this.ids, serverKey, roomKey),
       textPath: guildPath(this.ids, serverKey, text.key),
       roomName: room.name,
       log: this.log,

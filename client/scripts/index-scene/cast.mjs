@@ -5,11 +5,8 @@
 // What is shared with the other scene drivers, by import (`../scene-lib/`): the
 // synthetic media (`media-init.mjs`, through `openAs`: Vincent's canvas share,
 // a speech-like microphone, silence), and the relay probes (`call.mjs`:
-// `readRoom`, `leaveCall`, `mediaProbe`). `call.mjs`'s own `startCall` is not
-// called because it is fixed to the Glass cast (Brendan on camera and talking,
-// Vincent quiet) and to Glass's pill; the Index story needs members that join
-// and move at a step, and this file runs them through `ui.mjs`, which speaks
-// both Glass and Index.
+// `readRoom`, `leaveCall`, `mediaProbe`). Members join and move at a step of the
+// story, through `ui.mjs`.
 
 import { leaveCall, mediaProbe, readRoom } from '../scene-lib/call.mjs';
 import { FACES, STREAM_SCENE } from '../scene-lib/art.mjs';
@@ -81,7 +78,6 @@ export class Cast {
     const text = spec.channels.find(c => c.type === 0);
     this.roomChannelId(serverKey, roomKey);
     await joinRoom(member.session, {
-      roomPath: guildPath(this.ids, serverKey, roomKey),
       textPath: guildPath(this.ids, serverKey, text.key),
       roomName: room.name,
       log: this.log,
