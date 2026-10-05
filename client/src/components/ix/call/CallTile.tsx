@@ -14,8 +14,11 @@ import { Avatar } from '../identity';
 /**
  * One person in the call view (docs/index-spec.md §7.2, §3.1 "Call surface").
  *
- * Camera off: the 88px avatar (52 in the filmstrip) centered on the person-hue
- * gradient. Camera on: their live video fills the tile (`cover`, cropped about
+ * Camera off: the 88px avatar (52 in the filmstrip, 40 in the `mini` filmstrip
+ * over a stream in theater or full screen) centered on the person-hue
+ * gradient. The `mini` tile is a face only, never a camera (§7.7): it comes
+ * and goes with the chrome, and a camera under it would be one more native
+ * surface to decode and stack under a stream that fills the window. Camera on: their live video fills the tile (`cover`, cropped about
  * a third down so faces stay in frame), name and waveform bottom-left. The
  * talker wears the amber inner edge and glow.
  *
@@ -49,8 +52,11 @@ export interface CallTileProps {
   engine: MediaEngine | null;
   /** The voice is heard here (joined or listening): the waveform follows the real level. */
   realVoice: boolean;
-  /** `grid`: a tile of the people grid; `strip`: the filmstrip's 112px tile; `focus`: a camera in focus. */
-  variant: 'grid' | 'strip' | 'focus';
+  /**
+   * `grid`: a tile of the people grid; `strip`: the filmstrip's 112px tile;
+   * `mini`: the 64px face over a stream filling the window; `focus`: a camera in focus.
+   */
+  variant: 'grid' | 'strip' | 'mini' | 'focus';
   /** What a click does, or null for a tile that is not a button. */
   onActivate: (() => void) | null;
   /** The accessible name of the click ("Watch Vincent's screen"). */
@@ -67,7 +73,7 @@ export function CallTile({ person, engine, realVoice, variant, onActivate, activ
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [hasPicture, setHasPicture] = useState(false);
   const underlayLive = useNativeUnderlay(tileRef, canvasRef);
-  const camera = person.camera && engine !== null;
+  const camera = person.camera && engine !== null && variant !== 'mini';
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -90,7 +96,7 @@ export function CallTile({ person, engine, realVoice, variant, onActivate, activ
   }, [camera, engine, person.userId]);
 
   const picture = camera && (hasPicture || underlayLive);
-  const avatarSize = variant === 'strip' ? 52 : 88;
+  const avatarSize = variant === 'mini' ? 40 : variant === 'strip' ? 52 : 88;
   const state = personState(person);
   const sharingMark = person.sharing && !person.listening;
 
@@ -121,7 +127,8 @@ export function CallTile({ person, engine, realVoice, variant, onActivate, activ
       <span className="ix-call-tile__name">
         <span className="ix-call-tile__who">{person.self ? 'You' : person.name}</span>
         <span className="sr-only">, {describe(person, state.text)}</span>
-        {person.talking && <Wave userId={person.userId} real={realVoice} className="ix-call-tile__wave" />}
+        {/* A face in the mini filmstrip says it with its ring alone: no loop under hidden chrome. */}
+        {person.talking && variant !== 'mini' && <Wave userId={person.userId} real={realVoice} className="ix-call-tile__wave" />}
         {sharingMark && !person.talking && <IxGlyph name="screen" size={14} className="ix-call-tile__mark" />}
         {person.muted && !person.talking && !sharingMark && <IxGlyph name="micOff" size={14} className="ix-call-tile__mark" />}
       </span>

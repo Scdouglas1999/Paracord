@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { useLocation, useNavigationType } from 'react-router';
 
-import { useGlassStore } from '../../../stores/glassStore';
+import { stageFillsWindow, useGlassStore } from '../../../stores/glassStore';
 import { isPlacesRoute, usePhoneNavStore } from '../../glass/shell/phoneNav';
 import { usePhoneFrame } from '../../glass/shell/usePhoneFrame';
 import { useStageAudienceGuard } from '../../glass/stage/useStageAudienceGuard';
@@ -49,7 +49,9 @@ export interface IxFrameProps {
  *       .ix-main__content             the routed page
  *       #ix-sheet-host                SheetSlot's geometry; SheetSlot after it
  *     #ix-call-host                   CallSlot: over main at inset 10, or over the
- *                                     window in theater
+ *                                     window in theater; the whole window, edge to
+ *                                     edge, with a stream in theater or full screen
+ *                                     (`data-call-fill`, §7.7)
  *
  * ONE TREE FOR EVERY LAYOUT. The sidebar, main and the call host are the same
  * elements at every width, so crossing a breakpoint never remounts the page (a
@@ -76,6 +78,8 @@ export function IxFrame({ guildId, channelId, children }: IxFrameProps) {
   const hue = usePlaceHue(place);
   const placeName = usePlaceName(place);
   const stageMode = useGlassStore((state) => state.stage.mode);
+  // §7.2 theater / §7.7 full screen with a stream in focus: the call fills the window.
+  const callFills = useGlassStore((state) => stageFillsWindow(state.stage));
   const sheet = useGlassStore((state) => state.sheet);
   const indexPage = useToolbarStore((state) => state.page !== null);
 
@@ -109,7 +113,8 @@ export function IxFrame({ guildId, channelId, children }: IxFrameProps) {
 
   const stageOpen = stageMode !== 'none';
   const theater = stageMode === 'theater';
-  const sideInert = phone ? screen !== 'places' || stageOpen : theater;
+  const fill = callFills && !phone;
+  const sideInert = phone ? screen !== 'places' || stageOpen : theater || fill;
   const mainInert = phone ? screen !== 'conversation' || stageOpen : stageOpen;
 
   const shell = useMemo<IxShellValue>(
@@ -124,6 +129,7 @@ export function IxFrame({ guildId, channelId, children }: IxFrameProps) {
         data-native-underlay-clear=""
         data-layout={layout}
         data-stage={stageMode}
+        data-call-fill={fill ? 'true' : undefined}
         data-screen={phone ? screen : undefined}
       >
         <nav

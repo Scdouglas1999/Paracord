@@ -16,6 +16,9 @@ import { registerSessionReset } from './sessionReset';
  * Invariants the actions keep:
  *   - `stage.mode === 'none'` exactly when `stage` has no target.
  *   - `stage.chat` (the call view's chat column) is false while no stage is open.
+ *   - `stage.fullscreen` is true only while a stream is in focus (`streamerId`
+ *     set) on an open stage; leaving it never changes `mode`, so the layout
+ *     under it comes back as it was.
  *   - Watching never joins a call and closing the call view never leaves one: this
  *     store holds no media state and calls nothing in `voiceStore`.
  */
@@ -67,6 +70,12 @@ export interface StageState {
    * switching streams inside an open one; false whenever nothing is open.
    */
   chat: boolean;
+  /**
+   * F in the call view (docs/index-spec.md §7.7): the stream in focus over the
+   * whole screen, the window itself full screen. A layer over `mode`, which it
+   * leaves as it was: leaving full screen returns to that layout.
+   */
+  fullscreen: boolean;
   serverId: string | null;
   guildId: string | null;
   channelId: string | null;
@@ -88,8 +97,13 @@ export interface GlassState {
   openStage: (target: StageTarget, mode?: OpenStageMode) => void;
   /** Esc, "Back to chat". Never leaves a call. */
   closeStage: () => void;
-  /** T: main <-> theater. Ignored while no stage is open. */
+  /** T: main <-> theater. Ignored while no stage is open. Leaves full screen. */
   setStageMode: (mode: OpenStageMode) => void;
+  /**
+   * F: the stream in focus full screen, or back to the layout under it. Turning
+   * it on is ignored while no stream is in focus.
+   */
+  setStageFullscreen: (on: boolean) => void;
   /** H in the call view: the chat column on or off. Ignored while no stage is open. */
   toggleChat: () => void;
   openSheet: (sheet: GlassSheet | null) => void;
@@ -100,6 +114,7 @@ export interface GlassState {
 const NO_STAGE: StageState = {
   mode: 'none',
   chat: false,
+  fullscreen: false,
   serverId: null,
   guildId: null,
   channelId: null,
@@ -127,6 +142,8 @@ export const useGlassStore = create<GlassState>()((set, get) => ({
         mode: nextMode,
         // A fresh view opens without the chat column; switching streams keeps it.
         chat: opening ? false : current.chat,
+        // Switching streams keeps full screen; nothing to watch ends it.
+        fullscreen: !opening && target.streamerId !== null && current.fullscreen,
         serverId: target.serverId,
         guildId: target.guildId,
         channelId: target.channelId,
@@ -140,7 +157,14 @@ export const useGlassStore = create<GlassState>()((set, get) => ({
   setStageMode: (mode) => {
     const { stage } = get();
     if (stage.mode === 'none') return;
-    set({ stage: { ...stage, mode } });
+    set({ stage: { ...stage, mode, fullscreen: false } });
+  },
+
+  setStageFullscreen: (on) => {
+    const { stage } = get();
+    if (stage.mode === 'none' || stage.fullscreen === on) return;
+    if (on && stage.streamerId === null) return;
+    set({ stage: { ...stage, fullscreen: on } });
   },
 
   toggleChat: () => {
@@ -153,6 +177,14 @@ export const useGlassStore = create<GlassState>()((set, get) => ({
   closeSheet: () => set({ sheet: null }),
   reset: () => set({ ...INITIAL }),
 }));
+
+/**
+ * The call view fills the window (index-spec §7.2 "Theater", §7.7): a stream in
+ * focus in theater or full screen. The frame puts the call host at inset 0.
+ */
+export function stageFillsWindow(stage: StageState): boolean {
+  return stage.mode !== 'none' && stage.streamerId !== null && (stage.mode === 'theater' || stage.fullscreen);
+}
 
 /** True while a call view is open (main or theater). */
 export const selectStageOpen = (s: GlassState): boolean => s.stage.mode !== 'none';

@@ -8,7 +8,8 @@ import type { ReactNode, SVGProps } from 'react';
  *
  * The verb glyphs the call view keeps (listen, watch, clip, flame, theater) are
  * the Glass paths restroked to 1.7 (§2.6); a solid shape (listen's dot, watch's
- * pupil, the flame's ember) has no stroke.
+ * pupil, the flame's ember) has no stroke. Full screen and its exit are four
+ * corners pointing out and in (§7.7).
  *
  * Size is a prop in px; the stroke scales with the glyph, as in the prototype.
  * The default is the prototype's 18; the sizes in use are 12 (lock), 14 (chip
@@ -43,6 +44,8 @@ export const IX_GLYPH_NAMES = [
   'clip',
   'flame',
   'theater',
+  'fullScreen',
+  'fullScreenExit',
 ] as const;
 export type IxGlyphName = (typeof IX_GLYPH_NAMES)[number];
 
@@ -172,6 +175,8 @@ const BODIES: Record<IxGlyphName, ReactNode> = {
       <path d="M5 20.5a1.6 1.6 0 0 1 3.2 0M10.4 20.5a1.6 1.6 0 0 1 3.2 0M15.8 20.5a1.6 1.6 0 0 1 3.2 0" />
     </>
   ),
+  fullScreen: <path d="M4 9V5.5A1.5 1.5 0 0 1 5.5 4H9M15 4h3.5A1.5 1.5 0 0 1 20 5.5V9M20 15v3.5a1.5 1.5 0 0 1-1.5 1.5H15M9 20H5.5A1.5 1.5 0 0 1 4 18.5V15" />,
+  fullScreenExit: <path d="M9 4v3.5A1.5 1.5 0 0 1 7.5 9H4M20 9h-3.5A1.5 1.5 0 0 1 15 7.5V4M15 20v-3.5a1.5 1.5 0 0 1 1.5-1.5H20M4 15h3.5A1.5 1.5 0 0 1 9 16.5V20" />,
 };
 
 export interface GlyphFrameProps extends Omit<SVGProps<SVGSVGElement>, 'ref'> {

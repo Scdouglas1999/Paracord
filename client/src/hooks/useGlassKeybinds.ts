@@ -4,8 +4,9 @@ import { triggerClip } from '../lib/media/clips/useClip';
 import { useGlassStore } from '../stores/glassStore';
 
 /**
- * The call view's keys (docs/index-spec.md §7.4): Esc (theater -> main ->
- * closed), T theater, H the chat column, C clip (a stream in focus). Glass's S
+ * The call view's keys (docs/index-spec.md §7.4): Esc (full screen -> the
+ * layout under it; theater -> main -> closed), T theater, H the chat column,
+ * F full screen and C clip (a stream in focus). Glass's S
  * (browse) is retired. Bound on `window` while the call view is on screen (it
  * mounts this), so every handler on the way (a menu's, a dialog's focus trap,
  * the message box's, the voice keybinds) has had the key first and can claim
@@ -20,10 +21,13 @@ import { useGlassStore } from '../stores/glassStore';
  *
  * Esc never leaves a call: closing the view keeps it (§7.3). C is the same as
  * pressing Clip, for the stream in focus (what cannot be clipped is said in a
- * toast, as the button says it). The phone has no theater and no chat column.
+ * toast, as the button says it). The phone has no theater and no chat column,
+ * and its full screen is the sheet's own (sideways, or its Full screen
+ * control), so F is the desktop's and the browser's. In full screen T goes to
+ * theater (leaving full screen) and H waits: there is no chat column there.
  */
 
-export type GlassKeyAction = 'theater' | 'chat' | 'clip' | 'stop';
+export type GlassKeyAction = 'theater' | 'chat' | 'clip' | 'fullscreen' | 'stop';
 
 export interface GlassKeybindOptions {
   /** The call view is on screen. */
@@ -51,6 +55,9 @@ export function glassKeyAction(event: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'a
     case 'c':
     case 'C':
       return 'clip';
+    case 'f':
+    case 'F':
+      return 'fullscreen';
     default:
       return null;
   }
@@ -86,8 +93,10 @@ export function useGlassKeybinds({ enabled, phone, stream = true, onStop }: Glas
       switch (action) {
         case 'stop':
           event.preventDefault();
-          // Theater steps back to main first; the next Esc closes the view.
-          if (glass.stage.mode === 'theater' && !phone) glass.setStageMode('main');
+          // Full screen steps back to the layout under it, theater to main;
+          // the next Esc closes the view.
+          if (glass.stage.fullscreen) glass.setStageFullscreen(false);
+          else if (glass.stage.mode === 'theater' && !phone) glass.setStageMode('main');
           else onStop();
           return;
         case 'theater':
@@ -96,9 +105,14 @@ export function useGlassKeybinds({ enabled, phone, stream = true, onStop }: Glas
           glass.setStageMode(glass.stage.mode === 'theater' ? 'main' : 'theater');
           return;
         case 'chat':
-          if (phone) return;
+          if (phone || glass.stage.fullscreen) return;
           event.preventDefault();
           glass.toggleChat();
+          return;
+        case 'fullscreen':
+          if (phone || !stream) return;
+          event.preventDefault();
+          glass.setStageFullscreen(!glass.stage.fullscreen);
           return;
         case 'clip':
           if (!stream) return;

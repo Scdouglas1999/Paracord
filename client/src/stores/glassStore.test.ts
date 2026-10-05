@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { selectStageOpen, useGlassStore } from './glassStore';
+import { selectStageOpen, stageFillsWindow, useGlassStore } from './glassStore';
 
 const LOUNGE = { serverId: 'local', guildId: 'g1', channelId: 'lounge', streamerId: 'vincent' };
 
@@ -10,7 +10,7 @@ beforeEach(() => {
 describe('glassStore', () => {
   it('starts in the conversation with nothing open', () => {
     const s = useGlassStore.getState();
-    expect(s.stage).toEqual({ mode: 'none', chat: false, serverId: null, guildId: null, channelId: null, streamerId: null });
+    expect(s.stage).toEqual({ mode: 'none', chat: false, fullscreen: false, serverId: null, guildId: null, channelId: null, streamerId: null });
     expect(selectStageOpen(s)).toBe(false);
     expect(s.sheet).toBeNull();
   });
@@ -18,7 +18,7 @@ describe('glassStore', () => {
   it('opens a fresh call view in main', () => {
     useGlassStore.getState().openStage(LOUNGE);
     const s = useGlassStore.getState();
-    expect(s.stage).toEqual({ mode: 'main', chat: false, ...LOUNGE });
+    expect(s.stage).toEqual({ mode: 'main', chat: false, fullscreen: false, ...LOUNGE });
     expect(selectStageOpen(s)).toBe(true);
   });
 
@@ -32,7 +32,7 @@ describe('glassStore', () => {
     store.openStage(LOUNGE);
     store.setStageMode('theater');
     store.openStage({ ...LOUNGE, streamerId: 'brendan' });
-    expect(useGlassStore.getState().stage).toEqual({ mode: 'theater', chat: false, ...LOUNGE, streamerId: 'brendan' });
+    expect(useGlassStore.getState().stage).toEqual({ mode: 'theater', chat: false, fullscreen: false, ...LOUNGE, streamerId: 'brendan' });
   });
 
   it('moves between main and theater', () => {
@@ -75,7 +75,38 @@ describe('glassStore', () => {
     const store = useGlassStore.getState();
     store.setStageMode('theater');
     store.toggleChat();
-    expect(useGlassStore.getState().stage).toEqual({ mode: 'none', chat: false, serverId: null, guildId: null, channelId: null, streamerId: null });
+    expect(useGlassStore.getState().stage).toEqual({ mode: 'none', chat: false, fullscreen: false, serverId: null, guildId: null, channelId: null, streamerId: null });
+  });
+
+  it('full screen is a layer over the layout: on only with a stream, off keeps the mode (§7.7)', () => {
+    const store = useGlassStore.getState();
+    store.setStageFullscreen(true);
+    expect(useGlassStore.getState().stage.fullscreen).toBe(false);
+    store.openStage({ ...LOUNGE, streamerId: null });
+    store.setStageFullscreen(true);
+    expect(useGlassStore.getState().stage.fullscreen).toBe(false);
+    store.openStage(LOUNGE);
+    store.setStageFullscreen(true);
+    expect(useGlassStore.getState().stage).toMatchObject({ mode: 'main', fullscreen: true });
+    expect(stageFillsWindow(useGlassStore.getState().stage)).toBe(true);
+    // Another stream keeps it; nobody's stream ends it.
+    store.openStage({ ...LOUNGE, streamerId: 'jeremy' });
+    expect(useGlassStore.getState().stage.fullscreen).toBe(true);
+    store.setStageFullscreen(false);
+    expect(useGlassStore.getState().stage).toMatchObject({ mode: 'main', fullscreen: false });
+    expect(stageFillsWindow(useGlassStore.getState().stage)).toBe(false);
+    store.setStageFullscreen(true);
+    store.openStage({ ...LOUNGE, streamerId: null });
+    expect(useGlassStore.getState().stage.fullscreen).toBe(false);
+    // T leaves full screen into the layout it names; closing forgets it.
+    store.openStage(LOUNGE);
+    store.setStageFullscreen(true);
+    store.setStageMode('theater');
+    expect(useGlassStore.getState().stage).toMatchObject({ mode: 'theater', fullscreen: false });
+    expect(stageFillsWindow(useGlassStore.getState().stage)).toBe(true);
+    store.setStageFullscreen(true);
+    store.closeStage();
+    expect(useGlassStore.getState().stage.fullscreen).toBe(false);
   });
 
   it('opens and closes sheets', () => {

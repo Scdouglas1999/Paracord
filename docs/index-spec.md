@@ -556,10 +556,6 @@ is the only send motion. Index does not change send behavior.
 ## 5. Motion
 
 Curves: **spring** `cubic-bezier(.32,.72,0,1)`; **ease** `cubic-bezier(.2,.8,.2,1)`.
-All durations below are for full motion; reduced motion replaces every move
-with a 100ms opacity crossfade, removes pings and lifts, and stills the
-waveform. Every animation is transform/opacity (Web Animations or CSS) and is
-triggered by an event; nothing loops at rest. Animations are canceled and
 Every duration below is 1/2.2 of the prototype's (the owner, after living in the
 app: "the animations are too slow ... maybe 2x faster, maybe slightly beyond").
 Curves, distances, scales and stagger shapes are the prototype's, only the clock
@@ -748,7 +744,8 @@ hairline, one cream primary, text secondary actions. `BrandSplash` unchanged.
 ### 7.1 State
 
 `glassStore.stage` keeps one shape: `mode: 'none' | 'main' | 'theater'`
-(Glass's `side` becomes `main`), `chat: boolean` (H), target
+(Glass's `side` becomes `main`), `chat: boolean` (H), `fullscreen: boolean`
+(F, §7.7: a layer over `mode`, which it leaves as it was), target
 `{ guildId, channelId, streamerId | null }`. Watching without joining is the
 stage open with a `streamerId` while not joined (the existing `startWatch` /
 `stopWatch` view session). `browseOpen`, `pillExpanded` and
@@ -760,7 +757,8 @@ The call surface (§3.1) over main at inset 10:
 
 - **Header**: speaker glyph (amber), room name 18/700, server name 13 amber
   ("Direct call" for DMs), spacer, then icon controls: chat (H), theater (T),
-  and the **Back to chat** text button (Esc).
+  full screen (F, with a stream in focus), and the **Back to chat** text
+  button (Esc).
 - **Content**:
   - No stream in focus: the people grid (2 columns, 3 above 4 people, 4 above
     9; tiles 16:9 when anyone has a camera, otherwise as the prototype's tall
@@ -771,7 +769,8 @@ The call surface (§3.1) over main at inset 10:
     16:9, radius 20, fills the content area above a 112px filmstrip of people
     tiles (camera video or a 52px avatar chip); click any tile to focus it;
     the stream's overlay shows "Vincent's screen", volume and quality
-    (`StreamSound`) on hover.
+    (`StreamSound`), Show everyone and Full screen on hover. A double click
+    on the stream goes full screen (§7.7).
   - With **chat** on (H): the room's own text chat as a 360px column at the
     content's right, an inner panel `rgba(255,255,255,.03)` radius 20 with the
     same bubbles and a narrow message box. In DM calls it is the DM.
@@ -787,7 +786,12 @@ The call surface (§3.1) over main at inset 10:
     requests in the chat column header (the existing `StageChannelPanel`).
 - **Theater** (T): §5.9, the surface over the whole window at inset 10; the
   chat column, when on, stays inside it; when chat is off, new messages surface
-  over the stream bottom-left (the existing `SurfacingMessages`).
+  over the stream bottom-left (the existing `SurfacingMessages`). **With a
+  stream in focus theater is "the stream, big"** (owner, 2026-10-05): the
+  surface covers the window edge to edge (inset 0, no radius), the stream
+  fills it, and the header, controls and filmstrip are the auto-hiding chrome
+  of §7.7 instead of rows around it. The chat column, when on, keeps a 384px
+  column at the right (the chrome spans the rest).
 - The clip toast and the Together stage keep their Glass behavior
   (glass-spec §6.4) inside the call surface. **There are no stream reactions**
   (the flame and heart over a stream): the owner removed them on purpose
@@ -808,9 +812,11 @@ out of a call. Joining from watch keeps the view open.
 
 ### 7.4 Keyboard
 
-While the call view is open: Esc (theater → main → closed), T theater, H chat,
-C clip (when a stream is in focus). Glass's S (browse) is retired. Global voice
-keys (Ctrl+Shift+M mute, Ctrl+Shift+D deafen, push-to-talk) are unchanged.
+While the call view is open: Esc (full screen → the layout under it; theater
+→ main → closed), T theater (from full screen: theater), H chat (not in full
+screen), F full screen and C clip (when a stream is in focus). Glass's S
+(browse) is retired. Global voice keys (Ctrl+Shift+M mute, Ctrl+Shift+D
+deafen, push-to-talk) are unchanged.
 
 ### 7.5 DM calls
 
@@ -832,6 +838,51 @@ On the desktop, video draws into native surfaces beneath the webview
   the move and the surface attaches when the move settles.
 - Anything drawn over native video (controls, toasts, the clip toast) is legible without `backdrop-filter`: near-solid fills.
 - The `data-native-underlay-clear` contract on the shell root is kept.
+
+### 7.7 Full screen (desktop and browser)
+
+"The stream, whole screen" (owner, 2026-10-05), next to theater's "the stream,
+big".
+
+- **Entry**: the Full screen control in the header and on the stream's hover
+  overlay (four corners out), a double click on the stream, or F. Only with a
+  stream in focus. **Exit**: Esc, F, the same control (four corners in), or a
+  double click; the window comes back as it was (maximized, or its size and
+  position) and the call view returns to the layout under full screen (main
+  or theater, the chat column as it was). Back to chat from full screen closes
+  the view and leaves full screen. Showing everyone (no stream in focus) ends
+  it.
+- **The window**: the desktop app's window goes full screen (Tauri
+  `setFullscreen`; the size, position and maximized state are put back if the
+  window manager did not). The browser puts the document full screen (the
+  Fullscreen API on the root, so the call's popovers, portaled to the body,
+  still show). A refusal is said in a toast and the view goes back; an exit
+  from outside (the browser's own Esc, the compositor) is followed.
+- **The layout**: the frame marks `data-call-fill`; the call host is the whole
+  window (inset 0), the surface square-cornered on the letterbox black
+  (`--ix-letterbox`), the stream box the whole surface, letterboxed only by
+  its own aspect (contain). Settled, the page beneath (sidebar, main, banners)
+  is not drawn and its loops pause; during a move it stays.
+- **The chrome**: the header (whose stream it is, the stream's sound and
+  quality, Show everyone, Exit full screen, Back to chat), the call controls,
+  and a filmstrip of 64px faces (no cameras: one fewer native surface under a
+  stream that fills the window; the talker's ring, no waveform) float over the
+  stream on dark scrims (`--ix-chrome-scrim`), near-solid buttons. They show
+  on a pointer move, a tap or a key, and go after **2 s** of stillness: an 80ms
+  fade (`--duration-normal`) and a 6px slide, then not painted at all, the
+  cursor hidden over the stream. They stay while the pointer rests on one of
+  their controls, while a menu they opened is up, or while the keyboard is on
+  them. Nothing animates at rest. Reduced motion: the same fade, no slide.
+- **Motion**: going full screen and back is the theater FLIP (`ix-call:theater`,
+  §5.9) from where the surface was to the whole window, while the window
+  changes size under it.
+- **Native video** (§7.6): every change holds the move guard until the window
+  has its new size and the page has painted it twice (at most 900ms): posters
+  during the change, the holes reopened at the settled geometry, never a
+  surface at the old one.
+- **Phone** (§9): unchanged. Its full screen stays the sheet's own (turned
+  sideways, or the header's Full screen, which now uses the same four-corner
+  glyph); F is the desktop's and the browser's.
 
 ---
 

@@ -10,6 +10,7 @@ import { useGlassStore, type StageTarget } from '../../../stores/glassStore';
 import { useGuildStore } from '../../../stores/guildStore';
 import { useMemberStore } from '../../../stores/memberStore';
 import { useRemoteSpeakingStore } from '../../../stores/remoteSpeakingStore';
+import { useToastStore } from '../../../stores/toastStore';
 import { useVoiceStore } from '../../../stores/voiceStore';
 import type { VoiceState } from '../../../types';
 import { useJoinMuteStore } from '../../glass/pill/muteStore';
@@ -389,6 +390,104 @@ describe('IX-13 call view', () => {
     expect(useGlassStore.getState().stage.mode).toBe('main');
     act(() => press('Escape'));
     expect(useGlassStore.getState().stage.mode).toBe('none');
+  });
+
+  it('full screen (§7.7): the header button, a double click and F; the stream fills the window, chrome over it; Esc and the button come back', async () => {
+    const root = document.documentElement;
+    let fullscreenElement: Element | null = null;
+    Object.defineProperty(document, 'fullscreenElement', { configurable: true, get: () => fullscreenElement });
+    const request = vi.fn(async () => {
+      fullscreenElement = root;
+      document.dispatchEvent(new Event('fullscreenchange'));
+    });
+    const exit = vi.fn(async () => {
+      fullscreenElement = null;
+      document.dispatchEvent(new Event('fullscreenchange'));
+    });
+    root.requestFullscreen = request as never;
+    document.exitFullscreen = exit as never;
+    try {
+      holdCall([JEREMY, voiceState('vincent', { joined_at: at(10), self_stream: true, self_stream_started_at: at(20), self_video: true }), ME]);
+      renderSlot();
+      act(() => useGlassStore.getState().openStage(GENERAL));
+      expect(view()).toHaveAttribute('data-focus', 'stream');
+      expect(view()).not.toHaveAttribute('data-immersive');
+      // On the stream's own overlay too.
+      expect(within(view()).getByTestId('ix-call-stream-fullscreen')).toHaveAccessibleName('Full screen');
+
+      await act(async () => fireEvent.click(within(view()).getByTestId('ix-call-fullscreen')));
+      expect(useGlassStore.getState().stage).toMatchObject({ mode: 'main', fullscreen: true });
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(view()).toHaveAttribute('data-immersive', 'full');
+      expect(view()).toHaveAttribute('data-chrome', 'shown');
+      // The header leads with whose stream it is and carries its tools; no chat, no theater.
+      const head = view().querySelector('.ix-call-head') as HTMLElement;
+      expect(head.querySelector('.ix-call-stream__label')).toHaveTextContent('Vincent');
+      expect(within(head).getByRole('button', { name: 'Show everyone' })).toBeInTheDocument();
+      expect(within(head).getByTestId('ix-call-fullscreen')).toHaveAccessibleName('Exit full screen');
+      expect(within(head).queryByTestId('ix-call-chat')).toBeNull();
+      expect(within(head).queryByTestId('ix-call-theater')).toBeNull();
+      expect(view().querySelector('.ix-call-stream__overlay')).toBeNull();
+      // The filmstrip is faces only: no camera subscribed under a stream that fills the window.
+      expect(view().querySelectorAll('.ix-call-tile--mini').length).toBeGreaterThan(0);
+      expect(view().querySelector('.ix-call-tile--strip')).toBeNull();
+      expect(engine.live.get('vincent:camera') ?? 0).toBe(0);
+
+      // A double click on the stream comes back, to the layout under full screen.
+      await act(async () => fireEvent.doubleClick(view().querySelector('.ix-call-stream') as HTMLElement));
+      expect(useGlassStore.getState().stage).toMatchObject({ mode: 'main', fullscreen: false });
+      expect(exit).toHaveBeenCalledTimes(1);
+      expect(view()).not.toHaveAttribute('data-immersive');
+      expect(view()).not.toHaveAttribute('data-chrome');
+
+      // F goes; Esc comes back (and the view stays open).
+      await act(async () => press('f'));
+      expect(view()).toHaveAttribute('data-immersive', 'full');
+      await act(async () => press('Escape'));
+      expect(useGlassStore.getState().stage).toMatchObject({ mode: 'main', fullscreen: false });
+      expect(screen.getByTestId('ix-call')).toBeInTheDocument();
+
+      // Leaving full screen from outside (the browser's own Esc) is followed.
+      await act(async () => press('f'));
+      expect(useGlassStore.getState().stage.fullscreen).toBe(true);
+      await act(async () => {
+        fullscreenElement = null;
+        document.dispatchEvent(new Event('fullscreenchange'));
+      });
+      expect(useGlassStore.getState().stage.fullscreen).toBe(false);
+
+      // Theater with a stream is "the stream, big": immersive too, the filmstrip faces only.
+      act(() => press('t'));
+      expect(view()).toHaveAttribute('data-immersive', 'theater');
+      expect(within(view()).getByTestId('ix-call-theater')).toHaveAttribute('aria-pressed', 'true');
+      expect(view().querySelector('.ix-call-tile--mini')).not.toBeNull();
+      // Show everyone leaves the stream: the grid is not immersive.
+      act(() => fireEvent.click(within(view().querySelector('.ix-call-head') as HTMLElement).getByRole('button', { name: 'Show everyone' })));
+      expect(view()).toHaveAttribute('data-focus', 'grid');
+      expect(view()).not.toHaveAttribute('data-immersive');
+    } finally {
+      delete (root as Partial<HTMLElement>).requestFullscreen;
+      delete (document as Partial<Document>).exitFullscreen;
+      delete (document as { fullscreenElement?: unknown }).fullscreenElement;
+    }
+  });
+
+  it('full screen is refused loudly when the browser will not: a toast, and back to the layout', async () => {
+    const root = document.documentElement;
+    root.requestFullscreen = vi.fn(async () => {
+      throw new Error('not allowed');
+    }) as never;
+    try {
+      holdCall([JEREMY, voiceState('vincent', { joined_at: at(10), self_stream: true, self_stream_started_at: at(20) }), ME]);
+      renderSlot();
+      act(() => useGlassStore.getState().openStage(GENERAL));
+      await act(async () => press('f'));
+      await act(async () => {});
+      expect(useGlassStore.getState().stage.fullscreen).toBe(false);
+      expect(useToastStore.getState().toasts.some((entry) => /Could not go full screen: not allowed/.test(entry.message))).toBe(true);
+    } finally {
+      delete (root as Partial<HTMLElement>).requestFullscreen;
+    }
   });
 
   it('a stage channel: speakers are tiles, the audience one "N listening" row, and Request to speak', () => {

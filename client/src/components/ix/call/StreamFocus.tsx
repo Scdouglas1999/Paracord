@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useLayoutEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 
 import type { MediaEngine } from '../../../lib/media/mediaEngine';
 import type { StreamStageTarget } from '../../../stores/glassStore';
@@ -26,6 +26,12 @@ import { activateLabelOf, ListeningRow } from './PeopleGrid';
  * it, on hover: whose screen it is, the stream's sound and quality
  * (`StreamSoundButton`) and Show everyone; the clip toast; in theater with the
  * chat off, messages surfacing bottom left (`SurfacingMessages`).
+ *
+ * Theater and full screen (`immersive`, §7.7): the stream fills the content
+ * area edge to edge, letterboxed only by its own aspect, and the filmstrip
+ * becomes a row of 64px faces (`mini`, no cameras) that comes and goes with
+ * the chrome (`useIdleChrome`). The stream's label and tools move to the
+ * header there. A double click on the stream goes full screen and back.
  */
 export interface StreamFocusProps {
   focus: Exclude<CallFocus, { kind: 'grid' }>;
@@ -47,10 +53,16 @@ export interface StreamFocusProps {
   faceName: (person: StagePerson) => string;
   /** Where "Stream volume and quality" in More finds the overlay's button. */
   soundRef?: React.RefObject<HTMLDivElement | null>;
+  /** The stream fills the window (theater or full screen): no 16:9 box, faces only in the filmstrip. */
+  immersive?: boolean;
+  /** The stream is full screen. */
+  fullscreen?: boolean;
+  /** Full screen and back (the overlay's button, a double click on the stream). */
+  onToggleFullscreen?: () => void;
 }
 
 export function StreamFocus(props: StreamFocusProps) {
-  const { focus, tiles, listening, engine, realVoice, onFocus, faceName } = props;
+  const { focus, tiles, listening, engine, realVoice, onFocus, faceName, immersive = false, onToggleFullscreen } = props;
   const areaRef = useRef<HTMLDivElement | null>(null);
   const strip = tiles.filter((person) => !(focus.kind === 'camera' && person.userId === focus.userId));
   const hasStrip = strip.length > 0 || listening.length > 0;
@@ -71,12 +83,13 @@ export function StreamFocus(props: StreamFocusProps) {
     return () => observer.disconnect();
   }, [hasStrip]);
 
-  const pictureStyle = box ? { width: box.width, height: box.height } : undefined;
+  // Immersive: the stream's box is the whole area (CSS), its picture letterboxed inside.
+  const pictureStyle = box && !immersive ? { width: box.width, height: box.height } : undefined;
   const focused = focus.kind === 'camera' ? tiles.find((person) => person.userId === focus.userId) ?? null : null;
 
   return (
     <div ref={areaRef} className="ix-call-focus" data-focus={focus.kind} data-strip={hasStrip ? 'true' : undefined}>
-      <div className="ix-call-focus__stage">
+      <div className="ix-call-focus__stage" onDoubleClick={onToggleFullscreen ? (event) => toggleOnStream(event, onToggleFullscreen) : undefined}>
         {focus.kind === 'stream' && props.streamTarget ? (
           <StreamPicture {...props} streamTarget={props.streamTarget} style={pictureStyle} />
         ) : focused ? (
@@ -106,7 +119,7 @@ export function StreamFocus(props: StreamFocusProps) {
                 person={person}
                 engine={engine}
                 realVoice={realVoice}
-                variant="strip"
+                variant={immersive ? 'mini' : 'strip'}
                 faceName={faceName(person)}
                 current={current}
                 onActivate={kind && !current ? () => onFocus(person, kind) : null}
@@ -114,11 +127,20 @@ export function StreamFocus(props: StreamFocusProps) {
               />
             );
           })}
-          {listening.length > 0 && <ListeningRow people={listening} faceName={faceName} />}
+          {listening.length > 0 && !immersive && <ListeningRow people={listening} faceName={faceName} />}
         </div>
       )}
     </div>
   );
+}
+
+/** A double click on the stream itself (not on a control over it) goes full screen and back. */
+function toggleOnStream(event: MouseEvent<HTMLElement>, toggle: () => void): void {
+  const target = event.target as Element | null;
+  if (!target?.closest('.ix-call-stream')) return;
+  if (target.closest('button, a, input, [role="button"], .ix-call-stream__overlay, .glass-clip-toast')) return;
+  event.preventDefault();
+  toggle();
 }
 
 function StreamPicture({
@@ -130,6 +152,9 @@ function StreamPicture({
   onShowEveryone,
   soundRef,
   style,
+  immersive = false,
+  fullscreen = false,
+  onToggleFullscreen,
 }: StreamFocusProps & { streamTarget: StreamStageTarget; style: React.CSSProperties | undefined }) {
   const { view, watchAgain } = useStageWatch(streamTarget);
   const [hasPicture, setHasPicture] = useState(false);
@@ -162,26 +187,58 @@ function StreamPicture({
       className="ix-call-stream"
       style={style}
     >
-      <div className="ix-call-stream__overlay" ref={soundRef}>
-        <span className="ix-call-stream__label">
-          <span className="ix-call-stream__who">{model.label}</span>
-          {watching && <span className="ix-call-stream__count">{watching}</span>}
-        </span>
-        <span className="ix-call-stream__tools">
-          <StreamSoundButton className="ix-call-stream__tool" />
-          <button
-            type="button"
-            className="ix-call-stream__tool"
-            aria-label="Show everyone"
-            title="Show everyone. You stay in the call."
-            onClick={onShowEveryone}
-          >
-            <IxGlyph name="people" size={17} />
-          </button>
-        </span>
-      </div>
+      {/* Immersive: the label and these tools are the header's (CallView). */}
+      {!immersive && (
+        <div className="ix-call-stream__overlay" ref={soundRef}>
+          <StreamLabel label={model.label} watching={watching} />
+          <span className="ix-call-stream__tools">
+            <StreamTools onShowEveryone={onShowEveryone} />
+            {onToggleFullscreen && (
+              <button
+                type="button"
+                className="ix-call-stream__tool"
+                aria-label={fullscreen ? 'Exit full screen' : 'Full screen'}
+                aria-keyshortcuts="F"
+                title={fullscreen ? 'Exit full screen (F)' : 'Full screen (F)'}
+                data-testid="ix-call-stream-fullscreen"
+                onClick={onToggleFullscreen}
+              >
+                <IxGlyph name={fullscreen ? 'fullScreenExit' : 'fullScreen'} size={17} />
+              </button>
+            )}
+          </span>
+        </div>
+      )}
       <ClipToast target={{ ...streamTarget, streamerName: model.streamerName }} />
       <SurfacingMessages active={surfacing} onShowChat={onShowChat} />
     </StreamSurface>
+  );
+}
+
+/** "Vincent's screen · 3 watching": over the stream, or leading the header when the stream fills the window. */
+export function StreamLabel({ label, watching }: { label: string; watching: string | null }) {
+  return (
+    <span className="ix-call-stream__label">
+      <span className="ix-call-stream__who">{label}</span>
+      {watching && <span className="ix-call-stream__count">{watching}</span>}
+    </span>
+  );
+}
+
+/** The stream's own tools: its sound and quality, and Show everyone. */
+export function StreamTools({ onShowEveryone }: { onShowEveryone: () => void }) {
+  return (
+    <>
+      <StreamSoundButton className="ix-call-stream__tool" />
+      <button
+        type="button"
+        className="ix-call-stream__tool"
+        aria-label="Show everyone"
+        title="Show everyone. You stay in the call."
+        onClick={onShowEveryone}
+      >
+        <IxGlyph name="people" size={17} />
+      </button>
+    </>
   );
 }

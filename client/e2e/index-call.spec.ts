@@ -273,6 +273,125 @@ test.describe('IX-13 call view', () => {
     ).toEqual({ watching: false, connected: true, channel: CH.fuelRoomGeneral });
   });
 
+  test('full screen (§7.7): the stream edge to edge, chrome that comes and goes, back by Esc, a double click and F', async ({ page }) => {
+    const h = await joinedInFuel(page);
+    await h.setClock(CLOCK.visit);
+    await navigate(page, h.routes.channel('gnLounge'));
+    const lounge = roomCard(page, 'streaming');
+    await page.waitForTimeout(900);
+    await lounge.getByTestId('ix-card-watch').click();
+    const view = callView(page);
+    const stream = view.locator('.ix-call-stream');
+    await expect(stream).toHaveAttribute('data-picture', 'true', { timeout: 10_000 });
+    await callSettles(page);
+    const mainBox = (await view.boundingBox())!;
+    const isFull = () => page.evaluate(() => document.fullscreenElement === document.documentElement);
+    const chrome = () => view.getAttribute('data-chrome');
+
+    // The header's button. The surface FLIPs to the whole window (the theater move), and the page goes full screen.
+    await forget(page);
+    await view.getByTestId('ix-call-fullscreen').click();
+    await expect(page.locator('.ix-frame')).toHaveAttribute('data-call-fill', 'true');
+    await expect(view).toHaveAttribute('data-immersive', 'full');
+    await expect.poll(isFull).toBe(true);
+    const flip = await played(page);
+    expect(flip.map((entry) => entry.id)).toContain('ix-call:theater');
+    onlyTransformAndOpacity(flip);
+    await callSettles(page);
+    const viewport = page.viewportSize()!;
+    expect(await view.boundingBox()).toEqual({ x: 0, y: 0, width: viewport.width, height: viewport.height });
+    // The stream fills it; no 16:9 box, no radius, no filmstrip row under it.
+    expect(await stream.boundingBox()).toEqual({ x: 0, y: 0, width: viewport.width, height: viewport.height });
+    await expect(stream).toHaveCSS('border-top-left-radius', '0px');
+    await expect(view.locator('.ix-call-stream__overlay')).toHaveCount(0);
+    await expect(view.locator('.ix-call-head .ix-call-stream__who')).toHaveText("Vincent's screen");
+    await expect(view.getByTestId('ix-call-chat')).toHaveCount(0);
+    await expect(view.locator('.ix-call-strip .ix-call-tile--mini')).toHaveCount(3);
+    await expect(view.getByTestId('ix-call-fullscreen')).toHaveAccessibleName('Exit full screen');
+    await page.mouse.move(640, 300);
+    await page.mouse.move(650, 310);
+    expect(await chrome()).toBe('shown');
+    await page.waitForTimeout(300);
+    await shoot(page, 'call-fullscreen-chrome');
+
+    // Two still seconds: the chrome fades (80ms) and is gone, the cursor too; nothing runs at rest.
+    await expect.poll(chrome, { timeout: 4_000 }).toBe('gone');
+    await expect(view.locator('.ix-call-head')).toHaveCSS('visibility', 'hidden');
+    await expect(view.locator('.ix-call-controls')).toHaveCSS('visibility', 'hidden');
+    await expect(view.locator('.ix-call__main')).toHaveCSS('cursor', 'none');
+    await page.waitForTimeout(400);
+    expect(await page.evaluate(() => document.getAnimations().filter((animation) => animation.playState === 'running').length)).toBe(0);
+    await shoot(page, 'call-fullscreen');
+    // A move brings it back.
+    await page.mouse.move(700, 400);
+    await expect.poll(chrome).toBe('shown');
+    await expect(view.locator('.ix-call-head')).toHaveCSS('opacity', '1');
+
+    // Esc: back to the layout under full screen (main), the page no longer full screen, the view open.
+    await page.keyboard.press('Escape');
+    await expect(view).not.toHaveAttribute('data-immersive', /./);
+    await expect.poll(isFull).toBe(false);
+    await callSettles(page);
+    expect(await view.boundingBox()).toEqual(mainBox);
+    expect(await stage(page)).toMatchObject({ mode: 'main', streamerId: PEOPLE.vincent.id });
+
+    // A double click on the stream, both ways.
+    await stream.dblclick({ position: { x: 200, y: 200 } });
+    await expect(view).toHaveAttribute('data-immersive', 'full');
+    await expect.poll(isFull).toBe(true);
+    await callSettles(page);
+    await stream.dblclick({ position: { x: 200, y: 200 } });
+    await expect(view).not.toHaveAttribute('data-immersive', /./);
+    await expect.poll(isFull).toBe(false);
+    await callSettles(page);
+
+    // F, both ways.
+    await page.keyboard.press('f');
+    await expect(view).toHaveAttribute('data-immersive', 'full');
+    await callSettles(page);
+    await page.keyboard.press('f');
+    await expect(view).not.toHaveAttribute('data-immersive', /./);
+    await expect.poll(isFull).toBe(false);
+    await callSettles(page);
+
+    // Theater with a stream is the stream, big: the whole window, the filmstrip faces over it.
+    await page.keyboard.press('t');
+    await expect(view).toHaveAttribute('data-immersive', 'theater');
+    await callSettles(page);
+    expect(await view.boundingBox()).toEqual({ x: 0, y: 0, width: viewport.width, height: viewport.height });
+    expect(await isFull()).toBe(false);
+    await expect(view.locator('.ix-call-strip .ix-call-tile--mini')).toHaveCount(3);
+    await page.mouse.move(600, 300);
+    await page.mouse.move(610, 320);
+    await page.waitForTimeout(300);
+    await shoot(page, 'call-theater-stream-chrome');
+    await expect.poll(chrome, { timeout: 4_000 }).toBe('gone');
+    await shoot(page, 'call-theater-stream');
+    // H: the chat column keeps its place at the right; the stream and its chrome take the rest.
+    await page.keyboard.press('h');
+    const chat = view.getByRole('complementary', { name: 'Chat in Lounge' });
+    await expect(chat).toBeVisible();
+    await page.mouse.move(500, 300);
+    await page.mouse.move(510, 310);
+    await page.waitForTimeout(400);
+    const streamWithChat = (await stream.boundingBox())!;
+    expect(streamWithChat.x).toBe(0);
+    expect(streamWithChat.width).toBeCloseTo(viewport.width - 384, 0);
+    expect((await view.locator('.ix-call-controls').boundingBox())!.width).toBeCloseTo(viewport.width - 384, 0);
+    await shoot(page, 'call-theater-stream-chat');
+    await page.keyboard.press('h');
+    await expect(chat).toHaveCount(0);
+    // F from theater and Esc back to theater.
+    await page.keyboard.press('f');
+    await expect(view).toHaveAttribute('data-immersive', 'full');
+    await page.keyboard.press('Escape');
+    await expect(view).toHaveAttribute('data-immersive', 'theater');
+    await callSettles(page);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.ix-frame')).toHaveAttribute('data-stage', 'main');
+    await expect(page.locator('.ix-frame')).not.toHaveAttribute('data-call-fill', /./);
+  });
+
   test('a camera: a 16:9 grid with live video; a click focuses it above the filmstrip', async ({ page }) => {
     const h = await joinedInFuel(page);
     await h.step('crowd');

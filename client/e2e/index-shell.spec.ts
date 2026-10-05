@@ -208,7 +208,7 @@ test.describe('IX-4 shell', () => {
     expect((await census(page)).animations.filter((id) => id.startsWith('ix-'))).toEqual([]);
   });
 
-  test('the call host sits over main at inset 10, and over the window in theater with the sidebar dimmed', async ({ page }) => {
+  test('the call host sits over main at inset 10; theater with a stream fills the window edge to edge (§7.2, §7.7)', async ({ page }) => {
     await open(page);
     const main = await rectOf(page, '.ix-main');
     const host = await rectOf(page, '#ix-call-host');
@@ -241,11 +241,15 @@ test.describe('IX-4 shell', () => {
     await stage('theater');
     await expect(page.locator('.ix-frame')).toHaveAttribute('data-stage', 'theater');
     const frame = await rectOf(page, '.ix-frame');
+    // A stream in focus: theater is "the stream, big", the whole window, square corners.
+    await expect(page.locator('.ix-frame')).toHaveAttribute('data-call-fill', 'true');
     await callSettled(page);
-    expect(await rectOf(page, '.ix-inset-surface')).toMatchObject({ x: frame.x + 10, y: frame.y + 10, width: frame.width - 20 });
+    expect(await rectOf(page, '.ix-inset-surface')).toMatchObject({ x: frame.x, y: frame.y, width: frame.width, height: frame.height });
+    expect(await surface.evaluate((element) => getComputedStyle(element).borderTopLeftRadius)).toBe('0px');
     await page.waitForTimeout(800);
-    expect(await page.locator('.ix-side').evaluate((element) => getComputedStyle(element).opacity)).toBe('0.4');
+    // The sidebar under it is out of reach and, settled, not drawn at all.
     await expect(page.locator('.ix-side')).toHaveAttribute('inert', '');
+    expect(await page.locator('.ix-side').evaluate((element) => getComputedStyle(element).visibility)).toBe('hidden');
 
     await stage(null);
     await expect(page.locator('#ix-call-host')).toBeEmpty();

@@ -16,6 +16,7 @@ import {
 } from './callMotion';
 import { CallSheet } from './CallSheet';
 import { CallView } from './CallView';
+import { useWindowFullScreen } from './windowFullScreen';
 
 /**
  * The call slot (index-spec §7; IX-4's `CallSlot` contract): always mounted in
@@ -28,6 +29,9 @@ import { CallView } from './CallView';
  *     a still copy of the surface to shrink into the card while the real view
  *     unmounts at once (every video unsubscribed, §7.3);
  *   - a layout effect plays the open and theater FLIPs once React committed;
+ *     going full screen and back is the theater FLIP too (§7.7), from where
+ *     the surface was to the whole window, while `useWindowFullScreen` makes
+ *     the window (or the document) full screen under it;
  *   - every move holds the native video guard (`beginCallMove`) for its length.
  *
  * A newer move commits the running one first (no queueing). The chat column
@@ -48,6 +52,30 @@ interface Running {
 /** How long the native guard covers a chat column change (no animation plays). */
 const CHAT_GUARD_MS = 250;
 
+let moving = 0;
+
+/**
+ * A move of the call view begins: the native guard (`beginCallMove`, desktop
+ * only), and `<html data-ix-call-moving>` on every platform for its length.
+ * While the view fills the window and nothing moves, the page under it is not
+ * drawn at all (ix-call.css): a sidebar nobody can see does not repaint its
+ * waveforms behind a full-screen stream. During a move it stays, so the
+ * surface grows over it rather than over a hole.
+ */
+function beginMove(): () => void {
+  const endNative = beginCallMove();
+  moving += 1;
+  document.documentElement.setAttribute('data-ix-call-moving', '');
+  let ended = false;
+  return () => {
+    if (ended) return;
+    ended = true;
+    endNative();
+    moving = Math.max(0, moving - 1);
+    if (moving === 0) document.documentElement.removeAttribute('data-ix-call-moving');
+  };
+}
+
 export function CallSlot(_props: CallSlotProps) {
   const { layout } = useIxShell();
   const phone = layout === 'phone';
@@ -59,6 +87,8 @@ export function CallSlot(_props: CallSlotProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [open, stage.serverId, stage.guildId, stage.channelId, stage.streamerId],
   );
+  // §7.7: the window is full screen exactly while the view is (never on a phone).
+  useWindowFullScreen(open && !phone && stage.fullscreen);
   const surfaceRef = useRef<HTMLElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
   const pending = useRef<Pending | null>(null);
@@ -83,11 +113,12 @@ export function CallSlot(_props: CallSlotProps) {
       if (was !== 'none' && now !== 'none' && previous.stage.chat !== state.stage.chat) {
         // H: no move; cover native video while the layout settles.
         settle();
-        const end = beginCallMove();
+        const end = beginMove();
         running.current = { animations: [], end, timer: setTimeout(() => settle(), CHAT_GUARD_MS) };
         return;
       }
-      if (was === now || phoneRef.current) return;
+      const fullscreenChanged = was !== 'none' && now !== 'none' && previous.stage.fullscreen !== state.stage.fullscreen;
+      if ((was === now && !fullscreenChanged) || phoneRef.current) return;
       settle();
       if (pending.current) {
         pending.current.end();
@@ -95,13 +126,13 @@ export function CallSlot(_props: CallSlotProps) {
       }
       if (was === 'none') {
         const card = state.stage.channelId ? findCallCard(state.stage.channelId) : null;
-        pending.current = { kind: 'open', origin: card?.getBoundingClientRect() ?? null, end: beginCallMove() };
+        pending.current = { kind: 'open', origin: card?.getBoundingClientRect() ?? null, end: beginMove() };
         return;
       }
       if (now === 'none') {
         const surface = surfaceRef.current;
         if (!surface || !surface.isConnected) return;
-        const end = beginCallMove();
+        const end = beginMove();
         const ghost = ghostOf(surface);
         const card = previous.stage.channelId ? findCallCard(previous.stage.channelId) : null;
         const run: Running = {
@@ -121,7 +152,7 @@ export function CallSlot(_props: CallSlotProps) {
         if (!done) running.current = run;
         return;
       }
-      pending.current = { kind: 'theater', from: surfaceRef.current?.getBoundingClientRect() ?? null, end: beginCallMove() };
+      pending.current = { kind: 'theater', from: surfaceRef.current?.getBoundingClientRect() ?? null, end: beginMove() };
     });
     return () => {
       unsubscribe();
@@ -153,7 +184,7 @@ export function CallSlot(_props: CallSlotProps) {
     onSettle(animations, finish);
     // A hidden window stops the animation clock; the guard still comes off.
     if (running.current === run) run.timer = setTimeout(finish, Math.max(CALL_OPEN_MS, CALL_CLOSE_MS) + 500);
-  }, [stage.mode]);
+  }, [stage.mode, stage.fullscreen]);
 
   if (!target || !open) return null;
   const key = `${target.serverId}:${target.channelId}`;

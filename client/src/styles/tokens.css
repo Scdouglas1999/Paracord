@@ -968,6 +968,11 @@
   /* The scrim behind a dialog (§6.12), and the media viewer's near-black ground (§6.10). */
   --ix-scrim: rgba(0, 0, 0, 0.5);
   --ix-viewer: rgba(8, 8, 10, 0.96);
+  /* A stream filling the window (§7.7): the letterbox around its picture, and the
+     scrims under the chrome over it (dark at the screen's edge, clear toward the middle). */
+  --ix-letterbox: #000;
+  --ix-chrome-scrim: rgba(0, 0, 0, 0.62);
+  --ix-chrome-scrim-end: rgba(0, 0, 0, 0);
 
   /* ---- §2.5 Depth: static, never animated ------------------------------------ */
   --ix-shadow-room: 0 10px 30px rgba(0, 0, 0, 0.25);

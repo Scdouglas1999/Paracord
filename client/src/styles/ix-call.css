@@ -859,3 +859,208 @@ html[data-native-moving] .ix-call-ghost {
 :root[data-motion='reduced'] .ix-call-tile__video {
   transition: none;
 }
+
+/* ---- A stream filling the window: theater and full screen (§7.2, §7.7) -----------------------
+   With a stream in focus, theater and full screen put the surface over the whole
+   window edge to edge (the frame's `data-call-fill`; full screen also makes the
+   window full screen). The stream fills the surface, letterboxed only by its own
+   aspect (contain, black bars: the native surface's, the canvas's, or this
+   ground's). The header, the controls and a row of faces are chrome over it:
+   `data-chrome` (useIdleChrome.ts) shows them on a pointer move and lets them go
+   after two still seconds, fading `--duration-normal` (80ms); once gone they are not painted at all
+   and the cursor hides over the stream. Over native video the chrome is near-solid
+   or a dark scrim, never blurred (§7.6). */
+.ix-frame[data-call-fill='true'] .ix-call-host {
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+}
+
+.ix-frame[data-call-fill='true'] .ix-call-host .ix-inset-surface {
+  border-radius: 0;
+  box-shadow: none;
+}
+
+/* Settled over the whole window, the page under the surface is not drawn at all: nothing
+   behind a stream repaints (the sidebar's waveforms, a typing row), and its loops stop. During
+   a move (CallSlot's `data-ix-call-moving`) it stays, so the surface grows over the page. */
+html:not([data-ix-call-moving]) .ix-frame[data-call-fill='true'] > :is(.ix-side, .ix-main, .ix-banner-host) {
+  visibility: hidden;
+}
+
+html:not([data-ix-call-moving]) .ix-frame[data-call-fill='true'] > :is(.ix-side, .ix-main) * {
+  animation-play-state: paused;
+  transition: none;
+}
+
+/* The page beneath the surface is not painted while a hole is open (as in theater). */
+html[data-native-underlay]:not([data-native-moving]) .ix-frame[data-call-fill='true'] > .ix-side > :not(.ix-tint),
+html[data-native-underlay]:not([data-native-moving]) .ix-frame[data-call-fill='true'] > .ix-side::after {
+  visibility: hidden;
+}
+
+.ix-call[data-immersive] {
+  --ix-call-aside: 0px;
+  background-color: var(--ix-letterbox);
+}
+
+.ix-call[data-immersive][data-chat] {
+  /* The chat column (theater only) keeps its place at the right; the chrome is over the stream. */
+  --ix-call-aside: 384px;
+}
+
+.ix-call[data-immersive] .ix-call__layer {
+  position: relative;
+}
+
+.ix-call[data-immersive] .ix-call__body {
+  gap: 0;
+  padding: 0;
+}
+
+.ix-call[data-immersive] .ix-call__main {
+  position: relative;
+}
+
+.ix-call[data-immersive] .ix-call-chat {
+  flex-basis: var(--ix-call-aside);
+  padding: 12px;
+  background: var(--ix-call);
+}
+
+.ix-call[data-immersive] .ix-call-focus {
+  gap: 0;
+}
+
+.ix-call[data-immersive] .ix-call-focus__stage {
+  display: flex;
+}
+
+.ix-call[data-immersive] .ix-call-stream {
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  aspect-ratio: auto;
+  border-radius: 0;
+}
+
+.ix-call[data-immersive] .ix-call-stream:not([data-underlay='live']) {
+  background-color: var(--ix-letterbox);
+}
+
+.ix-call[data-immersive] .ix-call__together-line {
+  display: none;
+}
+
+/* The chrome. */
+.ix-call[data-immersive] .ix-call-head {
+  position: absolute;
+  top: 0;
+  right: var(--ix-call-aside);
+  left: 0;
+  z-index: 4;
+  padding: 14px 18px 30px;
+  background: linear-gradient(to bottom, var(--ix-chrome-scrim), var(--ix-chrome-scrim-end));
+}
+
+.ix-call-head__stream-tools {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 6px;
+  padding-right: 6px;
+  margin-right: 2px;
+  box-shadow: inset -1px 0 0 var(--ix-line);
+}
+
+.ix-call[data-immersive] .ix-call-controls {
+  position: absolute;
+  right: var(--ix-call-aside);
+  bottom: 0;
+  left: 0;
+  z-index: 4;
+  padding: 40px var(--ix-call-pad) 20px;
+  background: linear-gradient(to top, var(--ix-chrome-scrim), var(--ix-chrome-scrim-end));
+}
+
+.ix-call[data-immersive] .ix-call-strip {
+  position: absolute;
+  right: 0;
+  bottom: 80px;
+  left: 0;
+  z-index: 4;
+  flex: none;
+  gap: 8px;
+  height: 64px;
+  padding: 0 20px;
+}
+
+.ix-call-tile--mini {
+  flex: 0 0 auto;
+  width: 64px;
+  height: 64px;
+  border-radius: 16px;
+  background: var(--ix-pop-solid);
+}
+
+.ix-call-tile--mini .ix-call-tile__ground {
+  display: none;
+}
+
+.ix-call-tile--mini .ix-call-tile__name {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+/* Over the stream: near-solid fills, never the translucent ones the call surface uses. */
+.ix-call[data-immersive] .ix-call-head__tool,
+.ix-call[data-immersive] .ix-call-head__back,
+.ix-call[data-immersive] .ix-call-btn:not(.ix-call-btn--danger, .ix-call-btn--cream) {
+  background: var(--ix-pop-solid);
+}
+
+.ix-call[data-immersive] .ix-call-head__tool:hover,
+.ix-call[data-immersive] .ix-call-head__back:hover,
+.ix-call[data-immersive] .ix-call-btn:not(.ix-call-btn--danger, .ix-call-btn--cream):hover {
+  background: color-mix(in srgb, var(--ix-ink) 12%, var(--ix-pop-solid));
+}
+
+.ix-call[data-immersive] .ix-call-btn--danger {
+  background: color-mix(in srgb, var(--ix-danger-ink) 30%, var(--ix-pop-solid));
+}
+
+.ix-call[data-immersive] :is(.ix-call-head, .ix-call-controls, .ix-call-strip) {
+  transition: opacity var(--duration-normal) var(--ix-ease), transform var(--duration-normal) var(--ix-ease);
+}
+
+.ix-call[data-immersive]:is([data-chrome='hidden'], [data-chrome='gone']) :is(.ix-call-head, .ix-call-controls, .ix-call-strip) {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.ix-call[data-immersive]:is([data-chrome='hidden'], [data-chrome='gone']) .ix-call-head {
+  transform: translateY(-6px);
+}
+
+.ix-call[data-immersive]:is([data-chrome='hidden'], [data-chrome='gone']) :is(.ix-call-controls, .ix-call-strip) {
+  transform: translateY(6px);
+}
+
+/* Gone: not painted at all (nothing composited over the stream at rest), and no cursor over it. */
+.ix-call[data-immersive][data-chrome='gone'] :is(.ix-call-head, .ix-call-controls, .ix-call-strip) {
+  visibility: hidden;
+}
+
+.ix-call[data-immersive][data-chrome='gone'] .ix-call__main,
+.ix-call[data-immersive][data-chrome='gone'] .ix-call__main * {
+  cursor: none;
+}
+
+:root[data-motion='reduced'] .ix-call[data-immersive] :is(.ix-call-head, .ix-call-controls, .ix-call-strip) {
+  transform: none;
+  transition: opacity var(--duration-normal) linear;
+}

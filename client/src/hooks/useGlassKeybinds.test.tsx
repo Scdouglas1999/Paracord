@@ -41,6 +41,7 @@ describe('glassKeyAction', () => {
     expect(glassKeyAction({ key: 'T', ...plain })).toBe('theater');
     expect(glassKeyAction({ key: 'h', ...plain })).toBe('chat');
     expect(glassKeyAction({ key: 'c', ...plain })).toBe('clip');
+    expect(glassKeyAction({ key: 'F', ...plain })).toBe('fullscreen');
     expect(glassKeyAction({ key: 'Escape', ...plain })).toBe('stop');
     expect(glassKeyAction({ key: 'x', ...plain })).toBeNull();
     expect(glassKeyAction({ key: 't', ...plain, ctrlKey: true })).toBeNull();
@@ -77,6 +78,40 @@ describe('useGlassKeybinds', () => {
     expect(onStop).not.toHaveBeenCalled();
     press('Escape');
     expect(onStop).toHaveBeenCalledTimes(1);
+  });
+
+  it('F puts the stream full screen and back; Esc leaves full screen first, to the layout under it (§7.7)', () => {
+    const onStop = vi.fn();
+    render(<Keys onStop={onStop} />);
+    useGlassStore.getState().openStage(LOUNGE, 'theater');
+    press('f');
+    expect(useGlassStore.getState().stage).toMatchObject({ mode: 'theater', fullscreen: true });
+    // No chat column in full screen: H waits.
+    press('h');
+    expect(useGlassStore.getState().stage.chat).toBe(false);
+    press('F');
+    expect(useGlassStore.getState().stage).toMatchObject({ mode: 'theater', fullscreen: false });
+    press('f');
+    press('Escape');
+    expect(useGlassStore.getState().stage).toMatchObject({ mode: 'theater', fullscreen: false });
+    press('Escape');
+    expect(useGlassStore.getState().stage.mode).toBe('main');
+    // T from full screen goes to theater.
+    press('f');
+    press('t');
+    expect(useGlassStore.getState().stage).toMatchObject({ mode: 'theater', fullscreen: false });
+    expect(onStop).not.toHaveBeenCalled();
+  });
+
+  it('F needs a stream in focus, and is not the phone’s', () => {
+    const { unmount } = render(<Keys onStop={vi.fn()} stream={false} />);
+    useGlassStore.getState().openStage(LOUNGE);
+    press('f');
+    expect(useGlassStore.getState().stage.fullscreen).toBe(false);
+    unmount();
+    render(<Keys onStop={vi.fn()} phone />);
+    press('f');
+    expect(useGlassStore.getState().stage.fullscreen).toBe(false);
   });
 
   it('C clips the stream on the stage, as the Clip button does', () => {

@@ -300,7 +300,7 @@ export function CallSheet({ channelId, mode, children }: CallSheetProps) {
                 data-testid="ix-call-sheet-exit-full"
                 onClick={exitFullScreen}
               >
-                <IxGlyph name="theater" size={18} />
+                <IxGlyph name="fullScreenExit" size={18} />
               </button>
             )}
           </div>

@@ -7,7 +7,7 @@ import { isStreamTarget, useGlassStore, type OpenStageMode, type StageTarget } f
 import { useVoiceStore } from '../../../stores/voiceStore';
 import type { VoiceState } from '../../../types';
 import { ErrorBoundary } from '../../ErrorBoundary';
-import type { StagePerson } from '../../glass/stage/stageModel';
+import { watchingLabel, type StagePerson } from '../../glass/stage/stageModel';
 import { useStageData } from '../../glass/stage/useStageData';
 import { TogetherNowPlaying, TogetherWatchStage } from '../../voice/together/TogetherStage';
 import { useTogether } from '../../voice/together/useTogether';
@@ -16,13 +16,15 @@ import { CallHeader } from './CallHeader';
 import { ChatColumn } from './ChatColumn';
 import { autoFocusStream, callPeople, callRegionLabel, focusOf } from './callModel';
 import { PeopleGrid } from './PeopleGrid';
-import { StreamFocus } from './StreamFocus';
+import { StreamFocus, StreamLabel, StreamTools } from './StreamFocus';
+import { useIdleChrome } from './useIdleChrome';
 
 /**
  * The Index call view (docs/index-spec.md §7): the call surface over main at
  * inset 10 (over the window in theater), radius 24, `--ix-call`.
  *
- *   header    the channel, the server, chat (H), theater (T), Back to chat (Esc)
+ *   header    the channel, the server, chat (H), theater (T), full screen (F),
+ *             Back to chat (Esc)
  *   content   the people grid; or a stream or a camera in focus above a 112px
  *             filmstrip; or the Watch together player
  *   chat      H: the call's own conversation as a 360px column at the right
@@ -35,6 +37,13 @@ import { StreamFocus } from './StreamFocus';
  * stops the watch; closing the view unmounts every tile and the stream, which
  * unsubscribes all video and the stream's own audio, while the voices go on
  * (§7.3). Leaving the call with nothing being watched closes the view.
+ *
+ * Theater and full screen with a stream in focus (§7.2, §7.7, `data-immersive`):
+ * the frame puts the surface over the whole window, the stream fills it edge
+ * to edge, and the header, controls and filmstrip are chrome over it that
+ * comes with a pointer move and goes after two still seconds
+ * (`useIdleChrome`). Full screen also makes the window full screen (the slot's
+ * `useWindowFullScreen`).
  *
  * The surface (`.ix-inset-surface`, `data-native-underlay-clear`) and the
  * content layer (`.ix-call__layer`, the counter-layer of §5.8) are handed back
@@ -57,6 +66,7 @@ export const CallView = forwardRef(function CallView(
   const callEngine = useVoiceStore((state) => state.mediaEngine);
   const states = useVoiceStore((state) => state.channelParticipants.get(target.channelId) ?? NOBODY);
   const chat = useGlassStore((state) => state.stage.chat);
+  const fullscreen = useGlassStore((state) => state.stage.fullscreen) && !phone;
   const theater = mode === 'theater' && !phone;
 
   const joined = model.relation === 'joined';
@@ -143,6 +153,10 @@ export const CallView = forwardRef(function CallView(
   useGlassKeybinds({ enabled: true, phone, stream: focus.kind === 'stream', onStop: close });
 
   const toggleChat = useCallback(() => useGlassStore.getState().toggleChat(), []);
+  const toggleFullscreen = useCallback(() => {
+    const glass = useGlassStore.getState();
+    glass.setStageFullscreen(!glass.stage.fullscreen);
+  }, []);
   const toggleTheater = useCallback(() => {
     const glass = useGlassStore.getState();
     glass.setStageMode(glass.stage.mode === 'theater' ? 'main' : 'theater');
@@ -160,7 +174,19 @@ export const CallView = forwardRef(function CallView(
     soundRef.current?.querySelector<HTMLButtonElement>('button[aria-haspopup="dialog"]')?.click();
   }, []);
 
-  const showChat = chat && !phone;
+  // A stream filling the window (§7.7): theater or full screen.
+  const immersive = !phone && focus.kind === 'stream' && (theater || fullscreen);
+  const showChat = chat && !phone && !fullscreen;
+  const localSurface = useRef<HTMLElement | null>(null);
+  const setSurface = useCallback(
+    (node: HTMLElement | null) => {
+      localSurface.current = node;
+      if (typeof surfaceRef === 'function') surfaceRef(node);
+      else if (surfaceRef) surfaceRef.current = node;
+    },
+    [surfaceRef],
+  );
+  useIdleChrome(localSurface, immersive);
   let content;
   if (watchTogether && focus.kind === 'grid') {
     content = (
@@ -185,26 +211,31 @@ export const CallView = forwardRef(function CallView(
         listening={listening}
         engine={engine}
         realVoice={realVoice}
-        surfacing={theater && !showChat}
+        surfacing={(theater || fullscreen) && !showChat}
         onShowChat={() => {
           if (!useGlassStore.getState().stage.chat) useGlassStore.getState().toggleChat();
         }}
         onFocus={onFocus}
         onShowEveryone={showEveryone}
         faceName={faceName}
-        soundRef={soundRef}
+        soundRef={immersive ? undefined : soundRef}
+        immersive={immersive}
+        fullscreen={fullscreen}
+        onToggleFullscreen={phone ? undefined : toggleFullscreen}
       />
     );
   }
 
   return (
     <section
-      ref={surfaceRef}
+      ref={setSurface}
       className={cn('ix-inset-surface', 'ix-call')}
       data-testid="ix-call"
       aria-label={callRegionLabel(model)}
       data-native-underlay-clear=""
       data-mode={theater ? 'theater' : 'main'}
+      data-fullscreen={fullscreen ? 'true' : undefined}
+      data-immersive={immersive ? (fullscreen ? 'full' : 'theater') : undefined}
       data-focus={focus.kind}
       data-chat={showChat ? 'true' : undefined}
       data-relation={model.relation}
@@ -217,8 +248,14 @@ export const CallView = forwardRef(function CallView(
           theater={theater || (phone && mode === 'theater')}
           phone={phone}
           stream={focus.kind === 'stream'}
+          fullscreen={fullscreen}
+          immersive={immersive}
+          lead={immersive ? <StreamLabel label={model.label} watching={watchingLabel(watchers)} /> : undefined}
+          streamTools={immersive ? <StreamTools onShowEveryone={showEveryone} /> : undefined}
+          toolsRef={immersive ? soundRef : undefined}
           onToggleChat={toggleChat}
           onToggleTheater={toggleTheater}
+          onToggleFullscreen={toggleFullscreen}
           onBack={close}
         />
         <div className="ix-call__body">
