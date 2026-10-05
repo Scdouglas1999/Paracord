@@ -332,6 +332,18 @@ export class TauriMediaEngine implements MediaEngine {
     try {
       const advertisedCapabilities = await this.getStreamCapabilities().catch(() => null);
       this.assertOpen();
+      // Listen before the session starts. Its SessionJoin makes everyone in
+      // the call wrap a key to this one, and on a warm connection those keys
+      // arrive while `start_voice_session` is still returning: an event with no
+      // listener yet is gone, and nobody re-sends a key until the room changes,
+      // so a rejoin heard nobody. The commands these handlers invoke wait for
+      // the start to finish (the native side's transition lock).
+      await this.initializePublishedTrackListeners();
+      this.assertOpen();
+      await this.initializeMediaKeyListeners();
+      this.assertOpen();
+      await this.initializeTransportListeners();
+      this.assertOpen();
       this.startScheduled = true;
       await this.invokeOwned('start_voice_session', {
         endpoint: relayEndpoint,
@@ -346,12 +358,6 @@ export class TauriMediaEngine implements MediaEngine {
         // (the view slot, beside the call). See `SessionRole` in Rust.
         role: this.role,
       });
-      this.assertOpen();
-      await this.initializePublishedTrackListeners();
-      this.assertOpen();
-      await this.initializeMediaKeyListeners();
-      this.assertOpen();
-      await this.initializeTransportListeners();
       this.assertOpen();
       const tracks = await this.listPublishedTracks().catch(() => []);
       this.assertOpen();

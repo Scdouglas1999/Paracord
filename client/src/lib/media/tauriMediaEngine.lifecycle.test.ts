@@ -53,13 +53,36 @@ describe('native adapter deferred ownership', () => {
     expect(mic).toHaveBeenCalledTimes(2);
   });
 
+  // Joining makes everyone in the call wrap a key to this one, and on a warm
+  // connection those keys arrive before `start_voice_session` returns. A key
+  // delivered before its listener exists is lost for good (nobody re-sends one
+  // until the room changes), so a rejoin heard nobody.
+  it('listens for keys and the roster before it starts the session', async () => {
+    const order: string[] = [];
+    ipc.listen.mockImplementation((event: string) => { order.push(`listen ${event}`); return Promise.resolve(vi.fn()); });
+    ipc.invoke.mockImplementation((command: string) => {
+      order.push(command);
+      return command === 'start_voice_session' ? Promise.resolve({ connected: true }) : Promise.resolve([]);
+    });
+    const media = engine();
+    await media.connect('https://media.example/media', 'test-token', 'pin');
+    const owner = media.sessionOwnerId;
+    const started = order.indexOf('start_voice_session');
+    expect(started).toBeGreaterThan(-1);
+    for (const event of ['media_key_deliver', 'media_stream_key_deliver', 'media_participant_join_details', 'media_track_publish', 'media_transport_lost']) {
+      const at = order.indexOf(`listen ${event}:${owner}`);
+      expect(at, event).toBeGreaterThan(-1);
+      expect(at, event).toBeLessThan(started);
+    }
+  });
+
   it('stops only the dispatched owner when a native connect result is late', async () => {
     const start = deferred<unknown>();
     ipc.invoke.mockImplementation((command) => command === 'start_voice_session' ? start.promise : Promise.resolve([]));
     const old = engine();
     const connect = old.connect('https://media.example/media', 'test-token', 'pin').catch(error => error);
-    await flush();
-    expect(ipc.invoke).toHaveBeenCalledWith('start_voice_session', expect.objectContaining({ ownerId: old.sessionOwnerId }));
+    // The engine registers its listeners first (so no key sent on the join is missed), then starts.
+    await vi.waitFor(() => expect(ipc.invoke).toHaveBeenCalledWith('start_voice_session', expect.objectContaining({ ownerId: old.sessionOwnerId })));
     const next = engine(); next.setMute(true); await old.disconnect(); await flush();
     start.resolve({ connected: true });
     expect((await connect).message).toContain('ended');
