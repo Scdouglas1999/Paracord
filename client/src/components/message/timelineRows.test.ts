@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import { MessageType, type Message } from '../../types';
 import { buildTimelineRows, needsDivider, timeDividerParts, type MessageRow, type TimelineRow } from './timelineRows';
-import type { VoiceLine } from './voiceLines';
 
 /** The Index timeline's row model (docs/index-spec.md §4.11), without React. */
 
@@ -77,12 +76,10 @@ describe('the rows', () => {
     expect(messageRow(rows, 'd').isGrouped).toBe(false);
   });
 
-  it('puts your voice join among the messages at its moment, and it ends the group above it', () => {
-    const line: VoiceLine = { id: 'voice:1', kind: 'joined', guildId: 'g', channelId: 'v', at: at(21, 44) };
-    const rows = build([msg('a', 'j', at(21, 41)), msg('b', 'j', at(21, 43)), msg('c', 'j', at(21, 46))], { voiceLines: [line] });
-    expect(kinds(rows)).toEqual(['divider', 'a', 'b', 'voice', 'c', 'sentinel']);
-    expect(messageRow(rows, 'b').isLastInGroup).toBe(true);
-    expect(messageRow(rows, 'c').isGrouped).toBe(false);
+  it('draws only messages, dividers, the New divider, typing and history: never a voice join', () => {
+    const rows = build([msg('a', 'j', at(21, 41)), msg('b', 'j', at(21, 43)), msg('c', 'j', at(21, 46))]);
+    expect(kinds(rows)).toEqual(['divider', 'a', 'b', 'c', 'sentinel']);
+    expect(messageRow(rows, 'c').isGrouped).toBe(true);
   });
 
   it('draws the skeleton at the top while older history exists, and the typing row at the end', () => {

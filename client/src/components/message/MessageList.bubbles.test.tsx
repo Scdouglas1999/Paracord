@@ -6,7 +6,7 @@ import { MessageType } from '../../types';
 import { entityScopeKey } from '../../lib/serverScope';
 import { configureMotion, resetMotionSwitchForTests } from '../../lib/motion';
 import { installWaapiStub, type WaapiStub } from '../../lib/motion/waapiStub';
-import { resetVoiceLinesForTests, useVoiceLineStore } from './voiceLines';
+import { useVoiceStore } from '../../stores/voiceStore';
 import { parseMarkdown } from '../../lib/markdown';
 import { MessageList, isSystemMessage, systemMessageText } from './MessageList';
 
@@ -15,7 +15,7 @@ import { MessageList, isSystemMessage, systemMessageText } from './MessageList';
  * by author within five minutes with joined corners, the 30px face at the
  * bottom of a group and the name over its first bubble, time dividers, yours
  * cream on the right with no face, the white chip for a mention of you, system
- * lines and your own voice joins, the typing bubble, the New divider, the
+ * lines (never voice joins or leaves), the typing bubble, the New divider, the
  * reactions chip at the corner, media bubbles, the thread line, editing in
  * place, the arrival of somebody else's message, and a row that redraws only
  * when something it draws changed.
@@ -268,8 +268,10 @@ function rowOf(text: string): HTMLElement {
   return row as HTMLElement;
 }
 
+const VOICE_AT_REST = useVoiceStore.getState();
+
 afterEach(() => {
-  resetVoiceLinesForTests();
+  useVoiceStore.setState(VOICE_AT_REST, true);
 });
 
 beforeEach(() => {
@@ -521,27 +523,26 @@ describe('system lines (§4.11)', () => {
       .toBe('Eric renamed the channel to trips');
   });
 
-  it('says "You joined General" where it happened, among the messages, in the server’s first channel', async () => {
+  it('never draws a voice join or leave: who is in a voice channel is the room card\u2019s to show', async () => {
     mocks.useMessagesReturn.messages = [
       message('jeremy', todayAt(0), { content: 'who is up for a run' }),
       message('jeremy', todayAt(1), { content: 'I am in General' }),
       message('nick', todayAt(10), { content: 'on my way' }),
     ];
+    const { container } = renderList();
+    await screen.findByText('on my way');
+    // You join General (this server's voice channel), then leave it.
     act(() => {
-      useVoiceLineStore.getState().add({ kind: 'joined', guildId: 'g1', channelId: 'vc1', at: todayAt(4) });
-      // Another server's voice channel is not this conversation's business.
-      useVoiceLineStore.getState().add({ kind: 'joined', guildId: 'g2', channelId: 'vc9', at: todayAt(5) });
+      useVoiceStore.setState({ connected: true, channelId: 'vc1', guildId: 'g1', callMode: 'joined' });
     });
-    renderList();
-    const line = await screen.findByText('You joined General');
-    const row = line.closest('.ix-tl-system') as HTMLElement;
-    expect(row).toHaveAttribute('data-glyph', 'voice');
-    const after = (a: Element, b: Element) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
-    expect(after(rowOf('I am in General'), row)).toBe(true);
-    expect(after(row, rowOf('on my way'))).toBe(true);
-    expect(screen.getAllByText(/^You joined/)).toHaveLength(1);
-    // A system line breaks the group: Nick's message starts its own.
+    act(() => {
+      useVoiceStore.setState({ connected: false, channelId: null, guildId: null });
+    });
+    expect(screen.queryByText(/joined|left/i)).toBeNull();
+    expect(container.querySelector('.ix-tl-system')).toBeNull();
+    // Jeremy's two messages stay one group.
     expect(rowOf('I am in General')).toHaveAttribute('data-last', 'true');
+    expect(rowOf('who is up for a run')).not.toHaveAttribute('data-last', 'true');
   });
 });
 

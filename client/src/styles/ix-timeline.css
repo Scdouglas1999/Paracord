@@ -197,7 +197,7 @@
   color: var(--ix-ink);
 }
 
-/* "You joined General": centered, 13 ink-3, a 14px glyph (amber for voice), 8 above and below. */
+/* "Nick pinned a message": centered, 13 ink-3, a 14px glyph, 8 above and below. */
 .ix-tl-system {
   display: flex;
   flex-wrap: wrap;
@@ -216,10 +216,6 @@
 .ix-tl-system__glyph {
   display: inline-flex;
   flex: none;
-}
-
-.ix-tl-system[data-glyph='voice'] .ix-tl-system__glyph {
-  color: var(--ix-amber);
 }
 
 .ix-tl-system__time {

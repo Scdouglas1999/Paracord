@@ -109,12 +109,10 @@ function ReplyGlyph({ size = 15 }: { size?: number }) {
   );
 }
 
-export type SystemGlyph = 'voice' | 'call' | 'pin' | 'person' | 'thread' | 'info';
+export type SystemGlyph = 'call' | 'pin' | 'person' | 'thread' | 'info';
 
 function systemGlyph(kind: SystemGlyph) {
   switch (kind) {
-    case 'voice':
-      return <IxGlyph name="speaker" size={14} />;
     case 'call':
       return <IxGlyph name="phone" size={14} />;
     case 'pin':
@@ -130,7 +128,7 @@ function systemGlyph(kind: SystemGlyph) {
 
 /**
  * A line about the conversation, not a bubble (§3.1): centered, 13 ink-3, a
- * 14px glyph (amber for voice). "You joined General", "Nick pinned a message".
+ * 14px glyph. "Nick pinned a message". Voice joins and leaves are never lines.
  */
 export const SystemLine = React.forwardRef<
   HTMLDivElement,

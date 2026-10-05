@@ -88,11 +88,11 @@ describe('lines that are not bubbles', () => {
     expect(onMarkRead).toHaveBeenCalledTimes(1);
   });
 
-  it('a system line is a sentence with a glyph, amber only for voice (by its kind)', () => {
-    render(<SystemLine glyph="voice" text="You joined General" />);
-    const line = screen.getByText('You joined General').parentElement as HTMLElement;
+  it('a system line is a sentence with a glyph (by its kind)', () => {
+    render(<SystemLine glyph="pin" text="Nick pinned a message" />);
+    const line = screen.getByText('Nick pinned a message').parentElement as HTMLElement;
     expect(line).toHaveClass('ix-tl-system');
-    expect(line).toHaveAttribute('data-glyph', 'voice');
+    expect(line).toHaveAttribute('data-glyph', 'pin');
     expect(line.querySelector('svg')).not.toBeNull();
   });
 

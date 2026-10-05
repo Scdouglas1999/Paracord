@@ -9,6 +9,7 @@ import {
   shoot,
   type IndexHarness,
 } from './fixtures/index';
+import { voiceJoin, voiceLeave } from './fixtures/index/steps/motion';
 import { chatter, say } from './fixtures/index/steps/timeline';
 
 /**
@@ -98,7 +99,9 @@ test.describe('the timeline (§4.11)', () => {
     await h.step('arrive');
     await h.step('join');
     await page.waitForTimeout(1600);
-    await expect(page.getByText('You joined General')).toBeVisible();
+    // Your join is the room card's news, never a line in the conversation (§4.11).
+    await expect(feed(page).locator('.ix-tl-system')).toHaveCount(0);
+    await expect(feed(page).getByText(/(joined|left) General/)).toHaveCount(0);
     await shoot(page, 's2-joined');
     await crop(page, 's2-feed');
     await h.setClock(CLOCK.visit);
@@ -117,14 +120,13 @@ test.describe('the timeline (§4.11)', () => {
     await navigate(page, h.routes.place('people'));
     await shoot(page, 's6-people');
     await crop(page, 's6-feed');
-    // The join stays where it happened: between Jeremy's 9:41 messages and the busy stretch.
+    // Nobody's comings and goings reach the conversation: not yours, not theirs.
     await navigate(page, h.routes.channel('fuelGeneral'));
-    await toBottom(page);
-    const line = page.getByText('You joined General');
-    await line.scrollIntoViewIfNeeded();
-    const joined = await rect(line);
-    expect((await rect(bubbleOf(page, 'I’m in General'))).y).toBeLessThan(joined.y);
-    expect((await rect(bubbleOf(page, 'already in, come heckle'))).y).toBeGreaterThan(joined.y);
+    await h.step(voiceJoin, { who: 'nick', room: 'fuelRoomGeneral' });
+    await h.step(voiceLeave, { who: 'nick', room: 'fuelRoomGeneral' });
+    await page.waitForTimeout(400);
+    await expect(feed(page).locator('.ix-tl-system')).toHaveCount(0);
+    await expect(feed(page).getByText(/(joined|left) General/)).toHaveCount(0);
   });
 
   test('the feed keeps the prototype’s metrics', async ({ page }) => {
@@ -182,13 +184,13 @@ test.describe('the timeline (§4.11)', () => {
     const last = await rect(bubbleOf(page, 'yep, bringing the projector'));
     const scroller = await rect(feed(page));
     expect(scroller.y + scroller.height - (last.y + last.height)).toBeCloseTo(16, 0);
-    // The system line: 13 ink-3 with an amber 14px glyph; the divider 12/500, its day 600.
+    // The divider 12/500, its day 600.
     // At rest, nothing in the timeline moves.
     await page.waitForTimeout(2000);
     expect(await running(page)).toEqual([]);
   });
 
-  test('a time divider and your own voice join read as the prototype’s', async ({ page }) => {
+  test('a time divider reads as the prototype’s, and joining voice adds no line', async ({ page }) => {
     const h = await open(page);
     await h.step('arrive');
     await h.step('join');
@@ -197,11 +199,7 @@ test.describe('the timeline (§4.11)', () => {
     await expect(divider).toHaveAccessibleName(/^Today 9:41\s?PM$/);
     expect(await css(divider, ['font-size', 'font-weight'])).toEqual({ 'font-size': '12px', 'font-weight': '500' });
     expect(await css(divider.locator('b'), ['font-weight'])).toEqual({ 'font-weight': '600' });
-    const line = page.locator('.ix-tl-system', { hasText: 'You joined General' });
-    expect(await css(line, ['font-size'])).toEqual({ 'font-size': '13px' });
-    expect(await css(line.locator('.ix-tl-system__glyph'), ['color'])).toEqual({ color: 'rgb(255, 194, 126)' });
-    const glyph = await rect(line.locator('svg'));
-    expect([glyph.width, glyph.height]).toEqual([14, 14]);
+    await expect(feed(page).locator('.ix-tl-system')).toHaveCount(0);
     await crop(page, 'divider-and-join');
   });
 

@@ -58,7 +58,6 @@ interface Pending {
 }
 
 function arrivalKey(row: TimelineRow, me: string | null | undefined): string | null {
-  if (row.type === 'voice') return row.key;
   if (row.type !== 'message') return null;
   if (isPendingMessageId(row.message.id)) return null;
   if (row.message.author?.id && row.message.author.id === me) return null;
@@ -66,7 +65,7 @@ function arrivalKey(row: TimelineRow, me: string | null | undefined): string | n
 }
 
 function trackedKey(row: TimelineRow): string | null {
-  return row.type === 'message' || row.type === 'voice' ? row.key : null;
+  return row.type === 'message' ? row.key : null;
 }
 
 /** The rows on screen: each virtual row's content (the element the list positions). */

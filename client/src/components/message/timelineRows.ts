@@ -1,5 +1,4 @@
 import type { Message } from '../../types';
-import type { VoiceLine } from './voiceLines';
 
 /**
  * The rows the Index timeline draws (docs/index-spec.md §4.11), as a pure
@@ -10,8 +9,8 @@ import type { VoiceLine } from './voiceLines';
  *     five minutes; a reply, a system line or the New divider starts a new group;
  *   - a TIME DIVIDER precedes the first row, and any row that starts a new
  *     calendar day or comes more than 30 minutes after the one before it;
- *   - your own voice joins and leaves are system lines among the messages, at
- *     the moment they happened (`voiceLines.ts`);
+ *   - nobody's voice joins or leaves are drawn here: who is in a voice channel
+ *     is the room card's to show (§4.11);
  *   - the NEW divider sits above the first message you had not read;
  *   - while older history exists, three skeleton bubbles sit at the top.
  *
@@ -45,7 +44,6 @@ export type TimelineRow =
   | { type: 'divider'; key: string; at: string }
   | { type: 'new'; key: 'new' }
   | MessageRow
-  | { type: 'voice'; key: string; line: VoiceLine }
   | { type: 'typing'; key: 'typing' }
   | { type: 'sentinel'; key: 'sentinel' };
 
@@ -105,33 +103,9 @@ export interface BuildRowsInput {
   isSystem: (message: Message) => boolean;
   /** The drawn index of the first unread message, or null. */
   newIndex?: number | null;
-  /** Your voice joins and leaves to show in this conversation. */
-  voiceLines?: readonly VoiceLine[];
   typing?: boolean;
   /** Older history exists that is not loaded. */
   hasMore?: boolean;
-}
-
-type Item =
-  | { kind: 'message'; message: Message; index: number; at: string }
-  | { kind: 'voice'; line: VoiceLine; at: string };
-
-/** Messages and voice lines in time order (a line goes after anything at or before its moment). */
-function interleave(drawn: readonly Message[], lines: readonly VoiceLine[]): Item[] {
-  const items: Item[] = [];
-  const queue = [...lines].sort((a, b) => timeOf(a.at) - timeOf(b.at));
-  let next = 0;
-  drawn.forEach((message, index) => {
-    const at = messageTime(message);
-    const when = timeOf(at);
-    while (next < queue.length && Number.isFinite(when) && timeOf(queue[next].at) < when) {
-      items.push({ kind: 'voice', line: queue[next], at: queue[next].at });
-      next += 1;
-    }
-    items.push({ kind: 'message', message, index, at });
-  });
-  for (; next < queue.length; next += 1) items.push({ kind: 'voice', line: queue[next], at: queue[next].at });
-  return items;
 }
 
 export function buildTimelineRows({
@@ -140,7 +114,6 @@ export function buildTimelineRows({
   replyParentOf,
   isSystem,
   newIndex = null,
-  voiceLines = [],
   typing = false,
   hasMore = false,
 }: BuildRowsInput): TimelineRow[] {
@@ -155,29 +128,19 @@ export function buildTimelineRows({
 
   if (hasMore) rows.push({ type: 'history', key: 'history' });
 
-  const items = interleave(drawn, voiceLines);
   let previousAt: string | null = null;
   let previousMessage: Message | null = null;
   /** The last row was a plain message that a following one may continue. */
   let open: MessageRow | null = null;
 
-  for (const item of items) {
-    const divider = needsDivider(previousAt, item.at);
-    if (item.kind === 'voice') {
-      if (divider) rows.push({ type: 'divider', key: unique(`divider:${item.line.id}`, item.line.id), at: item.at });
-      if (open) open.isLastInGroup = true;
-      open = null;
-      rows.push({ type: 'voice', key: unique(item.line.id, item.line.id), line: item.line });
-      previousAt = item.at || previousAt;
-      continue;
-    }
-
-    const { message, index } = item;
+  drawn.forEach((message, index) => {
+    const at = messageTime(message);
+    const divider = needsDivider(previousAt, at);
     const key = unique(keyOf(message), message.id);
     const system = isSystem(message);
     const parent = replyParentOf(message, previousMessage);
     const atNew = newIndex === index;
-    if (divider) rows.push({ type: 'divider', key: unique(`divider:${key}`, key), at: item.at });
+    if (divider) rows.push({ type: 'divider', key: unique(`divider:${key}`, key), at });
     if (atNew) rows.push({ type: 'new', key: 'new' });
     const continues =
       open !== null &&
@@ -200,9 +163,9 @@ export function buildTimelineRows({
     if (continues && open) open.isLastInGroup = false;
     rows.push(row);
     open = system ? null : row;
-    previousAt = item.at || previousAt;
+    previousAt = at || previousAt;
     previousMessage = message;
-  }
+  });
 
   if (typing) rows.push({ type: 'typing', key: 'typing' });
   rows.push({ type: 'sentinel', key: 'sentinel' });

@@ -82,7 +82,6 @@ import {
   type ReactionTally,
 } from '../glass/cards';
 import { buildTimelineRows, messageTime, type TimelineRow } from './timelineRows';
-import { startVoiceLines, useVoiceLineStore, voiceLineText, type VoiceLine } from './voiceLines';
 import { captureRows, glideFrom, useArrivals } from './useArrivals';
 import { IxMenu, type IxMenuEntry, type MenuAnchor } from '../ix/menus';
 import { eventsHref } from '../guild/eventsRoute';
@@ -156,7 +155,7 @@ export function systemMessageText(message: Message, authorName: string): string 
   }
 }
 
-/** The glyph beside a system line (§3.1): amber only for voice. */
+/** The glyph beside a system line (§3.1). */
 export function systemGlyphOf(message: Message): SystemGlyph {
   switch (Number(message.message_type ?? message.type)) {
     case MessageType.Call:
@@ -909,28 +908,6 @@ function OwnedMessageList({
     return map;
   }, [activeGuildChannels, channelId]);
   const activeTyping = typingUsers.filter((id) => id !== me);
-  // Your own voice joins and leaves (§4.11): recorded app-wide, shown here when
-  // this is the voice channel's own conversation or its server's first channel.
-  useEffect(() => startVoiceLines(), []);
-  const allVoiceLines = useVoiceLineStore((state) => state.lines);
-  const firstTextChannelId = useMemo(() => {
-    let first: Channel | null = null;
-    for (const channel of activeGuildChannels) {
-      const kind = channel.channel_type ?? channel.type;
-      if (kind !== ChannelType.Text && kind !== 5) continue;
-      if (!first || (channel.position ?? 0) < (first.position ?? 0)) first = channel;
-    }
-    return first?.id ?? null;
-  }, [activeGuildChannels]);
-  const voiceLines = useMemo<VoiceLine[]>(
-    () =>
-      activeGuildId
-        ? allVoiceLines.filter(
-            (line) => line.guildId === activeGuildId && (line.channelId === channelId || channelId === firstTextChannelId),
-          )
-        : [],
-    [allVoiceLines, activeGuildId, channelId, firstTextChannelId],
-  );
   const scrollRef = useRef<HTMLDivElement>(null);
   const onScrollerRef = useRef(onScroller);
   onScrollerRef.current = onScroller;
@@ -1204,11 +1181,10 @@ function OwnedMessageList({
         },
         isSystem: isSystemMessage,
         newIndex: newIndex >= 0 ? newIndex : null,
-        voiceLines,
         typing: activeTyping.length > 0,
         hasMore,
       }),
-    [drawn, rowKeys, replyLayoutById, newIndex, voiceLines, activeTyping.length, hasMore],
+    [drawn, rowKeys, replyLayoutById, newIndex, activeTyping.length, hasMore],
   );
 
   // The New divider (§4.11) leaves 2s after the reader reaches the bottom, or
@@ -1341,7 +1317,6 @@ function OwnedMessageList({
       if (!row) return 40;
       // 12px words with 17 above and 8 below (§3.1).
       if (row.type === 'divider' || row.type === 'new') return 40;
-      if (row.type === 'voice') return 35;
       if (row.type === 'history') return 150;
       if (row.type === 'typing') return 48;
       if (row.type === 'sentinel') return 1;
@@ -2697,17 +2672,6 @@ function OwnedMessageList({
 
     if (row.type === 'history') {
       return <HistorySkeleton />;
-    }
-
-    if (row.type === 'voice') {
-      const room = activeGuildChannels.find((channel) => channel.id === row.line.channelId);
-      return (
-        <SystemLine
-          glyph="voice"
-          role="note"
-          text={voiceLineText(row.line, room?.name || 'a voice channel')}
-        />
-      );
     }
 
     if (row.type === 'typing') {

@@ -277,7 +277,7 @@ The window is two flush columns on `--ix-ground`:
 | Group (others) | grid `30px 1fr`, gap 10, align end, margin-top 6; avatar 30 at the group's bottom; name 12.5 ink-3, margin 0 0 3 13 |
 | Bubble | max 520; padding 9 14; radius 19; `--ix-bubble`; 15/1.42; stack gap 3; joined corners 7 on the avatar side (first: bottom; middle: both; last: top) |
 | Your bubble | right-aligned, cream, `--ix-cream-ink`; mirrored joined corners on the right |
-| System line | centered, gap 8, 13 ink-3, glyph 14 (amber for voice), margin 8 0 |
+| System line | centered, gap 8, 13 ink-3, glyph 14, margin 8 0 |
 | Welcome | mark 76 (radius 22, font 34); title 24/600 margin-top 20; line 15 ink-3 margin-top 6; cards `repeat(3, 196px)` gap 12 margin-top 24 |
 | Action card | padding 16; radius 18; `rgba(255,255,255,.045)` + hairline; gap 10; glyph tile 38 radius 12; title 15/700; line 13 ink-3 1.4 |
 | Event card | width 400 (max 100%); radius 20; `--ix-card`; padding 16; grid `auto 1fr`, gap 4 14; day tile 48×52 radius 12 `rgba(255,255,255,.07)`; actions margin-top 10 gap 8, buttons padding 8 12 radius 10 `rgba(255,255,255,.08)` 13.5/600, primary cream |
@@ -485,10 +485,14 @@ transition 135ms; no blur, §1.9).
   ink-3, Vote (cream, one per card).
 - **Events in messages**: the event card (§3.1): day tile, title, "Friday at
   9:00 PM · in General", actions "I'm in" (cream) / "Maybe" / details.
-- **System lines** (§3.1): voice joins in the channel's own room ("You joined
-  General" — your own joins and leaves only, so busy rooms do not flood the
-  feed), pins, thread created, member joined (the server's system channel), call
-  started/ended in DMs. Amber glyph only for voice.
+- **System lines** (§3.1): pins, thread created, member joined (the server's
+  system channel), call started/ended in DMs. **No voice joins or leaves**,
+  yours or anyone's, in any conversation (a text channel, the voice channel's
+  own chat, the call view's chat column): who is in a voice channel is the room
+  card's to show, and a line per join flooded the feed (owner, 2026-10-05). The
+  server writes no message for a voice join either (it never has, older builds
+  included). Screen readers still hear "Jeremy joined General" through the
+  polite live region (§10), which draws nothing.
 - **Typing**: a bubble with three dots beside the typist's avatar at the
   bottom; two or more typists: overlapped faces and "Nick and Maya are typing".
   Dots animate only while visible.
@@ -579,7 +583,7 @@ committed if a newer event of the same kind starts (no queueing).
 | 5.4 | **Pinned call card** | When the card is above the header (another place), switching between other places leaves it still. Switching to or from the call's own server moves it between "above the header" and "under the search" with a FLIP translate, 250ms spring, while the panes slide beneath |
 | 5.5 | **Room goes live / someone joins** | The card enters: `translateY(−8px) scale(.97)`, opacity 0 → none, 275ms spring, 55ms after the content below it starts to move down with a FLIP translate, 275ms spring (the card is translucent: the rows must not slide through it; IX-18). A person row enters the same way, 225ms spring. A person leaving: row fades and scales to .97, 115ms ease, then rows below FLIP up, 205ms spring. The room emptying: the card reverses (135ms ease) and the list FLIPs up. Dock: live dot scales in, 205ms spring, and **pings once**: an amber 2px ring around the dot from `scale(1)`, opacity 1 to `scale(2.2)`, opacity 0, 545ms ease (only when that server is not current) |
 | 5.6 | **Plan a night** | The draft event card grows out of the clicked action card: FLIP from the action card's rect (translate + scale), opacity .5→1, 295ms spring; the welcome crossfades out (135ms) |
-| 5.7 | **Join** | The card swaps to "yours": the yours layer (stronger tint, edge and glow, drawn as a second background layer) fades in 180ms ease. Your row flies from the toolbar avatar to its place: translate + scale from the avatar's rect, 340ms spring, above the other rows; your name holds at opacity 0 until 45% then fades in, and the new controls are there at once, as in the prototype (IX-18). A "You joined General" system line pops into the room's own channel if it is open |
+| 5.7 | **Join** | The card swaps to "yours": the yours layer (stronger tint, edge and glow, drawn as a second background layer) fades in 180ms ease. Your row flies from the toolbar avatar to its place: translate + scale from the avatar's rect, 340ms spring, above the other rows; your name holds at opacity 0 until 45% then fades in, and the new controls are there at once, as in the prototype (IX-18). No line is added to any conversation (§4.11) |
 | 5.8 | **Open call / Back to chat** | Open: the call surface grows out of the card: from the card's rect (translate + non-uniform scale, `transform-origin: 0 0`), opacity .3→1, 275ms spring; the tiles and controls fade in from 40% to 75% (they do not scale with the surface; they are in a counter-layer that only fades; whole by 75% so the call is drawn when the surface arrives, as the prototype; IX-18). Back to chat: the reverse into the card, 205ms spring, then hidden. The card's wide control label crossfades between "Open call" and "Back to chat", 90ms. Native video surfaces show their poster frame during the move and attach after it settles (§7.6) |
 | 5.9 | **Theater** (T) | The call surface FLIPs from main's inset to the window's inset 10 over the sidebar, 275ms spring; the sidebar dims to opacity .4 beneath. Reverse the same |
 | 5.10 | **Message arrives** (from others) | The new group or bubble from `translateY(14px) scale(.96)`, opacity 0, 250ms spring, `transform-origin` at the avatar side; earlier content FLIPs up when it was at the bottom |
