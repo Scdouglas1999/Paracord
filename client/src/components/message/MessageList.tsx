@@ -1958,12 +1958,12 @@ function OwnedMessageList({
     return () => mediaQuery.removeEventListener('change', updatePointerMode);
   }, []);
 
-  /* §5.1 phone pull: dragging the timeline down at its very top reveals the
-     room's lamp — a small light that brightens with the pull distance and
-     flickers once when the refresh fires. A light, never a spinner. The
-     gesture only watches: every listener is passive, the timeline's own scroll
-     is untouched, and the lamp is driven by direct style writes (no React
-     state per move). It exists only where a pull is physically possible. */
+  /* Phone pull: dragging the timeline down at its very top reveals a small
+     ring under the toolbar (`.ix-pull`, ix-phone.css) that fills in with the
+     pull distance and flickers once when the refresh fires. Never a spinner.
+     The gesture only watches: every listener is passive, the timeline's own
+     scroll is untouched, and the ring is driven by direct style writes (no
+     React state per move). It exists only where a pull is physically possible. */
   const pullLampRef = useRef<HTMLSpanElement>(null);
   useEffect(() => {
     const scroller = scrollRef.current;
@@ -2000,6 +2000,9 @@ function OwnedMessageList({
         () => {
           settle = null;
           if (!pulling) rest();
+          // It filled forwards only to bridge to the rest state just written:
+          // nothing stays in the document's animations at rest (IX-16).
+          leaving.cancel();
         },
         () => {
           settle = null;
@@ -2031,7 +2034,8 @@ function OwnedMessageList({
       }
       const dy = (event.touches[0]?.clientY ?? 0) - startY;
       pull = Math.max(0, dy - DEAD_ZONE);
-      paint(pull);
+      // Inside the dead zone nothing shows (a tap, or a sideways swipe).
+      if (pull > 0) paint(pull);
     };
     const onEnd = () => {
       if (!pulling) return;
@@ -3477,14 +3481,14 @@ function OwnedMessageList({
       <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {newMessageAnnouncement}
       </div>
-      {/* The pull lamp: a window the dragged-down timeline reveals. Its
-          position and glow are driven from the touch listeners above; it is
-          scenery, never interactive. */}
+      {/* The pull ring the dragged-down timeline reveals. Its position and
+          strength are driven from the touch listeners above; it is scenery,
+          never interactive. */}
       {isCoarsePointer && (
         <span
           ref={pullLampRef}
           aria-hidden
-          className="pc-window is-reading pointer-events-none absolute left-1/2 top-1.5 z-10 h-2.5 w-2.5 -translate-x-1/2 opacity-0"
+          className="ix-pull pointer-events-none absolute left-1/2 z-10 -translate-x-1/2 opacity-0"
         />
       )}
       <div

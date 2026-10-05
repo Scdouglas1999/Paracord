@@ -1,79 +1,144 @@
-import { prefersReducedMotion } from '../../../lib/motion/reducedMotion';
-import { GLASS_LAYOUT_CURVE } from '../../../lib/motion/sharedElement';
+import { IX_REDUCED_MS, IX_SPRING, canAnimate, ixReduced } from '../../ix/motion';
 import type { PhoneScreen } from './phoneNav';
 
 /**
- * The phone's screen change (docs/glass-spec.md §9): the conversation slides in
- * over places from the right, and places steps back a little and fades; going
- * back is the same move reversed. Reduced motion: a 150ms crossfade in place.
+ * The phone's push and pop (docs/index-spec.md §9; IX-16, which owns this file
+ * now): a page slides in from the right over the screen it was opened from,
+ * 360ms on the spring, while that screen moves 30% to the left beneath it and
+ * dims; going back is the same move reversed. Reduced motion: a 150ms
+ * crossfade in place.
+ *
+ * One model serves every push on a phone:
+ *
+ *   top     the page that is pushed (main over the sidebar; a sheet over main)
+ *   under   the screen it covers
+ *   shade   a dim layer inside `under` (`.ix-phone-shade`), so the screen
+ *           beneath reads as behind without a filter
+ *
+ * and one number places all three: `x`, how far the top page has been pushed
+ * away. `x = 0` is the top page covering everything (pushed); `x = 1` is the
+ * top page gone off the right edge (the screen beneath is in front). The edge
+ * swipe drives `x` with a finger and hands the rest of the move to these
+ * functions, so a gesture and a tap end in the same frames.
  *
  * Only `transform` and `opacity` move (the motion lint). The resting states are
- * CSS (glass-phone.css): the screen in front is at rest, the one behind is off to
- * its side and inert. This plays the way from one to the other, so the first
- * frame is exactly what was on screen and the last is what the CSS now says.
- * Web Animations rather than a CSS transition so that reduced motion can have
- * its own 150ms: the global switch zeroes every CSS duration (utilities.css).
+ * CSS (ix-phone.css): the screen in front at rest, the one behind at -30% with
+ * its shade up. These play the way from one resting state to the other, so the
+ * first frame is what was on screen and the last is what the CSS now says, and
+ * nothing fills forwards.
  */
 
-/** The slide, in ms. Shorter than the 650ms layout moves: it is a navigation, not a scene change. */
+/** The push, in ms (§9). */
 export const PHONE_SLIDE_MS = 360;
-/** The reduced-motion crossfade (`--glass-ms-reduced`). */
-export const PHONE_FADE_MS = 150;
+/** The reduced-motion crossfade. */
+export const PHONE_FADE_MS = IX_REDUCED_MS;
+/** How far the screen beneath moves while a page covers it (§9: "the root moves -30% beneath"). */
+export const UNDER_SHIFT = 30;
+/** The shortest finish a released swipe plays: anything less reads as a snap. */
+export const PHONE_MIN_FINISH_MS = 140;
 
-const EASING = `cubic-bezier(${GLASS_LAYOUT_CURVE.join(', ')})`;
-/** How far places steps back while the conversation covers it. */
-const PLACES_SHIFT = 'translateX(-22%)';
-
-type Frame = Keyframe[];
-
-function animatable(el: HTMLElement | null): el is HTMLElement {
-  return el !== null && typeof el.animate === 'function';
+export interface PushLayers {
+  top: HTMLElement | null;
+  under: HTMLElement | null;
+  shade: HTMLElement | null;
 }
 
-/** Play the change from `from` to `to`. Returns the animations so the caller can cancel them. */
+const round = (value: number) => Math.round(value * 1000) / 1000;
+
+/** The top page's transform at `x`. */
+export function topTransform(x: number): string {
+  return x <= 0 ? 'none' : `translateX(${round(x * 100)}%)`;
+}
+
+/** The covered screen's transform at `x`. */
+export function underTransform(x: number): string {
+  return x >= 1 ? 'none' : `translateX(${round(-UNDER_SHIFT * (1 - x))}%)`;
+}
+
+/** The shade's opacity at `x`. */
+export function shadeOpacity(x: number): number {
+  return round(Math.min(1, Math.max(0, 1 - x)));
+}
+
+/** Write `x` straight onto the layers (a finger is moving them). */
+export function paintPush(layers: PushLayers, x: number): void {
+  const clamped = Math.min(1, Math.max(0, x));
+  if (layers.top) layers.top.style.transform = topTransform(clamped);
+  if (layers.under) layers.under.style.transform = underTransform(clamped);
+  if (layers.shade) layers.shade.style.opacity = String(shadeOpacity(clamped));
+}
+
+/** Take the finger's writes off again (the CSS resting state is in charge). */
+export function clearPush(layers: PushLayers): void {
+  if (layers.top) layers.top.style.transform = '';
+  if (layers.under) layers.under.style.transform = '';
+  if (layers.shade) layers.shade.style.opacity = '';
+}
+
+export interface PushMoveOptions {
+  /** Ms; default `PHONE_SLIDE_MS`, scaled by the distance left when `from` is given. */
+  duration?: number;
+  /** An id prefix; the animations are `<id>:top`, `<id>:under`, `<id>:shade`. */
+  id?: string;
+}
+
+/**
+ * Move the layers from `from` to `to` (both `x`). With no finger involved that
+ * is 1 -> 0 (push) or 0 -> 1 (pop); after a swipe it is wherever the finger
+ * let go to the end it was going to. Reduced motion: the screen that ends in
+ * front fades in over 150ms, the other fades out, both where they rest.
+ */
+export function playPush(layers: PushLayers, from: number, to: number, options: PushMoveOptions = {}): Animation[] {
+  const id = options.id ?? 'ix-phone';
+  const started: Animation[] = [];
+  const play = (el: HTMLElement | null, frames: Keyframe[], part: string, duration: number, easing: string) => {
+    if (!canAnimate(el)) return;
+    const animation = el.animate(frames, { duration, easing });
+    animation.id = `${id}:${part}`;
+    started.push(animation);
+  };
+
+  if (ixReduced()) {
+    const pushing = to < from;
+    // The page that ends in front fades in; the one leaving fades out, both
+    // held where they rest (the leaving one at its old place until it is gone).
+    play(layers.top, pushing ? [{ opacity: 0 }, { opacity: 1 }] : [
+      { opacity: 1, transform: topTransform(from) },
+      { opacity: 0, transform: topTransform(from) },
+    ], 'top', PHONE_FADE_MS, 'ease-out');
+    play(layers.under, pushing ? [
+      { opacity: 1, transform: underTransform(from) },
+      { opacity: 0, transform: underTransform(from) },
+    ] : [{ opacity: 0 }, { opacity: 1 }], 'under', PHONE_FADE_MS, 'ease-out');
+    return started;
+  }
+
+  const distance = Math.abs(to - from);
+  const duration =
+    options.duration ?? (distance >= 1 ? PHONE_SLIDE_MS : Math.max(PHONE_MIN_FINISH_MS, Math.round(PHONE_SLIDE_MS * distance)));
+  play(layers.top, [{ transform: topTransform(from) }, { transform: topTransform(to) }], 'top', duration, IX_SPRING);
+  play(layers.under, [{ transform: underTransform(from) }, { transform: underTransform(to) }], 'under', duration, IX_SPRING);
+  play(layers.shade, [{ opacity: shadeOpacity(from) }, { opacity: shadeOpacity(to) }], 'shade', duration, IX_SPRING);
+  return started;
+}
+
+/** The shade inside a screen (`.ix-phone-shade`), if it has one. */
+export function shadeOf(screen: HTMLElement | null): HTMLElement | null {
+  return screen?.querySelector<HTMLElement>(':scope > .ix-phone-shade') ?? null;
+}
+
+/**
+ * The frame's own push: main over the sidebar (to `conversation`) or back (to
+ * `places`). `from` is where a swipe let go (`x`); without one the whole move
+ * plays. Returns the animations so the caller can cancel them.
+ */
 export function playPhoneScreens(
   places: HTMLElement | null,
   conversation: HTMLElement | null,
   to: PhoneScreen,
+  from?: number,
 ): Animation[] {
-  const reduced = prefersReducedMotion();
-  const toConversation = to === 'conversation';
-  const duration = reduced ? PHONE_FADE_MS : PHONE_SLIDE_MS;
-  const options: KeyframeAnimationOptions = { duration, easing: reduced ? 'ease-out' : EASING };
-
-  // The conversation has no surface of its own (it sits on the room), so places
-  // shows through it while the two overlap. Places therefore leaves early and
-  // arrives late: it is gone before the conversation has covered much of it, and
-  // it comes back once the conversation has mostly left.
-  // The screen coming in.
-  const incoming: Frame = reduced
-    ? [{ opacity: 0, transform: 'none' }, { opacity: 1, transform: 'none' }]
-    : toConversation
-      ? [{ transform: 'translateX(100%)' }, { transform: 'none' }]
-      : [
-          { opacity: 0, transform: PLACES_SHIFT, offset: 0 },
-          { opacity: 0, offset: 0.4 },
-          { opacity: 1, transform: 'none', offset: 1 },
-        ];
-  // The screen going out.
-  const outgoing: Frame = reduced
-    ? [{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'none' }]
-    : toConversation
-      ? [
-          { opacity: 1, transform: 'none', offset: 0 },
-          { opacity: 0, offset: 0.7 },
-          { opacity: 0, transform: PLACES_SHIFT, offset: 1 },
-        ]
-      : [{ transform: 'none' }, { transform: 'translateX(100%)' }];
-
-  const started: Animation[] = [];
-  const play = (el: HTMLElement | null, frames: Frame, name: string) => {
-    if (!animatable(el)) return;
-    const animation = el.animate(frames, options);
-    animation.id = `glass-phone:${name}`;
-    started.push(animation);
-  };
-  play(toConversation ? conversation : places, incoming, 'in');
-  play(toConversation ? places : conversation, outgoing, 'out');
-  return started;
+  const target = to === 'conversation' ? 0 : 1;
+  const start = from ?? (to === 'conversation' ? 1 : 0);
+  return playPush({ top: conversation, under: places, shade: shadeOf(places) }, start, target, { id: 'ix-phone' });
 }

@@ -14,6 +14,7 @@ import { ErrorBoundary } from '../../ErrorBoundary';
 import { useMinuteClock } from '../../glass/places/usePlacesData';
 import { CardSlot } from '../card';
 import { IxGlyph } from '../glyphs';
+import { PhoneAccountButton } from '../shell/phone/PhoneParts';
 import { Avatar } from '../identity';
 import { openDmPicker, openPeopleMenu, useMenuHostStore } from '../menus';
 import { PEOPLE_PLACE } from '../shell';
@@ -164,6 +165,8 @@ function PeoplePane({ leaving }: { leaving: boolean }) {
         >
           <IxGlyph name="dots" size={16} />
         </button>
+        {/* A phone's root: your face right of "…" opens the account menu (§9, IX-16). */}
+        <PhoneAccountButton />
       </div>
       <button
         type="button"

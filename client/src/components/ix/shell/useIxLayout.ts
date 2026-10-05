@@ -1,4 +1,5 @@
-import { DEFAULT_MOBILE_MAX_WIDTH, useMobile } from '../../../hooks/useMobile';
+import { useMobile } from '../../../hooks/useMobile';
+import { useIsPhone } from './phone/phoneLayout';
 
 /**
  * Which frame the window gets (docs/index-spec.md §3 "Widths").
@@ -17,7 +18,7 @@ export type IxLayout = 'wide' | 'narrow' | 'phone';
 export const IX_NARROW_MAX_WIDTH = 1024;
 
 export function useIxLayout(): IxLayout {
-  const phone = useMobile(DEFAULT_MOBILE_MAX_WIDTH);
+  const phone = useIsPhone();
   const narrow = useMobile(IX_NARROW_MAX_WIDTH);
   if (phone) return 'phone';
   return narrow ? 'narrow' : 'wide';

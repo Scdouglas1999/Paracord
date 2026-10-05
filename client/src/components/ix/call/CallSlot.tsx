@@ -14,6 +14,7 @@ import {
   playOpen,
   playTheater,
 } from './callMotion';
+import { CallSheet } from './CallSheet';
 import { CallView } from './CallView';
 
 /**
@@ -155,9 +156,10 @@ export function CallSlot(_props: CallSlotProps) {
   }, [stage.mode]);
 
   if (!target || !open) return null;
-  return (
+  const key = `${target.serverId}:${target.channelId}`;
+  const view = (
     <CallView
-      key={`${target.serverId}:${target.channelId}`}
+      key={key}
       ref={surfaceRef}
       target={target}
       mode={stage.mode as OpenStageMode}
@@ -165,4 +167,13 @@ export function CallSlot(_props: CallSlotProps) {
       contentRef={contentRef}
     />
   );
+  // A phone presents the view as a bottom sheet with its own moves (IX-16).
+  if (phone) {
+    return (
+      <CallSheet key={key} channelId={target.channelId} mode={stage.mode as OpenStageMode}>
+        {view}
+      </CallSheet>
+    );
+  }
+  return view;
 }

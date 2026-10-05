@@ -1,16 +1,19 @@
 import {
   useEffect,
+  useLayoutEffect,
   useRef,
   type ReactNode,
   type RefObject,
 } from 'react';
 import { createPortal } from 'react-dom';
 import { useFocusTrap } from '../../../hooks/useFocusTrap';
-import { useMobile } from '../../../hooks/useMobile';
 import { cn } from '../../../lib/utils';
 import { IxGlyph } from '../../ix/glyphs';
 import { SHEET_EXIT_MS, useExitPresence } from '../../ix/sheets/useExitPresence';
 import { IX_SHEET_HOST_ID } from '../../ix/shell/slots';
+import { PHONE_SLIDE_MS } from '../shell/phoneMotion';
+import { useIsPhone } from '../../ix/shell/phone/phoneLayout';
+import { pushSheet } from '../../ix/shell/phone/pushedSheets';
 
 /**
  * A sheet: the Index page that opens inside main on its right (docs/index-spec.md
@@ -36,6 +39,12 @@ import { IX_SHEET_HOST_ID } from '../../ix/shell/slots';
  *
  * Motion (§5.17): in from `translateX(24px)` + fade, 380ms spring; out 250ms
  * ease. Transform and opacity only; reduced motion is a 150ms fade.
+ *
+ * On a phone (index-spec §9; IX-16) a sheet is a pushed page: it slides in from
+ * the right over the whole screen, 360ms on the spring, while the screen it
+ * covers moves 30% left beneath it (`pushSheet`); its header leads with a back
+ * chevron (which closes it) instead of the close button, and the edge swipe
+ * drags it away.
  */
 
 export interface SheetFrameProps {
@@ -97,8 +106,14 @@ export function SheetFrame({
   children,
 }: SheetFrameProps) {
   // The phone frame's own boundary (`useIxLayout` asks the same question).
-  const phone = useMobile();
-  const { mounted, exiting } = useExitPresence(open, SHEET_EXIT_MS);
+  const phone = useIsPhone();
+  const { mounted, exiting } = useExitPresence(open, phone ? PHONE_SLIDE_MS : SHEET_EXIT_MS);
+
+  // A pushed page covers the screen it was opened from, which steps back beneath it.
+  useLayoutEffect(() => {
+    if (!open || !phone) return undefined;
+    return pushSheet();
+  }, [open, phone]);
   const ownRef = useRef<HTMLDivElement>(null);
   const ref = (panelRef ?? ownRef) as RefObject<HTMLDivElement | null>;
 
@@ -136,6 +151,18 @@ export function SheetFrame({
       {...(exiting ? { 'aria-hidden': true as const, inert: true as const } : null)}
     >
       <div className="ix-sheet__header">
+        {phone && !onBack && (
+          <button
+            type="button"
+            className="ix-sheet__btn ix-sheet__back"
+            aria-label={closeLabel === 'Close' ? 'Back' : closeLabel}
+            title={closeLabel === 'Close' ? 'Back' : closeLabel}
+            data-ix-sheet-dismiss=""
+            onClick={onClose}
+          >
+            <IxGlyph name="chevron" size={18} />
+          </button>
+        )}
         {onBack && (
           <button
             type="button"
@@ -158,15 +185,20 @@ export function SheetFrame({
           </div>
         )}
         {actions && <div className="ix-sheet__actions">{actions}</div>}
-        <button
-          type="button"
-          className="ix-sheet__btn ix-sheet__close"
-          aria-label={closeLabel}
-          title={closeLabel}
-          onClick={onClose}
-        >
-          <IxGlyph name="x" size={18} />
-        </button>
+        {/* On a phone the back chevron above closes it, and with a page pushed on
+            the sheet the close stays: it takes the whole stack away. */}
+        {(!phone || onBack) && (
+          <button
+            type="button"
+            className="ix-sheet__btn ix-sheet__close"
+            aria-label={closeLabel}
+            title={closeLabel}
+            data-ix-sheet-dismiss={phone ? '' : undefined}
+            onClick={onClose}
+          >
+            <IxGlyph name="x" size={18} />
+          </button>
+        )}
       </div>
       <div
         ref={bodyRef}

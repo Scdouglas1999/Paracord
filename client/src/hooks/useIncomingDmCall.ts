@@ -1,6 +1,8 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
+import { create } from 'zustand';
 
 import { useAuthStore } from '../stores/authStore';
+import { registerSessionReset } from '../stores/sessionReset';
 import { useVoiceStore } from '../stores/voiceStore';
 import { useCurrentChannelStore } from './useChannels';
 import { displayName } from '../lib/displayName';
@@ -33,6 +35,23 @@ export interface IncomingDmCall {
   participantCount: number;
 }
 
+/**
+ * The calls declined in this window, shared by every place that rings (the
+ * pinned card on the root, the call strip on a phone's pushed page): a decline
+ * in one silences the other.
+ */
+const useDeclinedStore = create<{ declined: string[]; set: (declined: string[]) => void }>()((set) => ({
+  declined: [],
+  set: (declined) => set({ declined }),
+}));
+
+registerSessionReset('incoming-dm-declined', () => useDeclinedStore.getState().set([]));
+
+/** Forget every decline (a new session; tests). */
+export function forgetDeclinedCalls(): void {
+  useDeclinedStore.getState().set([]);
+}
+
 export interface IncomingDmCallState {
   call: IncomingDmCall | null;
   decline: () => void;
@@ -44,7 +63,7 @@ export function useIncomingDmCall(): IncomingDmCallState {
   const joiningChannelId = useVoiceStore((state) => state.joiningChannelId);
   const selfUserId = useAuthStore((state) => state.user?.id ?? null);
   const dmChannels = useCurrentChannelStore((view) => view.channelsById);
-  const [declined, setDeclined] = useState<string[]>([]);
+  const declined = useDeclinedStore((state) => state.declined);
 
   const call = useMemo<IncomingDmCall | null>(() => {
     if (!selfUserId) return null;
@@ -69,7 +88,8 @@ export function useIncomingDmCall(): IncomingDmCallState {
   const decline = useCallback(() => {
     const channelId = call?.channelId;
     if (!channelId) return;
-    setDeclined((current) => (current.includes(channelId) ? current : [...current, channelId]));
+    const current = useDeclinedStore.getState().declined;
+    if (!current.includes(channelId)) useDeclinedStore.getState().set([...current, channelId]);
   }, [call?.channelId]);
 
   // Forget a decline once that call is over, so the next one rings again.
@@ -80,13 +100,12 @@ export function useIncomingDmCall(): IncomingDmCallState {
     }
     return ids;
   }, [channelParticipants, selfUserId]);
-  const stale = declined.filter((channelId) => !live.has(channelId));
-  if (stale.length) {
-    // Render-phase state update against the same component, which React applies
-    // before commit — cheaper and less flickery than an effect that would paint
-    // a stale decline first.
-    setDeclined((current) => current.filter((channelId) => live.has(channelId)));
-  }
+  const stale = declined.some((channelId) => !live.has(channelId));
+  useEffect(() => {
+    if (!stale) return;
+    const current = useDeclinedStore.getState().declined;
+    useDeclinedStore.getState().set(current.filter((channelId) => live.has(channelId)));
+  }, [stale, live]);
 
   return { call, decline };
 }

@@ -14,6 +14,8 @@ import { createPortal } from 'react-dom';
 import { cn } from '../../../lib/utils';
 import { IxGlyph } from '../glyphs';
 import { MENU_EXIT_MS, useExitPresence } from '../sheets/useExitPresence';
+import { ACTION_SHEET_EXIT_MS } from '../shell/phone/actionSheet';
+import { useIsPhone } from '../shell/phone/phoneLayout';
 import { isElementAnchor, type MenuAnchor } from './anchor';
 
 /**
@@ -37,6 +39,11 @@ import { isElementAnchor, type MenuAnchor } from './anchor';
  * Left closes it, Escape closes (and only this layer: it stops the event), Tab
  * closes. Focus lands on the first row (or the checked one) when it opens and
  * returns to what had it when it closes, unless a choice put it somewhere else.
+ *
+ * On a phone (docs/index-spec.md §9; IX-16) the same menu is a bottom action
+ * sheet: the full width less 8 on each side, above the safe area, radius 20,
+ * rows 52, over a scrim, with Cancel under the rows. It rises from the bottom
+ * and drops back (ix-phone.css); the anchor only says what opened it.
  */
 
 export type MenuCloseReason = 'escape' | 'outside' | 'select' | 'tab' | 'blur';
@@ -126,6 +133,8 @@ interface Placement {
   origin: string;
 }
 
+const SHEET_PLACEMENT: Placement = { left: 0, top: 0, origin: '50% 100%' };
+
 export function IxMenuSurface({
   open,
   onClose,
@@ -139,8 +148,10 @@ export function IxMenuSurface({
   children,
   testId,
 }: IxMenuSurfaceProps) {
-  const { mounted, exiting } = useExitPresence(open, MENU_EXIT_MS);
+  const phone = useIsPhone();
+  const { mounted, exiting } = useExitPresence(open, phone ? ACTION_SHEET_EXIT_MS : MENU_EXIT_MS);
   const ref = useRef<HTMLDivElement>(null);
+  const phoneRef = useRef(phone);
   const [placement, setPlacement] = useState<Placement | null>(null);
   const opener = useRef<HTMLElement | null>(null);
   const wasOpen = useRef(false);
@@ -151,6 +162,7 @@ export function IxMenuSurface({
   useLayoutEffect(() => {
     anchorRef.current = anchor;
     onCloseRef.current = onClose;
+    phoneRef.current = phone;
   });
 
   // Remember what had focus when the menu opened; hand it back after the leave.
@@ -184,6 +196,12 @@ export function IxMenuSurface({
     const menu = ref.current;
     const at = anchorRef.current;
     if (!menu || !at) return;
+    // An action sheet sits at the foot of the screen (CSS); the anchor does not place it.
+    if (phoneRef.current) {
+      menu.style.maxHeight = '';
+      setPlacement((previous) => previous ?? SHEET_PLACEMENT);
+      return;
+    }
     const viewport = window.visualViewport;
     const left0 = viewport?.offsetLeft ?? 0;
     const top0 = viewport?.offsetTop ?? 0;
@@ -342,6 +360,31 @@ export function IxMenuSurface({
 
   if (!mounted || typeof document === 'undefined') return null;
 
+  if (phone) {
+    return createPortal(
+      <>
+        <div className={cn('ix-action-scrim', exiting ? 'is-leaving' : 'is-entering')} aria-hidden="true" />
+        <div
+          ref={ref}
+          role="menu"
+          aria-label={label}
+          tabIndex={-1}
+          data-testid={testId}
+          data-presentation="sheet"
+          data-native-overlay-occlude=""
+          className={cn('ix-menu', 'ix-menu--sheet', exiting ? 'is-leaving' : 'is-entering', className)}
+          {...(exiting ? { 'aria-hidden': true as const, inert: true as const } : null)}
+        >
+          <div className="ix-menu__sheet-rows">{children}</div>
+          <button type="button" role="menuitem" className="ix-menu__cancel" data-testid="ix-menu-cancel" onClick={() => onCloseRef.current('escape')}>
+            Cancel
+          </button>
+        </div>
+      </>,
+      document.body,
+    );
+  }
+
   return createPortal(
     <div
       ref={ref}
@@ -396,7 +439,7 @@ function ItemRow({ entry, onChoose, nested }: RowProps) {
         <span className="ix-menu__label">{entry.label}</span>
         {entry.description && <span className="ix-menu__desc">{entry.description}</span>}
       </span>
-      {entry.hint && <span className="ix-menu__hint">{entry.hint}</span>}
+      {entry.hint && <span className="ix-menu__hint ix-menu__hint--key">{entry.hint}</span>}
       {entry.checked && (
         <span className="ix-menu__check" aria-hidden>
           <IxGlyph name="check" size={15} />

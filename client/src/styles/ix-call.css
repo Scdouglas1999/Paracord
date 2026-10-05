@@ -850,22 +850,7 @@ html[data-native-moving] .ix-call-ghost {
   background-color: var(--ix-call);
 }
 
-/* ---- Phone (IX-16 makes the call a sheet; until then the view fills the screen) --------- */
-.ix-frame[data-layout='phone'] .ix-call__body {
-  padding: 0 12px 12px;
-}
-
-.ix-frame[data-layout='phone'] .ix-call-head {
-  padding: calc(var(--safe-top, 0px) + 12px) 16px 12px;
-}
-
-.ix-frame[data-layout='phone'] .ix-call-controls {
-  padding-bottom: calc(var(--safe-bottom, 0px) + 16px);
-}
-
-.ix-frame[data-layout='phone'] .ix-call-grid {
-  grid-template-columns: repeat(min(var(--ix-call-cols, 2), 2), minmax(0, 1fr));
-}
+/* ---- Phone: the view is presented as a sheet (IX-16, ix-phone.css) ------------------------ */
 
 /* ---- Reduced motion (the app's one switch): no fades on the tiles -------------------------- */
 :root[data-motion='reduced'] .ix-call-tile::after,

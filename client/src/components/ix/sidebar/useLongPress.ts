@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, type MouseEvent, type PointerEvent } from 'react';
+import { useCallback, useEffect, useRef, type MouseEvent, type PointerEvent, type TouchEvent } from 'react';
 
 /**
  * The row's menu on touch (docs/index-spec.md §4.5: "the row's long-press on
@@ -61,6 +61,12 @@ export function useLongPress(onPress: (point: PressPoint) => void) {
     onPointerUp: cancel,
     onPointerLeave: cancel,
     onPointerCancel: cancel,
+    // The finger lifting after a press that opened a menu: no mouse events after
+    // it either (the browser's compatibility mousedown would land on the menu's
+    // scrim and close it at once on a phone, IX-16).
+    onTouchEnd: (event: TouchEvent<HTMLElement>) => {
+      if (fired.current && event.cancelable) event.preventDefault();
+    },
     onClickCapture: (event: MouseEvent<HTMLElement>) => {
       if (!fired.current) return;
       fired.current = false;

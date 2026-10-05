@@ -213,8 +213,10 @@ export const CallView = forwardRef(function CallView(
         <CallHeader
           model={model}
           chat={showChat}
-          theater={theater}
+          // A phone's full screen (IX-16, CallSheet) is the stage's theater mode on a stream.
+          theater={theater || (phone && mode === 'theater')}
           phone={phone}
+          stream={focus.kind === 'stream'}
           onToggleChat={toggleChat}
           onToggleTheater={toggleTheater}
           onBack={close}

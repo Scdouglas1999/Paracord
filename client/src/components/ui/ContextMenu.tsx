@@ -5,6 +5,9 @@ import { Check } from 'lucide-react';
 // point that opened it; the presence hook keeps the menu mounted for its leave.
 import { usePresence } from '../../lib/motion';
 import { cn } from '../../lib/utils';
+import { useExitPresence } from '../ix/sheets/useExitPresence';
+import { ACTION_SHEET_EXIT_MS } from '../ix/shell/phone/actionSheet';
+import { useIsPhone } from '../ix/shell/phone/phoneLayout';
 
 export interface ContextMenuItem {
   label: string;
@@ -42,7 +45,15 @@ interface ContextMenuProps {
 export function ContextMenu({ items, position, open = true, onClose, label = 'Context menu', anchorRef, anchorAlign = 'end' }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   const [focusedIndex, setFocusedIndex] = useState(-1);
-  const { mounted, exiting, scenery } = usePresence(open);
+  // On a phone the menu is a bottom action sheet (index-spec §9; IX-16), with a
+  // longer drop than a popover's, so it stays mounted for that.
+  const phone = useIsPhone();
+  const popover = usePresence(open);
+  const sheet = useExitPresence(open, ACTION_SHEET_EXIT_MS);
+  const { mounted, exiting } = phone ? sheet : popover;
+  const scenery = phone
+    ? (sheet.exiting ? { 'aria-hidden': true as const, inert: true as const } : {})
+    : popover.scenery;
   /** True when at least one row draws an icon, so every row reserves its column. */
   const anyIcon = items.some((item) => !item.divider && item.icon);
   // The caller drops `position` when it closes the menu, and the menu is still
@@ -179,14 +190,19 @@ export function ContextMenu({ items, position, open = true, onClose, label = 'Co
   if (!mounted) return null;
 
   return createPortal(
+    <>
+    {phone && <div className={cn('ix-action-scrim', exiting ? 'is-leaving' : 'is-entering')} aria-hidden="true" />}
     <div
       ref={menuRef}
       className={cn(
-        'pc-floating ix-lt--pop fixed z-[100] min-w-[min(13rem,calc(100vw-1rem))] max-w-[calc(100vw-1rem)] max-h-[calc(100dvh-1rem)] overflow-y-auto p-1.5 outline-none',
-        exiting ? 'pc-pop-out' : 'pc-pop-in',
+        phone
+          ? 'ix-action-sheet outline-none'
+          : 'pc-floating ix-lt--pop fixed z-[100] min-w-[min(13rem,calc(100vw-1rem))] max-w-[calc(100vw-1rem)] max-h-[calc(100dvh-1rem)] overflow-y-auto p-1.5 outline-none',
+        phone ? (exiting ? 'is-leaving' : 'is-entering') : exiting ? 'pc-pop-out' : 'pc-pop-in',
       )}
+      data-presentation={phone ? 'sheet' : undefined}
       style={
-        {
+        phone ? undefined : {
           left: adjustedPosition.x,
           top: adjustedPosition.y,
           // Grow out of the point that opened it: under a button, from the
@@ -262,7 +278,13 @@ export function ContextMenu({ items, position, open = true, onClose, label = 'Co
           </button>
         );
       })}
-    </div>,
+      {phone && (
+        <button type="button" role="menuitem" className="ix-menu__cancel" data-testid="ix-menu-cancel" onClick={onClose}>
+          Cancel
+        </button>
+      )}
+    </div>
+    </>,
     document.body
   );
 }

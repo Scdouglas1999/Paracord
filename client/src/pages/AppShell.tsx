@@ -12,12 +12,13 @@ import { CommandPalette } from '../components/layout/CommandPalette';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
 import { TogetherHost } from '../components/voice/together/TogetherHost';
 import { MotionDirector } from '../components/motion/MotionDirector';
-import { useGlassLayout, usePhoneNavigation, usePhoneNavStore } from '../components/glass/shell';
+import { usePhoneNavigation, usePhoneNavStore } from '../components/glass/shell/phoneNav';
 import { IxFrame } from '../components/ix/shell/IxFrame';
+import { useEdgeSwipe } from '../components/ix/shell/phone/useEdgeSwipe';
+import { useIxLayout } from '../components/ix/shell/useIxLayout';
 import { useGlassStore } from '../stores/glassStore';
 import { useUIStore } from '../stores/uiStore';
 import { useKeyboardNavigation } from '../hooks/useKeyboardNavigation';
-import { useSwipeGesture } from '../hooks/useSwipeGesture';
 import { SettingsPage } from './SettingsPage';
 import { GuildSettingsPage } from './GuildSettingsPage';
 import { useFocusTrap } from '../hooks/useFocusTrap';
@@ -38,10 +39,10 @@ import { ErrorBoundary } from '../components/ErrorBoundary';
  * This component keeps the app-level concerns the frame does not own: route
  * navigation for non-React callers, keyboard shortcuts, the settings dialogs,
  * the command palette, the confirm and interaction hosts, the skip link, and
- * the phone's navigation: on a phone the frame is two screens (the sidebar,
- * then main pushed over it) and this decides the first one, takes the edge
- * swipe back and turns the old drawer requests into the root screen
- * (`usePhoneNavigation`).
+ * the phone's navigation (index-spec §9, IX-16): on a phone the frame is two
+ * screens (the sidebar, then main pushed over it) and this decides the first
+ * one (`usePhoneNavigation`), turns the old drawer requests into the root
+ * screen, and turns on the back gesture (`useEdgeSwipe`).
  *
  * Overlay motion is the shared §5.1 set: drawers ease in from their edge on
  * ease-out and leave on ease-in, dialogs rise on pc-enter, backdrops fade — all
@@ -71,7 +72,7 @@ export function AppShell() {
   useFocusTrap(userSettingsDialogRef, userSettingsOpen, closeUserSettings);
   useFocusTrap(guildSettingsDialogRef, Boolean(guildSettingsId), closeGuildSettings);
 
-  const layout = useGlassLayout();
+  const layout = useIxLayout();
   const isMobile = layout === 'phone';
 
   // PHONE. The navigation drawer is gone: places is a screen of its own. The
@@ -105,15 +106,15 @@ export function AppShell() {
   // (gateway RELATIONSHIP_* events keep them live afterwards).
   useFreshRelationships();
 
-  // Phone: a swipe right from the left edge goes back from a conversation to
-  // places, as a platform's back gesture does. Whatever owns the edge keeps it:
-  // a dialog, a sheet, full screen, or places itself.
-  const phoneScreen = usePhoneNavStore((s) => s.screen);
-  const sheetOpen = useGlassStore((s) => s.sheet !== null);
-  const fullScreen = useGlassStore((s) => s.stage.mode === 'theater');
-  const swipeBackEnabled =
-    isMobile && phoneScreen === 'conversation' && !sheetOpen && !fullScreen && !userSettingsOpen && !guildSettingsId;
-  useSwipeGesture({ onSwipeRight: () => usePhoneNavStore.getState().showPlaces() }, swipeBackEnabled);
+  // Phone: the back gesture (IX-16). A finger from the left edge drags the page
+  // in front away (a pushed sheet, or main off the sidebar) and the screen
+  // beneath follows it in; a route's own pushed page (a thread) takes it as its
+  // back. What is in front is decided when the finger lands (`useEdgeSwipe`);
+  // here, only whether anything may take the edge at all: not under the call,
+  // not under settings.
+  const stageOpen = useGlassStore((s) => s.stage.mode !== 'none');
+  const swipeBackEnabled = isMobile && !stageOpen && !userSettingsOpen && !guildSettingsId;
+  useEdgeSwipe(swipeBackEnabled);
 
   // Settings full-page routes (`/app/admin`, guild settings) keep their
   // internal padding inside the conversation pane.

@@ -1,6 +1,6 @@
 import { act, renderHook } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { useIncomingDmCall } from './useIncomingDmCall';
+import { forgetDeclinedCalls, useIncomingDmCall } from './useIncomingDmCall';
 import type { Channel, VoiceState } from '../types';
 
 const mock = vi.hoisted(() => ({
@@ -34,6 +34,7 @@ function voiceState(userId: string, channelId: string, extra: Partial<VoiceState
 const dm = (id: string): Channel => ({ id, type: 1, name: null, created_at: '' } as unknown as Channel);
 
 beforeEach(() => {
+  forgetDeclinedCalls();
   mock.voice = { channelParticipants: new Map(), channelId: null, joiningChannelId: null };
   mock.channels = { 'dm-1': dm('dm-1'), 'dm-2': dm('dm-2') };
 });
@@ -106,5 +107,19 @@ describe('useIncomingDmCall', () => {
     expect(renderHook(() => useIncomingDmCall()).result.current.call).toEqual({
       channelId: 'dm-3', callerName: 'Ada, Grace', participantCount: 2,
     });
+  });
+});
+
+describe('one decline for every place that rings', () => {
+  it('declined in one place (the phone strip) is declined in the other (the root card)', () => {
+    mock.voice.channelParticipants = new Map([['dm-1', [voiceState('ada', 'dm-1')]]]);
+    const strip = renderHook(() => useIncomingDmCall());
+    const card = renderHook(() => useIncomingDmCall());
+    expect(strip.result.current.call?.channelId).toBe('dm-1');
+    expect(card.result.current.call?.channelId).toBe('dm-1');
+    act(() => strip.result.current.decline());
+    card.rerender();
+    expect(strip.result.current.call).toBeNull();
+    expect(card.result.current.call).toBeNull();
   });
 });

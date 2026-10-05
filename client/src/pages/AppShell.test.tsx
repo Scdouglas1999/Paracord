@@ -9,7 +9,7 @@ import { useGlassStore } from '../stores/glassStore';
 import { usePhoneNavStore } from '../components/glass/shell';
 import { useIxPlaceStore } from '../components/ix/shell';
 import { useMobile } from '../hooks/useMobile';
-import { useSwipeGesture } from '../hooks/useSwipeGesture';
+import { useEdgeSwipe } from '../components/ix/shell/phone/useEdgeSwipe';
 
 const fetchRelationshipsMock = vi.hoisted(() => vi.fn());
 const toggleSheetMock = vi.hoisted(() => vi.fn());
@@ -69,7 +69,7 @@ vi.mock('../components/voice/together/TogetherHost', () => ({ TogetherHost: () =
 
 // Side-effectful hooks that touch window/DOM — no-op them so the frame renders.
 vi.mock('../hooks/useKeyboardNavigation', () => ({ useKeyboardNavigation: () => {} }));
-vi.mock('../hooks/useSwipeGesture', () => ({ useSwipeGesture: vi.fn() }));
+vi.mock('../components/ix/shell/phone/useEdgeSwipe', () => ({ useEdgeSwipe: vi.fn() }));
 vi.mock('../hooks/useFocusTrap', () => ({ useFocusTrap: () => {} }));
 vi.mock('../hooks/useMobile', () => ({
   useMobile: vi.fn(() => false),
@@ -84,7 +84,7 @@ vi.mock('../stores/relationshipStore', () => ({
 }));
 
 const mockedUseMobile = vi.mocked(useMobile);
-const mockedSwipe = vi.mocked(useSwipeGesture);
+const mockedSwipe = vi.mocked(useEdgeSwipe);
 
 /** A phone: under the 768px breakpoint. */
 function usePhoneWindow() {
@@ -115,7 +115,7 @@ function shellRoutes() {
           path="guilds/:guildId/channels/:channelId"
           element={
             <div data-testid="outlet-content">
-              chat body <Link to="/app/guilds/g1/channels/c2">open clips</Link>{' '}
+              chat body <Link to="/app/guilds/g1/channels/c2">open clips</Link>{' '}<Link to="/app/guilds/g1/channels/c1" replace={false}>open c1</Link>{' '}
               <Link to="/app/guilds/g2/channels/c9">go to g2</Link> <Link to="/app/admin">open admin</Link>
             </div>
           }
@@ -337,22 +337,21 @@ describe('AppShell', () => {
       expect(useUIStore.getState().sidebarCollapsed).toBe(true);
     });
 
-    it('turns the edge swipe on for a pushed page, and off for everything that owns the edge', () => {
+    it('turns the back gesture on for a phone, and off under the call and under settings', () => {
+      // What the finger drags (a sheet, main, a route's pushed page) is decided
+      // when it lands (useEdgeSwipe's own suite); here, only whether the edge is free.
       renderShell('/app/guilds/g1/channels/c1');
-      const enabled = () => mockedSwipe.mock.calls.at(-1)?.[1];
+      const enabled = () => mockedSwipe.mock.calls.at(-1)?.[0];
       expect(enabled()).toBe(true);
 
       act(() => usePhoneNavStore.getState().showPlaces());
-      expect(enabled()).toBe(false);
-      act(() => usePhoneNavStore.getState().showConversation());
       expect(enabled()).toBe(true);
 
       act(() => useGlassStore.getState().openSheet('search'));
-      expect(enabled()).toBe(false);
-      act(() => useGlassStore.getState().closeSheet());
       expect(enabled()).toBe(true);
+      act(() => useGlassStore.getState().closeSheet());
 
-      act(() => useGlassStore.getState().openStage(LOUNGE, 'theater'));
+      act(() => useGlassStore.getState().openStage(LOUNGE));
       expect(enabled()).toBe(false);
       act(() => useGlassStore.getState().closeStage());
       expect(enabled()).toBe(true);
@@ -361,11 +360,11 @@ describe('AppShell', () => {
       expect(enabled()).toBe(false);
     });
 
-    it('the swipe goes back to the root', () => {
+    it('a tap on the row that is already open pushes main again', () => {
       const { container } = renderShell('/app/guilds/g1/channels/c1');
-      const handlers = mockedSwipe.mock.calls.at(-1)?.[0];
-      act(() => handlers?.onSwipeRight?.());
-      expect(frameScreen(container)).toBe('places');
+      act(() => usePhoneNavStore.getState().showPlaces());
+      act(() => screen.getByRole('link', { name: 'open c1', hidden: true }).click());
+      expect(frameScreen(container)).toBe('conversation');
     });
 
     it('draws the call over the whole screen in its phone form; both screens go inert under it', () => {

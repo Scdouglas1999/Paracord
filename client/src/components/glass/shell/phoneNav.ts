@@ -42,6 +42,27 @@ export const usePhoneNavStore = create<PhoneNavState>()((set) => ({
 
 registerSessionReset('glass-phone-nav', () => usePhoneNavStore.getState().setScreen(null));
 
+/**
+ * A screen change that has already been drawn: the edge swipe moved both
+ * screens with the finger and played the rest of the move itself, so the frame
+ * must not play it again (IX-16). The frame takes the mark when it sees the
+ * change (`takeSettledScreen`).
+ */
+let settledByGesture: PhoneScreen | null = null;
+
+/** Show `screen` without the frame's own slide: the caller has already moved the screens there. */
+export function showScreenSettled(screen: PhoneScreen): void {
+  settledByGesture = screen;
+  usePhoneNavStore.getState().setScreen(screen);
+}
+
+/** True once if the change to `screen` was drawn by a gesture (see `showScreenSettled`). */
+export function takeSettledScreen(screen: PhoneScreen): boolean {
+  const settled = settledByGesture === screen;
+  settledByGesture = null;
+  return settled;
+}
+
 /** The screen to draw: before a first choice is made a phone shows its conversation. */
 export function usePhoneScreen(): PhoneScreen {
   return usePhoneNavStore((state) => state.screen) ?? 'conversation';

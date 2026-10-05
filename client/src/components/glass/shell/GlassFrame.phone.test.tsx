@@ -285,14 +285,16 @@ describe('the phone layout of the frame', () => {
       expect(waapi.played).toHaveLength(0);
 
       act(() => usePhoneNavStore.getState().showPlaces());
-      const moves = waapi.played.filter((record) => record.animation.id.startsWith('glass-phone:'));
+      // The phone's push is the Index one now (IX-16, phoneMotion.ts): the page on
+      // top and the screen under it (no shade inside the Glass frame's screens).
+      const moves = waapi.played.filter((record) => record.animation.id.startsWith('ix-phone:'));
       expect(moves).toHaveLength(2);
-      const incoming = moves.find((record) => record.animation.id === 'glass-phone:in');
-      const outgoing = moves.find((record) => record.animation.id === 'glass-phone:out');
-      expect(incoming?.target).toBe(placesScreen(container));
-      expect(outgoing?.target).toBe(conversationScreen(container));
+      const under = moves.find((record) => record.animation.id === 'ix-phone:under');
+      const top = moves.find((record) => record.animation.id === 'ix-phone:top');
+      expect(under?.target).toBe(placesScreen(container));
+      expect(top?.target).toBe(conversationScreen(container));
       // Back: the conversation leaves to the right.
-      expect(outgoing?.keyframes.at(-1)).toMatchObject({ transform: 'translateX(100%)' });
+      expect(top?.keyframes.at(-1)).toMatchObject({ transform: 'translateX(100%)' });
     });
 
     it('moves focus to the conversation when it comes in and to the current row when places comes back', () => {

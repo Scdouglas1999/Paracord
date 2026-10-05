@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { forgetDeclinedCalls } from '../../../hooks/useIncomingDmCall';
 
 import { entityScopeKey } from '../../../lib/serverScope';
 import { useAuthStore } from '../../../stores/authStore';
@@ -125,6 +126,8 @@ const card = () => screen.getByTestId('ix-room-card');
 const names = () => [...card().querySelectorAll('.ix-card-row__name')].map((name) => name.textContent);
 
 beforeEach(() => {
+  // A decline is shared by every place that rings (the card, the phone's call strip).
+  forgetDeclinedCalls();
   vi.spyOn(Date, 'now').mockReturnValue(T0 + 34 * 60_000 + 5_000);
   listenIn.allowed = true;
   resetListenInForTests();

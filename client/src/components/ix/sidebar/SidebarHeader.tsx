@@ -2,6 +2,7 @@ import type { MouseEvent, RefObject } from 'react';
 
 import { IxGlyph } from '../glyphs';
 import { ServerMark } from '../identity';
+import { PhoneAccountButton } from '../shell/phone/PhoneParts';
 
 export interface SidebarHeaderProps {
   guildId: string;
@@ -67,6 +68,8 @@ export function SidebarHeader({
       >
         <IxGlyph name="dots" size={16} />
       </button>
+      {/* A phone's root: your face right of "…" opens the account menu (§9, IX-16). */}
+      <PhoneAccountButton />
     </div>
   );
 }

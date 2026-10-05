@@ -17,7 +17,7 @@ import { useGuildStore } from '../../stores/guildStore';
 import { useChannelStore } from '../../stores/channelStore';
 import { useMemberStore } from '../../stores/memberStore';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
-import { useMobile } from '../../hooks/useMobile';
+import { useIsPhone } from '../ix/shell/phone/phoneLayout';
 import { canAccessGuildSettingsSync } from '../../lib/guildSettingsAccess';
 import { isAdmin } from '../../types';
 import { cn } from '../../lib/utils';
@@ -81,7 +81,7 @@ export function CommandPalette() {
   const scopeGuildId = peopleScope ? null : (routeGuildId ?? selectedGuildId ?? null);
   const relationships = useRelationshipStore((s) => s.relationships);
   const members = useMemberStore((s) => (scope && scopeGuildId ? s.members.get(entityScopeKey(scope, scopeGuildId)) : undefined));
-  const phone = useMobile();
+  const phone = useIsPhone();
 
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -428,7 +428,14 @@ export function CommandPalette() {
                   setSelectedIndex(0);
                 }}
               />
-              <Kbd>Esc</Kbd>
+              {phone ? (
+                // A phone has no Esc key: the field's own Cancel puts it away (IX-16).
+                <button type="button" className="ix-switcher__cancel" data-testid="ix-switcher-cancel" onClick={handleClose}>
+                  Cancel
+                </button>
+              ) : (
+                <Kbd>Esc</Kbd>
+              )}
             </div>
 
             <div

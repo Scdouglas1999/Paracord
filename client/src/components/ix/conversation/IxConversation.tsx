@@ -12,7 +12,7 @@ import { MessageInput } from '../../message/MessageInput';
 import { MessageList } from '../../message/MessageList';
 import { IxGlyph } from '../glyphs';
 import { LargeTitle, useTitleFold } from '../page';
-import { PEOPLE_PLACE, serverPlace, useToolbar, usePlaceHue } from '../shell';
+import { PEOPLE_PLACE, serverPlace, useOptionalIxShell, useToolbar, usePlaceHue } from '../shell';
 import { openChannelMenu, openProfileCard } from '../menus';
 import { DmCallButton } from './DmCallButton';
 import { DropTarget } from './DropTarget';
@@ -150,13 +150,31 @@ function OwnedConversation({ subject, notices, onBack, backLabel, onPickRoles }:
     [profileId, channelMenu],
   );
 
-  // The toolbar: the folded title, the DM call, the back chevron.
+  // The toolbar: the folded title, the DM call, the back chevron. On a phone a
+  // one-to-one message also gets "…" for its channel menu (pins, media, catch
+  // up): there is no right click on glass, and its title is the profile (IX-16).
+  const phone = useOptionalIxShell()?.layout === 'phone';
   const call = useMemo(
     () =>
       isDm ? (
-        <DmCallButton channelId={channelId} title={title} allowed={actions.voice.allowed} reason={actions.voice.reason} />
+        <>
+          <DmCallButton channelId={channelId} title={title} allowed={actions.voice.allowed} reason={actions.voice.reason} />
+          {phone && profileId && (
+            <button
+              type="button"
+              className="ix-tool"
+              aria-label="Conversation options"
+              title="Conversation options"
+              aria-haspopup="menu"
+              data-testid="ix-conversation-more"
+              onClick={() => channelMenu(null)}
+            >
+              <IxGlyph name="dots" size={18} />
+            </button>
+          )}
+        </>
       ) : undefined,
-    [isDm, channelId, title, actions.voice.allowed, actions.voice.reason],
+    [isDm, channelId, title, actions.voice.allowed, actions.voice.reason, phone, profileId, channelMenu],
   );
   useToolbar({
     title,

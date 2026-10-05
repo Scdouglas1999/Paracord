@@ -1,1 +1,849 @@
-/* IX-16: the phone layout (§9). Created empty by IX-1; the owner fills it. */
+/* =============================================================================
+   IX-16: the phone (docs/index-spec.md §9). Imported last (globals.css), so a
+   rule here wins a tie with the desktop rule it adapts.
+
+   One React tree at every width: on a phone `.ix-frame[data-layout='phone']`
+   turns the two columns into two screens (ix-shell.css), and this sheet gives
+   them their phone shape: the root (the sidebar, the dock as a bottom bar, your
+   face in the header), pushed pages (a 52px toolbar, a 30px large title, the
+   call strip, the message box above the safe area and the keyboard), the call
+   as a sheet, sheets as pushed pages and menus as action sheets.
+
+   Surfaces that portal to <body> (sheets, menus, the switcher) read the layout
+   from `<html data-ix-layout="phone">` (phone/usePhoneRoot.ts).
+
+   Only transform and opacity animate (the motion lint). The push is Web
+   Animations (glass/shell/phoneMotion.ts) between the resting states below.
+   ============================================================================= */
+
+/* ---- Geometry ---------------------------------------------------------------------- */
+.ix-frame[data-layout='phone'] {
+  --ix-col-pad: 16px;
+  /* The pushed page's toolbar (§9: 52px); a page lays itself out under it. */
+  --ix-toolbar-h: 52px;
+  --ix-phone-bar: 52px;
+  --ix-phone-strip: 40px;
+  --ix-phone-dock: 64px;
+  overflow: hidden;
+}
+
+/* While the call strip shows, the page lays itself out under the toolbar and
+   the strip together. */
+.ix-frame[data-layout='phone'] > .ix-main:has(> .ix-callstrip) {
+  --ix-toolbar-h: calc(var(--ix-phone-bar) + var(--ix-phone-strip));
+}
+
+/* Held sideways a phone has its notch at a side: both screens keep clear of it. */
+.ix-frame[data-layout='phone'] > .ix-side,
+.ix-frame[data-layout='phone'] > .ix-main {
+  padding-left: var(--safe-left, 0px);
+  padding-right: var(--safe-right, 0px);
+}
+
+/* ---- The two screens: resting states --------------------------------------------------
+   In front: at rest. Behind: main parked off the right edge (ix-shell.css); the
+   sidebar 30% to the left under main, dimmed by its shade. A sheet pushed over
+   the screen in front holds that screen back the same way (`data-ix-pushed`). */
+.ix-frame[data-layout='phone'] > .ix-side {
+  padding-bottom: 0;
+}
+
+.ix-frame[data-layout='phone'] > .ix-side:not([data-active]) {
+  transform: translateX(-30%);
+  opacity: 1;
+}
+
+:root[data-ix-pushed] .ix-frame[data-layout='phone'] > [data-active] {
+  transform: translateX(-30%);
+}
+
+/* The dim layer in each screen: its opacity is the push's (phoneMotion.ts). */
+.ix-phone-shade {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  background: color-mix(in srgb, var(--ix-scrim) 50%, transparent);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.ix-frame[data-layout='phone'] > .ix-side:not([data-active]) > .ix-phone-shade,
+:root[data-ix-pushed] .ix-frame[data-layout='phone'] > [data-active] > .ix-phone-shade {
+  opacity: 1;
+}
+
+/* ---- The root: the sidebar, full width -------------------------------------------------- */
+/* Your face at the header's right, "…" left of it (§9). Both are 44px targets. */
+.ix-frame[data-layout='phone'] .ix-sh {
+  gap: 6px;
+  padding-right: 0;
+}
+
+.ix-frame[data-layout='phone'] .ix-sh__more,
+.ix-sh__me {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+}
+
+.ix-sh__me {
+  display: grid;
+  flex: none;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.ix-sh__me:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+/* People's header names the place in words; your face is the one at the right. */
+.ix-frame[data-layout='phone'] .ix-ph__who > .ix-av,
+.ix-frame[data-layout='phone'] .ix-ph__who > .ix-ph__blank {
+  display: none;
+}
+
+/* The dock is a bottom bar (§9): 64px plus the safe area, on the sidebar's foot
+   color, a top hairline, 44px targets around 34px marks, the indicator under
+   the current place, scrolling sideways when it overflows. */
+.ix-frame[data-layout='phone'] .ix-side__dock {
+  padding-bottom: var(--safe-bottom, 0px);
+  background: var(--ix-side-end);
+}
+
+.ix-frame[data-layout='phone'] .ix-dock {
+  --ix-dock-item: 44px;
+  box-sizing: border-box;
+  height: var(--ix-phone-dock);
+  padding: 0 12px;
+}
+
+.ix-frame[data-layout='phone'] .ix-dock__ind {
+  bottom: 5px;
+}
+
+/* No hover on a finger: the name tooltip never shows. */
+.ix-frame[data-layout='phone'] .ix-dock__tip {
+  display: none;
+}
+
+/* ---- Pushed pages: the toolbar, the large title ---------------------------------------- */
+/* 52px under the status bar; its fill (folded) reaches up under the status bar
+   the way a navigation bar does. Back chevron, folded title, search, members;
+   no avatar (it is on the root). */
+.ix-frame[data-layout='phone'] .ix-toolbar {
+  height: calc(var(--ix-phone-bar) + var(--safe-top, 0px));
+  padding: var(--safe-top, 0px) calc(6px + var(--safe-right, 0px)) 0 calc(4px + var(--safe-left, 0px));
+  gap: 0;
+}
+
+.ix-frame[data-layout='phone'] .ix-tool {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+}
+
+.ix-frame[data-layout='phone'] .ix-toolbar__back {
+  margin-left: 0;
+}
+
+.ix-frame[data-layout='phone'] .ix-toolbar__title {
+  max-width: none;
+  flex: 0 1 auto;
+  padding-inline: 4px;
+  font-size: 16px;
+}
+
+.ix-frame[data-layout='phone'] .ix-toolbar__me {
+  display: none;
+}
+
+/* The DM call button in the toolbar keeps the 44px target. */
+.ix-frame[data-layout='phone'] .ix-toolbar .ix-dm-call {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+/* §9: "a 30/700 large title that folds the same way". */
+.ix-frame[data-layout='phone'] .ix-large-title__h {
+  font-size: 30px;
+}
+
+/* ---- The call strip (§9) ----------------------------------------------------------------- */
+.ix-callstrip {
+  --ix-callstrip-ring: var(--ix-room-dark);
+  position: absolute;
+  top: calc(var(--safe-top, 0px) + var(--ix-phone-bar));
+  left: 0;
+  right: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  height: var(--ix-phone-strip);
+  padding: 0 calc(6px + var(--safe-right, 0px)) 0 var(--safe-left, 0px);
+  background: var(--ix-room-dark);
+  color: var(--ix-ink);
+}
+
+/* The yours tint over the solid ground, and a hairline in the card's amber edge. */
+.ix-callstrip::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: var(--ix-room-bg-yours);
+  box-shadow: inset 0 -1px 0 var(--ix-amber-edge);
+  pointer-events: none;
+}
+
+.ix-callstrip__open {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  height: 100%;
+  padding: 0 8px 0 16px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.ix-callstrip__open--static {
+  cursor: default;
+}
+
+.ix-callstrip__glyph {
+  flex: none;
+  color: var(--ix-amber);
+}
+
+.ix-callstrip__name {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ix-callstrip__faces {
+  flex: none;
+}
+
+.ix-callstrip__wave {
+  flex: none;
+}
+
+.ix-callstrip__mic {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 44px;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  color: var(--ix-ink-2);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.ix-callstrip__mic[data-muted='true'] {
+  color: var(--ix-danger-ink);
+}
+
+.ix-callstrip__answer {
+  display: flex;
+  flex: none;
+  gap: 6px;
+  padding-right: 4px;
+}
+
+/* Small enough for a 40px strip, still a finger's width. */
+.ix-callstrip .ix-callstrip__btn {
+  height: 30px;
+  min-width: 72px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+
+.ix-callstrip__open:focus-visible,
+.ix-callstrip__mic:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: -2px;
+}
+
+/* ---- The message box: above the safe area, above the keyboard --------------------------- */
+.ix-frame[data-layout='phone'] .ix-composer-column {
+  padding: 0 8px calc(var(--safe-bottom, 0px) + 8px);
+}
+
+/* The keyboard is up: main is laid out to what is still visible (usePhoneRoot.ts),
+   and the box sits on the keyboard, not on the home indicator's margin. */
+:root[data-ix-keyboard] .ix-frame[data-layout='phone'] > .ix-main {
+  top: var(--ix-vv-top, 0px);
+  bottom: var(--ix-keyboard, 0px);
+}
+
+:root[data-ix-keyboard] .ix-frame[data-layout='phone'] .ix-composer-column {
+  padding-bottom: 8px;
+}
+
+/* What main no longer covers is the keyboard's: the root behind stays out of sight. */
+:root[data-ix-keyboard] .ix-frame[data-layout='phone'] > .ix-side:not([data-active]) {
+  visibility: hidden;
+}
+
+/* ---- The call as a sheet (§9; components/ix/call/CallSheet.tsx) -------------------------- */
+.ix-frame[data-layout='phone'] .ix-call-host {
+  z-index: 60;
+}
+
+.ix-call-sheet__scrim {
+  position: absolute;
+  inset: 0;
+  background: var(--ix-scrim);
+}
+
+.ix-call-sheet {
+  position: absolute;
+  top: calc(var(--safe-top, 0px) + 8px);
+  left: 0;
+  right: 0;
+  bottom: 0;
+  overflow: hidden;
+  border-radius: 24px 24px 0 0;
+  background: var(--ix-call);
+  box-shadow: var(--ix-shadow-call);
+}
+
+.ix-call-sheet > .ix-inset-surface {
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.ix-call-sheet__handle {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  z-index: 2;
+  width: 36px;
+  height: 5px;
+  margin-left: -18px;
+  border-radius: 3px;
+  background: var(--ix-edge-strong);
+  touch-action: none;
+  pointer-events: none;
+}
+
+/* The header is what a finger drags the sheet by. */
+.ix-call-sheet .ix-call-head {
+  padding: 18px 14px 10px 18px;
+  touch-action: none;
+}
+
+.ix-call-sheet .ix-call-head__back {
+  min-height: 40px;
+}
+
+.ix-call-sheet .ix-call-head__tool {
+  width: 40px;
+  height: 40px;
+}
+
+.ix-call-sheet .ix-call__body {
+  padding: 0 12px 12px;
+}
+
+.ix-call-sheet .ix-call-controls {
+  gap: 8px;
+  padding: 4px 12px calc(var(--safe-bottom, 0px) + 14px);
+}
+
+.ix-call-sheet .ix-call-btn {
+  height: 48px;
+  min-width: 48px;
+}
+
+.ix-call-sheet .ix-call-btn--icon {
+  width: 48px;
+}
+
+/* People: one column for one or two, two above that; tiles scroll when they
+   do not fit. With cameras on they keep 16:9 at the column's width. */
+.ix-call-sheet .ix-call-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: minmax(132px, 1fr);
+  width: 100%;
+}
+
+.ix-call-sheet .ix-call-grid[data-count='1'],
+.ix-call-sheet .ix-call-grid[data-count='2'] {
+  grid-template-columns: minmax(0, 1fr);
+  width: 100%;
+}
+
+.ix-call-sheet .ix-call-grid[data-sized='true'] {
+  display: grid;
+  align-content: start;
+  align-self: stretch;
+  width: 100%;
+}
+
+.ix-call-sheet .ix-call-grid[data-sized='true'] > .ix-call-tile {
+  height: auto;
+  aspect-ratio: 16 / 9;
+}
+
+/* A stream: 16:9 at the top, everyone else below it in the same columns. */
+.ix-call-sheet .ix-call-focus {
+  gap: 10px;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.ix-call-sheet .ix-call-focus__stage {
+  flex: 0 0 auto;
+  display: block;
+}
+
+.ix-call-sheet .ix-call-focus__stage > * {
+  /* The picture places itself from the desktop's focus box (inline); a phone
+     gives it the column's width at 16:9. */
+  width: 100% !important;
+  height: auto !important;
+  aspect-ratio: 16 / 9 !important;
+}
+
+.ix-call-sheet .ix-call-strip {
+  display: grid;
+  flex: 0 0 auto;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: 104px;
+  height: auto;
+  overflow: visible;
+}
+
+.ix-call-sheet .ix-call-tile--strip,
+.ix-call-sheet .ix-call-tile--strip[data-camera='true'] {
+  width: auto;
+}
+
+.ix-call-sheet .ix-call-strip > .ix-call-listening {
+  grid-column: 1 / -1;
+  flex-direction: row;
+  justify-content: center;
+  padding: 6px 0;
+}
+
+/* Full screen (§9): turned sideways, or the header's Full screen, on a stream.
+   The stream alone over the whole screen, letterboxed; Back to chat and Exit
+   full screen float over it. */
+.ix-call-sheet[data-fullscreen] {
+  top: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.ix-call-sheet[data-fullscreen] .ix-call-sheet__handle,
+.ix-call-sheet[data-fullscreen] .ix-call-head,
+.ix-call-sheet[data-fullscreen] .ix-call-controls,
+.ix-call-sheet[data-fullscreen] .ix-call-strip,
+.ix-call-sheet[data-fullscreen] .ix-call__together-line {
+  display: none;
+}
+
+.ix-call-sheet[data-fullscreen] .ix-call__body {
+  padding: 0;
+}
+
+.ix-call-sheet[data-fullscreen] .ix-call-focus {
+  overflow: hidden;
+}
+
+.ix-call-sheet[data-fullscreen] .ix-call-focus__stage {
+  display: grid;
+  flex: 1 1 auto;
+  place-items: center;
+}
+
+.ix-call-sheet[data-fullscreen] .ix-call-focus__stage > * {
+  /* Letterboxed, never cropped: the whole width when held upright... */
+  width: 100% !important;
+  height: auto !important;
+  max-height: 100%;
+  aspect-ratio: 16 / 9 !important;
+  border-radius: 0;
+}
+
+/* ...the whole height when held sideways (wider than 16:9). */
+.ix-call-sheet[data-fullscreen][data-landscape] .ix-call-focus__stage > * {
+  width: auto !important;
+  height: 100% !important;
+  max-width: 100%;
+}
+
+.ix-call-sheet[data-fullscreen] {
+  background: var(--ix-call);
+}
+
+.ix-call-sheet__float {
+  position: absolute;
+  bottom: calc(var(--safe-bottom, 0px) + 12px);
+  left: calc(var(--safe-left, 0px) + 12px);
+  right: calc(var(--safe-right, 0px) + 12px);
+  z-index: 3;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.ix-call-sheet__float-btn {
+  min-height: 40px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--ix-pop-solid);
+  box-shadow: inset 0 0 0 1px var(--ix-edge-strong);
+  color: var(--ix-ink);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.ix-call-sheet__float-btn--icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  padding: 0;
+  color: var(--ix-amber);
+}
+
+.ix-call-sheet__float-btn:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+/* A sideways phone without a stream: the sheet keeps clear of the notch. */
+.ix-call-sheet[data-landscape]:not([data-fullscreen]) {
+  left: var(--safe-left, 0px);
+  right: var(--safe-right, 0px);
+}
+
+/* The close's still copy is a sheet too. */
+.ix-call-ghost.ix-call-sheet {
+  overflow: hidden;
+}
+
+/* ---- Sheets are pushed pages (§9) ------------------------------------------------------- */
+:root[data-ix-layout='phone'] .ix-sheet[data-host='window'] {
+  --ix-sheet-bar: 52px;
+  padding-top: var(--safe-top, 0px);
+  border-radius: 0;
+  background: var(--ix-main);
+  box-shadow: none;
+  padding-bottom: 0;
+}
+
+:root[data-ix-layout='phone'] .ix-sheet[data-host='window'] .ix-sheet__header {
+  min-height: var(--ix-sheet-bar);
+  padding-inline: 4px 8px;
+}
+
+:root[data-ix-layout='phone'] .ix-sheet[data-host='window'] .ix-sheet__btn {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+}
+
+:root[data-ix-layout='phone'] .ix-sheet[data-host='window'] .ix-sheet__body {
+  padding-bottom: var(--safe-bottom, 0px);
+}
+
+@keyframes ix-phone-push-in {
+  from {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes ix-phone-push-out {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+:root[data-ix-layout='phone'] .ix-sheet[data-host='window'].is-entering {
+  animation: ix-phone-push-in 360ms var(--ix-spring) backwards;
+}
+
+:root[data-ix-layout='phone'] .ix-sheet[data-host='window'].is-leaving {
+  animation: ix-phone-push-out 360ms var(--ix-spring) forwards;
+}
+
+/* The edge swipe already carried it off: it stays there until it unmounts. */
+:root[data-ix-layout='phone'] .ix-sheet[data-host='window'][data-ix-dismissed].is-leaving {
+  animation: none;
+  transform: translateX(100%);
+}
+
+:root[data-ix-layout='phone'][data-motion='reduced'] .ix-sheet[data-host='window'].is-entering {
+  animation: ix-fade-in 150ms var(--ix-ease) backwards;
+}
+
+:root[data-ix-layout='phone'][data-motion='reduced'] .ix-sheet[data-host='window'].is-leaving {
+  animation: ix-fade-out 150ms var(--ix-ease) forwards;
+}
+
+/* ---- Menus are action sheets (§9: radius 20, rows 52) ----------------------------------- */
+.ix-action-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 1099;
+  background: var(--ix-scrim);
+}
+
+.ix-action-scrim.is-entering {
+  animation: ix-fade-in 240ms var(--ix-ease) backwards;
+}
+
+.ix-action-scrim.is-leaving {
+  pointer-events: none;
+  animation: ix-fade-out 240ms var(--ix-ease) forwards;
+}
+
+.ix-menu.ix-menu--sheet,
+.ix-action-sheet {
+  position: fixed;
+  top: auto;
+  left: calc(var(--safe-left, 0px) + 8px);
+  right: calc(var(--safe-right, 0px) + 8px);
+  bottom: calc(var(--safe-bottom, 0px) + 8px);
+  z-index: 1100;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: auto;
+  max-width: none !important;
+  max-height: calc(100dvh - var(--safe-top, 0px) - var(--safe-bottom, 0px) - 56px) !important;
+  padding: 0;
+  overflow: visible;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  transform-origin: 50% 100%;
+}
+
+/* The rows: one rounded group, scrolling when there are more than fit. */
+.ix-menu__sheet-rows,
+.ix-action-sheet > :not(.ix-menu__cancel) {
+  background: var(--ix-pop-solid);
+}
+
+.ix-menu__sheet-rows {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px;
+  border-radius: 20px;
+  box-shadow: 0 0 0 1px var(--ix-edge-lit);
+  overscroll-behavior: contain;
+}
+
+/* The shared context menu has no rows wrapper: the sheet is its group. */
+.ix-action-sheet {
+  overflow-y: auto;
+  padding: 6px;
+  border-radius: 20px;
+  background: var(--ix-pop-solid);
+  box-shadow: 0 0 0 1px var(--ix-edge-lit);
+  gap: 0;
+}
+
+.ix-action-sheet > :not(.ix-menu__cancel) {
+  background: none;
+}
+
+.ix-menu--sheet .ix-menu__item,
+.ix-action-sheet > button {
+  min-height: 52px;
+  padding: 0 14px;
+  border-radius: 14px;
+  font-size: 16px;
+}
+
+/* A finger has no shortcuts: the keys a row names are not shown on a sheet. */
+.ix-menu--sheet .ix-menu__hint--key {
+  display: none;
+}
+
+.ix-menu--sheet .ix-menu__glyph {
+  width: 20px;
+  height: 20px;
+}
+
+.ix-menu--sheet .ix-menu__item--nested {
+  padding-inline-start: 48px;
+}
+
+.ix-menu--sheet .ix-menu__label-row {
+  padding: 10px 14px 4px;
+  font-size: 13px;
+}
+
+/* Cancel: its own rounded row under the group, the one bold choice. */
+.ix-menu__cancel {
+  flex: none;
+  min-height: 52px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 16px;
+  background: var(--ix-pop-solid);
+  box-shadow: 0 0 0 1px var(--ix-edge-lit);
+  color: var(--ix-ink);
+  font: inherit;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.ix-action-sheet > .ix-menu__cancel {
+  margin: 8px -6px -6px;
+  border-radius: 0 0 20px 20px;
+  box-shadow: inset 0 1px 0 var(--ix-line);
+}
+
+.ix-menu__cancel:active {
+  background: var(--ix-fill-2);
+}
+
+.ix-menu__cancel:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: -2px;
+}
+
+@keyframes ix-action-in {
+  from {
+    transform: translateY(calc(100% + 16px));
+  }
+}
+
+@keyframes ix-action-out {
+  to {
+    transform: translateY(calc(100% + 16px));
+  }
+}
+
+.ix-menu.ix-menu--sheet.is-entering,
+.ix-action-sheet.is-entering {
+  animation: ix-action-in 360ms var(--ix-spring) backwards;
+}
+
+.ix-menu.ix-menu--sheet.is-leaving,
+.ix-action-sheet.is-leaving {
+  pointer-events: none;
+  animation: ix-action-out 240ms var(--ix-ease) forwards;
+}
+
+:root[data-motion='reduced'] .ix-menu.ix-menu--sheet.is-entering,
+:root[data-motion='reduced'] .ix-action-sheet.is-entering {
+  animation: ix-fade-in 150ms var(--ix-ease) backwards;
+}
+
+:root[data-motion='reduced'] .ix-menu.ix-menu--sheet.is-leaving,
+:root[data-motion='reduced'] .ix-action-sheet.is-leaving {
+  animation: ix-fade-out 150ms var(--ix-ease) forwards;
+}
+
+/* The call's popovers (the microphone's menu, More, share quality) are sheets at
+   the foot of the screen too; they place themselves with inline coordinates. */
+:root[data-ix-layout='phone'] .ix-call-pop {
+  position: fixed !important;
+  top: auto !important;
+  left: calc(var(--safe-left, 0px) + 8px) !important;
+  right: calc(var(--safe-right, 0px) + 8px) !important;
+  bottom: calc(var(--safe-bottom, 0px) + 8px) !important;
+  width: auto !important;
+  max-height: 72dvh;
+  overflow-y: auto;
+  border-radius: 20px;
+}
+
+/* ---- The quick switcher: the whole screen, with Cancel (§9) ------------------------------ */
+.ix-switcher[data-layout='phone'] {
+  background: var(--ix-main);
+  padding-top: var(--safe-top, 0px);
+  padding-bottom: var(--safe-bottom, 0px);
+}
+
+.ix-switcher[data-layout='phone'] .ix-switcher__field {
+  height: 52px;
+  padding: 0 4px 0 16px;
+}
+
+.ix-switcher[data-layout='phone'] .ix-switcher__input {
+  font-size: 16px;
+}
+
+.ix-switcher__cancel {
+  flex: none;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  color: var(--ix-ink);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ix-switcher__cancel:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: -2px;
+}
+
+@keyframes ix-phone-rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+}
+
+.ix-switcher[data-layout='phone'].is-entering {
+  animation: ix-phone-rise 300ms var(--ix-spring) backwards;
+}
+
+:root[data-motion='reduced'] .ix-switcher[data-layout='phone'].is-entering {
+  animation: ix-fade-in 150ms var(--ix-ease) backwards;
+}
+
+/* ---- Reduced transparency: the strip and the floating controls are opaque ------------------ */
+:root[data-reduced-transparency='true'] .ix-callstrip::before {
+  background: none;
+}
+
+/* ---- The pull to refresh ring (MessageList: a pull down at the top of the timeline) ------- */
+.ix-pull {
+  top: calc(var(--ix-timeline-top, 0px) + 14px);
+  width: 18px;
+  height: 18px;
+  box-sizing: border-box;
+  border: 2px solid var(--ix-ink-3);
+  border-radius: 50%;
+}

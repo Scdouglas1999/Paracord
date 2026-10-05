@@ -7,19 +7,22 @@ import { callPlaceLine } from './callModel';
  * The call view's header (docs/index-spec.md §7.2, §3.1): the speaker glyph in
  * amber (a phone for a direct call, the podium for a stage channel), the
  * channel 18/700, the server 13 amber ("Direct call"), then chat (H), theater
- * (T) and **Back to chat** (Esc). The phone has neither chat nor theater.
+ * (T) and **Back to chat** (Esc). The phone has no chat; with a stream in focus
+ * it offers Full screen (theater on a phone, IX-16) instead.
  */
 export interface CallHeaderProps {
   model: StageModel;
   chat: boolean;
   theater: boolean;
   phone: boolean;
+  /** A stream is in focus: on a phone the header offers Full screen (IX-16). */
+  stream?: boolean;
   onToggleChat: () => void;
   onToggleTheater: () => void;
   onBack: () => void;
 }
 
-export function CallHeader({ model, chat, theater, phone, onToggleChat, onToggleTheater, onBack }: CallHeaderProps) {
+export function CallHeader({ model, chat, theater, phone, stream = false, onToggleChat, onToggleTheater, onBack }: CallHeaderProps) {
   const glyph = model.dm ? 'phone' : model.stageChannel ? 'stage' : 'speaker';
   const place = callPlaceLine(model);
   return (
@@ -55,6 +58,19 @@ export function CallHeader({ model, chat, theater, phone, onToggleChat, onToggle
             <IxGlyph name="theater" size={18} />
           </button>
         </>
+      )}
+      {phone && stream && (
+        <button
+          type="button"
+          className={cn('ix-call-head__tool', theater && 'is-on')}
+          aria-label={theater ? 'Exit full screen' : 'Full screen'}
+          aria-pressed={theater}
+          title={theater ? 'Exit full screen' : 'Full screen'}
+          data-testid="ix-call-fullscreen"
+          onClick={onToggleTheater}
+        >
+          <IxGlyph name="theater" size={18} />
+        </button>
       )}
       <button
         type="button"

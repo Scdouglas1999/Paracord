@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
-import { useLocation } from 'react-router';
+import { useLocation, useNavigationType } from 'react-router';
 
 import { useGlassStore } from '../../../stores/glassStore';
 import { isPlacesRoute, usePhoneNavStore } from '../../glass/shell/phoneNav';
@@ -10,6 +10,9 @@ import { CardSlot } from '../card';
 import { DockSlot } from '../dock';
 import { SheetSlot } from '../sheets';
 import { IxShellProvider, type IxShellValue } from './IxShellContext';
+import { CallStrip } from './phone/CallStrip';
+import { PhoneShade } from './phone/PhoneParts';
+import { usePhoneRoot } from './phone/usePhoneRoot';
 import { SidebarPanes } from './SidebarPanes';
 import { TintLayers } from './TintLayers';
 import { Toolbar } from './Toolbar';
@@ -50,7 +53,8 @@ export interface IxFrameProps {
  * draft, a scroll position, an open dialog survive). On a phone (§9) the same
  * two columns become two screens: the sidebar is the root, main is pushed over
  * it (the Glass phone navigation store and slide, `phoneNav`/`phoneMotion`,
- * reused; IX-16 owns the phone's finish).
+ * reused; IX-16 owns the phone's finish: `./phone/`, the call strip under the
+ * toolbar, a dim layer in each screen, the document-wide phone marks).
  *
  * `inert`: main while the call covers it; the sidebar too in theater (it dims
  * to .4 beneath, §5.9); on a phone, whichever screen is behind.
@@ -89,6 +93,8 @@ export function IxFrame({ guildId, channelId, children }: IxFrameProps) {
   );
 
   usePhonePush(phone, placeKey(place));
+  // IX-16: the phone's document-wide marks (`data-ix-layout`, the keyboard inset).
+  usePhoneRoot(phone);
 
   const stageOpen = stageMode !== 'none';
   const theater = stageMode === 'theater';
@@ -126,6 +132,7 @@ export function IxFrame({ guildId, channelId, children }: IxFrameProps) {
           <div className="ix-side__dock">
             <DockSlot />
           </div>
+          {phone && <PhoneShade />}
         </nav>
 
         <main
@@ -140,9 +147,11 @@ export function IxFrame({ guildId, channelId, children }: IxFrameProps) {
         >
           <TintLayers hue={hue} kind="main" />
           <Toolbar />
+          {phone && <CallStrip />}
           <div className="ix-main__content">{children}</div>
           <div id={IX_SHEET_HOST_ID} className="ix-sheet-host" data-sheet={sheet ?? undefined} />
           <SheetSlot />
+          {phone && <PhoneShade />}
         </main>
 
         <div id={IX_CALL_HOST_ID} className="ix-call-host" data-native-underlay-clear="">
@@ -154,19 +163,24 @@ export function IxFrame({ guildId, channelId, children }: IxFrameProps) {
 }
 
 /**
- * Phone: picking something in the sidebar pushes main (§9). A route change that
- * stays in the same place is a pick (a channel, a DM, Friends); one that moves
- * to another place is the dock, which keeps the root screen and shows the new
- * place's sidebar. The messages index (`/app/dms`) is the root's own route.
+ * Phone: picking something in the sidebar pushes main (§9). A navigation that
+ * stays in the same place is a pick (a channel, a DM, Friends), including a tap
+ * on the row that is already open (the same path, a new history entry: IX-16);
+ * only a push counts (a redirect replaces, the browser's back pops);
+ * one that moves to another place is the dock, which keeps the root screen and
+ * shows the new place's sidebar. The messages index (`/app/dms`) is the root's
+ * own route.
  */
 function usePhonePush(phone: boolean, placeId: string) {
-  const { pathname } = useLocation();
-  const last = useRef({ pathname, placeId });
+  const { pathname, key } = useLocation();
+  // A pick is a push; a redirect (replace) or the browser's back (pop) is not.
+  const kind = useNavigationType();
+  const last = useRef({ key, placeId });
   useEffect(() => {
     const before = last.current;
-    last.current = { pathname, placeId };
-    if (!phone || before.pathname === pathname) return;
+    last.current = { key, placeId };
+    if (!phone || before.key === key || kind !== 'PUSH') return;
     if (before.placeId !== placeId || isPlacesRoute(pathname)) return;
     usePhoneNavStore.getState().showConversation();
-  }, [phone, pathname, placeId]);
+  }, [phone, pathname, key, kind, placeId]);
 }

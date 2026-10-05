@@ -40,8 +40,8 @@ const FRAMES = path.join(outDir(), 'send');
 
 const composer = (page: Page) => page.locator(SEL.input);
 
-async function open(page: Page, options: { busy?: boolean } = {}): Promise<IndexHarness> {
-  await page.setViewportSize({ width: 1280, height: 800 });
+async function open(page: Page, options: { busy?: boolean; phone?: boolean } = {}): Promise<IndexHarness> {
+  await page.setViewportSize(options.phone ? { width: 390, height: 844 } : { width: 1280, height: 800 });
   const h = await installIndexScene(page, { video: false });
   await h.open(h.routes.channel('fuelGeneral'));
   if (options.busy !== false) {
@@ -179,6 +179,21 @@ test.describe('the send flight in the Index frame', () => {
     expect(start.y - landed.y).toBeGreaterThan(40);
     const last = await page.locator(SEL.ownRow).last().textContent();
     expect(last).toContain(text);
+  });
+
+  test('on a phone (IX-16) it flies in the phone layout, from the box onto its row', async ({ page }) => {
+    const text = 'omw, ten minutes';
+    await open(page, { phone: true });
+    await expect(page.locator('.ix-frame')).toHaveAttribute('data-layout', 'phone');
+    await expect(page.locator('.ix-frame')).toHaveAttribute('data-screen', 'conversation');
+    await type(page, text);
+    const start = await composer(page).boundingBox();
+    await film(page, 'phone-busy-general');
+    await expectLanded(page, text, { sameNode: true });
+    const landed = await page.locator(SEL.ownRow, { hasText: text }).locator(SEL.bubble).boundingBox();
+    if (!start || !landed) throw new Error('no box');
+    expect(start.y - landed.y).toBeGreaterThan(20);
+    expect(landed.x + landed.width).toBeLessThanOrEqual(390);
   });
 
   test('only transform, opacity and color move, on a 620ms flight, with no hang', async ({ page }) => {

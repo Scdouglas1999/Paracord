@@ -4,7 +4,7 @@ import { useLocation } from 'react-router';
 import { usePresence } from '../../../lib/motion';
 import { useVoiceStore } from '../../../stores/voiceStore';
 import { playPhoneScreens } from './phoneMotion';
-import { isConversationRoute, usePhoneNavStore, type PhoneScreen } from './phoneNav';
+import { isConversationRoute, takeSettledScreen, usePhoneNavStore, type PhoneScreen } from './phoneNav';
 
 /** Whether this client holds a call (joining, listening or joined): the pill's own test. */
 function useHoldsCall(): boolean {
@@ -25,12 +25,14 @@ export interface PhoneFrameState {
   /** The conversation pane (`main`), which takes focus when it comes in. */
   mainRef: RefObject<HTMLElement | null>;
   /**
+   * Glass only (GlassFrame, retired by IX-19; Index has no pill).
    * The call pill on places: only drawn while places is in front (and for the
    * length of its leave, so it does not vanish mid-slide). The conversation has
    * its own, and two of them on the page would be two of everything.
    */
   callOnPlaces: boolean;
   /**
+   * Glass only (see above).
    * A page that draws its own pill (a channel or a message) shows the call
    * there; any other page (Home, Friends, a server's overview) shows it in a bar
    * under the back button, so the call never goes out of reach.
@@ -39,7 +41,8 @@ export interface PhoneFrameState {
 }
 
 /**
- * The phone's navigation state, for `GlassFrame` (docs/glass-spec.md §8; WP-G20):
+ * The phone's navigation state, for the Index frame (`IxFrame`; docs/index-spec.md
+ * §9, IX-16) and, until IX-19 deletes it, `GlassFrame` (docs/glass-spec.md §8; WP-G20):
  * which of the two screens is in front, the call's place on each, and the move
  * between them, with where focus goes after it.
  *
@@ -76,7 +79,10 @@ export function usePhoneFrame(active: boolean): PhoneFrameState {
     previous.current = chosen;
     if (before === null || before === chosen) return;
     for (const animation of running.current) animation.cancel();
-    running.current = playPhoneScreens(placesRef.current, conversationRef.current, chosen);
+    // A swipe already drew this change; otherwise the push (or pop) plays.
+    running.current = takeSettledScreen(chosen)
+      ? []
+      : playPhoneScreens(placesRef.current, conversationRef.current, chosen);
     if (chosen === 'conversation') {
       mainRef.current?.focus({ preventScroll: true });
     } else {
