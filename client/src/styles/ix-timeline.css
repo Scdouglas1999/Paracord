@@ -1376,7 +1376,7 @@ button.ix-msg__who:hover {
    not yet answered for it (`data-flight='held'`, visible: it is already where
    the delivered row will be, so the swap never moves). Transform, opacity and
    the words' color are all that animate, and only on the ghost. Moved here
-   from glass-timeline.css unchanged, but for the fill: the Index bubble is
+   from the Glass timeline sheet unchanged, but for the fill: the Index bubble is
    cream with no shadow, so the ghost lands as exactly that. */
 .glass-msg[data-flight] {
   visibility: hidden;

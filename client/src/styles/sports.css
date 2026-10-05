@@ -548,31 +548,6 @@
   }
 }
 
-.pc-sports-diamond {
-  position: relative;
-  width: 24px;
-  /* A rotated base reaches a pixel and a half past its box; the room is kept here. */
-  height: 22px;
-  flex: none;
-}
-
-.pc-sports-base {
-  position: absolute;
-  width: 7px;
-  height: 7px;
-  background: var(--bg-well);
-  box-shadow: var(--shadow-well);
-  transform: rotate(45deg);
-}
-
-.pc-sports-base.is-on {
-  background: var(--text-primary);
-}
-
-.pc-sports-base.is-second { left: 8px; top: 3px; }
-.pc-sports-base.is-third { left: 1px; top: 11px; }
-.pc-sports-base.is-first { left: 15px; top: 11px; }
-
 .pc-sports-win {
   display: flex;
   width: 100%;
@@ -1089,24 +1064,11 @@
   background: var(--sports-chalk);
 }
 
-.pc-sports-inning,
-.pc-sports-piprow {
+.pc-sports-inning {
   display: inline-flex;
   align-items: center;
   gap: 3px;
 }
-
-.pc-sports-pip {
-  width: 7px;
-  height: 7px;
-  border: 1.5px solid var(--sports-chalk);
-  border-radius: var(--radius-full);
-  background: transparent;
-}
-
-.pc-sports-pip[data-shape='square'] { border-radius: 1px; }
-
-.pc-sports-pip.is-on { background: var(--sports-chalk); }
 
 .pc-sports-headshot {
   display: inline-flex;
@@ -1949,14 +1911,6 @@
   height: 14px;
 }
 
-.pc-sports-unpin {
-  border: 0;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: var(--text-title);
-  line-height: 1;
-}
-
 .pc-sports-pin-picker {
   position: static;
   z-index: 5;
@@ -2058,49 +2012,6 @@
 }
 
 .pc-sports-pin.is-open .pc-sports-pin-more { display: none; }
-
-.pc-sports-trophy {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  width: 2.25rem;
-  height: 2.25rem;
-  border-radius: 999px;
-  background: var(--bg-mod-subtle);
-  color: var(--text-secondary);
-}
-
-.pc-sports-trophy.is-ribbon {
-  width: 1.75rem;
-  height: 1.75rem;
-}
-
-.pc-sports-scorecard {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
-  max-width: 28rem;
-  margin-top: 2px;
-  padding: 6px 8px;
-  border-radius: var(--radius-card);
-  background: var(--bg-raised);
-  color: inherit;
-  text-align: left;
-  text-decoration: none;
-}
-
-.pc-sports-scorecard-line {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.pc-sports-scorecard-play {
-  color: var(--text-faint);
-  font-size: var(--text-meta);
-}
 
 .pc-sports-date {
   height: 1.75rem;

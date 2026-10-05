@@ -4,6 +4,31 @@
 
    Only transform, opacity and colors move here (the motion lint). */
 
+/* ---- The app root and the routed page's outlet --------------------------------
+   `pages/AppShell.tsx`: one window-sized column the frame fills. The banners
+   stack above it and `--pc-banner-inset` is the room they take; the shell stays
+   exactly one viewport tall and its content moves down instead. */
+.ix-app {
+  position: relative;
+  /* Its own stacking context, so a layer at z-index -1 stays above the ground
+     and below every in-flow child. */
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100dvh;
+  overflow: hidden;
+  color: var(--ix-ink);
+  background-color: var(--ix-ground);
+}
+
+/* A page that still wraps itself in "ground + gutter + plate" goes clear and flat inside
+   main, so main is the only surface. */
+.ix-outlet {
+  --color-bg-base: transparent;
+  --shadow-plate: none;
+}
+
 /* ---- The frame: two flush columns, no gutters ------------------------------ */
 .ix-frame {
   /* Geometry the slots and pages may read. */

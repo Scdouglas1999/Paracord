@@ -21,10 +21,8 @@
 /* ---- Where it sits ----------------------------------------------------------
    In the conversation column the box is 24px wider than the feed: the column's
    padding less 12 on each side (§3: margin 36 vs 48), 18px above main's foot.
-   `.ix-composer-column` is the host class for the Index conversation (IX-15);
-   `.glass-conversation__composer` is today's host until IX-15 replaces it. */
-.ix-composer-column,
-.glass-conversation__composer {
+   `.ix-composer-column` is the host class for the Index conversation (IX-15). */
+.ix-composer-column {
   box-sizing: border-box;
   width: 100%;
   max-width: calc(var(--ix-col-max, 920px) + 2 * var(--ix-col-pad, 48px));

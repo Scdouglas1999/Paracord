@@ -109,7 +109,8 @@ describe('Index stylesheets', () => {
     const imports = [...globals.matchAll(/^@import '\.\/(ix-[a-z-]+)\.css';$/gm)].map((m) => m[1]);
     expect(imports).toEqual(ORDER);
     const at = (needle: string) => globals.indexOf(needle);
-    expect(at("@import './ix-base.css'")).toBeGreaterThan(at("@import './glass-places.css'"));
+    expect(at("@import './glass-sheets.css'")).toBeGreaterThan(-1);
+    expect(at("@import './ix-base.css'")).toBeGreaterThan(at("@import './glass-sheets.css'"));
     expect(at("@import './ix-base.css'")).toBeGreaterThan(at("@import './server-home.css'"));
     expect(at("@import './ix-phone.css'")).toBeLessThan(at("@import './utilities.css'"));
   });

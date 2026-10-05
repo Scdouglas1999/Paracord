@@ -38,12 +38,12 @@
   padding-top: 18px;
 }
 
-/* AppShell wraps the routed page in `.glass-outlet`, a block that is itself a flex item.
+/* AppShell wraps the routed page in `.ix-outlet`, a block that is itself a flex item.
    `.ix-page` (a scroller), `.ix-empty` and `.ix-skeleton` size themselves as flex
    children of a column, so an Index page in it would be as tall as its content and
    clipped, never scrolling. Until the outlet is a flex column itself (IX-14, IX-15),
    make it one for exactly the pages that need it. */
-.glass-outlet:has(> .ix-page, > .ix-hued > .ix-page, > .ix-empty, > .ix-skeleton) {
+.ix-outlet:has(> .ix-page, > .ix-hued > .ix-page, > .ix-empty, > .ix-skeleton) {
   display: flex;
   flex-direction: column;
 }
@@ -230,17 +230,6 @@
   display: flex;
   flex-direction: column;
   gap: 24px;
-}
-
-/* The subtitle is the server's description: two lines at most. */
-.ix-ov__about,
-.ix-sp .ix-large-title__sub:has(.ix-ov__about) {
-  display: -webkit-box;
-  max-width: 62ch;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
 }
 
 /* Who is here, and what you can do from the front page. */

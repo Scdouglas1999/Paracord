@@ -88,7 +88,6 @@ const ALLOWED = [
  */
 const LOOPS = [
   ['styles/ix-card.css', '.ix-wave > i', 'the talking waveform: drawn only while that person talks (index-spec §4.4), still under reduced motion'],
-  ['styles/glass.css', '.glass-wave', 'the Glass waveform, the same rule; retired with the Glass shells (IX-19)'],
   ['styles/ix-timeline.css', '.ix-typing__bubble', 'the typing dots: drawn only while someone is typing'],
   ['styles/primitives.css', '.pc-typing-dots', 'typing dots (the design tokens page): only while someone is typing'],
   ['styles/primitives.css', '.pc-speaking', 'the speaking ring (the design tokens page): only while that person speaks'],

@@ -14,9 +14,8 @@
    `npm run test:tokens` fails on any literal color in this file.
 
    Imported after the Glass sheets and unlayered, so on a tie an Index rule beats
-   a Glass one: `Face` (components/glass/places/Lead.tsx) still carries
-   `.glass-face` for the rings other sheets draw around it, and `.ix-av` has to
-   win the type and the fill. Rules that a ring or a bite must be able to replace
+   a Glass one: `.ix-av` has to win the type and the fill over whatever a
+   Glass sheet says about an avatar. Rules that a ring or a bite must be able to replace
    are written inside `:where()` (zero specificity) on purpose.
 
    Nothing here animates anything but a color, in 120ms. Reduced motion needs no

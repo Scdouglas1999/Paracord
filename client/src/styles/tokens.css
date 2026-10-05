@@ -123,21 +123,6 @@
   --color-interactive-active: var(--interactive-active);
   --color-interactive-muted: var(--interactive-muted);
 
-  /* Identity hues — the fill a person or a server wears (a 28px circle, a
-     server's mark). Identity, never state. Fixed across both themes and across
-     the room's tint: a person's color is who they are, not where the app is.
-     Eight of them, so a channel with a dozen people in it rarely repeats one.
-     Written as TEXT, an identity has its own ink token — the timeline writes
-     an author's name in `--identity-ink-*`, not in the fill. */
-  --color-avatar-1: #e6a96a; /* apricot */
-  --color-avatar-2: #8db3ea; /* sky */
-  --color-avatar-3: #74c6a8; /* mint */
-  --color-avatar-4: #ea9a8a; /* coral */
-  --color-avatar-5: #c7a0e6; /* lilac */
-  --color-avatar-6: #dcc86c; /* straw */
-  --color-avatar-7: #7ec9d8; /* aqua */
-  --color-avatar-8: #ea9cc2; /* pink */
-
   /* ---- §2 Type faces ------------------------------------------------------ */
   /* Display / names — room and building names, page titles, author names. */
   /* Glass (docs/glass-spec.md §2.3): one family, Instrument Sans, with the width axis.
@@ -347,47 +332,28 @@
 /* =============================================================================
    GLASS (docs/glass-spec.md §2, §9). The default theme resolves to these.
 
-   The room lights the interface. One channel triplet, `--room-rgb`, is the only
-   thing the room controller (WP-G8) ever writes; every tinted surface is a
-   `color-mix()` of it into a neutral step at 4-6% (the owner rejected warmer
-   versions as "sepia": never above 6%).
-
-   REFERENCE SAMPLES. The two tints in spec §2.1 are reproduced, to a CIE76
-   delta-E of at most 1.5 (mean about 0.9), from these two room samples:
-       warm  (a live stream, amber-ish)   222, 109, 35    -> .glass-tint-warm
-       cool  (a banner, nothing live)      80, 158, 255   -> .glass-tint-cool
-   `docs/design/glass-g0-checkpoint.md` tabulates every token against the
-   reference. The neutrals below were fitted to those two samples; they are the
-   only numbers here that are not from the spec.
+   The surfaces the long tail of screens still reads (`--pane`, `--bub`,
+   `--raise`, `--sel`, `--deep`, `--solid`, `--street`, `--well`) are a
+   `color-mix()` of one channel triplet, `--room-rgb`, into a neutral step at
+   4-6% (the owner rejected warmer versions as "sepia": never above 6%). Room
+   light is retired (docs/index-spec.md §12): nothing writes the triplet any
+   more, so it is the one value below. The Index surfaces are `--ix-*`, further
+   down.
 
    A custom property is substituted where it is DECLARED, so the derived tokens
-   are declared for `:root`, for each theme's own attribute and for
-   `.glass-room`: a subtree that sets its own `--room-rgb` (the /design-tokens
-   page shows both tints side by side, and a sheet could one day be lit by
-   another room), or is painted in a theme other than the page's, re-derives
-   its own surfaces. High contrast reaches into `.glass-room` too, below,
-   because that selector re-declares the inputs it overrides.
+   are declared for `:root` and for each theme's own attribute: a subtree
+   painted in a theme other than the page's re-derives its own surfaces.
    `scripts/contrast-audit.mjs` reads this block, so keep the derivation in the
    `color-mix()` shapes it understands (srgb, an rgb() of `--room-rgb`, a hex or
    `transparent`).
    ============================================================================= */
 :root {
-  /* Match ROOM_DEFAULT until actual room content supplies a tint. */
   --room-rgb: 82, 143, 219;
-}
-
-.glass-tint-warm {
-  --room-rgb: 222, 109, 35;
-}
-
-.glass-tint-cool {
-  --room-rgb: 80, 158, 255;
 }
 
 [data-theme='glass'],
 [data-theme='glass-contrast'],
-:root,
-.glass-room {
+:root {
   /* Neutral steps the room is mixed into. */
   --glass-n-pane: #151616;
   --glass-n-solid: #141515;
@@ -501,16 +467,9 @@
   /* Hover and press, 120ms ease-out; nothing scales on press. */
   --glass-ms: 120ms;
   --glass-ease: ease-out;
-  /* Layout changes (pill -> stage, side by side <-> theater): a 650ms spring on
-     transform, size and radius. The room eases over 1.2s. Reduced motion turns
-     both into a 150ms crossfade. */
-  --glass-ms-layout: 650ms;
-  --glass-ms-room: 1200ms;
+  /* Reduced motion turns every move into a 150ms crossfade. */
   --glass-ms-reduced: 150ms;
   --glass-spring: cubic-bezier(0.2, 0.8, 0.2, 1);
-  /* §2.5: the talking waveform. Five bars, 3px wide, 2px apart. */
-  --wave-bar: 3px;
-  --wave-gap: 2px;
 }
 
 /* =============================================================================
@@ -529,22 +488,6 @@
 :root {
   color-scheme: dark;
 
-  /* The generated server cover (styles/glass-pages.css): the lightness of its
-     ground, its deep end and its soft lights. The hue and chroma are the
-     server's own, set per server; only these steps belong to the theme. */
-  --cover-l-ground: 17%;
-  --cover-l-deep: 29%;
-  --cover-l-mid: 56%;
-  --cover-l-light: 74%;
-  --cover-a-light: 0.58;
-  --cover-c-scale: 1;
-  /* A fine, colorless tooth over the made cover, so its gradients never band. */
-  --cover-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .55 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E");
-  --cover-grain-opacity: 0.09;
-  /* Static, cached grain rather than animated noise or a full-screen filter.
-     A few intensity levels break up dark gradient contours without making
-     the material visibly grainy. Keep the texture behind content, at a few levels of opacity. */
-  --surface-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .025 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E");
 
   /* ---- §1.1 Surfaces — the Lantern names, mapped onto Glass --------------- */
   /* The street: app base behind everything. */
@@ -579,7 +522,6 @@
   --spoiler-bg: var(--bg-well);
   --spoiler-bg-revealed: var(--bg-mod-strong);
   --bg-code: var(--bg-well);
-  --border-code: var(--border-subtle);
 
   /* ---- §1.2 Light — three lights, three meanings --------------------------- */
   /* Talking / live: people in a voice or video room. */
@@ -660,7 +602,6 @@
   --shadow-composer: var(--glass-edge), 0 8px 20px rgba(0, 0, 0, 0.35);
   --shadow-chip: var(--sh-content);
   --shadow-tile: var(--sh-content);
-  --shadow-floating: var(--shadow-plate);
 
   /* ---- §1.2 Light effects: fixed recipes, never free values ---------------- */
   --glow-window-white: 0 0 6px rgba(255, 194, 126, 0.55);
@@ -668,9 +609,6 @@
   /* The amber window's writing pulse peaks here — the speaking ring's breath
      at half its amplitude (§5.1), so typing is a murmur, not a shout. */
   --glow-window-amber-breathe: 0 0 9px rgba(255, 194, 126, 0.63);
-  /* The larger 12×16 windows on Home carry a proportionally larger glow. */
-  --glow-window-white-lg: 0 0 8px rgba(255, 194, 126, 0.55);
-  --glow-window-amber-lg: 0 0 8px rgba(255, 194, 126, 0.5);
   --glow-live-dot: 0 0 6px rgba(255, 194, 126, 0.8);
   /* A white-light fill (the Join button, the mic-on control). */
   --glow-light-fill: 0 0 16px rgba(255, 255, 255, 0.12);
@@ -715,24 +653,10 @@
      INTO the frame (`radial-gradient(70% 120% at 20% 0%)` over a tinted ground),
      so it hugs the top-left corner of the window instead of fogging it. */
   --thumb-frame-lit: var(--bub);
-  --thumb-glow: radial-gradient(70% 120% at 20% 0%, rgba(255, 194, 126, 0.14), rgba(255, 194, 126, 0));
   /* Away / offline. No rim. */
   --dim-filter: saturate(0.35) brightness(0.72);
   /* A name tag over a live tile. */
   --tag-fill: color-mix(in srgb, var(--street), transparent 22%);
-
-  /* ---- Identity as INK ----------------------------------------------------
-     An author's name in the timeline is written in their own color. On a dark
-     ground the fill IS the ink — every one of the eight clears 4.5:1 on every
-     ground (`scripts/contrast-audit.mjs`). */
-  --identity-ink-1: var(--color-avatar-1);
-  --identity-ink-2: var(--color-avatar-2);
-  --identity-ink-3: var(--color-avatar-3);
-  --identity-ink-4: var(--color-avatar-4);
-  --identity-ink-5: var(--color-avatar-5);
-  --identity-ink-6: var(--color-avatar-6);
-  --identity-ink-7: var(--color-avatar-7);
-  --identity-ink-8: var(--color-avatar-8);
 
   /* A native <select>'s own arrow is never used; this is the tokenized one
      (`.pc-select`). The literal lives here, with every other literal, because a
@@ -744,25 +668,7 @@
   --focus-ring: 0 0 0 2px var(--bg-base), 0 0 0 4px var(--focus-ring-color);
   --focus-ring-input: 0 0 0 2px var(--bg-base), 0 0 0 4px var(--focus-ring-color);
 
-  /* ---- Density (server-synced compact/comfortable message display) --------- */
-  --density-scale: 1;
-  --density-space-1: 0.25rem;
-  --density-space-2: 0.5rem;
-  --density-space-3: 0.75rem;
-  --density-space-4: 1rem;
-  --density-space-5: 1.25rem;
-
   /* ---- Shell metrics ------------------------------------------------------ */
-  /* The toggleable right panel (threads / pins / search / leaderboard / a group
-     message's people). Never a docked member list — §6.5. */
-  --w-context-panel: clamp(14rem, 24vw, 20rem);
-  --sidebar-width: 72px;
-  --sidebar-item-size: 52px;
-  --sidebar-icon-size: 26px;
-  --sidebar-bg: var(--bg-base);
-  --sidebar-border: var(--border-subtle);
-  --sidebar-active-indicator: var(--accent-primary);
-
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-right: env(safe-area-inset-right, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
@@ -852,14 +758,11 @@
    The room's tint is not mixed into the surfaces here: a theme whose whole
    job is a guaranteed floor cannot let that floor move with what happens to
    be live. Amber still means live; Join is still the one filled button.
-   `scripts/contrast-audit.mjs` sweeps this theme over every room tint it
-   sweeps Glass over.
+   `scripts/contrast-audit.mjs` measures this theme with the same ink sets.
    ============================================================================= */
-[data-theme='glass-contrast'] .glass-room,
 [data-theme='glass-contrast'] {
   /* Opaque panes; black street and wells; a lifted selection. The room's tint
-     is left out of the surfaces (the backdrop still carries it), so contrast
-     never depends on what happens to be live. */
+     is left out of the surfaces, so contrast never depends on it. */
   --glass-tint-base: 0%;
   --glass-tint-lift: 0%;
   --glass-clear-pane: 0%;
@@ -867,9 +770,6 @@
   --glass-n-street: #000000;
   --glass-n-well: #000000;
   --glass-n-sel: #33363a;
-
-  /* Texture must not soften high-contrast edges or lift its black ground. */
-  --surface-grain: none;
 
   /* Two steps only: full ink, and one secondary. */
   --ink-1: #ffffff;
@@ -915,15 +815,12 @@
   --border-strong: rgba(255, 255, 255, 0.65);
   --scrollbar-auto-thumb: rgba(255, 255, 255, 0.45);
   --scrollbar-auto-thumb-hover: rgba(255, 255, 255, 0.7);
-  --sidebar-border: var(--border-strong);
 
   /* Lit rings and glows, 1.5x (clamped at 1): a thicker rim and alphas that
      already run to 1, so a ring that is as bright as it can be stays there. */
   --glow-window-white: 0 0 6px rgba(255, 194, 126, 0.82);
   --glow-window-amber: 0 0 6px rgba(255, 194, 126, 0.75);
   --glow-window-amber-breathe: 0 0 9px rgba(255, 194, 126, 0.85);
-  --glow-window-white-lg: 0 0 8px rgba(255, 194, 126, 0.82);
-  --glow-window-amber-lg: 0 0 8px rgba(255, 194, 126, 0.75);
   --glow-live-dot: 0 0 6px rgba(255, 194, 126, 1);
   --glow-light-fill: 0 0 16px rgba(255, 255, 255, 0.18);
   --glow-control-on: 0 0 18px rgba(255, 255, 255, 0.24);
@@ -935,7 +832,6 @@
   --ring-a-peak-edge: 1;
   --ring-lit-plate: 0 0 0 2px rgba(255, 194, 126, 0.24), 0 0 34px rgba(255, 194, 126, 0.15);
   --lamp-radial: radial-gradient(closest-side, rgba(255, 194, 126, 0.24), rgba(255, 194, 126, 0));
-  --thumb-glow: radial-gradient(70% 120% at 20% 0%, rgba(255, 194, 126, 0.24), rgba(255, 194, 126, 0));
   --tag-fill: rgba(0, 0, 0, 0.9);
 }
 
@@ -1112,7 +1008,6 @@
   --sports-dirt: oklch(0.50 0.072 68);
   --sports-dirt-dark: oklch(0.40 0.055 58);
   --sports-endzone: oklch(0.33 0.055 165);
-  --sports-redzone: oklch(0.45 0.12 25 / 0.4);
   --sports-logo-chip: oklch(0.96 0.01 95);
   --sports-lace: oklch(0.32 0.045 55);
   --sports-ball-shadow: 0 2px 3px oklch(0.2 0.03 150 / 0.55);
@@ -1178,30 +1073,10 @@
 }
 
 /* =============================================================================
-   Density + responsive metrics
+   Responsive metrics
    ============================================================================= */
-:root[data-density='compact'] {
-  --density-scale: 0.9;
-  --density-space-1: 0.2rem;
-  --density-space-2: 0.45rem;
-  --density-space-3: 0.65rem;
-  --density-space-4: 0.875rem;
-  --density-space-5: 1rem;
-}
-
-:root[data-density='comfortable'] {
-  --density-scale: 1.08;
-  --density-space-1: 0.35rem;
-  --density-space-2: 0.65rem;
-  --density-space-3: 0.9rem;
-  --density-space-4: 1.15rem;
-  --density-space-5: 1.4rem;
-}
-
 @media (width < 768px) {
   :root {
-    --w-context-panel: 88vw;
-    --sidebar-item-size: 2.75rem;
     /* §3: phone plates and controls round up; hit targets grow (§9). */
     --radius-plate: var(--radius-plate-phone);
     --radius-control: var(--radius-control-phone);
@@ -1214,13 +1089,6 @@
     --h-stage-control: var(--h-stage-control-phone);
     --radius-stage-control: var(--radius-stage-control-phone);
     --shadow-plate: var(--shadow-plate-phone);
-  }
-}
-
-@media (max-width: 640px) {
-  :root {
-    --w-context-panel: 88vw;
-    --sidebar-item-size: 2.5rem;
   }
 }
 

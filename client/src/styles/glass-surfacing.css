@@ -1,0 +1,111 @@
+/* =============================================================================
+   Messages surfacing over the stream while the call view's chat column is off
+   (docs/index-spec.md §7.1, `components/glass/stage/SurfacingMessages.tsx`):
+   a short stack of the newest messages, bottom left, that fades in as they
+   arrive.
+
+   Tokens only (the literal-color lint); only transform and opacity animate
+   (the motion lint). On the desktop app's native video route no blur can
+   reach the video, so the bubbles carry near-solid fills there.
+   ============================================================================= */
+
+.glass-surfacing {
+  position: absolute;
+  bottom: 112px;
+  left: max(20px, var(--stage-vis-l, 0px));
+  width: min(380px, calc(100% - 40px));
+  pointer-events: none;
+}
+
+.glass-surfacing__stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-bubble);
+  color: inherit;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+@keyframes glass-surface-rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+}
+
+.glass-surfacing__bubble {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 14px 10px 10px;
+  border-radius: var(--r-bubble);
+  background-color: color-mix(in srgb, var(--bub) 92%, transparent);
+  box-shadow: var(--sh-raised);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  animation: glass-surface-rise 400ms var(--glass-spring) both;
+  transition: background-color var(--glass-ms) var(--glass-ease);
+}
+
+.glass-surfacing__stack:hover .glass-surfacing__bubble {
+  background-color: color-mix(in srgb, var(--ink-1) 4%, color-mix(in srgb, var(--bub) 92%, transparent));
+}
+
+.glass-surfacing__bubble[data-mention='true'] {
+  box-shadow:
+    inset 0 0 0 1.5px color-mix(in srgb, var(--ink-1) 90%, transparent),
+    var(--sh-raised);
+}
+
+.glass-surfacing__face {
+  margin-top: 1px;
+}
+
+.glass-surfacing__text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.glass-surfacing__who {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.glass-surfacing__where {
+  font-weight: 400;
+  color: var(--ink-3);
+}
+
+.glass-surfacing__body {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 15px;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+:root[data-reduced-transparency='true'] .glass-surfacing__bubble {
+  background-color: var(--solid);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+html[data-native-underlay] .glass-surfacing__bubble {
+  background-color: color-mix(in srgb, var(--bub) 98%, transparent);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}

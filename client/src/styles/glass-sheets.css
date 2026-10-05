@@ -452,54 +452,6 @@ button.glass-sheet-chip:hover {
   height: 40px;
 }
 
-.glass-sheet-face .glass-face {
-  width: 100%;
-  height: 100%;
-  font-size: 14px;
-}
-
-.glass-sheet-presence {
-  position: absolute;
-  right: -1px;
-  bottom: -1px;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background-color: var(--ink-1);
-  /* The bite: a ring in the sheet's opaque color. */
-  box-shadow: 0 0 0 2.5px var(--solid);
-}
-
-.glass-sheet-presence[data-status='idle'] {
-  background-color: var(--solid);
-  box-shadow:
-    inset 0 0 0 2px var(--ink-1),
-    0 0 0 2.5px var(--solid);
-}
-
-.glass-sheet-presence[data-status='dnd'] {
-  background-color: var(--ink-3);
-}
-
-.glass-sheet-presence[data-status='dnd']::after {
-  content: '';
-  position: absolute;
-  top: 5px;
-  left: 3px;
-  width: 6px;
-  height: 2px;
-  border-radius: 1px;
-  background-color: var(--solid);
-}
-
-.glass-sheet-presence[data-status='offline'],
-.glass-sheet-presence[data-status='invisible'] {
-  background-color: var(--solid);
-  box-shadow:
-    inset 0 0 0 2px var(--ink-3),
-    0 0 0 2.5px var(--solid);
-}
-
 /* ---- A conversation inside a sheet (a pushed thread) -------------------------- */
 .glass-sheet-thread {
   display: flex;
@@ -799,109 +751,9 @@ button.glass-sheet-chip:hover {
 }
 
 /* ---- Inbox ------------------------------------------------------------------------ */
-.glass-inbox__bar {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px 12px;
-  padding-block: 4px 12px;
-  background: linear-gradient(var(--solid) 78%, transparent);
-}
 
 /* The tabs scroll in their own strip, so the decision beside them (Mark all
    read) is never pushed out of reach on a narrow screen: it wraps below. */
-.glass-inbox__bar .glass-sheet-tabs {
-  max-width: 100%;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.glass-inbox__bar .glass-sheet-tabs::-webkit-scrollbar {
-  display: none;
-}
-
-.glass-inbox__count {
-  min-width: 18px;
-  padding: 1px 6px;
-  border-radius: 9px;
-  font-size: 12px;
-  text-align: center;
-  color: var(--ink-1);
-  background-color: var(--ix-fill-ctl);
-}
-
-.glass-inbox__where {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.glass-inbox__preview {
-  display: -webkit-box;
-  overflow: hidden;
-  color: var(--ink-2);
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-}
-
-.glass-inbox__row {
-  padding-block: 6px;
-}
-
-.glass-inbox__open {
-  display: flex;
-  flex: 1 1 auto;
-  align-items: flex-start;
-  gap: 12px;
-  min-width: 0;
-  padding: 4px 0;
-  border: 0;
-  border-radius: 12px;
-  font: inherit;
-  text-align: start;
-  color: inherit;
-  background: transparent;
-  cursor: pointer;
-}
-
-.glass-inbox__title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.glass-inbox__mention {
-  flex: 0 0 auto;
-  min-width: 20px;
-  height: 20px;
-  padding: 0 6px;
-  border-radius: 10px;
-  line-height: 20px;
-  text-align: center;
-  color: var(--mention-ink);
-  background-color: var(--mention-chip);
-}
-
-.glass-inbox__dot {
-  flex: 0 0 auto;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background-color: var(--ink-1);
-}
-
-.glass-inbox__author {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--ink-2);
-}
 
 /* ---- The catch-up summary ------------------------------------------------------------- */
 .glass-summary__meta {

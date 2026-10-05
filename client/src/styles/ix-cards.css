@@ -332,13 +332,6 @@
   color: var(--ix-ink-3);
 }
 
-/* Plan cards on a page are as wide as the page's column asks. */
-.glass-plans .ix-card,
-.glass-post .ix-card {
-  width: auto;
-  max-width: none;
-}
-
 /* ---- 4. Poll ---------------------------------------------------------------------
    Options as rows. The share bar behind a row is a scaleX from its left edge
    (--share is 0 to 1): a vote moving it is a composited change, not a relayout.

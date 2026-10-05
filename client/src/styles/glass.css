@@ -11,25 +11,12 @@
    ============================================================================= */
 
 /* ---- Type roles (§2.3) --------------------------------------------------- */
-.glass-title-server {
-  font-size: 28px;
-  font-weight: 600;
-  line-height: 1.1;
-  font-stretch: 92%;
-  letter-spacing: -0.025em;
-}
 
 .glass-title-channel {
   font-size: 20px;
   font-weight: 600;
   line-height: 1.2;
   letter-spacing: -0.01em;
-}
-
-.glass-title-section {
-  font-size: 17px;
-  font-weight: 600;
-  line-height: 1.25;
 }
 
 .glass-body {
@@ -69,64 +56,10 @@
   text-transform: uppercase;
 }
 
-/* Badges are the regular cut, never the narrow one. */
-.glass-badge-text {
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 1;
-  font-stretch: 100%;
-}
-
-.glass-ink-1 {
-  color: var(--ink-1);
-}
-
-.glass-ink-2 {
-  color: var(--ink-2);
-}
-
-.glass-ink-3 {
-  color: var(--ink-3);
-}
-
 /* ---- Focus (§9): 2px, offset 2, on every control ------------------------- */
 .glass-focusable:focus-visible {
   outline: var(--glass-focus-width) solid var(--glass-focus-color);
   outline-offset: var(--glass-focus-offset);
-}
-
-/* ---- Pane: the floating panel surface ------------------------------------ */
-.glass-pane {
-  position: relative;
-  border-radius: var(--r-pane);
-  background-color: var(--pane);
-  box-shadow: var(--sh-pane);
-  color: var(--ink-1);
-  /* No color transition: the room already eases in its canvas and --room-rgb is
-     written in small steps. Animating pane colors cost ~50% of a core on WebKitGTK. */
-}
-
-.glass-pane--deep {
-  background-color: var(--deep);
-}
-
-.glass-pane--solid {
-  background-color: var(--solid);
-}
-
-/* The panel is one quiet material, not a spotlight behind its contents.
-   Its rim is supplied by --sh-pane. A static, fine grain breaks up 8-bit
-   gradient steps from ambient light showing through the translucent surface. */
-.glass-pane--glow {
-  /* A background layer keeps the grain off text, avatars and shared media. */
-  background-image: var(--surface-grain);
-}
-
-/* Reduced transparency: panes become fully opaque. The switch is written by the
-   appearance setting (WP-G1); until then it never matches. */
-:root[data-reduced-transparency='true'] .glass-pane,
-:root[data-reduced-transparency='true'] .glass-pane--deep {
-  background-color: var(--solid);
 }
 
 /* ---- Buttons (§1.4, §1.5, §9) -------------------------------------------- */
@@ -156,12 +89,6 @@
   cursor: default;
 }
 
-.glass-btn--md {
-  height: 44px;
-  padding: 0 20px;
-  font-size: 15px;
-}
-
 /* Primary: Join. The one filled button on a screen. */
 .glass-btn--primary {
   background-color: var(--join);
@@ -177,8 +104,7 @@
 }
 
 /* Glass: a control you press over content. */
-.glass-btn--glass,
-.glass-btn--icon {
+.glass-btn--glass {
   background-color: var(--glass-fill);
   box-shadow: var(--glass-edge);
 }
@@ -187,18 +113,15 @@
   padding: 0 12px 0 10px;
 }
 
-.glass-btn--glass:hover:not(:disabled),
-.glass-btn--icon:hover:not(:disabled) {
+.glass-btn--glass:hover:not(:disabled) {
   background-color: var(--glass-fill-hover);
 }
 
-.glass-btn--glass:active:not(:disabled),
-.glass-btn--icon:active:not(:disabled) {
+.glass-btn--glass:active:not(:disabled) {
   background-color: var(--glass-fill-press);
 }
 
-.glass-btn--glass[aria-pressed='true'],
-.glass-btn--icon[aria-pressed='true'] {
+.glass-btn--glass[aria-pressed='true'] {
   background-color: var(--glass-fill-on);
   color: var(--ink-1);
 }
@@ -221,122 +144,4 @@
 
 .glass-btn--text:active:not(:disabled) {
   background-color: var(--wash-press);
-}
-
-/* Icon: a circle, 36 or 44. */
-.glass-btn--icon {
-  width: 36px;
-  padding: 0;
-}
-
-.glass-btn--icon.glass-btn--md {
-  width: 44px;
-}
-
-/* ---- Chips (solid, no outline: content is solid) -------------------------- */
-.glass-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border-radius: var(--r-chip);
-  background-color: var(--chip-count);
-  color: var(--ink-1);
-}
-
-.glass-chip--count {
-  min-width: 20px;
-  height: 20px;
-  padding: 0 6px;
-  justify-content: center;
-  border-radius: 10px;
-}
-
-.glass-chip--mention {
-  min-width: 20px;
-  height: 20px;
-  padding: 0 6px;
-  justify-content: center;
-  border-radius: 10px;
-  background-color: var(--mention-chip);
-  color: var(--mention-ink);
-}
-
-.glass-chip--live,
-.glass-chip--event {
-  height: 24px;
-  padding: 0 8px;
-  font-size: 15px;
-  font-weight: 500;
-  white-space: nowrap;
-}
-
-.glass-chip--live {
-  background-color: var(--amber-tint);
-  color: var(--amber-ink);
-}
-
-.glass-chip--event {
-  background-color: var(--chip-event);
-}
-
-.glass-chip--reaction {
-  height: 24px;
-  padding: 0 10px;
-  border-radius: 12px;
-  font-size: 13px;
-  font-weight: 600;
-  background-color: var(--chip-react);
-  /* A ring in the opaque pane color, so the chip bites the media it sits on. */
-  box-shadow: 0 0 0 3px var(--solid), var(--sh-content);
-}
-
-.glass-chip__dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background-color: currentColor;
-}
-
-/* ---- Waveform (§2.5): five amber bars, scaleY .35 <-> 1 ------------------- */
-.glass-wave {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--wave-gap);
-  height: 14px;
-  flex-shrink: 0;
-  color: var(--amber);
-}
-
-.glass-wave > span {
-  display: block;
-  width: var(--wave-bar);
-  border-radius: 1.5px;
-  background-color: currentColor;
-  transform-origin: center;
-  animation: glass-eq 1s ease-in-out infinite;
-}
-
-/* Real voice: the level is written as a scale, so the bar follows the voice
-   instead of the loop (one transform, no layout). */
-.glass-wave[data-live-level] > span {
-  animation: none;
-  transform: scaleY(var(--wave-scale, 0.35));
-  transition: transform 90ms linear;
-}
-
-@keyframes glass-eq {
-  0%,
-  100% {
-    transform: scaleY(0.35);
-  }
-  50% {
-    transform: scaleY(1);
-  }
-}
-
-/* Reduced motion: the bars stop, at rest at mid height. */
-:root[data-motion='reduced'] .glass-wave > span {
-  animation: none;
-  transform: scaleY(0.7);
-  transition: none;
 }

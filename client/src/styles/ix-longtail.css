@@ -211,13 +211,6 @@
   letter-spacing: -0.01em;
 }
 
-:where(.ix-lt, .ix-lt--card, .ix-lt--pop, .ix-lt--main, .pc-floating, .pc-dialog) .glass-title-section {
-  font-size: 17px;
-  font-weight: 700;
-  line-height: 1.25;
-  letter-spacing: -0.01em;
-}
-
 :where(.ix-lt, .ix-lt--card, .ix-lt--pop, .ix-lt--main, .pc-floating, .pc-dialog) .glass-body {
   font-size: 14px;
   line-height: 1.5;
@@ -298,7 +291,7 @@
 /* The settings route (`/app/guilds/:g/settings`) draws the same surface inside main, and
    Admin and Developer are large-title pages; AppShell's `p-3` on the outlet for those
    routes would float them 12px off main's edges. */
-.glass-outlet:has(> .ix-settings, > .ix-page, > .ix-hued > .ix-page) {
+.ix-outlet:has(> .ix-settings, > .ix-page, > .ix-hued > .ix-page) {
   padding: 0;
 }
 
