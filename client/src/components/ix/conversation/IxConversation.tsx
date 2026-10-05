@@ -245,7 +245,10 @@ function OwnedConversation({ subject, notices, onBack, backLabel, onPickRoles }:
 
   const hostStyle = { '--ix-hue': hue, '--ix-timeline-top': 'var(--ix-toolbar-h)' } as CSSProperties;
   return (
-    <div ref={root} className="ix-conv" data-testid="ix-conversation" data-subject={subject.kind} style={hostStyle}>
+    <div ref={root} className="ix-conv" data-testid="ix-conversation" data-subject={subject.kind} data-flight-scope="" style={hostStyle}>
+      {/* The send flight's layer: under the timeline and the message box, so the
+          flying bubble passes behind the rows it crosses (sendFlight.ts). */}
+      <div className="ix-flight-layer" data-flight-layer="" aria-hidden="true" />
       <ErrorBoundary variant="section" label="messages">
         <MessageList
           channelId={channelId}

@@ -128,7 +128,9 @@
 }
 
 :root[data-motion='reduced'] .ix-sheet.is-entering {
-  animation: ix-fade-in 150ms var(--ix-ease) backwards;
+  /* `!important`: the app's reduced-motion switch zeroes every animation with one
+     (utilities.css); this is the 150ms crossfade §5 puts in its place (IX-18). */
+  animation: ix-fade-in 150ms var(--ix-ease) backwards !important;
 }
 
 /* ---- Header: 58px, the title 17/700 and a line under it (§6.1) --------------------- */
@@ -298,7 +300,9 @@
 }
 
 :root[data-motion='reduced'] .ix-menu.is-entering {
-  animation: ix-fade-in 150ms var(--ix-ease) backwards;
+  /* `!important`: the app's reduced-motion switch zeroes every animation with one
+     (utilities.css); this is the 150ms crossfade §5 puts in its place (IX-18). */
+  animation: ix-fade-in 150ms var(--ix-ease) backwards !important;
 }
 
 .ix-menu__item {
@@ -757,7 +761,9 @@
 }
 
 :root[data-motion='reduced'] .ix-switcher.is-entering {
-  animation: ix-fade-in 150ms var(--ix-ease) backwards;
+  /* `!important`: the app's reduced-motion switch zeroes every animation with one
+     (utilities.css); this is the 150ms crossfade §5 puts in its place (IX-18). */
+  animation: ix-fade-in 150ms var(--ix-ease) backwards !important;
 }
 
 /* A phone gets the whole screen (§9). */
@@ -935,7 +941,9 @@
 }
 
 :root[data-motion='reduced'] .ix-profile.is-entering {
-  animation: ix-fade-in 150ms var(--ix-ease) backwards;
+  /* `!important`: the app's reduced-motion switch zeroes every animation with one
+     (utilities.css); this is the 150ms crossfade §5 puts in its place (IX-18). */
+  animation: ix-fade-in 150ms var(--ix-ease) backwards !important;
 }
 
 .ix-profile__banner {

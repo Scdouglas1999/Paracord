@@ -163,7 +163,7 @@ export function serverLink(guildId: string): string {
   return typeof window === 'undefined' ? path : new URL(path, window.location.origin).toString();
 }
 
-export function ServerMenuView({ server, anchor }: { server: ServerRef; anchor: MenuAnchor }) {
+export function ServerMenuView({ server, anchor, open = true }: { server: ServerRef; anchor: MenuAnchor; open?: boolean }) {
   const navigate = useNavigate();
   const reference = useMemo(() => ({ id: server.guildId, scope: server.scope }), [server.guildId, server.scope]);
   const key = entityScopeKey(server.scope, server.guildId);
@@ -261,7 +261,7 @@ export function ServerMenuView({ server, anchor }: { server: ServerRef; anchor: 
   const entries = buildServerMenu(input, actions);
   return (
     <IxMenu
-      open
+      open={open}
       onClose={closeMenu}
       anchor={anchor}
       label={`${server.name} menu`}

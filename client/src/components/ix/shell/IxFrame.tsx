@@ -5,9 +5,11 @@ import { useGlassStore } from '../../../stores/glassStore';
 import { isPlacesRoute, usePhoneNavStore } from '../../glass/shell/phoneNav';
 import { usePhoneFrame } from '../../glass/shell/usePhoneFrame';
 import { useStageAudienceGuard } from '../../glass/stage/useStageAudienceGuard';
+import { IxAnnouncer } from '../a11y';
 import { CallSlot } from '../call';
 import { CardSlot } from '../card';
 import { DockSlot } from '../dock';
+import { useMainEntrance } from '../motion';
 import { SheetSlot } from '../sheets';
 import { IxShellProvider, type IxShellValue } from './IxShellContext';
 import { CallStrip } from './phone/CallStrip';
@@ -15,6 +17,7 @@ import { PhoneShade } from './phone/PhoneParts';
 import { usePhoneRoot } from './phone/usePhoneRoot';
 import { SidebarPanes } from './SidebarPanes';
 import { TintLayers } from './TintLayers';
+import { useBannerHostStore } from './bannerHost';
 import { Toolbar } from './Toolbar';
 import { placeKey } from './place';
 import { IX_CALL_HOST_ID, IX_SHEET_HOST_ID } from './slots';
@@ -93,6 +96,14 @@ export function IxFrame({ guildId, channelId, children }: IxFrameProps) {
   );
 
   usePhonePush(phone, placeKey(place));
+  const setBannerHost = useBannerHostStore((state) => state.setHost);
+
+  // §5.1 / §5.2: the new page's title and feed come in from the direction the
+  // selection moved (a place switch: from where they stand). Not on a phone,
+  // where the pushed screen is the move.
+  const { pathname } = useLocation();
+  const contentRef = useRef<HTMLDivElement>(null);
+  useMainEntrance({ content: contentRef, sidebar: placesRef, pathname, placeKey: placeKey(place), enabled: !phone });
   // IX-16: the phone's document-wide marks (`data-ix-layout`, the keyboard inset).
   usePhoneRoot(phone);
 
@@ -148,15 +159,22 @@ export function IxFrame({ guildId, channelId, children }: IxFrameProps) {
           <TintLayers hue={hue} kind="main" />
           <Toolbar />
           {phone && <CallStrip />}
-          <div className="ix-main__content">{children}</div>
+          <div ref={contentRef} className="ix-main__content">{children}</div>
           <div id={IX_SHEET_HOST_ID} className="ix-sheet-host" data-sheet={sheet ?? undefined} />
           <SheetSlot />
           {phone && <PhoneShade />}
         </main>
 
+        {/* §6.8: the banner strips sit over main only (BannerStack portals here
+            and moves main down by their height); a phone keeps them across the window. */}
+        {!phone && <div ref={setBannerHost} className="ix-banner-host" data-testid="ix-banner-host" />}
+
         <div id={IX_CALL_HOST_ID} className="ix-call-host" data-native-underlay-clear="">
           <CallSlot />
         </div>
+
+        {/* §10: the one polite live region (joins, a server going live, a share). */}
+        <IxAnnouncer place={place} />
       </div>
     </IxShellProvider>
   );

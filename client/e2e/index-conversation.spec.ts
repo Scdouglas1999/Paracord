@@ -546,7 +546,7 @@ test.describe('the feed follows the message box (§5.12)', () => {
 });
 
 test.describe('notices (§6.8)', () => {
-  test('the banner strip: 36px in the card’s color across the top, with its words and one action', async ({ page }) => {
+  test('the banner strip: 36px in the card’s color across the top of main, with its words and one action', async ({ page }) => {
     await open(page);
     await page.evaluate(async () => {
       const ui = await import('/src/stores/uiStore.ts');
@@ -556,9 +556,11 @@ test.describe('notices (§6.8)', () => {
     await expect(strip).toBeVisible();
     await page.waitForTimeout(700);
     const rect = await box(strip);
-    expect([rect.x, rect.y, rect.width, rect.height]).toEqual([0, 0, 1280, 36]);
+    // Over main only (§6.8, the frame's banner host since IX-18): the sidebar keeps the window's top.
+    expect([rect.x, rect.y, rect.width, rect.height]).toEqual([316, 0, 964, 36]);
+    expect((await box(page.getByTestId('ix-sidebar'))).y).toBe(0);
     expect(await strip.evaluate((el) => [getComputedStyle(el).backgroundColor, getComputedStyle(el).fontSize, getComputedStyle(el).fontWeight])).toEqual(['rgb(42, 43, 47)', '13px', '600']);
-    // The window is pushed down by exactly the strip: the toolbar is under it, never covered.
+    // Main is pushed down by exactly the strip: the toolbar is under it, never covered.
     expect((await box(toolbar(page))).y).toBe(36);
     await expect(strip).toHaveText('The instance is restarting. You’ll reconnect automatically.');
     await crop(page, 'banner-restart', { x: 0, y: 0, width: 1280, height: 160 });

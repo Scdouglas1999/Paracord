@@ -173,6 +173,23 @@ function replyChip(target: HTMLElement, to: DOMRect): HTMLElement | null {
   return holder;
 }
 
+/**
+ * Where the ghost flies: the conversation's own flight layer when it has one
+ * (`[data-flight-scope]` > `[data-flight-layer]`), else the app's ghost layer.
+ *
+ * The Index conversation draws its layer UNDER its timeline and its message box
+ * (index-spec §5.11, IX-18): early in the flight, while the words are still
+ * turning into the bubble, the ghost rises across the bottom of the last
+ * message (the rows are 3px apart), and a half-filled bubble drawn over a
+ * bubble muddies both. Under the rows it passes behind them instead, a clean
+ * edge, and it never covers anything it does not land on. The flight itself,
+ * its path, curves and timing, is unchanged.
+ */
+function flightLayerFor(target: Element): HTMLElement | null {
+  const scope = target.closest('[data-flight-scope]');
+  return scope?.querySelector<HTMLElement>(':scope > [data-flight-layer]') ?? null;
+}
+
 function layer(className: string): HTMLSpanElement {
   const node = document.createElement('span');
   node.className = className;
@@ -187,10 +204,14 @@ function layer(className: string): HTMLSpanElement {
 export function flySend({ text, origin, bubble, onLand }: FlightOptions): Flight | null {
   if (prefersReducedMotion()) return null;
   const target = bubble();
-  const host = ghostLayer();
+  const local = target ? flightLayerFor(target) : null;
+  const host = local ?? ghostLayer();
   if (!target || !host || typeof host.animate !== 'function') return null;
   const to = target.getBoundingClientRect();
   if (to.width === 0 && to.height === 0) return null;
+  // The conversation's own layer is positioned in it, not in the viewport:
+  // the ghost's box is written relative to it (the moves are deltas either way).
+  const base = local ? local.getBoundingClientRect() : { left: 0, top: 0 };
 
   const look = getComputedStyle(target);
   // A reply's chip sits above the words: the words land where the bubble's own
@@ -201,8 +222,8 @@ export function flySend({ text, origin, bubble, onLand }: FlightOptions): Flight
   const shell = document.createElement('div');
   shell.className = 'glass-flight';
   shell.setAttribute('aria-hidden', 'true');
-  shell.style.left = `${to.left}px`;
-  shell.style.top = `${to.top}px`;
+  shell.style.left = `${to.left - base.left}px`;
+  shell.style.top = `${to.top - base.top}px`;
   shell.style.width = `${to.width}px`;
   shell.style.height = `${to.height}px`;
   const body = layer('glass-flight__body');
@@ -334,8 +355,8 @@ export function flySend({ text, origin, bubble, onLand }: FlightOptions): Flight
     const dy = now.top - aim.top;
     if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return;
     aim = { left: now.left, top: now.top };
-    shell.style.left = `${now.left}px`;
-    shell.style.top = `${now.top}px`;
+    shell.style.left = `${now.left - base.left}px`;
+    shell.style.top = `${now.top - base.top}px`;
     startX -= dx;
     startY -= dy;
     for (const [animation, frames] of [[mover, xFrames], [lifter, yFrames]] as const) {

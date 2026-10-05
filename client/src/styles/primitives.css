@@ -431,7 +431,7 @@
   }
 }
 
-/* A toast (§5.18): from 8px above and a fade, 300ms on the spring; out 150ms. */
+/* A toast (§5.18): from 8px above and a fade, 300ms on the spring; out 200ms. */
 @keyframes pc-toast-in {
   from {
     opacity: 0;
@@ -563,7 +563,7 @@
 }
 
 .pc-toast-out {
-  animation: pc-toast-out 150ms var(--ix-ease) forwards;
+  animation: pc-toast-out 200ms var(--ix-ease) forwards;
 }
 
 .pc-content-in {

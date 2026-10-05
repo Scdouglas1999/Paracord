@@ -232,8 +232,10 @@
 .pc-sports-minifield { width: 100%; height: 18px; }
 .pc-sports-mini-diamond { width: 28px; height: 22px; }
 
+/* A live game's mark is still (IX-18, index-spec §1.2: nothing loops at rest; a
+   game being live is a state, not an event). The score flash below is the event. */
 .pc-sports-live {
-  animation: pc-sports-pulse 1.5s ease-in-out infinite;
+  animation: none;
 }
 
 .pc-sports-hero-band {
@@ -319,11 +321,6 @@
 @keyframes pc-sports-tint-fade {
   from { opacity: 1; }
   to { opacity: 0; }
-}
-
-@keyframes pc-sports-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.4; transform: scale(0.72); }
 }
 
 .pc-sports-score.is-score-flash,
@@ -1575,8 +1572,9 @@
   border-radius: 2px;
 }
 
+/* The drive in progress is drawn, not pulsed (IX-18, §1.2). */
 .pc-sports-drivebar.is-live {
-  animation: pc-sports-drivepulse 1.2s ease-in-out infinite;
+  animation: none;
 }
 
 .pc-sports-drivebar.is-right::after,
@@ -1600,11 +1598,6 @@
   left: -5px;
   border-width: 4px 6px 4px 0;
   border-color: transparent currentColor transparent transparent;
-}
-
-@keyframes pc-sports-drivepulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.45; }
 }
 
 .pc-sports-skeleton {

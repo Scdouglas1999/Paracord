@@ -580,7 +580,8 @@
 :root[data-motion='reduced'] .ix-ch__dot {
   transform: scale(1);
   opacity: 0;
-  transition: opacity 150ms linear;
+  /* `!important` over the global reduced-motion zero (utilities.css): the fade is the §5 replacement (IX-18). */
+  transition: opacity 150ms linear !important;
 }
 
 :root[data-motion='reduced'] .ix-ch[data-unread='true'] .ix-ch__dot {
@@ -588,5 +589,5 @@
 }
 
 :root[data-motion='reduced'] .ix-sb__chev {
-  transition: opacity 150ms linear;
+  transition: opacity 150ms linear !important;
 }

@@ -41,6 +41,12 @@ export const CALL_THEATER_MS = 600;
 export const CALL_CLOSE_MS = 450;
 /** Open: the content holds at 0 until this share of the move, then fades in. */
 export const CALL_CONTENT_FROM = 0.4;
+/**
+ * … and is whole by this share (IX-18, held against the prototype, whose tiles
+ * are drawn from the start of the grow: a fade that took the whole rest of the
+ * move left the view half-empty when the surface had already arrived).
+ */
+export const CALL_CONTENT_TO = 0.75;
 /** Close: the copy's content is gone by this share of the move. */
 export const CALL_CONTENT_OUT = 0.3;
 
@@ -80,14 +86,21 @@ export function beginCallMove(): () => void {
  * parent plays it on the spring, so the child keeps its own size. The parent
  * interpolates `scale(s)` linearly in eased progress p; the child carries
  * `scale(1/s(p))` at each sample, linear between samples. `fadeFrom` makes the
- * child hold at opacity 0 until that share of the move, then fade in.
+ * child hold at opacity 0 until that share of the move, then fade in, whole by
+ * `fadeTo` (default: the end of the move).
  */
-export function counterKeyframes(from: RectLike, to: RectLike, fadeFrom?: number): Keyframe[] {
+export function counterKeyframes(from: RectLike, to: RectLike, fadeFrom?: number, fadeTo = 1): Keyframe[] {
   const sx0 = to.width > 0 ? from.width / to.width : 1;
   const sy0 = to.height > 0 ? from.height / to.height : 1;
   const frames: Keyframe[] = [];
-  for (let i = 0; i <= SAMPLES; i += 1) {
-    const t = i / SAMPLES;
+  // The samples, plus the fade's own start when it falls between two of them:
+  // "holds at 0 until 40%" (§5.8) means exactly 40%, not the sample before it.
+  const offsets = Array.from({ length: SAMPLES + 1 }, (_, i) => i / SAMPLES);
+  for (const edge of fadeFrom === undefined ? [] : [fadeFrom, fadeTo]) {
+    if (edge > 0 && edge < 1 && !offsets.includes(edge)) offsets.push(edge);
+  }
+  offsets.sort((a, b) => a - b);
+  for (const t of offsets) {
     const p = SPRING(t);
     const sx = sx0 + (1 - sx0) * p;
     const sy = sy0 + (1 - sy0) * p;
@@ -96,7 +109,7 @@ export function counterKeyframes(from: RectLike, to: RectLike, fadeFrom?: number
       transform: `scale(${round(1 / sx)}, ${round(1 / sy)})`,
       transformOrigin: '0 0',
     };
-    if (fadeFrom !== undefined) frame.opacity = t <= fadeFrom ? 0 : round((t - fadeFrom) / (1 - fadeFrom));
+    if (fadeFrom !== undefined) frame.opacity = t <= fadeFrom ? 0 : t >= fadeTo ? 1 : round((t - fadeFrom) / (fadeTo - fadeFrom));
     frames.push(frame);
   }
   frames[frames.length - 1].transform = 'none';
@@ -139,7 +152,7 @@ export function playOpen(surface: HTMLElement, content: HTMLElement | null, orig
   grow.id = 'ix-call:open';
   const played = [grow];
   if (canAnimate(content)) {
-    const counter = content.animate(counterKeyframes(from, to, CALL_CONTENT_FROM), { duration: CALL_OPEN_MS, easing: 'linear' });
+    const counter = content.animate(counterKeyframes(from, to, CALL_CONTENT_FROM, CALL_CONTENT_TO), { duration: CALL_OPEN_MS, easing: 'linear' });
     counter.id = 'ix-call:open-content';
     played.push(counter);
   }

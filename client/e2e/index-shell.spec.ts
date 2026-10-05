@@ -43,6 +43,20 @@ const rectOf = (page: Page, selector: string) =>
     return { x: r.x, y: r.y, width: r.width, height: r.height, right: r.right, bottom: r.bottom };
   });
 
+/**
+ * The call surface's own moves (IX-13, §5.8/§5.9: it grows out of the card, or
+ * from 96% of itself when no card is on screen, and FLIPs on theater) are
+ * transforms, so its rect is only the host's once they have played out.
+ */
+const callSettled = (page: Page) =>
+  expect
+    .poll(() =>
+      page.evaluate(
+        () => document.getAnimations().filter((animation) => animation.id.startsWith('ix-call:') && animation.playState === 'running').length,
+      ),
+    )
+    .toBe(0);
+
 /** Every animation in the document right now (ids where set), and every pane and tint layer. */
 const census = (page: Page) =>
   page.evaluate(() => ({
@@ -221,6 +235,7 @@ test.describe('IX-4 shell', () => {
     await stage('side');
     const surface = page.getByRole('region', { name: 'Call' });
     await expect(surface).toBeVisible();
+    await callSettled(page);
     expect(await rectOf(page, '.ix-inset-surface')).toMatchObject({ x: main.x + 10, y: main.y + 10, width: main.width - 20 });
     expect(await surface.evaluate((element) => getComputedStyle(element).borderTopLeftRadius)).toBe('24px');
     await expect(page.locator('.ix-main')).toHaveAttribute('inert', '');
@@ -229,6 +244,7 @@ test.describe('IX-4 shell', () => {
     await stage('theater');
     await expect(page.locator('.ix-frame')).toHaveAttribute('data-stage', 'theater');
     const frame = await rectOf(page, '.ix-frame');
+    await callSettled(page);
     expect(await rectOf(page, '.ix-inset-surface')).toMatchObject({ x: frame.x + 10, y: frame.y + 10, width: frame.width - 20 });
     await page.waitForTimeout(800);
     expect(await page.locator('.ix-side').evaluate((element) => getComputedStyle(element).opacity)).toBe('0.4');
@@ -267,8 +283,9 @@ test.describe('IX-4 shell', () => {
     await page.locator('#ix-sheet-host').evaluate((element) => element.setAttribute('data-sheet', 'search'));
     expect((await rectOf(page, '#ix-sheet-host')).width).toBe(480);
     await page.setViewportSize({ width: 900, height: 700 });
+    // The frame takes its narrow layout on the resize's own render: wait for it (it raced).
+    await expect.poll(async () => (await rectOf(page, '.ix-main')).x).toBe(280);
     const narrowMain = await rectOf(page, '.ix-main');
-    expect(narrowMain.x).toBe(280);
     const narrowHost = await rectOf(page, '#ix-sheet-host');
     expect(narrowHost).toMatchObject({ x: narrowMain.x + 10, width: narrowMain.width - 20 });
   });

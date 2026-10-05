@@ -39,6 +39,25 @@
   flex: none;
 }
 
+/* The send flight's layer (IX-18): under the timeline (z 2) and the message box
+   (z 3, its own), over main's ground. The flying bubble passes behind the rows
+   it crosses on its way up instead of over them (sendFlight.ts, flightLayerFor). */
+.ix-conv > .ix-timeline {
+  position: relative;
+  z-index: 2;
+}
+
+.ix-flight-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.ix-flight-layer > .glass-flight {
+  position: absolute;
+}
+
 /* ---- The title block ------------------------------------------------------------ */
 
 /* What a page pins under the large title (a score, a stage's session): 14px under the

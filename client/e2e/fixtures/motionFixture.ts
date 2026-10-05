@@ -1,243 +1,222 @@
 import type { Page } from '@playwright/test';
 
-import { installGlassScene } from './glass/install';
-import { CAST, CH, GAME_NIGHT_ID } from './glass/scene';
-
 /**
- * The mocked world the motion gate drives (`e2e/motion-gate.spec.ts`): the Glass
- * reference scene (fixtures/glass), with no server and no media stack, so every
- * Glass moment can be measured on the same page a person would see it on.
+ * The motion recorder behind the Index motion gate (`e2e/motion-gate.spec.ts`,
+ * docs/index-spec.md §5).
  *
- *   - `installMotionMocks` is `installGlassScene`: Game Night with its live
- *     Lounge (Vincent sharing, Brendan on camera), Basecamp behind it, and the
- *     DEV fixture stream lighting the room;
- *   - `fakeMedia` puts the media a relay would deliver into the stores, so a
- *     stream exists for the stage to draw (the same fake the stage, theater and
- *     pill specs use, through the DEV fixture frame source);
- *   - `readMotionConstants` reads, from the running app, every number the gate
- *     holds a moment to: each package's own constant and the `--glass-ms*`
- *     tokens. The gate cites them; it never hard-codes a duration of its own.
+ * The gate needs to know every animation a moment started, not a sample of the
+ * ones still running when a frame happened to land. So the recorder is
+ * installed before the app loads and hears every animation as it is created:
+ *
+ *   - Web Animations: `Element.prototype.animate` is wrapped (the Index motion
+ *     helpers, the card, the call view, the timeline, the composer all use it);
+ *   - CSS transitions and CSS animations: `transitionrun` and `animationstart`
+ *     are heard in the capture phase on the window, and the matching
+ *     `CSSTransition` / `CSSAnimation` object is taken from the element.
+ *
+ * Each record keeps the live `Animation`, so the description is read at the
+ * end of the moment (a Web Animation's `id` is assigned after `animate()`
+ * returns). `describe()` turns them into plain data: what moved, for how long,
+ * on which curve, through which keyframes, and whether it was still playing.
+ *
+ * Nothing here holds a duration of its own: the gate holds each moment to
+ * index-spec §5 and names the section it cites.
  */
 
-export const GENERAL = `/app/guilds/${GAME_NIGHT_ID}/channels/${CH.general}`;
-export const BASECAMP = 'Basecamp';
-
-const IDS = {
-  sean: CAST.sean.id,
-  vincent: CAST.vincent.id,
-  brendan: CAST.brendan.id,
-  lounge: CH.lounge,
-  guild: GAME_NIGHT_ID,
-};
-
-export async function installMotionMocks(page: Page): Promise<void> {
-  await installGlassScene(page);
+/** One animation the page started, as plain data. */
+export interface MotionRecord {
+  /** `web` (Element.animate), `transition` (CSS), `animation` (CSS @keyframes). */
+  kind: 'web' | 'transition' | 'animation';
+  /** A Web Animation's id (`ix-pane:in`), a transition's property, an @keyframes name. */
+  id: string;
+  /** Where it ran: `div.ix-pane`, with the element's test id or data-place when it has one. */
+  target: string;
+  /** The active duration in ms (duration x iterations); null for an infinite loop. */
+  duration: number | null;
+  delay: number;
+  loops: boolean;
+  /** The effect's timing easing (a transition's timing function; `linear` for most @keyframes). */
+  easing: string;
+  /** Each keyframe's own easing, where one is set (an @keyframes rule carries its curve here). */
+  keyframeEasings: string[];
+  /** Every CSS property a keyframe sets (camelCase, as `getKeyframes` reports them). */
+  properties: string[];
+  /** Each keyframe's transform, in order. */
+  transforms: string[];
+  /** Each keyframe's opacity, in order. */
+  opacities: string[];
+  /** Each keyframe's computed offset (0..1), in order. */
+  offsets: number[];
+  /** The offsets of the keyframes that set an opacity (pairs with `opacities`). */
+  opacityOffsets: number[];
+  /** It runs inside a talking waveform (`.ix-wave`): the one motion allowed to go on while someone talks (§1.2, §4.4). */
+  talking: boolean;
+  /** `composite` of the effect (`replace`, `add`). */
+  composite: string;
+  /** `fill` of the effect. */
+  fill: string;
+  /** When it was created, in ms after the moment's mark. */
+  at: number;
+  /** `running`, `finished`, `idle` (canceled), `paused`, at the time of `describe`. */
+  playState: string;
 }
 
-/** Every duration the gate measures against, read from the app itself. */
-export interface MotionConstants {
-  /** `pill/pillMotion.ts`: the pill's grow and shrink ("spring, 550ms", §5). */
-  PILL_SPRING_MS: number;
-  /** `pill/pillMotion.ts`: the words fading before the capsule shrinks, and its reduced-motion twin. */
-  PILL_FADE_MS: number;
-  PILL_FADE_REDUCED_MS: number;
-  /** `stage/stageTransition.ts`: pill -> stage, side by side <-> theater, browse, H (§6, §9). */
-  STAGE_MOVE_MS: number;
-  /** `stage/stageTransition.ts`: what every one of those becomes under reduced motion (§9). */
-  STAGE_CROSSFADE_MS: number;
-  /** `shell/phoneMotion.ts`: the phone's screen change, and its reduced-motion crossfade. */
-  PHONE_SLIDE_MS: number;
-  PHONE_FADE_MS: number;
-  /** `styles/tokens.css` §9: hover and press. */
-  glassMs: number;
-  /** `--glass-ms-layout`: the CSS side of the layout moves (the conversation stepping aside). */
-  glassMsLayout: number;
-  /** `--glass-ms-room`: the room's crossfade on a server switch. */
-  glassMsRoom: number;
-  /** `--glass-ms-reduced`: the crossfade that replaces a move. */
-  glassMsReduced: number;
-  /** `--duration-slow`: the engine's content swap, a route change's 4px rise (`lib/motion/animate.ts`, `contentIn`). */
-  durationSlow: number;
-  /** `--duration-move`: the shared element (`lib/motion/sharedElement.ts`, `transitionWith`). */
-  durationMove: number;
-}
-
-export async function readMotionConstants(page: Page): Promise<MotionConstants> {
-  return page.evaluate(async () => {
-    const pill = (await import('/src/components/glass/pill/pillMotion.ts' as string)) as Record<string, number>;
-    const stage = (await import('/src/components/glass/stage/stageTransition.ts' as string)) as Record<string, number>;
-    const phone = (await import('/src/components/glass/shell/phoneMotion.ts' as string)) as Record<string, number>;
-    const css = getComputedStyle(document.documentElement);
-    const token = (name: string) => Number.parseFloat(css.getPropertyValue(name));
-    return {
-      PILL_SPRING_MS: pill.PILL_SPRING_MS,
-      PILL_FADE_MS: pill.PILL_FADE_MS,
-      PILL_FADE_REDUCED_MS: pill.PILL_FADE_REDUCED_MS,
-      STAGE_MOVE_MS: stage.STAGE_MOVE_MS,
-      STAGE_CROSSFADE_MS: stage.STAGE_CROSSFADE_MS,
-      PHONE_SLIDE_MS: phone.PHONE_SLIDE_MS,
-      PHONE_FADE_MS: phone.PHONE_FADE_MS,
-      glassMs: token('--glass-ms'),
-      glassMsLayout: token('--glass-ms-layout'),
-      glassMsRoom: token('--glass-ms-room'),
-      glassMsReduced: token('--glass-ms-reduced'),
-      durationSlow: token('--duration-slow'),
-      durationMove: token('--duration-move'),
+declare global {
+  interface Window {
+    __ixMotion?: {
+      /** Every animation since the last mark: the live object, its target, when. */
+      log: Array<{ animation: Animation; at: number }>;
+      mark: number;
+      seen: WeakSet<Animation>;
     };
+  }
+}
+
+/**
+ * Install the recorder. Call before the first `page.goto` (an init script runs
+ * on every load, so a reload keeps it).
+ */
+export async function installMotionRecorder(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const bag = { log: [] as Array<{ animation: Animation; at: number }>, mark: performance.now(), seen: new WeakSet<Animation>() };
+    window.__ixMotion = bag;
+    const keep = (animation: Animation | null | undefined) => {
+      if (!animation || bag.seen.has(animation)) return;
+      bag.seen.add(animation);
+      bag.log.push({ animation, at: performance.now() - bag.mark });
+    };
+    const original = Element.prototype.animate;
+    Element.prototype.animate = function animate(this: Element, ...args: Parameters<Element['animate']>) {
+      const animation = original.apply(this, args);
+      keep(animation);
+      return animation;
+    };
+    // CSS: the event names the property (or @keyframes) and the element; the
+    // CSSTransition / CSSAnimation object is the element's running one.
+    const fromEvent = (event: Event, match: (animation: Animation) => boolean) => {
+      const target = event.target as Element | null;
+      if (!target || typeof target.getAnimations !== 'function') return;
+      for (const animation of target.getAnimations()) if (match(animation)) keep(animation);
+    };
+    window.addEventListener(
+      'transitionrun',
+      (event) => {
+        const { propertyName, pseudoElement } = event as TransitionEvent;
+        fromEvent(event, (animation) => {
+          const effect = animation.effect as (KeyframeEffect & { pseudoElement?: string | null }) | null;
+          return (
+            typeof CSSTransition !== 'undefined'
+            && animation instanceof CSSTransition
+            && animation.transitionProperty === propertyName
+            && (effect?.pseudoElement ?? '') === (pseudoElement ?? '')
+          );
+        });
+      },
+      true,
+    );
+    window.addEventListener(
+      'animationstart',
+      (event) => {
+        const { animationName } = event as AnimationEvent;
+        fromEvent(event, (animation) => typeof CSSAnimation !== 'undefined' && animation instanceof CSSAnimation && animation.animationName === animationName);
+      },
+      true,
+    );
+  });
+}
+
+/** Forget everything recorded so far and start the clock of a new moment. */
+export async function markMoment(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const bag = window.__ixMotion;
+    if (!bag) throw new Error('the motion recorder is not installed (installMotionRecorder before goto)');
+    bag.log = [];
+    bag.mark = performance.now();
+  });
+}
+
+/** Everything recorded since the mark, as plain data. */
+export async function describeMoment(page: Page): Promise<MotionRecord[]> {
+  return page.evaluate(() => {
+    const bag = window.__ixMotion;
+    if (!bag) throw new Error('the motion recorder is not installed');
+    const name = (el: Element | null | undefined, pseudo: string | null | undefined) => {
+      if (!el) return 'detached';
+      const tag = el.tagName.toLowerCase();
+      // `getAttribute`: an SVG's `className` is not a string (the sidebar's chevron is an svg).
+      const cls = (el.getAttribute('class') ?? '').trim().split(/\s+/).filter(Boolean).slice(0, 2).join('.');
+      const html = el as HTMLElement;
+      const hint = html.dataset?.testid ?? html.dataset?.place ?? html.dataset?.ixTint ?? '';
+      return `${tag}${cls ? `.${cls}` : ''}${hint ? `[${hint}]` : ''}${pseudo ?? ''}`;
+    };
+    const meta = new Set(['offset', 'computedOffset', 'easing', 'composite']);
+    return bag.log.map(({ animation, at }) => {
+      const effect = animation.effect as (KeyframeEffect & { pseudoElement?: string | null }) | null;
+      const timing = effect?.getTiming?.();
+      const computed = effect?.getComputedTiming?.();
+      const keyframes = (effect?.getKeyframes?.() ?? []) as Array<Keyframe & { easing?: string; composite?: string }>;
+      const properties = new Set<string>();
+      for (const keyframe of keyframes) for (const key of Object.keys(keyframe)) if (!meta.has(key)) properties.add(key);
+      const isTransition = typeof CSSTransition !== 'undefined' && animation instanceof CSSTransition;
+      const isCss = typeof CSSAnimation !== 'undefined' && animation instanceof CSSAnimation;
+      const iterations = Number(timing?.iterations ?? 1);
+      const loops = iterations === Infinity;
+      const duration = Number(timing?.duration ?? 0) || 0;
+      return {
+        kind: isTransition ? 'transition' : isCss ? 'animation' : 'web',
+        id: isTransition
+          ? (animation as CSSTransition).transitionProperty
+          : isCss
+            ? (animation as CSSAnimation).animationName
+            : animation.id,
+        target: name(effect?.target, effect?.pseudoElement),
+        duration: loops ? null : Math.round(duration * iterations),
+        delay: Number(timing?.delay ?? 0) || 0,
+        loops,
+        easing: String(timing?.easing ?? 'linear'),
+        keyframeEasings: keyframes.map((k) => String(k.easing ?? 'linear')).filter((e) => e !== 'linear'),
+        properties: [...properties],
+        transforms: keyframes.filter((k) => k.transform !== undefined).map((k) => String(k.transform)),
+        opacities: keyframes.filter((k) => k.opacity !== undefined).map((k) => String(k.opacity)),
+        offsets: keyframes.map((k) => Number((k as { computedOffset?: number }).computedOffset ?? k.offset ?? 0)),
+        opacityOffsets: keyframes
+          .filter((k) => k.opacity !== undefined)
+          .map((k) => Number((k as { computedOffset?: number }).computedOffset ?? k.offset ?? 0)),
+        talking: Boolean((effect?.target as Element | null | undefined)?.closest?.('.ix-wave')),
+        composite: String((effect as KeyframeEffect | null)?.composite ?? 'replace'),
+        fill: String(timing?.fill ?? 'auto'),
+        at: Math.round(at),
+        playState: computed && animation.playState === 'running' && computed.progress === null ? 'pending' : animation.playState,
+      } satisfies MotionRecord as MotionRecord;
+    });
   });
 }
 
 /**
- * The media a relay would deliver, faked in the page: `startWatch` goes live on
- * an engine that paints the fixture stream into whatever canvas it is given (and
- * taps it for the glow), `stopWatch` clears it, and the watcher count and the
- * stream's start time are what the server would say. `joined` also puts this
- * client in the Lounge's call, with Brendan's camera and voice level.
+ * Every animation the document holds right now (`document.getAnimations()`:
+ * running, paused, or finished and still filling), as `kind:id:state@target`.
+ * The gate asserts this is empty two seconds after each moment settles
+ * (index-spec §5, plan §5.4: "`document.getAnimations().length === 0` two
+ * seconds after every §5 moment settles"). A talking waveform is left out
+ * unless `talking` is set: it is the one motion that goes on while someone
+ * talks (§1.2), and the gate holds it to "only while someone talks" itself.
  */
-export async function fakeMedia(page: Page, options: { joined: boolean; watchers?: number }): Promise<void> {
-  await page.evaluate(
-    async ({ ids, joined, watchers }) => {
-      const voice = (await import('/src/stores/voiceStore.ts' as string)) as any;
-      const list = (await import('/src/stores/serverListStore.ts' as string)) as any;
-      const scopeModule = (await import('/src/lib/serverScope.ts' as string)) as any;
-      const fixture = (await import('/src/lib/room/fixtureFrameSource.ts' as string)) as any;
-      const serverId = list.useServerListStore.getState().activeServerId ?? scopeModule.LOCAL_SERVER_ID;
-      const scope = { serverId, userId: ids.sean };
-      const store = voice.useVoiceStore;
-
-      /** An engine that paints a fixture scene into a canvas, like the WebCodecs route does. */
-      const engineFor = (scenes: Record<string, string>) => {
-        const sources = new Map<string, any>();
-        const source = (scene: string) => {
-          // Half the stage specs' size and a slower beat: the gate measures the page's frames, and a
-          // fixture that paints 1280x720 eight times a second would be the heaviest thing on the main
-          // thread (createImageBitmap alone was a tenth of it). A real stream is decoded off it.
-          if (!sources.has(scene)) sources.set(scene, fixture.createFixtureFrameSource({ scene, width: 320, height: 180 }));
-          return sources.get(scene);
-        };
-        return {
-          subscribeVideo(userId: string, canvas: HTMLCanvasElement, onFrame?: () => void, opts?: { preferredTrackId?: string }) {
-            const scene = scenes[`${userId}:${opts?.preferredTrackId ?? 'screen'}`];
-            if (!scene) return () => {};
-            const context = canvas.getContext('2d');
-            const stop = source(scene).subscribe((bitmap: ImageBitmap) => {
-              const w = Math.max(1, Math.round(canvas.clientWidth * devicePixelRatio));
-              const h = Math.max(1, Math.round(canvas.clientHeight * devicePixelRatio));
-              if (canvas.width !== w) canvas.width = w;
-              if (canvas.height !== h) canvas.height = h;
-              // Cover, like a camera tile (the stream is 16:9 in a 16:9 box anyway).
-              const scale = Math.max(w / bitmap.width, h / bitmap.height);
-              const dw = bitmap.width * scale;
-              const dh = bitmap.height * scale;
-              context?.drawImage(bitmap, (w - dw) / 2, (h - dh) / 2, dw, dh);
-              bitmap.close();
-              onFrame?.();
-            }, 2);
-            return stop;
-          },
-          tapVideoFrames(userId: string, trackId: string, onFrame: (frame: unknown) => void) {
-            const scene = scenes[`${userId}:${trackId}`];
-            if (!scene) return { route: Promise.resolve('no-track'), release: () => {} };
-            const stop = source(scene).subscribe((bitmap: unknown) => onFrame(bitmap), 1);
-            return { route: Promise.resolve('frames'), release: stop };
-          },
-        };
-      };
-
-      const watchEngine = engineFor({ [`${ids.vincent}:screen`]: 'stream' });
-      const callEngine = engineFor({ [`${ids.brendan}:camera`]: 'camera', [`${ids.vincent}:screen`]: 'stream' });
-
-      store.setState({
-        startWatch: async (target: any) => {
-          store.setState({
-            watchView: {
-              id: 'e2e-watch',
-              kind: 'watch',
-              scope,
-              guildId: target.guildId,
-              channelId: target.channelId,
-              streamerId: target.streamerId,
-              route: joined ? 'call' : 'session',
-              phase: 'live',
-              engine: joined ? callEngine : watchEngine,
-              sessionId: 'e2e-view',
-              endReason: null,
-              pauseReason: null,
-              error: null,
-            },
-          });
-        },
-        stopWatch: async () => store.setState({ watchView: null }),
-        fetchWatchers: async () => {
-          if (!watchers) return;
-          store.getState().handleWatchersUpdate(
-            { channel_id: ids.lounge, guild_id: ids.guild, streams: [{ user_id: ids.vincent, watchers }] },
-            scope,
-          );
-        },
-      });
-
-      // Vincent went live 42 minutes before the scene's clock, as the server would say.
-      const startedAt = new Date(Date.now() - 42 * 60_000 - 10_000).toISOString();
-      const me = {
-        user_id: ids.sean,
-        channel_id: ids.lounge,
-        guild_id: ids.guild,
-        session_id: 'e2e-session',
-        username: 'sean',
-        display_name: 'Sean',
-        avatar_hash: null,
-        deaf: false,
-        mute: false,
-        self_deaf: false,
-        self_mute: false,
-        self_stream: false,
-        self_video: false,
-        suppress: false,
-        mode: 'joined',
-      };
-      // The mocked gateway replays READY now and then; put the call's rows back each time.
-      const put = () => {
-        const current = store.getState();
-        const there = current.channelParticipants.get(ids.lounge) ?? [];
-        const vincent = there.find((s: any) => s.user_id === ids.vincent);
-        const settled = vincent?.self_stream_started_at && (!joined || there.some((s: any) => s.user_id === ids.sean));
-        if (settled) return;
-        const rows = there
-          .filter((s: any) => s.user_id !== ids.sean)
-          .map((s: any) => (s.user_id === ids.vincent ? { ...s, self_stream_started_at: startedAt } : s));
-        if (joined) rows.push(me);
-        const channelParticipants = new Map(current.channelParticipants);
-        channelParticipants.set(ids.lounge, rows);
-        store.setState({
-          channelParticipants,
-          ...(joined
-            ? {
-                callId: 'e2e-call',
-                callScope: scope,
-                callPhase: 'connected',
-                callMode: 'joined',
-                connected: true,
-                joining: false,
-                channelId: ids.lounge,
-                guildId: ids.guild,
-                selfMute: false,
-                mediaEngine: callEngine,
-                participants: new Map(rows.map((s: any) => [s.user_id, s])),
-                speakingUsers: new Set([ids.brendan]),
-              }
-            : {}),
-        });
-      };
-      put();
-      store.subscribe(put);
-      if (joined) {
-        const levels = (await import('/src/lib/motion/voiceLevel.ts' as string)) as any;
-        const speak = () => levels.publishVoiceLevels('room', new Map([[ids.brendan, 0.55 + 0.35 * Math.sin(Date.now() / 260)]]));
-        speak();
-        setInterval(speak, 250);
-      }
-    },
-    { ids: IDS, joined: options.joined, watchers: options.watchers ?? 0 },
-  );
+export async function runningNow(page: Page, { talking = false }: { talking?: boolean } = {}): Promise<string[]> {
+  return page.evaluate((keepTalking) =>
+    document.getAnimations()
+      .filter((animation) => {
+        const target = (animation.effect as KeyframeEffect | null)?.target as Element | null | undefined;
+        return keepTalking || !target?.closest?.('.ix-wave');
+      })
+      .map((animation) => {
+        const effect = animation.effect as (KeyframeEffect & { pseudoElement?: string | null }) | null;
+        const el = effect?.target as HTMLElement | null | undefined;
+        const kind = typeof CSSTransition !== 'undefined' && animation instanceof CSSTransition
+          ? `transition:${(animation as CSSTransition).transitionProperty}`
+          : typeof CSSAnimation !== 'undefined' && animation instanceof CSSAnimation
+            ? `animation:${(animation as CSSAnimation).animationName}`
+            : `web:${animation.id || '(no id)'}`;
+        const cls = el ? (el.getAttribute('class') ?? '').trim().split(/\s+/).filter(Boolean).slice(0, 2).join('.') : '';
+        return `${kind}:${animation.playState}@${el ? `${el.tagName.toLowerCase()}${cls ? `.${cls}` : ''}` : 'detached'}${effect?.pseudoElement ?? ''}`;
+      }), talking);
 }

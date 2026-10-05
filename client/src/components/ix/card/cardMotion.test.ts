@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { IX_EASE, IX_SPRING } from '../motion';
 import {
+  CARD_IN_DELAY_MS,
   CARD_IN_MS,
   CARD_OUT_MS,
   FLY_MS,
@@ -79,9 +80,12 @@ describe('card motion', () => {
     playEnter(el(), 'row');
     expectTransformOpacityOnly();
     expect(calls[0].keyframes[0]).toEqual({ opacity: 0, transform: 'translateY(-8px) scale(0.97)' });
-    expect(calls[0].options).toMatchObject({ duration: CARD_IN_MS, easing: IX_SPRING });
+    // The card waits 120ms behind the push it causes (IX-18), held at its start by `backwards`
+    // (which never outlasts the move: nothing fills after it ends).
+    expect(calls[0].options).toMatchObject({ duration: CARD_IN_MS, delay: CARD_IN_DELAY_MS, easing: IX_SPRING, fill: 'backwards' });
     expect(calls[1].options).toMatchObject({ duration: ROW_IN_MS, easing: IX_SPRING });
-    expect(calls[0].options.fill).toBeUndefined();
+    expect(calls[1].options.fill).toBeUndefined();
+    expect(CARD_IN_DELAY_MS).toBe(120);
     expect([CARD_IN_MS, ROW_IN_MS]).toEqual([600, 500]);
   });
 

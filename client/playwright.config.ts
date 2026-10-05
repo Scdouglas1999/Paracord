@@ -16,16 +16,14 @@ import { defineConfig, devices } from '@playwright/test';
 // mocked invocation never runs the real-server project or triggers the heavier
 // real-server webServer.
 const REAL_SERVER = process.env.PARACORD_E2E_REAL === '1';
-// The motion gate (motion-gate.spec.ts): opt-in, mocked like the smoke, on the
-// Glass reference scene (e2e/fixtures/glass). It samples requestAnimationFrame
-// across each Glass moment (the hover step, the pill growing, the pill becoming
-// the stage, theater, browse, the room crossfade, the phone's screen slide, the
-// reduced-motion crossfades) and fails a frame over 32ms while an animation is
-// in flight (the stage's own known cost is named and bounded in the spec), a
-// move that does not run exactly the constant its package declares, or a
-// property other than transform and opacity moving (docs/glass-spec.md §9).
-// Gated out of the default run: it deliberately sits and watches frames, which
-// is the opposite of what a fast CI smoke should do. `npm run test:motion`.
+// The motion gate (motion-gate.spec.ts): opt-in, mocked, on the Index review
+// scene (e2e/fixtures/index; its realtime stub is this config's, app port + 2).
+// It records every animation each moment of docs/index-spec.md §5 starts and
+// fails one that does not run the spec's duration and curve, a property other
+// than transform and opacity (colors may step) moving, anything still animating
+// two seconds after a moment settles, and reduced motion that is not a 150ms
+// crossfade. Gated out of the default run: it deliberately sits and watches,
+// which is the opposite of what a fast CI smoke should do. `npm run test:motion`.
 const MOTION_GATE = !REAL_SERVER && process.env.PARACORD_E2E_MOTION === '1';
 // Glass review screenshots (glass-review.spec.ts): opt-in, mocked like the
 // smoke, output under output/design-reference/glass-build/<WP>/. It renders the

@@ -33,7 +33,7 @@ export function buildPeopleMenu(actions: PeopleMenuActions): IxMenuEntry[] {
   ];
 }
 
-export function PeopleMenuView({ anchor }: { anchor: MenuAnchor }) {
+export function PeopleMenuView({ anchor, open = true }: { anchor: MenuAnchor; open?: boolean }) {
   const navigate = useNavigate();
   const entries = buildPeopleMenu({
     newMessage: () => openDmPicker('direct'),
@@ -42,5 +42,5 @@ export function PeopleMenuView({ anchor }: { anchor: MenuAnchor }) {
     addFriend: () => navigate('/app/friends', { state: { addFriend: true } }),
     settings: () => useUIStore.getState().setUserSettingsOpen(true),
   });
-  return <IxMenu open onClose={closeMenu} anchor={anchor} label="People menu" width={240} entries={entries} testId="ix-people-menu" />;
+  return <IxMenu open={open} onClose={closeMenu} anchor={anchor} label="People menu" width={240} entries={entries} testId="ix-people-menu" />;
 }

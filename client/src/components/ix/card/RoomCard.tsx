@@ -96,10 +96,12 @@ export function RoomCard({ card, position, mayAnimate, exiting = false, onExited
     flight.current?.dispose();
     flight.current?.done();
     const face = root.querySelector<HTMLElement>('[data-self="true"] .ix-card-row__face');
-    const holds = [
-      root.querySelector<HTMLElement>('[data-self="true"] .ix-card-row__name'),
-      actionsRef.current,
-    ].filter((element): element is HTMLElement => element !== null);
+    // Your name waits for your face; the new controls do not (IX-18, as the
+    // prototype draws them: joining answers at once with the controls you now
+    // have, while the face is still on its way).
+    const holds = [root.querySelector<HTMLElement>('[data-self="true"] .ix-card-row__name')].filter(
+      (element): element is HTMLElement => element !== null,
+    );
     const played = playFlight(face, toolbarAvatarRect(), holds);
     const record = { done: played.done, dispose: () => {} };
     flight.current = record;

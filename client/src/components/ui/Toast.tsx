@@ -8,12 +8,12 @@ import { useToastStore, type Toast, type ToastType, type ToastAction } from '../
  * Toasts (docs/index-spec.md §5.18, §6.8): a near-solid capsule at the top
  * center of main, under the toolbar. 13.5/600 ink, an optional text action, and
  * an error or a warning carries its glyph and the danger ink on the words, never a
- * red fill. They arrive from 8px above on the spring (300ms) and leave in 150ms;
+ * red fill. They arrive from 8px above on the spring (300ms) and leave in 200ms;
  * the store removes one after its duration (4s by default).
  */
 
-/** How long a dismissed toast stays to play its leave (inside `usePresence`'s 170ms). */
-const LEAVE_MS = 150;
+/** How long a dismissed toast stays to play its leave (§5.18: out 200ms). */
+const LEAVE_MS = 200;
 /** The toolbar's height and the gap under it (the frame's `--ix-toolbar-h`). */
 const TOOLBAR_PX = 58;
 const GAP_PX = 8;

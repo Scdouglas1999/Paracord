@@ -19,6 +19,7 @@ import {
 import {
   CALL_CLOSE_MS,
   CALL_CONTENT_FROM,
+  CALL_CONTENT_TO,
   CALL_OPEN_MS,
   counterKeyframes,
   findCallCard,
@@ -151,6 +152,9 @@ describe('callMotion', () => {
     expect(counter.keyframes[0]).toMatchObject({ transform: 'scale(3.2329, 4.7273)', opacity: 0 });
     expect(counter.keyframes.at(-1)).toMatchObject({ transform: 'none', opacity: 1 });
     expect(counter.keyframes.filter((frame) => (frame.offset as number) <= CALL_CONTENT_FROM).every((frame) => frame.opacity === 0)).toBe(true);
+    // Exactly at 40% (a keyframe of its own, not the sample before it), and whole by 75% (IX-18).
+    expect(counter.keyframes.some((frame) => frame.offset === CALL_CONTENT_FROM && frame.opacity === 0)).toBe(true);
+    expect(counter.keyframes.filter((frame) => (frame.offset as number) >= CALL_CONTENT_TO).every((frame) => frame.opacity === 1)).toBe(true);
     // Transform and opacity only.
     const props = new Set(waapi.played.flatMap((record) => record.keyframes.flatMap((frame) => Object.keys(frame))));
     expect([...props].sort()).toEqual(['offset', 'opacity', 'transform', 'transformOrigin']);

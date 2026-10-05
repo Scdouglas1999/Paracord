@@ -10,6 +10,12 @@
 .ix-card-slot {
   display: flow-root;
   flex-shrink: 0;
+  /* Over what it pushes (IX-18): a card arriving pushes the rows below down
+     (§5.5) from where they stood, under it; drawn on top, the card covers them
+     as they slide out from beneath it instead of the rows' text crossing it.
+     Above the rows' own z-index 1 (ix-sidebar.css). */
+  position: relative;
+  z-index: 2;
 }
 
 /* The pinned host's cards never shrink either (the host is above the panes). */

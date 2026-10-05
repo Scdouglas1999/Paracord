@@ -6,7 +6,7 @@ import { registerAppNavigate } from '../lib/appNavigate';
 // (pc-fade), panels enter/exit on pc-enter/pc-exit, drawers slide on the
 // pc-drawer set — and usePresence keeps each mounted for its leave. The
 // engine's data-motion switch is the only reduced-motion source of truth.
-import { useContentSwap, usePresence } from '../lib/motion';
+import { usePresence } from '../lib/motion';
 import { cn } from '../lib/utils';
 import { CommandPalette } from '../components/layout/CommandPalette';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
@@ -123,8 +123,6 @@ export function AppShell() {
     || location.pathname === '/app/developers'
     || /^\/app\/guilds\/[^/]+\/settings$/.test(location.pathname);
 
-  const routeContentRef = useContentSwap<HTMLDivElement>(location.pathname);
-
   const userSettingsPresence = usePresence(userSettingsOpen);
   const guildSettingsPresence = usePresence(Boolean(guildSettingsId));
 
@@ -170,10 +168,10 @@ export function AppShell() {
         </a>
 
         <IxFrame guildId={guildId ?? null} channelId={channelId ?? null}>
-          {/* Switching channels (or anywhere else) crossfades the page in
-              with a 4px rise — never a slide (§5.2). */}
+          {/* What comes in when the route changes is the frame's to play
+              (index-spec §5.1, §5.2: the title and the feed, from the
+              direction the selection moved; IxFrame's useMainEntrance). */}
           <div
-            ref={routeContentRef}
             className={cn('glass-outlet min-h-0 w-full flex-1 overflow-hidden', isSettingsRoute && 'p-3')}
           >
             <Outlet />

@@ -14,6 +14,8 @@
  *   crossfadeLayers . a new layer fading in over an old one (the tint, §5.1)
  *   flipFromRect .... FLIP from a rect: measureRect, flipFromRect, invertTransform,
  *                     measureRects + flipMoved (displaced content)
+ *   mainEntrance .... main's title and feed coming in on a switch (§5.1, §5.2);
+ *                     useMainEntrance is the frame's hook that plays it
  */
 export { IX_EASE, IX_REDUCED_MS, IX_SPRING, canAnimate, ixReduced } from './curves';
 export { commit, onSettle } from './onSettle';
@@ -23,3 +25,17 @@ export { TINT_FADE_MS, crossfadeLayers } from './crossfadeLayers';
 export type { CrossfadeOptions } from './crossfadeLayers';
 export { flipFromRect, flipMoved, invertTransform, measureRect, measureRects } from './flipFromRect';
 export type { FlipFromRectOptions, RectLike } from './flipFromRect';
+export {
+  MAIN_FEED_IN_MS,
+  MAIN_FEED_SHIFT,
+  MAIN_TITLE_IN_MS,
+  MAIN_TITLE_LIFT,
+  MAIN_TITLE_SHIFT,
+  entranceKeyframes,
+  entranceParts,
+  playEntrance,
+  rowDirection,
+} from './mainEntrance';
+export type { EntranceDirection, EntrancePart } from './mainEntrance';
+export { useMainEntrance } from './useMainEntrance';
+export type { MainEntranceInput } from './useMainEntrance';

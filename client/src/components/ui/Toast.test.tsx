@@ -101,7 +101,7 @@ describe('ToastContainer', () => {
       vi.advanceTimersByTime(2);
     });
     expect(useToastStore.getState().toasts).toHaveLength(0);
-    // Still on screen for its leave (150ms), out of the accessibility tree.
+    // Still on screen for its leave (200ms), out of the accessibility tree.
     const leaving = screen.getByText('Link copied').closest('[data-toast-type]') as HTMLElement;
     expect(leaving).toHaveClass('pc-toast-out');
     expect(leaving).toHaveAttribute('aria-hidden', 'true');

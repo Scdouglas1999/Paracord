@@ -97,7 +97,7 @@ export function channelLink(subject: ChannelMenuRequest['subject']): string {
   return typeof window === 'undefined' ? path : new URL(path, window.location.origin).toString();
 }
 
-export function ChannelMenuView({ request, anchor }: { request: ChannelMenuRequest; anchor: MenuAnchor }) {
+export function ChannelMenuView({ request, anchor, open = true }: { request: ChannelMenuRequest; anchor: MenuAnchor; open?: boolean }) {
   const { subject, summary } = request;
   const isDm = subject.kind === 'dm';
   const guildId = subject.kind === 'channel' ? subject.guildId : null;
@@ -125,7 +125,7 @@ export function ChannelMenuView({ request, anchor }: { request: ChannelMenuReque
 
   return (
     <IxMenu
-      open
+      open={open}
       onClose={closeMenu}
       anchor={anchor}
       label="Channel actions"

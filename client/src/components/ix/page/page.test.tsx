@@ -1,8 +1,9 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, renderHook, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useToolbarStore } from '../shell/toolbarStore';
 import { LargeTitlePage, foldProgress } from '.';
+import { MISSING_TITLE_MS, useTitleFold } from './useTitleFold';
 
 let frames: Array<() => void> = [];
 
@@ -101,5 +102,34 @@ describe('the title fold (§5.14)', () => {
     // The large title is the same button.
     act(() => screen.getByRole('button', { name: 'Thread' }).click());
     expect(onTitleClick).toHaveBeenCalled();
+  });
+});
+
+describe('a title that is not mounted (IX-18)', () => {
+  const scroller = (overflows: boolean) => {
+    const element = document.createElement('div');
+    Object.defineProperty(element, 'scrollHeight', { configurable: true, value: overflows ? 2000 : 400 });
+    Object.defineProperty(element, 'clientHeight', { configurable: true, value: 600 });
+    return element;
+  };
+
+  it('folds only after it has stayed away a moment, and only with something to have scrolled past', () => {
+    vi.useFakeTimers();
+    try {
+      const long = renderHook(() => useTitleFold(scroller(true)));
+      expect(long.result.current.folded).toBe(false);
+      act(() => {
+        vi.advanceTimersByTime(MISSING_TITLE_MS);
+      });
+      expect(long.result.current.folded).toBe(true);
+      // A short list between two commits of a switch: never folded (no fill flash).
+      const short = renderHook(() => useTitleFold(scroller(false)));
+      act(() => {
+        vi.advanceTimersByTime(MISSING_TITLE_MS * 2);
+      });
+      expect(short.result.current.folded).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

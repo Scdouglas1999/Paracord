@@ -29,6 +29,8 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 export const FOLD_RANGE = 60;
 /** Past this scroll distance the toolbar shows the folded title and its fill (§4.9). */
 export const FOLD_AT = 40;
+/** How long a title may be missing (a switch in progress) before the toolbar folds for it. */
+export const MISSING_TITLE_MS = 160;
 
 export function foldProgress(scrollTop: number): number {
   return Math.max(0, Math.min(1, scrollTop / FOLD_RANGE));
@@ -55,13 +57,39 @@ export function useTitleFold(scroller: HTMLElement | null): TitleFold {
     scrollerRef.current = scroller;
   }, [scroller]);
 
+  // A title that is not mounted folds only once it has stayed away a moment.
+  const missing = useRef(0);
   const update = useCallback(() => {
     const element = scrollerRef.current;
     const scrollTop = element ? element.scrollTop : 0;
     const node = title.current;
-    if (node && node.isConnected) applyFold(node, scrollTop);
-    setFolded(node && node.isConnected ? scrollTop > FOLD_AT : Boolean(element));
+    if (node && node.isConnected) {
+      window.clearTimeout(missing.current);
+      missing.current = 0;
+      applyFold(node, scrollTop);
+      setFolded(scrollTop > FOLD_AT);
+      return;
+    }
+    // A title that is not mounted is above what is loaded, so it counts as
+    // folded, but only when there is something to have scrolled past and only
+    // after it has stayed away for MISSING_TITLE_MS: between two commits of a
+    // switch the old title is gone before the new one is in (a channel whose
+    // history has not said yet where it starts), and folding then would flash
+    // the toolbar's fill on every channel change.
+    if (!element || element.scrollHeight <= element.clientHeight + 1) {
+      window.clearTimeout(missing.current);
+      missing.current = 0;
+      setFolded(false);
+      return;
+    }
+    if (missing.current) return;
+    missing.current = window.setTimeout(() => {
+      missing.current = 0;
+      const now = title.current;
+      if (!now || !now.isConnected) setFolded(true);
+    }, MISSING_TITLE_MS);
   }, []);
+  useEffect(() => () => window.clearTimeout(missing.current), []);
 
   const titleRef = useCallback(
     (element: HTMLElement | null) => {

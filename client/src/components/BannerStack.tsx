@@ -1,4 +1,7 @@
 import { useEffect, useRef, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
+
+import { IX_BANNER_INSET_PROPERTY, useBannerHost } from './ix/shell/bannerHost';
 
 /**
  * The custom property the app shell reserves the banners' height with.
@@ -45,15 +48,19 @@ const FLOATING_NOTICE = [
  */
 export function BannerStack({ children }: { children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
+  // The Index frame's host over main (index-spec §6.8): there, the column sits
+  // over main alone and main is what moves down (`--ix-banner-inset`).
+  const host = useBannerHost();
 
   useEffect(() => {
     const node = ref.current;
     if (!node) return;
     const root = document.documentElement;
+    const property = host ? IX_BANNER_INSET_PROPERTY : BANNER_INSET_PROPERTY;
 
     const apply = () => {
       const height = Math.round(node.getBoundingClientRect().height);
-      root.style.setProperty(BANNER_INSET_PROPERTY, `${height}px`);
+      root.style.setProperty(property, `${height}px`);
     };
     apply();
 
@@ -64,10 +71,18 @@ export function BannerStack({ children }: { children: ReactNode }) {
     observer?.observe(node);
     return () => {
       observer?.disconnect();
-      root.style.removeProperty(BANNER_INSET_PROPERTY);
+      root.style.removeProperty(property);
     };
-  }, []);
+  }, [host]);
 
+  if (host) {
+    return createPortal(
+      <div ref={ref} data-banner-stack="" data-host="main" className={`relative flex flex-col ${FLOATING_NOTICE}`}>
+        {children}
+      </div>,
+      host,
+    );
+  }
   return (
     <div
       ref={ref}

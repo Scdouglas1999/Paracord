@@ -370,13 +370,30 @@ button.ix-toolbar__title:focus-visible,
   }
 }
 
+/* ---- Banner host (§6.8, IX-18): the strips over main only ---------------------
+   `BannerStack` draws its column here while the frame is up and publishes its
+   height as --ix-banner-inset: main (toolbar, page, sheets) and the call surface
+   over it move down by exactly that much; the sidebar stays put. A phone has no
+   host: its banners keep the window's width and the shell's --pc-banner-inset. */
+.ix-banner-host {
+  position: absolute;
+  top: 0;
+  left: var(--ix-side-w);
+  right: 0;
+  z-index: 7;
+}
+
+.ix-frame:not([data-layout='phone']) > .ix-main {
+  margin-top: var(--ix-banner-inset, 0px);
+}
+
 /* ---- Call host (§3.1 "Call surface", §5.9) ------------------------------------
    Geometry only: over main at inset 10, or over the window in theater. The
    surface (`.ix-inset-surface`) is the slot's, so its own moves (§5.8) carry
    its paint with it. */
 .ix-call-host {
   position: absolute;
-  top: var(--ix-inset);
+  top: calc(var(--ix-inset) + var(--ix-banner-inset, 0px));
   right: var(--ix-inset);
   bottom: var(--ix-inset);
   left: calc(var(--ix-side-w) + var(--ix-inset));

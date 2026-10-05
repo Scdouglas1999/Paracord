@@ -1,964 +1,754 @@
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import { expect, test, type Page, type Route, type TestInfo } from '@playwright/test';
 
 import {
-  fakeMedia,
-  GENERAL,
-  installMotionMocks,
-  readMotionConstants,
-  type MotionConstants,
-} from './fixtures/motionFixture';
+  CH,
+  GUILD,
+  HISTORY_EPOCH,
+  ME,
+  actionCard,
+  at,
+  channelRow,
+  composerInput,
+  dockItem,
+  installIndexScene,
+  roomCard,
+  scrollConversation,
+  type IndexHarness,
+} from './fixtures/index';
+import { share, speak, voiceJoin, voiceLeave } from './fixtures/index/steps/motion';
+import { describeMoment, installMotionRecorder, markMoment, runningNow, type MotionRecord } from './fixtures/motionFixture';
 
 /**
- * The Glass motion gate (docs/glass-spec.md §9; docs/design/glass-plan.md §5.3).
+ * The Index motion gate (docs/index-spec.md §5, §10; docs/design/index-plan.md
+ * §3 IX-18, §5.4).
  *
- * "A frame over 32 ms fails": every Glass moment is measured, not judged by eye.
- * A `requestAnimationFrame` sampler runs across the moment and records every
- * frame interval AND every animation the document had in flight (CSS
- * transitions, CSS animations and Web Animations alike), so a regression names
- * the frame and the recipe.
+ * The owner's bar: "really slick animations around the app for different
+ * things, without being overbearing and having everything moving all the
+ * time". So the gate holds two things, for every moment of §5:
  *
- *   hover          a places row and a glass button step one wash lighter; press one darker
- *   pill           the faces open it (and close it) on the spring, on transform
- *   pill -> stage  Watch grows the stage out of the pill; Stop watching shrinks it back
- *   theater (T)    side by side <-> theater; browse (S), beside the stream and in theater
- *   room           a server switch crossfades the room: two canvases' opacity
- *   phone          places <-> conversation, the phone's two screens
- *   shared element `lib/motion/sharedElement.ts`: View Transitions and FLIP, one choreography
- *   reduced        every move as a 150ms crossfade, the spring nothing, the loops stopped
+ *   THE MOMENT. Each animation that IS the moment runs exactly the spec's
+ *   duration, on the spec's curve (spring `cubic-bezier(.32,.72,0,1)` or ease
+ *   `cubic-bezier(.2,.8,.2,1)`), from the spec's start (`translateY(14px)
+ *   scale(.96)`, opacity .3, ...). The numbers are the spec's, cited by section
+ *   at each assertion, never the app's own constants read back: a constant that
+ *   drifts from §5 fails here.
  *
- * THE NUMBERS. No duration is the gate's own. Each is the constant of the
- * package that owns the moment, read from the running app (`readMotionConstants`),
- * and the gate first holds each constant to what the spec says (the first case):
- * the pill's spring 550ms (§5), a layout move 650ms (§6, §9: "600-650ms"), hover
- * 120ms (§9), the room 1.2s (§4), reduced motion 150ms (§9). An animation that
- * IS a moment must run exactly its constant; anything else in the window either
- * belongs to another moment (held to that one's constant) or may not run longer
- * than this moment does.
+ *   THE LAW. Only `transform` and `opacity` move (plus colors, which §5.13 and
+ *   §5.15 allow: a background or ink stepping one shade). Any other animated
+ *   property in any moment fails the gate by name (`height`, `boxShadow`,
+ *   `filter`, `width`, ...); `scripts/motion-lint.mjs` keeps the same rule in
+ *   the source. Nothing loops but the talking waveform, and that only while
+ *   somebody talks.
  *
- * THE FRAME BUDGET is 32ms, given by the brief of this gate and used by the gate
- * before it. Frames are only judged while an animation is in flight (the click
- * and React's commit of the new state come before the first animated frame and
- * are held to a long-task ceiling instead). What the stage's moves cost today is
- * over the budget by a frame or two, and is named in `KNOWN`, so it cannot grow
- * without this failing; the hover, the pill, browse and the phone's slide are at
- * zero.
+ *   QUIET AT REST. Two seconds after each moment settles,
+ *   `document.getAnimations()` is empty (§1.2 "Quiet at rest, alive on
+ *   events"; plan §5.4.4: the WebKitGTK desktop's idle CPU is a design
+ *   constraint). While somebody talks, the waveform is the one exception, and
+ *   the talking-ring case proves it stops when they do.
  *
- * THE LAW. Only `transform` and `opacity` move, plus color on what is pressed,
- * plus `border-radius` where §9 says "position, size and radius animate
- * together" (a box that grows into another: the pill and the panes). Any other
- * animated property, in any moment, fails the gate by name (`motion-lint.mjs`
- * keeps the same rule in the source).
+ *   REDUCED MOTION. Every move becomes a 150ms opacity crossfade; pings and
+ *   lifts are gone; the waveform is still (§5, opening paragraph).
  *
- * WHICH ENGINE. The Glass layout moves are ONE engine on every platform: Web
- * Animations on transform (`lib/motion/sharedElement.ts`, `playMorph`), so the
- * gate asserts that a layout move never starts a View Transition
- * (docs/design/glass-g15-checkpoint.md, "Why not View Transitions"). The other
- * half of that file, `transitionWith` (View Transitions where the webview has
- * them, FLIP elsewhere), still carries "walk into a room" from the timeline's
- * event line and a server's overview, and is gated on its own demo.
+ * How it hears every animation: `fixtures/motionFixture.ts` wraps
+ * `Element.prototype.animate` and listens for `transitionrun` and
+ * `animationstart` before the app loads, so a moment's record is complete, not
+ * a sample of what a frame happened to see.
  *
- * NOT A MOMENT OF THIS GATE: the send flight (docs/glass-spec.md §9), a protected
- * signature gesture exempt from the 8px / 500ms / no-overshoot ceilings of the
- * quiet motion system. This gate never sends a message; the flight is filmed and
- * measured on its own (e2e/glass-send.spec.ts, `npx playwright test -c
- * e2e/glass-send.config.ts`), and its constants are pinned in sendFlight.test.tsx.
+ * NOT A MOMENT OF THIS GATE'S CEILINGS: the send flight (§5.11), the owner's
+ * favorite and protected gesture (docs/design/index-checkpoints/M1.md). It is
+ * filmed and measured by `e2e/index-send.spec.ts`; here one case only guards
+ * that nobody clamps it (it still flies its 620ms arc, well past 8px).
  *
- * Opt in:  PARACORD_E2E_MOTION=1 npx playwright test   (`npm run test:motion`)
- * It is gated out of the default mocked smoke so CI stays fast.
+ * Run:
+ *   cd client
+ *   npm run test:motion            (playwright.config.ts, ports 4173/4175)
+ *   PARACORD_E2E_INDEX_SPEC=motion-gate PARACORD_E2E_INDEX_PORT=4663 \
+ *   PARACORD_E2E_INDEX_RT_PORT=4665 PARACORD_E2E_INDEX_WP=ix18 \
+ *   npx playwright test -c e2e/index-review.config.ts
+ *
+ * The scene is the Index review harness (`fixtures/index`, IX-0); the one-event
+ * steps it needs are `fixtures/index/steps/motion.ts`.
  */
 
-/** A frame with an animation in flight over this fails. The gate's own (30 fps), not the spec's. */
-const FRAME_BUDGET_MS = 32;
+/* ---- The spec's curves --------------------------------------------------------- */
 
-/**
- * The longest any single frame of a moment may be, the click and React's commit
- * included: a frame that long is a hang, not a missed beat (RAIL's 100ms).
- * A moment that mounts a whole surface says so, and why, where it raises it.
- */
-const COMMIT_FRAME_CEILING_MS = 100;
+/** §5: spring, `cubic-bezier(.32,.72,0,1)` (as the engine spells it back). */
+const SPRING = 'cubic-bezier(0.32, 0.72, 0, 1)';
+/** §5: ease, `cubic-bezier(.2,.8,.2,1)`. */
+const EASE = 'cubic-bezier(0.2, 0.8, 0.2, 1)';
+/** §5 does not name the curve (a plain fade): any is fine. */
+const ANY = '*';
 
-/**
- * CSS properties an animation may touch. `border-radius` is allowed only where
- * the moment says so (§9: "position, size and radius animate together").
- */
+/** §5: reduced motion replaces every move with a 150ms opacity crossfade. */
+const REDUCED_MS = 150;
+/** §5.4 plan: quiet two seconds after a moment settles. */
+const REST_MS = 2_000;
+
+/** The properties a moment may animate: transform and opacity (§1.9, §5). */
 const LAW = new Set(['transform', 'opacity', 'transformOrigin', 'translate', 'scale', 'rotate']);
-const COLORS = new Set(['backgroundColor', 'color', 'borderColor', 'outlineColor', 'fill', 'stroke']);
-const RADIUS = new Set([
-  'borderRadius',
-  'borderTopLeftRadius',
-  'borderTopRightRadius',
-  'borderBottomLeftRadius',
-  'borderBottomRightRadius',
-]);
-/** Bookkeeping in a keyframe, not a property. */
-const KEYFRAME_META = new Set(['offset', 'computedOffset', 'easing', 'composite']);
+/** Colors may step (§5.13 send control, §5.15 rows and controls, §4.9 toolbar fill). */
+const COLORS = new Set(['color', 'backgroundColor', 'borderColor', 'outlineColor', 'fill', 'stroke', 'borderTopColor', 'borderBottomColor', 'borderLeftColor', 'borderRightColor']);
 
-/* ---- The sampler ------------------------------------------------------------- */
+test.use({
+  viewport: { width: 1280, height: 800 },
+  deviceScaleFactor: 1,
+  timezoneId: 'America/Chicago',
+  locale: 'en-US',
+});
+test.describe.configure({ timeout: 150_000 });
 
-interface AnimationRecord {
-  /** `CSSTransition`, `CSSAnimation`, or a Web Animation. */
-  kind: 'transition' | 'animation' | 'web';
-  /** A Web Animation's id (`glass-morph:stage`), a CSS animation's or transition's property. */
-  id: string;
-  /** Where it ran: `div.glass-place-row::before`. */
-  target: string;
-  /** Milliseconds, the active phase. `Infinity` for a loop (serialized as null). */
-  duration: number | null;
-  loops: boolean;
-  /** Every CSS property any of its keyframes sets. */
-  properties: string[];
-  /** Each keyframe's transform, in order (empty when none sets one). */
-  transforms: string[];
-  /** Each keyframe's opacity, in order. */
-  opacities: string[];
+/* ---- What a moment must be ------------------------------------------------------ */
+
+interface Play {
+  /** What it is, and where §5 says so. */
+  cites: string;
+  match: (record: MotionRecord) => boolean;
+  /** ms, the spec's. */
+  duration: number;
+  /** SPRING, EASE, a literal, or ANY. */
+  curve: string;
+  delay?: number;
+  /** The first keyframe's transform (a string, or a pattern). */
+  fromTransform?: string | RegExp;
+  /** The last keyframe's transform. */
+  toTransform?: string | RegExp;
+  /** The opacity keyframes, in order. */
+  opacities?: string[];
+  /** Properties it must move (beyond the law). */
+  moves?: Array<'transform' | 'opacity'>;
+  atLeast?: number;
+  atMost?: number;
 }
 
-interface MomentSample {
-  frames: Array<{ at: number; animating: boolean }>;
-  records: AnimationRecord[];
+interface Moment {
+  plays: Play[];
+  /** Ids or names that must NOT play in this moment (a retired recipe, a ping on the current place). */
+  absent?: Array<{ cites: string; match: (record: MotionRecord) => boolean }>;
 }
+
+const describe = (record: MotionRecord) =>
+  `${record.kind}:${record.id}@${record.target} ${record.duration ?? 'loop'}ms ${record.easing}`
+  + `${record.keyframeEasings.length ? ` [${record.keyframeEasings.join('|')}]` : ''}`
+  + ` {${record.properties.join(',')}} T[${record.transforms.join(' > ')}] O[${record.opacities.join(' > ')}]`;
+
+const curveOf = (record: MotionRecord) => (record.keyframeEasings.length > 0 && record.easing === 'linear' ? record.keyframeEasings[0] : record.easing);
 
 /**
- * Run `act` with a frame sampler attached and report what the browser did.
- *
- * The sampler ignores animations with infinite iterations when it decides
- * whether the engine was animating: the talking waveform breathes on screen all
- * the time and would make every frame of every moment "animating". It still
- * RECORDS them (the reduced-motion case asserts there are none).
+ * Every rule of the gate applied to one moment's record. Throws (a failed
+ * expect) naming the moment, the section, and the animation. Pure on purpose:
+ * the self-test hands it a record with a forbidden property and expects a throw.
  */
-async function measureMoment(page: Page, act: () => Promise<void>, settleMs = 1100): Promise<MomentSample> {
-  await page.evaluate(() => {
-    const bag = { frames: [] as Array<{ at: number; animating: boolean }>, records: [] as unknown[], running: true };
-    (window as unknown as { __motionSample: typeof bag }).__motionSample = bag;
-    const seen = new WeakSet<Animation>();
-    const describe = (el: Element | null | undefined, pseudo: string | null | undefined) => {
-      if (!el) return 'unknown';
-      const cls = typeof el.className === 'string' ? el.className.trim().split(/\s+/).slice(0, 2).join('.') : '';
-      return `${el.tagName.toLowerCase()}${cls ? `.${cls}` : ''}${pseudo ?? ''}`;
-    };
-    const tick = (now: number) => {
-      let animating = false;
-      for (const animation of document.getAnimations()) {
-        const effect = animation.effect as KeyframeEffect | null;
-        const timing = effect?.getComputedTiming?.();
-        if (!effect || !timing) continue;
-        const loops = timing.iterations === Infinity;
-        if (!loops && timing.progress !== null && timing.progress !== undefined && animation.playState === 'running') animating = true;
-        if (seen.has(animation)) continue;
-        seen.add(animation);
-        const keyframes = (effect.getKeyframes?.() ?? []) as Keyframe[];
-        const meta = ['offset', 'computedOffset', 'easing', 'composite'];
-        const properties = new Set<string>();
-        for (const keyframe of keyframes) for (const key of Object.keys(keyframe)) if (!meta.includes(key)) properties.add(key);
-        const isTransition = typeof CSSTransition !== 'undefined' && animation instanceof CSSTransition;
-        const isCssAnimation = typeof CSSAnimation !== 'undefined' && animation instanceof CSSAnimation;
-        bag.records.push({
-          kind: isTransition ? 'transition' : isCssAnimation ? 'animation' : 'web',
-          id: isTransition
-            ? (animation as CSSTransition).transitionProperty
-            : isCssAnimation
-              ? (animation as CSSAnimation).animationName
-              : animation.id,
-          target: describe(effect.target, (effect as KeyframeEffect & { pseudoElement?: string | null }).pseudoElement),
-          duration: loops ? null : Number(timing.activeDuration) || 0,
-          loops,
-          properties: [...properties],
-          transforms: keyframes.filter((k) => k.transform !== undefined).map((k) => String(k.transform)),
-          opacities: keyframes.filter((k) => k.opacity !== undefined).map((k) => String(k.opacity)),
-        });
-      }
-      bag.frames.push({ at: now, animating });
-      if (bag.running) requestAnimationFrame(tick);
-    };
-    requestAnimationFrame(tick);
-  });
+function expectMoment(label: string, records: MotionRecord[], moment: Moment): void {
+  const log = records.map(describe).join('\n    ');
+  if (process.env.PARACORD_E2E_MOTION_VERBOSE) console.log(`[motion-gate] ${label}\n    ${log}`);
 
-  await act();
-  await page.waitForTimeout(settleMs);
-
-  return page.evaluate(() => {
-    const bag = (window as unknown as { __motionSample: { frames: MomentSample['frames']; records: MomentSample['records']; running: boolean } }).__motionSample;
-    bag.running = false;
-    return { frames: bag.frames, records: bag.records } as MomentSample;
-  });
-}
-
-interface Frame {
-  delta: number;
-  /** When, in ms from the sampler's first frame. */
-  at: number;
-  /** Whether an animation was in flight when this interval started. */
-  engineRunning: boolean;
-}
-
-/** Frame intervals, minus the first pair (the sampler's own warm-up). */
-function intervals(sample: MomentSample): Frame[] {
-  const origin = sample.frames[0]?.at ?? 0;
-  const out: Frame[] = [];
-  for (let i = 2; i < sample.frames.length; i += 1) {
-    out.push({
-      delta: sample.frames[i].at - sample.frames[i - 1].at,
-      at: Math.round(sample.frames[i].at - origin),
-      engineRunning: sample.frames[i - 1].animating,
-    });
-  }
-  return out;
-}
-
-const describeFrame = (frame: Frame) =>
-  `${frame.delta.toFixed(1)}ms at +${frame.at}ms (${frame.engineRunning ? 'an animation was in flight' : 'nothing in flight'})`;
-
-function percentile(frames: Frame[], p: number): number {
-  if (frames.length === 0) return 0;
-  const sorted = frames.map((frame) => frame.delta).sort((a, b) => a - b);
-  return sorted[Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length))];
-}
-
-/* ---- What a moment must be --------------------------------------------------- */
-
-interface Expected {
-  /** The animations that ARE this moment: which, and how long each runs. */
-  plays: Array<{
-    /** Matches a record's id (a Web Animation's id, a transition's property) and/or its target. */
-    match: (record: AnimationRecord) => boolean;
-    /** The constant, in ms, the moment is held to (the app's own). */
-    duration: number;
-    /** Why that number: the constant's name. */
-    cites: string;
-    /** At least this many (default 1). */
-    atLeast?: number;
-  }>;
-  /** `border-radius` may animate (a box growing into another, §9). */
-  radius?: boolean;
-  /** Allow colors to animate (the hover step). */
-  colors?: boolean;
-  /** Longest any finite animation in the window may run, ms (default: the longest `plays`). */
-  ceiling?: number;
-  /**
-   * Frames the moment may drop while an animation is in flight, named at the call site with
-   * whose work they are (default 0). A frame is dropped when it is over FRAME_BUDGET_MS.
-   */
-  droppedFrames?: number;
-  /**
-   * The longest any single frame of the window may be (default COMMIT_FRAME_CEILING_MS). A moment
-   * that mounts a whole surface says so, and why, where it raises it.
-   */
-  commitCeilingMs?: number;
-  /**
-   * Whether the frame rules apply at all (default true). Not for the View Transitions path: the browser
-   * snapshots the whole viewport to run it, and on a runner with no GPU that costs frames the engine does
-   * not spend. What must hold there is the choreography, the duration and the law.
-   */
-  frames?: boolean;
-}
-
-function report(label: string, sample: MomentSample) {
-  const frames = intervals(sample);
-  const animating = frames.filter((frame) => frame.engineRunning);
-  const worst = animating.reduce((max, frame) => (frame.delta > max.delta ? frame : max), { delta: 0, at: 0, engineRunning: true });
-  const worstOverall = frames.reduce((max, frame) => (frame.delta > max.delta ? frame : max), { delta: 0, at: 0, engineRunning: false });
-  const finite = sample.records.filter((record) => !record.loops);
-  const longest = finite.reduce((max, record) => Math.max(max, record.duration ?? 0), 0);
-  // The numbers go in the run log on purpose: the checkpoint quotes them.
-  console.log(
-    `[motion-gate] ${label}: animating-frames=${animating.length}/${frames.length} `
-    + `worst-animating=${worst.delta.toFixed(1)}ms@+${worst.at} worst-overall=${worstOverall.delta.toFixed(1)}ms@+${worstOverall.at} `
-    + `dropped=${animating.filter((f) => f.delta > FRAME_BUDGET_MS).length} `
-    + `p95=${percentile(animating, 95).toFixed(1)}ms longest=${longest}ms animations=${finite.length}`,
-  );
-  if (process.env.PARACORD_E2E_MOTION_VERBOSE) {
-    for (const frame of frames.filter((f) => f.delta > FRAME_BUDGET_MS)) {
-      console.log(`[motion-gate]   ${label}: frame ${describeFrame(frame)}`);
+  for (const play of moment.plays) {
+    const matched = records.filter(play.match);
+    expect(matched.length, `${label}: ${play.cites} did not play\n    saw:\n    ${log}`).toBeGreaterThanOrEqual(play.atLeast ?? 1);
+    if (play.atMost !== undefined) {
+      expect(matched.length, `${label}: ${play.cites} played ${matched.length} times`).toBeLessThanOrEqual(play.atMost);
     }
-    for (const record of sample.records.filter((r) => !r.loops)) {
-      console.log(
-        `[motion-gate]   ${label}: ${record.kind} ${record.id} @${record.target} ${record.loops ? 'loop' : `${record.duration}ms`} `
-        + `[${record.properties.join(', ')}]`,
-      );
-    }
-  }
-  return { frames, animating, worst, worstOverall, finite, longest };
-}
-
-/**
- * Every budget a Glass moment has, applied to one measured moment: the frames,
- * the durations (each animation that IS the moment runs exactly the package's
- * constant), and the law (only what the spec lets animate did).
- */
-function expectMoment(label: string, sample: MomentSample, expected: Expected) {
-  const measured = report(label, sample);
-  expect(measured.frames.length, `${label}: the sampler saw no frames`).toBeGreaterThan(10);
-  expect(measured.animating.length, `${label}: nothing animated`).toBeGreaterThan(0);
-
-  if (expected.frames !== false) {
-  // Frames: every frame with an animation in flight is a frame, at most `droppedFrames` of which may miss
-  // the budget (named at the call site, with whose work it is).
-  const dropped = measured.animating.filter((frame) => frame.delta > FRAME_BUDGET_MS);
-  expect(
-    dropped.map(describeFrame),
-    `${label}: more than ${expected.droppedFrames ?? 0} frame(s) over ${FRAME_BUDGET_MS}ms while an animation was in flight`,
-  ).toHaveLength(Math.min(dropped.length, expected.droppedFrames ?? 0));
-  const commitCeiling = expected.commitCeilingMs ?? COMMIT_FRAME_CEILING_MS;
-  expect(
-    measured.worstOverall.delta,
-    `${label}: ${describeFrame(measured.worstOverall)} is a long task inside the moment (ceiling ${commitCeiling}ms)`,
-  ).toBeLessThanOrEqual(commitCeiling);
-  }
-
-  // Durations: each animation that is the moment runs exactly the constant.
-  let longestPlayed = 0;
-  for (const play of expected.plays) {
-    const matched = measured.finite.filter(play.match);
-    expect(
-      matched.length,
-      `${label}: expected at least ${play.atLeast ?? 1} animation(s) for ${play.cites}; saw ${measured.finite.map((r) => `${r.kind}:${r.id}@${r.target}`).join(', ') || 'none'}`,
-    ).toBeGreaterThanOrEqual(play.atLeast ?? 1);
     for (const record of matched) {
-      expect(record.duration, `${label}: "${record.id}" on ${record.target} should run ${play.cites} = ${play.duration}ms`).toBe(play.duration);
-    }
-    longestPlayed = Math.max(longestPlayed, play.duration);
-  }
-  // What else was in the window: each neighbor is some other moment's own recipe, held to ITS constant
-  // (a server switch starts the room's crossfade whatever moment it happens inside), and anything
-  // else may not run longer than this moment does.
-  const ceiling = expected.ceiling ?? longestPlayed;
-  const strangers: string[] = [];
-  for (const record of measured.finite) {
-    if (expected.plays.some((play) => play.match(record)) || isHoverStep(record)) continue;
-    const neighbor = NEIGHBORS().find((candidate) => candidate.match(record));
-    if (neighbor) {
-      expect(record.duration, `${label}: "${record.id}" on ${record.target} belongs to ${neighbor.owner}: ${neighbor.cites} = ${neighbor.duration}ms`).toBe(neighbor.duration);
-    } else if ((record.duration ?? 0) > ceiling) {
-      strangers.push(`${record.kind}:${record.id}@${record.target} ${record.duration}ms`);
+      const name = `${label}: ${play.cites} (${describe(record)})`;
+      expect(record.duration, `${name}: duration`).toBe(play.duration);
+      if (play.curve !== ANY) expect(curveOf(record), `${name}: curve`).toBe(play.curve);
+      expect(record.delay, `${name}: delay`).toBe(play.delay ?? 0);
+      if (play.fromTransform !== undefined) expect(record.transforms[0], `${name}: from`).toMatch(play.fromTransform);
+      if (play.toTransform !== undefined) expect(record.transforms.at(-1), `${name}: to`).toMatch(play.toTransform);
+      if (play.opacities) expect(record.opacities, `${name}: opacity`).toEqual(play.opacities);
+      for (const property of play.moves ?? []) expect(record.properties, `${name}: moves ${property}`).toContain(property);
     }
   }
-  expect(strangers, `${label}: something runs longer than the moment's ${ceiling}ms`).toEqual([]);
 
-  // The law. (The pointer is always somewhere: the hover step it causes on the
-  // way, a color at `--glass-ms`, is a moment of its own and is gated above.)
-  const illegal = new Set<string>();
-  for (const record of sample.records) {
-    if (isHoverStep(record)) continue;
-    // The View Transitions path is the browser's own: its snapshot groups animate width and height
-    // because that is how a user agent morphs a snapshot, and no source-level rule can reach them.
-    // What the app asks of them (which element, how long) is held above.
-    if (record.target.includes('::view-transition')) continue;
+  for (const absent of moment.absent ?? []) {
+    const played = records.filter(absent.match);
+    expect(played.map(describe), `${label}: ${absent.cites}`).toEqual([]);
+  }
+
+  // The law: transform and opacity (and colors) only, everywhere in the window.
+  const illegal: string[] = [];
+  for (const record of records) {
     for (const property of record.properties) {
-      if (KEYFRAME_META.has(property) || LAW.has(property)) continue;
-      if (expected.colors && COLORS.has(property)) continue;
-      if (expected.radius && RADIUS.has(property)) continue;
-      illegal.add(`${property} (${record.kind}:${record.id}@${record.target}, ${record.duration}ms)`);
+      if (LAW.has(property) || COLORS.has(property)) continue;
+      illegal.push(`${property} in ${describe(record)}`);
     }
   }
-  expect([...illegal], `${label}: only transform and opacity move${expected.radius ? ' (and border-radius, for a box that grows)' : ''}${expected.colors ? ' (and color, on what is pressed)' : ''}`).toEqual([]);
-  return measured;
+  expect(illegal, `${label}: only transform and opacity move (§1.9, §5); colors may step`).toEqual([]);
+
+  // Nothing loops but the waveform, and only while someone talks.
+  const loops = records.filter((record) => record.loops && !record.talking).map(describe);
+  expect(loops, `${label}: nothing loops (§1.2: "no idle loops")`).toEqual([]);
 }
 
-/* ---- Helpers ------------------------------------------------------------------- */
+/* ---- Matchers -------------------------------------------------------------------- */
+
+const web = (id: string) => (record: MotionRecord) => record.kind === 'web' && record.id === id;
+const webOn = (id: string, target: string) => (record: MotionRecord) => web(id)(record) && record.target.includes(target);
+const transition = (property: string, target: string) => (record: MotionRecord) =>
+  record.kind === 'transition' && record.id === property && record.target.includes(target);
+const cssAnimation = (name: string, target?: string) => (record: MotionRecord) =>
+  record.kind === 'animation' && record.id === name && (target === undefined || record.target.includes(target));
+/** A transition going toward a value (a reversed, shortened one is another moment). */
+const toward = (match: (record: MotionRecord) => boolean, end: RegExp) => (record: MotionRecord) =>
+  match(record) && end.test(record.transforms.at(-1) ?? record.opacities.at(-1) ?? '');
+
+/* ---- The harness ---------------------------------------------------------------- */
 
 /**
- * Animations that belong to another moment and may share a window with this one.
- * Each is held to its owner's constant wherever it turns up.
+ * The realtime stub's port: the index-review config passes it; under
+ * `npm run test:motion` (playwright.config.ts) it is the app's port + 2
+ * (4173 / 4175), the convention every e2e config here keeps.
  */
-const NEIGHBORS = () => [
-  {
-    owner: 'the room',
-    cites: '--glass-ms-room',
-    duration: constants.glassMsRoom,
-    // Opening a stage or switching a server changes what lights the room: its two canvases crossfade.
-    match: (r: AnimationRecord) => r.kind === 'transition' && r.id === 'opacity' && r.target.includes('glass-room-backdrop__layer'),
-  },
-  {
-    owner: 'the content swap',
-    cites: '--duration-slow',
-    duration: constants.durationSlow,
-    // A route change (picking a channel) crossfades the page in with a 4px rise.
-    match: (r: AnimationRecord) => r.kind === 'web' && r.id === 'data-motion-recipe:content',
-  },
-];
-
-/**
- * The step a pointer causes on whatever it crosses: a CSS transition of color, opacity or transform
- * that takes at most `--glass-ms` (a hover that is left again before its 120ms are up reverses in
- * less). It is its own moment, gated above, and may show up inside any other.
- */
-const isHoverStep = (record: AnimationRecord) =>
-  record.kind === 'transition'
-  && record.duration !== null
-  && record.duration <= constants.glassMs
-  && record.properties.length > 0
-  && record.properties.every((p) => COLORS.has(p) || p === 'opacity' || p === 'transform');
-
-const pill = (page: Page) => page.getByRole('region', { name: /live voice channel|voice call/ });
-const stagePane = (page: Page) => page.getByRole('region', { name: 'Stage' });
-
-/** Every move's clones and shield are gone, and nothing of it is still playing. */
-async function settled(page: Page) {
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          document.getAnimations().filter((a) => a.id.startsWith('glass-morph:') && a.playState === 'running').length
-          + document.querySelectorAll('.glass-morph > *').length,
-      ),
-    )
-    .toBe(0);
-  await page.waitForTimeout(250);
+function stubPort(info: TestInfo): number {
+  const fromEnv = process.env.PARACORD_E2E_INDEX_RT_PORT;
+  if (fromEnv) return Number(fromEnv);
+  const base = info.project.use.baseURL ?? 'http://127.0.0.1:4173';
+  return Number(new URL(base).port) + 2;
 }
 
-/**
- * The mocked server refuses read-state acks ("Failed to save read position"), and
- * that toast is the harness's, not the moment's: it would enter and leave inside
- * the window being measured.
- */
-async function clearToasts(page: Page) {
-  await page.evaluate(async () => {
-    const toasts = (await import('/src/stores/toastStore.ts' as string)) as { useToastStore: { setState: (s: unknown) => void } };
-    toasts.useToastStore.setState({ toasts: [] });
-  });
-}
-
-/** The room has found its light and everything has been still for a moment. */
-async function quiet(page: Page) {
-  await expect(page.locator('.glass-room-backdrop')).toHaveAttribute('data-room-phase', 'lit', { timeout: 15_000 });
+async function open(page: Page, info: TestInfo, route?: (h: IndexHarness) => string): Promise<IndexHarness> {
+  await installMotionRecorder(page);
+  const h = await installIndexScene(page, { video: false, rtPort: stubPort(info) });
+  await h.open(route ? route(h) : h.routes.channel('fuelGeneral'));
   await page.evaluate(() => document.fonts.ready);
-  await page.waitForTimeout(1500);
-  await clearToasts(page);
+  await park(page);
+  await rest(page, 'the page after load');
+  return h;
 }
 
-async function open(page: Page, size: { width: number; height: number } = { width: 1440, height: 900 }) {
-  await page.setViewportSize(size);
-  await installMotionMocks(page);
-  await page.goto(GENERAL);
-  await expect(page.getByRole('main')).toBeVisible();
-  await expect(pill(page)).toBeVisible();
-  await quiet(page);
-  constants = await readMotionConstants(page);
-}
-
-/** Go to a server, let the room settle on it, and come back to where you were. */
-async function visitAndReturn(page: Page, there: Locator, back: Locator) {
-  await there.click();
-  await expect(page.locator('.glass-room-backdrop')).toHaveAttribute('data-room-phase', 'lit', { timeout: 15_000 });
-  await page.waitForTimeout(1500);
-  await back.click();
-  await expect(page.locator('.glass-room-backdrop')).toHaveAttribute('data-room-source', /^stream-/);
-  await page.waitForTimeout(2500);
-  await parkPointer(page);
-}
-
-async function watchFromPill(page: Page) {
-  await pill(page).getByRole('button', { name: "Watch Vincent's screen" }).click();
-  await expect(stagePane(page)).toBeVisible();
-  await expect(page.locator('.glass-frame__stage .glass-stage__stream[data-picture="true"]')).toBeVisible();
-  await settled(page);
-  await clearToasts(page);
-}
-
-/** The pointer goes somewhere it hovers nothing. */
-async function parkPointer(page: Page) {
-  const size = page.viewportSize();
-  if (size) await page.mouse.move(size.width - 3, size.height - 3);
-  await page.waitForTimeout(250);
-}
-
-const isMorph = (record: AnimationRecord) => record.kind === 'web' && record.id.startsWith('glass-morph:');
-const morphNamed = (name: string) => (record: AnimationRecord) => record.kind === 'web' && record.id === `glass-morph:${name}`;
-const transitionOf = (property: string, within?: string) => (record: AnimationRecord) =>
-  record.kind === 'transition' && record.id === property && (within === undefined || record.target.includes(within));
-
-/** A layout move never starts a View Transition: the Glass moves are one engine (playMorph). */
-async function countViewTransitions(page: Page): Promise<() => Promise<number>> {
-  await page.evaluate(() => {
-    const doc = document as unknown as { startViewTransition?: (...args: unknown[]) => unknown };
-    const w = window as unknown as { __viewTransitions: number };
-    w.__viewTransitions = 0;
-    const original = doc.startViewTransition?.bind(document);
-    doc.startViewTransition = (...args: unknown[]) => {
-      w.__viewTransitions += 1;
-      return original?.(...args);
-    };
-  });
-  return () => page.evaluate(() => (window as unknown as { __viewTransitions: number }).__viewTransitions);
+/** The pointer goes where it hovers nothing. */
+async function park(page: Page): Promise<void> {
+  await page.mouse.move(1279, 799);
 }
 
 /**
- * What the stage's moves cost today, in a dev build on a software-rendered runner, named so it cannot
- * grow unnoticed (docs/design/glass-g22-checkpoint.md hands it to WP-G23).
+ * Quiet at rest: wait until nothing is animating (the moment has settled),
+ * then two more seconds, and `document.getAnimations()` must be empty (the
+ * talking waveform aside, unless `strict`).
  *
- * The moves themselves are transform and opacity and run clean: the hover, the pill, browse and the
- * phone's slide hold every frame at 20ms or under. The stage's moves (open, close, theater) and a server
- * switch each drop two or three frames (45 to 90ms) while React re-renders what the move changes around
- * them: the message rows and the message box for the conversation's new width, the other server's places
- * for a switch. The animation is not what is slow, and a production build is cheaper than this dev one.
+ * A moment may set off a later one by design, an event of its own: the New
+ * divider fades two seconds after you have read to the bottom (IX-11), "Link
+ * copied" turns back after two seconds (§5.16). Those settle too, so the wait
+ * starts again (up to three times); a loop never settles and fails here.
  */
-const KNOWN = {
-  /** Frames over the budget while a stage move runs (seen: one to three). */
-  stageMoves: { droppedFrames: 3 },
-  /** The longest single frame when the click mounts the stage (seen: 65 to 134ms). */
-  mountsStageMs: 150,
-  /** A server switch (seen: two or three frames, the longest 65 to 90ms). */
-  switchesServer: { droppedFrames: 3, commitCeilingMs: 150 },
-};
+async function rest(page: Page, label: string, { strict = false }: { strict?: boolean } = {}): Promise<void> {
+  for (let round = 0; round < 3; round += 1) {
+    await expect
+      .poll(() => runningNow(page, { talking: strict }), { message: `${label}: the moment never settled`, timeout: 8_000 })
+      .toEqual([]);
+    await page.waitForTimeout(REST_MS);
+    if ((await runningNow(page, { talking: strict })).length === 0) return;
+  }
+  expect(await runningNow(page, { talking: strict }), `${label}: something is still animating ${REST_MS}ms after it settled`).toEqual([]);
+}
 
-/** Every duration below, read from the running app by `open` (they are the app's, not the gate's). */
-let constants: MotionConstants;
+/**
+ * One moment: mark, act, let it settle and rest, and hold its record to the
+ * spec. Returns the record for anything the case checks on its own.
+ */
+async function moment(page: Page, label: string, act: () => Promise<unknown>, spec: Moment, { strict = false } = {}): Promise<MotionRecord[]> {
+  await markMoment(page);
+  await act();
+  await rest(page, label, { strict });
+  const records = await describeMoment(page);
+  expectMoment(label, records, spec);
+  return records;
+}
 
-test.describe('the Glass motion gate (§9)', () => {
-  test('the constants are the spec\'s', async ({ page }) => {
-    await open(page);
-    // §9 and §4/§5/§6, read from the app: a constant that drifts out of the spec fails here,
-    // before any moment is measured against it.
-    expect(constants.glassMs, '--glass-ms: hover and press, "120ms ease-out" (§9)').toBe(120);
-    expect(constants.PILL_SPRING_MS, 'PILL_SPRING_MS: "grows ... (spring, 550ms)" (§5)').toBe(550);
-    expect(constants.STAGE_MOVE_MS, 'STAGE_MOVE_MS: "shared-element transition ... 650ms" (§6)').toBe(650);
-    expect(constants.glassMsLayout, '--glass-ms-layout is the same move').toBe(constants.STAGE_MOVE_MS);
-    expect(constants.STAGE_MOVE_MS, '"600-650ms spring" (§9)').toBeGreaterThanOrEqual(600);
-    expect(constants.STAGE_MOVE_MS).toBeLessThanOrEqual(650);
-    expect(constants.glassMsRoom, '--glass-ms-room: "switching servers crossfades over 1.2s" (§4)').toBe(1200);
-    expect(constants.glassMsReduced, '--glass-ms-reduced: "150ms crossfades" (§9)').toBe(150);
-    expect(constants.STAGE_CROSSFADE_MS).toBe(constants.glassMsReduced);
-    expect(constants.PHONE_FADE_MS).toBe(constants.glassMsReduced);
-    expect(constants.PILL_FADE_REDUCED_MS).toBe(constants.glassMsReduced);
-    // The phone's slide is a navigation, not a scene change: its own number, shorter than a layout move.
-    expect(constants.PHONE_SLIDE_MS, 'PHONE_SLIDE_MS (glass-g20): shorter than a layout move').toBeLessThan(constants.STAGE_MOVE_MS);
-  });
+/** The scene's clock moved on (a message "now" sorts after what came before). */
+async function later(h: IndexHarness, time: string): Promise<void> {
+  await h.setClock(at(time));
+}
 
-  test('hover: a places row and a glass button step one wash lighter in 120ms, on color alone', async ({ page }) => {
-    test.setTimeout(120_000);
-    await open(page);
-    const row = page.getByRole('navigation', { name: 'Channels' }).getByRole('link', { name: /Clips/ });
-    await expect(row).toBeVisible();
-    await parkPointer(page);
+const json = (route: Route, body: unknown, status = 200) =>
+  route.fulfill({ status, contentType: 'application/json', headers: { 'X-Paracord-History-Epoch': HISTORY_EPOCH }, body: JSON.stringify(body) });
 
-    const hover = await measureMoment(page, async () => {
-      await row.hover();
-    }, 500);
-    expectMoment('hover (places row)', hover, {
-      plays: [{ match: transitionOf('background-color', 'glass-place-row'), duration: constants.glassMs, cites: '--glass-ms' }],
-      colors: true,
-    });
+/* ---- The moments ------------------------------------------------------------------ */
 
-    // Pressed, then dragged off before the button comes up: a press, not a click
-    // (a click would open the channel, and its page would swap in under the next moment).
-    const press = await measureMoment(page, async () => {
-      await page.mouse.down();
-    }, 500);
-    await parkPointer(page);
-    await page.mouse.up();
-    expectMoment('press (places row)', press, {
-      plays: [{ match: transitionOf('background-color', 'glass-place-row'), duration: constants.glassMs, cites: '--glass-ms' }],
-      colors: true,
-    });
-
-    // A glass button (the pill's Listen) steps the same way.
-    await parkPointer(page);
-    const listen = pill(page).getByRole('button', { name: 'Listen in to Lounge' });
-    const button = await measureMoment(page, async () => {
-      await listen.hover();
-    }, 500);
-    expectMoment('hover (glass button)', button, {
-      plays: [{ match: transitionOf('background-color', 'glass-btn'), duration: constants.glassMs, cites: '--glass-ms' }],
-      colors: true,
-    });
-    await parkPointer(page);
-  });
-
-  test('pill: the faces open it and close it on the spring, on transform (and its radius)', async ({ page }) => {
-    test.setTimeout(120_000);
-    await open(page);
-    const faces = pill(page).getByRole('button', { name: "Show who's in Lounge" });
-
-    const opening = await measureMoment(page, async () => {
-      await faces.click();
-    });
-    await expect(pill(page)).toHaveAttribute('data-phase', 'expanded');
-    const opened = expectMoment('pill (open)', opening, {
+test.describe('the Index motion gate (index-spec §5)', () => {
+  test('§5.1 switching place: panes slide by dock order, the tint crossfades, the indicator glides, main comes in', async ({ page }, info) => {
+    await open(page, info);
+    const right = {
       plays: [
-        { match: (r) => r.id === 'glass-pill:surface', duration: constants.PILL_SPRING_MS, cites: 'PILL_SPRING_MS' },
-        { match: (r) => r.id === 'glass-pill:glow', duration: constants.PILL_SPRING_MS, cites: 'PILL_SPRING_MS' },
+        { cites: '§5.1 old pane: translateX(-dir×40%), 1→0, 450ms spring', match: web('ix-pane:out'), duration: 450, curve: SPRING, fromTransform: 'none', toTransform: 'translateX(-40%)', opacities: ['1', '0'], atMost: 1 },
+        { cites: '§5.1 new pane: from translateX(dir×60%), 0→1, 550ms spring', match: web('ix-pane:in'), duration: 550, curve: SPRING, fromTransform: 'translateX(60%)', toTransform: 'none', opacities: ['0', '1'], atMost: 1 },
+        { cites: '§5.1 the sidebar tint fades in over the old, 900ms ease', match: web('ix-tint:side'), duration: 900, curve: EASE, opacities: ['0', '1'], atMost: 1 },
+        { cites: '§5.1 main glow, the same', match: web('ix-tint:main'), duration: 900, curve: EASE, opacities: ['0', '1'], atMost: 1 },
+        { cites: '§5.1 dock indicator glides, 550ms spring', match: web('ix-dock:indicator'), duration: 550, curve: SPRING, moves: ['transform'], atMost: 1 },
+        { cites: '§5.1 the new place’s mark scales to 1.08, 450ms spring', match: toward(transition('transform', 'ix-dock__mark'), /scale\(1\.08\)/), duration: 450, curve: SPRING },
+        { cites: '§5.1 the old mark back to 1, 450ms spring', match: toward(transition('transform', 'ix-dock__mark'), /^none$/), duration: 450, curve: SPRING },
+        { cites: '§5.1/5.2 main title: a place switch comes in as the prototype plays it (dir 0): from translateY(4px), 420ms spring', match: web('ix-main:title'), duration: 420, curve: SPRING, fromTransform: 'translateY(4px)', opacities: ['0', '1'] },
+        { cites: '§5.1/5.2 main feed: from translateY(0), fading, 480ms spring', match: web('ix-main:feed'), duration: 480, curve: SPRING, fromTransform: 'translateY(0px)', opacities: ['0', '1'] },
       ],
-      radius: true,
-      // The roster and the words fade in beside the spring (CSS opacity, --pill-fade).
-      ceiling: constants.PILL_SPRING_MS,
-    });
-    // The capsule's size and place is the spring on transform; its radius rides the same curve.
-    const surface = opened.finite.find((r) => r.id === 'glass-pill:surface');
-    expect(surface?.properties.sort(), 'the capsule animates transform and its radius only').toEqual(['borderRadius', 'transform']);
-
-    const closing = await measureMoment(page, async () => {
-      await faces.click();
-    });
-    await expect(pill(page)).toHaveAttribute('data-phase', 'compact');
-    expectMoment('pill (close)', closing, {
-      plays: [{ match: (r) => r.id === 'glass-pill:surface', duration: constants.PILL_SPRING_MS, cites: 'PILL_SPRING_MS' }],
-      radius: true,
-      ceiling: constants.PILL_SPRING_MS,
-    });
-  });
-
-  test('pill -> stage: Watch grows the stage out of the pill in 650ms, and Stop watching shrinks it back', async ({ page }) => {
-    test.setTimeout(120_000);
-    await open(page);
-    await fakeMedia(page, { joined: false, watchers: 1 });
-    const viewTransitions = await countViewTransitions(page);
-
-    const opening = await measureMoment(page, async () => {
-      await pill(page).getByRole('button', { name: "Watch Vincent's screen" }).click();
-    });
-    await expect(stagePane(page)).toBeVisible();
-    const opened = expectMoment('pill -> stage (Watch)', opening, {
+      absent: [{ cites: 'the Glass route crossfade (4px, 240ms) is retired in the Index frame', match: web('data-motion-recipe:content') }],
+    } satisfies Moment;
+    await moment(page, 'Fuel → Game Night', () => dockItem(page, 'gameNight').click(), right);
+    await park(page);
+    await moment(page, 'Game Night → Fuel (leftward)', () => dockItem(page, 'fuel').click(), {
       plays: [
-        { match: morphNamed('stage'), duration: constants.STAGE_MOVE_MS, cites: 'STAGE_MOVE_MS' },
-        { match: isMorph, duration: constants.STAGE_MOVE_MS, cites: 'STAGE_MOVE_MS', atLeast: 2 },
+        { cites: '§5.1 old pane leaves to the right: translateX(40%)', match: web('ix-pane:out'), duration: 450, curve: SPRING, toTransform: 'translateX(40%)' },
+        { cites: '§5.1 new pane from the left: translateX(-60%)', match: web('ix-pane:in'), duration: 550, curve: SPRING, fromTransform: 'translateX(-60%)' },
+        { cites: '§5.1 tint', match: web('ix-tint:side'), duration: 900, curve: EASE },
+        { cites: '§5.1 indicator', match: web('ix-dock:indicator'), duration: 550, curve: SPRING },
       ],
-      radius: true,
-      ...KNOWN.stageMoves,
-      // The click mounts the whole stage (people, controls, the stream's canvases) before the
-      // first animated frame: React's render of it, in a dev build, is the long frame.
-      commitCeilingMs: KNOWN.mountsStageMs,
     });
-    // The stage is the thing that grows, and it carries its radius with it.
-    expect(opened.finite.find(morphNamed('stage'))?.properties).toContain('transform');
-    expect(await viewTransitions(), 'a layout move is Web Animations; it never starts a View Transition').toBe(0);
-    await settled(page);
-
-    const closing = await measureMoment(page, async () => {
-      await page.keyboard.press('Escape');
-    });
-    await expect(stagePane(page)).toHaveCount(0);
-    expectMoment('stage -> pill (Stop watching)', closing, {
-      plays: [{ match: isMorph, duration: constants.STAGE_MOVE_MS, cites: 'STAGE_MOVE_MS', atLeast: 2 }],
-      radius: true,
-      ...KNOWN.stageMoves,
-    });
-    expect(await viewTransitions()).toBe(0);
-    // Stopping never leaves: the pill is back, and nothing of the move is left behind.
-    await expect(pill(page)).toBeVisible();
-    await settled(page);
+    // One pane and one tint layer each at rest.
+    await expect(page.locator('.ix-pane')).toHaveCount(1);
+    await expect(page.locator('[data-ix-tint="side"]')).toHaveCount(1);
   });
 
-  test('theater (T): side by side and theater trade places in 650ms, stream scaled, never stretched', async ({ page }) => {
-    test.setTimeout(120_000);
-    await open(page);
-    await fakeMedia(page, { joined: true, watchers: 2 });
-    await watchFromPill(page);
-    const viewTransitions = await countViewTransitions(page);
-
-    const toTheater = await measureMoment(page, async () => {
-      await page.keyboard.press('t');
+  test('§5.2 switching channel: the selection glides, the title and feed come in from the direction it moved', async ({ page }, info) => {
+    await open(page, info, (h) => h.routes.channel('gnLounge'));
+    const down = await moment(page, 'lounge → looking-for-group (down)', () => channelRow(page, 'gnLfg').click(), {
+      plays: [
+        { cites: '§5.2 selection translateY to the new row, 450ms spring (no height)', match: web('ix-select:glide'), duration: 450, curve: SPRING, fromTransform: /^translateY\(/, moves: ['transform'], atMost: 1 },
+        { cites: '§5.2 title from translateY(dir×14+4 = 18px), 420ms spring', match: web('ix-main:title'), duration: 420, curve: SPRING, fromTransform: 'translateY(18px)', opacities: ['0', '1'] },
+        { cites: '§5.2 feed from translateY(dir×22 = 22px), 480ms spring', match: web('ix-main:feed'), duration: 480, curve: SPRING, fromTransform: 'translateY(22px)', opacities: ['0', '1'] },
+      ],
+      absent: [{ cites: 'the Glass route crossfade is retired', match: web('data-motion-recipe:content') }],
     });
-    await expect(page.locator('.glass-stage[data-mode="theater"]')).toBeVisible();
-    const entered = expectMoment('theater (T)', toTheater, {
-      plays: [{ match: isMorph, duration: constants.STAGE_MOVE_MS, cites: 'STAGE_MOVE_MS', atLeast: 2 }],
-      radius: true,
-      ...KNOWN.stageMoves,
+    await park(page);
+    const up = await moment(page, 'looking-for-group → lounge (up)', () => channelRow(page, 'gnLounge').click(), {
+      plays: [
+        { cites: '§5.2 the glide back up', match: web('ix-select:glide'), duration: 450, curve: SPRING },
+        { cites: '§5.2 title from translateY(-14+4 = -10px)', match: web('ix-main:title'), duration: 420, curve: SPRING, fromTransform: 'translateY(-10px)' },
+        { cites: '§5.2 feed from translateY(-22px)', match: web('ix-main:feed'), duration: 480, curve: SPRING, fromTransform: 'translateY(-22px)' },
+      ],
     });
-    // The stream travels with one uniform scale: no keyframe of its morph scales one axis only.
-    const stream = entered.finite.find(morphNamed('stream'));
-    expect(stream, 'the stream is one of the things that moves').toBeTruthy();
-    for (const transform of stream?.transforms ?? []) {
-      const scale = /scale\(([\d.e+-]+),\s*([\d.e+-]+)\)/.exec(transform);
-      if (scale) expect(Math.abs(Number(scale[1]) - Number(scale[2])), `the stream stretched: ${transform}`).toBeLessThan(0.01);
+    // §4.9: the toolbar's fill follows a real fold only: two short channels, so it never flashes between them.
+    for (const records of [down, up]) {
+      expect(records.filter(transition('background-color', 'ix-toolbar')).map(describe), '§4.9 the toolbar fill only follows a real fold').toEqual([]);
     }
-    await settled(page);
-
-    const back = await measureMoment(page, async () => {
-      await page.keyboard.press('t');
-    });
-    await expect(page.locator('.glass-stage[data-mode="side"]')).toBeVisible();
-    expectMoment('theater (T, back)', back, {
-      plays: [{ match: isMorph, duration: constants.STAGE_MOVE_MS, cites: 'STAGE_MOVE_MS', atLeast: 2 }],
-      radius: true,
-      ...KNOWN.stageMoves,
-    });
-    expect(await viewTransitions()).toBe(0);
-    await settled(page);
   });
 
-  test('browse (S): places slides back in beside the stream in 650ms, and Esc puts it away', async ({ page }) => {
-    test.setTimeout(120_000);
-    await open(page);
-    await fakeMedia(page, { joined: false });
-    await watchFromPill(page);
-
-    const browsing = await measureMoment(page, async () => {
-      await page.keyboard.press('s');
-    });
-    await expect(page.locator('.glass-frame__places')).toBeVisible();
-    await expect(page.getByRole('main')).toHaveAttribute('data-away', 'true');
-    expectMoment('browse (S)', browsing, {
-      // The morph is the stage and places; the conversation steps aside on the CSS
-      // transition of the same length (--glass-ms-layout), on transform and opacity.
+  test('§5.3 a preview changes: the new line rolls up, the time fades in, the unread dot scales in and out', async ({ page }, info) => {
+    const h = await open(page, info);
+    await later(h, '21:39:30');
+    await moment(page, 'a message in plans', () => h.step('message', { channel: 'fuelPlans', who: 'jeremy', text: 'movie friday?' }), {
       plays: [
-        { match: isMorph, duration: constants.STAGE_MOVE_MS, cites: 'STAGE_MOVE_MS', atLeast: 1 },
-        { match: (r) => r.kind === 'transition' && r.target.startsWith('main.'), duration: constants.glassMsLayout, cites: '--glass-ms-layout', atLeast: 2 },
+        { cites: '§5.3 the line from translateY(9px), opacity 0, 520ms spring', match: web('ix-preview:line'), duration: 520, curve: SPRING, fromTransform: 'translateY(9px)', opacities: ['0', '1'], atMost: 1 },
+        { cites: '§5.3 the time fades in, 400ms', match: web('ix-preview:time'), duration: 400, curve: ANY, opacities: ['0', '1'], atMost: 1 },
+        { cites: '§5.3 the unread dot scales 0→1, 450ms spring', match: toward(transition('transform', 'ix-ch__dot'), /scale\(1\)/), duration: 450, curve: SPRING },
       ],
-      radius: true,
     });
-    await settled(page);
-
-    const away = await measureMoment(page, async () => {
-      await page.keyboard.press('Escape');
+    const reading = await moment(page, 'reading plans', () => channelRow(page, 'fuelPlans').click(), {
+      plays: [{ cites: '§5.3 the dot scales 1→0 when read, 450ms spring', match: toward(transition('transform', 'ix-ch__dot'), /scale\(0\)/), duration: 450, curve: SPRING }],
     });
-    await expect(page.locator('.glass-frame__places')).toHaveCount(0);
-    expectMoment('browse (S, away)', away, {
-      plays: [{ match: isMorph, duration: constants.STAGE_MOVE_MS, cites: 'STAGE_MOVE_MS', atLeast: 1 }],
-      radius: true,
-    });
-    await settled(page);
+    // §4.9: a channel whose history has not said yet where it starts (it only has
+    // what the gateway brought) does not flash the toolbar's fill while it loads.
+    expect(reading.filter(transition('background-color', 'ix-toolbar')).map(describe), '§4.9 no fill flash on a switch').toEqual([]);
   });
 
-  test('browse in theater: places floats over the stream and the faces and controls move over', async ({ page }) => {
-    test.setTimeout(120_000);
-    await open(page);
-    await fakeMedia(page, { joined: false });
-    await watchFromPill(page);
-    await page.keyboard.press('t');
-    await settled(page);
-
-    const browsing = await measureMoment(page, async () => {
-      await page.keyboard.press('s');
+  test('§5.5 a room goes live, people come and go, it empties; the dock pings once for another server', async ({ page }, info) => {
+    const h = await open(page, info);
+    await moment(page, 'Jeremy joins General (the room goes live)', () => h.step(voiceJoin, { who: 'jeremy', room: 'fuelRoomGeneral' }), {
+      plays: [
+        { cites: '§5.5 the card enters: translateY(-8px) scale(.97), 0→1, 600ms spring (a 120ms beat behind the push it causes, IX-18)', match: web('ix-card:card-in'), duration: 600, delay: 120, curve: SPRING, fromTransform: 'translateY(-8px) scale(0.97)', opacities: ['0', '1'], atMost: 1 },
+        { cites: '§5.5 what is below moves down by FLIP, 600ms spring', match: webOn('ix-card:push', 'ix-sb__rows'), duration: 600, curve: SPRING, moves: ['transform'] },
+        { cites: '§5.5 the dock’s live dot scales in, 450ms spring', match: toward(transition('transform', 'ix-dock__live'), /scale\(1\)/), duration: 450, curve: SPRING },
+      ],
+      absent: [{ cites: '§5.5 no ping for the server you are looking at', match: web('ix-dock:ping') }],
     });
-    await expect(page.locator('.glass-stage[data-mode="theater"][data-browse="true"]')).toBeVisible();
-    expectMoment('browse in theater (S)', browsing, {
-      plays: [{ match: isMorph, duration: constants.STAGE_MOVE_MS, cites: 'STAGE_MOVE_MS', atLeast: 1 }],
-      radius: true,
+    await moment(page, 'Nick joins (a row enters)', () => h.step(voiceJoin, { who: 'nick', room: 'fuelRoomGeneral' }), {
+      plays: [
+        { cites: '§5.5 a person row enters the same way, 500ms spring', match: web('ix-card:row-in'), duration: 500, curve: SPRING, fromTransform: 'translateY(-8px) scale(0.97)', opacities: ['0', '1'], atMost: 1 },
+        { cites: '§5.5 rows and actions below move down, 500ms', match: web('ix-card:push'), duration: 500, curve: SPRING },
+      ],
     });
-    await settled(page);
+    await moment(page, 'Nick leaves (a row leaves)', () => h.step(voiceLeave, { who: 'nick', room: 'fuelRoomGeneral' }), {
+      plays: [
+        { cites: '§5.5 a leaving row fades and scales to .97, 250ms ease', match: web('ix-card:row-out'), duration: 250, curve: EASE, toTransform: 'scale(0.97)', opacities: ['1', '0'], atMost: 1 },
+        { cites: '§5.5 then rows below FLIP up, 450ms spring', match: web('ix-card:push'), duration: 450, curve: SPRING },
+        { cites: '§5.5 … the sidebar under the card too, once the row has gone', match: webOn('ix-card:push', 'ix-sb__rows'), duration: 450, curve: SPRING, atMost: 1 },
+      ],
+    });
+    await moment(page, 'Jeremy leaves (the room empties)', () => h.step(voiceLeave, { who: 'jeremy', room: 'fuelRoomGeneral' }), {
+      plays: [
+        { cites: '§5.5 the card reverses, 300ms ease', match: web('ix-card:card-out'), duration: 300, curve: EASE, opacities: ['1', '0'], atMost: 1 },
+        { cites: '§5.5 and the list FLIPs up once, 450ms spring', match: webOn('ix-card:push', 'ix-sb__rows'), duration: 450, curve: SPRING, atMost: 1 },
+        { cites: '§5.5 the live dot scales out', match: toward(transition('transform', 'ix-dock__live'), /scale\(0\)/), duration: 450, curve: SPRING },
+      ],
+    });
+    const pinged = await moment(page, 'Basecamp goes live (another server)', () => h.step(voiceJoin, { who: 'brendan', room: 'bcRoomWorkshop' }), {
+      plays: [
+        { cites: '§5.5 the dock pings once: a ring from scale(1), 1 to scale(2.2), 0, 1200ms ease', match: web('ix-dock:ping'), duration: 1200, curve: EASE, fromTransform: 'scale(1)', toTransform: 'scale(2.2)', opacities: ['1', '0'], atLeast: 1, atMost: 1 },
+        { cites: '§5.5 its live dot scales in', match: toward(transition('transform', 'ix-dock__live'), /scale\(1\)/), duration: 450, curve: SPRING },
+      ],
+    });
+    expect(pinged.filter(web('ix-dock:ping'))[0]?.target).toContain('ix-dock__ping');
+    // §10: the same moment in words.
+    await expect(page.getByTestId('ix-announcer')).toContainText('Basecamp is live');
   });
 
-  test('room: a server switch crossfades the two canvases over 1.2s, on opacity', async ({ page }) => {
-    test.setTimeout(120_000);
-    await open(page);
-    const servers = page.getByRole('navigation', { name: 'Servers' });
-    const basecamp = servers.getByRole('button', { name: /^Basecamp/ });
-    await expect(basecamp).toBeVisible();
-    // Visit Basecamp once and come back: its channels, previews and members are in the stores,
-    // so what the window measures is the crossfade, not the first load of a server.
-    await visitAndReturn(page, basecamp, servers.getByRole('button', { name: /^Game Night/ }));
-    await clearToasts(page);
-
-    // The room's own sample: both canvases' opacity, every frame, across the switch.
-    await page.evaluate(() => {
-      const bag = { samples: [] as Array<{ at: number; opacities: number[] }>, running: true, started: 0 };
-      (window as unknown as { __roomFade: typeof bag }).__roomFade = bag;
-      const tick = (now: number) => {
-        if (!bag.started) bag.started = now;
-        bag.samples.push({
-          at: now - bag.started,
-          opacities: [...document.querySelectorAll('.glass-room-backdrop__layer')].map((layer) => Number(getComputedStyle(layer).opacity)),
-        });
-        if (bag.running) requestAnimationFrame(tick);
-      };
-      requestAnimationFrame(tick);
+  test('§5.4 the pinned call card: still between other places, a FLIP to and from its own server', async ({ page }, info) => {
+    const h = await open(page, info);
+    await h.step('arrive');
+    await h.step('join');
+    await rest(page, 'joined');
+    await moment(page, 'Fuel → Game Night (the card pins above the header)', () => dockItem(page, 'gameNight').click(), {
+      plays: [
+        { cites: '§5.4 the card FLIPs between "under the search" and "above the header", 550ms spring, translate only', match: web('ix-card:pin'), duration: 550, curve: SPRING, fromTransform: /^translate\(0px, -?\d/, toTransform: 'none', atLeast: 1, atMost: 1 },
+        { cites: '§5.1 while the panes slide beneath', match: web('ix-pane:in'), duration: 550, curve: SPRING },
+      ],
     });
-    const crossfade = await measureMoment(
-      page,
-      async () => {
-        await basecamp.click();
-      },
-      constants.glassMsRoom + 900,
+    await park(page);
+    await moment(page, 'Game Night → Basecamp (the pinned card stays still)', () => dockItem(page, 'basecamp').click(), {
+      plays: [{ cites: '§5.1 panes slide', match: web('ix-pane:in'), duration: 550, curve: SPRING }],
+      absent: [
+        { cites: '§5.4 switching between other places leaves the card still', match: web('ix-card:pin') },
+        { cites: '§5.4 nothing of the pinned card moves', match: (record) => record.target.includes('ix-room-card') },
+      ],
+    });
+    await park(page);
+    await moment(page, 'Basecamp → Fuel (back under the search)', () => dockItem(page, 'fuel').click(), {
+      plays: [{ cites: '§5.4 the FLIP home, 550ms spring', match: web('ix-card:pin'), duration: 550, curve: SPRING, toTransform: 'none', atMost: 1 }],
+    });
+  });
+
+  test('§5.6 Plan a night grows the draft out of the action card; §5.15 the card lifts 3px', async ({ page }, info) => {
+    await open(page, info);
+    await moment(page, 'hovering an action card', () => actionCard(page, 'plan').hover(), {
+      plays: [{ cites: '§5.15 action cards lift −3px, 400ms spring', match: toward(transition('transform', 'ix-way'), /translateY\(-3px\)/), duration: 400, curve: SPRING }],
+    });
+    await moment(page, 'Plan a night', () => actionCard(page, 'plan').click(), {
+      plays: [
+        { cites: '§5.6 FLIP from the action card’s rect (translate + scale), .5→1, 650ms spring', match: web('ix-conversation:draft'), duration: 650, curve: SPRING, fromTransform: /^translate\(.+\) scale\(/, toTransform: 'none', opacities: ['0.5', '1'], atMost: 1 },
+        { cites: '§5.6 the welcome crossfades out, 300ms', match: web('ix-conversation:welcome-out'), duration: 300, curve: ANY, opacities: ['1', '0'], atMost: 1 },
+      ],
+    });
+  });
+
+  test('§5.7 joining: the yours layer fades in, your face flies from the toolbar avatar, the rest waits until 45%', async ({ page }, info) => {
+    const h = await open(page, info);
+    await h.step('arrive');
+    await rest(page, 'Jeremy is here');
+    await later(h, '21:45:00');
+    await moment(page, 'Join', () => roomCard(page).getByTestId('ix-card-join').click(), {
+      plays: [
+        { cites: '§5.7 the yours layer fades in, 400ms ease', match: (r) => transition('opacity', 'ix-room-card__layer--yours')(r) && r.opacities.at(-1) === '1', duration: 400, curve: EASE },
+        { cites: '§5.7 your row flies from the toolbar avatar: translate + scale, 750ms spring', match: webOn('ix-card:fly', 'ix-card-row__face'), duration: 750, curve: SPRING, fromTransform: /^translate\(.+\) scale\(/, toTransform: 'none', atMost: 1 },
+        { cites: '§5.7 the card’s new content holds at 0 until 45%, then fades in', match: web('ix-card:fly-hold'), duration: 750, curve: ANY, opacities: ['0', '0', '1'] },
+        { cites: '§5.7/5.10 "You joined General" pops into general', match: webOn('ix-timeline:arrive', 'ix-tl-system'), duration: 550, curve: SPRING },
+      ],
+    });
+    const records = await describeMoment(page);
+    for (const hold of records.filter(web('ix-card:fly-hold'))) expect(hold.offsets, '§5.7 "holds at opacity 0 until 45%"').toEqual([0, 0.45, 1]);
+  });
+
+  test('§5.8/5.9 the call grows out of the card and back; theater moves to the window', async ({ page }, info) => {
+    const h = await open(page, info);
+    await h.step('arrive');
+    await h.step('join');
+    await rest(page, 'joined');
+    await moment(page, 'Open call', () => roomCard(page, 'yours').getByTestId('ix-card-open-call').click(), {
+      plays: [
+        { cites: '§5.8 the surface grows out of the card: translate + non-uniform scale, .3→1, 600ms spring', match: web('ix-call:open'), duration: 600, curve: SPRING, fromTransform: /^translate\(.+\) scale\(.+, .+\)$/, toTransform: 'none', opacities: ['0.3', '1'], atMost: 1 },
+        { cites: '§5.8 the tiles and controls are a counter-layer that fades in from 40%', match: web('ix-call:open-content'), duration: 600, curve: ANY, moves: ['opacity'], atMost: 1 },
+        { cites: '§5.8 the wide control’s label crossfades, 200ms', match: (r) => r.kind === 'transition' && r.id === 'opacity' && r.duration === 200 && /span/.test(r.target), duration: 200, curve: ANY, atLeast: 2 },
+      ],
+    });
+    const content = (await describeMoment(page)).find(web('ix-call:open-content'));
+    const holdUntil = content ? content.opacityOffsets[content.opacities.lastIndexOf('0')] : -1;
+    expect(holdUntil, '§5.8 the counter-layer holds at 0 until 40%, then fades in').toBeCloseTo(0.4, 2);
+    const wholeBy = content ? content.opacityOffsets[content.opacities.indexOf('1')] : -1;
+    expect(wholeBy, 'IX-18: … and is whole by 75%, so the call is drawn when the surface arrives (as the prototype)').toBeCloseTo(0.75, 2);
+    await moment(page, 'Theater (T)', () => page.keyboard.press('t'), {
+      plays: [
+        { cites: '§5.9 the surface FLIPs from main’s inset to the window’s, 600ms spring', match: web('ix-call:theater'), duration: 600, curve: SPRING, fromTransform: /^translate\(/, toTransform: 'none', atMost: 1 },
+        { cites: '§5.9 the sidebar dims to .4 beneath, 600ms spring', match: (r) => transition('opacity', 'ix-side')(r) && r.opacities.at(-1) === '0.4', duration: 600, curve: SPRING },
+      ],
+    });
+    await moment(page, 'Theater off', () => page.keyboard.press('t'), {
+      plays: [
+        { cites: '§5.9 reverse the same', match: web('ix-call:theater'), duration: 600, curve: SPRING },
+        { cites: '§5.9 the sidebar comes back to 1', match: (r) => transition('opacity', 'ix-side')(r) && r.opacities.at(-1) === '1', duration: 600, curve: SPRING },
+      ],
+    });
+    await moment(page, 'Back to chat', () => page.getByTestId('ix-call-back').click(), {
+      plays: [{ cites: '§5.8 back into the card, 450ms spring, then hidden', match: web('ix-call:close'), duration: 450, curve: SPRING, toTransform: /^translate\(.+\) scale\(/, atMost: 1 }],
+    });
+    await expect(page.locator('.ix-call')).toHaveCount(0);
+  });
+
+  test('§5.10 a message arrives from someone: it pops from the avatar side and what was there makes room', async ({ page }, info) => {
+    const h = await open(page, info);
+    await h.step('arrive');
+    await rest(page, 'arrived');
+    await later(h, '21:46:00');
+    await moment(page, 'Jeremy says something', () => h.step('message', { channel: 'fuelGeneral', who: 'jeremy', text: 'you coming?' }), {
+      plays: [
+        { cites: '§5.10 the new bubble from translateY(14px) scale(.96), opacity 0, 550ms spring', match: web('ix-timeline:arrive'), duration: 550, curve: SPRING, fromTransform: 'translateY(14px) scale(0.96)', toTransform: 'none', opacities: ['0', '1'], atMost: 1 },
+        { cites: '§5.10 earlier content FLIPs up (it was at the bottom)', match: web('ix-timeline:make-room'), duration: 550, curve: SPRING, moves: ['transform'] },
+      ],
+    });
+  });
+
+  test('§5.11 the send flight is not this gate’s to clamp: it still flies its 620ms arc', async ({ page }, info) => {
+    const h = await open(page, info);
+    await h.step('arrive');
+    await rest(page, 'arrived');
+    await composerInput(page).click();
+    await page.keyboard.type('count me in');
+    await rest(page, 'typed');
+    await markMoment(page);
+    await page.keyboard.press('Enter');
+    await rest(page, 'sent');
+    const flight = (await describeMoment(page)).filter((r) => r.kind === 'web' && r.id === 'data-motion-recipe:send-flight');
+    expect(flight.length, 'the flight played').toBeGreaterThan(0);
+    for (const record of flight.filter((r) => r.properties.includes('transform'))) expect(record.duration, 'M1: 620ms').toBe(620);
+    const travel = Math.max(
+      ...flight.flatMap((r) => r.transforms.map((t) => Math.max(...[...t.matchAll(/-?\d+(?:\.\d+)?px/g)].map((m) => Math.abs(Number.parseFloat(m[0])))))),
     );
-    const fade = await page.evaluate(() => {
-      const bag = (window as unknown as { __roomFade: { samples: Array<{ at: number; opacities: number[] }>; running: boolean } }).__roomFade;
-      bag.running = false;
-      return bag.samples;
-    });
-    // Basecamp has no stream: its banner or its icon lights the room now.
-    await expect(page.locator('.glass-room-backdrop')).toHaveAttribute('data-room-source', /^(banner|icon)$/);
-
-    expectMoment('room (server switch)', crossfade, {
-      plays: [{ match: transitionOf('opacity', 'glass-room-backdrop__layer'), duration: constants.glassMsRoom, cites: '--glass-ms-room', atLeast: 2 }],
-      // The room is what eases for 1.2s, so the window's ceiling is the room's own.
-      ceiling: constants.glassMsRoom,
-      // The switch renders the other server's places panel and conversation while the crossfade
-      // starts: React's work on the page, in a dev build, is the long frames (see KNOWN).
-      ...KNOWN.switchesServer,
-    });
-    // Both canvases are partly visible mid-fade, and exactly one is at the end.
-    const mid = fade.find((sample) => sample.at >= constants.glassMsRoom / 2);
-    expect(mid?.opacities.every((opacity) => opacity > 0.05 && opacity < 0.95), `mid-fade opacities ${JSON.stringify(mid)}`).toBe(true);
-    expect([...fade[fade.length - 1].opacities].sort()).toEqual([0, 1]);
+    expect(travel, 'M1: never clamped to the quiet system’s 8px').toBeGreaterThan(40);
   });
 
-  test('phone: places and the conversation are two screens, and the change between them is a 360ms slide', async ({ page }) => {
-    test.setTimeout(120_000);
-    await open(page, { width: 390, height: 844 });
-    const frame = page.locator('.glass-frame');
-    await expect(frame).toHaveAttribute('data-screen', 'conversation');
-    const clips = page.getByRole('navigation', { name: 'Channels' }).getByRole('link', { name: /Clips/ });
-    // Open Clips once and come back to places: its timeline is in the stores, so what the window
-    // measures is the slide, not the first render of a channel's messages.
-    await page.getByRole('button', { name: 'Back to places' }).click();
-    await expect(frame).toHaveAttribute('data-screen', 'places');
-    await clips.click();
-    await expect(frame).toHaveAttribute('data-screen', 'conversation');
-    await expect(page.getByRole('heading', { level: 1, name: 'Clips' })).toBeVisible();
-    await page.waitForTimeout(1500);
-    await clearToasts(page);
-
-    const toPlaces = await measureMoment(page, async () => {
-      await page.getByRole('button', { name: 'Back to places' }).click();
-    }, 700);
-    await expect(frame).toHaveAttribute('data-screen', 'places');
-    expectMoment('phone (conversation -> places)', toPlaces, {
-      plays: [{ match: (r) => r.id.startsWith('glass-phone:'), duration: constants.PHONE_SLIDE_MS, cites: 'PHONE_SLIDE_MS', atLeast: 2 }],
+  test('§5.12/5.13 the message box opens in three slices, the feed follows, the send control turns cream', async ({ page }, info) => {
+    await open(page, info);
+    await moment(page, 'the box opens', () => composerInput(page).click(), {
+      plays: [
+        { cites: '§5.12 the top cap translates up 46px, 500ms spring', match: webOn('ix-composer:shape:top', 'slice--top'), duration: 500, curve: SPRING, fromTransform: 'translateY(46px)', toTransform: 'none' },
+        { cites: '§5.12 the middle scales in Y from 0 to 1, 500ms spring', match: webOn('ix-composer:shape:mid', 'slice--mid'), duration: 500, curve: SPRING, fromTransform: /^scaleY\(/, toTransform: 'none' },
+        { cites: '§5.12 the tools row: opacity 300ms after 80ms', match: (r) => transition('opacity', 'ix-composer__tools')(r) && r.opacities.at(-1) === '1', duration: 300, curve: ANY, delay: 80 },
+        { cites: '§5.12 the tools row: from translateY(6px), 450ms spring', match: toward(transition('transform', 'ix-composer__tools'), /^none$/), duration: 450, curve: SPRING, fromTransform: 'translateY(6px)' },
+        { cites: '§5.12 the feed above FLIPs from its old position, 500ms spring', match: web('ix-conversation:feed'), duration: 500, curve: SPRING, moves: ['transform'] },
+      ],
     });
-
-    const toConversation = await measureMoment(page, async () => {
-      await clips.click();
-    }, 700);
-    await expect(frame).toHaveAttribute('data-screen', 'conversation');
-    expectMoment('phone (places -> conversation)', toConversation, {
-      plays: [{ match: (r) => r.id.startsWith('glass-phone:'), duration: constants.PHONE_SLIDE_MS, cites: 'PHONE_SLIDE_MS', atLeast: 2 }],
-      // The channel's own page crossfades in under the slide (the route content swap).
-      ceiling: constants.PHONE_SLIDE_MS,
+    await moment(page, 'typing', () => page.keyboard.type('hey'), {
+      plays: [{ cites: '§5.13 send: quiet → cream, a 200ms color transition', match: transition('background-color', 'ix-composer__send'), duration: 200, curve: ANY }],
+    });
+    await moment(page, 'the box closes', async () => {
+      await page.keyboard.press('Control+A');
+      await page.keyboard.press('Delete');
+      await page.locator('.ix-main').click({ position: { x: 600, y: 300 } });
+    }, {
+      plays: [
+        { cites: '§5.12 closing reverses in 350ms', match: webOn('ix-composer:shape:top', 'slice--top'), duration: 350, curve: SPRING, fromTransform: 'translateY(-46px)' },
+        { cites: '§5.12 the feed follows, 350ms', match: web('ix-conversation:feed'), duration: 350, curve: SPRING },
+      ],
     });
   });
 
-  test('shared element (lib/motion/sharedElement.ts): View Transitions and FLIP are one choreography of --duration-move', async ({ page }) => {
-    test.setTimeout(120_000);
-    await page.setViewportSize({ width: 1440, height: 1200 });
-    // No Glass scene here: it pins the page's Date, and the engine's "wait for the chrome to arrive"
-    // loop counts Date.now() down to its deadline, which a pinned clock never reaches (a walk back,
-    // with no chrome to rise, would wait for ever). The demo needs no account and no server.
-    await page.goto('/design-tokens');
-    constants = await readMotionConstants(page);
-    const shared = page.locator('#motion-shared');
-    await shared.scrollIntoViewIfNeeded();
-    await expect(shared).toBeVisible();
-    await page.evaluate(() => document.fonts.ready);
-    await page.waitForTimeout(600);
-
-    // The Web Animations FLIP path: the one this engine is answerable for, frames and all.
-    const flip = await measureMoment(page, async () => {
-      await shared.getByRole('button', { name: /\(FLIP\)$/ }).click();
-    }, 1000);
-    await expect(shared.getByText('Last run: flip.')).toBeVisible();
-    expectMoment('shared element (FLIP)', flip, {
-      plays: [{ match: (r) => r.id === 'data-motion-recipe:shared', duration: constants.durationMove, cites: '--duration-move' }],
+  test('§5.14 the title folds with the scroll, and the toolbar fills', async ({ page }, info) => {
+    const h = await open(page, info);
+    await h.step('arrive');
+    await h.step('crowd');
+    await h.step('busy', { pace: 0 });
+    await rest(page, 'busy');
+    await scrollConversation(page, 0);
+    await rest(page, 'at the top');
+    const records = await moment(page, 'scrolled past 40px', () => scrollConversation(page, 120), {
+      plays: [
+        { cites: '§5.14 the folded title enters: opacity 250ms', match: (r) => transition('opacity', 'ix-toolbar__title')(r) && r.opacities.at(-1) === '1', duration: 250, curve: ANY },
+        { cites: '§5.14 … and from translateY(6px), 350ms spring', match: toward(transition('transform', 'ix-toolbar__title'), /^none$/), duration: 350, curve: SPRING, fromTransform: 'translateY(6px)' },
+        { cites: '§5.14 the toolbar background appears, 300ms (color)', match: transition('background-color', 'ix-toolbar'), duration: 300, curve: ANY },
+      ],
     });
+    // Scroll-linked, no timer: the large title itself never animates.
+    expect(records.filter((r) => r.target.includes('ix-large-title')).map(describe)).toEqual([]);
+    // Where the scroll landed (the scroller may end short of 120 with other fonts): t = min(1, scrollTop / 60).
+    const fold = await page.locator('.ix-timeline__header .ix-large-title').evaluate((el) => {
+      const scroller = el.closest('.ix-timeline__scroller') as HTMLElement;
+      return { top: scroller.scrollTop, scale: Number(/scale\(([\d.]+)\)/.exec(el.style.transform)?.[1] ?? 1), opacity: Number(el.style.opacity || 1) };
+    });
+    const t = Math.min(1, fold.top / 60);
+    expect(fold.top, 'scrolled past the fold point (40px)').toBeGreaterThan(40);
+    expect(fold.scale, '§5.14 scale(1 − .1t)').toBeCloseTo(1 - 0.1 * t, 3);
+    expect(fold.opacity, '§5.14 opacity 1 − .9t').toBeCloseTo(1 - 0.9 * t, 3);
+  });
 
-    // The View Transitions path, where the webview has it: the same choreography and duration and the
-    // same law; its frames are the compositor's bill on a runner with no GPU, and are not gated.
-    const viewTransition = await measureMoment(page, async () => {
-      await shared.getByRole('button', { name: /^(?:Walk into the channel|Back to the Lobby)$/ }).click();
-    }, 1000);
-    await expect(shared.getByText('Last run: view-transition.')).toBeVisible();
-    expectMoment('shared element (View Transitions)', viewTransition, {
-      // The shared element's own snapshot group and its cross-fade; the page's root snapshot
-      // cross-fades for --duration-fast alongside it.
-      plays: [{ match: (r) => r.target.includes('::view-transition') && r.target.includes('pc-tokens-room'), duration: constants.durationMove, cites: '--duration-move', atLeast: 2 }],
-      frames: false,
+  test('§5.15 hover lifts: the dock 2px, rows one shade lighter in color', async ({ page }, info) => {
+    await open(page, info);
+    await moment(page, 'hovering a dock item', () => dockItem(page, 'gameNight').hover(), {
+      plays: [{ cites: '§5.15 dock items −2px, 350ms spring', match: toward(transition('transform', 'ix-dock__item'), /translateY\(-2px\)/), duration: 350, curve: SPRING }],
+    });
+    await moment(page, 'hovering a channel row', () => channelRow(page, 'fuelClips').hover(), {
+      plays: [{ cites: '§5.15 rows: background one step lighter, 120ms ease (color only)', match: transition('background-color', 'ix-ch'), duration: 120, curve: EASE }],
     });
   });
 
-  test.describe('reduced motion: a layout change is a 150ms crossfade, and nothing loops', () => {
-    async function expectCrossfade(label: string, sample: MomentSample, constant: number, cites: string, match: (r: AnimationRecord) => boolean) {
-      const finite = sample.records.filter((record) => !record.loops);
-      const played = finite.filter(match);
-      expect(played.length, `${label}: the crossfade never played (saw ${finite.map((r) => `${r.kind}:${r.id}`).join(', ') || 'none'})`).toBeGreaterThan(0);
-      for (const record of played) {
-        expect(record.duration, `${label}: "${record.id}" is ${cites} = ${constant}ms under reduced motion`).toBe(constant);
-        // Nothing travels: every keyframe's transform is the rest one.
-        for (const transform of record.transforms) {
-          expect(transform === 'none' || /^translate\(0(px)?, ?0(px)?\) scale\(1, ?1\)$/.test(transform), `${label}: "${record.id}" travels (${transform}) under reduced motion`).toBe(true);
+  test('§5.16 Bring your people says "Link copied" with a 200ms crossfade, and back after 2s', async ({ page, context }, info) => {
+    await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+    await open(page, info);
+    await page.route(`**/api/v1/channels/${CH.fuelGeneral}/invites`, (route) =>
+      json(route, { code: 'fuelfuel', channel_id: CH.fuelGeneral, guild_id: GUILD.fuel.id, created_at: '2026-10-01T00:00:00Z', inviter_id: ME.id, max_age: 0, max_uses: 0, uses: 0 }, 201));
+    await page.route(`**/api/v1/guilds/${GUILD.fuel.id}/invites`, (route) => json(route, { error: 'forbidden' }, 403));
+    await page.route('**/api/v1/instance/share-address', (route) => json(route, { url: 'https://paracord.example', reach: 'internet' }));
+    await moment(page, 'copy', async () => {
+      await actionCard(page, 'invite').click();
+      await park(page);
+      await page.waitForTimeout(2_400);
+    }, {
+      plays: [{ cites: '§5.16 the label crossfades (opacity), 200ms, there and back', match: (r) => r.kind === 'transition' && r.id === 'opacity' && /ix-way__[ab]/.test(r.target), duration: 200, curve: ANY, atLeast: 4 }],
+    });
+  });
+
+  test('§5.17 sheets slide in from main’s right edge; menus scale from their anchor', async ({ page }, info) => {
+    await open(page, info);
+    await moment(page, 'the search sheet opens', () => page.getByRole('button', { name: 'Search messages' }).click(), {
+      plays: [{ cites: '§5.17 sheets: translateX(24px), opacity 0 → none, 380ms spring', match: cssAnimation('ix-sheet-in'), duration: 380, curve: SPRING, fromTransform: /translate3d\(24px, 0px, 0px\)|translateX\(24px\)/, toTransform: 'none', opacities: ['0', '1'] }],
+    });
+    await moment(page, 'the search sheet closes', () => page.keyboard.press('Escape'), {
+      plays: [{ cites: '§5.17 out 250ms ease', match: cssAnimation('ix-sheet-out'), duration: 250, curve: EASE }],
+    });
+    await moment(page, 'the server menu opens', () => page.getByRole('button', { name: 'Server options' }).click(), {
+      plays: [{ cites: '§5.17 menus: scale(.97) + fade from their anchor, 180ms ease', match: cssAnimation('ix-pop-in'), duration: 180, curve: EASE, fromTransform: 'scale(0.97)', opacities: ['0', '1'] }],
+    });
+    await moment(page, 'the server menu closes', () => page.keyboard.press('Escape'), {
+      plays: [{ cites: '§5.17 menus out 120ms', match: cssAnimation('ix-pop-out'), duration: 120, curve: ANY }],
+    });
+  });
+
+  test('§5.18 a toast drops in under the toolbar and leaves after 4s', async ({ page }, info) => {
+    await open(page, info);
+    await moment(page, 'a toast', async () => {
+      await page.evaluate(async () => {
+        const toasts = (await import('/src/stores/toastStore.ts' as string)) as { toast: { success(message: string): void } };
+        toasts.toast.success('Saved');
+      });
+      await page.waitForTimeout(4_600);
+    }, {
+      plays: [
+        { cites: '§5.18 from translateY(−8px) + fade, 300ms spring', match: cssAnimation('pc-toast-in'), duration: 300, curve: SPRING, fromTransform: /translate3d\(0px, -8px, 0px\)|translateY\(-8px\)/, opacities: ['0'] },
+        { cites: '§5.18 out 200ms', match: cssAnimation('pc-toast-out'), duration: 200, curve: ANY },
+      ],
+    });
+  });
+
+  test('§5.19/§4.4 the talking ring fades, and the waveform runs only while someone talks', async ({ page }, info) => {
+    const h = await open(page, info);
+    await h.step(voiceJoin, { who: 'jeremy', room: 'fuelRoomGeneral' });
+    await rest(page, 'Jeremy is in General');
+    await moment(page, 'Jeremy starts talking', () => h.step(speak, { who: 'jeremy', room: 'fuelRoomGeneral', speaking: true }), {
+      plays: [{ cites: '§5.19 the ring: opacity 150ms in', match: (r) => transition('opacity', 'ix-card-row__ring')(r) && r.opacities.at(-1) === '1', duration: 150, curve: ANY }],
+    });
+    expect((await runningNow(page, { talking: true })).length, '§4.4 the waveform runs while he talks').toBeGreaterThan(0);
+    await moment(page, 'Jeremy stops', () => h.step(speak, { who: 'jeremy', room: 'fuelRoomGeneral', speaking: false }), {
+      plays: [{ cites: '§5.19 the ring: 300ms out', match: (r) => transition('opacity', 'ix-card-row__ring')(r) && r.opacities.at(-1) === '0', duration: 300, curve: ANY }],
+    }, { strict: true });
+    // §1.2: nobody talks, so nothing at all moves (the waveform is gone, not paused).
+    expect(await runningNow(page, { talking: true })).toEqual([]);
+    // §10: a share starting is said in words.
+    await h.step(share, { who: 'jeremy', room: 'fuelRoomGeneral' });
+    await expect(page.getByTestId('ix-announcer')).toContainText('Jeremy started sharing');
+  });
+
+  test('§5.20 a category collapses: its rows fade, the rest FLIPs up, the chevron turns', async ({ page }, info) => {
+    await open(page, info);
+    await page.evaluate(
+      async ({ guildId, clips, plans }) => {
+        const channels = (await import('/src/stores/channelStore.ts' as string)) as any;
+        const guilds = (await import('/src/stores/guildStore.ts' as string)) as any;
+        const guild = guilds.useGuildStore.getState().guilds.find((entry: any) => entry.id === guildId);
+        const store = channels.useChannelStore;
+        const existing = store.getState().channelsByGuild[guild.key] as any[];
+        const category = { id: '999000000000000001', type: 4, guild_id: guildId, name: 'Planning', position: 1, nsfw: false, created_at: new Date().toISOString() };
+        store.getState().addChannel(category, guild.scope);
+        for (const id of [clips, plans]) store.getState().updateChannel({ ...existing.find((entry) => entry.id === id), parent_id: category.id }, guild.scope);
+      },
+      { guildId: GUILD.fuel.id, clips: CH.fuelClips, plans: CH.fuelPlans },
+    );
+    await rest(page, 'a category');
+    const fold = page.getByRole('button', { name: 'Planning', exact: true });
+    await moment(page, 'the category closes', async () => {
+      await fold.click();
+      await park(page);
+    }, {
+      plays: [
+        { cites: '§5.20 its rows fade, 150ms', match: web('ix-collapse:fade'), duration: 150, curve: ANY, moves: ['opacity'] },
+        { cites: '§5.20 the rest of the sidebar FLIPs up, 450ms spring', match: web('ix-collapse:move'), duration: 450, curve: SPRING, moves: ['transform'] },
+        { cites: '§5.20 the chevron rotates, 200ms', match: transition('transform', 'ix-sb__chev'), duration: 200, curve: ANY },
+      ],
+    });
+  });
+});
+
+test.describe('reduced motion (index-spec §5: every move a 150ms crossfade; no pings, no lifts; the waveform still)', () => {
+  test('moves fade in place, pings and lifts are gone, the waveform is still', async ({ page }, info) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    const h = await open(page, info);
+    const fadesOnly = (label: string, records: MotionRecord[], named: string[]) => {
+      for (const record of records) {
+        expect(record.transforms.filter((t) => t !== 'none'), `${label}: nothing travels (${describe(record)})`).toEqual([]);
+        if (record.properties.every((p) => COLORS.has(p))) continue;
+        expect(record.duration ?? Infinity, `${label}: ${describe(record)} is a fade of at most ${REDUCED_MS}ms`).toBeLessThanOrEqual(REDUCED_MS);
+      }
+      for (const id of named) {
+        const played = records.filter(web(id));
+        expect(played.length, `${label}: ${id} crossfades`).toBeGreaterThan(0);
+        for (const record of played) {
+          expect(record.duration, `${label}: ${id} is ${REDUCED_MS}ms`).toBe(REDUCED_MS);
+          expect(record.properties, `${label}: ${id} is opacity only`).toEqual(['opacity']);
         }
       }
-      // And nothing runs longer than the crossfade.
-      expect(
-        finite.filter((record) => (record.duration ?? 0) > constant).map((record) => `${record.kind}:${record.id}@${record.target} ${record.duration}ms`),
-        `${label}: something runs longer than ${constant}ms under reduced motion`,
-      ).toEqual([]);
-      expect(sample.records.filter((record) => record.loops).map((record) => `${record.id}@${record.target}`), `${label}: a loop is still running`).toEqual([]);
-    }
-
-    test('the moves become 150ms crossfades, the spring plays nothing, and the waveform stops', async ({ page }) => {
-      test.setTimeout(150_000);
-      await page.emulateMedia({ reducedMotion: 'reduce' });
-      await open(page);
-      await expect(page.locator('html')).toHaveAttribute('data-motion', 'reduced');
-      // The loops are off: no infinite animation is running anywhere on the page.
-      const loops = await page.evaluate(() =>
-        document
-          .getAnimations()
-          .filter((a) => (a.effect as KeyframeEffect | null)?.getComputedTiming?.().iterations === Infinity && a.playState === 'running')
-          .map((a) => a.id || (a as CSSAnimation).animationName || 'anonymous'),
-      );
-      expect(loops, 'loops still running under reduced motion').toEqual([]);
-
-      // The pill's spring plays nothing; its roster crossfades (CSS), which reduced motion zeroes.
-      const faces = pill(page).getByRole('button', { name: "Show who's in Lounge" });
-      const expanding = await measureMoment(page, async () => {
-        await faces.click();
-      }, 500);
-      await expect(pill(page)).toHaveAttribute('data-phase', 'expanded');
-      expect(expanding.records.filter((r) => r.id.startsWith('glass-pill:')).map((r) => r.id), 'the pill\'s spring under reduced motion').toEqual([]);
-      await faces.click();
-      await expect(pill(page)).toHaveAttribute('data-phase', 'compact');
-
-      // pill -> stage, then T, then S: each is a 150ms crossfade in place.
-      await fakeMedia(page, { joined: true });
-      const opening = await measureMoment(page, async () => {
-        await pill(page).getByRole('button', { name: "Watch Vincent's screen" }).click();
-      }, 600);
-      await expect(stagePane(page)).toBeVisible();
-      await expectCrossfade('reduced: pill -> stage', opening, constants.STAGE_CROSSFADE_MS, 'STAGE_CROSSFADE_MS', isMorph);
-      await settled(page);
-
-      const theater = await measureMoment(page, async () => {
-        await page.keyboard.press('t');
-      }, 600);
-      await expectCrossfade('reduced: theater (T)', theater, constants.STAGE_CROSSFADE_MS, 'STAGE_CROSSFADE_MS', isMorph);
-      await settled(page);
-
-      await page.keyboard.press('t');
-      await settled(page);
-      const browse = await measureMoment(page, async () => {
-        await page.keyboard.press('s');
-      }, 600);
-      await expectCrossfade('reduced: browse (S)', browse, constants.STAGE_CROSSFADE_MS, 'STAGE_CROSSFADE_MS', isMorph);
-      await settled(page);
-    });
-
-    test('the phone\'s screen change and the room are 150ms crossfades', async ({ page }) => {
-      test.setTimeout(120_000);
-      await page.emulateMedia({ reducedMotion: 'reduce' });
-      await open(page, { width: 390, height: 844 });
-      const toPlaces = await measureMoment(page, async () => {
-        await page.getByRole('button', { name: 'Back to places' }).click();
-      }, 500);
-      await expect(page.locator('.glass-frame')).toHaveAttribute('data-screen', 'places');
-      await expectCrossfade('reduced: phone screens', toPlaces, constants.PHONE_FADE_MS, 'PHONE_FADE_MS', (r) => r.id.startsWith('glass-phone:'));
-      // Both screens crossfade: an opacity animation each, and no slide.
-      const screens = toPlaces.records.filter((r) => r.id.startsWith('glass-phone:'));
-      expect(screens.length).toBeGreaterThanOrEqual(2);
-      for (const record of screens) expect(record.properties.includes('opacity'), `${record.id} crossfades`).toBe(true);
-    });
-
-    test('a server switch eases the room over 150ms, not 1.2s', async ({ page }) => {
-      test.setTimeout(120_000);
-      await page.emulateMedia({ reducedMotion: 'reduce' });
-      await open(page);
-      const basecamp = page.getByRole('navigation', { name: 'Servers' }).getByRole('button', { name: /^Basecamp/ });
-      const crossfade = await measureMoment(page, async () => {
-        await basecamp.click();
-      }, 800);
-      await expect(page.locator('.glass-room-backdrop')).toHaveAttribute('data-room-source', /^(banner|icon)$/);
-      await expectCrossfade('reduced: room', crossfade, constants.glassMsReduced, '--glass-ms-reduced', transitionOf('opacity', 'glass-room-backdrop__layer'));
-    });
+    };
+    const run = async (label: string, act: () => Promise<unknown>, named: string[], absent: string[] = []) => {
+      await markMoment(page);
+      await act();
+      await rest(page, label);
+      const records = await describeMoment(page);
+      expectMoment(label, records, { plays: [], absent: absent.map((id) => ({ cites: `${id} is not played under reduced motion`, match: web(id) })) });
+      fadesOnly(label, records, named);
+    };
+    await run('switch place', () => dockItem(page, 'gameNight').click(), ['ix-pane:in', 'ix-main:title', 'ix-main:feed']);
+    await park(page);
+    await run('switch channel', () => channelRow(page, 'gnLfg').click(), ['ix-select:fade', 'ix-main:title', 'ix-main:feed']);
+    await run('back to Fuel', () => dockItem(page, 'fuel').click(), ['ix-pane:in']);
+    await park(page);
+    await run('a room goes live', () => h.step(voiceJoin, { who: 'jeremy', room: 'fuelRoomGeneral' }), ['ix-card:card-in']);
+    await run('another server goes live: no ping', () => h.step(voiceJoin, { who: 'brendan', room: 'bcRoomWorkshop' }), [], ['ix-dock:ping']);
+    await run('a lift is gone', () => dockItem(page, 'gameNight').hover(), []);
+    await park(page);
+    await run('join', () => roomCard(page).getByTestId('ix-card-join').click(), ['ix-card:fly']);
+    await run('open call', () => roomCard(page, 'yours').getByTestId('ix-card-open-call').click(), ['ix-call:open']);
+    await run('back to chat', () => page.getByTestId('ix-call-back').click(), ['ix-call:close']);
+    await later(h, '21:46:00');
+    await run('a message arrives', () => h.step('message', { channel: 'fuelGeneral', who: 'jeremy', text: 'you coming?' }), ['ix-timeline:arrive']);
+    // CSS moments fade too (the app-wide switch would otherwise snap them).
+    await markMoment(page);
+    await page.getByRole('button', { name: 'Search messages' }).click();
+    await rest(page, 'reduced: a sheet');
+    const sheet = (await describeMoment(page)).filter(cssAnimation('ix-fade-in'));
+    expect(sheet.map((r) => [r.duration, r.properties.join(',')]), 'a sheet crossfades in 150ms').toEqual([[REDUCED_MS, 'opacity']]);
+    await page.keyboard.press('Escape');
+    await rest(page, 'reduced: the sheet closed');
+    await markMoment(page);
+    await page.getByRole('button', { name: 'Server options' }).click();
+    await rest(page, 'reduced: a menu');
+    const menu = (await describeMoment(page)).filter(cssAnimation('ix-fade-in'));
+    expect(menu.map((r) => [r.duration, r.properties.join(',')]), 'a menu crossfades in 150ms').toEqual([[REDUCED_MS, 'opacity']]);
+    await page.keyboard.press('Escape');
+    // The waveform is still: talking draws it, but nothing runs.
+    await h.step(speak, { who: 'jeremy', room: 'fuelRoomGeneral', speaking: true });
+    await page.waitForTimeout(600);
+    expect(await runningNow(page, { talking: true }), 'the waveform is still').toEqual([]);
   });
+});
 
-  test('motion is on when it should be: the waveform loops, and is the only loop', async ({ page }) => {
-    await open(page);
-    // The counterpart of the reduced-motion case: a gate that never saw a loop would pass "no loops" on a dead page.
-    const loops = await page.evaluate(() =>
-      document
-        .getAnimations()
-        .filter((a) => (a.effect as KeyframeEffect | null)?.getComputedTiming?.().iterations === Infinity && a.playState === 'running')
-        .map((a) => (a as CSSAnimation).animationName || a.id || 'anonymous'),
-    );
-    expect(loops.length, 'the talking waveform is on the pill').toBeGreaterThan(0);
+test.describe('the gate catches what it guards', () => {
+  test('a moment given a height or box-shadow animation fails the gate, as does a drifted duration', async ({ page }, info) => {
+    await open(page, info, (h) => h.routes.channel('gnLounge'));
+    await markMoment(page);
+    await channelRow(page, 'gnLfg').click();
+    // Someone "improves" the glide: a height animation beside it, and a shadow transition on a row.
+    await page.evaluate(() => {
+      const selection = document.querySelector<HTMLElement>('.ix-sel');
+      const grow = selection?.animate([{ height: '51px' }, { height: '60px' }], { duration: 450, easing: 'cubic-bezier(0.32, 0.72, 0, 1)' });
+      if (grow) grow.id = 'ix-select:glide';
+      const row = document.querySelector<HTMLElement>('[data-testid="ix-channel-row"]');
+      if (row) {
+        row.style.transition = 'box-shadow 450ms';
+        row.style.boxShadow = '0 0 0 4px red';
+      }
+    });
+    await page.waitForTimeout(1_200);
+    const records = await describeMoment(page);
+    const glide = { plays: [{ cites: '§5.2 glide', match: (r: MotionRecord) => web('ix-select:glide')(r) && r.properties.includes('transform'), duration: 450, curve: SPRING }] };
+    expect(() => expectMoment('self-test: height', records, glide)).toThrow(/height/);
+    expect(() => expectMoment('self-test: box-shadow', records, glide)).toThrow(/boxShadow/);
+    // And a duration that is not the spec's.
+    const clean = records.filter((r) => r.properties.every((p) => LAW.has(p) || COLORS.has(p)));
+    expect(() => expectMoment('self-test: duration', clean, { plays: [{ ...glide.plays[0], duration: 300 }] })).toThrow(/duration/);
+    // The same record without the injected animations passes.
+    expect(() => expectMoment('self-test: clean', clean, glide)).not.toThrow();
   });
 });

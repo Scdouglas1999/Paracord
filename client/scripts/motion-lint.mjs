@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * The motion lint (docs/glass-spec.md §9 — only transform and opacity move).
+ * The motion lint (docs/index-spec.md §1.9 and §5: only transform and opacity
+ * move; §1.2: nothing loops at rest. It began as docs/glass-spec.md §9).
  *
  * "Only `transform` and `opacity` animate." A transition or a keyframe that
  * moves `box-shadow`, `width`, `height`, `filter`, `top` or `left` repaints (or
@@ -37,6 +38,17 @@
  * transform/opacity. An allowance that no longer matches anything fails the
  * run too, so the list cannot rot.
  *
+ * LOOPS (IX-18). "Quiet at rest, alive on events": the only continuous motion
+ * is the talking waveform, and only while someone talks (index-spec §1.2). So
+ * an animation that repeats forever (a CSS `infinite`, Web Animations
+ * `iterations: Infinity`, Tailwind's `animate-pulse`/`-ping`/`-bounce`) needs a
+ * named allowance in `LOOPS` below saying what event it lasts for (someone
+ * talking, someone typing, a request in flight), and `animate-spin` is a
+ * spinner, which exists only while something loads. On the WebKitGTK desktop
+ * a loop at rest is idle CPU the owner pays for all day. The running gate
+ * (`e2e/motion-gate.spec.ts`) checks the other half: nothing is animating two
+ * seconds after any §5 moment.
+ *
  * Run: `npm run test:motion-lint` (also part of `npm test`).
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs';
@@ -67,6 +79,24 @@ const ALLOWED = [
     'box-shadow: none',
     'the other half of the same edge-on swap in the tile flip',
   ],
+];
+
+/**
+ * Animations allowed to repeat forever: [file, a substring of the rule's
+ * selector, what event it lasts for]. Each must be drawn only for as long as
+ * that event goes on; nothing here may be on screen at rest.
+ */
+const LOOPS = [
+  ['styles/ix-card.css', '.ix-wave > i', 'the talking waveform: drawn only while that person talks (index-spec §4.4), still under reduced motion'],
+  ['styles/glass.css', '.glass-wave', 'the Glass waveform, the same rule; retired with the Glass shells (IX-19)'],
+  ['styles/ix-timeline.css', '.ix-typing__bubble', 'the typing dots: drawn only while someone is typing'],
+  ['styles/primitives.css', '.pc-typing-dots', 'typing dots (the design tokens page): only while someone is typing'],
+  ['styles/primitives.css', '.pc-speaking', 'the speaking ring (the design tokens page): only while that person speaks'],
+  ['styles/primitives.css', '.pc-window-breath.is-writing', 'only while someone is writing (`is-writing`)'],
+  ['styles/primitives.css', '.pc-mark-breathe', 'the mark on the app’s loading screen: only while the app starts'],
+  ['styles/primitives.css', '.pc-sweep', 'an upload’s progress: only while the upload runs'],
+  ['styles/ix-cards.css', '.ix-bot-btn__busy', 'a bot button’s request in flight: only until it answers'],
+  ['styles/sports.css', '.pc-sports-skeleton-park', 'a loading skeleton: only until the game’s detail arrives'],
 ];
 
 function walk(dir, out = []) {
@@ -136,6 +166,16 @@ function lintCss(file, raw) {
       }
     }
   }
+  // Loops: `infinite` in an animation shorthand or its iteration count.
+  const loop = /(?:^|[;{\s])(animation(?:-iteration-count)?)\s*:\s*([^;}]+)/g;
+  for (const m of css.matchAll(loop)) {
+    if (!/\binfinite\b/.test(m[2])) continue;
+    const before = css.slice(0, m.index + m[0].indexOf(m[1]));
+    const open = before.lastIndexOf('{');
+    const close = before.lastIndexOf('}', open);
+    const selector = before.slice(close + 1, open).trim().replace(/\s+/g, ' ');
+    findings.push({ line: lineOf(css, m.index), text: `${selector} { ${m[1]}: ${m[2].trim()} }`, why: 'loops forever', loop: true, selector });
+  }
   return findings;
 }
 
@@ -148,6 +188,13 @@ function lintScript(file, src) {
     for (const m of src.matchAll(/matchMedia\(\s*['"`]\(prefers-reduced-motion/g)) {
       findings.push({ line: lineOf(src, m.index), text: m[0], why: 'reads the OS setting directly — use useReducedMotion()/prefersReducedMotion()' });
     }
+  }
+  // Loops: Tailwind's (a spinner is the one that only exists while something loads).
+  for (const m of src.matchAll(/\banimate-(pulse|ping|bounce)\b/g)) {
+    findings.push({ line: lineOf(src, m.index), text: m[0], why: 'loops forever (Tailwind)', loop: true, selector: m[0] });
+  }
+  for (const m of src.matchAll(/iterations\s*:\s*Infinity/g)) {
+    findings.push({ line: lineOf(src, m.index), text: m[0], why: 'a Web Animation that loops forever', loop: true, selector: m[0] });
   }
   // Tailwind utilities.
   for (const m of src.matchAll(/\btransition-(all|shadow)\b/g)) {
@@ -193,6 +240,8 @@ function lintScript(file, src) {
 
 const failures = [];
 const used = new Set();
+const usedLoops = new Set();
+const loopFailures = [];
 let scanned = 0;
 for (const full of walk(SRC)) {
   const file = relative(SRC, full).split(sep).join('/');
@@ -200,6 +249,15 @@ for (const full of walk(SRC)) {
   scanned += 1;
   const found = file.endsWith('.css') ? lintCss(file, text) : lintScript(file, text);
   for (const f of found) {
+    if (f.loop) {
+      const loopAllowance = LOOPS.findIndex(([f2, needle]) => f2 === file && f.selector.includes(needle));
+      if (loopAllowance >= 0) {
+        usedLoops.add(loopAllowance);
+        continue;
+      }
+      loopFailures.push(`${file}:${f.line}  ${f.why}\n    ${f.text.slice(0, 160)}`);
+      continue;
+    }
     const allowance = ALLOWED.findIndex(([f2, needle]) => f2 === file && f.text.includes(needle));
     if (allowance >= 0) {
       used.add(allowance);
@@ -209,17 +267,28 @@ for (const full of walk(SRC)) {
   }
 }
 
-const stale = ALLOWED.filter((_, i) => !used.has(i)).map(([file, needle]) => `${file} — "${needle}"`);
+const stale = [
+  ...ALLOWED.filter((_, i) => !used.has(i)).map(([file, needle]) => `${file} — "${needle}"`),
+  ...LOOPS.filter((_, i) => !usedLoops.has(i)).map(([file, needle]) => `${file} — loop "${needle}"`),
+];
 
-if (failures.length || stale.length) {
+if (failures.length || loopFailures.length || stale.length) {
+  if (loopFailures.length) {
+    console.error(`Motion lint: ${loopFailures.length} animation(s) that loop forever with no named event (index-spec §1.2, nothing loops at rest):\n`);
+    for (const f of loopFailures) console.error(`  ${f}`);
+    console.error('\nPlay it on the event instead, or name in LOOPS what it lasts for (someone talking, a request in flight).\n');
+  }
   if (failures.length) {
     console.error(`Motion lint: ${failures.length} animation(s) of a property that may not animate (only transform and opacity may):\n`);
     for (const f of failures) console.error(`  ${f}`);
-    console.error('\nUse a still layer whose opacity crossfades, or a transform. docs/glass-spec.md §9.');
+    console.error('\nUse a still layer whose opacity crossfades, or a transform. docs/index-spec.md §1.9, §5.');
   }
   if (stale.length) {
     console.error(`\nMotion lint: allowances that no longer match anything — remove them:\n  ${stale.join('\n  ')}`);
   }
   process.exit(1);
 }
-console.log(`Motion lint passed: ${scanned} files animate only transform and opacity (${ALLOWED.length} named allowances, each with its reason).`);
+console.log(
+  `Motion lint passed: ${scanned} files animate only transform and opacity (${ALLOWED.length} named allowances), `
+  + `and nothing loops but ${LOOPS.length} named loops, each for as long as its event lasts.`,
+);

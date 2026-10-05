@@ -20,6 +20,14 @@ import { IX_EASE, IX_REDUCED_MS, IX_SPRING, canAnimate, ixReduced, invertTransfo
  */
 
 export const CARD_IN_MS = 600;
+/**
+ * The card waits this long while what it pushes makes room (IX-18). The card is
+ * translucent: entering on the same beat as the 600ms push, the rows still
+ * sliding down showed through it for the first frames (the prototype does not
+ * push at all, so never had them under it). By 120ms the spring has moved the
+ * rows two thirds of the way.
+ */
+export const CARD_IN_DELAY_MS = 120;
 export const CARD_OUT_MS = 300;
 export const ROW_IN_MS = 500;
 export const ROW_OUT_MS = 250;
@@ -48,7 +56,9 @@ export function playEnter(element: HTMLElement | null, kind: 'card' | 'row'): An
       { opacity: 0, transform: ARRIVE },
       { opacity: 1, transform: 'none' },
     ],
-    { duration: kind === 'card' ? CARD_IN_MS : ROW_IN_MS, easing: IX_SPRING },
+    kind === 'card'
+      ? { duration: CARD_IN_MS, delay: CARD_IN_DELAY_MS, easing: IX_SPRING, fill: 'backwards' }
+      : { duration: ROW_IN_MS, easing: IX_SPRING },
   );
   animation.id = id;
   return animation;
@@ -154,8 +164,7 @@ export interface FlightResult {
 /**
  * Your face flies from the toolbar's avatar (`from`) into its row (`face`, now
  * laid out at its place), translate and one scale, 750ms spring, above the
- * other rows. `holds` (your name, the card's new controls) wait at opacity 0
- * until 45% and fade in. Reduced motion: they fade in over 150ms, nothing flies.
+ * other rows. `holds` (your name) wait at opacity 0 until 45% and fade in. Reduced motion: they fade in over 150ms, nothing flies.
  */
 export function playFlight(face: HTMLElement | null, from: RectLike | null, holds: readonly HTMLElement[]): FlightResult {
   const animations: Animation[] = [];

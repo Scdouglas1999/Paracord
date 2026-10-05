@@ -75,6 +75,15 @@ function usePrimed(): () => boolean {
 /**
  * Push what is below the slot when its height changes (§5.5): down with the
  * card's arrival (600ms) or a row's (500ms), up when something left (450ms).
+ *
+ * Most changes come with a render of the slot (a card or a row arriving). One
+ * does not: a person's row that has played its exit (`PeopleRows` keeps it for
+ * its 250ms fade) is taken out by the rows themselves. A ResizeObserver hears
+ * that one, so what is below FLIPs up after the row has gone ("then rows below
+ * FLIP up", §5.5) instead of jumping, and the height the next render compares
+ * against is the one on screen (a stale one pushed twice when the room then
+ * emptied). A change a render already played is not played again: the layout
+ * effect has updated the height by the time the observer reads it.
  */
 function usePushBelow(box: () => HTMLElement | null, mayAnimate: () => boolean, place: string, shownKey: string | null) {
   const last = useRef<{ height: number; place: string; key: string | null } | null>(null);
@@ -89,6 +98,33 @@ function usePushBelow(box: () => HTMLElement | null, mayAnimate: () => boolean, 
     const arrived = previous.key !== shownKey && shownKey !== null;
     playPush(contentBelow(element), delta, delta < 0 ? PUSH_UP_MS : arrived ? CARD_IN_MS : ROW_IN_MS);
   });
+
+  const observed = useRef<{ element: HTMLElement; observer: ResizeObserver } | null>(null);
+  useEffect(() => {
+    const element = box();
+    if (observed.current?.element === element) return;
+    observed.current?.observer.disconnect();
+    observed.current = null;
+    if (!element || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => {
+      const previous = last.current;
+      const height = element.offsetHeight;
+      if (!previous || Math.abs(height - previous.height) < 0.5) return;
+      last.current = { ...previous, height };
+      if (!mayAnimate() || height > previous.height) return;
+      playPush(contentBelow(element), height - previous.height, PUSH_UP_MS);
+    });
+    observer.observe(element);
+    observed.current = { element, observer };
+  });
+  useEffect(
+    () => () => {
+      // Forget it too: StrictMode runs this and then the effect above again.
+      observed.current?.observer.disconnect();
+      observed.current = null;
+    },
+    [],
+  );
 }
 
 /* ---- Inline -------------------------------------------------------------------- */
