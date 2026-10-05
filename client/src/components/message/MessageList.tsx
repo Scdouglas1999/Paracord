@@ -1221,7 +1221,7 @@ function OwnedMessageList({
   useLayoutEffect(() => {
     const before = closeUp.current;
     closeUp.current = null;
-    if (before) queueMicrotask(() => glideFrom(before, { duration: 450, id: 'ix-timeline:close-up' }));
+    if (before) queueMicrotask(() => glideFrom(before, { duration: 205, id: 'ix-timeline:close-up' }));
   });
   useEffect(() => {
     if (!catchUp || !atBottom) return undefined;
@@ -1232,7 +1232,7 @@ function OwnedMessageList({
         markCaughtUpRef.current();
         return;
       }
-      fade = divider.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 300, easing: IX_EASE, fill: 'forwards' });
+      fade = divider.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 135, easing: IX_EASE, fill: 'forwards' });
       fade.id = 'ix-timeline:new-out';
       fade.finished.then(() => markCaughtUpRef.current(), () => {});
     }, NEW_DIVIDER_LINGER_MS);

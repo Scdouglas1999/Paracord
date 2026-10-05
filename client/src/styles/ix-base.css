@@ -18,7 +18,7 @@
    Glass sheet says about an avatar. Rules that a ring or a bite must be able to replace
    are written inside `:where()` (zero specificity) on purpose.
 
-   Nothing here animates anything but a color, in 120ms. Reduced motion needs no
+   Nothing here animates anything but a color, in 55ms. Reduced motion needs no
    switch: a color change is not motion.
    ============================================================================= */
 
@@ -252,7 +252,7 @@
   font-weight: 700;
   line-height: 1;
   white-space: nowrap;
-  transition: background-color 120ms var(--ix-ease);
+  transition: background-color 55ms var(--ix-ease);
 }
 
 .ix-cream:hover:not(:disabled):not([aria-disabled='true']) {
@@ -292,8 +292,8 @@
   color: var(--ix-ink-2);
   font-family: inherit;
   transition:
-    background-color 120ms var(--ix-ease),
-    color 120ms var(--ix-ease);
+    background-color 55ms var(--ix-ease),
+    color 55ms var(--ix-ease);
 }
 
 .ix-ctl:hover:not(:disabled) {
@@ -342,7 +342,7 @@
   font-weight: 400;
   line-height: 1;
   white-space: nowrap;
-  transition: background-color 120ms var(--ix-ease);
+  transition: background-color 55ms var(--ix-ease);
 }
 
 .ix-chip:hover:not(:disabled) {

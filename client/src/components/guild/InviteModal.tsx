@@ -63,7 +63,7 @@ function InviteReadout({
     <div
       className={cn(
         'pc-well flex h-11 items-center gap-2 py-1 pl-3 pr-1',
-        'transition-opacity duration-[120ms] ease-[var(--ix-ease)]',
+        'transition-opacity duration-[55ms] ease-[var(--ix-ease)]',
         // Keyed on the field, not `focus-within`: this well also holds Copy,
         // which draws its own ring. One ring per control.
         'has-[>input:focus-visible]:[outline:var(--ix-focus)] has-[>input:focus-visible]:[outline-offset:var(--ix-focus-offset)]',
@@ -76,7 +76,7 @@ function InviteReadout({
 }
 
 /**
- * A button's label that crossfades to its done word and back (§5.16, 200ms; the
+ * A button's label that crossfades to its done word and back (§5.16, 90ms; the
  * parent holds `done` for 2s). Both words sit in one grid cell so the button
  * keeps the width of the longer one and nothing around it moves.
  */

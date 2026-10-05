@@ -3,7 +3,7 @@
 /* Primary button on the entry pages ("Log in", "Create account"): the cream
    action, the ONE filled button on a screen. 44 tall at radius 12 so it sits in
    the column with the 44px fields (§6.14). Hover is one step lighter, press one
-   step darker, 120ms. Nothing scales. */
+   step darker, 55ms. Nothing scales. */
 .btn-primary {
   position: relative;
   isolation: isolate;
@@ -24,9 +24,9 @@
   white-space: nowrap;
   cursor: pointer;
   transition:
-    background-color 120ms var(--ix-ease),
-    color 120ms var(--ix-ease),
-    opacity 120ms var(--ix-ease);
+    background-color 55ms var(--ix-ease),
+    color 55ms var(--ix-ease),
+    opacity 55ms var(--ix-ease);
 }
 
 @media (hover: hover) {
@@ -61,7 +61,7 @@
   font-size: 0.9375rem;
   line-height: 1.4;
   outline: none;
-  transition: background-color 120ms var(--ix-ease);
+  transition: background-color 55ms var(--ix-ease);
 }
 
 .input-field::placeholder {
@@ -88,8 +88,8 @@
   border: none;
   cursor: pointer;
   transition:
-    color 120ms var(--ix-ease),
-    background-color 120ms var(--ix-ease);
+    color 55ms var(--ix-ease),
+    background-color 55ms var(--ix-ease);
 }
 
 @media (hover: hover) {
@@ -123,7 +123,7 @@
   background: transparent;
   border: none;
   cursor: pointer;
-  transition: background-color 120ms var(--ix-ease);
+  transition: background-color 55ms var(--ix-ease);
 }
 
 @media (hover: hover) {

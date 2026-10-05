@@ -87,7 +87,7 @@ pre, code,
     color: var(--text-secondary);
     border: none;
     background: transparent;
-    /* The §5.1 pressable recipe: the hover wash and a 0.98 press, 120ms on
+    /* The §5.1 pressable recipe: the hover wash and a 0.98 press, 55ms on
        the one ease-out (see .pc-pressable in primitives.css). */
     transition:
       background-color var(--duration-fast) var(--ease-out),

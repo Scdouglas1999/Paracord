@@ -185,9 +185,9 @@ test.describe('dialogs and confirms (§6.12)', () => {
     const dialog = running.find((entry) => entry.name === 'pc-dialog-in');
     const scrim = running.find((entry) => entry.name === 'pc-fade');
     expect(dialog, 'the dialog animates in').toBeTruthy();
-    expect(dialog?.duration).toBe(220);
+    expect(dialog?.duration).toBe(100);
     expect(dialog?.properties.sort()).toEqual(['opacity', 'transform']);
-    expect(scrim?.duration).toBe(200);
+    expect(scrim?.duration).toBe(90);
     await page.waitForTimeout(500);
     const dialogEl = page.getByRole('alertdialog');
     const cream = await dialogEl.getByRole('button').evaluateAll((buttons) =>
@@ -220,7 +220,7 @@ test.describe('toasts (§5.18, §6.8)', () => {
         })),
     );
     expect(entering).toHaveLength(1);
-    expect(entering[0].duration).toBe(300);
+    expect(entering[0].duration).toBe(135);
     expect(entering[0].properties.sort()).toEqual(['opacity', 'transform']);
     await page.waitForTimeout(450);
     const toast = page.getByRole('status').filter({ hasText: 'Link copied' });

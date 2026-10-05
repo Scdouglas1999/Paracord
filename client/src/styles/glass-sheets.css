@@ -13,7 +13,7 @@
    Tokens only: the literal-color lint covers this file. Unlayered, after the
    frame and the conversation, so it beats the Lantern utilities on the panels
    it restyles in place. Only transform and opacity animate (the motion lint);
-   hover and press are background-color changes over 120ms; nothing scales on
+   hover and press are background-color changes over 55ms; nothing scales on
    press. Reduced motion is the global `data-motion` switch.
    ============================================================================= */
 
@@ -93,7 +93,7 @@
   text-align: start;
   color: var(--ink-1);
   background-color: transparent;
-  transition: background-color 120ms var(--ix-ease);
+  transition: background-color 55ms var(--ix-ease);
 }
 
 button.glass-sheet-row,
@@ -182,9 +182,9 @@ button.glass-sheet-row:active:not(:disabled) {
   cursor: pointer;
   opacity: 0;
   transition:
-    opacity 120ms var(--ix-ease),
-    background-color 120ms var(--ix-ease),
-    color 120ms var(--ix-ease);
+    opacity 55ms var(--ix-ease),
+    background-color 55ms var(--ix-ease),
+    color 55ms var(--ix-ease);
 }
 
 .glass-sheet-row:hover .glass-sheet-row__action,
@@ -230,7 +230,7 @@ a.glass-sheet-card {
   font: inherit;
   text-align: start;
   cursor: pointer;
-  transition: background-color 120ms var(--ix-ease);
+  transition: background-color 55ms var(--ix-ease);
 }
 
 button.glass-sheet-card:hover,
@@ -341,7 +341,7 @@ a.glass-sheet-card:hover {
   color: var(--ink-1);
   background-color: var(--ix-fill-field);
   box-shadow: inset 0 0 0 1px var(--ix-edge-lit);
-  transition: background-color 120ms var(--ix-ease);
+  transition: background-color 55ms var(--ix-ease);
 }
 
 .glass-sheet-field:hover {
@@ -388,7 +388,7 @@ a.glass-sheet-card:hover {
   font-weight: 600;
   color: var(--ink-1);
   background-color: var(--ix-fill-ctl);
-  transition: background-color 120ms var(--ix-ease);
+  transition: background-color 55ms var(--ix-ease);
 }
 
 button.glass-sheet-chip {
@@ -425,8 +425,8 @@ button.glass-sheet-chip:hover {
   background-color: transparent;
   cursor: pointer;
   transition:
-    background-color 120ms var(--ix-ease),
-    color 120ms var(--ix-ease);
+    background-color 55ms var(--ix-ease),
+    color 55ms var(--ix-ease);
 }
 
 .glass-sheet-tab:hover {
@@ -958,8 +958,8 @@ button.glass-person__open {
   background-color: transparent;
   cursor: pointer;
   transition:
-    background-color 120ms var(--ix-ease),
-    color 120ms var(--ix-ease);
+    background-color 55ms var(--ix-ease),
+    color 55ms var(--ix-ease);
 }
 
 .glass-sheet-thread__parent:hover:not(:disabled) {

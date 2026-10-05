@@ -8,7 +8,7 @@ import { motionToken, ms } from './tokens';
  * `<RollingNumber>` — §5.1's "numbers re-roll".
  *
  * Any count that changes flips vertically: the old value rolls up and out, the
- * new one rolls up and in, 180ms (`--duration-roll`). It only ever animates on
+ * new one rolls up and in, 80ms (`--duration-roll`). It only ever animates on
  * a CHANGE — a count that is simply rendered has not been caused by anybody, and
  * §5.3 forbids animating on first paint.
  *

@@ -5,8 +5,8 @@ import { IX_REDUCED_MS, IX_SPRING, canAnimate, ixReduced } from './curves';
  * title and the new feed come in, each on its own beat, from the direction the
  * selection moved in the sidebar.
  *
- *   title   from translateY(dir × 14 + 4px), opacity 0, 420ms spring
- *   feed    from translateY(dir × 22px),     opacity 0, 480ms spring
+ *   title   from translateY(dir × 14 + 4px), opacity 0, 190ms spring
+ *   feed    from translateY(dir × 22px),     opacity 0, 220ms spring
  *
  * `dir` is the sign of the row index change in the sidebar (+1: the new row is
  * below the old one, so the new content comes up from below). A jump from
@@ -14,14 +14,14 @@ import { IX_REDUCED_MS, IX_SPRING, canAnimate, ixReduced } from './curves';
  * the feed only fades, which is how the prototype plays a server switch (its
  * `drawMain(true)` passes no direction while the sidebar slides across).
  *
- * Reduced motion: both fade in place, 150ms.
+ * Reduced motion: both fade in place, 100ms.
  *
  * Nothing fills forwards: each element rests at its own CSS state the moment
  * its animation ends, so `document.getAnimations()` is empty at rest.
  */
 
-export const MAIN_TITLE_IN_MS = 420;
-export const MAIN_FEED_IN_MS = 480;
+export const MAIN_TITLE_IN_MS = 190;
+export const MAIN_FEED_IN_MS = 220;
 export const MAIN_TITLE_SHIFT = 14;
 export const MAIN_TITLE_LIFT = 4;
 export const MAIN_FEED_SHIFT = 22;

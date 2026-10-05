@@ -185,7 +185,7 @@ export function StickerPicker({ guildId, onSelect, onClose, leaving = false }: S
                   onClick={() => onSelect(sticker.id)}
                   title={sticker.name}
                   aria-label={`Select sticker ${sticker.name}`}
-                  className="pc-focusable flex aspect-square items-center justify-center rounded-[10px] p-1 outline-none transition-colors duration-[120ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill)] active:bg-[var(--ix-fill-2)]"
+                  className="pc-focusable flex aspect-square items-center justify-center rounded-[10px] p-1 outline-none transition-colors duration-[55ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill)] active:bg-[var(--ix-fill-2)]"
                 >
                   <ResourceImage
                     src={imageUrl}

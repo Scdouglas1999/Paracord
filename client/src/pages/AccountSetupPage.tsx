@@ -276,7 +276,7 @@ function OwnedAccountSetupPage() {
                 type="button"
                 aria-label={copied ? 'Recovery phrase copied' : 'Copy recovery phrase'}
                 onClick={handleCopyPhrase}
-                className="pc-focusable mt-3 inline-flex h-9 items-center gap-1.5 rounded-[10px] px-2.5 text-[13.5px] font-semibold text-[var(--ix-ink-2)] transition-colors duration-[120ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill)] hover:text-[var(--ix-ink)]"
+                className="pc-focusable mt-3 inline-flex h-9 items-center gap-1.5 rounded-[10px] px-2.5 text-[13.5px] font-semibold text-[var(--ix-ink-2)] transition-colors duration-[55ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill)] hover:text-[var(--ix-ink)]"
               >
                 {copied ? <Check size={14} /> : <Copy size={14} />}
                 {copied ? 'Copied to clipboard' : 'Copy phrase'}
@@ -288,7 +288,7 @@ function OwnedAccountSetupPage() {
             {/* The control that enables Continue never lives inside the scroll
                 region: on a short window it landed below the fold, so Continue
                 stayed disabled with nothing on screen explaining why. */}
-            <label className="flex cursor-pointer items-start gap-2.5 rounded-[12px] bg-[var(--ix-fill-card)] px-4 py-3.5 shadow-[inset_0_0_0_1px_var(--ix-line)] transition-colors duration-[120ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill-card-hover)]">
+            <label className="flex cursor-pointer items-start gap-2.5 rounded-[12px] bg-[var(--ix-fill-card)] px-4 py-3.5 shadow-[inset_0_0_0_1px_var(--ix-line)] transition-colors duration-[55ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill-card-hover)]">
               <input
                 type="checkbox"
                 checked={savedPhrase}

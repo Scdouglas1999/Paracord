@@ -34,7 +34,7 @@ const SEL = {
   held: '[data-flight]',
 } as const;
 
-const OFFSETS = [0, 50, 110, 150, 260, 620] as const;
+const OFFSETS = [0, 25, 50, 70, 115, 280] as const;
 const FRAMES = path.join(outDir(), 'send');
 
 const composer = (page: Page) => page.locator(SEL.input);
@@ -195,7 +195,7 @@ test.describe('the send flight in the Index frame', () => {
     expect(landed.x + landed.width).toBeLessThanOrEqual(390);
   });
 
-  test('only transform, opacity and color move, on a 620ms flight, with no hang', async ({ page }) => {
+  test('only transform, opacity and color move, on a 280ms flight, with no hang', async ({ page }) => {
     const text = 'measure me';
     await open(page);
     await type(page, text);
@@ -231,7 +231,7 @@ test.describe('the send flight in the Index frame', () => {
     expect(flight.length).toBeGreaterThan(5);
     const allowed = new Set(['transform', 'opacity', 'color', 'backgroundColor', 'offset', 'easing', 'composite', 'computedOffset']);
     for (const animation of flight) for (const property of animation.props) expect(allowed.has(property), `${animation.id} animates ${property}`).toBe(true);
-    expect(flight.filter((a) => a.id.startsWith('data-motion-recipe:send-flight')).map((a) => a.duration)).toContain(620);
+    expect(flight.filter((a) => a.id.startsWith('data-motion-recipe:send-flight')).map((a) => a.duration)).toContain(280);
     expect(worst).toBeLessThan(250);
     await expectLanded(page, text);
   });

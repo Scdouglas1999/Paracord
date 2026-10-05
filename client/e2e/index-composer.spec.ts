@@ -180,7 +180,7 @@ test.describe('the message box', () => {
       'ix-composer:shape:top',
     ]);
     for (const animation of shape) {
-      expect(animation.duration, `${animation.id} is 500ms`).toBe(500);
+      expect(animation.duration, `${animation.id} is 225ms`).toBe(225);
       for (const prop of animation.props) if (!META.has(prop)) expect(prop, `${animation.id} animates ${prop}`).toBe('transform');
     }
 
@@ -202,7 +202,7 @@ test.describe('the message box', () => {
       'ix-composer:shape:top',
     ]);
     for (const animation of back) {
-      expect(animation.duration, `${animation.id} is 350ms`).toBe(350);
+      expect(animation.duration, `${animation.id} is 160ms`).toBe(160);
       for (const prop of animation.props) if (!META.has(prop)) expect(prop, `${animation.id} animates ${prop}`).toBe('transform');
     }
     expect((await box(page).boundingBox())?.height).toBe(52);
@@ -280,7 +280,7 @@ test.describe('the message box', () => {
     await expect(picker.getByRole('tab', { name: 'Emoji' })).toHaveAttribute('aria-selected', 'true');
     await expect(picker.getByRole('tab', { name: 'GIF' })).toBeVisible();
     await expect(picker.getByRole('tab', { name: 'Stickers' })).toBeVisible();
-    // Measured after its 180ms entrance (scale .97 and a fade).
+    // Measured after its 80ms entrance (scale .97 and a fade).
     await page.waitForTimeout(400);
     const rect = await picker.boundingBox();
     expect(Math.round(rect!.width)).toBe(360);

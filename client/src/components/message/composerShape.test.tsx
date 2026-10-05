@@ -9,7 +9,7 @@ describe('the three-slice move', () => {
     expect(composerShapeMove(52, 98)).toEqual({ offset: 46, midFrom: 4 / 50, duration: COMPOSER_GROW_MS });
   });
 
-  it('closes from 98 to 52 in 350ms: the top starts 46px higher, the middle 12.5 times taller', () => {
+  it('closes from 98 to 52 in 160ms: the top starts 46px higher, the middle 12.5 times taller', () => {
     expect(composerShapeMove(98, 52)).toEqual({ offset: -46, midFrom: 50 / 4, duration: COMPOSER_SHRINK_MS });
   });
 
@@ -111,7 +111,7 @@ describe('useComposerShape', () => {
     expect(part('mid')?.keyframes).toEqual([{ transform: `scaleY(${4 / 50})` }, { transform: 'none' }]);
     expect(part('tools')).toBeUndefined();
     for (const entry of played) {
-      expect(entry.options).toMatchObject({ duration: 500, fill: 'none' });
+      expect(entry.options).toMatchObject({ duration: 225, fill: 'none' });
       expect(entry.animation.id).toMatch(/^ix-composer:shape:/);
     }
   });
@@ -126,7 +126,7 @@ describe('useComposerShape', () => {
     setHeight(box, 52);
     observers[0]();
     expect(part('tools')?.keyframes).toEqual([{ transform: 'none' }, { transform: 'translateY(46px)' }]);
-    expect(part('top')?.options.duration).toBe(350);
+    expect(part('top')?.options.duration).toBe(160);
   });
 
   it('snaps a change the send flight makes, and under reduced motion', () => {

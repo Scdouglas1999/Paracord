@@ -19,8 +19,8 @@ import { cn } from '../../lib/utils';
  * centered, max 440 wide at `sm`, radius 20, the card color, a title 17/700, a
  * body 14 ink-2 and actions right-aligned (a text Cancel and one cream confirm;
  * a destructive confirm is the danger ink on its fill). Owns the portal, the scrim
- * (`--ix-scrim`, fading 200ms), the enter/exit motion (the panel from scale(.97) and
- * a fade, 220ms on the spring), ARIA wiring, focus trap and Escape handling.
+ * (`--ix-scrim`, fading 90ms), the enter/exit motion (the panel from scale(.97) and
+ * a fade, 100ms on the spring), ARIA wiring, focus trap and Escape handling.
  * Complex consumers that already manage their own focus trap
  * can opt out with `manageFocus={false}` and pass their own `panelRef`.
  *
@@ -186,7 +186,7 @@ export function ModalCloseButton({ className }: { className?: string }) {
       className={cn(
         'pc-focusable absolute right-3.5 top-3.5 flex h-9 w-9 items-center justify-center',
         'rounded-[11px] text-[var(--ix-ink-3)]',
-        'transition-colors duration-[120ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill)] hover:text-[var(--ix-ink)] active:bg-[var(--ix-fill-2)]',
+        'transition-colors duration-[55ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill)] hover:text-[var(--ix-ink)] active:bg-[var(--ix-fill-2)]',
         className,
       )}
     >

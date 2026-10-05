@@ -10,7 +10,7 @@ import { cn } from '../../../lib/utils';
  *            lights amber.
  *   text     a decision: Leave, Post to General, Mark read.
  *
- * Hover is one token step lighter, press one step darker, 120ms ease-out
+ * Hover is one token step lighter, press one step darker, 55ms ease-out
  * (glass.css). Nothing scales. The focus ring is the §9 one. The Index
  * buttons are `components/ix/primitives`.
  */

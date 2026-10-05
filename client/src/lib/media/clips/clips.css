@@ -23,7 +23,7 @@
   box-shadow: var(--sh-pane);
   color: var(--ink-1);
   transform: translateX(-50%);
-  animation: glass-clip-rise 400ms var(--glass-spring) both;
+  animation: glass-clip-rise 180ms var(--glass-spring) both;
 }
 
 .glass-stage[data-layout='phone'] .glass-clip-toast {

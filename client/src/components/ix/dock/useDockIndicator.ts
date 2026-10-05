@@ -2,8 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 
 import { IX_EASE, IX_REDUCED_MS, IX_SPRING, canAnimate, ixReduced } from '../motion';
 
-/** The indicator glides to the new item in 550ms on the spring (§5.1). */
-export const INDICATOR_GLIDE_MS = 550;
+/** The indicator glides to the new item in 250ms on the spring (§5.1). */
+export const INDICATOR_GLIDE_MS = 250;
 /** The indicator is 16 wide (§3.1), so its left edge is 8 left of an item's center. */
 const HALF_WIDTH = 8;
 
@@ -59,8 +59,8 @@ function glideBar(bar: HTMLElement, from: number, to: number): Animation | null 
  * current server is scrolled into view when the place changes, before the glide
  * is measured, so the bar travels to where the item will be.
  *
- * One Web Animation (`ix-dock:indicator`, transform, 550ms spring) from where
- * the bar was to where it is; reduced motion lands it with a 150ms fade.
+ * One Web Animation (`ix-dock:indicator`, transform, 250ms spring) from where
+ * the bar was to where it is; reduced motion lands it with a 100ms fade.
  *
  * Returns the three elements to attach: the dock's root, the servers' scroller
  * and the bar. (`currentKey` is the current place's key, or null when it is not

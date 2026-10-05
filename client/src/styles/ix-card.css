@@ -36,14 +36,14 @@
 }
 
 /* Two background layers: the live tint, and "yours" (stronger tint, edge and
-   glow) that crossfades over it when you join (§5.7, 400ms, opacity only). */
+   glow) that crossfades over it when you join (§5.7, 180ms, opacity only). */
 .ix-room-card__layer {
   position: absolute;
   inset: 0;
   z-index: -1;
   border-radius: inherit;
   pointer-events: none;
-  transition: opacity 400ms var(--ix-ease);
+  transition: opacity 180ms var(--ix-ease);
 }
 
 .ix-room-card__layer--live {
@@ -69,7 +69,7 @@
   opacity: 0;
 }
 
-/* A sidebar pane sliding out still draws the old place for 450ms. Your call is
+/* A sidebar pane sliding out still draws the old place for 205ms. Your call is
    not in it: it is travelling to the pinned slot (§5.4). */
 .ix-pane[data-leaving] .ix-room-card[data-ix-call-card] {
   visibility: hidden;
@@ -234,7 +234,7 @@
   border-radius: 7px;
   background: transparent;
   cursor: pointer;
-  transition: color 120ms var(--ix-ease);
+  transition: color 55ms var(--ix-ease);
 }
 
 .ix-card-row__watch:hover {
@@ -382,7 +382,7 @@
   padding: 0 8px;
 }
 
-/* "Open call" and "Back to chat" crossfade in place (§5.8, 200ms). Both sit in
+/* "Open call" and "Back to chat" crossfade in place (§5.8, 90ms). Both sit in
    one cell, which may be narrower than the longer label: each label centers
    and, in a narrow sidebar, ellipsizes rather than spill over its neighbors. */
 .ix-swap {
@@ -400,7 +400,7 @@
   opacity: 0;
   text-overflow: ellipsis;
   white-space: nowrap;
-  transition: opacity 200ms var(--ix-ease);
+  transition: opacity 90ms var(--ix-ease);
 }
 
 .ix-swap > span[data-on] {

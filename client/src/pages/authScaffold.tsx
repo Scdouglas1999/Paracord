@@ -279,7 +279,7 @@ export function AuthSteps({
           <span
             key={index}
             className={cn(
-              'h-[3px] flex-1 rounded-[var(--radius-full)] transition-colors duration-[200ms] ease-[var(--ix-ease)]',
+              'h-[3px] flex-1 rounded-[var(--radius-full)] transition-colors duration-[90ms] ease-[var(--ix-ease)]',
               index < step ? 'bg-[var(--ix-cream)]' : 'bg-[var(--ix-fill-2)]',
             )}
           />

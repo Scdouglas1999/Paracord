@@ -82,7 +82,7 @@ afterEach(() => {
 /* -------------------------------------------------------------------------- */
 
 describe('spring', () => {
-  const SPRING = { stiffness: 260, damping: 34, mass: 1 };
+  const SPRING = { stiffness: 1260, damping: 75, mass: 1 };
 
   it('starts at rest and travels the whole way', () => {
     expect(springProgress(0, SPRING)).toBeCloseTo(0, 6);
@@ -101,21 +101,21 @@ describe('spring', () => {
   });
 
   it('is critically damped and overdamped without overshoot at higher damping', () => {
-    for (const damping of [2 * Math.sqrt(260), 60]) {
+    for (const damping of [2 * Math.sqrt(1260), 130]) {
       let peak = 0;
-      for (let t = 0; t <= 1200; t += 2) peak = Math.max(peak, springProgress(t, { stiffness: 260, damping, mass: 1 }));
+      for (let t = 0; t <= 1200; t += 2) peak = Math.max(peak, springProgress(t, { stiffness: 1260, damping, mass: 1 }));
       expect(peak).toBeLessThanOrEqual(1.0001);
     }
   });
 
-  it('settles inside §5.3 budget of 500ms', () => {
+  it('settles inside §5.3 budget of 225ms', () => {
     const duration = springDuration(SPRING);
-    expect(duration).toBeGreaterThan(100);
-    expect(duration).toBeLessThanOrEqual(500);
+    expect(duration).toBeGreaterThan(45);
+    expect(duration).toBeLessThanOrEqual(225);
   });
 
   it('samples a linear() easing that starts at 0, ends exactly at 1, and never passes it', () => {
-    const easing = springLinearEasing(SPRING, { durationMs: 240, samples: 24 });
+    const easing = springLinearEasing(SPRING, { durationMs: 110, samples: 24 });
     expect(easing.startsWith('linear(')).toBe(true);
     const points = easing.slice('linear('.length, -1).split(',').map((n) => Number(n.trim()));
     expect(points).toHaveLength(25);
@@ -128,12 +128,12 @@ describe('spring', () => {
   it('hands a fresh animation the --ease-out token, and a retarget the sampled spring', () => {
     vi.stubGlobal('CSS', { supports: () => true });
     expect(springEasing(SPRING)).toBe(MOTION_TOKEN_FALLBACKS['--ease-out']);
-    const carried = springEasing({ ...SPRING, velocity: 4 }, { durationMs: 240 });
+    const carried = springEasing({ ...SPRING, velocity: 4 }, { durationMs: 110 });
     expect(carried.startsWith('linear(')).toBe(true);
     const points = carried.slice('linear('.length, -1).split(',').map((n) => Number(n.trim()));
     // Even a fast retarget is capped under the speed that would cross the mark.
     expect(Math.max(...points)).toBeLessThanOrEqual(1);
-    const fast = springEasing({ ...SPRING, velocity: 400 }, { durationMs: 240 });
+    const fast = springEasing({ ...SPRING, velocity: 400 }, { durationMs: 110 });
     const fastPoints = fast.slice('linear('.length, -1).split(',').map((n) => Number(n.trim()));
     expect(Math.max(...fastPoints)).toBeLessThanOrEqual(1);
   });
@@ -225,7 +225,7 @@ describe('the recipes', () => {
     }
   });
 
-  it('keeps every recipe under the 500ms ceiling', () => {
+  it('keeps every recipe under the 225ms ceiling', () => {
     const el = document.createElement('div');
     document.body.append(el);
     settleIn(el);
@@ -238,7 +238,7 @@ describe('the recipes', () => {
     for (const record of waapi.played) {
       const duration = Number(record.options.duration ?? 0);
       const delay = Number(record.options.delay ?? 0);
-      expect(duration + delay).toBeLessThanOrEqual(500);
+      expect(duration + delay).toBeLessThanOrEqual(225);
     }
   });
 
@@ -249,7 +249,7 @@ describe('the recipes', () => {
       return el;
     });
     stagger(els);
-    expect(waapi.played.map((record) => record.options.delay)).toEqual([0, 30, 60]);
+    expect(waapi.played.map((record) => record.options.delay)).toEqual([0, 15, 30]);
   });
 
   it('cancels the recipe it replaces rather than stacking on it', () => {
@@ -310,7 +310,7 @@ describe('<RollingNumber>', () => {
     const [outgoing, incoming] = waapi.played;
     expect(outgoing.keyframes[1].transform).toBe('translate3d(0, -100%, 0)');
     expect(incoming.keyframes[0].transform).toBe('translate3d(0, 100%, 0)');
-    expect(Number(outgoing.options.duration)).toBe(180);
+    expect(Number(outgoing.options.duration)).toBe(80);
   });
 
   it('announces the final value once, and the roll itself is hidden from AT', async () => {
@@ -638,8 +638,8 @@ describe('the lights changing', () => {
     expect(ids).toContain('data-motion-recipe:lights-in');
     const out = waapi.played.find((r) => r.animation.id === 'data-motion-recipe:lights-out')!;
     const back = waapi.played.find((r) => r.animation.id === 'data-motion-recipe:lights-in')!;
-    // The two halves add up to --duration-dim and no more (§5.3: 500ms).
-    expect(Number(out.options.duration) + Number(back.options.duration)).toBe(400);
+    // The two halves add up to --duration-dim and no more (§5.3: 225ms).
+    expect(Number(out.options.duration) + Number(back.options.duration)).toBe(180);
     // Opacity alone: the base is never transformed and never relaid out.
     for (const record of [out, back]) {
       for (const frame of record.keyframes) expect(Object.keys(frame)).toEqual(['opacity']);

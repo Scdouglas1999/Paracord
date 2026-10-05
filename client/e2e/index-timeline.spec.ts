@@ -321,7 +321,7 @@ test.describe('the timeline (§4.11)', () => {
     const seen = await page.evaluate(() => (window as unknown as { __ixArrive: Array<{ id: string; frames: Keyframe[]; duration: number; easing: string; composite: string; target: string }> }).__ixArrive);
     const pops = seen.filter((entry) => entry.id === 'ix-timeline:arrive');
     expect(pops).toHaveLength(1);
-    expect(pops[0].duration).toBe(550);
+    expect(pops[0].duration).toBe(250);
     expect(pops[0].easing).toBe('cubic-bezier(0.32, 0.72, 0, 1)');
     expect(pops[0].frames[0]).toMatchObject({ opacity: '0', transform: 'translateY(14px) scale(0.96)', transformOrigin: '0% 100%' });
     const glides = seen.filter((entry) => entry.id === 'ix-timeline:make-room');

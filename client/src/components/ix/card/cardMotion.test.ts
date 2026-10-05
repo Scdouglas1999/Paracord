@@ -75,28 +75,28 @@ function expectTransformOpacityOnly() {
 }
 
 describe('card motion', () => {
-  it('enter: the card 600ms and a row 500ms from translateY(-8px) scale(.97), spring', () => {
+  it('enter: the card 275ms and a row 225ms from translateY(-8px) scale(.97), spring', () => {
     playEnter(el(), 'card');
     playEnter(el(), 'row');
     expectTransformOpacityOnly();
     expect(calls[0].keyframes[0]).toEqual({ opacity: 0, transform: 'translateY(-8px) scale(0.97)' });
-    // The card waits 120ms behind the push it causes (IX-18), held at its start by `backwards`
+    // The card waits 55ms behind the push it causes (IX-18), held at its start by `backwards`
     // (which never outlasts the move: nothing fills after it ends).
     expect(calls[0].options).toMatchObject({ duration: CARD_IN_MS, delay: CARD_IN_DELAY_MS, easing: IX_SPRING, fill: 'backwards' });
     expect(calls[1].options).toMatchObject({ duration: ROW_IN_MS, easing: IX_SPRING });
     expect(calls[1].options.fill).toBeUndefined();
-    expect(CARD_IN_DELAY_MS).toBe(120);
-    expect([CARD_IN_MS, ROW_IN_MS]).toEqual([600, 500]);
+    expect(CARD_IN_DELAY_MS).toBe(55);
+    expect([CARD_IN_MS, ROW_IN_MS]).toEqual([275, 225]);
   });
 
-  it('leave: the card 300ms (reverse) and a row 250ms (fade and .97), ease; it fills because it is removed after', () => {
+  it('leave: the card 135ms (reverse) and a row 115ms (fade and .97), ease; it fills because it is removed after', () => {
     playLeave(el(), 'card');
     playLeave(el(), 'row');
     expectTransformOpacityOnly();
     expect(calls[0].options).toMatchObject({ duration: CARD_OUT_MS, easing: IX_EASE, fill: 'forwards' });
     expect(calls[1].keyframes[1]).toEqual({ opacity: 0, transform: 'scale(0.97)' });
     expect(calls[1].options.duration).toBe(ROW_OUT_MS);
-    expect([CARD_OUT_MS, ROW_OUT_MS]).toEqual([300, 250]);
+    expect([CARD_OUT_MS, ROW_OUT_MS]).toEqual([135, 115]);
   });
 
   it('push: displaced content plays back from where it was (translateY only)', () => {
@@ -116,7 +116,7 @@ describe('card motion', () => {
     expect(contentBelow(document.querySelector('.ix-side__pinned')).map((e) => e.id)).toEqual(['panes']);
   });
 
-  it('flight: your face flies from the toolbar avatar as a ghost (translate + one scale, 750ms spring); the rest holds until 45%', () => {
+  it('flight: your face flies from the toolbar avatar as a ghost (translate + one scale, 340ms spring); the rest holds until 45%', () => {
     const face = el('20,200,24,24');
     const name = el();
     const flight = playFlight(face, { left: 1228, top: 13, width: 32, height: 32 }, [name]);
@@ -135,7 +135,7 @@ describe('card motion', () => {
     expect(face.style.visibility).toBe('');
   });
 
-  it('pinned and inline: a translate-only move of 550ms, in place or as a copy on the document', () => {
+  it('pinned and inline: a translate-only move of 250ms, in place or as a copy on the document', () => {
     const card = el('12,124,292,160');
     playPinMove(card, { left: 12, top: 28, width: 292, height: 170 });
     const target = el('12,124,292,160');
@@ -148,14 +148,14 @@ describe('card motion', () => {
     expect(target.style.opacity).toBe('');
   });
 
-  it('reduced motion: moves are 150ms fades; displaced content does not move; nothing flies', () => {
+  it('reduced motion: moves are 100ms fades; displaced content does not move; nothing flies', () => {
     reduced.on = true;
     playEnter(el(), 'card');
     expect(playPush([el()], 40)).toEqual([]);
     playFlight(el(), { left: 0, top: 0, width: 32, height: 32 }, []);
     expect(document.querySelector('[data-ix-ghost]')).toBeNull();
     for (const call of calls) {
-      expect(call.options.duration).toBe(150);
+      expect(call.options.duration).toBe(100);
       for (const frame of call.keyframes) expect(Object.keys(frame)).toEqual(['opacity']);
     }
   });

@@ -51,11 +51,11 @@ describe('the preview roll', () => {
       { transform: 'translateY(9px)', opacity: 0 },
       { transform: 'none', opacity: 1 },
     ]);
-    expect(line.options).toMatchObject({ duration: 520, easing: 'cubic-bezier(0.32, 0.72, 0, 1)' });
+    expect(line.options).toMatchObject({ duration: 235, easing: 'cubic-bezier(0.32, 0.72, 0, 1)' });
     expect(line.target.textContent).toBe('Nick: yep');
     const [time] = played('ix-preview:time');
     expect(time.keyframes).toEqual([{ opacity: 0 }, { opacity: 1 }]);
-    expect(time.options.duration).toBe(400);
+    expect(time.options.duration).toBe(180);
   });
 
   it('plays nothing when a line first arrives (there was none), when it is the same, or in a pane that is sliding out', () => {
@@ -68,7 +68,7 @@ describe('the preview roll', () => {
     expect(waapi.played).toHaveLength(0);
   });
 
-  it('only moves transform and opacity, and under reduced motion only fades (150ms)', () => {
+  it('only moves transform and opacity, and under reduced motion only fades (100ms)', () => {
     const { rerender } = render(<Roll line="a" time="1" />);
     rerender(<Roll line="b" time="2" />);
     for (const record of waapi.played) expect(properties(record.keyframes).every((key) => key === 'transform' || key === 'opacity')).toBe(true);
@@ -77,7 +77,7 @@ describe('the preview roll', () => {
     rerender(<Roll line="c" time="3" />);
     const [line] = played('ix-preview:line');
     expect(line.keyframes).toEqual([{ opacity: 0 }, { opacity: 1 }]);
-    expect(line.options.duration).toBe(150);
+    expect(line.options.duration).toBe(100);
   });
 });
 
@@ -112,12 +112,12 @@ describe('the selection glide', () => {
     expect(waapi.played).toHaveLength(0);
   });
 
-  it('glides to the next row by translateY alone: 450ms on the spring curve', () => {
+  it('glides to the next row by translateY alone: 205ms on the spring curve', () => {
     const { getByTestId, rerender } = render(<Glide y={37} />);
     rerender(<Glide y={90} />);
     const [glide] = played('ix-select:glide');
     expect(glide.keyframes).toEqual([{ transform: 'translateY(37px)' }, { transform: 'translateY(90px)' }]);
-    expect(glide.options).toMatchObject({ duration: 450, easing: 'cubic-bezier(0.32, 0.72, 0, 1)' });
+    expect(glide.options).toMatchObject({ duration: 205, easing: 'cubic-bezier(0.32, 0.72, 0, 1)' });
     expect(properties(glide.keyframes)).toEqual(['transform']);
     expect(getByTestId('sel').style.transform).toBe('translateY(90px)');
     expect(getByTestId('sel').style.height).toBe('');
@@ -155,13 +155,13 @@ describe('the selection glide', () => {
     expect(waapi.played).toHaveLength(0);
   });
 
-  it('crossfades in place under reduced motion (150ms), with no travel', () => {
+  it('crossfades in place under reduced motion (100ms), with no travel', () => {
     configureMotion('reduced');
     const { rerender } = render(<Glide y={37} />);
     rerender(<Glide y={90} />);
     const [fade] = played('ix-select:fade');
     expect(fade.keyframes).toEqual([{ opacity: 0 }, { opacity: 1 }]);
-    expect(fade.options.duration).toBe(150);
+    expect(fade.options.duration).toBe(100);
     expect(played('ix-select:glide')).toHaveLength(0);
   });
 });
@@ -223,14 +223,14 @@ describe('closing a category', () => {
   });
   afterEach(() => restore());
 
-  it('fades the row that leaves (a ghost, 150ms) and moves the rest up by FLIP (450ms spring)', () => {
+  it('fades the row that leaves (a ghost, 70ms) and moves the rest up by FLIP (205ms spring)', () => {
     const { getByText, getByTestId } = render(<Collapse />);
     fireEvent.click(getByText('fold'));
     expect(getByTestId('rooms').closest('[data-state]')).toHaveAttribute('data-state', 'closed');
     // The voice channels label was at 206 and is at 153: it plays from where it was, as a translate only.
     const [move] = played('ix-collapse:move').filter((record) => record.target === getByTestId('rooms'));
     expect(move.keyframes).toEqual([{ transform: 'translate(0px, 53px)', transformOrigin: '0 0' }, { transform: 'none', transformOrigin: '0 0' }]);
-    expect(move.options).toMatchObject({ duration: 450, easing: 'cubic-bezier(0.32, 0.72, 0, 1)' });
+    expect(move.options).toMatchObject({ duration: 205, easing: 'cubic-bezier(0.32, 0.72, 0, 1)' });
     // The row that left is gone, and a copy of it fades where it was.
     expect(document.querySelector('[data-testid="row-b"]')).toBeNull();
     const ghost = getByTestId('ghosts').firstElementChild as HTMLElement;
@@ -240,7 +240,7 @@ describe('closing a category', () => {
     expect(ghost).not.toHaveAttribute('data-testid');
     const [fade] = played('ix-collapse:fade');
     expect(fade.keyframes).toEqual([{ opacity: 1 }, { opacity: 0 }]);
-    expect(fade.options.duration).toBe(150);
+    expect(fade.options.duration).toBe(70);
     // Settled: the ghost is removed, and only transform and opacity ever moved.
     act(() => fade.animation.finish());
     return Promise.resolve().then(() => {

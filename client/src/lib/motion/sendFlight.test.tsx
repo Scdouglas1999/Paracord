@@ -96,19 +96,19 @@ afterEach(() => {
 });
 
 describe('the approved flight, pinned', () => {
-  it('is the prototype\'s: 620ms, an arc on two curves, a 3px overshoot at 70%', () => {
-    expect(SEND_FLIGHT.duration).toBe(620);
+  it('is the prototype\'s: 280ms, an arc on two curves, a 3px overshoot at 70%', () => {
+    expect(SEND_FLIGHT.duration).toBe(280);
     expect(SEND_FLIGHT.easeX).toBe('cubic-bezier(0.3, 0.05, 0.2, 1)');
     expect(SEND_FLIGHT.easeY).toBe('cubic-bezier(0.22, 1, 0.36, 1)');
     expect(SEND_FLIGHT.glide).toBe('cubic-bezier(0.32, 0.72, 0, 1)');
     expect(SEND_FLIGHT.fromScale).toBe(0.95);
     expect(SEND_FLIGHT.overshoot).toEqual({ y: -3, scale: 1.01, at: 0.7 });
     expect([SEND_FLIGHT.fillFrom, SEND_FLIGHT.fillTo]).toEqual([0.14, 0.22]);
-    expect(RELAX_MS).toBe(300);
+    expect(RELAX_MS).toBe(135);
   });
 
-  it('does not obey the quiet system\'s ceilings, and says so: more than 8px, longer than 500ms', () => {
-    // §5.2 ("4-8px", "500ms") governs every other recipe. The flight is a
+  it('does not obey the quiet system\'s ceilings, and says so: more than 8px, longer than 225ms', () => {
+    // §5.2 ("4-8px", "225ms") governs every other recipe. The flight is a
     // protected signature gesture (docs/glass-spec.md §9) and must not be
     // clamped back to the lift it was.
     const bubble = bubbleAt({ left: 900, top: 700, width: 254, height: 40 });
@@ -119,8 +119,8 @@ describe('the approved flight, pinned', () => {
     const travelled = Math.abs(Number(/translate3d\(0(?:px)?, (-?[\d.]+)px/.exec(start)?.[1]));
     expect(travelled).toBeGreaterThan(8);
     expect(travelled).toBeCloseTo(800 + 18 - (700 + 20), 5);
-    expect(Number(on(shell).options.duration)).toBe(620);
-    expect(Number(on(shell).options.duration)).toBeGreaterThan(500);
+    expect(Number(on(shell).options.duration)).toBe(280);
+    expect(Number(on(shell).options.duration)).toBeGreaterThan(225);
   });
 });
 
@@ -150,14 +150,14 @@ describe('takeoff', () => {
     expect(readSendOrigin(textarea)).toEqual({ left: 420, top: 812, width: 640, height: 36, inset: 10, color: 'rgb(1, 2, 3)' });
   });
 
-  it('plays one 620ms flight on five layers, and only transform, opacity and color move', () => {
+  it('plays one 280ms flight on five layers, and only transform, opacity and color move', () => {
     const bubble = bubbleAt({ left: 900, top: 700, width: 254, height: 40 });
     flySend({ text: 'count me in', origin: ORIGIN, bubble: () => bubble, onLand: () => {} });
     const layers = ghostLayers();
     expect(flight()).toHaveLength(5);
     const allowed = new Set(['transform', 'opacity', 'color', 'offset', 'easing', 'composite']);
     for (const record of flight()) {
-      expect(Number(record.options.duration)).toBe(620);
+      expect(Number(record.options.duration)).toBe(280);
       for (const frame of record.keyframes) for (const property of Object.keys(frame)) expect(allowed.has(property), property).toBe(true);
     }
     // x on its curve, y and scale on another.
@@ -346,18 +346,18 @@ describe('the rows that make room, and the composer', () => {
     expect(played).toHaveLength(1);
     const record = waapi.played.find((entry) => entry.target === row)!;
     expect(record.keyframes[0].transform).toBe('translate3d(0px, 60px, 0)');
-    expect(Number(record.options.duration)).toBe(560);
+    expect(Number(record.options.duration)).toBe(255);
     expect(record.options.easing).toBe(SEND_FLIGHT.glide);
     expect(record.animation.id).toBe('data-motion-recipe:send-room');
   });
 
-  it('presses the composer: .992 and back over 300ms', () => {
+  it('presses the composer: .992 and back over 135ms', () => {
     const capsule = document.createElement('div');
     document.body.append(capsule);
     pressComposer(capsule);
     const record = waapi.played.find((entry) => entry.target === capsule)!;
     expect(record.keyframes.map((frame) => frame.transform)).toEqual(['scale(1)', 'scale(0.992)', 'scale(1)']);
-    expect(Number(record.options.duration)).toBe(300);
+    expect(Number(record.options.duration)).toBe(135);
   });
 
   it('releases the send control from the cream look to the quiet one, in colors only', () => {
@@ -372,7 +372,7 @@ describe('the rows that make room, and the composer', () => {
     const record = waapi.played.find((entry) => entry.target === button)!;
     expect(Object.keys(record.keyframes[0]).sort()).toEqual(['backgroundColor', 'color']);
     expect(record.keyframes[1]).toEqual({ backgroundColor: 'rgba(255, 255, 255, 0.08)', color: 'rgba(235, 238, 242, 0.62)' });
-    expect(Number(record.options.duration)).toBe(420);
+    expect(Number(record.options.duration)).toBe(190);
     expect(record.animation.id).toBe('data-motion-recipe:send-release');
   });
 

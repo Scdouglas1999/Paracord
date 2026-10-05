@@ -3,7 +3,7 @@
    column whose children never shrink. Everything here is what the pane holds.
 
    Only transform, opacity and colors move (the motion lint). Reduced motion (the one switch,
-   `:root[data-motion='reduced']`) trades every move for a 150ms opacity fade.
+   `:root[data-motion='reduced']`) trades every move for a 100ms opacity fade.
 
    Measured against the prototype at 1x (paracord-index.html): header 20-60 at x 18, search 74-108,
    a label 37 tall, a channel row 51 tall on a 53 pitch, a room row 36. Text that the prototype leaves
@@ -52,7 +52,7 @@
   font: inherit;
   text-align: left;
   cursor: pointer;
-  transition: background-color 120ms var(--ix-ease);
+  transition: background-color 55ms var(--ix-ease);
 }
 
 .ix-sh__main:hover {
@@ -97,7 +97,7 @@
   background-color: transparent;
   color: var(--ix-ink-3);
   cursor: pointer;
-  transition: background-color 120ms var(--ix-ease);
+  transition: background-color 55ms var(--ix-ease);
 }
 
 .ix-sh__more:hover,
@@ -121,7 +121,7 @@
   font-size: 13.5px;
   text-align: left;
   cursor: pointer;
-  transition: background-color 120ms var(--ix-ease);
+  transition: background-color 55ms var(--ix-ease);
 }
 
 .ix-search:hover {
@@ -194,8 +194,8 @@
   margin-right: -2px;
   opacity: 0;
   transition:
-    opacity 120ms var(--ix-ease),
-    transform 200ms var(--ix-spring);
+    opacity 55ms var(--ix-ease),
+    transform 90ms var(--ix-spring);
 }
 
 .ix-sb__fold[aria-expanded='false'] .ix-sb__chev {
@@ -229,8 +229,8 @@
   opacity: 0;
   cursor: pointer;
   transition:
-    opacity 120ms var(--ix-ease),
-    background-color 120ms var(--ix-ease);
+    opacity 55ms var(--ix-ease),
+    background-color 55ms var(--ix-ease);
 }
 
 .ix-sb .ix-section-label:hover .ix-sb__add,
@@ -293,7 +293,7 @@
   text-align: left;
   text-decoration: none;
   cursor: pointer;
-  transition: background-color 120ms var(--ix-ease);
+  transition: background-color 55ms var(--ix-ease);
 }
 
 .ix-ch:hover {
@@ -361,7 +361,7 @@
   border-radius: 50%;
   background-color: var(--ix-ink);
   transform: scale(0);
-  transition: transform 450ms var(--ix-spring);
+  transition: transform 205ms var(--ix-spring);
   pointer-events: none;
 }
 
@@ -436,8 +436,8 @@
   text-align: left;
   cursor: pointer;
   transition:
-    background-color 120ms var(--ix-ease),
-    color 120ms var(--ix-ease);
+    background-color 55ms var(--ix-ease),
+    color 55ms var(--ix-ease);
 }
 
 .ix-rm:hover {
@@ -485,7 +485,7 @@
   text-align: left;
   text-decoration: none;
   cursor: pointer;
-  transition: background-color 120ms var(--ix-ease);
+  transition: background-color 55ms var(--ix-ease);
 }
 
 .ix-ev:hover {
@@ -571,7 +571,7 @@
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
-  transition: background-color 120ms var(--ix-ease);
+  transition: background-color 55ms var(--ix-ease);
 }
 
 .ix-sb__retry:hover {
@@ -583,7 +583,7 @@
   transform: scale(1);
   opacity: 0;
   /* `!important` over the global reduced-motion zero (utilities.css): the fade is the §5 replacement (IX-18). */
-  transition: opacity 150ms linear !important;
+  transition: opacity 100ms linear !important;
 }
 
 :root[data-motion='reduced'] .ix-ch[data-unread='true'] .ix-ch__dot {
@@ -591,5 +591,5 @@
 }
 
 :root[data-motion='reduced'] .ix-sb__chev {
-  transition: opacity 150ms linear !important;
+  transition: opacity 100ms linear !important;
 }

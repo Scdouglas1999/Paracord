@@ -4,8 +4,8 @@ import type { PhoneScreen } from './phoneNav';
 /**
  * The phone's push and pop (docs/index-spec.md §9; IX-16, which owns this file
  * now): a page slides in from the right over the screen it was opened from,
- * 360ms on the spring, while that screen moves 30% to the left beneath it and
- * dims; going back is the same move reversed. Reduced motion: a 150ms
+ * 165ms on the spring, while that screen moves 30% to the left beneath it and
+ * dims; going back is the same move reversed. Reduced motion: a 100ms
  * crossfade in place.
  *
  * One model serves every push on a phone:
@@ -29,13 +29,13 @@ import type { PhoneScreen } from './phoneNav';
  */
 
 /** The push, in ms (§9). */
-export const PHONE_SLIDE_MS = 360;
+export const PHONE_SLIDE_MS = 165;
 /** The reduced-motion crossfade. */
 export const PHONE_FADE_MS = IX_REDUCED_MS;
 /** How far the screen beneath moves while a page covers it (§9: "the root moves -30% beneath"). */
 export const UNDER_SHIFT = 30;
 /** The shortest finish a released swipe plays: anything less reads as a snap. */
-export const PHONE_MIN_FINISH_MS = 140;
+export const PHONE_MIN_FINISH_MS = 65;
 
 export interface PushLayers {
   top: HTMLElement | null;

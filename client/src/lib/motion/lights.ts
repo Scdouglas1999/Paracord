@@ -120,7 +120,7 @@ export interface LightsChangeOptions {
  *     see is genuinely the old theme fading into the new one.
  *   - **The crossfade**, everywhere else: there is no snapshot to cross with,
  *     so the lights go down to the street's own color and come back up in the
- *     new one. A dip, over the same 400ms, on the same two curves.
+ *     new one. A dip, over the same 180ms, on the same two curves.
  *
  * Under reduced motion the change simply happens. §5.3: "everything lands
  * instantly".

@@ -18,8 +18,8 @@ import { useWelcomeFacts } from './useWelcomeFacts';
 import { Welcome } from './Welcome';
 import { buildWelcome } from './welcomeModel';
 
-/** §5.6: the welcome crossfades out while the draft grows in, 300ms. */
-export const WELCOME_OUT_MS = 300;
+/** §5.6: the welcome crossfades out while the draft grows in, 135ms. */
+export const WELCOME_OUT_MS = 135;
 
 export interface EmptyConversationProps {
   subject: ConversationSubject;

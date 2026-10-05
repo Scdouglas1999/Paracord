@@ -17,7 +17,7 @@ import { IX_REDUCED_MS, IX_SPRING, canAnimate, ixReduced } from './curves';
  *   'none'     translate only (content pushed by an arrival, the pinned card
  *              between its two positions, §5.4, §5.5)
  *
- * Reduced motion (§5): a move becomes a 150ms opacity fade in place
+ * Reduced motion (§5): a move becomes a 100ms opacity fade in place
  * (`reduced: 'fade'`, the default: for something appearing or travelling), or
  * nothing at all (`reduced: 'none'`: for content that was merely displaced,
  * which would otherwise flash).

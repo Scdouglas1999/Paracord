@@ -198,7 +198,7 @@ describe('the one-time ping (§5.5)', () => {
       { transform: 'scale(1)', opacity: 1 },
       { transform: 'scale(2.2)', opacity: 0 },
     ]);
-    expect(ping.options).toMatchObject({ duration: 1200, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' });
+    expect(ping.options).toMatchObject({ duration: 545, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' });
 
     // A re-render, or another change in the dock, does not replay it.
     view.update([PEOPLE, FUEL, { ...GAME, live: true, unread: true }, BASE]);
@@ -247,7 +247,7 @@ describe('the indicator (§5.1)', () => {
     expect((bars[0] as HTMLElement).style.transform).toMatch(/^translateX\(/);
   });
 
-  it('glides 550ms on the spring when the place changes, and not at first paint or when nothing changed', () => {
+  it('glides 250ms on the spring when the place changes, and not at first paint or when nothing changed', () => {
     const view = mount([PEOPLE, FUEL, GAME], serverPlace('fuel'));
     expect(glides()).toHaveLength(0);
     view.update([PEOPLE, FUEL, GAME], serverPlace('fuel'));
@@ -273,7 +273,7 @@ describe('the indicator (§5.1)', () => {
       expect(glides()).toHaveLength(1);
       const [glide] = glides();
       expect(glide.keyframes).toEqual([{ transform: 'translateX(84px)' }, { transform: 'translateX(132px)' }]);
-      expect(glide.options).toMatchObject({ duration: 550, easing: 'cubic-bezier(0.32, 0.72, 0, 1)' });
+      expect(glide.options).toMatchObject({ duration: 250, easing: 'cubic-bezier(0.32, 0.72, 0, 1)' });
       expect((document.querySelector('.ix-dock__ind') as HTMLElement).style.transform).toBe('translateX(132px)');
       // A newer glide cancels the running one (no queueing).
       view.update([PEOPLE, FUEL, GAME], serverPlace('people'));

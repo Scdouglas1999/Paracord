@@ -38,7 +38,7 @@ import type { CardPosition } from '../shell/slots';
  *   └──────────────────────────────────────────────────────┘
  *
  * Two background layers: the live tint, and "yours" (stronger tint, edge and
- * glow) that fades in over it when you join (400ms, opacity only). Every move
+ * glow) that fades in over it when you join (180ms, opacity only). Every move
  * is in `cardMotion.ts`.
  */
 

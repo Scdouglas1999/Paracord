@@ -144,7 +144,7 @@ export function Tabs<T extends string = string>({
             onKeyDown={(event) => onKeyDown(event, index)}
             className={cn(
               'pc-focusable relative inline-flex shrink-0 select-none items-center justify-center gap-2 whitespace-nowrap',
-              'text-[13.5px] font-semibold transition-[color,background-color] duration-[120ms] ease-[var(--ix-ease)]',
+              'text-[13.5px] font-semibold transition-[color,background-color] duration-[55ms] ease-[var(--ix-ease)]',
               'disabled:pointer-events-none disabled:opacity-[.45]',
               size === 'sm' ? 'h-[var(--h-control-sm)] px-2.5' : 'h-8 px-3.5',
               fill && 'flex-1',

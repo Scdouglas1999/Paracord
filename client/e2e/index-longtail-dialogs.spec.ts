@@ -143,11 +143,11 @@ test.describe('dialogs (§6.12)', () => {
     await expect(dialog.getByRole('heading')).toHaveCSS('font-weight', '700');
     await shot(page, 'invite');
 
-    // Copy: the label crossfades (opacity, 200ms), then comes back after two seconds.
+    // Copy: the label crossfades (opacity, 90ms), then comes back after two seconds.
     const copy = dialog.getByRole('button', { name: 'Copy invite link' });
     const words = dialog.locator('.ix-copy').first();
     await expect(words.locator('span').nth(0)).toHaveText('Copy link');
-    await expect(words.locator('span').nth(0)).toHaveCSS('transition-duration', '0.2s');
+    await expect(words.locator('span').nth(0)).toHaveCSS('transition-duration', '0.09s');
     await copy.click();
     await expect(dialog.getByRole('button', { name: 'Invite link copied' })).toBeVisible();
     await expect(words.locator('span[data-on="true"]')).toHaveText('Link copied');
@@ -446,7 +446,7 @@ test.describe('media viewer (§6.10)', () => {
     await expect(thumb).toBeVisible();
     const from = await thumb.locator('img').boundingBox();
     await thumb.click();
-    // Mid-flight: the stage's FLIP is a transform-only animation on the spring, 450ms.
+    // Mid-flight: the stage's FLIP is a transform-only animation on the spring, 205ms.
     await page.waitForTimeout(120);
     const grow = await page.evaluate(() => {
       const found = document.getAnimations().find((animation) => animation.id === 'ix-viewer:grow');
@@ -461,7 +461,7 @@ test.describe('media viewer (§6.10)', () => {
       };
     });
     expect(grow, 'ix-viewer:grow is running').not.toBeNull();
-    expect(grow!.duration).toBe(450);
+    expect(grow!.duration).toBe(205);
     expect(grow!.easing).toBe('cubic-bezier(0.32, 0.72, 0, 1)');
     expect(grow!.properties.sort()).toEqual(['transform', 'transformOrigin']);
     await shotHere(page, 'viewer-midflight');
@@ -503,7 +503,7 @@ test.describe('media viewer (§6.10)', () => {
       };
     });
     expect(shrink, 'ix-viewer:shrink is running').not.toBeNull();
-    expect(shrink!.duration).toBe(450);
+    expect(shrink!.duration).toBe(205);
     expect(shrink!.properties.sort()).toEqual(['transform', 'transformOrigin']);
     await shotHere(page, 'viewer-closing');
     await expect(viewer).toBeHidden({ timeout: 2_000 });

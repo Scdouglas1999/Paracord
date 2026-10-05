@@ -20,7 +20,7 @@ import { isElementAnchor, type MenuAnchor } from './anchor';
 
 /**
  * The Index popover menu (docs/index-spec.md §6.2-6.5; §5.17: `scale(.97)` + fade
- * from the anchor, 180ms ease in, 120ms out). Near-solid `--ix-pop`, radius 14,
+ * from the anchor, 80ms ease in, 55ms out). Near-solid `--ix-pop`, radius 14,
  * rows 36 (14/500, glyph 16 ink-3), hairline separators; opaque under Reduced
  * transparency.
  *

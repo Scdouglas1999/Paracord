@@ -74,7 +74,7 @@
   min-height: 0;
   overflow: hidden;
   /* Theater dims it beneath the call (§5.9). */
-  transition: opacity 600ms var(--ix-spring);
+  transition: opacity 275ms var(--ix-spring);
 }
 
 /* The right hairline (§3): drawn above the tint layers, which cover the column. */
@@ -192,7 +192,7 @@
   height: var(--ix-toolbar-h);
   padding: 0 20px 0 40px;
   background-color: transparent;
-  transition: background-color 300ms var(--ix-ease);
+  transition: background-color 135ms var(--ix-ease);
 }
 
 .ix-toolbar::after {
@@ -205,7 +205,7 @@
   background: var(--ix-line);
   opacity: 0;
   pointer-events: none;
-  transition: opacity 300ms var(--ix-ease);
+  transition: opacity 135ms var(--ix-ease);
 }
 
 .ix-toolbar[data-folded='true'] {
@@ -242,8 +242,8 @@
   transform: translateY(6px);
   pointer-events: none;
   transition:
-    opacity 250ms var(--ix-ease),
-    transform 350ms var(--ix-spring);
+    opacity 115ms var(--ix-ease),
+    transform 160ms var(--ix-spring);
 }
 
 .ix-toolbar[data-folded='true'] .ix-toolbar__title {
@@ -269,7 +269,7 @@ button.ix-toolbar__title {
   background-color: transparent;
   color: var(--ix-ink-2);
   cursor: pointer;
-  transition: background-color 120ms var(--ix-ease);
+  transition: background-color 55ms var(--ix-ease);
 }
 
 .ix-tool:hover {

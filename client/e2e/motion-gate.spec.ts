@@ -46,7 +46,7 @@ import { describeMoment, installMotionRecorder, markMoment, runningNow, type Mot
  *   constraint). While somebody talks, the waveform is the one exception, and
  *   the talking-ring case proves it stops when they do.
  *
- *   REDUCED MOTION. Every move becomes a 150ms opacity crossfade; pings and
+ *   REDUCED MOTION. Every move becomes a 100ms opacity crossfade; pings and
  *   lifts are gone; the waveform is still (§5, opening paragraph).
  *
  * How it hears every animation: `fixtures/motionFixture.ts` wraps
@@ -57,7 +57,7 @@ import { describeMoment, installMotionRecorder, markMoment, runningNow, type Mot
  * NOT A MOMENT OF THIS GATE'S CEILINGS: the send flight (§5.11), the owner's
  * favorite and protected gesture (docs/design/index-checkpoints/M1.md). It is
  * filmed and measured by `e2e/index-send.spec.ts`; here one case only guards
- * that nobody clamps it (it still flies its 620ms arc, well past 8px).
+ * that nobody clamps it (it still flies its 280ms arc, well past 8px).
  *
  * Run:
  *   cd client
@@ -79,8 +79,8 @@ const EASE = 'cubic-bezier(0.2, 0.8, 0.2, 1)';
 /** §5 does not name the curve (a plain fade): any is fine. */
 const ANY = '*';
 
-/** §5: reduced motion replaces every move with a 150ms opacity crossfade. */
-const REDUCED_MS = 150;
+/** §5: reduced motion replaces every move with a 100ms opacity crossfade. */
+const REDUCED_MS = 100;
 /** §5.4 plan: quiet two seconds after a moment settles. */
 const REST_MS = 2_000;
 
@@ -270,26 +270,26 @@ test.describe('the Index motion gate (index-spec §5)', () => {
     await open(page, info);
     const right = {
       plays: [
-        { cites: '§5.1 old pane: translateX(-dir×40%), 1→0, 450ms spring', match: web('ix-pane:out'), duration: 450, curve: SPRING, fromTransform: 'none', toTransform: 'translateX(-40%)', opacities: ['1', '0'], atMost: 1 },
-        { cites: '§5.1 new pane: from translateX(dir×60%), 0→1, 550ms spring', match: web('ix-pane:in'), duration: 550, curve: SPRING, fromTransform: 'translateX(60%)', toTransform: 'none', opacities: ['0', '1'], atMost: 1 },
-        { cites: '§5.1 the sidebar tint fades in over the old, 900ms ease', match: web('ix-tint:side'), duration: 900, curve: EASE, opacities: ['0', '1'], atMost: 1 },
-        { cites: '§5.1 main glow, the same', match: web('ix-tint:main'), duration: 900, curve: EASE, opacities: ['0', '1'], atMost: 1 },
-        { cites: '§5.1 dock indicator glides, 550ms spring', match: web('ix-dock:indicator'), duration: 550, curve: SPRING, moves: ['transform'], atMost: 1 },
-        { cites: '§5.1 the new place’s mark scales to 1.08, 450ms spring', match: toward(transition('transform', 'ix-dock__mark'), /scale\(1\.08\)/), duration: 450, curve: SPRING },
-        { cites: '§5.1 the old mark back to 1, 450ms spring', match: toward(transition('transform', 'ix-dock__mark'), /^none$/), duration: 450, curve: SPRING },
-        { cites: '§5.1/5.2 main title: a place switch comes in as the prototype plays it (dir 0): from translateY(4px), 420ms spring', match: web('ix-main:title'), duration: 420, curve: SPRING, fromTransform: 'translateY(4px)', opacities: ['0', '1'] },
-        { cites: '§5.1/5.2 main feed: from translateY(0), fading, 480ms spring', match: web('ix-main:feed'), duration: 480, curve: SPRING, fromTransform: 'translateY(0px)', opacities: ['0', '1'] },
+        { cites: '§5.1 old pane: translateX(-dir×40%), 1→0, 205ms spring', match: web('ix-pane:out'), duration: 205, curve: SPRING, fromTransform: 'none', toTransform: 'translateX(-40%)', opacities: ['1', '0'], atMost: 1 },
+        { cites: '§5.1 new pane: from translateX(dir×60%), 0→1, 250ms spring', match: web('ix-pane:in'), duration: 250, curve: SPRING, fromTransform: 'translateX(60%)', toTransform: 'none', opacities: ['0', '1'], atMost: 1 },
+        { cites: '§5.1 the sidebar tint fades in over the old, 410ms ease', match: web('ix-tint:side'), duration: 410, curve: EASE, opacities: ['0', '1'], atMost: 1 },
+        { cites: '§5.1 main glow, the same', match: web('ix-tint:main'), duration: 410, curve: EASE, opacities: ['0', '1'], atMost: 1 },
+        { cites: '§5.1 dock indicator glides, 250ms spring', match: web('ix-dock:indicator'), duration: 250, curve: SPRING, moves: ['transform'], atMost: 1 },
+        { cites: '§5.1 the new place’s mark scales to 1.08, 205ms spring', match: toward(transition('transform', 'ix-dock__mark'), /scale\(1\.08\)/), duration: 205, curve: SPRING },
+        { cites: '§5.1 the old mark back to 1, 205ms spring', match: toward(transition('transform', 'ix-dock__mark'), /^none$/), duration: 205, curve: SPRING },
+        { cites: '§5.1/5.2 main title: a place switch comes in as the prototype plays it (dir 0): from translateY(4px), 190ms spring', match: web('ix-main:title'), duration: 190, curve: SPRING, fromTransform: 'translateY(4px)', opacities: ['0', '1'] },
+        { cites: '§5.1/5.2 main feed: from translateY(0), fading, 220ms spring', match: web('ix-main:feed'), duration: 220, curve: SPRING, fromTransform: 'translateY(0px)', opacities: ['0', '1'] },
       ],
-      absent: [{ cites: 'the Glass route crossfade (4px, 240ms) is retired in the Index frame', match: web('data-motion-recipe:content') }],
+      absent: [{ cites: 'the Glass route crossfade (4px, 110ms) is retired in the Index frame', match: web('data-motion-recipe:content') }],
     } satisfies Moment;
     await moment(page, 'Fuel → Game Night', () => dockItem(page, 'gameNight').click(), right);
     await park(page);
     await moment(page, 'Game Night → Fuel (leftward)', () => dockItem(page, 'fuel').click(), {
       plays: [
-        { cites: '§5.1 old pane leaves to the right: translateX(40%)', match: web('ix-pane:out'), duration: 450, curve: SPRING, toTransform: 'translateX(40%)' },
-        { cites: '§5.1 new pane from the left: translateX(-60%)', match: web('ix-pane:in'), duration: 550, curve: SPRING, fromTransform: 'translateX(-60%)' },
-        { cites: '§5.1 tint', match: web('ix-tint:side'), duration: 900, curve: EASE },
-        { cites: '§5.1 indicator', match: web('ix-dock:indicator'), duration: 550, curve: SPRING },
+        { cites: '§5.1 old pane leaves to the right: translateX(40%)', match: web('ix-pane:out'), duration: 205, curve: SPRING, toTransform: 'translateX(40%)' },
+        { cites: '§5.1 new pane from the left: translateX(-60%)', match: web('ix-pane:in'), duration: 250, curve: SPRING, fromTransform: 'translateX(-60%)' },
+        { cites: '§5.1 tint', match: web('ix-tint:side'), duration: 410, curve: EASE },
+        { cites: '§5.1 indicator', match: web('ix-dock:indicator'), duration: 250, curve: SPRING },
       ],
     });
     // One pane and one tint layer each at rest.
@@ -301,18 +301,18 @@ test.describe('the Index motion gate (index-spec §5)', () => {
     await open(page, info, (h) => h.routes.channel('gnLounge'));
     const down = await moment(page, 'lounge → looking-for-group (down)', () => channelRow(page, 'gnLfg').click(), {
       plays: [
-        { cites: '§5.2 selection translateY to the new row, 450ms spring (no height)', match: web('ix-select:glide'), duration: 450, curve: SPRING, fromTransform: /^translateY\(/, moves: ['transform'], atMost: 1 },
-        { cites: '§5.2 title from translateY(dir×14+4 = 18px), 420ms spring', match: web('ix-main:title'), duration: 420, curve: SPRING, fromTransform: 'translateY(18px)', opacities: ['0', '1'] },
-        { cites: '§5.2 feed from translateY(dir×22 = 22px), 480ms spring', match: web('ix-main:feed'), duration: 480, curve: SPRING, fromTransform: 'translateY(22px)', opacities: ['0', '1'] },
+        { cites: '§5.2 selection translateY to the new row, 205ms spring (no height)', match: web('ix-select:glide'), duration: 205, curve: SPRING, fromTransform: /^translateY\(/, moves: ['transform'], atMost: 1 },
+        { cites: '§5.2 title from translateY(dir×14+4 = 18px), 190ms spring', match: web('ix-main:title'), duration: 190, curve: SPRING, fromTransform: 'translateY(18px)', opacities: ['0', '1'] },
+        { cites: '§5.2 feed from translateY(dir×22 = 22px), 220ms spring', match: web('ix-main:feed'), duration: 220, curve: SPRING, fromTransform: 'translateY(22px)', opacities: ['0', '1'] },
       ],
       absent: [{ cites: 'the Glass route crossfade is retired', match: web('data-motion-recipe:content') }],
     });
     await park(page);
     const up = await moment(page, 'looking-for-group → lounge (up)', () => channelRow(page, 'gnLounge').click(), {
       plays: [
-        { cites: '§5.2 the glide back up', match: web('ix-select:glide'), duration: 450, curve: SPRING },
-        { cites: '§5.2 title from translateY(-14+4 = -10px)', match: web('ix-main:title'), duration: 420, curve: SPRING, fromTransform: 'translateY(-10px)' },
-        { cites: '§5.2 feed from translateY(-22px)', match: web('ix-main:feed'), duration: 480, curve: SPRING, fromTransform: 'translateY(-22px)' },
+        { cites: '§5.2 the glide back up', match: web('ix-select:glide'), duration: 205, curve: SPRING },
+        { cites: '§5.2 title from translateY(-14+4 = -10px)', match: web('ix-main:title'), duration: 190, curve: SPRING, fromTransform: 'translateY(-10px)' },
+        { cites: '§5.2 feed from translateY(-22px)', match: web('ix-main:feed'), duration: 220, curve: SPRING, fromTransform: 'translateY(-22px)' },
       ],
     });
     // §4.9: the toolbar's fill follows a real fold only: two short channels, so it never flashes between them.
@@ -326,13 +326,13 @@ test.describe('the Index motion gate (index-spec §5)', () => {
     await later(h, '21:39:30');
     await moment(page, 'a message in plans', () => h.step('message', { channel: 'fuelPlans', who: 'jeremy', text: 'movie friday?' }), {
       plays: [
-        { cites: '§5.3 the line from translateY(9px), opacity 0, 520ms spring', match: web('ix-preview:line'), duration: 520, curve: SPRING, fromTransform: 'translateY(9px)', opacities: ['0', '1'], atMost: 1 },
-        { cites: '§5.3 the time fades in, 400ms', match: web('ix-preview:time'), duration: 400, curve: ANY, opacities: ['0', '1'], atMost: 1 },
-        { cites: '§5.3 the unread dot scales 0→1, 450ms spring', match: toward(transition('transform', 'ix-ch__dot'), /scale\(1\)/), duration: 450, curve: SPRING },
+        { cites: '§5.3 the line from translateY(9px), opacity 0, 235ms spring', match: web('ix-preview:line'), duration: 235, curve: SPRING, fromTransform: 'translateY(9px)', opacities: ['0', '1'], atMost: 1 },
+        { cites: '§5.3 the time fades in, 180ms', match: web('ix-preview:time'), duration: 180, curve: ANY, opacities: ['0', '1'], atMost: 1 },
+        { cites: '§5.3 the unread dot scales 0→1, 205ms spring', match: toward(transition('transform', 'ix-ch__dot'), /scale\(1\)/), duration: 205, curve: SPRING },
       ],
     });
     const reading = await moment(page, 'reading plans', () => channelRow(page, 'fuelPlans').click(), {
-      plays: [{ cites: '§5.3 the dot scales 1→0 when read, 450ms spring', match: toward(transition('transform', 'ix-ch__dot'), /scale\(0\)/), duration: 450, curve: SPRING }],
+      plays: [{ cites: '§5.3 the dot scales 1→0 when read, 205ms spring', match: toward(transition('transform', 'ix-ch__dot'), /scale\(0\)/), duration: 205, curve: SPRING }],
     });
     // §4.9: a channel whose history has not said yet where it starts (it only has
     // what the gateway brought) does not flash the toolbar's fill while it loads.
@@ -343,36 +343,36 @@ test.describe('the Index motion gate (index-spec §5)', () => {
     const h = await open(page, info);
     await moment(page, 'Jeremy joins General (the room goes live)', () => h.step(voiceJoin, { who: 'jeremy', room: 'fuelRoomGeneral' }), {
       plays: [
-        { cites: '§5.5 the card enters: translateY(-8px) scale(.97), 0→1, 600ms spring (a 120ms beat behind the push it causes, IX-18)', match: web('ix-card:card-in'), duration: 600, delay: 120, curve: SPRING, fromTransform: 'translateY(-8px) scale(0.97)', opacities: ['0', '1'], atMost: 1 },
-        { cites: '§5.5 what is below moves down by FLIP, 600ms spring', match: webOn('ix-card:push', 'ix-sb__rows'), duration: 600, curve: SPRING, moves: ['transform'] },
-        { cites: '§5.5 the dock’s live dot scales in, 450ms spring', match: toward(transition('transform', 'ix-dock__live'), /scale\(1\)/), duration: 450, curve: SPRING },
+        { cites: '§5.5 the card enters: translateY(-8px) scale(.97), 0→1, 275ms spring (a 55ms beat behind the push it causes, IX-18)', match: web('ix-card:card-in'), duration: 275, delay: 55, curve: SPRING, fromTransform: 'translateY(-8px) scale(0.97)', opacities: ['0', '1'], atMost: 1 },
+        { cites: '§5.5 what is below moves down by FLIP, 275ms spring', match: webOn('ix-card:push', 'ix-sb__rows'), duration: 275, curve: SPRING, moves: ['transform'] },
+        { cites: '§5.5 the dock’s live dot scales in, 205ms spring', match: toward(transition('transform', 'ix-dock__live'), /scale\(1\)/), duration: 205, curve: SPRING },
       ],
       absent: [{ cites: '§5.5 no ping for the server you are looking at', match: web('ix-dock:ping') }],
     });
     await moment(page, 'Nick joins (a row enters)', () => h.step(voiceJoin, { who: 'nick', room: 'fuelRoomGeneral' }), {
       plays: [
-        { cites: '§5.5 a person row enters the same way, 500ms spring', match: web('ix-card:row-in'), duration: 500, curve: SPRING, fromTransform: 'translateY(-8px) scale(0.97)', opacities: ['0', '1'], atMost: 1 },
-        { cites: '§5.5 rows and actions below move down, 500ms', match: web('ix-card:push'), duration: 500, curve: SPRING },
+        { cites: '§5.5 a person row enters the same way, 225ms spring', match: web('ix-card:row-in'), duration: 225, curve: SPRING, fromTransform: 'translateY(-8px) scale(0.97)', opacities: ['0', '1'], atMost: 1 },
+        { cites: '§5.5 rows and actions below move down, 225ms', match: web('ix-card:push'), duration: 225, curve: SPRING },
       ],
     });
     await moment(page, 'Nick leaves (a row leaves)', () => h.step(voiceLeave, { who: 'nick', room: 'fuelRoomGeneral' }), {
       plays: [
-        { cites: '§5.5 a leaving row fades and scales to .97, 250ms ease', match: web('ix-card:row-out'), duration: 250, curve: EASE, toTransform: 'scale(0.97)', opacities: ['1', '0'], atMost: 1 },
-        { cites: '§5.5 then rows below FLIP up, 450ms spring', match: web('ix-card:push'), duration: 450, curve: SPRING },
-        { cites: '§5.5 … the sidebar under the card too, once the row has gone', match: webOn('ix-card:push', 'ix-sb__rows'), duration: 450, curve: SPRING, atMost: 1 },
+        { cites: '§5.5 a leaving row fades and scales to .97, 115ms ease', match: web('ix-card:row-out'), duration: 115, curve: EASE, toTransform: 'scale(0.97)', opacities: ['1', '0'], atMost: 1 },
+        { cites: '§5.5 then rows below FLIP up, 205ms spring', match: web('ix-card:push'), duration: 205, curve: SPRING },
+        { cites: '§5.5 … the sidebar under the card too, once the row has gone', match: webOn('ix-card:push', 'ix-sb__rows'), duration: 205, curve: SPRING, atMost: 1 },
       ],
     });
     await moment(page, 'Jeremy leaves (the room empties)', () => h.step(voiceLeave, { who: 'jeremy', room: 'fuelRoomGeneral' }), {
       plays: [
-        { cites: '§5.5 the card reverses, 300ms ease', match: web('ix-card:card-out'), duration: 300, curve: EASE, opacities: ['1', '0'], atMost: 1 },
-        { cites: '§5.5 and the list FLIPs up once, 450ms spring', match: webOn('ix-card:push', 'ix-sb__rows'), duration: 450, curve: SPRING, atMost: 1 },
-        { cites: '§5.5 the live dot scales out', match: toward(transition('transform', 'ix-dock__live'), /scale\(0\)/), duration: 450, curve: SPRING },
+        { cites: '§5.5 the card reverses, 135ms ease', match: web('ix-card:card-out'), duration: 135, curve: EASE, opacities: ['1', '0'], atMost: 1 },
+        { cites: '§5.5 and the list FLIPs up once, 205ms spring', match: webOn('ix-card:push', 'ix-sb__rows'), duration: 205, curve: SPRING, atMost: 1 },
+        { cites: '§5.5 the live dot scales out', match: toward(transition('transform', 'ix-dock__live'), /scale\(0\)/), duration: 205, curve: SPRING },
       ],
     });
     const pinged = await moment(page, 'Basecamp goes live (another server)', () => h.step(voiceJoin, { who: 'brendan', room: 'bcRoomWorkshop' }), {
       plays: [
-        { cites: '§5.5 the dock pings once: a ring from scale(1), 1 to scale(2.2), 0, 1200ms ease', match: web('ix-dock:ping'), duration: 1200, curve: EASE, fromTransform: 'scale(1)', toTransform: 'scale(2.2)', opacities: ['1', '0'], atLeast: 1, atMost: 1 },
-        { cites: '§5.5 its live dot scales in', match: toward(transition('transform', 'ix-dock__live'), /scale\(1\)/), duration: 450, curve: SPRING },
+        { cites: '§5.5 the dock pings once: a ring from scale(1), 1 to scale(2.2), 0, 545ms ease', match: web('ix-dock:ping'), duration: 545, curve: EASE, fromTransform: 'scale(1)', toTransform: 'scale(2.2)', opacities: ['1', '0'], atLeast: 1, atMost: 1 },
+        { cites: '§5.5 its live dot scales in', match: toward(transition('transform', 'ix-dock__live'), /scale\(1\)/), duration: 205, curve: SPRING },
       ],
     });
     expect(pinged.filter(web('ix-dock:ping'))[0]?.target).toContain('ix-dock__ping');
@@ -387,13 +387,13 @@ test.describe('the Index motion gate (index-spec §5)', () => {
     await rest(page, 'joined');
     await moment(page, 'Fuel → Game Night (the card pins above the header)', () => dockItem(page, 'gameNight').click(), {
       plays: [
-        { cites: '§5.4 the card FLIPs between "under the search" and "above the header", 550ms spring, translate only', match: web('ix-card:pin'), duration: 550, curve: SPRING, fromTransform: /^translate\(0px, -?\d/, toTransform: 'none', atLeast: 1, atMost: 1 },
-        { cites: '§5.1 while the panes slide beneath', match: web('ix-pane:in'), duration: 550, curve: SPRING },
+        { cites: '§5.4 the card FLIPs between "under the search" and "above the header", 250ms spring, translate only', match: web('ix-card:pin'), duration: 250, curve: SPRING, fromTransform: /^translate\(0px, -?\d/, toTransform: 'none', atLeast: 1, atMost: 1 },
+        { cites: '§5.1 while the panes slide beneath', match: web('ix-pane:in'), duration: 250, curve: SPRING },
       ],
     });
     await park(page);
     await moment(page, 'Game Night → Basecamp (the pinned card stays still)', () => dockItem(page, 'basecamp').click(), {
-      plays: [{ cites: '§5.1 panes slide', match: web('ix-pane:in'), duration: 550, curve: SPRING }],
+      plays: [{ cites: '§5.1 panes slide', match: web('ix-pane:in'), duration: 250, curve: SPRING }],
       absent: [
         { cites: '§5.4 switching between other places leaves the card still', match: web('ix-card:pin') },
         { cites: '§5.4 nothing of the pinned card moves', match: (record) => record.target.includes('ix-room-card') },
@@ -401,19 +401,19 @@ test.describe('the Index motion gate (index-spec §5)', () => {
     });
     await park(page);
     await moment(page, 'Basecamp → Fuel (back under the search)', () => dockItem(page, 'fuel').click(), {
-      plays: [{ cites: '§5.4 the FLIP home, 550ms spring', match: web('ix-card:pin'), duration: 550, curve: SPRING, toTransform: 'none', atMost: 1 }],
+      plays: [{ cites: '§5.4 the FLIP home, 250ms spring', match: web('ix-card:pin'), duration: 250, curve: SPRING, toTransform: 'none', atMost: 1 }],
     });
   });
 
   test('§5.6 Plan a night grows the draft out of the action card; §5.15 the card lifts 3px', async ({ page }, info) => {
     await open(page, info);
     await moment(page, 'hovering an action card', () => actionCard(page, 'plan').hover(), {
-      plays: [{ cites: '§5.15 action cards lift −3px, 400ms spring', match: toward(transition('transform', 'ix-way'), /translateY\(-3px\)/), duration: 400, curve: SPRING }],
+      plays: [{ cites: '§5.15 action cards lift −3px, 180ms spring', match: toward(transition('transform', 'ix-way'), /translateY\(-3px\)/), duration: 180, curve: SPRING }],
     });
     await moment(page, 'Plan a night', () => actionCard(page, 'plan').click(), {
       plays: [
-        { cites: '§5.6 FLIP from the action card’s rect (translate + scale), .5→1, 650ms spring', match: web('ix-conversation:draft'), duration: 650, curve: SPRING, fromTransform: /^translate\(.+\) scale\(/, toTransform: 'none', opacities: ['0.5', '1'], atMost: 1 },
-        { cites: '§5.6 the welcome crossfades out, 300ms', match: web('ix-conversation:welcome-out'), duration: 300, curve: ANY, opacities: ['1', '0'], atMost: 1 },
+        { cites: '§5.6 FLIP from the action card’s rect (translate + scale), .5→1, 295ms spring', match: web('ix-conversation:draft'), duration: 295, curve: SPRING, fromTransform: /^translate\(.+\) scale\(/, toTransform: 'none', opacities: ['0.5', '1'], atMost: 1 },
+        { cites: '§5.6 the welcome crossfades out, 135ms', match: web('ix-conversation:welcome-out'), duration: 135, curve: ANY, opacities: ['1', '0'], atMost: 1 },
       ],
     });
   });
@@ -425,10 +425,9 @@ test.describe('the Index motion gate (index-spec §5)', () => {
     await later(h, '21:45:00');
     await moment(page, 'Join', () => roomCard(page).getByTestId('ix-card-join').click(), {
       plays: [
-        { cites: '§5.7 the yours layer fades in, 400ms ease', match: (r) => transition('opacity', 'ix-room-card__layer--yours')(r) && r.opacities.at(-1) === '1', duration: 400, curve: EASE },
-        { cites: '§5.7 your row flies from the toolbar avatar: translate + scale, 750ms spring', match: webOn('ix-card:fly', 'ix-card-row__face'), duration: 750, curve: SPRING, fromTransform: /^translate\(.+\) scale\(/, toTransform: 'none', atMost: 1 },
-        { cites: '§5.7 the card’s new content holds at 0 until 45%, then fades in', match: web('ix-card:fly-hold'), duration: 750, curve: ANY, opacities: ['0', '0', '1'] },
-        { cites: '§5.7/5.10 "You joined General" pops into general', match: webOn('ix-timeline:arrive', 'ix-tl-system'), duration: 550, curve: SPRING },
+        { cites: '§5.7 the yours layer fades in, 180ms ease', match: (r) => transition('opacity', 'ix-room-card__layer--yours')(r) && r.opacities.at(-1) === '1', duration: 180, curve: EASE },
+        { cites: '§5.7 your row flies from the toolbar avatar: translate + scale, 340ms spring', match: webOn('ix-card:fly', 'ix-card-row__face'), duration: 340, curve: SPRING, fromTransform: /^translate\(.+\) scale\(/, toTransform: 'none', atMost: 1 },
+        { cites: '§5.7 the card’s new content holds at 0 until 45%, then fades in', match: web('ix-card:fly-hold'), duration: 340, curve: ANY, opacities: ['0', '0', '1'] },
       ],
     });
     const records = await describeMoment(page);
@@ -442,9 +441,9 @@ test.describe('the Index motion gate (index-spec §5)', () => {
     await rest(page, 'joined');
     await moment(page, 'Open call', () => roomCard(page, 'yours').getByTestId('ix-card-open-call').click(), {
       plays: [
-        { cites: '§5.8 the surface grows out of the card: translate + non-uniform scale, .3→1, 600ms spring', match: web('ix-call:open'), duration: 600, curve: SPRING, fromTransform: /^translate\(.+\) scale\(.+, .+\)$/, toTransform: 'none', opacities: ['0.3', '1'], atMost: 1 },
-        { cites: '§5.8 the tiles and controls are a counter-layer that fades in from 40%', match: web('ix-call:open-content'), duration: 600, curve: ANY, moves: ['opacity'], atMost: 1 },
-        { cites: '§5.8 the wide control’s label crossfades, 200ms', match: (r) => r.kind === 'transition' && r.id === 'opacity' && r.duration === 200 && /span/.test(r.target), duration: 200, curve: ANY, atLeast: 2 },
+        { cites: '§5.8 the surface grows out of the card: translate + non-uniform scale, .3→1, 275ms spring', match: web('ix-call:open'), duration: 275, curve: SPRING, fromTransform: /^translate\(.+\) scale\(.+, .+\)$/, toTransform: 'none', opacities: ['0.3', '1'], atMost: 1 },
+        { cites: '§5.8 the tiles and controls are a counter-layer that fades in from 40%', match: web('ix-call:open-content'), duration: 275, curve: ANY, moves: ['opacity'], atMost: 1 },
+        { cites: '§5.8 the wide control’s label crossfades, 90ms', match: (r) => r.kind === 'transition' && r.id === 'opacity' && r.duration === 90 && /span/.test(r.target), duration: 90, curve: ANY, atLeast: 2 },
       ],
     });
     const content = (await describeMoment(page)).find(web('ix-call:open-content'));
@@ -454,18 +453,18 @@ test.describe('the Index motion gate (index-spec §5)', () => {
     expect(wholeBy, 'IX-18: … and is whole by 75%, so the call is drawn when the surface arrives (as the prototype)').toBeCloseTo(0.75, 2);
     await moment(page, 'Theater (T)', () => page.keyboard.press('t'), {
       plays: [
-        { cites: '§5.9 the surface FLIPs from main’s inset to the window’s, 600ms spring', match: web('ix-call:theater'), duration: 600, curve: SPRING, fromTransform: /^translate\(/, toTransform: 'none', atMost: 1 },
-        { cites: '§5.9 the sidebar dims to .4 beneath, 600ms spring', match: (r) => transition('opacity', 'ix-side')(r) && r.opacities.at(-1) === '0.4', duration: 600, curve: SPRING },
+        { cites: '§5.9 the surface FLIPs from main’s inset to the window’s, 275ms spring', match: web('ix-call:theater'), duration: 275, curve: SPRING, fromTransform: /^translate\(/, toTransform: 'none', atMost: 1 },
+        { cites: '§5.9 the sidebar dims to .4 beneath, 275ms spring', match: (r) => transition('opacity', 'ix-side')(r) && r.opacities.at(-1) === '0.4', duration: 275, curve: SPRING },
       ],
     });
     await moment(page, 'Theater off', () => page.keyboard.press('t'), {
       plays: [
-        { cites: '§5.9 reverse the same', match: web('ix-call:theater'), duration: 600, curve: SPRING },
-        { cites: '§5.9 the sidebar comes back to 1', match: (r) => transition('opacity', 'ix-side')(r) && r.opacities.at(-1) === '1', duration: 600, curve: SPRING },
+        { cites: '§5.9 reverse the same', match: web('ix-call:theater'), duration: 275, curve: SPRING },
+        { cites: '§5.9 the sidebar comes back to 1', match: (r) => transition('opacity', 'ix-side')(r) && r.opacities.at(-1) === '1', duration: 275, curve: SPRING },
       ],
     });
     await moment(page, 'Back to chat', () => page.getByTestId('ix-call-back').click(), {
-      plays: [{ cites: '§5.8 back into the card, 450ms spring, then hidden', match: web('ix-call:close'), duration: 450, curve: SPRING, toTransform: /^translate\(.+\) scale\(/, atMost: 1 }],
+      plays: [{ cites: '§5.8 back into the card, 205ms spring, then hidden', match: web('ix-call:close'), duration: 205, curve: SPRING, toTransform: /^translate\(.+\) scale\(/, atMost: 1 }],
     });
     await expect(page.locator('.ix-call')).toHaveCount(0);
   });
@@ -477,13 +476,13 @@ test.describe('the Index motion gate (index-spec §5)', () => {
     await later(h, '21:46:00');
     await moment(page, 'Jeremy says something', () => h.step('message', { channel: 'fuelGeneral', who: 'jeremy', text: 'you coming?' }), {
       plays: [
-        { cites: '§5.10 the new bubble from translateY(14px) scale(.96), opacity 0, 550ms spring', match: web('ix-timeline:arrive'), duration: 550, curve: SPRING, fromTransform: 'translateY(14px) scale(0.96)', toTransform: 'none', opacities: ['0', '1'], atMost: 1 },
-        { cites: '§5.10 earlier content FLIPs up (it was at the bottom)', match: web('ix-timeline:make-room'), duration: 550, curve: SPRING, moves: ['transform'] },
+        { cites: '§5.10 the new bubble from translateY(14px) scale(.96), opacity 0, 250ms spring', match: web('ix-timeline:arrive'), duration: 250, curve: SPRING, fromTransform: 'translateY(14px) scale(0.96)', toTransform: 'none', opacities: ['0', '1'], atMost: 1 },
+        { cites: '§5.10 earlier content FLIPs up (it was at the bottom)', match: web('ix-timeline:make-room'), duration: 250, curve: SPRING, moves: ['transform'] },
       ],
     });
   });
 
-  test('§5.11 the send flight is not this gate’s to clamp: it still flies its 620ms arc', async ({ page }, info) => {
+  test('§5.11 the send flight is not this gate’s to clamp: it still flies its 280ms arc', async ({ page }, info) => {
     const h = await open(page, info);
     await h.step('arrive');
     await rest(page, 'arrived');
@@ -495,7 +494,7 @@ test.describe('the Index motion gate (index-spec §5)', () => {
     await rest(page, 'sent');
     const flight = (await describeMoment(page)).filter((r) => r.kind === 'web' && r.id === 'data-motion-recipe:send-flight');
     expect(flight.length, 'the flight played').toBeGreaterThan(0);
-    for (const record of flight.filter((r) => r.properties.includes('transform'))) expect(record.duration, 'M1: 620ms').toBe(620);
+    for (const record of flight.filter((r) => r.properties.includes('transform'))) expect(record.duration, 'M1: 280ms').toBe(280);
     const travel = Math.max(
       ...flight.flatMap((r) => r.transforms.map((t) => Math.max(...[...t.matchAll(/-?\d+(?:\.\d+)?px/g)].map((m) => Math.abs(Number.parseFloat(m[0])))))),
     );
@@ -506,15 +505,15 @@ test.describe('the Index motion gate (index-spec §5)', () => {
     await open(page, info);
     await moment(page, 'the box opens', () => composerInput(page).click(), {
       plays: [
-        { cites: '§5.12 the top cap translates up 46px, 500ms spring', match: webOn('ix-composer:shape:top', 'slice--top'), duration: 500, curve: SPRING, fromTransform: 'translateY(46px)', toTransform: 'none' },
-        { cites: '§5.12 the middle scales in Y from 0 to 1, 500ms spring', match: webOn('ix-composer:shape:mid', 'slice--mid'), duration: 500, curve: SPRING, fromTransform: /^scaleY\(/, toTransform: 'none' },
-        { cites: '§5.12 the tools row: opacity 300ms after 80ms', match: (r) => transition('opacity', 'ix-composer__tools')(r) && r.opacities.at(-1) === '1', duration: 300, curve: ANY, delay: 80 },
-        { cites: '§5.12 the tools row: from translateY(6px), 450ms spring', match: toward(transition('transform', 'ix-composer__tools'), /^none$/), duration: 450, curve: SPRING, fromTransform: 'translateY(6px)' },
-        { cites: '§5.12 the feed above FLIPs from its old position, 500ms spring', match: web('ix-conversation:feed'), duration: 500, curve: SPRING, moves: ['transform'] },
+        { cites: '§5.12 the top cap translates up 46px, 225ms spring', match: webOn('ix-composer:shape:top', 'slice--top'), duration: 225, curve: SPRING, fromTransform: 'translateY(46px)', toTransform: 'none' },
+        { cites: '§5.12 the middle scales in Y from 0 to 1, 225ms spring', match: webOn('ix-composer:shape:mid', 'slice--mid'), duration: 225, curve: SPRING, fromTransform: /^scaleY\(/, toTransform: 'none' },
+        { cites: '§5.12 the tools row: opacity 135ms after 35ms', match: (r) => transition('opacity', 'ix-composer__tools')(r) && r.opacities.at(-1) === '1', duration: 135, curve: ANY, delay: 35 },
+        { cites: '§5.12 the tools row: from translateY(6px), 205ms spring', match: toward(transition('transform', 'ix-composer__tools'), /^none$/), duration: 205, curve: SPRING, fromTransform: 'translateY(6px)' },
+        { cites: '§5.12 the feed above FLIPs from its old position, 225ms spring', match: web('ix-conversation:feed'), duration: 225, curve: SPRING, moves: ['transform'] },
       ],
     });
     await moment(page, 'typing', () => page.keyboard.type('hey'), {
-      plays: [{ cites: '§5.13 send: quiet → cream, a 200ms color transition', match: transition('background-color', 'ix-composer__send'), duration: 200, curve: ANY }],
+      plays: [{ cites: '§5.13 send: quiet → cream, a 90ms color transition', match: transition('background-color', 'ix-composer__send'), duration: 90, curve: ANY }],
     });
     await moment(page, 'the box closes', async () => {
       await page.keyboard.press('Control+A');
@@ -522,8 +521,8 @@ test.describe('the Index motion gate (index-spec §5)', () => {
       await page.locator('.ix-main').click({ position: { x: 600, y: 300 } });
     }, {
       plays: [
-        { cites: '§5.12 closing reverses in 350ms', match: webOn('ix-composer:shape:top', 'slice--top'), duration: 350, curve: SPRING, fromTransform: 'translateY(-46px)' },
-        { cites: '§5.12 the feed follows, 350ms', match: web('ix-conversation:feed'), duration: 350, curve: SPRING },
+        { cites: '§5.12 closing reverses in 160ms', match: webOn('ix-composer:shape:top', 'slice--top'), duration: 160, curve: SPRING, fromTransform: 'translateY(-46px)' },
+        { cites: '§5.12 the feed follows, 160ms', match: web('ix-conversation:feed'), duration: 160, curve: SPRING },
       ],
     });
   });
@@ -538,9 +537,9 @@ test.describe('the Index motion gate (index-spec §5)', () => {
     await rest(page, 'at the top');
     const records = await moment(page, 'scrolled past 40px', () => scrollConversation(page, 120), {
       plays: [
-        { cites: '§5.14 the folded title enters: opacity 250ms', match: (r) => transition('opacity', 'ix-toolbar__title')(r) && r.opacities.at(-1) === '1', duration: 250, curve: ANY },
-        { cites: '§5.14 … and from translateY(6px), 350ms spring', match: toward(transition('transform', 'ix-toolbar__title'), /^none$/), duration: 350, curve: SPRING, fromTransform: 'translateY(6px)' },
-        { cites: '§5.14 the toolbar background appears, 300ms (color)', match: transition('background-color', 'ix-toolbar'), duration: 300, curve: ANY },
+        { cites: '§5.14 the folded title enters: opacity 115ms', match: (r) => transition('opacity', 'ix-toolbar__title')(r) && r.opacities.at(-1) === '1', duration: 115, curve: ANY },
+        { cites: '§5.14 … and from translateY(6px), 160ms spring', match: toward(transition('transform', 'ix-toolbar__title'), /^none$/), duration: 160, curve: SPRING, fromTransform: 'translateY(6px)' },
+        { cites: '§5.14 the toolbar background appears, 135ms (color)', match: transition('background-color', 'ix-toolbar'), duration: 135, curve: ANY },
       ],
     });
     // Scroll-linked, no timer: the large title itself never animates.
@@ -559,14 +558,14 @@ test.describe('the Index motion gate (index-spec §5)', () => {
   test('§5.15 hover lifts: the dock 2px, rows one shade lighter in color', async ({ page }, info) => {
     await open(page, info);
     await moment(page, 'hovering a dock item', () => dockItem(page, 'gameNight').hover(), {
-      plays: [{ cites: '§5.15 dock items −2px, 350ms spring', match: toward(transition('transform', 'ix-dock__item'), /translateY\(-2px\)/), duration: 350, curve: SPRING }],
+      plays: [{ cites: '§5.15 dock items −2px, 160ms spring', match: toward(transition('transform', 'ix-dock__item'), /translateY\(-2px\)/), duration: 160, curve: SPRING }],
     });
     await moment(page, 'hovering a channel row', () => channelRow(page, 'fuelClips').hover(), {
-      plays: [{ cites: '§5.15 rows: background one step lighter, 120ms ease (color only)', match: transition('background-color', 'ix-ch'), duration: 120, curve: EASE }],
+      plays: [{ cites: '§5.15 rows: background one step lighter, 55ms ease (color only)', match: transition('background-color', 'ix-ch'), duration: 55, curve: EASE }],
     });
   });
 
-  test('§5.16 Bring your people says "Link copied" with a 200ms crossfade, and back after 2s', async ({ page, context }, info) => {
+  test('§5.16 Bring your people says "Link copied" with a 90ms crossfade, and back after 2s', async ({ page, context }, info) => {
     await context.grantPermissions(['clipboard-read', 'clipboard-write']);
     await open(page, info);
     await page.route(`**/api/v1/channels/${CH.fuelGeneral}/invites`, (route) =>
@@ -578,23 +577,23 @@ test.describe('the Index motion gate (index-spec §5)', () => {
       await park(page);
       await page.waitForTimeout(2_400);
     }, {
-      plays: [{ cites: '§5.16 the label crossfades (opacity), 200ms, there and back', match: (r) => r.kind === 'transition' && r.id === 'opacity' && /ix-way__[ab]/.test(r.target), duration: 200, curve: ANY, atLeast: 4 }],
+      plays: [{ cites: '§5.16 the label crossfades (opacity), 90ms, there and back', match: (r) => r.kind === 'transition' && r.id === 'opacity' && /ix-way__[ab]/.test(r.target), duration: 90, curve: ANY, atLeast: 4 }],
     });
   });
 
   test('§5.17 sheets slide in from main’s right edge; menus scale from their anchor', async ({ page }, info) => {
     await open(page, info);
     await moment(page, 'the search sheet opens', () => page.getByRole('button', { name: 'Search messages' }).click(), {
-      plays: [{ cites: '§5.17 sheets: translateX(24px), opacity 0 → none, 380ms spring', match: cssAnimation('ix-sheet-in'), duration: 380, curve: SPRING, fromTransform: /translate3d\(24px, 0px, 0px\)|translateX\(24px\)/, toTransform: 'none', opacities: ['0', '1'] }],
+      plays: [{ cites: '§5.17 sheets: translateX(24px), opacity 0 → none, 175ms spring', match: cssAnimation('ix-sheet-in'), duration: 175, curve: SPRING, fromTransform: /translate3d\(24px, 0px, 0px\)|translateX\(24px\)/, toTransform: 'none', opacities: ['0', '1'] }],
     });
     await moment(page, 'the search sheet closes', () => page.keyboard.press('Escape'), {
-      plays: [{ cites: '§5.17 out 250ms ease', match: cssAnimation('ix-sheet-out'), duration: 250, curve: EASE }],
+      plays: [{ cites: '§5.17 out 115ms ease', match: cssAnimation('ix-sheet-out'), duration: 115, curve: EASE }],
     });
     await moment(page, 'the server menu opens', () => page.getByRole('button', { name: 'Server options' }).click(), {
-      plays: [{ cites: '§5.17 menus: scale(.97) + fade from their anchor, 180ms ease', match: cssAnimation('ix-pop-in'), duration: 180, curve: EASE, fromTransform: 'scale(0.97)', opacities: ['0', '1'] }],
+      plays: [{ cites: '§5.17 menus: scale(.97) + fade from their anchor, 80ms ease', match: cssAnimation('ix-pop-in'), duration: 80, curve: EASE, fromTransform: 'scale(0.97)', opacities: ['0', '1'] }],
     });
     await moment(page, 'the server menu closes', () => page.keyboard.press('Escape'), {
-      plays: [{ cites: '§5.17 menus out 120ms', match: cssAnimation('ix-pop-out'), duration: 120, curve: ANY }],
+      plays: [{ cites: '§5.17 menus out 55ms', match: cssAnimation('ix-pop-out'), duration: 55, curve: ANY }],
     });
   });
 
@@ -608,8 +607,8 @@ test.describe('the Index motion gate (index-spec §5)', () => {
       await page.waitForTimeout(4_600);
     }, {
       plays: [
-        { cites: '§5.18 from translateY(−8px) + fade, 300ms spring', match: cssAnimation('pc-toast-in'), duration: 300, curve: SPRING, fromTransform: /translate3d\(0px, -8px, 0px\)|translateY\(-8px\)/, opacities: ['0'] },
-        { cites: '§5.18 out 200ms', match: cssAnimation('pc-toast-out'), duration: 200, curve: ANY },
+        { cites: '§5.18 from translateY(−8px) + fade, 135ms spring', match: cssAnimation('pc-toast-in'), duration: 135, curve: SPRING, fromTransform: /translate3d\(0px, -8px, 0px\)|translateY\(-8px\)/, opacities: ['0'] },
+        { cites: '§5.18 out 90ms', match: cssAnimation('pc-toast-out'), duration: 90, curve: ANY },
       ],
     });
   });
@@ -654,15 +653,15 @@ test.describe('the Index motion gate (index-spec §5)', () => {
       await park(page);
     }, {
       plays: [
-        { cites: '§5.20 its rows fade, 150ms', match: web('ix-collapse:fade'), duration: 150, curve: ANY, moves: ['opacity'] },
-        { cites: '§5.20 the rest of the sidebar FLIPs up, 450ms spring', match: web('ix-collapse:move'), duration: 450, curve: SPRING, moves: ['transform'] },
-        { cites: '§5.20 the chevron rotates, 200ms', match: transition('transform', 'ix-sb__chev'), duration: 200, curve: ANY },
+        { cites: '§5.20 its rows fade, 70ms', match: web('ix-collapse:fade'), duration: 70, curve: ANY, moves: ['opacity'] },
+        { cites: '§5.20 the rest of the sidebar FLIPs up, 205ms spring', match: web('ix-collapse:move'), duration: 205, curve: SPRING, moves: ['transform'] },
+        { cites: '§5.20 the chevron rotates, 90ms', match: transition('transform', 'ix-sb__chev'), duration: 90, curve: ANY },
       ],
     });
   });
 });
 
-test.describe('reduced motion (index-spec §5: every move a 150ms crossfade; no pings, no lifts; the waveform still)', () => {
+test.describe('reduced motion (index-spec §5: every move a 100ms crossfade; no pings, no lifts; the waveform still)', () => {
   test('moves fade in place, pings and lifts are gone, the waveform is still', async ({ page }, info) => {
     await page.emulateMedia({ reducedMotion: 'reduce' });
     const h = await open(page, info);
@@ -708,14 +707,14 @@ test.describe('reduced motion (index-spec §5: every move a 150ms crossfade; no 
     await page.getByRole('button', { name: 'Search messages' }).click();
     await rest(page, 'reduced: a sheet');
     const sheet = (await describeMoment(page)).filter(cssAnimation('ix-fade-in'));
-    expect(sheet.map((r) => [r.duration, r.properties.join(',')]), 'a sheet crossfades in 150ms').toEqual([[REDUCED_MS, 'opacity']]);
+    expect(sheet.map((r) => [r.duration, r.properties.join(',')]), 'a sheet crossfades in 100ms').toEqual([[REDUCED_MS, 'opacity']]);
     await page.keyboard.press('Escape');
     await rest(page, 'reduced: the sheet closed');
     await markMoment(page);
     await page.getByRole('button', { name: 'Server options' }).click();
     await rest(page, 'reduced: a menu');
     const menu = (await describeMoment(page)).filter(cssAnimation('ix-fade-in'));
-    expect(menu.map((r) => [r.duration, r.properties.join(',')]), 'a menu crossfades in 150ms').toEqual([[REDUCED_MS, 'opacity']]);
+    expect(menu.map((r) => [r.duration, r.properties.join(',')]), 'a menu crossfades in 100ms').toEqual([[REDUCED_MS, 'opacity']]);
     await page.keyboard.press('Escape');
     // The waveform is still: talking draws it, but nothing runs.
     await h.step(speak, { who: 'jeremy', room: 'fuelRoomGeneral', speaking: true });
@@ -732,22 +731,22 @@ test.describe('the gate catches what it guards', () => {
     // Someone "improves" the glide: a height animation beside it, and a shadow transition on a row.
     await page.evaluate(() => {
       const selection = document.querySelector<HTMLElement>('.ix-sel');
-      const grow = selection?.animate([{ height: '51px' }, { height: '60px' }], { duration: 450, easing: 'cubic-bezier(0.32, 0.72, 0, 1)' });
+      const grow = selection?.animate([{ height: '51px' }, { height: '60px' }], { duration: 205, easing: 'cubic-bezier(0.32, 0.72, 0, 1)' });
       if (grow) grow.id = 'ix-select:glide';
       const row = document.querySelector<HTMLElement>('[data-testid="ix-channel-row"]');
       if (row) {
-        row.style.transition = 'box-shadow 450ms';
+        row.style.transition = 'box-shadow 205ms';
         row.style.boxShadow = '0 0 0 4px red';
       }
     });
     await page.waitForTimeout(1_200);
     const records = await describeMoment(page);
-    const glide = { plays: [{ cites: '§5.2 glide', match: (r: MotionRecord) => web('ix-select:glide')(r) && r.properties.includes('transform'), duration: 450, curve: SPRING }] };
+    const glide = { plays: [{ cites: '§5.2 glide', match: (r: MotionRecord) => web('ix-select:glide')(r) && r.properties.includes('transform'), duration: 205, curve: SPRING }] };
     expect(() => expectMoment('self-test: height', records, glide)).toThrow(/height/);
     expect(() => expectMoment('self-test: box-shadow', records, glide)).toThrow(/boxShadow/);
     // And a duration that is not the spec's.
     const clean = records.filter((r) => r.properties.every((p) => LAW.has(p) || COLORS.has(p)));
-    expect(() => expectMoment('self-test: duration', clean, { plays: [{ ...glide.plays[0], duration: 300 }] })).toThrow(/duration/);
+    expect(() => expectMoment('self-test: duration', clean, { plays: [{ ...glide.plays[0], duration: 135 }] })).toThrow(/duration/);
     // The same record without the injected animations passes.
     expect(() => expectMoment('self-test: clean', clean, glide)).not.toThrow();
   });

@@ -7,7 +7,7 @@ import { ImageLightbox } from './ImageLightbox';
 
 /**
  * The media viewer (docs/index-spec.md §6.10): the picture grows out of the bubble
- * that was pressed (a FLIP, 450ms on the spring) and shrinks back into it on
+ * that was pressed (a FLIP, 205ms on the spring) and shrinks back into it on
  * close, then the viewer goes. Transform and opacity only.
  */
 
@@ -59,13 +59,13 @@ const properties = (id: string) =>
   new Set(byId(id).flatMap((record) => record.keyframes.flatMap((frame) => Object.keys(frame))));
 
 describe('the media viewer FLIP', () => {
-  it('grows out of the pressed bubble: a transform-only move from its rect, 450ms on the spring', () => {
+  it('grows out of the pressed bubble: a transform-only move from its rect, 205ms on the spring', () => {
     render(<ImageLightbox />);
     press();
     open();
     const grow = byId('ix-viewer:grow');
     expect(grow).toHaveLength(1);
-    expect(grow[0].options.duration).toBe(450);
+    expect(grow[0].options.duration).toBe(205);
     expect(grow[0].options.easing).toBe('cubic-bezier(0.32, 0.72, 0, 1)');
     const [first, last] = grow[0].keyframes;
     // translate(dx, dy) scale(sx, sy) from the stage's rect to the thumbnail's.
@@ -103,7 +103,7 @@ describe('the media viewer FLIP', () => {
     expect(dialog).toHaveAttribute('aria-hidden', 'true');
     const shrink = byId('ix-viewer:shrink');
     expect(shrink).toHaveLength(1);
-    expect(shrink[0].options.duration).toBe(450);
+    expect(shrink[0].options.duration).toBe(205);
     const [first, last] = shrink[0].keyframes;
     expect(first.transform).toBe('none');
     expect(last.transform).toBe('translate(180px, 210px) scale(0.2, 0.2)');
@@ -126,15 +126,15 @@ describe('the media viewer FLIP', () => {
     expect(screen.getByRole('dialog', { name: 'Image viewer' })).not.toHaveAttribute('aria-hidden');
   });
 
-  it('reduced motion: no move, a 150ms fade', () => {
+  it('reduced motion: no move, a 100ms fade', () => {
     configureMotion('reduced');
     render(<ImageLightbox />);
     press();
     open();
-    // The reduced path is the helper's own 150ms fade in place.
+    // The reduced path is the helper's own 100ms fade in place.
     const grow = byId('ix-viewer:grow');
     expect(grow).toHaveLength(1);
-    expect(grow[0].options.duration).toBe(150);
+    expect(grow[0].options.duration).toBe(100);
     expect(grow[0].keyframes.map((frame) => Object.keys(frame).filter((key) => key !== 'offset')).flat()).toEqual(['opacity', 'opacity']);
   });
 

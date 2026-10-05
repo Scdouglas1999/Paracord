@@ -74,11 +74,11 @@ function usePrimed(): () => boolean {
 
 /**
  * Push what is below the slot when its height changes (§5.5): down with the
- * card's arrival (600ms) or a row's (500ms), up when something left (450ms).
+ * card's arrival (275ms) or a row's (225ms), up when something left (205ms).
  *
  * Most changes come with a render of the slot (a card or a row arriving). One
  * does not: a person's row that has played its exit (`PeopleRows` keeps it for
- * its 250ms fade) is taken out by the rows themselves. A ResizeObserver hears
+ * its 115ms fade) is taken out by the rows themselves. A ResizeObserver hears
  * that one, so what is below FLIPs up after the row has gone ("then rows below
  * FLIP up", §5.5) instead of jumping, and the height the next render compares
  * against is the one on screen (a stale one pushed twice when the room then

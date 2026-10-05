@@ -4,14 +4,14 @@ import { IX_REDUCED_MS, IX_SPRING, canAnimate, ixReduced } from '../motion';
 
 /**
  * A channel's last line changes (docs/index-spec.md §5.3): the new line rolls up
- * from `translateY(9px)` and fades in, 520ms spring, and the time fades in over
- * 400ms. Returns the refs of the line and the time, in that order. Plays for a row that already had a line and now has a different one: not
+ * from `translateY(9px)` and fades in, 235ms spring, and the time fades in over
+ * 180ms. Returns the refs of the line and the time, in that order. Plays for a row that already had a line and now has a different one: not
  * when previews first arrive (there was no line before), not in a pane that is
- * sliding out, never at rest. Reduced motion: a 150ms fade, no travel.
+ * sliding out, never at rest. Reduced motion: a 100ms fade, no travel.
  */
 
-export const PREVIEW_ROLL_MS = 520;
-export const PREVIEW_TIME_MS = 400;
+export const PREVIEW_ROLL_MS = 235;
+export const PREVIEW_TIME_MS = 180;
 
 export function usePreviewRoll(line: string | null, time: string | null, enabled: boolean) {
   const lineRef = useRef<HTMLSpanElement>(null);

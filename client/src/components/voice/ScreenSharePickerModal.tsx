@@ -49,7 +49,7 @@ function ScreenShareSourceCard({
       aria-checked={selected}
       onClick={() => onChoose(source)}
       className={cn(
-        'pc-focusable group flex flex-col justify-start rounded-[18px] p-2.5 text-left outline-none transition-colors duration-[120ms] ease-[var(--ix-ease)]',
+        'pc-focusable group flex flex-col justify-start rounded-[18px] p-2.5 text-left outline-none transition-colors duration-[55ms] ease-[var(--ix-ease)]',
         selected
           ? 'ix-hue-selected'
           : 'bg-[var(--ix-fill-card)] shadow-[inset_0_0_0_1px_var(--ix-line)] hover:bg-[var(--ix-fill-card-hover)]',

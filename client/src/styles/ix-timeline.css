@@ -189,7 +189,7 @@
   font-weight: 600;
   line-height: 15px;
   cursor: pointer;
-  transition: color 120ms var(--ix-ease), background-color 120ms var(--ix-ease);
+  transition: color 55ms var(--ix-ease), background-color 55ms var(--ix-ease);
 }
 
 .ix-tl-new__mark:hover {
@@ -226,7 +226,7 @@
   font-size: 12px;
   font-variant-numeric: tabular-nums;
   opacity: 0;
-  transition: opacity 120ms var(--ix-ease);
+  transition: opacity 55ms var(--ix-ease);
 }
 
 .ix-tl-system:hover .ix-tl-system__time,
@@ -531,7 +531,7 @@ button.ix-msg__who:hover {
   pointer-events: none;
   opacity: 0;
   transform: translateY(-50%);
-  transition: opacity 120ms var(--ix-ease);
+  transition: opacity 55ms var(--ix-ease);
 }
 
 .ix-msg[data-own] .ix-msg__time {
@@ -564,7 +564,7 @@ button.ix-msg__who:hover {
   line-height: 16px;
   text-align: left;
   cursor: pointer;
-  transition: color 120ms var(--ix-ease);
+  transition: color 55ms var(--ix-ease);
 }
 
 .ix-msg[data-own] .ix-reply {
@@ -637,7 +637,7 @@ button.ix-msg__who:hover {
   box-shadow: inset 0 0 0 1px var(--ix-line), var(--ix-shadow-capsule);
   visibility: hidden;
   opacity: 0;
-  transition: opacity 120ms var(--ix-ease), visibility 0s linear 120ms;
+  transition: opacity 55ms var(--ix-ease), visibility 0s linear 55ms;
 }
 
 .ix-msg:hover .ix-capsule,
@@ -645,7 +645,7 @@ button.ix-msg__who:hover {
 .ix-msg[data-menu-open] .ix-capsule {
   visibility: visible;
   opacity: 1;
-  transition: opacity 120ms var(--ix-ease), visibility 0s;
+  transition: opacity 55ms var(--ix-ease), visibility 0s;
 }
 
 .ix-capsule__btn {
@@ -659,7 +659,7 @@ button.ix-msg__who:hover {
   background: transparent;
   color: var(--ix-ink-2);
   cursor: pointer;
-  transition: color 120ms var(--ix-ease), background-color 120ms var(--ix-ease);
+  transition: color 55ms var(--ix-ease), background-color 55ms var(--ix-ease);
 }
 
 .ix-capsule__btn:hover,
@@ -733,7 +733,7 @@ button.ix-msg__who:hover {
   color: var(--ix-ink-2);
   font: inherit;
   cursor: pointer;
-  transition: background-color 120ms var(--ix-ease), color 120ms var(--ix-ease);
+  transition: background-color 55ms var(--ix-ease), color 55ms var(--ix-ease);
 }
 
 .ix-bite__seg[data-me] {
@@ -899,7 +899,7 @@ button.ix-msg__who:hover {
   gap: 6px;
   visibility: hidden;
   opacity: 0;
-  transition: opacity 120ms var(--ix-ease), visibility 0s linear 120ms;
+  transition: opacity 55ms var(--ix-ease), visibility 0s linear 55ms;
 }
 
 .ix-media:hover .ix-media__tools,
@@ -907,7 +907,7 @@ button.ix-msg__who:hover {
 .ix-msg[data-coarse] .ix-media__tools {
   visibility: visible;
   opacity: 1;
-  transition: opacity 120ms var(--ix-ease), visibility 0s;
+  transition: opacity 55ms var(--ix-ease), visibility 0s;
 }
 
 .ix-media__tool {
@@ -921,7 +921,7 @@ button.ix-msg__who:hover {
   background: var(--ix-capsule);
   color: var(--ix-ink-2);
   cursor: pointer;
-  transition: color 120ms var(--ix-ease);
+  transition: color 55ms var(--ix-ease);
 }
 
 .ix-media__tool:hover:not(:disabled) {
@@ -980,7 +980,7 @@ button.ix-msg__who:hover {
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
-  transition: color 120ms var(--ix-ease), background-color 120ms var(--ix-ease);
+  transition: color 55ms var(--ix-ease), background-color 55ms var(--ix-ease);
 }
 
 .ix-file__action:hover:not(:disabled) {
@@ -1035,7 +1035,7 @@ button.ix-msg__who:hover {
   line-height: 16px;
   font-variant-numeric: tabular-nums;
   cursor: pointer;
-  transition: color 120ms var(--ix-ease);
+  transition: color 55ms var(--ix-ease);
 }
 
 .ix-thread-line:hover {
@@ -1093,7 +1093,7 @@ button.ix-msg__who:hover {
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
-  transition: color 120ms var(--ix-ease), background-color 120ms var(--ix-ease);
+  transition: color 55ms var(--ix-ease), background-color 55ms var(--ix-ease);
 }
 
 .ix-msg__edit-btn:hover:not(:disabled) {
@@ -1279,8 +1279,8 @@ button.ix-msg__who:hover {
   font-variant-numeric: tabular-nums;
   pointer-events: auto;
   cursor: pointer;
-  animation: ix-jump-in 300ms var(--ix-spring) both;
-  transition: background-color 120ms var(--ix-ease);
+  animation: ix-jump-in 135ms var(--ix-spring) both;
+  transition: background-color 55ms var(--ix-ease);
 }
 
 .ix-jump:hover {
@@ -1299,7 +1299,7 @@ button.ix-msg__who:hover {
 }
 
 :root[data-motion='reduced'] .ix-jump {
-  animation-duration: 150ms;
+  animation-duration: 100ms;
 }
 
 /* ---- Bulk delete (moderators) ----------------------------------------------------------- */

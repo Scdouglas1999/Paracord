@@ -4,7 +4,7 @@ import { useReducedMotion } from '../../../lib/motion/reducedMotion';
 
 /**
  * Staying mounted for an exit of a given length (docs/index-spec.md §5.17: a
- * sheet leaves in 250ms, longer than `usePresence`'s 170ms hold, which would cut
+ * sheet leaves in 115ms, longer than `usePresence`'s 75ms hold, which would cut
  * the leave short).
  *
  * The same rules as `lib/motion/presence.ts` `usePresence`, which this mirrors
@@ -57,7 +57,7 @@ export function useExitPresence(open: boolean, exitMs: number): ExitPresence {
   return state;
 }
 
-/** Index motion: a sheet enters in 380ms and leaves in 250ms (§5.17). */
-export const SHEET_EXIT_MS = 250;
-/** Menus and popovers leave in 120ms (§5.17); the hold is a little longer so the animation finishes first. */
-export const MENU_EXIT_MS = 140;
+/** Index motion: a sheet enters in 175ms and leaves in 115ms (§5.17). */
+export const SHEET_EXIT_MS = 115;
+/** Menus and popovers leave in 55ms (§5.17); the hold is a little longer so the animation finishes first. */
+export const MENU_EXIT_MS = 65;

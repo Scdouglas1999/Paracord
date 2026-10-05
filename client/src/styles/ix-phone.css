@@ -587,11 +587,11 @@
 }
 
 :root[data-ix-layout='phone'] .ix-sheet[data-host='window'].is-entering {
-  animation: ix-phone-push-in 360ms var(--ix-spring) backwards;
+  animation: ix-phone-push-in 165ms var(--ix-spring) backwards;
 }
 
 :root[data-ix-layout='phone'] .ix-sheet[data-host='window'].is-leaving {
-  animation: ix-phone-push-out 360ms var(--ix-spring) forwards;
+  animation: ix-phone-push-out 165ms var(--ix-spring) forwards;
 }
 
 /* The edge swipe already carried it off: it stays there until it unmounts. */
@@ -601,11 +601,11 @@
 }
 
 :root[data-ix-layout='phone'][data-motion='reduced'] .ix-sheet[data-host='window'].is-entering {
-  animation: ix-fade-in 150ms var(--ix-ease) backwards;
+  animation: ix-fade-in 100ms var(--ix-ease) backwards;
 }
 
 :root[data-ix-layout='phone'][data-motion='reduced'] .ix-sheet[data-host='window'].is-leaving {
-  animation: ix-fade-out 150ms var(--ix-ease) forwards;
+  animation: ix-fade-out 100ms var(--ix-ease) forwards;
 }
 
 /* ---- Menus are action sheets (§9: radius 20, rows 52) ----------------------------------- */
@@ -617,12 +617,12 @@
 }
 
 .ix-action-scrim.is-entering {
-  animation: ix-fade-in 240ms var(--ix-ease) backwards;
+  animation: ix-fade-in 110ms var(--ix-ease) backwards;
 }
 
 .ix-action-scrim.is-leaving {
   pointer-events: none;
-  animation: ix-fade-out 240ms var(--ix-ease) forwards;
+  animation: ix-fade-out 110ms var(--ix-ease) forwards;
 }
 
 .ix-menu.ix-menu--sheet,
@@ -750,23 +750,23 @@
 
 .ix-menu.ix-menu--sheet.is-entering,
 .ix-action-sheet.is-entering {
-  animation: ix-action-in 360ms var(--ix-spring) backwards;
+  animation: ix-action-in 165ms var(--ix-spring) backwards;
 }
 
 .ix-menu.ix-menu--sheet.is-leaving,
 .ix-action-sheet.is-leaving {
   pointer-events: none;
-  animation: ix-action-out 240ms var(--ix-ease) forwards;
+  animation: ix-action-out 110ms var(--ix-ease) forwards;
 }
 
 :root[data-motion='reduced'] .ix-menu.ix-menu--sheet.is-entering,
 :root[data-motion='reduced'] .ix-action-sheet.is-entering {
-  animation: ix-fade-in 150ms var(--ix-ease) backwards;
+  animation: ix-fade-in 100ms var(--ix-ease) backwards;
 }
 
 :root[data-motion='reduced'] .ix-menu.ix-menu--sheet.is-leaving,
 :root[data-motion='reduced'] .ix-action-sheet.is-leaving {
-  animation: ix-fade-out 150ms var(--ix-ease) forwards;
+  animation: ix-fade-out 100ms var(--ix-ease) forwards;
 }
 
 /* The call's popovers (the microphone's menu, More, share quality) are sheets at
@@ -826,11 +826,11 @@
 }
 
 .ix-switcher[data-layout='phone'].is-entering {
-  animation: ix-phone-rise 300ms var(--ix-spring) backwards;
+  animation: ix-phone-rise 135ms var(--ix-spring) backwards;
 }
 
 :root[data-motion='reduced'] .ix-switcher[data-layout='phone'].is-entering {
-  animation: ix-fade-in 150ms var(--ix-ease) backwards;
+  animation: ix-fade-in 100ms var(--ix-ease) backwards;
 }
 
 /* ---- Reduced transparency: the strip and the floating controls are opaque ------------------ */

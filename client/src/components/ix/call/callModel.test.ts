@@ -138,7 +138,7 @@ describe('callMotion', () => {
     return el;
   };
 
-  it('open grows the surface out of the card (translate + non-uniform scale, .3 -> 1, 600ms spring); content fades from 40%', () => {
+  it('open grows the surface out of the card (translate + non-uniform scale, .3 -> 1, 275ms spring); content fades from 40%', () => {
     const surface = box(326, 10, 944, 780);
     const content = document.createElement('div');
     surface.appendChild(content);
@@ -167,7 +167,7 @@ describe('callMotion', () => {
     configureMotion('reduced');
     playTheater(surface, null, { left: 326, top: 10, width: 944, height: 780 });
     expect(waapi.played[1].keyframes).toEqual([{ opacity: 0 }, { opacity: 1 }]);
-    expect(waapi.played[1].options.duration).toBe(150);
+    expect(waapi.played[1].options.duration).toBe(100);
   });
 
   it('counter keyframes end at rest and invert the start scale', () => {
@@ -177,7 +177,7 @@ describe('callMotion', () => {
     expect(frames.every((frame) => frame.opacity === undefined)).toBe(true);
   });
 
-  it('close: a still copy (no ids, no test ids, no hole) shrinks into the card in 450ms, then goes', async () => {
+  it('close: a still copy (no ids, no test ids, no hole) shrinks into the card in 205ms, then goes', async () => {
     const surface = box(326, 10, 944, 780);
     surface.setAttribute('data-testid', 'ix-call');
     surface.setAttribute('data-native-underlay-clear', '');

@@ -14,7 +14,7 @@ export const IX_SPRING = 'cubic-bezier(0.32, 0.72, 0, 1)';
 export const IX_EASE = 'cubic-bezier(0.2, 0.8, 0.2, 1)';
 
 /** Reduced motion replaces every move with an opacity crossfade of this length (§5). */
-export const IX_REDUCED_MS = 150;
+export const IX_REDUCED_MS = 100;
 
 /**
  * Whether motion is reduced right now: the app's one switch (OS setting folded

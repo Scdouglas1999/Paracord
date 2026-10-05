@@ -17,8 +17,8 @@ import { IX_SPRING, canAnimate, ixReduced } from '../ix/motion';
  *
  * The bottom cap never moves: the box is anchored at its foot (it sits on the
  * conversation's bottom edge), so growing and shrinking happen at the top.
- * Growing (open, a new line, an attachment) runs 500ms on the spring; shrinking
- * (close, a line removed) 350ms (§5.12 "closing reverses in 350ms"). A change
+ * Growing (open, a new line, an attachment) runs 225ms on the spring; shrinking
+ * (close, a line removed) 160ms (§5.12 "closing reverses in 160ms"). A change
  * mid-move starts from where the shape is on screen, not from where it was
  * going (§5 "canceled and committed if a newer event of the same kind starts").
  *
@@ -30,9 +30,9 @@ import { IX_SPRING, canAnimate, ixReduced } from '../ix/motion';
 /** The corner radius of the box, and so the height of each cap. */
 export const COMPOSER_RADIUS = 24;
 /** Opening, or any growth. */
-export const COMPOSER_GROW_MS = 500;
+export const COMPOSER_GROW_MS = 225;
 /** Closing, or any shrink. */
-export const COMPOSER_SHRINK_MS = 350;
+export const COMPOSER_SHRINK_MS = 160;
 
 export interface ComposerShapeMove {
   /** Where the top edge starts, relative to its new place (px; positive = lower). */

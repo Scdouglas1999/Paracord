@@ -201,7 +201,7 @@ describe('taking off', () => {
     expect(glides).toHaveLength(2);
     for (const glide of glides) {
       expect(glide.keyframes[0].transform).toBe('translate3d(0px, 60px, 0)');
-      expect(Number(glide.options.duration)).toBe(560);
+      expect(Number(glide.options.duration)).toBe(255);
       expect(glide.options.easing).toBe('cubic-bezier(0.32, 0.72, 0, 1)');
     }
   });

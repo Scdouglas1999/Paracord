@@ -39,7 +39,7 @@ import type { Place } from './place';
 export interface SidebarSlotProps {
   /**
    * The place this pane shows. NOT necessarily the route's: while the place
-   * slides, the leaving pane keeps rendering the old place for 450ms. Read the
+   * slides, the leaving pane keeps rendering the old place for 205ms. Read the
    * place from here, never from the route, and key per-place state on it.
    * The pane (`.ix-pane`) is the scroller, padding 16 12 8, flex column with
    * children that never shrink; the slot renders its sections as children.

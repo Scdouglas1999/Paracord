@@ -56,7 +56,7 @@ describe('Glass tokens', () => {
     expect(decl('--accent-danger')).toBe('var(--ix-danger-ink)');
   });
 
-  it('holds the shape and depth of §2.4 and the 120ms timing of §9', () => {
+  it('holds the shape and depth of §2.4 and the 55ms timing of §9', () => {
     expect(decl('--r-pane')).toBe('28px');
     expect(decl('--r-bubble')).toBe('20px');
     expect(decl('--r-row')).toBe('16px');
@@ -64,7 +64,7 @@ describe('Glass tokens', () => {
     expect(decl('--sh-content')).toBe('0 1px 2px rgba(0, 0, 0, 0.28)');
     expect(decl('--sh-raised')).toContain('0 10px 28px rgba(0, 0, 0, 0.2)');
     expect(decl('--sh-pane')).toBe('0 40px 90px rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.045)');
-    expect(decl('--glass-ms')).toBe('120ms');
+    expect(decl('--glass-ms')).toBe('55ms');
     expect(decl('--glass-focus-color')).toBe('rgba(255, 255, 255, 0.85)');
     expect(decl('--glass-focus-offset')).toBe('2px');
   });

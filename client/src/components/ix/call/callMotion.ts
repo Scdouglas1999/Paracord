@@ -7,19 +7,19 @@ import { IX_REDUCED_MS, IX_SPRING, canAnimate, invertTransform, ixReduced, type 
  * The call view's moves (docs/index-spec.md §5.8, §5.9, §7.6).
  *
  *   open     the surface grows out of the room card: translate + non-uniform
- *            scale from the card's rect (origin 0 0), opacity .3 -> 1, 600ms
+ *            scale from the card's rect (origin 0 0), opacity .3 -> 1, 275ms
  *            spring. Its content sits in a counter-layer that undoes the scale
  *            and only fades, from 40% of the move.
  *   theater  the surface FLIPs from main's inset to the window's (or back),
- *            600ms spring; the content keeps its new size in the counter-layer
+ *            275ms spring; the content keeps its new size in the counter-layer
  *            while the surface grows around it.
  *   close    Back to chat: a still copy of the surface shrinks back into the
- *            card, 450ms spring, its content fading in the first third, then
+ *            card, 205ms spring, its content fading in the first third, then
  *            it is gone. The real view unmounts at once, so every video it
  *            subscribed stops when the close starts (§7.3).
  *
  * Every move is transform and opacity only, with ids `ix-call:*`; nothing fills
- * forwards on anything that stays. Reduced motion: a 150ms fade in place.
+ * forwards on anything that stays. Reduced motion: a 100ms fade in place.
  *
  * NATIVE VIDEO (§7.6, docs/glass-spec.md §6.6). In the desktop app each video
  * is a platform surface under the webview that follows its tile only when the
@@ -36,9 +36,9 @@ import { IX_REDUCED_MS, IX_SPRING, canAnimate, invertTransform, ixReduced, type 
  * the web there are no native surfaces, and none of this runs.
  */
 
-export const CALL_OPEN_MS = 600;
-export const CALL_THEATER_MS = 600;
-export const CALL_CLOSE_MS = 450;
+export const CALL_OPEN_MS = 275;
+export const CALL_THEATER_MS = 275;
+export const CALL_CLOSE_MS = 205;
 /** Open: the content holds at 0 until this share of the move, then fades in. */
 export const CALL_CONTENT_FROM = 0.4;
 /**

@@ -6,7 +6,7 @@
    a utility at the call site still wins.
 
    Only `transform` and `opacity` animate (the motion lint). Hover and press are
-   background-color and color changes over 120ms ease-out; nothing scales on
+   background-color and color changes over 55ms ease-out; nothing scales on
    press. Reduced motion is the `data-motion` switch, never a media query.
    ============================================================================= */
 

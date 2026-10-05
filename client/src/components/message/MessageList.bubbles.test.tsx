@@ -1007,7 +1007,7 @@ describe('a message arrives (§5.10)', () => {
     const [pop] = arrivals();
     expect(pop.target).toBe(rowOf('just arrived'));
     expect(pop.keyframes[0]).toMatchObject({ transform: 'translateY(14px) scale(0.96)', opacity: 0, transformOrigin: '0% 100%' });
-    expect(pop.options).toMatchObject({ duration: 550, easing: 'cubic-bezier(0.32, 0.72, 0, 1)' });
+    expect(pop.options).toMatchObject({ duration: 250, easing: 'cubic-bezier(0.32, 0.72, 0, 1)' });
     for (const frame of pop.keyframes) {
       for (const property of Object.keys(frame)) {
         expect(['transform', 'opacity', 'transformOrigin', 'offset', 'easing', 'composite']).toContain(property);

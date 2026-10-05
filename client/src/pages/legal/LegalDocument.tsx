@@ -71,7 +71,7 @@ export function LegalDocument({ eyebrow, icon: Icon, title, updated, intro, sect
                     <li key={s.id}>
                       <a
                         href={`#${s.id}`}
-                        className="pc-focusable block rounded-[8px] py-1 text-[13.5px] font-medium text-[var(--ix-ink-2)] transition-colors duration-[120ms] ease-[var(--ix-ease)] hover:text-[var(--ix-ink)]"
+                        className="pc-focusable block rounded-[8px] py-1 text-[13.5px] font-medium text-[var(--ix-ink-2)] transition-colors duration-[55ms] ease-[var(--ix-ease)] hover:text-[var(--ix-ink)]"
                       >
                         {s.heading}
                       </a>

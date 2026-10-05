@@ -44,7 +44,7 @@ export function ErrorBanner({
         <button
           type="button"
           onClick={onRetry}
-          className="pc-focusable shrink-0 rounded-[10px] bg-[var(--ix-fill-ctl)] px-3 py-1 text-[13px] font-semibold text-[var(--ix-ink)] transition-colors duration-[120ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill-ctl-hover)] active:bg-[var(--ix-fill-2)]"
+          className="pc-focusable shrink-0 rounded-[10px] bg-[var(--ix-fill-ctl)] px-3 py-1 text-[13px] font-semibold text-[var(--ix-ink)] transition-colors duration-[55ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill-ctl-hover)] active:bg-[var(--ix-fill-2)]"
         >
           {retryLabel}
         </button>

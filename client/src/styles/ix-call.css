@@ -91,7 +91,7 @@
   background: transparent;
   color: var(--ix-ink-2);
   cursor: pointer;
-  transition: background-color 120ms var(--ix-ease), color 120ms var(--ix-ease);
+  transition: background-color 55ms var(--ix-ease), color 55ms var(--ix-ease);
 }
 
 .ix-call-head__tool:hover {
@@ -115,7 +115,7 @@
   font-weight: 600;
   color: var(--ix-ink);
   cursor: pointer;
-  transition: background-color 150ms var(--ix-ease);
+  transition: background-color 70ms var(--ix-ease);
 }
 
 .ix-call-head__back:hover {
@@ -248,7 +248,7 @@ button.ix-call-tile__button {
   width: 100%;
   height: 100%;
   pointer-events: none;
-  transition: opacity 200ms var(--ix-ease);
+  transition: opacity 90ms var(--ix-ease);
 }
 
 /* Your own camera reads as a mirror, as it always has (the native surface is told). */
@@ -453,7 +453,7 @@ button.ix-call-tile__button {
   gap: 12px;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 200ms var(--ix-ease);
+  transition: opacity 90ms var(--ix-ease);
 }
 
 .ix-call-stream:hover > .ix-call-stream__overlay,
@@ -633,7 +633,7 @@ button.ix-call-tile__button {
   color: var(--ix-ink);
   white-space: nowrap;
   cursor: pointer;
-  transition: background-color 120ms var(--ix-ease), color 120ms var(--ix-ease);
+  transition: background-color 55ms var(--ix-ease), color 55ms var(--ix-ease);
 }
 
 .ix-call-btn--icon {

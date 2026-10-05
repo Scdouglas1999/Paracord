@@ -19,7 +19,7 @@ import { cn } from "../../lib/utils";
  *            red fill, and never cream.
  *
  * Sizes: sm 32, md 36 (default), lg 44 (phone and the entry pages). Radius 11
- * (10 at `sm`). Hover is one token step lighter, press one step darker, 120ms;
+ * (10 at `sm`). Hover is one token step lighter, press one step darker, 55ms;
  * nothing scales.
  *
  * Legacy variant/size names (`default`, `destructive`, `secondary`, `outline`,
@@ -43,9 +43,9 @@ const buttonVariants = cva(
         "pc-focusable",
         "relative inline-flex select-none items-center justify-center gap-2 whitespace-nowrap",
         "font-semibold outline-none",
-        // Color only, over 120ms on the one ease (§5.15). A press never moves
+        // Color only, over 55ms on the one ease (§5.15). A press never moves
         // or resizes the button.
-        "transition-[background-color,color] duration-[120ms] ease-[var(--ix-ease)]",
+        "transition-[background-color,color] duration-[55ms] ease-[var(--ix-ease)]",
         "disabled:pointer-events-none disabled:opacity-[.45]",
     ].join(" "),
     {

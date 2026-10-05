@@ -268,27 +268,33 @@
      pass). Quiet, quick, never bouncy. Every duration and curve in the client
      comes from here; a component never writes its own milliseconds.
 
-       fast    120ms  hover and press feedback
-       normal  180ms  small surfaces: menus, popovers, tooltips, toasts
-       slow    240ms  panels, sheets, dialogs, page content
-       page    420ms  a page's FIRST entrance stagger, and nothing else
+       fast     55ms  hover and press feedback
+       normal   80ms  small surfaces: menus, popovers, tooltips, toasts
+       slow    110ms  panels, sheets, dialogs, page content
+       page    190ms  a page's FIRST entrance stagger, and nothing else
        exits   ~70% of the entrance, on the quicker `--ease-in`
+
+     Every duration and stagger here is its first value divided by 2.2: the owner
+     found the first set too slow after living in the app and asked for "2x,
+     maybe a bit beyond". Curves, distances and scales did not change, only the
+     clock. What did not speed up: the breath and the card glow (loops that exist
+     only while someone talks) and the soundboard burst (it has to be read).
 
      Only `transform` and `opacity` animate. Movement is 4–8px, scale 0.98→1
      (0.96 for a menu growing from its anchor). */
-  --duration-fast: 120ms;
-  --duration-normal: 180ms;
-  --duration-slow: 240ms;
-  --duration-page: 420ms;
-  /* Leaving is quicker than arriving: 130ms for a small surface (180 × .7),
-     170ms for a panel or dialog (240 × .7). `usePresence` keeps a leaving
+  --duration-fast: 55ms;
+  --duration-normal: 80ms;
+  --duration-slow: 110ms;
+  --duration-page: 190ms;
+  /* Leaving is quicker than arriving: 60ms for a small surface (80 × .7),
+     75ms for a panel or dialog (110 × .7). `usePresence` keeps a leaving
      element mounted for `--duration-exit-slow`, the longer of the two. */
-  --duration-exit: 130ms;
-  --duration-exit-slow: 170ms;
+  --duration-exit: 60ms;
+  --duration-exit-slow: 75ms;
   /* Light only: warm-up when a room lights, dim when it empties. Both are
      opacity crossfades of still glows, never an animated shadow. */
-  --duration-warm-up: 220ms;
-  --duration-dim: 400ms;
+  --duration-warm-up: 100ms;
+  --duration-dim: 180ms;
   --duration-breathe: 1600ms;
   /* A live card's glow breathes slower than a face does (server-home-spec:
      "a 2 s cycle"): a card is a room, not a person. */
@@ -299,11 +305,11 @@
   /* A shared element traveling from where you clicked to where it lands
      (§5.1 "the thing you click becomes the thing you look at"). The one
      movement longer than a panel, and still inside the page-entrance range. */
-  --duration-move: 320ms;
+  --duration-move: 145ms;
   /* A count re-rolling: old up/out, new up/in (§5.1 "numbers re-roll"). */
-  --duration-roll: 180ms;
+  --duration-roll: 80ms;
   /* A page's first entrance: neighbors start 40ms apart. */
-  --stagger-page: 40ms;
+  --stagger-page: 20ms;
   /* Curves. ONE ease-out for everything that arrives or moves, a quicker
      ease-in for everything that leaves, and the in-out that only the breath
      uses. No overshoot anywhere: there is no spring curve any more. */
@@ -312,15 +318,17 @@
   --ease-in-out: cubic-bezier(0.45, 0, 0.55, 1);
   /* Neighboring lights stagger 30ms; supporting chrome rises 80ms after the
      shared element it belongs to (§5.1). */
-  --stagger-light: 30ms;
-  --stagger-chrome: 80ms;
+  --stagger-light: 15ms;
+  --stagger-chrome: 35ms;
   /* The spring in code (lib/motion/spring.ts) exists only so an INTERRUPTED
      animation can carry its velocity into the next one. It is critically
-     damped (2·√260 ≈ 32.2, so 34 is just past it): it never overshoots, never
-     wobbles. A fresh animation uses `--ease-out`, not the spring. Unitless on
-     purpose: physics constants read by script, not lengths CSS can use. */
-  --spring-stiffness: 260;
-  --spring-damping: 34;
+     damped (2·√1260 ≈ 71, so 75 is just past it): it never overshoots, never
+     wobbles. Sped up with the clock: stiffness × 2.2² and damping × 2.2 (260 and
+     34 before) settle the same curve 2.2× sooner. A fresh animation uses
+     `--ease-out`, not the spring. Unitless on purpose: physics constants read by
+     script, not lengths CSS can use. */
+  --spring-stiffness: 1260;
+  --spring-damping: 75;
   --spring-mass: 1;
   /* Tailwind's bare `transition*` utilities default to these instead of its
      own 150ms `ease`, so an unadorned utility is already on the law. */
@@ -464,11 +472,11 @@
   --glass-focus-color: rgba(255, 255, 255, 0.85);
   --glass-focus-width: 2px;
   --glass-focus-offset: 2px;
-  /* Hover and press, 120ms ease-out; nothing scales on press. */
-  --glass-ms: 120ms;
+  /* Hover and press, 55ms ease-out; nothing scales on press. */
+  --glass-ms: 55ms;
   --glass-ease: ease-out;
-  /* Reduced motion turns every move into a 150ms crossfade. */
-  --glass-ms-reduced: 150ms;
+  /* Reduced motion turns every move into a 100ms crossfade. */
+  --glass-ms-reduced: 100ms;
   --glass-spring: cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
