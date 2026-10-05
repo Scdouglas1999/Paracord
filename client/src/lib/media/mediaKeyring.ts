@@ -4,6 +4,18 @@ import { concatBytes, utf8ToBytes } from '@noble/hashes/utils.js';
 import { bytesToHex, fromBase64, hexToBytes, toArrayBuffer, toBase64 } from '../crypto/util';
 
 /**
+ * A wrapped media key that did not authenticate between this device's call key
+ * and the sender's: it was sealed to some other call key. Typed so a caller can
+ * tell it from a malformed key (see `TrackKeyGrace` in `engineShared.ts`).
+ */
+export class UnopenableMediaKeyError extends Error {
+  constructor() {
+    super('A media key sent to this device could not be opened: it was not sealed to this call’s keys.');
+    this.name = 'UnopenableMediaKeyError';
+  }
+}
+
+/**
  * Media call keys.
  *
  * Every frame of voice and video leaves this device encrypted under a sender
@@ -334,9 +346,7 @@ export class MediaKeyring {
       } catch {
         // Authentication failed: the envelope was not sealed between this
         // device's call key and the one the sender published for this call.
-        throw new Error(
-          'A media key sent to this device could not be opened: it was not sealed to this call’s keys.',
-        );
+        throw new UnopenableMediaKeyError();
       }
       const plaintext = new Uint8Array(opened);
       try {

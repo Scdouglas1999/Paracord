@@ -34,12 +34,16 @@ describe('gateway READY guild core contract', () => {
     expect(isReadyGuildCore(readyGuild)).toBe(true);
   });
 
-  it.each(['id', 'owner_id', 'name', 'icon_hash', 'created_at', 'member_count', 'hue'] as const)(
+  it.each(['id', 'owner_id', 'name', 'icon_hash', 'created_at', 'member_count'] as const)(
     'rejects a guild missing required field %s',
     field => {
       expect(isReadyGuildCore(without(field))).toBe(false);
     },
   );
+
+  it('accepts a guild without hue: a server from before server colors sends none', () => {
+    expect(isReadyGuildCore(without('hue'))).toBe(true);
+  });
 
   it('accepts a present null icon but rejects wrongly typed icons', () => {
     expect(isReadyGuildCore({ ...readyGuild, icon_hash: null })).toBe(true);
@@ -48,8 +52,9 @@ describe('gateway READY guild core contract', () => {
   });
 
   it('accepts a server color on the wheel or null, and nothing else', () => {
-    for (const hue of [0, 214, 359, null]) expect(isReadyGuildCore({ ...readyGuild, hue })).toBe(true);
-    for (const hue of [-1, 360, 1.5, '214', undefined]) expect(isReadyGuildCore({ ...readyGuild, hue })).toBe(false);
+    // Absent (undefined) is an older server and reads as null; present, it must be on the wheel.
+    for (const hue of [0, 214, 359, null, undefined]) expect(isReadyGuildCore({ ...readyGuild, hue })).toBe(true);
+    for (const hue of [-1, 360, 1.5, '214']) expect(isReadyGuildCore({ ...readyGuild, hue })).toBe(false);
   });
 
   it.each([null, '2', -1, 1.5, 4294967296])('rejects member_count %s', member_count => {

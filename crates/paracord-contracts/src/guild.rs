@@ -6,13 +6,17 @@ use std::collections::BTreeMap;
 /// Space metadata used by the authenticated space list and navigation.
 /// Nullable fields are present in responses, including when their value is null.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = summary_fields_absent_on_older_servers)]
 pub struct GuildSummary {
     pub id: String,
     pub name: String,
     pub description: Option<String>,
     pub icon_hash: Option<String>,
     /// `/api/v1/guilds/{id}/banner?v=…` once a banner is uploaded, otherwise null.
-    /// The version changes with every upload.
+    /// The version changes with every upload. This server always sends it; it
+    /// is optional in the contract because servers older than 3.2 (no banners)
+    /// leave it out of the summary, and absent reads exactly as null.
+    #[serde(default)]
     pub banner_hash: Option<String>,
     pub owner_id: String,
     #[schemars(range(min = 0, max = 4294967295u64))]
@@ -24,7 +28,11 @@ pub struct GuildSummary {
     pub hub_settings: Option<HubSettings>,
     pub bot_settings: Option<BTreeMap<String, GuildBotConfig>>,
     /// The server's color as a hue, 0-359. Null when unset; clients then
-    /// derive one from the id.
+    /// derive one from the id. This server always sends it. It is optional in
+    /// the contract for protocol-version tolerance: a server from before
+    /// server colors leaves it out, which a client reads as null (no color
+    /// picked) and as "this server cannot store a color".
+    #[serde(default)]
     #[schemars(range(min = 0, max = 359))]
     pub hue: Option<u32>,
 }
@@ -45,6 +53,7 @@ pub struct GuildDetail {
 /// Distinct from `GuildSummary`: READY sends only durable fields, never the
 /// REST settings surface. Nullable fields are present, including when null.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = core_fields_absent_on_older_servers)]
 pub struct ReadyGuildCore {
     #[schemars(length(min = 1), regex(pattern = r"\S"))]
     pub id: String,
@@ -57,10 +66,25 @@ pub struct ReadyGuildCore {
     pub created_at: String,
     #[schemars(range(min = 0, max = 4294967295u64))]
     pub member_count: u32,
-    /// The server's color as a hue, 0-359; null when unset (see
-    /// `GuildSummary::hue`).
+    /// The server's color as a hue, 0-359; null when unset. Always sent;
+    /// optional only so a client accepts an older server that has no colors
+    /// (see `GuildSummary::hue`).
+    #[serde(default)]
     #[schemars(range(min = 0, max = 359))]
     pub hue: Option<u32>,
+}
+
+/// Servers older than 3.2 (no banners) send no `banner_hash` in the summary, and
+/// servers from before server colors send no `hue`; see
+/// [`crate::absent_on_older_servers`]. `GuildDetail` flattens the summary and
+/// inherits both.
+fn summary_fields_absent_on_older_servers(schema: &mut schemars::Schema) {
+    crate::absent_on_older_servers(schema, &["banner_hash", "hue"]);
+}
+
+/// Servers from before server colors send READY guilds without `hue`.
+fn core_fields_absent_on_older_servers(schema: &mut schemars::Schema) {
+    crate::absent_on_older_servers(schema, &["hue"]);
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]

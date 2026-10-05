@@ -39,6 +39,7 @@ import { isSportsScoreAuthor } from '../components/sports/scoreUpdate';
 import type { Channel, Guild, Member, Message, Poll, Presence, User, VoiceState } from '../types';
 import type { Component } from '../types/components';
 import { InteractionCallbackType } from '../types/interactions';
+import { useServerFeatureStore } from '../lib/serverFeatures';
 
 interface ReadyChannelPayload extends Partial<Channel> {
   id: string;
@@ -191,6 +192,8 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
   switch (event) {
     case GatewayEvents.READY: {
       useUIStore.getState().setServerRestarting(false);
+      // A reconnect may follow a server update: what it lacked is asked again.
+      useServerFeatureStore.getState().forget(serverId);
 
       // Pull an authoritative read-state snapshot on every (re)connect so unread
       // and mention badges reconcile after any events missed while offline.
@@ -225,7 +228,10 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
           icon_hash: core.icon_hash,
           created_at: core.created_at,
           member_count: core.member_count,
-          hue: core.hue,
+          // Only a server with colors sends `hue` (null when unset). Leaving the
+          // key out for an older server keeps "this server cannot store a color"
+          // readable (`serverStoresColor`), and absent reads as null everywhere.
+          ...(core.hue !== undefined ? { hue: core.hue } : {}),
         };
         if (memberScope) useGuildStore.getState().addGuild(normalizedGuild, memberScope);
 

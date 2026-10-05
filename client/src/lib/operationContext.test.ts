@@ -7,7 +7,7 @@ vi.mock('./connectionManager', () => ({ connectionManager: { getApiClient: () =>
 vi.mock('./secureStorage', () => ({ secureSet: vi.fn(), secureGet: vi.fn(), secureDelete: vi.fn() }));
 import { useServerListStore } from '../stores/serverListStore';
 import { captureOperationContext, OperationExpiredError } from './operationContext';
-import { createApiClient } from '../api/client';
+import { createApiClient, isMissingRoute } from '../api/client';
 import { acceptDatabaseHistoryEpoch, clearDatabaseHistoryMemory, DATABASE_HISTORY_HEADER, getDatabaseHistoryEpoch, registerHistoryReconciler } from './databaseHistory';
 
 const oldHistory = '7257b8f7-610e-4a8b-a20c-5a94a7b98428';
@@ -161,6 +161,29 @@ describe('operation ownership across asynchronous work', () => {
     expect(reconcile).toHaveBeenCalledWith(scope);
     expect(operation.signal.aborted).toBe(true);
     expect(getDatabaseHistoryEpoch(scope)).toBe(oldHistory);
+    unsubscribe();
+  });
+
+  it('reads a route the server does not have (404, empty, no epoch) as that, never as a history change', async () => {
+    acceptDatabaseHistoryEpoch(scope, oldHistory);
+    const reconcile = vi.fn(); const unsubscribe = registerHistoryReconciler(reconcile);
+    const client = createApiClient('https://a.test/api/v1', () => 'a-token', vi.fn(), vi.fn(), undefined, () => 'refresh-token');
+    clients.remote = client;
+    // An older server's router fallback: outside the API layer, so no epoch header.
+    client.defaults.adapter = async config => {
+      throw new AxiosError('Request failed with status code 404', 'ERR_BAD_REQUEST', config, undefined, { ...response(config, ''), status: 404, statusText: 'Not Found' });
+    };
+    const operation = captureOperationContext();
+    const failure = await operation.requestRoot({ url: '/api/v1/guilds/1/channel-previews' }).catch((error: unknown) => error);
+    expect(isMissingRoute(failure)).toBe(true);
+    expect(operation.signal.aborted).toBe(false);
+    expect(reconcile).not.toHaveBeenCalled();
+    // A 404 the API itself answered still has to carry this history's epoch.
+    client.defaults.adapter = async config => {
+      throw new AxiosError('missing', 'ERR_BAD_REQUEST', config, undefined, { ...response(config, { code: 'NOT_FOUND', message: 'Unknown channel' }), status: 404 });
+    };
+    await expect(operation.request({ url: '/channels/1' })).rejects.toThrow('Database history changed');
+    expect(reconcile).toHaveBeenCalledWith(scope);
     unsubscribe();
   });
 

@@ -9,8 +9,25 @@ pub mod relationship;
 pub mod user;
 pub mod voice;
 
-use schemars::{generate::SchemaSettings, JsonSchema};
+use schemars::{generate::SchemaSettings, JsonSchema, Schema};
 use serde_json::{json, Map, Value};
+
+/// Protocol-version tolerance for response fields added after a release.
+///
+/// Paracord is self-hosted: a new client talks to servers that are older than
+/// it. A response schema derived for serialization requires every field this
+/// server always sends, so a field added later would make the generated
+/// validators reject a whole payload (READY's servers, the server list) from
+/// an older server. Each field named here is still always sent by this server;
+/// the contract only stops requiring it, and the client reads its absence as
+/// the older server's meaning (documented on each field). This is not a
+/// fallback: there is one reading of each payload, and a feature that needs
+/// the field is off on a server that does not send it.
+pub(crate) fn absent_on_older_servers(schema: &mut Schema, fields: &[&str]) {
+    if let Some(Value::Array(required)) = schema.get_mut("required") {
+        required.retain(|name| !name.as_str().is_some_and(|name| fields.contains(&name)));
+    }
+}
 
 fn response_schema<T: JsonSchema>() -> Value {
     serde_json::to_value(
@@ -251,16 +268,20 @@ mod tests {
         let schemas = schemas();
         let snapshot = &schemas["schemas"]["VoiceStateSnapshot"];
         let required = snapshot["required"].as_array().unwrap();
+        for name in ["user_id", "channel_id", "self_stream", "self_video"] {
+            assert!(required.contains(&json!(name)), "missing: {name}");
+        }
+        // The Glass and Index fields are always sent, but servers from before
+        // them leave them out, so the contract accepts their absence.
         for name in [
+            "session_id",
+            "username",
+            "speaking",
+            "request_to_speak_at",
             "mode",
             "self_stream_started_at",
             "joined_at",
-            "user_id",
-            "channel_id",
         ] {
-            assert!(required.contains(&json!(name)), "missing: {name}");
-        }
-        for name in ["session_id", "username", "speaking", "request_to_speak_at"] {
             assert!(
                 !required.contains(&json!(name)),
                 "should be optional: {name}"
@@ -275,6 +296,20 @@ mod tests {
             "username": "sean", "avatar_hash": null
         }))
         .is_ok());
+        // An older server's voice state: no mode, no stream start, no join time.
+        let older: voice::VoiceStateSnapshot = serde_json::from_value(json!({
+            "user_id": "1", "channel_id": "2", "guild_id": "3",
+            "self_mute": false, "self_deaf": false, "self_stream": false,
+            "self_video": false, "suppress": false
+        }))
+        .unwrap();
+        assert_eq!(older.mode, voice::VoiceMode::Joined);
+        assert_eq!(older.joined_at, None);
+        assert_eq!(older.self_stream_started_at, None);
+        let sent = serde_json::to_value(&older).unwrap();
+        for name in ["mode", "self_stream_started_at", "joined_at"] {
+            assert!(sent.get(name).is_some(), "always serialized: {name}");
+        }
         assert!(
             serde_json::from_value::<voice::UpdateVoiceModeRequest>(json!({"mode": "full"}))
                 .is_err(),
@@ -328,12 +363,16 @@ mod tests {
             ]
         );
         let required = core["required"].as_array().unwrap();
-        for name in &names {
+        for name in names.iter().filter(|name| **name != "hue") {
             assert!(
                 required.contains(&json!(name)),
                 "missing READY requirement: {name}"
             );
         }
+        assert!(
+            !required.contains(&json!("hue")),
+            "a server from before colors sends no hue"
+        );
         // The READY projection intentionally omits the REST settings surface.
         for name in [
             "description",
@@ -366,7 +405,7 @@ mod tests {
     }
 
     #[test]
-    fn hue_is_a_present_nullable_wheel_angle_and_a_clearable_patch() {
+    fn hue_is_an_optional_nullable_wheel_angle_and_a_clearable_patch() {
         let schemas = schemas();
         for name in ["GuildSummary", "GuildDetail", "ReadyGuildCore"] {
             let schema = &schemas["schemas"][name];
@@ -374,14 +413,30 @@ mod tests {
             assert_eq!(hue["type"], json!(["integer", "null"]), "{name}");
             assert_eq!(hue["minimum"], json!(0), "{name}");
             assert_eq!(hue["maximum"], json!(359), "{name}");
+            // Always sent by this server, but optional in the contract: a
+            // server from before colors leaves it out (absent reads as null).
             assert!(
-                schema["required"]
+                !schema["required"]
                     .as_array()
                     .unwrap()
                     .contains(&json!("hue")),
-                "{name} always carries hue"
+                "{name} accepts a payload without hue"
             );
         }
+        let older: guild::ReadyGuildCore = serde_json::from_value(json!({
+            "id": "1", "owner_id": "2", "name": "Space", "icon_hash": null,
+            "created_at": "2026-09-12T12:00:00+00:00", "member_count": 2
+        }))
+        .unwrap();
+        assert_eq!(older.hue, None);
+        assert!(
+            serde_json::to_value(&older).unwrap().get("hue").is_some(),
+            "this server always sends hue, null included"
+        );
+        assert!(!schemas["schemas"]["GuildSummary"]["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("banner_hash")));
         let request = &schemas["schemas"]["UpdateGuildRequest"];
         assert!(!request["required"]
             .as_array()

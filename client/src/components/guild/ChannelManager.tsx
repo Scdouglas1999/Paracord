@@ -41,6 +41,7 @@ import {
 } from '../ui';
 import { FieldLabel, GroupLabel, SectionHeader, ToggleRow } from './SettingsPrimitives';
 import { toast } from '../../stores/toastStore';
+import { OlderServerError } from '../../lib/serverFeatures';
 
 interface ChannelManagerProps {
   guildId: string;
@@ -1042,16 +1043,21 @@ function SortableChannelItem({
   // Filed under the channel it was read for, so a row reused for another
   // channel shows nothing until that channel's own answer arrives.
   const [listenInRead, setListenInRead] = useState<
-    { channelId: string; enabled: boolean | null; unknown: boolean } | null
+    { channelId: string; enabled: boolean | null; unknown: boolean; olderServer?: boolean } | null
   >(null);
   const listenIn = listenInRead?.channelId === channel.id ? listenInRead.enabled : null;
   const listenInUnknown = listenInRead?.channelId === channel.id && listenInRead.unknown;
+  const listenInOlderServer = listenInRead?.channelId === channel.id && listenInRead.olderServer === true;
   useEffect(() => {
     if (!isVoice) return;
     let canceled = false;
     voiceApi.getListenIn(channel.id)
       .then((enabled) => { if (!canceled) setListenInRead({ channelId: channel.id, enabled, unknown: false }); })
-      .catch(() => { if (!canceled) setListenInRead({ channelId: channel.id, enabled: null, unknown: true }); });
+      .catch((error: unknown) => {
+        if (canceled) return;
+        // A server from before listening in has no such setting to change.
+        setListenInRead({ channelId: channel.id, enabled: null, unknown: !(error instanceof OlderServerError), olderServer: error instanceof OlderServerError });
+      });
     return () => { canceled = true; };
   }, [isVoice, channel.id]);
   const toggleListenIn = useCallback(async (next: boolean) => {
@@ -1253,7 +1259,9 @@ function SortableChannelItem({
             </label>
             <span className="flex items-center gap-1.5">
               <span className="text-meta text-text-secondary">
-                {listenInUnknown ? 'Listening in (could not load)' : 'Listening in'}
+                {listenInOlderServer
+                  ? 'Listening in (needs a newer server)'
+                  : listenInUnknown ? 'Listening in (could not load)' : 'Listening in'}
               </span>
               <Switch
                 size="sm"

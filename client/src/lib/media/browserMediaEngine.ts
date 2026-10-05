@@ -73,6 +73,7 @@ import {
   type ReassembledVideoFrame,
   type RosterKind,
   type VideoReassemblyState,
+  TrackKeyGrace,
 } from './engineShared';
 
 const SAMPLE_RATE = 48_000;
@@ -618,6 +619,9 @@ export class BrowserMediaEngine implements MediaEngine {
     if (this.disposed) throw new DOMException('The media session has ended.', 'AbortError');
   }
 
+  /** Stream keys an older relay handed over sealed to a previous call key (engineShared.ts). */
+  private readonly trackKeyGrace = new TrackKeyGrace((error) => this.failKeyExchange(error));
+
   private failKeyExchange(error: unknown): void {
     if (this.disposed) return;
     const reason = `Media encryption could not verify a participant: ${error instanceof Error ? error.message : String(error)}`;
@@ -784,6 +788,7 @@ export class BrowserMediaEngine implements MediaEngine {
     if (this.disposePromise) return this.disposePromise;
     this.disposed = true;
     this.disconnecting = true;
+    this.trackKeyGrace.dispose();
     this.cameraGeneration++;
     this.screenGeneration++;
     this.removeAbortListener?.();
@@ -2881,6 +2886,7 @@ export class BrowserMediaEngine implements MediaEngine {
           .then((decrypted) => {
             // Null: the publisher left the call before its key could be opened.
             if (this.disposed || !decrypted) return;
+            this.trackKeyGrace.opened(this.trackKey(streamId, trackId));
             this.rememberDeliveredTrackKey(
               streamId,
               trackId,
@@ -2892,7 +2898,7 @@ export class BrowserMediaEngine implements MediaEngine {
               void this.applyDeliveredTrackKeys(existingTrack);
             }
           })
-          .catch(error => this.failKeyExchange(error));
+          .catch(error => this.trackKeyGrace.refused(this.trackKey(streamId, trackId), error));
         break;
       }
       default:

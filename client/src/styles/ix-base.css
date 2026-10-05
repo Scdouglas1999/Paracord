@@ -229,6 +229,7 @@
 }
 
 .ix-cream:disabled,
+.ix-cream[aria-disabled='true'],
 .ix-ctl:disabled,
 .ix-chip:disabled {
   opacity: 0.45;
@@ -254,11 +255,11 @@
   transition: background-color 120ms var(--ix-ease);
 }
 
-.ix-cream:hover:not(:disabled) {
+.ix-cream:hover:not(:disabled):not([aria-disabled='true']) {
   background: var(--ix-cream-hover);
 }
 
-.ix-cream:active:not(:disabled) {
+.ix-cream:active:not(:disabled):not([aria-disabled='true']) {
   background: var(--ix-cream-press);
 }
 

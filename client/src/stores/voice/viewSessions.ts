@@ -19,6 +19,11 @@
  *   onto a session of its own. Watching never joins the call and stopping
  *   never leaves it. A self-preview rides the local call without a server
  *   viewer registration or audio playback, and ends when that call ends.
+ * - **An older server has no view sessions** (the route is missing,
+ *   `lib/serverFeatures.ts`). There, a member of the call watches through the
+ *   call, as every client did before view sessions, and nobody else can watch
+ *   without joining: the view fails with that reason instead of a 404. Such a
+ *   watch is never registered on the server, so stopping it sends nothing.
  * - **No automatic retry.** A view the relay superseded, ended or revoked (its
  *   viewer may no longer see the channel), one that did
  *   not connect within {@link VIEW_CONNECT_DEADLINE_MS}, or one refused by the
@@ -34,6 +39,7 @@ import { parseRelayCloseReason } from '../../lib/media/engineShared';
 import type { OperationContext } from '../../lib/operationContext';
 import type { AccountScope } from '../../lib/serverScope';
 import type { CallSession } from './callSession';
+import { noteMissingRoute, OlderServerError, serverLacks } from '../../lib/serverFeatures';
 
 /**
  * How long a new view is given to connect. The server retires a view that has
@@ -154,6 +160,11 @@ class ViewOwner {
   /** The call it rides, when it does. */
   call: CallSession | null = null;
   sessionId: string | null = null;
+  /**
+   * The server has no view sessions (an older server): this watch rides the
+   * call without a registration, so there is nothing to stop on the server.
+   */
+  unregistered = false;
   releaseAudio: (() => void) | null = null;
   /** Ended or failed: stays down. */
   finished = false;
@@ -267,7 +278,7 @@ function stopReceipt(owner: ViewOwner): string | null {
 /** Tell the server this view is over (scoped to its receipt), then let the context go. */
 function stopOnServer(owner: ViewOwner): void {
   const receipt = stopReceipt(owner);
-  const registered = !owner.isSelfPreview && (owner.route === 'session' || owner.route === 'call');
+  const registered = !owner.isSelfPreview && !owner.unregistered && (owner.route === 'session' || owner.route === 'call');
   if (!receipt || !registered) { owner.disposeContext(); return; }
   void createCallVoiceApi(owner.context).stopView(owner.target.channelId, receipt)
     .catch((error) => console.warn('[voice] Stopping a view failed:', error))
@@ -335,8 +346,22 @@ async function attemptWatch(owner: ViewOwner): Promise<void> {
       await rideCall(owner, h, attempt);
       return;
     }
-    const { data } = await createCallVoiceApi(owner.context).startView(channelId, 'watch', streamerId);
+    const serverId = owner.target.scope.serverId;
+    if (serverLacks(serverId, 'voiceViews')) {
+      await watchOnOlderServer(owner, h, attempt);
+      return;
+    }
+    let data: VoiceViewSession;
+    try {
+      ({ data } = await createCallVoiceApi(owner.context).startView(channelId, 'watch', streamerId));
+    } catch (error) {
+      if (!noteMissingRoute(serverId, 'voiceViews', error)) throw error;
+      owner.assertCurrent(attempt);
+      await watchOnOlderServer(owner, h, attempt);
+      return;
+    }
     owner.assertCurrent(attempt);
+    owner.unregistered = false;
     if (data.via_membership) await rideCall(owner, h, attempt);
     else await connectSession(owner, data, h, attempt);
   } catch (error) {
@@ -344,6 +369,16 @@ async function attemptWatch(owner: ViewOwner): Promise<void> {
     fail(owner, error);
     throw error;
   }
+}
+
+/**
+ * A server without view sessions: the call's own members see its streams
+ * through the call, and nobody else can watch without joining.
+ */
+async function watchOnOlderServer(owner: ViewOwner, h: ViewHost, attempt: number): Promise<void> {
+  if (!h.callIn(owner.target.scope, owner.target.channelId)) throw new OlderServerError('voiceViews');
+  owner.unregistered = true;
+  await rideCall(owner, h, attempt);
 }
 
 /** A watch whose server answer says it rides this client's call. */

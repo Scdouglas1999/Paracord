@@ -26,6 +26,7 @@ import { useReadStateStore } from '../stores/readStateStore';
 import { GatewayEvents } from './events';
 import { useMemberStore } from '../stores/memberStore';
 import { useGuildStore } from '../stores/guildStore';
+import { serverStoresColor } from '../components/guild/serverColor';
 import { refreshGuildChannelVisibility, useChannelStore } from '../stores/channelStore';
 import { getMessageStore, type MessageState } from '../stores/messageStore';
 import { useAuthStore } from '../stores/authStore';
@@ -137,7 +138,27 @@ describe('dispatch READY normalization', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('channel missing id'));
     warn.mockRestore();
   });
-  it.each(['id', 'owner_id', 'name', 'member_count', 'icon_hash', 'created_at', 'hue'] as const)('preserves confirmed guild metadata when READY omits %s', async field => {
+  it('lists a READY guild from a server without colors (no hue) and keeps hue absent', () => {
+    useAuthStore.setState({ user: { id: 'viewer', username: 'viewer' } as User });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { hue: _absent, ...olderCore } = readyCore;
+      dispatchGatewayEvent(SERVER, GatewayEvents.READY, { guilds: [{ ...olderCore, voice_states: [], channels: [] }] });
+      const guilds = useGuildStore.getState().guilds;
+      expect(guilds.map((guild) => guild.id)).toEqual(['g1']);
+      expect('hue' in guilds[0]).toBe(false);
+      expect(serverStoresColor(guilds[0])).toBe(false);
+      expect(warn).not.toHaveBeenCalled();
+    } finally { warn.mockRestore(); }
+  });
+  it('reads a null READY hue as a server with colors and nothing picked', () => {
+    useAuthStore.setState({ user: { id: 'viewer', username: 'viewer' } as User });
+    dispatchGatewayEvent(SERVER, GatewayEvents.READY, { guilds: [{ ...readyCore, channels: [] }] });
+    const [guild] = useGuildStore.getState().guilds;
+    expect(guild.hue).toBeNull();
+    expect(serverStoresColor(guild)).toBe(true);
+  });
+  it.each(['id', 'owner_id', 'name', 'member_count', 'icon_hash', 'created_at'] as const)('preserves confirmed guild metadata when READY omits %s', async field => {
     useAuthStore.setState({ user: { id: 'viewer' } as User });
     const scope = { serverId: SERVER, userId: 'viewer' };
     useGuildStore.getState().addGuild({ ...readyCore, name: 'Confirmed', member_count: 9, default_channel_id: 'confirmed-channel', description: 'Confirmed detail' }, scope);
@@ -847,6 +868,30 @@ describe('voice: watcher counts and the Glass voice-state fields', () => {
     const participants = useVoiceStore.getState().participants;
     expect(participants.get('sean')?.mode).toBe('listen');
     expect(participants.get('vincent')?.self_stream_started_at).toBe('2026-09-30T20:30:00Z');
+  });
+
+  it('loads READY voice states from a server without mode, stream start or join time', async () => {
+    useAuthStore.setState({ user: { id: 'viewer' } as User });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await dispatchGatewayEvent(SERVER, GatewayEvents.READY, {
+        guilds: [{
+          id: 'g1', owner_id: 'owner-1', name: 'Older', member_count: 2, icon_hash: null,
+          created_at: '2026-01-01T00:00:00Z', channels: [{ id: 'lounge', name: 'Lounge', type: 2 }],
+          voice_states: [{
+            user_id: 'jeremy', channel_id: 'lounge', guild_id: 'g1', session_id: 'r1',
+            self_mute: false, self_deaf: false, self_stream: true, self_video: false, suppress: false,
+            mute: false, deaf: false,
+          }],
+        }],
+      } as never);
+      expect(useGuildStore.getState().guilds.map((guild) => guild.id)).toEqual(['g1']);
+      const [state] = useVoiceStore.getState().channelParticipants.get('lounge') ?? [];
+      expect(state).toMatchObject({ user_id: 'jeremy', self_stream: true });
+      expect(state.joined_at ?? null).toBeNull();
+      expect(state.mode ?? 'joined').toBe('joined');
+      expect(warn).not.toHaveBeenCalled();
+    } finally { warn.mockRestore(); }
   });
 
   it("files a DM call's watcher counts (no guild) and READY's DM call voice states", async () => {

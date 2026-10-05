@@ -42,7 +42,8 @@ describe('Rust-derived wire validation', () => {
     { ...guild, hub_settings: { welcome_text: 42 } },
     { ...guild, visibility: 'unknown' },
     { ...guild, owner_id: 123 },
-    { ...guild, hue: undefined },
+    // An absent hue is an older server (no colors) and is accepted; a wrong one is not.
+    { ...guild, hue: '214' },
     { ...guild, hue: 360 },
   ])('rejects incompatible data without exposing it in diagnostics', async invalid => {
     const data = { ...invalid, private_fixture_marker: 'DO_NOT_LOG_USER_CONTENT' };

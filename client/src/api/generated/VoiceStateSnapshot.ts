@@ -21,11 +21,18 @@ export interface VoiceStateSnapshot {
    * the channel, reset by a move. Null only on a status announcement whose
    * stored row could not be read.
    */
-  joined_at: string | null;
+  joined_at?: string | null;
   /**
    * `listen` shows as "Listening in" on the roster.
+   *
+   * `mode`, `self_stream_started_at` and `joined_at` are always sent by this
+   * server. They are optional in the contract for protocol-version
+   * tolerance: servers from before them leave them out. An
+   * absent `mode` is `joined` (there was no listening in); an absent time is
+   * unknown, exactly as null, and a client shows nothing it would have
+   * derived from it (a room reads "live", not "live N min").
    */
-  mode: 'joined' | 'listen';
+  mode?: 'joined' | 'listen';
   mute: boolean;
   request_to_speak_at?: string | null;
   self_deaf: boolean;
@@ -33,9 +40,9 @@ export interface VoiceStateSnapshot {
   self_stream: boolean;
   /**
    * When the member's current stream started (RFC 3339), for "LIVE 42 MIN".
-   * Non-null exactly while `self_stream` is true.
+   * Non-null exactly while `self_stream` is true (when sent at all).
    */
-  self_stream_started_at: string | null;
+  self_stream_started_at?: string | null;
   self_video: boolean;
   session_id?: string | null;
   /**

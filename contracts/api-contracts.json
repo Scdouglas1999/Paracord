@@ -617,7 +617,8 @@
           "type": "array"
         },
         "banner_hash": {
-          "description": "`/api/v1/guilds/{id}/banner?v=…` once a banner is uploaded, otherwise null.\nThe version changes with every upload.",
+          "default": null,
+          "description": "`/api/v1/guilds/{id}/banner?v=…` once a banner is uploaded, otherwise null.\nThe version changes with every upload. This server always sends it; it\nis optional in the contract because servers older than 3.2 (no banners)\nleave it out of the summary, and absent reads exactly as null.",
           "type": [
             "string",
             "null"
@@ -665,7 +666,8 @@
           ]
         },
         "hue": {
-          "description": "The server's color as a hue, 0-359. Null when unset; clients then\nderive one from the id.",
+          "default": null,
+          "description": "The server's color as a hue, 0-359. Null when unset; clients then\nderive one from the id. This server always sends it. It is optional in\nthe contract for protocol-version tolerance: a server from before\nserver colors leaves it out, which a client reads as null (no color\npicked) and as \"this server cannot store a color\".",
           "format": "uint32",
           "maximum": 359,
           "minimum": 0,
@@ -716,7 +718,6 @@
         "name",
         "description",
         "icon_hash",
-        "banner_hash",
         "owner_id",
         "member_count",
         "created_at",
@@ -725,7 +726,6 @@
         "discovery_tags",
         "hub_settings",
         "bot_settings",
-        "hue",
         "system_channel_id",
         "vanity_url_code",
         "feature_flags"
@@ -996,7 +996,8 @@
           "type": "array"
         },
         "banner_hash": {
-          "description": "`/api/v1/guilds/{id}/banner?v=…` once a banner is uploaded, otherwise null.\nThe version changes with every upload.",
+          "default": null,
+          "description": "`/api/v1/guilds/{id}/banner?v=…` once a banner is uploaded, otherwise null.\nThe version changes with every upload. This server always sends it; it\nis optional in the contract because servers older than 3.2 (no banners)\nleave it out of the summary, and absent reads exactly as null.",
           "type": [
             "string",
             "null"
@@ -1037,7 +1038,8 @@
           ]
         },
         "hue": {
-          "description": "The server's color as a hue, 0-359. Null when unset; clients then\nderive one from the id.",
+          "default": null,
+          "description": "The server's color as a hue, 0-359. Null when unset; clients then\nderive one from the id. This server always sends it. It is optional in\nthe contract for protocol-version tolerance: a server from before\nserver colors leaves it out, which a client reads as null (no color\npicked) and as \"this server cannot store a color\".",
           "format": "uint32",
           "maximum": 359,
           "minimum": 0,
@@ -1076,7 +1078,6 @@
         "name",
         "description",
         "icon_hash",
-        "banner_hash",
         "owner_id",
         "member_count",
         "created_at",
@@ -1084,8 +1085,7 @@
         "allowed_roles",
         "discovery_tags",
         "hub_settings",
-        "bot_settings",
-        "hue"
+        "bot_settings"
       ],
       "title": "GuildSummary",
       "type": "object"
@@ -1114,7 +1114,8 @@
               "type": "array"
             },
             "banner_hash": {
-              "description": "`/api/v1/guilds/{id}/banner?v=…` once a banner is uploaded, otherwise null.\nThe version changes with every upload.",
+              "default": null,
+              "description": "`/api/v1/guilds/{id}/banner?v=…` once a banner is uploaded, otherwise null.\nThe version changes with every upload. This server always sends it; it\nis optional in the contract because servers older than 3.2 (no banners)\nleave it out of the summary, and absent reads exactly as null.",
               "type": [
                 "string",
                 "null"
@@ -1155,7 +1156,8 @@
               ]
             },
             "hue": {
-              "description": "The server's color as a hue, 0-359. Null when unset; clients then\nderive one from the id.",
+              "default": null,
+              "description": "The server's color as a hue, 0-359. Null when unset; clients then\nderive one from the id. This server always sends it. It is optional in\nthe contract for protocol-version tolerance: a server from before\nserver colors leaves it out, which a client reads as null (no color\npicked) and as \"this server cannot store a color\".",
               "format": "uint32",
               "maximum": 359,
               "minimum": 0,
@@ -1194,7 +1196,6 @@
             "name",
             "description",
             "icon_hash",
-            "banner_hash",
             "owner_id",
             "member_count",
             "created_at",
@@ -1202,8 +1203,7 @@
             "allowed_roles",
             "discovery_tags",
             "hub_settings",
-            "bot_settings",
-            "hue"
+            "bot_settings"
           ],
           "type": "object"
         },
@@ -1682,7 +1682,8 @@
           "type": "string"
         },
         "hue": {
-          "description": "The server's color as a hue, 0-359; null when unset (see\n`GuildSummary::hue`).",
+          "default": null,
+          "description": "The server's color as a hue, 0-359; null when unset. Always sent;\noptional only so a client accepts an older server that has no colors\n(see `GuildSummary::hue`).",
           "format": "uint32",
           "maximum": 359,
           "minimum": 0,
@@ -1725,8 +1726,7 @@
         "name",
         "icon_hash",
         "created_at",
-        "member_count",
-        "hue"
+        "member_count"
       ],
       "title": "ReadyGuildCore",
       "type": "object"
@@ -2337,6 +2337,7 @@
           ]
         },
         "joined_at": {
+          "default": null,
           "description": "When the member entered this channel (RFC 3339), for \"live 12 min\" on a\nroom: the room started at the earliest `joined_at` among its members.\nStamped on every join and listen join, kept while the member stays in\nthe channel, reset by a move. Null only on a status announcement whose\nstored row could not be read.",
           "type": [
             "string",
@@ -2345,7 +2346,8 @@
         },
         "mode": {
           "$ref": "#/$defs/VoiceMode",
-          "description": "`listen` shows as \"Listening in\" on the roster."
+          "default": "joined",
+          "description": "`listen` shows as \"Listening in\" on the roster.\n\n`mode`, `self_stream_started_at` and `joined_at` are always sent by this\nserver. They are optional in the contract for protocol-version\ntolerance: servers from before them leave them out. An\nabsent `mode` is `joined` (there was no listening in); an absent time is\nunknown, exactly as null, and a client shows nothing it would have\nderived from it (a room reads \"live\", not \"live N min\")."
         },
         "mute": {
           "default": false,
@@ -2367,7 +2369,8 @@
           "type": "boolean"
         },
         "self_stream_started_at": {
-          "description": "When the member's current stream started (RFC 3339), for \"LIVE 42 MIN\".\nNon-null exactly while `self_stream` is true.",
+          "default": null,
+          "description": "When the member's current stream started (RFC 3339), for \"LIVE 42 MIN\".\nNon-null exactly while `self_stream` is true (when sent at all).",
           "type": [
             "string",
             "null"
@@ -2414,10 +2417,7 @@
         "self_video",
         "suppress",
         "mute",
-        "deaf",
-        "mode",
-        "self_stream_started_at",
-        "joined_at"
+        "deaf"
       ],
       "title": "VoiceStateSnapshot",
       "type": "object"

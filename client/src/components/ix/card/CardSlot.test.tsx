@@ -18,6 +18,8 @@ import { useJoinMuteStore } from '../../glass/pill/muteStore';
 import { useListenBlockStore } from '../../glass/pill/pillActions';
 import { CardSlot } from './CardSlot';
 import { resetListenInForTests } from './listenIn';
+import { resetViewSupportProbeForTests } from './CardActions';
+import { resetServerFeaturesForTests, serverLacks, useServerFeatureStore } from '../../../lib/serverFeatures';
 import { MINUTE_TICK_MS, tickMinuteForTests } from './minuteTick';
 
 /**
@@ -34,10 +36,18 @@ vi.mock('../../../hooks/useCurrentUser', () => ({
 vi.mock('../../../api/files', () => ({
   fileApi: { resolveAttachmentObjectUrl: vi.fn(async () => 'blob:face') },
 }));
-const listenIn = vi.hoisted(() => ({ allowed: true }));
-vi.mock('../../../api/voice', () => ({
-  voiceApi: { getListenIn: vi.fn(async () => listenIn.allowed) },
-}));
+const listenIn = vi.hoisted(() => ({ allowed: true as boolean | 'older-server' }));
+vi.mock('../../../api/voice', async () => {
+  const { OlderServerError } = await import('../../../lib/serverFeatures');
+  return {
+    voiceApi: {
+      getListenIn: vi.fn(async () => {
+        if (listenIn.allowed === 'older-server') throw new OlderServerError('listenIn');
+        return listenIn.allowed;
+      }),
+    },
+  };
+});
 
 const T0 = Date.parse('2026-10-01T21:12:50-05:00');
 
@@ -132,6 +142,8 @@ beforeEach(() => {
   vi.spyOn(Date, 'now').mockReturnValue(T0 + 34 * 60_000 + 5_000);
   listenIn.allowed = true;
   resetListenInForTests();
+  resetServerFeaturesForTests();
+  resetViewSupportProbeForTests();
   useAuthStore.setState({ user: { id: 'me', username: 'sean', display_name: 'Sean', avatar_hash: null } } as never);
   useGlassStore.getState().reset();
   useToastStore.setState({ toasts: [] });
@@ -195,6 +207,22 @@ describe('the inline card', () => {
     expect(await within(card()).findByTestId('ix-card-listen')).toHaveAccessibleName('Listen in to Lounge');
   });
 
+  it('reads "live" without minutes for a server that sends no join times', () => {
+    // An older server sends no `joined_at` (or `mode`): the start is unknown, so
+    // the card never derives a wrong "live N min".
+    const older = (userId: string) => {
+      const { joined_at: _joined, mode: _mode, ...rest } = voiceState(userId);
+      return rest as VoiceState;
+    };
+    useVoiceStore.setState({ channelParticipants: new Map([['lounge', [older('vincent'), older('brendan')]]]) });
+    renderSlot('inline');
+    expect(card()).toHaveAttribute('data-state', 'live');
+    expect(card()).toHaveAccessibleName('Lounge, live, 2 people');
+    expect(within(card()).getByText('live')).toBeInTheDocument();
+    expect(within(card()).queryByText(/live \d/)).toBeNull();
+    expect(names()).toEqual(['Vincent', 'Brendan']);
+  });
+
   it('says what a room you are not in plays together, under the head', () => {
     useVoiceStore.setState({ channelParticipants: new Map([['lounge', [VINCENT, BRENDAN]]]) });
     renderSlot('inline');
@@ -228,6 +256,31 @@ describe('the inline card', () => {
     expect(actions.joinChannel).toHaveBeenCalledWith('lounge', 'g1');
     await act(async () => fireEvent.click(await screen.findByTestId('ix-card-listen')));
     expect(actions.listen).toHaveBeenCalledWith('lounge', 'g1');
+  });
+
+  it('a server from before listening in has no Listen control in any room', async () => {
+    listenIn.allowed = 'older-server';
+    useVoiceStore.setState({ channelParticipants: new Map([['lounge', [VINCENT]]]) });
+    renderSlot('inline');
+    await waitFor(() => expect(serverLacks(SCOPE.serverId, 'listenIn')).toBe(true));
+    await act(async () => {});
+    expect(screen.queryByTestId('ix-card-listen')).toBeNull();
+    expect(screen.getByTestId('ix-card-join')).toBeInTheDocument();
+  });
+
+  it('a server without watching-without-joining keeps Watch, disabled, saying to join', () => {
+    useServerFeatureStore.getState().markMissing(SCOPE.serverId, 'voiceViews');
+    useVoiceStore.setState({ channelParticipants: new Map([['lounge', [BRENDAN, { ...VINCENT, self_stream: true }]]]) });
+    renderSlot('inline');
+    const watch = screen.getByTestId('ix-card-watch');
+    expect(watch).toHaveAttribute('aria-disabled', 'true');
+    expect(watch).toHaveAttribute('title', 'This server runs an older version of Paracord. Join the call to watch.');
+    fireEvent.click(watch);
+    expect(useGlassStore.getState().stage.mode).toBe('none');
+    expect(useToastStore.getState().toasts.map((toast) => toast.message)).toContain(
+      'This server runs an older version of Paracord. Join the call to watch.',
+    );
+    expect(screen.getByTestId('ix-card-join')).not.toHaveAttribute('aria-disabled');
   });
 
   it('a room that does not admit listeners has no Listen control', async () => {

@@ -24,6 +24,20 @@ describe('production guild HTTP contracts', () => {
     expect(adapter.mock.calls[0][0]).toMatchObject({ method: 'get', url: '/users/@me/guilds' });
   });
 
+  it('accepts an older server\'s list and detail, which carry no hue or banner_hash', async () => {
+    const { hue: _hue, banner_hash: _banner, ...olderSummary } = guildSummaryFixture();
+    const list = clientWith([olderSummary]);
+    const listed = await list.api.getAll();
+    expect(listed.data).toHaveLength(1);
+    expect(listed.data[0]).not.toHaveProperty('hue');
+    const { hue: _detailHue, ...olderDetail } = guildDetailFixture();
+    const detail = clientWith(olderDetail);
+    expect((await detail.api.get('1001')).data).not.toHaveProperty('hue');
+    // Present but out of range is still refused: tolerance is for absence only.
+    const wrong = clientWith([guildSummaryFixture({ hue: 360 })]);
+    await expect(wrong.api.getAll()).rejects.toBeInstanceOf(ApiContractError);
+  });
+
   it('accepts actual detail for reads and mutations and retains transport metadata', async () => {
     const detail = guildDetailFixture();
     const { api, adapter } = clientWith(detail, 201);

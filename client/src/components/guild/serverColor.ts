@@ -10,6 +10,17 @@ import { PALETTE_HUES } from '../../lib/identityHue';
 import { readIconPixels } from './iconPixels';
 
 /**
+ * Whether the server this guild came from can store a color. A server with
+ * colors always sends `hue` (null when nothing is picked); one from before them
+ * leaves the field out of every guild payload, so an absent `hue` means the
+ * picker has nothing to save to. That is protocol-version tolerance, not a
+ * guess: the field's presence is the server saying what it supports.
+ */
+export function serverStoresColor(guild: { hue?: number | null }): boolean {
+  return guild.hue !== undefined;
+}
+
+/**
  * The eleven swatches, in the palette's own order (rose, through the warm reds
  * and oranges, the greens and teals, to the blues). The names are what a screen
  * reader says: a color is never the only cue.

@@ -9,7 +9,7 @@ import type { Guild } from '../../types';
 import { IxGlyph } from '../ix/glyphs';
 import { ToolChip } from '../ix/primitives';
 import { GroupLabel } from './SettingsPrimitives';
-import { SERVER_COLOR_SWATCHES, readIconHue, swatchName } from './serverColor';
+import { SERVER_COLOR_SWATCHES, readIconHue, serverStoresColor, swatchName } from './serverColor';
 
 export interface ServerColorFieldProps {
   guild: Guild;
@@ -35,6 +35,33 @@ export interface ServerColorFieldProps {
  * is a check and a ring as well as a color.
  */
 export function ServerColorField({ guild, iconSrc }: ServerColorFieldProps) {
+  if (!serverStoresColor(guild)) return <UnsupportedServerColor guild={guild} />;
+  return <ServerColorPicker guild={guild} iconSrc={iconSrc} />;
+}
+
+/**
+ * A server from before server colors sends no `hue` and would accept a `PATCH`
+ * with one while storing nothing, so the picker is not offered: the section says
+ * why and what the window uses instead (the id's color).
+ */
+function UnsupportedServerColor({ guild }: { guild: Guild }) {
+  const effective = serverHue({ id: guild.id, hue: null });
+  return (
+    <section className="ix-color" aria-labelledby={`server-color-${guild.id}`} data-testid="server-color-unsupported">
+      <GroupLabel>
+        <span id={`server-color-${guild.id}`}>Server color</span>
+      </GroupLabel>
+      <p className="ix-color__help">
+        This server runs an older version of Paracord that cannot store a color. Update the server to pick one.
+      </p>
+      <p className="ix-color__now" data-testid="server-color-now">
+        {`Automatic. This server uses ${swatchName(effective) ?? 'its own color'}.`}
+      </p>
+    </section>
+  );
+}
+
+function ServerColorPicker({ guild, iconSrc }: ServerColorFieldProps) {
   const scope = useCurrentAccountScope();
   // The settings overlay holds its own copy of the guild, so the field keeps the
   // value it last saved (the store takes the reply too, which is what the window's

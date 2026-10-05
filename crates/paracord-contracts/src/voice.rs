@@ -3,9 +3,10 @@ use serde::{Deserialize, Serialize};
 
 /// How a member takes part in a voice channel. `listen` hears the voices and
 /// never sends; everyone in the channel sees the member as listening in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum VoiceMode {
+    #[default]
     Joined,
     Listen,
 }
@@ -23,10 +24,17 @@ pub enum VoiceViewKind {
     Ambient,
 }
 
+/// Servers from before listening in and the Index room times leave these out;
+/// see [`crate::absent_on_older_servers`] and the note on `mode`.
+fn snapshot_fields_absent_on_older_servers(schema: &mut schemars::Schema) {
+    crate::absent_on_older_servers(schema, &["mode", "self_stream_started_at", "joined_at"]);
+}
+
 /// A voice state as READY lists it (`guilds[].voice_states[]`) and as a
 /// `VOICE_STATE_UPDATE` for someone *in* a channel carries it. (A leave is
 /// `channel_id: null` plus `prior_channel_id` and is not this shape.)
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = snapshot_fields_absent_on_older_servers)]
 pub struct VoiceStateSnapshot {
     #[schemars(length(min = 1), regex(pattern = r"^[0-9]+$"))]
     pub user_id: String,
@@ -46,15 +54,25 @@ pub struct VoiceStateSnapshot {
     #[serde(default)]
     pub deaf: bool,
     /// `listen` shows as "Listening in" on the roster.
+    ///
+    /// `mode`, `self_stream_started_at` and `joined_at` are always sent by this
+    /// server. They are optional in the contract for protocol-version
+    /// tolerance: servers from before them leave them out. An
+    /// absent `mode` is `joined` (there was no listening in); an absent time is
+    /// unknown, exactly as null, and a client shows nothing it would have
+    /// derived from it (a room reads "live", not "live N min").
+    #[serde(default)]
     pub mode: VoiceMode,
     /// When the member's current stream started (RFC 3339), for "LIVE 42 MIN".
-    /// Non-null exactly while `self_stream` is true.
+    /// Non-null exactly while `self_stream` is true (when sent at all).
+    #[serde(default)]
     pub self_stream_started_at: Option<String>,
     /// When the member entered this channel (RFC 3339), for "live 12 min" on a
     /// room: the room started at the earliest `joined_at` among its members.
     /// Stamped on every join and listen join, kept while the member stays in
     /// the channel, reset by a move. Null only on a status announcement whose
     /// stored row could not be read.
+    #[serde(default)]
     pub joined_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_to_speak_at: Option<String>,

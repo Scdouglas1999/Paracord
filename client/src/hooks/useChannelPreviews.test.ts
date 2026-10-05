@@ -14,6 +14,7 @@ import {
   useChannelPreviews,
   type ChannelPreviewEntry,
 } from './useChannelPreviews';
+import { resetServerFeaturesForTests, serverLacks } from '../lib/serverFeatures';
 
 const getChannelPreviews = vi.hoisted(() => vi.fn());
 const messageStore = vi.hoisted(() => ({ current: null as unknown }));
@@ -257,6 +258,25 @@ describe('useChannelPreviews', () => {
     await waitFor(() => expect(result.current.status).toBe('error'));
     expect(result.current.error).toBeTruthy();
     expect(result.current.previews.size).toBe(0);
+  });
+
+  it('reads a server without the route as one older than previews: no error, store previews only, asked once', async () => {
+    resetServerFeaturesForTests();
+    getChannelPreviews.mockRejectedValue({ isAxiosError: true, response: { status: 404, data: '' } });
+    const { result, unmount } = renderHook(() => useChannelPreviews('g1', SCOPE, [{ id: 'c1', last_message_id: '101' }]));
+    await waitFor(() => expect(result.current.status).toBe('unsupported'));
+    expect(result.current.error).toBeNull();
+    expect(serverLacks('srv', 'channelPreviews')).toBe(true);
+    // A channel whose messages are loaded still shows its newest one.
+    act(() => {
+      store().setState({ messages: { c1: [message({ id: '101', channel_id: 'c1', content: 'fresh' })] } });
+    });
+    expect(result.current.previews.get('c1')).toMatchObject({ messageId: '101', content: 'fresh' });
+    unmount();
+    const again = renderHook(() => useChannelPreviews('g2', SCOPE, CHANNELS));
+    await waitFor(() => expect(again.result.current.status).toBe('unsupported'));
+    expect(getChannelPreviews).toHaveBeenCalledTimes(1);
+    resetServerFeaturesForTests();
   });
 
   it('asks again for another server, and never shows the old one’s previews for it', async () => {

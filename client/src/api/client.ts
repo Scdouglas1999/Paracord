@@ -136,6 +136,26 @@ export function isMissingOrForbidden(err: unknown): boolean {
 }
 
 /**
+ * True when the server has no such route at all: a 404 (or, for a path it
+ * knows, a 405) with an empty body, which is what a server older than the
+ * route answers (the router's own fallback). A route that exists but cannot find its object answers 404 with
+ * the standard `{code, message}` body, so the two never read alike.
+ *
+ * This is protocol-version tolerance: Paracord is self-hosted and a new client
+ * talks to older servers. A caller that sees it turns the feature off for that
+ * server (`lib/serverFeatures.ts`) and says so; it never retries or guesses.
+ */
+export function isMissingRoute(err: unknown): boolean {
+  if (!axios.isAxiosError(err) || (err.response?.status !== 404 && err.response?.status !== 405)) return false;
+  const body: unknown = err.response.data;
+  if (body === undefined || body === null) return true;
+  if (typeof body === 'string') return body.trim() === '';
+  if (body instanceof ArrayBuffer) return body.byteLength === 0;
+  if (typeof Blob !== 'undefined' && body instanceof Blob) return body.size === 0;
+  return false;
+}
+
+/**
  * Extract a human-readable error message from an API error.
  * Supports the standardized {code, message, details} format.
  */
@@ -355,7 +375,8 @@ apiClient.interceptors.response.use(
       headers?: Record<string, string>;
     } & TimedRequestConfig);
     original?._paracordContext?.assertCurrent();
-    if (err.response) original?._paracordContext?.assertResponseCurrent?.(err.response.headers);
+    // A missing route carries no history epoch (see the per-server client below).
+    if (err.response && !isMissingRoute(err)) original?._paracordContext?.assertResponseCurrent?.(err.response.headers);
     const tookMs = elapsedMs(original ?? {});
     const traceId = readTraceIdFromHeaders(err.response?.headers);
     if (
@@ -521,7 +542,11 @@ export function createApiClient(
         headers?: Record<string, string>;
       } & TimedRequestConfig);
       original?._paracordContext?.assertCurrent();
-      if (err.response) original?._paracordContext?.assertResponseCurrent?.(err.response.headers);
+      // A route the server does not have is answered by the router's own
+      // fallback, outside the API layer that stamps the history epoch: no
+      // epoch there says nothing about the database, so it must not read as a
+      // history change (which would reconnect the account on every such reply).
+      if (err.response && !isMissingRoute(err)) original?._paracordContext?.assertResponseCurrent?.(err.response.headers);
       const tookMs = elapsedMs(original ?? {});
       const traceId = readTraceIdFromHeaders(err.response?.headers);
       if (

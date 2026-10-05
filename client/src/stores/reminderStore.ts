@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { extractApiError } from '../api/client';
 import { remindersApi, type ReminderItem } from '../api/reminders';
+import { noteMissingRoute, olderServerReason, serverLacks } from '../lib/serverFeatures';
 import { useServerListStore } from './serverListStore';
 
 function currentServerScope(): string {
@@ -31,6 +32,10 @@ export const useReminderStore = create<ReminderState>()((set, get) => ({
     const serverId = currentServerScope();
     const current = get();
     if (current.serverId === serverId && (current.loading || (current.loaded && !force))) return;
+    if (serverLacks(serverId, 'reminders')) {
+      set({ serverId, items: [], loaded: false, loading: false, error: olderServerReason('reminders') });
+      return;
+    }
     set({
       serverId,
       items: current.serverId === serverId ? current.items : [],
@@ -44,7 +49,10 @@ export const useReminderStore = create<ReminderState>()((set, get) => ({
       set({ items: data.items, loaded: true, error: null });
     } catch (err) {
       if (currentServerScope() === serverId && get().serverId === serverId) {
-        set({ error: `Failed to load reminders: ${extractApiError(err)}` });
+        // An older server has no reminders: say that, not "404" (lib/serverFeatures.ts).
+        set({ error: noteMissingRoute(serverId, 'reminders', err)
+          ? olderServerReason('reminders')
+          : `Failed to load reminders: ${extractApiError(err)}` });
       }
     } finally {
       if (currentServerScope() === serverId && get().serverId === serverId) {

@@ -38,6 +38,7 @@ import { captureScopedOperation } from '../lib/operationContext';
 import { accountScopeKey, type AccountScope } from '../lib/serverScope';
 import type { Message } from '../types';
 import { useCurrentMessageStoreApi } from './useMessageStore';
+import { noteMissingRoute, serverLacks } from '../lib/serverFeatures';
 
 /** Who wrote a message, as much as a row needs to draw a face and a name. */
 export interface PreviewAuthor {
@@ -225,8 +226,12 @@ export function effectivePreviews(
 }
 
 export interface ChannelPreviews {
-  /** `loading` until the first answer for this server arrives. */
-  status: 'idle' | 'loading' | 'ready' | 'error';
+  /**
+   * `loading` until the first answer for this server arrives. `unsupported`:
+   * the server is older than previews (lib/serverFeatures.ts), so only the
+   * channels whose messages this client has loaded show one.
+   */
+  status: 'idle' | 'loading' | 'ready' | 'error' | 'unsupported';
   error: string | null;
   /** By channel id. A channel with no messages has no entry. */
   previews: ReadonlyMap<string, ChannelPreviewEntry>;
@@ -240,7 +245,7 @@ const RECENT_AUTHOR_LIMIT = 3;
 
 interface Fetched {
   key: string;
-  status: 'loading' | 'ready' | 'error';
+  status: 'loading' | 'ready' | 'error' | 'unsupported';
   error: string | null;
   entries: ReadonlyMap<string, ChannelPreviewEntry>;
 }
@@ -281,6 +286,15 @@ export function useChannelPreviews(
         disposed = true;
       };
     }
+    if (serverLacks(serverId, 'channelPreviews')) {
+      void Promise.resolve().then(() => {
+        if (!disposed) setFetched({ key: requestKey, status: 'unsupported', error: null, entries: new Map() });
+      });
+      return () => {
+        disposed = true;
+        context.dispose();
+      };
+    }
     void (async () => {
       try {
         const { data } = await createChannelApi(() => context.api).getChannelPreviews(guildId, {
@@ -296,6 +310,10 @@ export function useChannelPreviews(
         });
       } catch (error) {
         if (disposed || context.signal.aborted) return;
+        if (noteMissingRoute(serverId, 'channelPreviews', error)) {
+          setFetched({ key: requestKey, status: 'unsupported', error: null, entries: new Map() });
+          return;
+        }
         setFetched({ key: requestKey, status: 'error', error: extractApiError(error), entries: new Map() });
       } finally {
         context.dispose();

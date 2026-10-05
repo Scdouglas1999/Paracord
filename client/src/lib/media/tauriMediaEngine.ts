@@ -29,6 +29,7 @@ import {
   readRosterKind,
   samePublishedTrack,
   type RosterKind,
+  TrackKeyGrace,
 } from './engineShared';
 
 // Tauri API imports - these resolve at runtime in the Tauri environment
@@ -251,6 +252,9 @@ export class TauriMediaEngine implements MediaEngine {
     if (this.disposed) throw new DOMException('The native media session has ended.', 'AbortError');
   }
 
+  /** Stream keys an older relay handed over sealed to a previous call key (engineShared.ts). */
+  private readonly trackKeyGrace = new TrackKeyGrace((error) => this.failKeyExchange(error));
+
   private failKeyExchange(error: unknown): void {
     if (this.disposed) return;
     const reason = `Media encryption could not verify a participant: ${error instanceof Error ? error.message : String(error)}`;
@@ -386,6 +390,7 @@ export class TauriMediaEngine implements MediaEngine {
     if (this.disposePromise) return this.disposePromise;
     this.disposed = true;
     this.disconnecting = true;
+    this.trackKeyGrace.dispose();
     this.removeAbortListener?.();
     this.removeAbortListener = null;
     this.transportLostCb = this.cameraFailureCb = this.screenShareEndedCb = null;
@@ -1259,17 +1264,18 @@ export class TauriMediaEngine implements MediaEngine {
           payload.senderUserId,
           Uint8Array.from(payload.ciphertext),
         )
-        .then((decrypted) =>
+        .then((decrypted) => {
           // Null: the publisher left the call before its key could be opened.
-          decrypted &&
-          this.invokeOwned('media_apply_track_sender_key', {
+          if (!decrypted) return undefined;
+          this.trackKeyGrace.opened(`${payload.streamId}:${payload.trackId}`);
+          return this.invokeOwned('media_apply_track_sender_key', {
             streamId: payload.streamId,
             trackId: payload.trackId,
             epoch: decrypted.epoch || payload.epoch,
             rawKey: Array.from(decrypted.rawKey),
-          }),
-        )
-        .catch(error => this.failKeyExchange(error));
+          });
+        })
+        .catch(error => this.trackKeyGrace.refused(`${payload.streamId}:${payload.trackId}`, error));
     });
     // The native session decides, per roster change, which keys rotate and
     // which must go out to whom (a member's arrival or departure: every key; a

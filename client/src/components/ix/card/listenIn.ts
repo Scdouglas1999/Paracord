@@ -3,6 +3,7 @@ import { create } from 'zustand';
 
 import { voiceApi } from '../../../api/voice';
 import { logVoiceDiagnostic } from '../../../lib/desktopDiagnostics';
+import { OlderServerError, useServerFeatureStore, useServerLacks } from '../../../lib/serverFeatures';
 
 /**
  * Whether a room admits listeners (its `listen_in_enabled` feature setting,
@@ -11,6 +12,8 @@ import { logVoiceDiagnostic } from '../../../lib/desktopDiagnostics';
  * the server once per room per session (`GET /channels/{id}/features`).
  *
  * Until the answer comes the control is not drawn (it would only flicker away).
+ * A server from before listening in has no such setting, and no listening in:
+ * the control is never drawn for any of its rooms (`lib/serverFeatures.ts`).
  * If the server cannot say, the control is drawn: pressing it asks the server,
  * which refuses out loud when listening in is off (`pillActions.toggleListen`
  * reports the refusal and blocks the control), so nothing degrades in silence.
@@ -39,19 +42,25 @@ const asking = new Set<string>();
 export function useListenInAllowed(serverId: string, channelId: string, ask: boolean): boolean {
   const key = `${serverId}:${channelId}`;
   const answer = useListenInStore((state) => state.allowed[key]);
+  const olderServer = useServerLacks(serverId, 'listenIn');
   useEffect(() => {
-    if (!ask || answer !== undefined || asking.has(key)) return;
+    if (!ask || olderServer || answer !== undefined || asking.has(key)) return;
     asking.add(key);
     voiceApi
       .getListenIn(channelId)
       .then((allowed) => useListenInStore.getState().set(key, allowed))
       .catch((error: unknown) => {
+        if (error instanceof OlderServerError) {
+          useServerFeatureStore.getState().markMissing(serverId, 'listenIn');
+          useListenInStore.getState().set(key, false);
+          return;
+        }
         logVoiceDiagnostic('[ix-card] listen-in setting unavailable', { channelId, error: String(error) });
         useListenInStore.getState().set(key, 'unknown');
       })
       .finally(() => asking.delete(key));
-  }, [ask, answer, key, channelId]);
-  if (!ask) return false;
+  }, [ask, olderServer, answer, key, channelId, serverId]);
+  if (!ask || olderServer) return false;
   return answer === true || answer === 'unknown';
 }
 

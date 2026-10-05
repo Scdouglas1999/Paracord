@@ -145,8 +145,12 @@ export interface SidebarInputs {
   /** Every channel of the server the store holds (categories and threads included). */
   channels: readonly Channel[];
   previews: ReadonlyMap<string, ChannelPreviewEntry>;
-  /** Whether previews are here yet: `ready` is the only state in which "No messages yet" is true. */
-  previewStatus: 'idle' | 'loading' | 'ready' | 'error';
+  /**
+   * Whether previews are here yet: `ready` is the only state in which "No
+   * messages yet" is true. `unsupported` (a server older than previews) draws
+   * no line where none is loaded: there is nothing wrong to report.
+   */
+  previewStatus: 'idle' | 'loading' | 'ready' | 'error' | 'unsupported';
   readStates: Readonly<Record<string, ReadState | undefined>>;
   mutedChannelIds: ReadonlySet<string>;
   guildMuted: boolean;

@@ -64,6 +64,7 @@ import { logVoiceDiagnostic } from '../lib/desktopDiagnostics';
 import type { MediaEngine } from '../lib/media/mediaEngine';
 import { createMediaEngine } from '../lib/media/mediaEngine';
 import { registerSessionReset } from './sessionReset';
+import { noteMissingRoute, OlderServerError, serverLacks, useServerFeatureStore } from '../lib/serverFeatures';
 // §5.1 "speaking is a breath": where the engine reports HOW LOUD, the ring
 // brightens with the voice. The level is deliberately not store state — it
 // changes fifty times a second, and a store write would re-render the room to
@@ -2211,11 +2212,16 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
   },
 
   fetchWatchers: async ({ serverId, channelId }) => {
+    // A server without view sessions counts no watchers (lib/serverFeatures.ts).
+    if (serverLacks(serverId, 'voiceViews')) return;
     const context = captureOperationContext(serverId);
     try {
       const { data } = await createCallVoiceApi(context).watchers(channelId);
       context.assertCurrent();
       get().handleWatchersUpdate(data, context.scope);
+    } catch (error) {
+      if (noteMissingRoute(context.scope.serverId, 'voiceViews', error)) return;
+      throw error;
     } finally {
       context.dispose();
     }
@@ -3656,6 +3662,16 @@ async function performCallJoin(owner: CallSession, previousMute: boolean, previo
     const { data } = await api.join(channelId, isDm, fallback, owner.mode);
     owner.membershipSessionId = data.session_id ?? null;
     owner.membershipUncertain = !data.session_id;
+    if (listening && data.mode !== 'listen') {
+      // An older server has no listening in: it ignores `?mode=listen` and
+      // admits a full member, whom everyone would see in the call. Give that
+      // membership straight back and say why (lib/serverFeatures.ts).
+      useServerFeatureStore.getState().markMissing(owner.context.scope.serverId, 'listenIn');
+      if (data.session_id) await api.leave(channelId, isDm, data.session_id).catch(() => {});
+      owner.membershipSessionId = null;
+      owner.membershipUncertain = false;
+      throw new OlderServerError('listenIn');
+    }
     owner.assertCurrent();
     return data;
   };

@@ -44,6 +44,7 @@ import { accountScopeKey } from '../lib/serverScope';
 import { useServerListStore } from './serverListStore';
 import { isListeningIn, liveMinutes } from './voice/selectors';
 import { VIEW_CONNECT_DEADLINE_MS } from './voice/viewSessions';
+import { OlderServerError, resetServerFeaturesForTests, serverLacks } from '../lib/serverFeatures';
 
 const SCOPE = { serverId: 'A', userId: '1' };
 
@@ -101,7 +102,9 @@ function queueEngines(count: number): Fake[] {
 beforeEach(async () => {
   await useVoiceStore.getState().reset(); await flush();
   fixture.selected = 'A'; fixture.user = '1'; engines = [];
-  fixture.join.mockReset().mockResolvedValue(joinResponse());
+  // The server admits a join in the mode it was asked for, and says which.
+  fixture.join.mockReset().mockImplementation(async (_server: string, _channel: string, _dm: boolean, _fallback: string | undefined, mode = 'joined') =>
+    joinResponse('call-receipt', mode));
   fixture.leave.mockReset().mockResolvedValue(undefined);
   fixture.setMode.mockReset().mockResolvedValue({ data: { channel_id: 'lounge', session_id: 'call-receipt', mode: 'joined', can_publish: true } });
   fixture.startView.mockReset().mockImplementation(async (_channel: string, kind: string) => viewResponse(kind));
@@ -427,6 +430,75 @@ describe('watch', () => {
     // The same target again is the running watch.
     await useVoiceStore.getState().startWatch({ ...WATCH, streamerId: 'brendan' });
     expect(fixture.startView).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ── An older server (no view sessions, no listening in) ─────────────────────
+
+/** What a server answers for a route it does not have: 404, empty body. */
+function missingRoute() {
+  return { isAxiosError: true, response: { status: 404, data: '' } };
+}
+
+describe('an older server', () => {
+  beforeEach(() => resetServerFeaturesForTests());
+
+  it('watches through the call for a member, unregistered, and never asks for a view again', async () => {
+    const [call] = queueEngines(1);
+    await useVoiceStore.getState().joinChannel('lounge', 'guild');
+    fixture.startView.mockRejectedValueOnce(missingRoute());
+    await useVoiceStore.getState().startWatch(WATCH);
+    const watch = useVoiceStore.getState().watchView!;
+    expect(watch).toMatchObject({ phase: 'live', route: 'call', error: null });
+    expect(watch.engine).toBe(call.engine);
+    expect(serverLacks('A', 'voiceViews')).toBe(true);
+    await useVoiceStore.getState().stopWatch();
+    await flush();
+    // Nothing was registered on the server, so nothing is stopped there.
+    expect(fixture.stopView).not.toHaveBeenCalled();
+    await useVoiceStore.getState().startWatch(WATCH);
+    expect(fixture.startView).toHaveBeenCalledTimes(1);
+    expect(useVoiceStore.getState().watchView).toMatchObject({ phase: 'live', route: 'call' });
+  });
+
+  it('refuses to watch without joining, in words, with no 404 and no connection', async () => {
+    fixture.startView.mockRejectedValueOnce(missingRoute());
+    await expect(useVoiceStore.getState().startWatch(WATCH)).rejects.toBeInstanceOf(OlderServerError);
+    expect(useVoiceStore.getState().watchView).toMatchObject({
+      phase: 'failed', error: 'This server runs an older version of Paracord. Join the call to watch.',
+    });
+    expect(fixture.factory).not.toHaveBeenCalled();
+  });
+
+  it('still reports a 404 with a body as the server’s refusal, not as an older server', async () => {
+    fixture.startView.mockRejectedValueOnce({ isAxiosError: true, response: { status: 404, data: { code: 'NOT_FOUND', message: 'Unknown channel' } } });
+    await expect(useVoiceStore.getState().startWatch(WATCH)).rejects.toBeDefined();
+    expect(useVoiceStore.getState().watchView).toMatchObject({ phase: 'failed', error: 'Unknown channel' });
+    expect(serverLacks('A', 'voiceViews')).toBe(false);
+  });
+
+  it('asks for no watcher counts once the server has shown it has none', async () => {
+    fixture.watchers.mockRejectedValueOnce(missingRoute());
+    await useVoiceStore.getState().fetchWatchers({ channelId: 'lounge' });
+    expect(serverLacks('A', 'voiceViews')).toBe(true);
+    await useVoiceStore.getState().fetchWatchers({ serverId: 'A', channelId: 'lounge' });
+    expect(fixture.watchers).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives back a listen join the server admitted as a full member, and says why', async () => {
+    queueEngines(1);
+    // An older server ignores `?mode=listen` and answers without a mode.
+    const { mode: _mode, ...older } = joinResponse('older-receipt').data;
+    fixture.join.mockResolvedValueOnce({ data: older });
+    await useVoiceStore.getState().listen('lounge', 'guild');
+    expect(fixture.leave).toHaveBeenCalledTimes(1);
+    expect(fixture.leave).toHaveBeenCalledWith('A', 'lounge', false, 'older-receipt');
+    expect(serverLacks('A', 'listenIn')).toBe(true);
+    const state = useVoiceStore.getState();
+    expect(state.connected).toBe(false);
+    expect(state.callMode).toBeNull();
+    expect(state.connectionError).toBe('This server runs an older version of Paracord that has no listening in. Join the call instead.');
+    expect(fixture.factory).not.toHaveBeenCalled();
   });
 });
 

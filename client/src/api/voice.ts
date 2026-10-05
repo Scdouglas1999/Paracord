@@ -4,6 +4,7 @@ import type { VoiceMode } from '../types/voice.types';
 import type { VoiceModeResponse } from './generated/VoiceModeResponse';
 import type { VoiceViewKind, VoiceViewSession } from './generated/VoiceViewSession';
 import type { VoiceWatchers } from './generated/VoiceWatchers';
+import { OlderServerError } from '../lib/serverFeatures';
 
 export type { VoiceModeResponse, VoiceViewKind, VoiceViewSession, VoiceWatchers };
 
@@ -72,10 +73,13 @@ export const voiceApi = {
     getApi().post(`/api/v1/dms/${channelId}/voice/leave`, undefined, { timeout: 10_000 }),
   /**
    * Whether this voice channel admits listeners (its `listen_in_enabled`
-   * feature setting; on unless a moderator turned it off).
+   * feature setting; on unless a moderator turned it off). A server from
+   * before listening in answers the features without the field: that is an
+   * {@link OlderServerError}, not an unknown answer.
    */
   getListenIn: async (channelId: string): Promise<boolean> => {
     const { data } = await getApi().get<{ listen_in_enabled?: boolean }>(`/channels/${channelId}/features`);
+    if (data && typeof data === 'object' && !('listen_in_enabled' in data)) throw new OlderServerError('listenIn');
     if (typeof data?.listen_in_enabled !== 'boolean') {
       throw new Error('This server does not report whether listening in is allowed here.');
     }

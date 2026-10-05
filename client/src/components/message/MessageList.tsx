@@ -17,6 +17,7 @@ import { useReadStateStore } from '../../stores/readStateStore';
 import { useMemberStore } from '../../stores/memberStore';
 import { useSavedMessageStore } from '../../stores/savedMessageStore';
 import { pendingReminderMessageIds, useReminderStore } from '../../stores/reminderStore';
+import { olderServerReason, useServerLacks } from '../../lib/serverFeatures';
 import { useUIStore } from '../../stores/uiStore';
 import { channelApi } from '../../api/channels';
 import { MessageEditHistoryDialog } from './MessageEditHistoryDialog';
@@ -742,7 +743,13 @@ function OwnedMessageList({
     sourceIsDm: !activeGuildId,
     unreadable: decryptingIds.has(message.id) || (Boolean(message.e2ee) && message.content === ENCRYPTED_DM_PLACEHOLDER),
   });
+  // An older server has no reminders (lib/serverFeatures.ts): Remind me says so.
+  const remindersMissing = useServerLacks(savedServerScope, 'reminders');
   const openRemind = (message: Message, x: number, y: number) => {
+    if (remindersMissing) {
+      toast.info(olderServerReason('reminders'));
+      return;
+    }
     const node = actionAnchor.current;
     if (node) {
       node.style.left = `${x}px`;
@@ -2562,7 +2569,14 @@ function OwnedMessageList({
         setForwardOpen(true);
       },
     });
-    item({ id: 'remind', label: 'Remind me', icon: <Clock size={16} strokeWidth={1.7} />, onSelect: () => openRemind(msg, at.x, at.y) });
+    item({
+      id: 'remind',
+      label: 'Remind me',
+      icon: <Clock size={16} strokeWidth={1.7} />,
+      disabled: remindersMissing,
+      description: remindersMissing ? olderServerReason('reminders') : undefined,
+      onSelect: () => openRemind(msg, at.x, at.y),
+    });
     item({
       id: 'save',
       label: savedIds.has(msg.id) ? 'Remove from Saved' : 'Save for later',

@@ -1,6 +1,7 @@
-import { forwardRef, useCallback, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { forwardRef, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 
 import { toggleVoiceVideo } from '../../../hooks/useVoice';
+import { olderServerReason, useServerLacks } from '../../../lib/serverFeatures';
 import { useGlassStore } from '../../../stores/glassStore';
 import { toast } from '../../../stores/toastStore';
 import { useVoiceStore } from '../../../stores/voiceStore';
@@ -60,6 +61,10 @@ export const CardActions = forwardRef<HTMLDivElement, CardActionsProps>(function
   const offersListen = !card.isDm && !card.stage && (card.state === 'live' || card.state === 'listening');
   const listenAllowed = useListenInAllowed(card.serverId, card.channelId, offersListen && card.state === 'live');
   const blockReason = listenBlockReason(blocked, action);
+  // An older server has no watching without joining (lib/serverFeatures.ts):
+  // Watch stays, disabled, and says to join instead.
+  const watchUnavailable = useServerLacks(card.serverId, 'voiceViews');
+  useViewSupportProbe(card.serverId, card.channelId, card.state === 'streaming' && !card.isDm);
 
   if (card.state === 'yours') return <YoursActions ref={ref} card={card} action={action} />;
 
@@ -82,7 +87,20 @@ export const CardActions = forwardRef<HTMLDivElement, CardActionsProps>(function
     return (
       <div ref={ref} className="ix-card-actions">
         {join(true)}
-        <CreamButton grow data-testid="ix-card-watch" onClick={() => watchStream(action, streamer.userId)}>
+        <CreamButton
+          grow
+          data-testid="ix-card-watch"
+          aria-disabled={watchUnavailable || undefined}
+          title={watchUnavailable ? olderServerReason('voiceViews') : undefined}
+          aria-description={watchUnavailable ? olderServerReason('voiceViews') : undefined}
+          onClick={() => {
+            if (watchUnavailable) {
+              toast.info(olderServerReason('voiceViews'));
+              return;
+            }
+            watchStream(action, streamer.userId);
+          }}
+        >
           Watch {streamer.name}
         </CreamButton>
       </div>
@@ -113,6 +131,27 @@ export const CardActions = forwardRef<HTMLDivElement, CardActionsProps>(function
     </div>
   );
 });
+
+/**
+ * Ask a server whether it can show a stream without a join, once per room per
+ * session, before anyone presses Watch: the watcher counts' route is the view
+ * sessions' read side, and an older server has neither. A current server just
+ * answers with the counts (the card shows them anyway).
+ */
+const probedViews = new Set<string>();
+function useViewSupportProbe(serverId: string, channelId: string, ask: boolean): void {
+  useEffect(() => {
+    const key = `${serverId}:${channelId}`;
+    if (!ask || probedViews.has(key)) return;
+    probedViews.add(key);
+    void useVoiceStore.getState().fetchWatchers({ serverId, channelId }).catch(() => {});
+  }, [ask, serverId, channelId]);
+}
+
+/** For tests. */
+export function resetViewSupportProbeForTests(): void {
+  probedViews.clear();
+}
 
 const YoursActions = forwardRef<HTMLDivElement, { card: RoomCardModel; action: PillActionTarget }>(function YoursActions(
   { card, action },

@@ -58,6 +58,20 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('ServerColorField', () => {
+  it('offers nothing to pick on a server without colors (no hue), and says why', () => {
+    const { hue: _absent, ...older } = baseGuild();
+    const guild = older as Guild;
+    seed(guild);
+    render(<ServerColorField guild={guild} iconSrc="data:image/png;base64,AAAA" />);
+    expect(screen.getByTestId('server-color-unsupported')).toHaveTextContent(
+      'This server runs an older version of Paracord that cannot store a color.',
+    );
+    expect(screen.queryByRole('group', { name: 'Server color swatches' })).toBeNull();
+    expect(screen.queryByRole('button')).toBeNull();
+    expect(screen.getByTestId('server-color-now')).toHaveTextContent(/^Automatic\. This server uses /);
+    expect(updateGuild).not.toHaveBeenCalled();
+  });
+
   it('offers the eleven palette swatches, none pressed until one is picked (automatic)', () => {
     const guild = baseGuild();
     seed(guild);

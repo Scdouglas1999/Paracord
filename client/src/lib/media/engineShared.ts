@@ -5,7 +5,7 @@
 import type { OperationContext } from '../operationContext';
 import type { PublishedLayerDescriptor, PublishedTrackDescriptor } from './mediaEngine';
 import { decodeVideoFrameMetadata, type VideoFrameMetadata } from './transport/protocol';
-import type { MediaKeyring } from './mediaKeyring';
+import { UnopenableMediaKeyError, type MediaKeyring } from './mediaKeyring';
 
 /** In-progress reassembly of a fragmented video frame, keyed per frame. */
 export interface VideoReassemblyState {
@@ -455,4 +455,59 @@ export function samePublishedTrack(a: PublishedTrackDescriptor, b: PublishedTrac
       && (layer.width ?? null) === (other.width ?? null) && (layer.height ?? null) === (other.height ?? null)
       && (layer.maxBitrateKbps ?? null) === (other.maxBitrateKbps ?? null);
   });
+}
+
+
+/**
+ * How long a stream key this device could not open may wait for one it can.
+ * See {@link TrackKeyGrace}.
+ */
+export const STALE_TRACK_KEY_GRACE_MS = 8_000;
+
+/**
+ * Stream keys that arrived sealed to a call key this device no longer holds.
+ *
+ * A relay from before 2026-09-29 (Paracord 3.3 and older) pushes the stream
+ * keys it stored for an account the moment that account connects, before its
+ * `session_join` has published the new call key: a rejoiner is handed keys
+ * sealed to the call key it held last time, which it cannot open. Every
+ * publisher then wraps a fresh key to the new call key on the rejoiner's
+ * arrival (a member arriving rotates every key), and that one opens. So an
+ * unopenable stream key ends the call only when no key for that track that
+ * this device can open follows within {@link STALE_TRACK_KEY_GRACE_MS}: still
+ * loud, never silent, but a rejoin into a running call on an older server
+ * works. A current relay sends stored keys only after the join, having dropped
+ * the stale ones, so there this never waits. Only stream keys are covered: an
+ * unopenable voice key still ends the call at once.
+ */
+export class TrackKeyGrace {
+  private readonly waiting = new Map<string, ReturnType<typeof setTimeout>>();
+
+  constructor(private readonly fail: (error: unknown) => void, private readonly graceMs = STALE_TRACK_KEY_GRACE_MS) {}
+
+  /** A stream key for `track` was refused; anything but a stale seal fails now. */
+  refused(track: string, error: unknown): void {
+    if (!(error instanceof UnopenableMediaKeyError)) {
+      this.fail(error);
+      return;
+    }
+    if (this.waiting.has(track)) return;
+    this.waiting.set(track, setTimeout(() => {
+      this.waiting.delete(track);
+      this.fail(error);
+    }, this.graceMs));
+  }
+
+  /** A key for `track` opened: whatever was refused before it is moot. */
+  opened(track: string): void {
+    const timer = this.waiting.get(track);
+    if (timer === undefined) return;
+    clearTimeout(timer);
+    this.waiting.delete(track);
+  }
+
+  dispose(): void {
+    for (const timer of this.waiting.values()) clearTimeout(timer);
+    this.waiting.clear();
+  }
 }
