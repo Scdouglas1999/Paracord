@@ -9,8 +9,8 @@ import { cn } from '../../../lib/utils';
  * listening) the bars follow the voice: the engine writes `--voice-level` on
  * every `[data-motion-speaking="<userId>"]` (lib/motion/voiceLevel.ts) and the
  * CSS scales each bar from it. Elsewhere only "somebody is talking" is known
- * (`VOICE_SPEAKING`), and the bars run their CSS loop, ticking on the shared
- * 100ms grid. Reduced motion: static bars at mid height (ix-card.css).
+ * (`VOICE_SPEAKING`), and the bars run their CSS loop. Both step five times a
+ * second (a 200ms grid): on the Linux desktop each step is a paint of the window. Reduced motion: static bars at mid height (ix-card.css).
  */
 export function Wave({ userId, real, className }: { userId: string; real: boolean; className?: string }) {
   return (

@@ -971,6 +971,10 @@
   /* ---- §5 Curves ------------------------------------------------------------- */
   --ix-spring: cubic-bezier(0.32, 0.72, 0, 1);
   --ix-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  /* The talking ring's fades (§4.4, 150ms in, 300ms out) in a few even steps:
+     each step is one paint, where a curve paints every frame of the fade. */
+  --ix-talk-fade-in: steps(3, jump-end);
+  --ix-talk-fade-out: steps(5, jump-end);
 
   /* ---- §2.2 Hue ---------------------------------------------------------------
      --ix-hue is the place's hue, a number from 0 to 359 (People is 210, and the

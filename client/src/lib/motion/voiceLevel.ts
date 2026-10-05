@@ -19,7 +19,7 @@ import { prefersReducedMotion } from './reducedMotion';
  * Four rules, and each of them is load-bearing:
  *
  *   1. **One loop for every tile.** Not one per `StageTile`, not one per
- *      `LitAvatar`. A ten-person room is one timer on the 100ms grid,
+ *      `LitAvatar`. A ten-person room is one timer on the 200ms grid,
  *      and it exits the moment the last voice has released to silence.
  *   2. **No React state, ever.** A level is 50 updates a second; a store write
  *      would re-render the room fifty times a second to change a glow. The
@@ -45,19 +45,31 @@ export const VOICE_ATTACK_MS = 60;
 export const VOICE_RELEASE_MS = 240;
 
 /**
- * The loop ticks on the shared 100ms grid (docs/index-spec.md §4.4), not every
+ * The loop ticks on a 200ms grid (docs/index-spec.md §4.4), not every
  * animation frame. On the Linux desktop (WebKitGTK with shared-memory frames)
- * every painted frame copies the whole window, and a per-frame envelope kept a
- * call with one talker at about a quarter of a core in the web process. Ten
- * steps a second is the same cadence as the waveform's own loop.
+ * every painted frame copies the whole window, so the waveform's cost is its
+ * paint count: a per-frame envelope kept a call with one talker at about a
+ * quarter of a core in the web process, ten steps a second at about four
+ * points of it. Five steps a second is the cadence of the waveform's own loop
+ * (somebody talking in a room you are not in), so a talker reads the same
+ * everywhere, and it halves what the bars cost in a call.
  */
-export const VOICE_GRID_MS = 100;
+export const VOICE_GRID_MS = 200;
 
 /**
  * The level is written at 1/64, which is finer than the 15% of an alpha it
  * drives can render and coarse enough that a steady voice stops writing.
  */
 const STEPS = 64;
+
+/**
+ * The waveform's bars trade heights on every step while a voice is up
+ * (`data-voice-phase`, ix-card.css): at five steps a second a level alone
+ * moves four bars in lockstep, which reads as a meter, not a voice. The phase
+ * cycles through these four values, built once.
+ */
+export const VOICE_PHASE_ATTR = 'data-voice-phase';
+const PHASES = ['0', '1', '2', '3'] as const;
 
 /** Every value the property can ever take, built once. Nothing else allocates. */
 const LEVEL_STRINGS: string[] = Array.from({ length: STEPS + 1 }, (_, index) =>
@@ -82,6 +94,8 @@ interface Tracked {
   written: number;
   /** The elements carrying this person's ring, re-collected on every publish. */
   elements: HTMLElement[];
+  /** Where the waveform's bar pattern is (an index into `PHASES`). */
+  phase: number;
 }
 
 const published = new Map<VoiceLevelSource, Map<string, number>>();
@@ -133,7 +147,19 @@ function write(entry: Tracked, step: number): void {
 }
 
 function release(entry: Tracked): void {
-  for (const element of entry.elements) element.style.removeProperty(VOICE_LEVEL_VAR);
+  for (const element of entry.elements) {
+    element.style.removeProperty(VOICE_LEVEL_VAR);
+    element.removeAttribute(VOICE_PHASE_ATTR);
+  }
+}
+
+/** The next bar pattern, on the waveforms only (a `data-motion-speaking` element). */
+function advancePhase(entry: Tracked): void {
+  entry.phase = (entry.phase + 1) % PHASES.length;
+  const value = PHASES[entry.phase];
+  for (const element of entry.elements) {
+    if (element.hasAttribute(SPEAKING_MARK)) element.setAttribute(VOICE_PHASE_ATTR, value);
+  }
 }
 
 /**
@@ -157,6 +183,8 @@ function tick(now: number): void {
     }
     const step = Math.round(entry.level * STEPS);
     if (step !== entry.written) write(entry, step);
+    // A voice that is up moves the bars every step, steady or not.
+    if (step > 0 && elapsed > 0) advancePhase(entry);
     // Silent, and the envelope has finished letting go: the ring is back at
     // rest and there is nothing left to drive.
     if (step === 0 && target === 0) {
@@ -220,7 +248,7 @@ export function publishVoiceLevels(
     for (const userId of known.keys()) {
       let entry = tracked.get(userId);
       if (!entry) {
-        entry = { level: 0, target: 0, written: -1, elements: [] };
+        entry = { level: 0, target: 0, written: -1, elements: [], phase: 0 };
         tracked.set(userId, entry);
       }
       entry.elements = collect(userId);

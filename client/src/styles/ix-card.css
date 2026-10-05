@@ -189,7 +189,10 @@
 }
 
 /* The face carries the talking ring: an element of its own whose opacity fades
-   150ms in and 300ms out (§4.4). The ring's shadow never animates. */
+   150ms in and 300ms out (§4.4). The ring's shadow never animates. The fades
+   run in a few steps (--ix-talk-fade-in/out, tokens.css) rather than on
+   every frame: on the Linux desktop each frame is a paint of the window, and a
+   ring that comes and goes with every phrase was a third of a call's cost. */
 .ix-card-row__face {
   position: relative;
   display: inline-grid;
@@ -205,12 +208,13 @@
     0 0 0 3.5px var(--ix-amber);
   opacity: 0;
   pointer-events: none;
-  transition: opacity 300ms var(--ix-ease);
+  transition: opacity 300ms var(--ix-talk-fade-out);
 }
 
 .ix-card-row[data-talking='true'] .ix-card-row__ring {
   opacity: 1;
   transition-duration: 150ms;
+  transition-timing-function: var(--ix-talk-fade-in);
 }
 
 /* Trailing: the screen glyph (sharing), mic-off (muted), 14px in the tertiary ink. */
@@ -307,7 +311,7 @@
 .ix-wave[data-real] > i {
   animation: none;
   transform: scaleY(calc(0.35 + 0.65 * min(1, var(--voice-level, 0) * var(--ix-wave-gain, 1))));
-  /* Each level is one step on the 100ms grid, like the loop above; a transition
+  /* Each level is one step on the 200ms grid, like the loop above; a transition
      between steps would paint every frame while anyone talks. */
   transition: none;
 }
@@ -322,6 +326,38 @@
 
 .ix-wave[data-real] > i:nth-child(4) {
   --ix-wave-gain: 0.75;
+}
+
+/* While the voice is up the bars trade heights on every step (the engine turns
+   data-voice-phase, lib/motion/voiceLevel.ts), so five steps a second read as a
+   voice rather than a meter pinned at the top. Each phase is a permutation of
+   the same four gains: the loudness still decides how tall the group is. */
+.ix-wave[data-real][data-voice-phase='0'] > i:nth-child(1),
+.ix-wave[data-real][data-voice-phase='1'] > i:nth-child(2),
+.ix-wave[data-real][data-voice-phase='2'] > i:nth-child(3),
+.ix-wave[data-real][data-voice-phase='3'] > i:nth-child(4) {
+  --ix-wave-gain: 1;
+}
+
+.ix-wave[data-real][data-voice-phase='0'] > i:nth-child(2),
+.ix-wave[data-real][data-voice-phase='1'] > i:nth-child(4),
+.ix-wave[data-real][data-voice-phase='2'] > i:nth-child(1),
+.ix-wave[data-real][data-voice-phase='3'] > i:nth-child(3) {
+  --ix-wave-gain: 0.62;
+}
+
+.ix-wave[data-real][data-voice-phase='0'] > i:nth-child(3),
+.ix-wave[data-real][data-voice-phase='1'] > i:nth-child(1),
+.ix-wave[data-real][data-voice-phase='2'] > i:nth-child(4),
+.ix-wave[data-real][data-voice-phase='3'] > i:nth-child(2) {
+  --ix-wave-gain: 0.86;
+}
+
+.ix-wave[data-real][data-voice-phase='0'] > i:nth-child(4),
+.ix-wave[data-real][data-voice-phase='1'] > i:nth-child(3),
+.ix-wave[data-real][data-voice-phase='2'] > i:nth-child(2),
+.ix-wave[data-real][data-voice-phase='3'] > i:nth-child(1) {
+  --ix-wave-gain: 0.45;
 }
 
 /* Reduced motion: still bars at mid height. */

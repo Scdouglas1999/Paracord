@@ -350,12 +350,15 @@ States:
 
 - Ring: on the 24px avatar, `0 0 0 2px <card-dark>, 0 0 0 3.5px amber`, drawn
   as an absolutely positioned ring element whose **opacity** fades 150ms in,
-  300ms out. Never animate the shadow.
+  300ms out, in 3 and 5 even steps (`--ix-talk-fade-in/out`): each step is one
+  paint, where a curve paints every frame of the fade. Never animate the shadow.
 - Waveform: four bars 2.5×12px, gap 2, radius 2, amber, `scaleY(.35 ↔ 1)` at
-  1, .8, 1.15, .9s. Driven by the shared 100ms voice-level grid
-  (`lib/motion/voiceLevel.ts`) when a level is available; otherwise the CSS
-  loop runs **only while the person is talking** and the element is removed when
-  they stop. Reduced motion: static bars at mid height.
+  1, .8, 1.2, 1s. Both kinds step five times a second (a 200ms grid). Where a
+  level is available it drives the bars (`lib/motion/voiceLevel.ts`), and while
+  the voice is up the four bars trade heights on every step
+  (`data-voice-phase`), so the group's height is the voice and its shape moves;
+  otherwise the CSS loop runs **only while the person is talking** and the
+  element is removed when they stop. Reduced motion: static bars at mid height.
 
 ### 4.5 Channels
 
