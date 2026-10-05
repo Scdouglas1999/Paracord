@@ -781,6 +781,35 @@ describe('membership event completeness', () => {
   });
 });
 
+describe('the member count follows joins and leaves', () => {
+  const core = { id: 'g1', owner_id: 'owner-1', name: 'Fuel', icon_hash: null, created_at: '2026-01-01T00:00:00Z', hue: null };
+  const count = () => useGuildStore.getState().guilds[0]?.member_count;
+
+  it('counts someone joining and leaving, never you, and never a member the roster already has', () => {
+    useAuthStore.setState({ user: { id: 'viewer' } as User });
+    const scope = getServerAccountScope(SERVER)!;
+    useGuildStore.getState().addGuild({ ...core, member_count: 2 }, scope);
+    const fetch = vi.spyOn(useMemberStore.getState(), 'fetchMembers').mockResolvedValue(undefined);
+    try {
+      dispatchGatewayEvent(SERVER, GatewayEvents.GUILD_MEMBER_ADD, { guild_id: 'g1', user: { id: 'jeremy', username: 'Jeremy' } as User });
+      expect(count()).toBe(3);
+      dispatchGatewayEvent(SERVER, GatewayEvents.GUILD_MEMBER_ADD, { guild_id: 'g1', user: { id: 'viewer', username: 'viewer' } as User });
+      expect(count()).toBe(3);
+      const member = { guild_id: 'g1', user: { id: 'maya', username: 'Maya' } as User, roles: ['g1'], joined_at: '2026-10-05T00:00:00Z', deaf: false, mute: false };
+      dispatchGatewayEvent(SERVER, GatewayEvents.GUILD_MEMBER_ADD, member);
+      expect(count()).toBe(4);
+      // The same join told twice (a replay) is one member.
+      dispatchGatewayEvent(SERVER, GatewayEvents.GUILD_MEMBER_ADD, member);
+      expect(count()).toBe(4);
+      dispatchGatewayEvent(SERVER, GatewayEvents.GUILD_MEMBER_REMOVE, { guild_id: 'g1', user: { id: 'maya' } as User });
+      expect(count()).toBe(3);
+      // Someone the loaded roster never had is not news.
+      dispatchGatewayEvent(SERVER, GatewayEvents.GUILD_MEMBER_REMOVE, { guild_id: 'g1', user: { id: 'stranger' } as User });
+      expect(count()).toBe(3);
+    } finally { fetch.mockRestore(); }
+  });
+});
+
 describe('voice: watcher counts and the Glass voice-state fields', () => {
   it('files VOICE_WATCHERS_UPDATE under the account and channel', () => {
     useAuthStore.setState({ user: { id: 'viewer' } as User });

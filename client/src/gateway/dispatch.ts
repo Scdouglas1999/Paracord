@@ -134,6 +134,29 @@ function isCompleteMember(data: unknown): data is Member {
     && typeof member.deaf === 'boolean' && typeof member.mute === 'boolean';
 }
 
+/**
+ * Keep a server's member count (the sidebar header's "N members") in step with
+ * people joining and leaving: READY's count is otherwise the last word until the
+ * next reconnect. Your own join is already in the count the server sent with the
+ * server, and a member the loaded roster already has (or never had) is not news.
+ */
+function adjustMemberCount(
+  serverId: string,
+  scope: NonNullable<ReturnType<typeof getServerAccountScope>>,
+  guildId: string,
+  userId: string | undefined,
+  delta: 1 | -1,
+): void {
+  if (!userId || userId === getServerUser(serverId)?.id) return;
+  const key = entityScopeKey(scope, guildId);
+  const roster = useMemberStore.getState().members.get(key);
+  const listed = roster?.some((member) => member.user.id === userId) ?? false;
+  if (roster && (delta > 0 ? listed : !listed)) return;
+  const guild = useGuildStore.getState().guilds.find((candidate) => candidate.key === key);
+  if (!guild || typeof guild.member_count !== 'number') return;
+  useGuildStore.getState().updateGuildData(guildId, { member_count: Math.max(0, guild.member_count + delta) }, scope);
+}
+
 export function dispatchGatewayEvent(serverId: string, event: string, data: GatewayDispatchData, recovered = false): void | Promise<void> {
   const memberScope = getServerAccountScope(serverId);
   const channels = getAccountChannelView(memberScope);
@@ -562,6 +585,7 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
 
     case GatewayEvents.GUILD_MEMBER_ADD:
       if (!data.guild_id) break;
+      if (memberScope) adjustMemberCount(serverId, memberScope, data.guild_id, data.user?.id ?? data.user_id, 1);
       if (isCompleteMember(data)) {
         if (memberScope) useMemberStore.getState().addMember(data.guild_id, data, memberScope);
       } else {
@@ -572,6 +596,7 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
       if (!data.guild_id) break;
       {
         const targetUserId = data.user?.id ?? data.user_id;
+        if (memberScope) adjustMemberCount(serverId, memberScope, data.guild_id, targetUserId, -1);
         if (targetUserId) {
           if (memberScope) useMemberStore.getState().removeMember(data.guild_id, targetUserId, memberScope);
         } else {
