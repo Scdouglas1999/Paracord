@@ -564,7 +564,11 @@ moved; delays and staggers scale with it. Not scaled: the talking ring's fades
 cost), the tooltip's 400ms show delay (an intent delay, not an animation), and
 the 2s, 4s read times. The send flight (§5.11) is 280ms (was 620ms) with its
 colour handoff, overshoot and the composer's press and the send control's release
-scaled with it.
+scaled with it (the handoff window is widened from 14-22% to 12-24% of the flight so it stays two frames at 60Hz).
+All durations below are for full motion; reduced motion replaces every move
+with a 100ms opacity crossfade, removes pings and lifts, and stills the
+waveform. Every animation is transform/opacity (Web Animations or CSS) and is
+triggered by an event; nothing loops at rest. Animations are canceled and
 committed if a newer event of the same kind starts (no queueing).
 
 | # | Moment | Motion |
@@ -579,7 +583,7 @@ committed if a newer event of the same kind starts (no queueing).
 | 5.8 | **Open call / Back to chat** | Open: the call surface grows out of the card: from the card's rect (translate + non-uniform scale, `transform-origin: 0 0`), opacity .3→1, 275ms spring; the tiles and controls fade in from 40% to 75% (they do not scale with the surface; they are in a counter-layer that only fades; whole by 75% so the call is drawn when the surface arrives, as the prototype; IX-18). Back to chat: the reverse into the card, 205ms spring, then hidden. The card's wide control label crossfades between "Open call" and "Back to chat", 90ms. Native video surfaces show their poster frame during the move and attach after it settles (§7.6) |
 | 5.9 | **Theater** (T) | The call surface FLIPs from main's inset to the window's inset 10 over the sidebar, 275ms spring; the sidebar dims to opacity .4 beneath. Reverse the same |
 | 5.10 | **Message arrives** (from others) | The new group or bubble from `translateY(14px) scale(.96)`, opacity 0, 250ms spring, `transform-origin` at the avatar side; earlier content FLIPs up when it was at the bottom |
-| 5.11 | **Send** | Owned by `feat/send-flight` (arc out of the message box, 280ms). Index composes with it and changes nothing in its path or timing; the ghost flies in the conversation's own layer, under the timeline's rows, so where it crosses the last bubble early in the flight it passes behind it (IX-18) |
+| 5.11 | **Send** | Owned by `feat/send-flight` (arc out of the message box, 280ms; the words become the bubble between 12% and 24% of it, 34ms, two frames at 60Hz). Index composes with it and changes nothing in its path or timing; the ghost flies in the conversation's own layer, under the timeline's rows, so where it crosses the last bubble early in the flight it passes behind it (IX-18) |
 | 5.12 | **Message box opens** | The capsule is three slices (top cap, stretchable middle, bottom row) so the corners never distort: the top cap translates up 46px and the middle scales from 0 to 1 in Y, 225ms spring; the tools row from `translateY(6px)`, opacity 0, 135ms opacity with 35ms delay and 205ms spring translate. The layout height changes once at the start; the feed above it FLIPs from its old position, 225ms spring, so nothing jumps. Closing reverses in 160ms. The focus edge and halo fade in (opacity of a ring layer), 115ms |
 | 5.13 | **Send button** | Quiet → cream when text appears: background color transition 90ms (color transitions are allowed) |
 | 5.14 | **Title fold** | Scroll-linked, no timer: `t = min(1, scrollTop/60)`; large title `scale(1 − .1t)`, opacity `1 − .9t`, `transform-origin: 0 50%`. Past 40px the folded title enters from `translateY(6px)` + fade (115ms opacity, 160ms spring) and the toolbar background appears (135ms color). Updates on `scroll` with one `requestAnimationFrame` per frame at most |

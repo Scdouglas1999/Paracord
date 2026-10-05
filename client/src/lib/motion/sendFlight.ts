@@ -38,8 +38,11 @@ import { motionToken } from './tokens';
  * The approved prototype's numbers (a documented exception to §5.2), played
  * 2.2× faster than the prototype plays them: the owner found the first
  * 620ms flight too slow once the app was in daily use. The shape did not
- * change (the curves, the 3px overshoot, the fill window and the shadow hold
- * are all offsets of the duration), only the clock.
+ * change (the curves, the 3px overshoot and the shadow hold are offsets of the
+ * duration), only the clock. One thing is not a pure scale: the words become
+ * the bubble between 0.12 and 0.24 (it was 0.14 to 0.22), so the handoff is
+ * 34ms, two frames at 60Hz, where a straight scale left it 22ms, one frame:
+ * a pop, not a dissolve.
  */
 export const SEND_FLIGHT = {
   /** The whole flight. */
@@ -55,8 +58,8 @@ export const SEND_FLIGHT = {
   fromScale: 0.95,
   overshoot: { y: -3, scale: 1.01, at: 0.7 },
   /** The words become the bubble between these two offsets. */
-  fillFrom: 0.14,
-  fillTo: 0.22,
+  fillFrom: 0.12,
+  fillTo: 0.24,
   /** The airborne shadow holds until here, then settles away. */
   shadowHold: 0.4,
   /** The send control releasing from the cream "on" look to the quiet one. */

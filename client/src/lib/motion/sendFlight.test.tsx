@@ -103,7 +103,7 @@ describe('the approved flight, pinned', () => {
     expect(SEND_FLIGHT.glide).toBe('cubic-bezier(0.32, 0.72, 0, 1)');
     expect(SEND_FLIGHT.fromScale).toBe(0.95);
     expect(SEND_FLIGHT.overshoot).toEqual({ y: -3, scale: 1.01, at: 0.7 });
-    expect([SEND_FLIGHT.fillFrom, SEND_FLIGHT.fillTo]).toEqual([0.14, 0.22]);
+    expect([SEND_FLIGHT.fillFrom, SEND_FLIGHT.fillTo]).toEqual([0.12, 0.24]);
     expect(RELAX_MS).toBe(135);
   });
 
@@ -177,15 +177,15 @@ describe('takeoff', () => {
     const { fill, words, shadow } = ghostLayers();
     expect(words.textContent).toBe('count me in');
     expect(words.style.color).toBe('rgb(243, 245, 245)');
-    expect(on(fill).keyframes.map((frame) => [frame.offset, frame.opacity])).toEqual([[0, 0], [0.14, 0], [0.22, 1], [1, 1]]);
+    expect(on(fill).keyframes.map((frame) => [frame.offset, frame.opacity])).toEqual([[0, 0], [0.12, 0], [0.24, 1], [1, 1]]);
     expect(on(words).keyframes.map((frame) => [frame.offset, frame.color])).toEqual([
       [0, 'rgb(243, 245, 245)'],
-      [0.14, 'rgb(243, 245, 245)'],
-      [0.22, 'rgb(20, 21, 22)'],
+      [0.12, 'rgb(243, 245, 245)'],
+      [0.24, 'rgb(20, 21, 22)'],
       [1, 'rgb(20, 21, 22)'],
     ]);
     // A soft shadow while airborne, on its own layer, that settles away.
-    expect(on(shadow).keyframes.map((frame) => [frame.offset, frame.opacity])).toEqual([[0, 0], [0.22, 1], [0.4, 1], [1, 0]]);
+    expect(on(shadow).keyframes.map((frame) => [frame.offset, frame.opacity])).toEqual([[0, 0], [0.24, 1], [0.4, 1], [1, 0]]);
   });
 
   it('carries a reply\'s chip as a picture that comes in with the fill, and puts the words below it', () => {
@@ -205,7 +205,7 @@ describe('takeoff', () => {
     expect(picture?.querySelector('.glass-tl-reply')?.textContent).toBe('Nick new personal best');
     expect(picture?.style.top).toBe('9px');
     expect(words.style.top).toBe('30px');
-    expect(on(picture!).keyframes.map((frame) => [frame.offset, frame.opacity])).toEqual([[0, 0], [0.14, 0], [0.22, 1], [1, 1]]);
+    expect(on(picture!).keyframes.map((frame) => [frame.offset, frame.opacity])).toEqual([[0, 0], [0.12, 0], [0.24, 1], [1, 1]]);
   });
 
   it('carries the Index reply line that sits above the bubble, in the row, with the row\'s own inks', () => {
@@ -225,7 +225,7 @@ describe('takeoff', () => {
     expect(picture?.style.left).toBe('50px');
     expect(picture?.querySelector('.glass-bubble')).toBeNull();
     expect(picture?.querySelector('.glass-tl-reply')?.textContent).toBe('Jeremy: who is up for a run');
-    expect(on(picture!).keyframes.map((frame) => [frame.offset, frame.opacity])).toEqual([[0, 0], [0.14, 0], [0.22, 1], [1, 1]]);
+    expect(on(picture!).keyframes.map((frame) => [frame.offset, frame.opacity])).toEqual([[0, 0], [0.12, 0], [0.24, 1], [1, 1]]);
   });
 
   it('leaves from the words\' own left edge and the box\'s middle', () => {
