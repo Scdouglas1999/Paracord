@@ -89,10 +89,6 @@ pub const EVENT_VOICE_SPEAKING: &str = "VOICE_SPEAKING";
 /// `watch`, plus call members watching through their call). Guild-scoped with a
 /// `channel_id`, so only sessions that may view the channel receive it.
 pub const EVENT_VOICE_WATCHERS_UPDATE: &str = "VOICE_WATCHERS_UPDATE";
-/// Reactions on a stream (flame, heart), coalesced per voice channel. Sent only
-/// to the channel's voice members and the people watching it through a view
-/// session, never guild-wide (docs/glass-spec.md §6.5).
-pub const EVENT_STREAM_REACTIONS: &str = "STREAM_REACTIONS";
 
 // Invite events
 pub const EVENT_INVITE_CREATE: &str = "INVITE_CREATE";
