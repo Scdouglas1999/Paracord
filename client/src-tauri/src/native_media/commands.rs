@@ -378,7 +378,7 @@ pub async fn stop_voice_session(
             return Ok(());
         }
     }
-    if !(in_call || !in_view) {
+    if !in_call && in_view {
         return Ok(());
     }
     state.calls.cancel(&owner_id);
