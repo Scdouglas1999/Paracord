@@ -5,24 +5,19 @@ import { entityScopeKey as memberScopeKey } from '../lib/serverScope';
 import { useCurrentAccountScope } from '../hooks/useCurrentUser';
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
-import { ForumView } from '../components/channel/ForumView';
 import { useChannelStore } from '../stores/channelStore';
 import { useGuildStore } from '../stores/guildStore';
 import { useMemberStore } from '../stores/memberStore';
 import { cancelMessageFetch } from '../stores/messageStore';
 import { BuildingNotFound } from '../components/guild/BuildingNotFound';
-import { GuildWelcomeScreen } from '../components/guild/GuildWelcomeScreen';
 import { GuildOnboardingGate } from '../components/guild/GuildOnboardingGate';
 import { createChannelApi } from '../api/channels';
 import { ChannelType } from '../types';
-import {
-  getVersionedStorageItem,
-  setVersionedStorageItem,
-} from '../lib/versionedStorage';
 import { GuildLoadingScreen, ChannelNotFoundScreen, ChannelLoadErrorScreen } from './guild/GuildStateScreens';
 import { TextChannelView } from './guild/TextChannelView';
 import { ChannelAmbient } from '../components/sports/ChannelPin';
-import { ConversationPane, type ConversationSubject } from '../components/glass/conversation';
+import { ForumPage } from '../components/ix/conversation/ForumPage';
+import type { ConversationSubject } from '../components/ix/conversation';
 import { StageChannelPanel } from '../components/glass/stage/StageChannelPanel';
 export function GuildPage() {
   const { guildId, channelId } = useParams();
@@ -42,23 +37,11 @@ export function GuildPage() {
   const selectChannel = useCurrentChannelStore((s) => s.selectChannel);
   const channel = channels.find((c) => c.id === channelId);
 
-  // Welcome screen state
   const guilds = useCurrentGuilds();
   const currentGuild = guilds.find((g) => g.id === guildId);
-  const [showWelcome, setShowWelcome] = useState(() => {
-    if (!guildId) return false;
-    return !getVersionedStorageItem(
-      `guild-welcomed:${guildId}`,
-      [`guild-welcomed:${guildId}`],
-    );
-  });
-
-  const dismissWelcome = () => {
-    if (guildId) {
-      setVersionedStorageItem(`guild-welcomed:${guildId}`, '1');
-    }
-    setShowWelcome(false);
-  };
+  // "Pick roles" in the joiner welcome brings the onboarding page back: a new key mounts the gate
+  // afresh (it asks the server again and is no longer put away).
+  const [gateRun, setGateRun] = useState(0);
 
   const channelName = channel?.name || 'Unknown channel';
   const isStage = channel?.type === ChannelType.Stage || channel?.channel_type === ChannelType.Stage;
@@ -100,18 +83,6 @@ export function GuildPage() {
     return () => context.dispose();
   }, [channelId, memberScope]);
 
-  // Listen for custom event to re-show welcome screen from sidebar menu
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail;
-      if (detail?.guildId === guildId) {
-        setShowWelcome(true);
-      }
-    };
-    window.addEventListener('paracord:show-welcome', handler);
-    return () => window.removeEventListener('paracord:show-welcome', handler);
-  }, [guildId]);
-
   if (isLoading) {
     return <GuildLoadingScreen />;
   }
@@ -128,18 +99,9 @@ export function GuildPage() {
     return <ChannelNotFoundScreen guildId={guildId} />;
   }
 
-  const entryChrome = (
-    <>
-      {showWelcome && currentGuild && (
-        <GuildWelcomeScreen
-          guild={currentGuild}
-          channels={channels}
-          onDismiss={dismissWelcome}
-        />
-      )}
-      {!showWelcome && guildId && <GuildOnboardingGate guildId={guildId} />}
-    </>
-  );
+  // The server's onboarding (rules, roles) is a page over main; the welcome is the conversation's own
+  // (`IxConversation`: the empty channel's cards, or the joiner card above the message box).
+  const entryChrome = guildId ? <GuildOnboardingGate key={gateRun} guildId={guildId} /> : null;
 
   // Every route that gets here has both ids (`guilds/:guildId/channels/:channelId`).
   if (!guildId || !channelId) return null;
@@ -151,44 +113,43 @@ export function GuildPage() {
     channelId,
     channelName,
     topic: channel?.topic,
-    isForum,
   };
 
-  // A forum keeps its own body (posts, not a timeline) under the shared header.
+  // A forum keeps its own body (posts, not a timeline) under the shared large title.
   if (isForum) {
     return (
-      <ConversationPane
-        subject={subject}
-        notices={entryChrome}
-        timeline={<ForumView channelId={channelId} channelName={channelName} />}
-      />
+      <>
+        <ForumPage subject={subject} />
+        {entryChrome}
+      </>
     );
   }
 
-  // A text channel, a thread, or a voice channel's chat: the conversation pane
-  // the shell floats on the room, with its header, its timeline in the 720px
-  // column and its message box. A voice or stage channel's header carries that
-  // channel's pill (join, listen, watch; "Show the call" once you are in), and
-  // the call itself is the stage (docs/design/glass-plan.md §8.4: voice channel
-  // chat beside the stage; stage channels use the stage look). A stage channel
-  // adds its session (topic, moderators, raised hands) over the chat.
+  // A text channel, a thread, or a voice channel's chat: the Index conversation (docs/index-spec.md
+  // §4.11, §8.1). A pinned score and a stage channel's session sit under the large title; the
+  // onboarding page covers main on its own. Joining a voice channel never navigates: its call is
+  // the card and the call view.
+  const hasNotices = channel?.type === ChannelType.Text || isStage;
   return (
-    <TextChannelView
-      guildId={guildId}
-      channelId={channelId}
-      channelName={channelName}
-      channel={channel}
-      channels={channels}
-      subject={subject}
-      notices={
-        <>
-          {channel?.type === ChannelType.Text && (
-            <ChannelAmbient guildId={guildId} channelId={channelId} />
-          )}
-          {isStage && <StageChannelPanel guildId={guildId} channelId={channelId} channelName={channelName} />}
-          {entryChrome}
-        </>
-      }
-    />
+    <>
+      <TextChannelView
+        guildId={guildId}
+        channelId={channelId}
+        channelName={channelName}
+        channel={channel}
+        channels={channels}
+        subject={subject}
+        onPickRoles={() => setGateRun((run) => run + 1)}
+        notices={
+          hasNotices ? (
+            <>
+              {channel?.type === ChannelType.Text && <ChannelAmbient guildId={guildId} channelId={channelId} />}
+              {isStage && <StageChannelPanel guildId={guildId} channelId={channelId} channelName={channelName} />}
+            </>
+          ) : undefined
+        }
+      />
+      {entryChrome}
+    </>
   );
 }

@@ -1,1 +1,748 @@
-/* IX-15: the conversation chrome, welcomes and banners (§4.13). Created empty by IX-1; the owner fills it. */
+/* =============================================================================
+   IX-15: the conversation chrome (docs/index-spec.md §3.1, §4.11, §4.13, §5.6,
+   §5.12, §5.14, §6.8). Components: components/ix/conversation/*, the banner strip
+   (components/{BannerStack,ConnectionStatusBar,RestartBanner,UpdateNotification}),
+   the delivery cards (components/message/MessagingQueuePanel and
+   MessagingRecoveryNotice) and the section error (components/ErrorBoundary).
+
+     .ix-conv                     a conversation in main: timeline, then the box's column
+       .ix-timeline               MessageList (ix-timeline.css): the large title is its header
+       .ix-composer-column        the message box (ix-composer.css), + the joiner card
+       .ix-drop                   the full-main drop target, in main (a portal)
+
+   The timeline's scroller starts with the toolbar's 58px (`--ix-timeline-top`), and
+   the title, the welcome and the draft sit in the column (`.ix-tl-col`).
+
+   Tokens only (the literal-color lint); only transform and opacity animate (the
+   motion lint): the card lift is a transform transition, the invite card's words
+   crossfade by opacity, the drop target fades in by opacity.
+   ============================================================================= */
+
+/* ---- The host ------------------------------------------------------------------ */
+
+.ix-conv {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  /* A query container: the action cards wrap by the conversation's own width. */
+  container: ix-conv / inline-size;
+}
+
+.ix-conv > .ix-timeline {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.ix-conv > .ix-composer-column {
+  flex: none;
+}
+
+/* ---- The title block ------------------------------------------------------------ */
+
+/* What a page pins under the large title (a score, a stage's session): 14px under the
+   subtitle, scrolling away with it. */
+.ix-conv-notices {
+  padding-top: 14px;
+}
+
+.ix-conv-notices:empty {
+  display: none;
+}
+
+.ix-conv-sub {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 12px;
+}
+
+/* "End-to-end encrypted" after the topic, with a lock (§4.11). */
+.ix-conv-sub__lock {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* The DM call button while the call runs: an amber glyph (amber is live, §1.4). */
+.ix-dmcall[data-active='true'] {
+  color: var(--ix-amber);
+}
+
+.ix-dmcall:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.ix-dmcall:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+/* ---- The empty conversation: the welcome and the draft (§4.13, §5.6) --------------- */
+
+.ix-conv-empty {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+/* The welcome is centered in what is left under the title, optically: the prototype's feed
+   ends 58px above the box, so its center sits there. */
+.ix-conv-empty__welcome {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  padding-block: 0 58px;
+}
+
+/* While the draft grows in, the welcome leaves over it (a crossfade): it keeps its place and gives up the pointer. */
+.ix-conv-empty__welcome[data-leaving] {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* Your draft sits where a message of yours would: on the right, on the box. */
+.ix-conv-empty__draft {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: auto;
+  padding-bottom: 16px;
+}
+
+.ix-welcome {
+  display: grid;
+  justify-items: center;
+  padding-block: 10px;
+  text-align: center;
+  /* The prototype's own: the font's line gap, not the app's 1.5. */
+  line-height: normal;
+}
+
+/* The mark: a server's, a face (76px, set by the component) or a group's tile. */
+.ix-welcome__tile {
+  display: grid;
+  place-items: center;
+  width: 76px;
+  height: 76px;
+  border-radius: 22px;
+}
+
+.ix-welcome__title {
+  margin: 20px 0 0;
+  color: var(--ix-ink);
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.018em;
+}
+
+.ix-welcome__line {
+  max-width: 440px;
+  margin: 6px 0 0;
+  color: var(--ix-ink-3);
+  font-size: 15px;
+}
+
+/* Three cards of 196 with 12 between; a person without every permission sees fewer and the row stays centered. */
+.ix-ways {
+  --ix-ways: 3;
+  display: grid;
+  grid-template-columns: repeat(var(--ix-ways), 196px);
+  justify-content: center;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.ix-ways[data-count='1'] {
+  --ix-ways: 1;
+}
+
+.ix-ways[data-count='2'] {
+  --ix-ways: 2;
+}
+
+.ix-way {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding: 16px;
+  border: 0;
+  border-radius: 18px;
+  background-color: var(--ix-fill-card);
+  box-shadow: inset 0 0 0 1px var(--ix-line);
+  color: var(--ix-ink);
+  font: inherit;
+  line-height: normal;
+  text-align: left;
+  cursor: pointer;
+  /* Hover lifts 3px (400ms spring, §5.15); the fill is a color transition. */
+  transition:
+    transform 400ms var(--ix-spring),
+    background-color 200ms var(--ix-ease);
+}
+
+.ix-way:hover {
+  background-color: var(--ix-fill-card-hover);
+  transform: translateY(-3px);
+}
+
+.ix-way:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+.ix-way[aria-busy='true'] {
+  cursor: progress;
+}
+
+/* The glyph's tile: the place's hue (`.ix-hue-tile` draws its fill and glyph color). */
+.ix-way__gl {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+}
+
+.ix-way__title {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.ix-way__body {
+  color: var(--ix-ink-3);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+/* "Bring your people" and "Link copied" share one cell, so the card never changes size (§5.16, 200ms). */
+.ix-way__title--swap {
+  display: grid;
+}
+
+.ix-way__a,
+.ix-way__b {
+  grid-area: 1 / 1;
+  transition: opacity 200ms var(--ix-ease);
+}
+
+.ix-way__b {
+  opacity: 0;
+}
+
+.ix-way__title--swap[data-copied] .ix-way__a {
+  opacity: 0;
+}
+
+.ix-way__title--swap[data-copied] .ix-way__b {
+  opacity: 1;
+}
+
+/* Under 640px of column the cards stack, one under the other, each laid out as a row (the tile beside its
+   words) so three of them still fit above the message box. */
+@container ix-conv (max-width: 704px) {
+  .ix-ways {
+    grid-template-columns: minmax(0, 360px);
+  }
+
+  .ix-way {
+    grid-template-columns: auto minmax(0, 1fr);
+    column-gap: 14px;
+    row-gap: 3px;
+    align-items: center;
+  }
+
+  .ix-way__gl {
+    grid-row: 1 / span 2;
+  }
+
+  .ix-way__title {
+    align-self: end;
+  }
+
+  .ix-way__body {
+    align-self: start;
+  }
+}
+
+/* ---- The draft event card ("Plan a night") -------------------------------------------- */
+
+.ix-draft {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  max-width: 100%;
+}
+
+/* The wrapper is exactly the card (it is the rect the card grows from). */
+.ix-draft__card {
+  display: flex;
+  max-width: 100%;
+}
+
+.ix-draft__error {
+  max-width: 400px;
+  margin: 0;
+  color: var(--ix-danger-ink);
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: right;
+}
+
+/* ---- The joiner welcome above the box (a first visit to a populated server) --------------- */
+
+.ix-joiner {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: start;
+  margin-bottom: 8px;
+  padding: 14px 14px 14px 16px;
+  border-radius: 16px;
+  background: var(--ix-card);
+  box-shadow: var(--ix-shadow-event);
+}
+
+.ix-joiner__title {
+  margin: 0;
+  color: var(--ix-ink);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.ix-joiner__line {
+  display: -webkit-box;
+  margin: 2px 0 0;
+  overflow: hidden;
+  color: var(--ix-ink-3);
+  font-size: 13px;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.ix-joiner__acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+/* ---- The drop target (§4.12) -------------------------------------------------------------- */
+
+.ix-drop {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  background: var(--ix-drop);
+  pointer-events: none;
+  animation: ix-drop-in 160ms var(--ix-ease) both;
+}
+
+.ix-drop__box {
+  position: absolute;
+  inset: 10px;
+  display: grid;
+  place-items: center;
+  border: 2px dashed var(--ix-line);
+  border-radius: 24px;
+}
+
+.ix-drop__label {
+  color: var(--ix-ink);
+  font-size: 17px;
+  font-weight: 600;
+}
+
+@keyframes ix-drop-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* ---- A section that failed: the empty-state layout, sized to its host (§6.8) -------------------- */
+
+.ix-section-error {
+  /* A query container: a conversation gets the 24px title, a sidebar or a call's chat column a smaller one. */
+  container: ix-section / inline-size;
+  display: flex;
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  color: var(--ix-ink);
+}
+
+/* In a conversation it stands in the space the timeline had, under the toolbar. */
+.ix-conv > .ix-section-error {
+  padding-top: var(--ix-toolbar-h, 58px);
+}
+
+.ix-section-error__body {
+  display: grid;
+  justify-items: center;
+  max-width: 440px;
+  margin: auto;
+  padding: 24px 20px;
+  text-align: center;
+}
+
+.ix-section-error__title {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.018em;
+  line-height: 1.2;
+}
+
+.ix-section-error__line {
+  margin: 6px 0 0;
+  color: var(--ix-ink-3);
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+.ix-section-error__body > .ix-cream {
+  margin-top: 24px;
+}
+
+@container ix-section (max-width: 360px) {
+  .ix-section-error__body {
+    padding: 16px 14px;
+  }
+
+  .ix-section-error__title {
+    font-size: 16px;
+    letter-spacing: -0.01em;
+  }
+
+  .ix-section-error__line {
+    font-size: 13px;
+  }
+
+  .ix-section-error__body > .ix-cream {
+    margin-top: 16px;
+  }
+}
+
+/* The whole app failed (the root's boundary): a card on the ground, in the Index family. */
+.ix-fatal {
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  min-height: 100vh;
+  padding: 40px 16px;
+  background: var(--ix-ground);
+  color: var(--ix-ink);
+}
+
+.ix-fatal__panel {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 640px;
+  padding: 32px;
+  border-radius: 20px;
+  background: var(--ix-card);
+  box-shadow: var(--ix-shadow-event);
+}
+
+.ix-fatal__title {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.018em;
+}
+
+.ix-fatal__line {
+  max-width: 520px;
+  margin: 8px 0 0;
+  color: var(--ix-ink-2);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.ix-fatal__details {
+  margin-top: 20px;
+  overflow: hidden;
+  border-radius: 12px;
+  background: var(--ix-code);
+}
+
+.ix-fatal__summary {
+  padding: 10px 14px;
+  color: var(--ix-ink-2);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ix-fatal__summary:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: calc(var(--ix-focus-offset) * -1);
+}
+
+.ix-fatal__pre {
+  max-height: 18rem;
+  margin: 0;
+  padding: 12px 14px;
+  overflow: auto;
+  border-top: 1px solid var(--ix-line);
+  color: var(--ix-ink-3);
+  font-family: var(--font-code, ui-monospace, monospace);
+  font-size: 12.5px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ix-fatal__acts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 24px;
+}
+
+.ix-fatal__link {
+  margin-left: auto;
+  padding: 4px;
+  border-radius: 6px;
+  color: var(--ix-ink-2);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.ix-fatal__link:hover {
+  color: var(--ix-ink);
+}
+
+.ix-fatal__link:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+/* ---- The banner strip (§6.8) ------------------------------------------------------------------ */
+
+/* A 36px strip across the top: `--ix-card`, a bottom hairline, 13/600 ink, one text action.
+   Never amber, never a fill of any other color: an error is said in the danger ink. */
+.ix-banner-strip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 36px;
+  padding: 0 16px;
+  background: var(--ix-card);
+  box-shadow: 0 1px 0 var(--ix-line);
+  color: var(--ix-ink);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.ix-banner-strip__text {
+  min-width: 0;
+  padding-block: 8px;
+}
+
+.ix-banner-strip[data-tone='danger'] .ix-banner-strip__text {
+  color: var(--ix-danger-ink);
+}
+
+.ix-banner-strip__action {
+  flex: none;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--ix-ink);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+  transition: background-color 120ms var(--ix-ease);
+}
+
+.ix-banner-strip__action:hover:not(:disabled) {
+  background: var(--ix-fill);
+}
+
+.ix-banner-strip__action:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.ix-banner-strip__action:focus-visible,
+.ix-banner-strip__dismiss:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+.ix-banner-strip__dismiss {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--ix-ink-2);
+  cursor: pointer;
+  transition: background-color 120ms var(--ix-ease);
+}
+
+.ix-banner-strip__dismiss:hover {
+  background: var(--ix-fill);
+}
+
+/* ---- Delivery and recovery above the box (§8.4) ---------------------------------------------------- */
+
+/* A quiet card (`--ix-card`, radius 16) directly above the message box, the box's width. */
+.ix-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: var(--ix-card);
+  color: var(--ix-ink-2);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.ix-notice-group {
+  min-width: 0;
+}
+
+.ix-notice-summary {
+  color: var(--ix-ink-2);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ix-notice-summary:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+  border-radius: 6px;
+}
+
+.ix-notice__title {
+  margin: 0;
+  color: var(--ix-ink);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.ix-notice__text {
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  color: var(--ix-ink);
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.ix-notice__fine {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--ix-ink-3);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.ix-notice__error {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--ix-danger-ink);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.ix-notice__acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.ix-notice__field {
+  display: block;
+  margin-top: 4px;
+  color: var(--ix-ink-3);
+  font-size: 12.5px;
+}
+
+.ix-notice__field textarea {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--ix-fill-field);
+  box-shadow: inset 0 0 0 1px var(--ix-line);
+  color: var(--ix-ink);
+  font: inherit;
+  font-size: 14px;
+  resize: vertical;
+}
+
+.ix-notice__field textarea:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+.ix-notice-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* ---- A forum: the title over the forum's own posts (§8.1) ---------------------------------------------- */
+
+.ix-conv-head--forum {
+  flex: none;
+  /* The toolbar floats over the top of the page; there is no scroller to carry its 58px. */
+  padding-top: var(--ix-toolbar-h, 58px);
+}
+
+.ix-forum-body {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.ix-banner-strip__link {
+  color: var(--ix-ink-2);
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.ix-banner-strip__link:hover {
+  color: var(--ix-ink);
+}
+
+.ix-banner-strip__link:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+  border-radius: 4px;
+}

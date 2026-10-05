@@ -1,10 +1,9 @@
 import { invoke } from '@tauri-apps/api/core';
 import { check, type Update } from '@tauri-apps/plugin-updater';
-import { ArrowDownToLine, CheckCircle2, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { safeExternalUrl } from '../lib/security';
 import { isTauri } from '../lib/tauriEnv';
-import { Button } from './ui/Button';
+import { BannerStrip } from './ix/conversation/BannerStrip';
 
 const GITHUB_OWNER = (import.meta.env.VITE_GITHUB_OWNER as string | undefined)?.trim() || 'Scoduglas1999';
 const GITHUB_REPO = (import.meta.env.VITE_GITHUB_REPO as string | undefined)?.trim() || 'Paracord';
@@ -296,77 +295,31 @@ export function UpdateNotification() {
   if (!runningInTauri || !visible || !updateInfo) return null;
 
   const downloaded = status === 'downloaded';
-  const StatusIcon = downloaded ? CheckCircle2 : ArrowDownToLine;
-  const statusColor = downloaded ? 'var(--accent-success)' : 'var(--accent-info)';
+  const downloading = status === 'downloading';
 
-  // Toast recipe (lantern-stage-spec §8): bg-accent surface, hairline border, radius-md,
-  // shadow-[var(--shadow-plate)], a leading semantic state icon, --text-label title and --text-meta body.
+  // A banner strip (docs/index-spec.md §6.8): the words, one text action ("Restart to update"), and a way
+  // to put it away. An update that failed says so in the danger ink and keeps its action. The release notes
+  // stay one click away as a link, not a second action.
   return (
-    <div
-      role="status"
-      aria-live="polite"
-      className="pc-enter fixed bottom-4 right-4 z-[140] w-[min(24rem,calc(100vw-1.5rem))] rounded-well border border-border-subtle bg-bg-raised p-4 shadow-[var(--shadow-plate)]"
+    <BannerStrip
+      data-testid="ix-banner-update"
+      tone={errorText ? 'danger' : 'plain'}
+      action={
+        downloaded
+          ? { label: 'Restart to update', onPress: () => void onRestartAndInstall() }
+          : { label: downloading ? 'Downloading…' : 'Download update', onPress: () => void onDownload(), disabled: status === 'checking' || downloading }
+      }
+      onDismiss={onDismiss}
+      dismissLabel={downloaded ? 'Update later' : 'Dismiss update notice'}
     >
-      <div className="flex items-start gap-3">
-        <StatusIcon size={18} style={{ color: statusColor, flexShrink: 0, marginTop: '1px' }} />
-        <div className="min-w-0 flex-1">
-          <div className="text-label text-text-primary">
-            {downloaded ? 'Update ready to install' : 'New release available'}
-          </div>
-          <div className="mt-0.5 text-meta text-text-secondary">
-            Paracord {updateInfo.version}
-            {updateInfo.publishedAt
-              ? ` · ${new Date(updateInfo.publishedAt).toLocaleDateString()}`
-              : ''}
-          </div>
-          <a
-            className="mt-1 inline-block rounded-chip text-meta font-medium text-text-link outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:underline focus-visible:shadow-[var(--focus-ring)]"
-            href={updateInfo.htmlUrl}
-            target="_blank"
-            rel="noreferrer"
-          >
-            View release notes
-          </a>
-        </div>
-        <button
-          className="-mr-1 -mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-chip text-text-muted outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
-          onClick={onDismiss}
-          type="button"
-          aria-label="Dismiss update notification"
-        >
-          <X size={16} />
-        </button>
-      </div>
-
-      <div className="mt-3 truncate font-code text-meta text-text-muted" title={updateInfo.assetName}>
-        {downloaded ? `Downloaded ${updateInfo.assetName}` : updateInfo.assetName}
-      </div>
-
-      {errorText && (
-        <div className="mt-2 rounded-chip bg-danger-tint px-2.5 py-1.5 text-meta text-accent-danger">
-          {errorText}
-        </div>
-      )}
-
-      <div className="mt-3.5 flex flex-wrap items-center gap-2">
-        {downloaded ? (
-          <Button size="sm" onClick={onRestartAndInstall}>
-            Restart to install
-          </Button>
-        ) : (
-          <Button
-            size="sm"
-            onClick={onDownload}
-            loading={status === 'downloading'}
-            disabled={status === 'checking' || status === 'downloading'}
-          >
-            {status === 'downloading' ? 'Downloading…' : 'Download update'}
-          </Button>
-        )}
-        <Button size="sm" variant="ghost" onClick={onDismiss}>
-          {downloaded ? 'Later' : 'Dismiss'}
-        </Button>
-      </div>
-    </div>
+      {errorText
+        ? `The update did not finish: ${errorText}`
+        : downloaded
+          ? `Paracord ${updateInfo.version} is ready to install.`
+          : `Paracord ${updateInfo.version} is available.`}{' '}
+      <a className="ix-banner-strip__link" href={updateInfo.htmlUrl} target="_blank" rel="noreferrer">
+        Release notes
+      </a>
+    </BannerStrip>
   );
 }

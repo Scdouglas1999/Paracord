@@ -1,41 +1,40 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { TextChannelView } from './TextChannelView';
 import { useMemberStore } from '../../stores/memberStore';
 import { entityScopeKey } from '../../lib/serverScope';
 import type { Channel } from '../../types';
+import type { ConversationSubject } from '../../components/ix/conversation';
 
 /**
- * A thread view is about the thread (docs/lantern-stage-spec.md §7.4).
+ * A thread view is about the thread (docs/lantern-stage-spec.md §7.4), and a pushed
+ * page (docs/index-spec.md §6.1, §8.1): the thread's name is the title, "Thread in
+ * design-notes · started by mara" is under it, the toolbar has a back chevron to the
+ * channel it lives in, and Esc goes there too.
  *
- * It used to be about the thread's *parent*: the body rendered the parent room
- * behind a "Parent channel" strip, so a page titled "Bracket tolerance" said
- * "design-notes is dark — nobody has posted in design-notes yet" about a room
- * with fifty messages in it.
- *
- * The timeline and composer are stubbed to the one thing that matters here —
- * which channel they were given.
+ * `IxConversation` (the large title, the timeline, the welcome, the message box) has
+ * its own suite; here it is reduced to what this page hands it.
  */
-vi.mock('../../components/message/MessageList', () => ({
-  MessageList: ({ channelId }: { channelId: string }) => (
-    <div data-testid="timeline">{channelId}</div>
-  ),
-}));
-vi.mock('../../components/message/MessageInput', () => ({
-  MessageInput: ({ channelId }: { channelId: string }) => (
-    <div data-testid="composer">{channelId}</div>
-  ),
-}));
-// The conversation pane's header (WP-G11) is covered in
-// components/glass/conversation; this suite is about the body, so the header is
-// reduced to the title it was handed.
-vi.mock('../../components/glass/conversation/ConversationHeader', () => ({
-  ConversationHeader: ({ subject }: { subject: { kind: string; channelName?: string; title?: string } }) => (
-    <div data-testid="header">{subject.kind === 'dm' ? subject.title : subject.channelName}</div>
-  ),
+const seen = vi.hoisted(() => ({ props: null as null | Record<string, unknown> }));
+vi.mock('../../components/ix/conversation', () => ({
+  IxConversation: (props: { subject: ConversationSubject; onBack?: () => void; backLabel?: string }) => {
+    seen.props = props as unknown as Record<string, unknown>;
+    const { subject, onBack, backLabel } = props;
+    return (
+      <div data-testid="conversation">
+        <h1>{subject.kind === 'channel' ? subject.channelName : subject.title}</h1>
+        {subject.kind === 'channel' && subject.subtitle && <p data-testid="subtitle">{subject.subtitle}</p>}
+        {onBack && (
+          <button type="button" onClick={onBack}>
+            {backLabel}
+          </button>
+        )}
+      </div>
+    );
+  },
 }));
 
 const SCOPE = { serverId: '__local__', userId: 'user-1' };
@@ -88,27 +87,36 @@ function renderThread(channel: Channel = THREAD, channels: Channel[] = [PARENT, 
 
 beforeEach(() => {
   useMemberStore.setState({ members: new Map() });
+  seen.props = null;
 });
 
+afterEach(cleanup);
+
 describe('a thread view', () => {
-  it('shows the thread, not the room it lives in', () => {
+  it('is the thread, titled by its own name, and says where it lives', () => {
     renderThread();
-    expect(screen.getByTestId('timeline')).toHaveTextContent('2003');
-    expect(screen.getByTestId('composer')).toHaveTextContent('2003');
-    expect(screen.queryByText('Parent channel')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Bracket tolerance' })).toBeInTheDocument();
+    expect(screen.getByTestId('subtitle')).toHaveTextContent('Thread in design-notes');
+    expect((seen.props?.subject as { isThread?: boolean }).isThread).toBe(true);
   });
 
-  it('says where the thread lives, and walks back to it', async () => {
+  it('walks back to the channel it lives in, from the toolbar chevron and from Esc', async () => {
     renderThread();
-    expect(screen.getByText('A thread in')).toBeInTheDocument();
-    const parent = screen.getByRole('button', { name: '#design-notes' });
-    await userEvent.click(parent);
+    await userEvent.click(screen.getByRole('button', { name: 'Back to design-notes' }));
+    expect(screen.getByTestId('pathname')).toHaveTextContent('/app/guilds/g1/channels/2001');
+    await userEvent.keyboard('{Escape}');
+    expect(screen.getByTestId('pathname')).toHaveTextContent('/app/guilds/g1/channels/2001');
+  });
+
+  it('goes back with Alt+Left too', async () => {
+    renderThread();
+    await userEvent.keyboard('{Alt>}{ArrowLeft}{/Alt}');
     expect(screen.getByTestId('pathname')).toHaveTextContent('/app/guilds/g1/channels/2001');
   });
 
   it('names the person who started it once the roster can be read', () => {
     renderThread();
-    expect(screen.queryByText(/started by/)).not.toBeInTheDocument();
+    expect(screen.getByTestId('subtitle')).not.toHaveTextContent('started by');
 
     cleanup();
     useMemberStore.setState({
@@ -120,26 +128,23 @@ describe('a thread view', () => {
       ]),
     });
     renderThread();
-    expect(screen.getByText('· started by mara')).toBeInTheDocument();
+    expect(screen.getByTestId('subtitle')).toHaveTextContent('Thread in design-notes · started by mara');
   });
 
-  it('says so plainly when the room the thread lives in is gone', () => {
+  it('says so plainly when the channel the thread lives in is gone, and goes back to the server', async () => {
     renderThread(THREAD, [THREAD]);
-    expect(screen.getByText('a channel you can no longer see')).toBeInTheDocument();
+    expect(screen.getByTestId('subtitle')).toHaveTextContent('Thread in a channel you can no longer see');
+    await userEvent.click(screen.getByRole('button', { name: 'Back to the server' }));
+    expect(screen.getByTestId('pathname')).toHaveTextContent('/app/guilds/g1');
+    expect(screen.getByTestId('pathname')).not.toHaveTextContent('channels');
   });
 
-  it('leaves an ordinary room alone', () => {
+  it('leaves an ordinary channel alone: no back chevron, no thread line, Esc does nothing', async () => {
     renderThread(PARENT, [PARENT]);
-    expect(screen.queryByText('A thread in')).not.toBeInTheDocument();
-    expect(screen.getByTestId('timeline')).toHaveTextContent('2001');
-  });
-
-  it('renders into the conversation pane: header, timeline and message box in their regions', () => {
-    const { container } = renderThread(PARENT, [PARENT]);
-    const pane = container.querySelector('.glass-conversation');
-    expect(pane).not.toBeNull();
-    expect(pane!.querySelector('.glass-conversation__header')).toHaveTextContent('design-notes');
-    expect(pane!.querySelector('.glass-conversation__timeline')).toContainElement(screen.getByTestId('timeline'));
-    expect(pane!.querySelector('.glass-conversation__composer')).toContainElement(screen.getByTestId('composer'));
+    expect(screen.queryByTestId('subtitle')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Back/ })).not.toBeInTheDocument();
+    expect((seen.props?.subject as { isThread?: boolean }).isThread).toBeUndefined();
+    await userEvent.keyboard('{Escape}');
+    expect(screen.getByTestId('pathname')).toHaveTextContent('/app/guilds/g1/channels/2003');
   });
 });

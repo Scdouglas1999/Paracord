@@ -1,15 +1,13 @@
-import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
-import { entityScopeKey } from '../../lib/serverScope';
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { MessageSquare } from 'lucide-react';
+import { useCallback, useMemo, type ReactNode } from 'react';
 import { useNavigate } from 'react-router';
-import { MessageList } from '../../components/message/MessageList';
-import { MessageInput } from '../../components/message/MessageInput';
-import { useMemberStore } from '../../stores/memberStore';
-import type { Channel, Message } from '../../types';
+
+import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
 import { displayName } from '../../lib/displayName';
-import { ErrorBoundary } from '../../components/ErrorBoundary';
-import { ConversationPane, type ConversationSubject } from '../../components/glass/conversation';
+import { entityScopeKey } from '../../lib/serverScope';
+import { useMemberStore } from '../../stores/memberStore';
+import type { Channel } from '../../types';
+import { IxConversation, type ConversationSubject } from '../../components/ix/conversation';
+import { usePushedPageKeys } from '../../components/rooms/lobby/usePushedPageKeys';
 
 interface TextChannelViewProps {
   guildId: string | undefined;
@@ -17,64 +15,46 @@ interface TextChannelViewProps {
   channelName: string;
   channel: Channel | undefined;
   channels: Channel[];
-  /** What the conversation pane's header describes. */
+  /** What the conversation is: the large title, the toolbar and the message box are made from it. */
   subject: ConversationSubject;
-  /** Strips above the timeline from the page (a pinned score, the entry gates). */
+  /** Under the large title: a pinned score, a stage channel's session. */
   notices?: ReactNode;
+  /** Brings the server's onboarding page back ("Pick roles" in the joiner welcome). */
+  onPickRoles?: () => void;
 }
 
 /**
- * A text or thread channel as a Glass conversation (docs/glass-spec.md §3.2):
- * it renders into the `ConversationPane` slot — header, notices, the timeline
- * (`MessageList`) and the message box (`MessageInput`) — and the shell floats
- * that pane on the room. The message internals are reused untouched.
- *
- * The side surfaces (search / pins / threads / media / economy) are not docked
- * here; the shell's sheets slot hosts them, driven by
- * `uiStore.contextPanelMode` and toggled from the header.
+ * A text channel or a thread as an Index conversation (docs/index-spec.md §4.11,
+ * §8.1): `IxConversation` draws the large title, the timeline, the welcome and the
+ * message box; this page says what a THREAD is.
  *
  * **A thread view is about the thread** (docs/lantern-stage-spec.md §7.4). It
  * used to be about the thread's *parent*: the body rendered the parent room's
  * timeline behind a "Parent channel" strip while the thread itself was pushed
  * into the side panel, so a page whose title was the thread said "design-notes
- * is dark — nobody has posted in design-notes yet" about a room with fifty
- * messages in it. The thread is the page now; one line under the header says
- * where it lives and who started it, and the room's other threads are one
- * click away in the Threads panel.
+ * is dark" about a room with fifty messages in it. The thread is the page now: a
+ * pushed page (§6.1) with the thread's name as its title, "Thread in design-notes ·
+ * started by Mara" under it, a back chevron to the channel it lives in, and Esc or
+ * Alt+Left to go there too. The room's other threads are one click away in the
+ * Threads page of the channel menu.
  */
 export function TextChannelView(props: TextChannelViewProps) {
   const scope = useCurrentAccountScope();
   return <OwnedTextChannelView key={scope ? entityScopeKey(scope, props.channelId) : `unavailable:${props.channelId}`} {...props} />;
 }
 
-function OwnedTextChannelView({
-  guildId,
-  channelId,
-  channelName,
-  channel,
-  channels,
-  subject,
-  notices,
-}: TextChannelViewProps) {
+function OwnedTextChannelView({ guildId, channel, channels, subject, notices, onPickRoles }: TextChannelViewProps) {
   const navigate = useNavigate();
   const scope = useCurrentAccountScope();
-  const [replyingTo, setReplyingTo] = useState<{ id: string; author: string; content: string } | null>(null);
-
-  // Clear the reply target when switching channels.
-  useEffect(() => {
-    setReplyingTo(null);
-  }, [channelId]);
 
   const isThread = channel?.type === 6 || channel?.channel_type === 6;
-  const parentChannelId = isThread ? channel?.parent_id ?? null : null;
-  const parentChannel = parentChannelId ? channels.find((c) => c.id === parentChannelId) : null;
+  const parentChannelId = isThread ? (channel?.parent_id ?? null) : null;
+  const parentChannel = parentChannelId ? channels.find((candidate) => candidate.id === parentChannelId) : null;
 
   // Who opened the thread. Named only when this client can actually resolve
-  // them — a thread whose starter is not in the loaded roster says nothing
+  // them: a thread whose starter is not in the loaded roster says nothing
   // rather than guessing, and never renders a bare id.
-  const members = useMemberStore((state) =>
-    scope && guildId ? state.members.get(entityScopeKey(scope, guildId)) : undefined,
-  );
+  const members = useMemberStore((state) => (scope && guildId ? state.members.get(entityScopeKey(scope, guildId)) : undefined));
   const starterName = useMemo(() => {
     const ownerId = isThread ? channel?.owner_id : null;
     if (!ownerId || !members) return null;
@@ -82,64 +62,27 @@ function OwnedTextChannelView({
     return member ? displayName(member.user, member.nick) : null;
   }, [channel?.owner_id, isThread, members]);
 
-  // A single malformed message must degrade this panel, not the app.
-  const timeline = (
-    <ErrorBoundary variant="section" label="the message feed">
-      <MessageList
-        channelId={channelId}
-        onReply={(msg: Message) =>
-          setReplyingTo({
-            id: msg.id,
-            author: displayName(msg.author),
-            content: msg.content || '',
-          })
-        }
-      />
-    </ErrorBoundary>
-  );
+  const threadSubject = useMemo<ConversationSubject>(() => {
+    if (!isThread || subject.kind !== 'channel') return subject;
+    const where = parentChannel ? `Thread in ${parentChannel.name || 'a channel'}` : 'Thread in a channel you can no longer see';
+    return { ...subject, isThread: true, subtitle: starterName ? `${where} · started by ${starterName}` : where };
+  }, [isThread, subject, parentChannel, starterName]);
 
-  const threadOrigin = isThread && (
-    <div className="panel-divider flex shrink-0 flex-wrap items-center gap-x-1.5 gap-y-1 border-b border-border-subtle px-4 py-2.5">
-      <MessageSquare size={13} aria-hidden className="shrink-0 text-text-muted" />
-      <span className="text-meta text-text-muted">A thread in</span>
-      {parentChannel && guildId ? (
-        <button
-          type="button"
-          onClick={() => navigate(`/app/guilds/${guildId}/channels/${parentChannel.id}`)}
-          className="pc-focusable rounded-[var(--radius-control)] px-1 text-label text-text-secondary transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:text-text-primary"
-        >
-          #{parentChannel.name || 'unknown'}
-        </button>
-      ) : (
-        <span className="text-label text-text-secondary">a channel you can no longer see</span>
-      )}
-      {starterName && (
-        <span className="truncate text-meta text-text-muted">· started by {starterName}</span>
-      )}
-    </div>
-  );
+  // Back: the channel the thread lives in, or the server when that is gone.
+  const goBack = useCallback(() => {
+    if (!guildId) return;
+    navigate(parentChannel ? `/app/guilds/${guildId}/channels/${parentChannel.id}` : `/app/guilds/${guildId}`);
+  }, [navigate, guildId, parentChannel]);
+  const onBack = isThread && guildId ? goBack : undefined;
+  usePushedPageKeys(onBack ?? null);
 
   return (
-    <ConversationPane
-      subject={subject}
-      notices={
-        notices != null || threadOrigin ? (
-          <>
-            {notices}
-            {threadOrigin}
-          </>
-        ) : undefined
-      }
-      timeline={timeline}
-      composer={
-        <MessageInput
-          channelId={channelId}
-          guildId={guildId}
-          channelName={channelName}
-          replyingTo={replyingTo}
-          onCancelReply={() => setReplyingTo(null)}
-        />
-      }
+    <IxConversation
+      subject={threadSubject}
+      notices={notices}
+      onBack={onBack}
+      backLabel={parentChannel ? `Back to ${parentChannel.name || 'the channel'}` : 'Back to the server'}
+      onPickRoles={onPickRoles}
     />
   );
 }

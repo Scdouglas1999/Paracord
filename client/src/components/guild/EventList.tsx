@@ -93,9 +93,23 @@ function eventListError(action: string, err: unknown): string {
   return detail ? `${action}: ${detail}` : action;
 }
 
+/**
+ * What a NEW event's form opens with (the empty channel's "Plan a night", IX-15:
+ * its Edit puts the draft's name, time and voice channel here). Ignored when
+ * editing an existing event.
+ */
+export interface EventFormDefaults {
+  name?: string;
+  start?: Date;
+  /** A voice channel to hold the event in; sent with the event when its type is a voice channel. */
+  channelId?: string | null;
+  entityType?: 1 | 2;
+}
+
 interface EventFormModalProps {
   guildId: string;
   event?: ScheduledEvent;
+  defaults?: EventFormDefaults;
   onClose: () => void;
   onSaved: (event: ScheduledEvent) => void;
 }
@@ -147,17 +161,18 @@ const ENTITY_TABS = [
   { value: '2', label: 'External' },
 ] as const;
 
-export function EventFormModal({ guildId, event, onClose, onSaved }: EventFormModalProps) {
-  const [name, setName] = useState(event?.name ?? '');
+export function EventFormModal({ guildId, event, defaults, onClose, onSaved }: EventFormModalProps) {
+  const [name, setName] = useState(event?.name ?? defaults?.name ?? '');
   const [description, setDescription] = useState(event?.description ?? '');
   const fallbackWindow = useMemo(() => defaultEventWindow(), []);
   const [scheduledStart, setScheduledStart] = useState(
-    toDateTimeLocalValue(event?.scheduled_start) || (event ? '' : fallbackWindow.start)
+    toDateTimeLocalValue(event?.scheduled_start) ||
+      (event ? '' : defaults?.start ? localInputValue(defaults.start) : fallbackWindow.start)
   );
   const [scheduledEnd, setScheduledEnd] = useState(
-    toDateTimeLocalValue(event?.scheduled_end) || (event ? '' : fallbackWindow.end)
+    toDateTimeLocalValue(event?.scheduled_end) || (event || defaults?.start ? '' : fallbackWindow.end)
   );
-  const [entityType, setEntityType] = useState(event?.entity_type ?? 2); // external by default
+  const [entityType, setEntityType] = useState(event?.entity_type ?? defaults?.entityType ?? 2); // external by default
   const [location, setLocation] = useState(event?.location ?? '');
   const [recurrenceRule, setRecurrenceRule] = useState<'none' | 'daily' | 'weekly' | 'monthly'>(
     event?.recurrence_rule === 'daily' || event?.recurrence_rule === 'weekly' || event?.recurrence_rule === 'monthly'
@@ -196,6 +211,7 @@ export function EventFormModal({ guildId, event, onClose, onSaved }: EventFormMo
         scheduled_start: new Date(scheduledStart).toISOString(),
         scheduled_end: scheduledEnd ? new Date(scheduledEnd).toISOString() : (isEditing ? null : undefined),
         entity_type: entityType,
+        ...(!isEditing && entityType === 1 && defaults?.channelId ? { channel_id: defaults.channelId } : null),
         location: optionalText(location),
         recurrence_rule: recurrenceRule === 'none' ? (isEditing ? null : undefined) : recurrenceRule,
         reminder_minutes: reminderMinutes === 'none' ? (isEditing ? null : undefined) : Number(reminderMinutes),

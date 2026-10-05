@@ -1,4 +1,5 @@
 import { cleanup, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -44,5 +45,53 @@ describe('ErrorBoundary', () => {
       'href',
       'https://github.com/Scoduglas1999/Paracord/issues/new',
     );
+  });
+});
+
+describe('ErrorBoundary variant="section"', () => {
+  afterEach(() => {
+    cleanup();
+    vi.resetModules();
+  });
+
+  async function renderSection(label?: string) {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { ErrorBoundary } = await import('./ErrorBoundary');
+    const view = render(
+      <ErrorBoundary variant="section" label={label}>
+        <ThrowingChild />
+      </ErrorBoundary>,
+    );
+    return { view, consoleError };
+  }
+
+  it('is the empty-state layout: "Something went wrong showing messages" and a cream Reload', async () => {
+    const { consoleError } = await renderSection('messages');
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Something went wrong showing messages' })).toBeInTheDocument();
+    expect(screen.getByText('The rest of the app is still working.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Reload' })).toHaveClass('ix-cream');
+    consoleError.mockRestore();
+  });
+
+  it('names the section in lower case: "showing channels"', async () => {
+    const { consoleError } = await renderSection('Channels');
+    expect(screen.getByRole('heading', { name: 'Something went wrong showing channels' })).toBeInTheDocument();
+    consoleError.mockRestore();
+  });
+
+  it('Reload tries the section again; when it keeps failing the same button reloads the app', async () => {
+    const reload = vi.fn();
+    vi.stubGlobal('location', { ...window.location, reload });
+    const { consoleError } = await renderSection('messages');
+    for (const _ of [1, 2]) {
+      await userEvent.click(screen.getByRole('button', { name: 'Reload' }));
+      expect(reload).not.toHaveBeenCalled();
+    }
+    expect(screen.getByText('It keeps failing. Reloading the app should clear it.')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Reload app' }));
+    expect(reload).toHaveBeenCalledTimes(1);
+    consoleError.mockRestore();
+    vi.unstubAllGlobals();
   });
 });

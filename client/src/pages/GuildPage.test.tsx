@@ -11,53 +11,54 @@ import { useUIStore } from '../stores/uiStore';
 import type { Channel } from '../types';
 import { GuildPage } from './GuildPage';
 
-// The conversation header (WP-G11) is covered in components/glass/conversation.
-vi.mock('../components/glass/conversation/ConversationHeader', () => ({
-  ConversationHeader: ({ subject }: { subject: { kind: string; channelName?: string; title?: string } }) => (
-    <div data-testid="topbar">{subject.kind === 'dm' ? subject.title : subject.channelName}</div>
+// The conversation (large title, timeline, welcome, message box) is covered in components/ix/conversation.
+// A forum is its chrome over the forum's own posts; here it is reduced to the channel it was given.
+vi.mock('../components/ix/conversation/ForumPage', () => ({
+  ForumPage: ({ subject }: { subject: { channelId: string; channelName: string } }) => (
+    <div data-testid="forum-view" data-channel={subject.channelId} data-title={subject.channelName} />
   ),
-}));
-
-vi.mock('../components/channel/ForumView', () => ({
-  ForumView: () => <div data-testid="forum-view" />,
 }));
 
 vi.mock('../components/glass/stage/StageChannelPanel', () => ({
   StageChannelPanel: ({ channelId }: { channelId: string }) => <div data-testid="stage-panel">{channelId}</div>,
 }));
 
-// The text view renders the page's notices (welcome, onboarding gate, pinned
-// score, a stage channel's session) into its conversation pane, so the stub
-// keeps them, and says which channel and header it was given.
+// The text view renders the page's notices (a pinned score, a stage channel's session)
+// under its large title, so the stub keeps them, and says which channel and title it was
+// given. "Pick roles" is its onboarding callback.
 vi.mock('./guild/TextChannelView', () => ({
   TextChannelView: ({
     notices,
     channelId,
     subject,
+    onPickRoles,
   }: {
     notices?: ReactNode;
     channelId: string;
     subject: { kind: string; channelName?: string };
+    onPickRoles?: () => void;
   }) => (
     <div data-testid="text-view" data-channel={channelId} data-title={subject.channelName}>
       {notices}
-    </div>
-  ),
-}));
-
-vi.mock('../components/guild/GuildWelcomeScreen', () => ({
-  GuildWelcomeScreen: ({ onDismiss }: { onDismiss: () => void }) => (
-    <div data-testid="welcome">
-      <button type="button" onClick={onDismiss}>
-        Dismiss Welcome
+      <button type="button" onClick={onPickRoles}>
+        Pick roles
       </button>
     </div>
   ),
 }));
 
-vi.mock('../components/guild/GuildOnboardingGate', () => ({
-  GuildOnboardingGate: () => <div data-testid="onboarding" />,
-}));
+const gateMounts = vi.hoisted(() => ({ count: 0 }));
+vi.mock('../components/guild/GuildOnboardingGate', async () => {
+  const React = await import('react');
+  return {
+    GuildOnboardingGate: () => {
+      React.useEffect(() => {
+        gateMounts.count += 1;
+      }, []);
+      return <div data-testid="onboarding" />;
+    },
+  };
+});
 
 vi.mock('../hooks/usePermissions', () => ({
   usePermissions: () => ({ permissions: 0n, isAdmin: false }),
@@ -116,6 +117,7 @@ function renderGuildPage(channelId: string) {
 describe('GuildPage composition shell', () => {
   beforeEach(() => {
     window.localStorage.clear();
+    gateMounts.count = 0;
     Object.defineProperty(window, 'matchMedia', {
       writable: true,
       value: vi.fn().mockImplementation((query: string) => ({
@@ -206,17 +208,35 @@ describe('GuildPage composition shell', () => {
     expect(screen.queryByTestId('stage-panel')).not.toBeInTheDocument();
   });
 
-  it('dismisses the welcome screen and persists the dismissal', async () => {
-    const user = userEvent.setup();
+  it('has no welcome modal: the welcome belongs to the conversation, and the onboarding page stays', () => {
     seedChannels([makeChannel('text', 0)]);
 
     renderGuildPage('text');
 
-    expect(screen.getByTestId('welcome')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByTestId('onboarding')).toBeInTheDocument();
+    // Opening a server writes nothing: being welcomed is the conversation's (it marks it when it is shown).
+    expect(window.localStorage.getItem(`paracord:v2:guild-welcomed:${GUILD_ID}`)).toBeNull();
+  });
 
-    await user.click(screen.getByRole('button', { name: 'Dismiss Welcome' }));
+  it('brings the onboarding page back when the welcome\'s Pick roles asks', async () => {
+    const user = userEvent.setup();
+    seedChannels([makeChannel('text', 0)]);
 
-    expect(screen.queryByTestId('welcome')).not.toBeInTheDocument();
-    expect(window.localStorage.getItem(`paracord:v2:guild-welcomed:${GUILD_ID}`)).toBe('1');
+    renderGuildPage('text');
+    expect(gateMounts.count).toBe(1);
+
+    await user.click(screen.getByRole('button', { name: 'Pick roles' }));
+
+    expect(gateMounts.count).toBe(2);
+  });
+
+  it('pins the onboarding page over a forum too', () => {
+    seedChannels([makeChannel('forum', 7)]);
+
+    renderGuildPage('forum');
+
+    expect(screen.getByTestId('forum-view')).toHaveAttribute('data-channel', 'forum');
+    expect(screen.getByTestId('onboarding')).toBeInTheDocument();
   });
 });

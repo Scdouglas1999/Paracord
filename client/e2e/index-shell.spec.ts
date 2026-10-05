@@ -161,10 +161,11 @@ test.describe('IX-4 shell', () => {
     await open(page);
     await mountLargeTitlePage(page, 60);
     await expect(page.locator('.ix-main')).toHaveAttribute('data-page', 'index');
-    const title = page.getByTestId('ix-title');
+    // The routed conversation has its own large title now (IX-15): this is the page the test mounted.
+    const title = page.getByTestId('ix4-page').getByTestId('ix-title');
     await expect(title).toHaveText('general');
     // At rest: the title sits 48px into main, under the toolbar; the toolbar is clear.
-    const at = await rectOf(page, '[data-testid="ix-title"]');
+    const at = await rectOf(page, '[data-testid="ix4-page"] [data-testid="ix-title"]');
     expect(at.x).toBe(316 + 48);
     await expect(toolbar(page)).toHaveAttribute('data-folded', 'false');
     await shoot(page, 'shell-large-title', { settle: 400 });
@@ -172,7 +173,7 @@ test.describe('IX-4 shell', () => {
     // 30px: half folded, toolbar still clear.
     await page.getByTestId('ix4-page').evaluate((element) => element.scrollTo({ top: 30 }));
     await page.waitForTimeout(100);
-    const half = await page.locator('.ix-large-title').evaluate((element) => ({ t: element.style.transform, o: element.style.opacity }));
+    const half = await page.getByTestId('ix4-page').locator('.ix-large-title').evaluate((element) => ({ t: element.style.transform, o: element.style.opacity }));
     expect(half.t).toBe('scale(0.95)');
     expect(Number(half.o)).toBeCloseTo(0.55, 2);
     await expect(toolbar(page)).toHaveAttribute('data-folded', 'false');

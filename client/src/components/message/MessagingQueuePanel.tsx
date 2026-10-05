@@ -2,20 +2,20 @@ import { useEffect, useRef, useState } from 'react';
 import { useStore } from 'zustand';
 import type { AccountMessagingRuntime, RuntimeQueueRow } from '../../lib/messages/accountMessagingRuntime';
 import { isPreparedSend } from '../../lib/messages/durableOutbox';
-import { Button } from '../ui';
+import { CreamButton, ToolChip } from '../ix/primitives';
 import { cn } from '../../lib/utils';
 
 /**
- * Delivery and recovery, above the composer (docs/lantern-stage-spec.md §7.4).
+ * Delivery and recovery, above the composer (docs/index-spec.md §8.4).
  *
  * Every row here is something the app is still holding on the user's behalf: a
  * send that has not landed, an edit or delete that has not been accepted, text
- * recovered from a history that is gone. They are **raised rows inside the text
- * room's plate** — near the composer because that is where you decide what to
- * do about them, and raised because they are waiting on you.
+ * recovered from a history that is gone. Each is a quiet card (`--ix-card`, radius
+ * 16) directly above the message box, at the box's width: near the composer because
+ * that is where you decide what to do about them.
  *
  * The behavior is untouched: retry, copy, edit, discard and restore all go
- * through the messaging runtime exactly as before.
+ * through the messaging runtime exactly as before. Only the surface is Index's.
  *
  * One thing IS held back: a send that is merely in flight. Every send spends a
  * moment in this queue on its way to the server, and surfacing a card for it
@@ -42,22 +42,13 @@ export function isQuietlyInFlight(row: RuntimeQueueRow, nowMs: number): boolean 
   return Number.isFinite(started) && nowMs - started < IN_FLIGHT_GRACE_MS;
 }
 
-/** One raised row. The shape is shared by queued sends, mutations and recovery. */
+/** One card. The shape is shared by queued sends, mutations and recovery. */
 function DeliveryRow({ className, children }: { className?: string; children: React.ReactNode }) {
-  return (
-    <li
-      className={cn(
-        'min-w-0 rounded-[var(--radius-well)] bg-bg-raised p-3 shadow-[var(--shadow-raised)]',
-        className,
-      )}
-    >
-      {children}
-    </li>
-  );
+  return <li className={cn('ix-notice', className)}>{children}</li>;
 }
 
 function RowTitle({ children }: { children: React.ReactNode }) {
-  return <p className="pc-display text-name text-text-primary">{children}</p>;
+  return <p className="ix-notice__title">{children}</p>;
 }
 
 function QueueEntry({ runtime, row, copy }: { runtime: AccountMessagingRuntime; row: RuntimeQueueRow; copy: (content: string) => void }) {
@@ -87,32 +78,31 @@ function QueueEntry({ runtime, row, copy }: { runtime: AccountMessagingRuntime; 
   }
   return <DeliveryRow>
     <RowTitle>{discarding ? 'Resolving discard' : refused ? 'Refused — not delivered' : row.record.status === 'failed' ? 'Delivery needs attention' : 'Queued message'}</RowTitle>
-    <p className="mt-1 whitespace-pre-wrap break-words text-body text-text-body">{row.record.draft.content || 'Attachment or sticker message'}</p>
-    {row.record.error && <p className="mt-2 break-words text-meta text-text-muted">{row.record.error}</p>}
+    <p className="ix-notice__text">{row.record.draft.content || 'Attachment or sticker message'}</p>
+    {row.record.error && <p className="ix-notice__fine">{row.record.error}</p>}
     {refused
-      ? <p className="mt-1 break-words text-meta text-text-faint">Sending this again would be refused the same way. Change the message and it goes back in the queue, or discard it.</p>
-      : prepared && <p className="mt-1 break-words text-meta text-text-faint">Delivery may already have committed. Editing or discarding resolves the original request first.</p>}
-    {editing && <label className="mt-2 block text-meta text-text-secondary">Replacement text
+      ? <p className="ix-notice__fine">Sending this again would be refused the same way. Change the message and it goes back in the queue, or discard it.</p>
+      : prepared && <p className="ix-notice__fine">Delivery may already have committed. Editing or discarding resolves the original request first.</p>}
+    {editing && <label className="ix-notice__field">Replacement text
       <textarea
-        className="mt-1 w-full resize-y rounded-[var(--radius-well)] bg-bg-well px-3 py-2 text-body text-text-primary shadow-[var(--shadow-well)] outline-none focus-visible:shadow-[var(--focus-ring-input)]"
         value={content}
         onChange={event => setContent(event.target.value)}
         disabled={busy}
         rows={3}
       />
     </label>}
-    <div className="mt-2 flex flex-wrap gap-2">
+    <div className="ix-notice__acts">
       {editing ? <>
-        <Button size="sm" disabled={busy || !content.trim()} onClick={() => void act('edit')}>Save queued edit</Button>
-        <Button variant="ghost" size="sm" disabled={busy} onClick={() => setEditing(false)}>Cancel edit</Button>
+        <CreamButton size="sm" disabled={busy || !content.trim()} onClick={() => void act('edit')}>Save queued edit</CreamButton>
+        <ToolChip disabled={busy} onClick={() => setEditing(false)}>Cancel edit</ToolChip>
       </> : <>
-        {!refused && <Button variant="ghost" size="sm" disabled={busy} onClick={() => void act('retry')}>Retry delivery</Button>}
-        <Button variant="ghost" size="sm" disabled={!row.record.draft.content} onClick={() => copy(row.record.draft.content)}>Copy text</Button>
-        <Button variant="ghost" size="sm" disabled={busy || discarding} onClick={() => { editRow.current = row; setContent(row.record.draft.content); setEditing(true); }}>Edit queued text</Button>
-        <Button variant="ghost" size="sm" disabled={busy || discarding} onClick={() => void act('discard')}>{prepared && !refused ? 'Resolve and discard' : 'Discard draft'}</Button>
+        {!refused && <ToolChip disabled={busy} onClick={() => void act('retry')}>Retry delivery</ToolChip>}
+        <ToolChip disabled={!row.record.draft.content} onClick={() => copy(row.record.draft.content)}>Copy text</ToolChip>
+        <ToolChip disabled={busy || discarding} onClick={() => { editRow.current = row; setContent(row.record.draft.content); setEditing(true); }}>Edit queued text</ToolChip>
+        <ToolChip disabled={busy || discarding} onClick={() => void act('discard')}>{prepared && !refused ? 'Resolve and discard' : 'Discard draft'}</ToolChip>
       </>}
     </div>
-    {error && <p role="alert" className="mt-2 break-words text-meta text-accent-danger">{error}</p>}
+    {error && <p role="alert" className="ix-notice__error">{error}</p>}
   </DeliveryRow>;
 }
 
@@ -156,29 +146,29 @@ export function MessagingQueuePanel({ runtime, channelId }: { runtime: AccountMe
     try { await controller.capture(); setError(null); }
     catch (error) { setError(error instanceof Error ? error.message : 'The recovered text could not be saved as a draft.'); }
   };
-  return <details className="min-w-0" open>
-    <summary className="cursor-pointer text-section text-text-secondary">Saved delivery and recovery ({rows.length + mutations.length + recovery.length})</summary>
-    <ul className="mt-2 flex flex-col gap-2">
+  return <details className="ix-notice-group" open>
+    <summary className="ix-notice-summary">Saved delivery and recovery ({rows.length + mutations.length + recovery.length})</summary>
+    <ul className="ix-notice-list">
       {rows.map(row => <QueueEntry key={`${row.source}:${row.record.id}`} runtime={runtime} row={row} copy={content => void copy(content)} />)}
       {mutations.map(row => <DeliveryRow key={`${row.source}:${row.record.id}`}>
         <RowTitle>{row.record.intent.kind === 'delete' ? 'Saved deletion' : 'Saved message edit'}</RowTitle>
-        {row.record.draft && <p className="mt-1 whitespace-pre-wrap break-words text-body text-text-body">{row.record.draft.content}</p>}
-        {row.record.error && <p className="mt-2 break-words text-meta text-text-muted">{row.record.error}</p>}
-        <div className="mt-2 flex flex-wrap gap-2">
-          {!row.record.targetDeleted && <Button variant="ghost" size="sm" onClick={() => void runtime.retryMutation(row).catch(error => setError(error instanceof Error ? error.message : 'Retry failed.'))}>Retry saved change</Button>}
-          {row.record.draft && <Button variant="ghost" size="sm" onClick={() => void copy(row.record.draft!.content)}>Copy retained text</Button>}
+        {row.record.draft && <p className="ix-notice__text">{row.record.draft.content}</p>}
+        {row.record.error && <p className="ix-notice__fine">{row.record.error}</p>}
+        <div className="ix-notice__acts">
+          {!row.record.targetDeleted && <ToolChip onClick={() => void runtime.retryMutation(row).catch(error => setError(error instanceof Error ? error.message : 'Retry failed.'))}>Retry saved change</ToolChip>}
+          {row.record.draft && <ToolChip onClick={() => void copy(row.record.draft!.content)}>Copy retained text</ToolChip>}
         </div>
       </DeliveryRow>)}
       {recovery.map(row => <DeliveryRow key={row.id}>
         <RowTitle>Recovery draft</RowTitle>
-        <p className="mt-1 whitespace-pre-wrap break-words text-body text-text-body">{row.content}</p>
-        <p className="mt-2 break-words text-meta text-text-faint">{row.reason}</p>
-        <div className="mt-2 flex flex-wrap gap-2">
-          <Button variant="ghost" size="sm" onClick={() => void restore(row.content)}>Restore into the composer</Button>
-          <Button variant="ghost" size="sm" onClick={() => void copy(row.content)}>Copy recovery text</Button>
+        <p className="ix-notice__text">{row.content}</p>
+        <p className="ix-notice__fine">{row.reason}</p>
+        <div className="ix-notice__acts">
+          <ToolChip onClick={() => void restore(row.content)}>Restore into the composer</ToolChip>
+          <ToolChip onClick={() => void copy(row.content)}>Copy recovery text</ToolChip>
         </div>
       </DeliveryRow>)}
     </ul>
-    {error && <p role="alert" className="mt-2 break-words text-meta text-accent-danger">{error}</p>}
+    {error && <p role="alert" className="ix-notice__error">{error}</p>}
   </details>;
 }

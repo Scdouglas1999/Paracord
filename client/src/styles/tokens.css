@@ -1059,6 +1059,8 @@
   --ix-tip: rgba(30, 31, 35, 0.98);
   /* The same surface fully opaque: sheets, menus and the switcher under Reduced transparency (§10). */
   --ix-pop-solid: #16171a;
+  /* The full-main drop target (§4.12, IX-15): main dimmed under its dashed outline. */
+  --ix-drop: rgba(14, 15, 17, 0.9);
   /* The scrim behind a dialog (§6.12), and the media viewer's near-black ground (§6.10). */
   --ix-scrim: rgba(0, 0, 0, 0.5);
   --ix-viewer: rgba(8, 8, 10, 0.96);

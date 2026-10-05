@@ -144,8 +144,8 @@ function AppInitializer({ children }: { children: ReactNode }) {
       <BannerStack>
         <ConnectionStatusBar />
         <RestartBanner />
+        <UpdateNotification />
       </BannerStack>
-      <UpdateNotification />
       <ToastContainer />
       <ImageLightbox />
       {children}

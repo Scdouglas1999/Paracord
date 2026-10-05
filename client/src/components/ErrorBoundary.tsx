@@ -1,21 +1,21 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
-import { Bug, Home, RefreshCw, RotateCcw } from 'lucide-react';
 import { safeExternalUrl } from '../lib/security';
 import { logVoiceDiagnostic } from '../lib/desktopDiagnostics';
-import { Button } from './ui/Button';
+import { CreamButton, ToolChip } from './ix/primitives';
 
 interface Props {
   children: ReactNode;
   fallback?: ReactNode;
   /**
    * `page` (default) renders the full-viewport recovery screen — correct at the
-   * app root and for whole route surfaces. `section` renders a compact inline
-   * panel sized to its container, for boundaries around a single region (the
+   * app root and for whole route surfaces. `section` renders the empty-state layout
+   * (docs/index-spec.md §6.8: "Something went wrong showing messages" and a cream
+   * "Reload") sized to its container, for boundaries around a single region (the
    * message feed, the sidebar, a call tile) where the rest of the app is still
    * usable and must stay on screen.
    */
   variant?: 'page' | 'section';
-  /** Region name used in the section fallback, e.g. "message feed". */
+  /** What failed, as the section fallback names it: "Something went wrong showing {label}" ("messages"). */
   label?: string;
 }
 interface State {
@@ -79,85 +79,50 @@ export class ErrorBoundary extends Component<Props, State> {
 
     if (this.props.variant === 'section') {
       const label = this.props.label ?? 'this section';
+      const named = label.charAt(0).toLowerCase() + label.slice(1);
+      const exhausted = remainingRetries === 0;
       return (
-        <div
-          className="flex h-full w-full min-w-0 flex-col items-start justify-center gap-3 p-6"
-          role="alert"
-        >
-          <div className="flex h-9 w-9 items-center justify-center rounded-chip bg-danger-tint text-accent-danger">
-            <Bug size={18} />
-          </div>
-          <div className="min-w-0">
-            <p className="text-label font-semibold text-text-primary">
-              Couldn&apos;t display {label}
+        <div className="ix-section-error" data-testid="ix-section-error">
+          <section className="ix-section-error__body" role="alert">
+            <h2 className="ix-section-error__title">Something went wrong showing {named}</h2>
+            <p className="ix-section-error__line">
+              {exhausted
+                ? 'It keeps failing. Reloading the app should clear it.'
+                : 'The rest of the app is still working.'}
             </p>
-            <p className="mt-1 max-w-prose text-meta text-text-secondary">
-              The rest of the app is still working. Retry this panel, or reload if it
-              keeps failing.
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button size="sm" onClick={this.resetBoundary} disabled={remainingRetries === 0}>
-              <RotateCcw size={14} className="mr-1.5" />
-              {remainingRetries > 0 ? 'Retry' : 'Retry limit reached'}
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => window.location.reload()}>
-              <RefreshCw size={14} className="mr-1.5" />
-              Reload app
-            </Button>
-          </div>
+            <CreamButton onClick={exhausted ? () => window.location.reload() : this.resetBoundary}>
+              {exhausted ? 'Reload app' : 'Reload'}
+            </CreamButton>
+          </section>
         </div>
       );
     }
 
     return (
-      <div
-        className="flex min-h-screen items-center justify-center bg-bg-base px-4 py-10"
-        role="alert"
-        aria-live="assertive"
-      >
-        <div className="w-full max-w-2xl rounded-well border border-border-subtle bg-bg-raised p-8 shadow-[var(--shadow-lifted)]">
-          <div className="flex h-11 w-11 items-center justify-center rounded-chip bg-danger-tint text-accent-danger">
-            <Bug size={22} />
-          </div>
-          <h1 className="mt-5 font-display text-title text-text-primary">
-            Something broke on our end
-          </h1>
-          <p className="mt-2 max-w-prose text-body text-text-secondary">
+      <div className="ix-fatal" role="alert" aria-live="assertive">
+        <div className="ix-fatal__panel">
+          <h1 className="ix-fatal__title">Something broke on our end</h1>
+          <p className="ix-fatal__line">
             A rendering error interrupted this screen — your account and messages are safe.
             Retry the view, head back home, or reload the app to recover.
           </p>
 
-          <details className="mt-6 overflow-hidden rounded-chip border border-border-subtle bg-bg-well">
-            <summary className="cursor-pointer list-none px-3.5 py-2.5 text-label text-text-secondary transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:text-text-primary">
-              Technical details
-            </summary>
-            <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words border-t border-border-subtle px-3.5 py-3 font-code text-meta text-text-muted">
+          <details className="ix-fatal__details">
+            <summary className="ix-fatal__summary">Technical details</summary>
+            <pre className="ix-fatal__pre">
               {this.state.error?.toString()}
               {'\n\n'}
               {this.state.errorInfo?.componentStack}
             </pre>
           </details>
 
-          <div className="mt-6 flex flex-wrap items-center gap-2.5">
-            <Button onClick={this.resetBoundary} disabled={remainingRetries === 0}>
-              <RotateCcw size={16} className="mr-1.5" />
+          <div className="ix-fatal__acts">
+            <CreamButton onClick={this.resetBoundary} disabled={remainingRetries === 0}>
               {remainingRetries > 0 ? `Retry (${remainingRetries} left)` : 'Retry limit reached'}
-            </Button>
-            <Button variant="secondary" onClick={() => (window.location.href = '/app')}>
-              <Home size={16} className="mr-1.5" />
-              Return home
-            </Button>
-            <Button variant="ghost" onClick={() => window.location.reload()}>
-              <RefreshCw size={16} className="mr-1.5" />
-              Reload app
-            </Button>
-            <a
-              href={BUG_REPORT_URL}
-              target="_blank"
-              rel="noreferrer"
-              className="ml-auto rounded-chip px-1 text-meta font-semibold text-text-link outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:underline focus-visible:shadow-[var(--focus-ring)]"
-            >
+            </CreamButton>
+            <ToolChip onClick={() => (window.location.href = '/app')}>Return home</ToolChip>
+            <ToolChip onClick={() => window.location.reload()}>Reload app</ToolChip>
+            <a href={BUG_REPORT_URL} target="_blank" rel="noreferrer" className="ix-fatal__link">
               Report bug
             </a>
           </div>

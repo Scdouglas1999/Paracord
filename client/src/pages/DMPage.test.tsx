@@ -1,42 +1,27 @@
-import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { cleanup, render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAuthStore } from '../stores/authStore';
 import { useChannelStore } from '../stores/channelStore';
-import { usePresenceStore } from '../stores/presenceStore';
-import { useReadStateStore } from '../stores/readStateStore';
 import { useServerListStore } from '../stores/serverListStore';
-import { useUIStore } from '../stores/uiStore';
-import { useVoiceStore } from '../stores/voiceStore';
 import type { Channel } from '../types';
+import type { ConversationSubject } from '../components/ix/conversation';
 import { DMPage } from './DMPage';
 
-// Your face at the page bar and a face's picture read the account and the download ticket.
-vi.mock('../components/glass/conversation/HeaderAvatar', () => ({ HeaderAvatar: () => <button type="button">Your profile</button> }));
-vi.mock('../hooks/useDownloadTicket', () => ({ useDownloadTicket: () => null }));
-
-// The conversation header (WP-G11) is covered in components/glass/conversation;
-// this suite is about the page, so it is reduced to what it was handed.
-vi.mock('../components/glass/conversation/ConversationHeader', () => ({
-  ConversationHeader: ({ subject }: { subject: { channelId: string; kind: string; title?: string; channelName?: string } }) => (
-    <div data-testid="topbar" data-channel-id={subject.channelId}>{subject.kind === 'dm' ? subject.title : subject.channelName}</div>
-  ),
+/**
+ * A direct message or a group as an Index conversation (docs/index-spec.md §4.11,
+ * §6.6). `IxConversation` (the large title, the call button, the timeline, the
+ * new-message welcome, the message box) is covered in components/ix/conversation;
+ * this suite is about the page that finds the conversation and says who it is with.
+ * `/app/dms` is not a page (it redirects: components/ix/people/LastPlaceRedirect).
+ */
+const seen = vi.hoisted(() => ({ subject: null as null | Record<string, unknown> }));
+vi.mock('../components/ix/conversation', () => ({
+  IxConversation: ({ subject }: { subject: ConversationSubject }) => {
+    seen.subject = subject as unknown as Record<string, unknown>;
+    return <div data-testid="conversation" data-channel-id={subject.channelId} />;
+  },
 }));
-
-vi.mock('../components/message/MessageList', () => ({
-  MessageList: () => <div data-testid="message-list" />,
-}));
-
-vi.mock('../components/message/MessageInput', () => ({
-  MessageInput: () => <div data-testid="message-input" />,
-}));
-
-vi.mock('../components/message/DmPickerModal', () => ({
-  DmPickerModal: ({ open }: { open: boolean }) =>
-    open ? <div data-testid="dm-picker" /> : null,
-}));
-
 
 const currentUser = {
   id: 'me',
@@ -52,13 +37,15 @@ const bob = {
   id: 'bob',
   username: 'Bob',
   discriminator: 2,
+  avatar_hash: 'a1',
+  display_name: 'Bobby',
   flags: 0,
   bot: false,
   system: false,
   created_at: '2026-01-01T00:00:00.000Z',
 };
 
-function groupDm(recipients = [currentUser, bob]): Channel {
+function groupDm(recipients = [currentUser, bob, { ...bob, id: 'cy', username: 'Cy' }]): Channel {
   return {
     id: 'dm-1',
     name: 'Launch group',
@@ -86,10 +73,6 @@ function directDm(): Channel {
   } as unknown as Channel;
 }
 
-function seedChannel(channel: Channel) {
-  seedDmList([channel]);
-  useChannelStore.getState().selectChannel({ id: channel.id, scope: { serverId: '__local__', userId: 'me' } });
-}
 function seedDmList(channels: Channel[]) {
   useChannelStore.getState().reset();
   useChannelStore.getState().setChannels('', channels, { serverId: '__local__', userId: 'me' });
@@ -101,211 +84,72 @@ function renderDmPage(path: string) {
       <Routes>
         <Route path="/app/dms" element={<DMPage />} />
         <Route path="/app/dms/:channelId" element={<DMPage />} />
-        <Route path="/app/friends" element={<div>Friends route</div>} />
       </Routes>
     </MemoryRouter>,
   );
 }
 
-describe('DMPage — conversation view (ContextPanel-driven member surface)', () => {
-  beforeEach(() => {
-    useAuthStore.setState({ token: 'token', user: currentUser });
-    useUIStore.setState({ contextPanelMode: null });
-    useServerListStore.setState({ activeServerId: null, servers: [] });
-  });
+beforeEach(() => {
+  seen.subject = null;
+  useAuthStore.setState({ token: 'token', user: currentUser });
+  useServerListStore.setState({ activeServerId: null, servers: [] });
+});
 
-  it('renders the message surface with no docked member <aside>', () => {
-    seedChannel(groupDm());
+afterEach(cleanup);
 
-    renderDmPage('/app/dms/dm-1');
-
-    expect(screen.getByTestId('message-list')).toBeInTheDocument();
-    expect(screen.getByTestId('message-input')).toBeInTheDocument();
-    // The bespoke docked recipient list is gone; recipients live in ContextPanel.
-    expect(screen.queryByText('Bob')).not.toBeInTheDocument();
-  });
-
-  it('uses the shared conversation header without a duplicate members toolbar', () => {
-    seedChannel(groupDm());
-    renderDmPage('/app/dms/dm-1');
-    expect(screen.getByTestId('topbar')).toHaveAttribute('data-channel-id', 'dm-1');
-    expect(screen.queryByRole('button', { name: 'Members' })).not.toBeInTheDocument();
-  });
-
-  it('does not render the group-DM members toggle for a 1:1 DM', () => {
-    seedChannel(directDm());
+describe('DMPage', () => {
+  it('is a conversation: the one it was opened on, as a direct message', () => {
+    seedDmList([directDm()]);
 
     renderDmPage('/app/dms/dm-2');
 
-    expect(screen.queryByRole('button', { name: 'Members' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('conversation')).toHaveAttribute('data-channel-id', 'dm-2');
+    expect(seen.subject).toMatchObject({
+      kind: 'dm',
+      channelId: 'dm-2',
+      isGroup: false,
+      // The title opens this person's profile card; the welcome draws their face.
+      recipient: { id: 'bob', username: 'Bob', display_name: 'Bobby', avatar_hash: 'a1' },
+    });
+    expect(seen.subject?.participants).toBeUndefined();
+  });
+
+  it('titles a group by its name, and counts everyone in it', () => {
+    seedDmList([groupDm()]);
+
+    renderDmPage('/app/dms/dm-1');
+
+    expect(seen.subject).toMatchObject({ kind: 'dm', channelId: 'dm-1', isGroup: true, title: 'Launch group', recipient: null, participants: 3 });
+  });
+
+  it('is not the list of conversations: with no conversation there is nothing to draw', () => {
+    seedDmList([directDm()]);
+
+    renderDmPage('/app/dms');
+
+    expect(screen.queryByTestId('conversation')).not.toBeInTheDocument();
   });
 
   it('does not resolve a deep-link ID against another server account', () => {
-    useServerListStore.setState({ activeServerId: 'srv-a', servers: ['srv-a', 'srv-b'].map(id => ({ id, url: `https://${id}.test`, name: id, token: 'token', userId: 'me', user: currentUser, connected: true })) });
+    useServerListStore.setState({
+      activeServerId: 'srv-a',
+      servers: ['srv-a', 'srv-b'].map((id) => ({
+        id,
+        url: `https://${id}.test`,
+        name: id,
+        token: 'token',
+        userId: 'me',
+        user: currentUser,
+        connected: true,
+      })),
+    });
     useChannelStore.getState().reset();
     useChannelStore.getState().setChannels('', [groupDm()], { serverId: 'srv-b', userId: 'me' });
+
     renderDmPage('/app/dms/dm-1');
-    expect(screen.queryByRole('button', { name: 'Members' })).not.toBeInTheDocument();
+
+    // Not found for this account: a plain "Direct message", and the active server is left alone.
+    expect(seen.subject).toMatchObject({ kind: 'dm', channelId: 'dm-1', title: 'Direct message', isGroup: false });
     expect(useServerListStore.getState().activeServerId).toBe('srv-a');
-  });
-});
-
-describe('DMPage — all-conversations index (/app/dms)', () => {
-  beforeEach(() => {
-    useAuthStore.setState({ token: 'token', user: currentUser });
-    useUIStore.setState({ contextPanelMode: null });
-    useServerListStore.setState({ activeServerId: null, servers: [] });
-    useReadStateStore.getState().reset();
-    usePresenceStore.setState({ presences: new Map(), presenceOrder: new Map() });
-  });
-
-  it('offers "New message" as the primary action and shows a designed empty state', async () => {
-    const user = userEvent.setup();
-    seedDmList([]);
-
-    renderDmPage('/app/dms');
-
-    // Primary action lives in the page header (the empty state also offers one).
-    const newMessageButtons = screen.getAllByRole('button', { name: /new message/i });
-    expect(newMessageButtons.length).toBeGreaterThan(0);
-
-    // Designed empty state pointing at friends (left-aligned, warm copy).
-    expect(screen.getByText('Nobody has said anything to you yet')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /find friends/i })).toBeInTheDocument();
-
-    // The header primary action opens the shared DM picker.
-    await user.click(newMessageButtons[0]);
-    expect(screen.getByTestId('dm-picker')).toBeInTheDocument();
-  });
-
-  it('lists every DM sorted by last activity and opens one on click', async () => {
-    const user = userEvent.setup();
-    const ancient: Channel = {
-      id: 'dm-ancient',
-      type: 1,
-      channel_type: 1,
-      guild_id: null,
-      recipient: { id: 'ancient-user', username: 'Ancient', discriminator: 3 },
-      last_message_id: '100',
-      position: 0,
-      permission_overwrites: [],
-      created_at: '2026-01-01T00:00:00.000Z',
-    } as unknown as Channel;
-    const fresh: Channel = {
-      id: 'dm-fresh',
-      type: 1,
-      channel_type: 1,
-      guild_id: null,
-      recipient: { id: 'bob', username: 'Nova', discriminator: 4 },
-      last_message_id: '9000000000000000000',
-      position: 0,
-      permission_overwrites: [],
-      created_at: '2026-01-01T00:00:00.000Z',
-    } as unknown as Channel;
-    seedDmList([ancient, fresh]);
-
-    renderDmPage('/app/dms');
-
-    expect(screen.getByText('Conversations')).toBeInTheDocument();
-    expect(screen.getByText('2')).toBeInTheDocument();
-
-    const rows = screen
-      .getAllByRole('button')
-      .filter((b) => /Nova|Ancient/.test(b.textContent ?? ''));
-    // Most-recent-activity conversation sorts first.
-    expect(rows[0].textContent).toContain('Nova');
-    expect(rows[1].textContent).toContain('Ancient');
-    expect(screen.getAllByTestId('dm-last-activity')).toHaveLength(2);
-
-    // No read state + a last message ⇒ unread indicator.
-    expect(screen.getAllByTestId('unread-dot').length).toBeGreaterThan(0);
-
-    await user.click(rows[0]);
-    expect(screen.getByTestId('message-list')).toBeInTheDocument();
-    expect(useChannelStore.getState().selectedChannel?.id).toBe('dm-fresh');
-  });
-
-  it('filters conversations by name and offers a clear recovery action', async () => {
-    const user = userEvent.setup();
-    const nova = {
-      ...directDm(),
-      id: 'dm-nova',
-      recipient: { ...bob, username: 'Nova' },
-      last_message_id: '1000000000000000',
-    } as unknown as Channel;
-    const launch = {
-      ...groupDm(),
-      id: 'dm-launch',
-      last_message_id: '2000000000000000',
-    } as unknown as Channel;
-    seedDmList([nova, launch]);
-
-    renderDmPage('/app/dms');
-    await user.type(screen.getByRole('searchbox', { name: 'Filter conversations' }), 'nova');
-
-    expect(screen.getByText('Conversations')).toBeInTheDocument();
-    expect(screen.getByText('1 of 2')).toBeInTheDocument();
-    expect(screen.getByText('Nova')).toBeInTheDocument();
-    expect(screen.queryByText('Launch group')).not.toBeInTheDocument();
-
-    await user.clear(screen.getByRole('searchbox', { name: 'Filter conversations' }));
-    await user.type(screen.getByRole('searchbox', { name: 'Filter conversations' }), 'missing');
-    expect(screen.getByText('No matching conversations')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Clear filter' }));
-    expect(screen.getByText('Launch group')).toBeInTheDocument();
-  });
-
-  it('is the Messages page: one h1, the count, and New message as the one filled button', () => {
-    const nova = { ...directDm(), id: 'dm-nova', recipient: { ...bob, username: 'Nova' }, last_message_id: '1000000000000000' } as unknown as Channel;
-    seedDmList([nova]);
-    renderDmPage('/app/dms');
-    expect(screen.getByRole('heading', { level: 1, name: 'Messages' })).toBeInTheDocument();
-    expect(screen.getByText('1 conversation, latest first')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /new message/i })).toHaveClass('bg-accent-primary');
-  });
-
-  it('draws a person with a presence mark in ink and a group as a glyph tile', () => {
-    usePresenceStore.setState({
-      presences: new Map([['__local__:bob', { user_id: 'bob', status: 'idle', activities: [] }]]),
-      presenceOrder: new Map(),
-    });
-    const person = { ...directDm(), id: 'dm-bob', recipient: bob, last_message_id: '2000000000000000' } as unknown as Channel;
-    const group = { ...groupDm(), id: 'dm-group', last_message_id: '1000000000000000' } as unknown as Channel;
-    seedDmList([person, group]);
-    const { container } = renderDmPage('/app/dms');
-    const rows = container.querySelectorAll('li.glass-prow');
-    expect(rows).toHaveLength(2);
-    // Bob is away: a ring, not a color; the group has no presence at all.
-    expect(rows[0].querySelector('.glass-presence')).toHaveAttribute('data-status', 'idle');
-    expect(rows[1].querySelector('.glass-presence')).toBeNull();
-    expect(rows[1].querySelector('.glass-lead--tile')).not.toBeNull();
-    expect(rows[1]).toHaveTextContent('group');
-  });
-
-  it('says a mention with the white chip and its words, not a colored badge', () => {
-    const nova = { ...directDm(), id: 'dm-nova', recipient: { ...bob, username: 'Nova' }, last_message_id: '5000000000000000' } as unknown as Channel;
-    seedDmList([nova]);
-    useReadStateStore.setState({
-      byAccount: { [JSON.stringify(['__local__', 'me'])]: { 'dm-nova': { channel_id: 'dm-nova', last_message_id: '1', mention_count: 2 } } },
-    });
-    const { container } = renderDmPage('/app/dms');
-    expect(screen.getByTestId('mention-badge')).toHaveClass('glass-chip--mention');
-    expect(screen.getByTestId('mention-badge')).toHaveTextContent('2');
-    expect(container.querySelector('.glass-place-dot')).toBeNull();
-  });
-
-  it('keeps a DM call out of the conversation: the pill and the stage carry it', () => {
-    // No stream box and no control bar in the column: the header's call button,
-    // the pill ("Show the call") and the stage are the call's surfaces.
-    seedChannel(directDm());
-    useVoiceStore.setState({ connected: true, channelId: 'dm-2', guildId: 'dm' });
-    try {
-      const { container } = renderDmPage('/app/dms/dm-2');
-      expect(container.querySelector('.glass-conversation__notices')).toBeNull();
-      expect(container.querySelector('[aria-label="Call controls"]')).toBeNull();
-      expect(screen.getByTestId('message-list')).toBeInTheDocument();
-    } finally {
-      useVoiceStore.setState({ connected: false, channelId: null, guildId: null });
-    }
   });
 });

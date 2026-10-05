@@ -2,12 +2,12 @@
 // ONE reduced-motion switch — the presence hook keeps the bar mounted for its
 // --duration-fast leave.
 import { usePresence } from '../lib/motion';
-import { RefreshCw } from 'lucide-react';
 import { useUIStore } from '../stores/uiStore';
-import { cn } from '../lib/utils';
+import { BannerStrip } from './ix/conversation/BannerStrip';
 
-// App-wide status banner (lantern-stage-spec §8): an info-toned top bar with a
-// matching lucide icon and --text-label copy, dropping in on the shared recipe.
+// App-wide status banner (docs/index-spec.md §6.8): the instance is restarting. A
+// 36px strip in the card's color with its words and no action: there is nothing
+// to press, the app reconnects on its own (and nothing here spins).
 export function RestartBanner() {
   const serverRestarting = useUIStore((s) => s.serverRestarting);
   const { mounted, exiting, scenery } = usePresence(serverRestarting);
@@ -15,24 +15,12 @@ export function RestartBanner() {
   if (!mounted) return null;
 
   return (
-    <div
-      role="status"
-      aria-live="polite"
-      className={cn(
-        'flex w-full items-center justify-center gap-2 px-4 py-2',
-        exiting ? 'pc-banner-out' : 'pc-banner-in',
-      )}
-      style={{
-        backgroundColor: 'color-mix(in srgb, var(--accent-info) 16%, var(--bg-raised))',
-        borderBottom: '1px solid color-mix(in srgb, var(--accent-info) 45%, transparent)',
-        boxShadow: 'var(--shadow-lifted)',
-      }}
+    <BannerStrip
+      data-testid="ix-banner-restart"
+      className={exiting ? 'pc-banner-out' : 'pc-banner-in'}
       {...scenery}
     >
-      <RefreshCw size={15} className="animate-spin" style={{ color: 'var(--accent-info)' }} />
-      <span className="text-label" style={{ color: 'var(--accent-info)' }}>
-        The instance is restarting — you'll reconnect automatically
-      </span>
-    </div>
+      The instance is restarting. You’ll reconnect automatically.
+    </BannerStrip>
   );
 }
