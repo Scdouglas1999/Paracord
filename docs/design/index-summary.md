@@ -96,6 +96,7 @@ lost `browseOpen`, `chatHidden`, `pillExpanded` and `placesOverlayOpen`.
 | IX-17 Long tail | Settings, Admin, entry pages, dialogs, pickers, the media viewer | [IX-17](index-checkpoints/IX-17.md) |
 | IX-18 Motion gate | Every §5 moment held to its duration and curve, transform and opacity only, quiet at rest | [IX-18](index-checkpoints/IX-18.md) |
 | IX-19 Retire Glass | Deleted the Glass code, CSS, tokens and e2e specs; deleted stream reactions; ported the e2e suites | [IX-19](index-checkpoints/IX-19.md) |
+| IX-20 Release check | The full CI gate, the desktop app walked and measured on WebKitGTK, and the fixes they found: the desktop's talking indicator, a rejoin that heard nobody, the waveform's cost, the member count, Back to chat, Together's line | [IX-20](index-checkpoints/IX-20.md), [release check](index-release-check.md) |
 | M1 Send flight | `feat/send-flight` merged; the owner's favorite animation is protected | [M1](index-checkpoints/M1.md) |
 | M2 Native video | `feat/native-video` merged before the call view was built | [M2](index-checkpoints/M2.md) |
 
@@ -132,12 +133,14 @@ PARACORD_E2E_REAL=1 npx playwright test       # the real release server, serving
 
 ## Left open
 
-The long form is in `index-checkpoints/IX-19.md`. In short:
+The release check is [`index-release-check.md`](index-release-check.md); IX-19's
+long form is in `index-checkpoints/IX-19.md`. In short:
 
-- Together's per-room "Watching..." summary (`hooks/useGuildTogether.ts`) is no
-  longer drawn by Index. The hook is kept and unreferenced; wire it into the
-  room card or delete it.
-- The card's "Back to chat" label ellipsizes at 1280px (known since IX-13).
+- In a call on the desktop, one person talking keeps WebKitWebProcess at about
+  11% of a core (the real waveform and the talking ring are most of it). At
+  rest the app sits at 0.3 to 1.9%.
+- The join-muted preference may land after a quick unmute on a row join (seen
+  once by the scene, not reproduced by hand).
 - `lib/attention`'s light model still feeds the server home, Friends and the
   people sheet; the parts nothing uses were removed, the rest stays.
 - Engines still parse the `ambient` view token and the server keeps its dormant
