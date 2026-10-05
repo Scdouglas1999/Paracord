@@ -67,6 +67,33 @@ impl SpeakerHysteresis {
     }
 }
 
+/// Each participant's voice SSRC (`derive_track_ssrc(user, "audio")`, the
+/// scheme every engine shares), to the user id the renderer knows them by.
+fn voice_owners_of(user_ids: impl Iterator<Item = i64>) -> HashMap<u32, String> {
+    user_ids
+        .map(|user_id| {
+            (
+                NativeMediaSession::derive_track_ssrc(user_id, "audio"),
+                user_id.to_string(),
+            )
+        })
+        .collect()
+}
+
+/// The `media_speaking_change` payload: speaking user ids to their raw audio
+/// level (-dBov). An SSRC nobody in the roster owns yet is left out until the
+/// roster names it.
+fn speakers_by_user(speaking: &[(u32, u8)], owners: &HashMap<u32, String>) -> HashMap<String, f64> {
+    speaking
+        .iter()
+        .filter_map(|(ssrc, level)| {
+            owners
+                .get(ssrc)
+                .map(|user| (user.clone(), f64::from((*level).min(AUDIO_LEVEL_SILENCE))))
+        })
+        .collect()
+}
+
 /// Spawn a task that periodically checks audio levels and emits speaking change events.
 pub fn spawn_speaking_detector(session: &mut NativeMediaSession, app: super::CallEventSink) {
     let shutdown = session.shutdown.clone();
@@ -79,10 +106,16 @@ pub fn spawn_speaking_detector(session: &mut NativeMediaSession, app: super::Cal
     let local_mic_frames = session.local_mic_frames.clone();
     let muted = session.muted.clone();
     let mic_capture_generation = session.mic_capture_generation.clone();
+    // Who each voice SSRC belongs to. The renderer files speakers by user id
+    // (the card's rows, the call tiles, `--voice-level`), as the browser engine
+    // reports them; an SSRC there matches nobody, so nobody ever showed as
+    // talking in a desktop call.
+    let session_participants = session.session_participants.clone();
 
     let handle = tokio::spawn(async move {
         let mut tick = interval(Duration::from_millis(100));
         let mut hysteresis: HashMap<u32, SpeakerHysteresis> = HashMap::new();
+        let mut voice_owners: HashMap<u32, String> = HashMap::new();
         let mut last_frame_count = local_mic_frames.load(Ordering::Relaxed);
         let mut last_local_emit: Option<(u8, bool)> = None;
         // A microphone that opened and then delivered nothing is the failure
@@ -104,33 +137,41 @@ pub fn spawn_speaking_detector(session: &mut NativeMediaSession, app: super::Cal
                 _ = shutdown.notified() => break,
                 _ = tick.tick() => {
                     let remote = remote_audio.lock().await;
-                    let mut speakers: HashMap<String, f64> = HashMap::new();
+                    // Speaking SSRCs with their audio level as sent: RTP's
+                    // -dBov convention, 0 loudest and 127 silence, which is
+                    // what the renderer's `levelFromDbov` reads.
+                    let mut speaking: Vec<(u32, u8)> = Vec::new();
                     let now = Instant::now();
 
                     for (&ssrc, state) in remote.iter() {
                         let entry = hysteresis
                             .entry(ssrc)
                             .or_insert_with(|| SpeakerHysteresis::new(now));
-                        let is_speaking = entry.update(state.audio_level, now);
-
-                        if is_speaking {
-                            let level =
-                                1.0 - (state.audio_level as f64 / AUDIO_LEVEL_SILENCE as f64);
-                            speakers.insert(ssrc.to_string(), level);
+                        if entry.update(state.audio_level, now) {
+                            speaking.push((ssrc, state.audio_level));
                         }
                     }
 
                     // Forget speakers that dropped out so their stale hysteresis
                     // state does not linger for the life of the session.
                     hysteresis.retain(|ssrc, _| remote.contains_key(ssrc));
+                    drop(remote);
+
+                    if speaking.iter().any(|(ssrc, _)| !voice_owners.contains_key(ssrc)) {
+                        let known = session_participants.lock().await;
+                        voice_owners = voice_owners_of(known.keys().copied());
+                    }
+                    let speakers = speakers_by_user(&speaking, &voice_owners);
 
                     let membership_changed = speakers.len() != last_speaker_ids.len()
                         || speakers.keys().any(|id| !last_speaker_ids.iter().any(|prev| prev == id));
-                    if membership_changed {
+                    // While anyone talks the levels are the waveform, so they go
+                    // every tick, as the browser engine sends them; otherwise
+                    // only a change in who talks is news.
+                    if membership_changed || !speakers.is_empty() {
                         last_speaker_ids = speakers.keys().cloned().collect();
                         let _ = app.emit("media_speaking_change", &speakers);
                     }
-                    drop(remote);
 
                     // ── Your own microphone ──────────────────────────────────
                     let frames = local_mic_frames.load(Ordering::Relaxed);
@@ -1494,6 +1535,23 @@ mod tests {
     use paracord_transport::stream::{
         PublishedLayer, PublishedTrack, TrackSubscription, VideoCodec,
     };
+
+    #[test]
+    fn speakers_are_named_by_user_id_with_their_raw_level() {
+        let owners = voice_owners_of([42_i64, 7].into_iter());
+        let vincent = NativeMediaSession::derive_track_ssrc(42, "audio");
+        let brendan = NativeMediaSession::derive_track_ssrc(7, "audio");
+        assert_eq!(owners.get(&vincent).map(String::as_str), Some("42"));
+        // Vincent loud, Brendan just over the line, and a source the roster has
+        // not named yet (left out rather than reported as a number nobody owns).
+        let speakers = speakers_by_user(&[(vincent, 20), (brendan, 94), (12345, 30)], &owners);
+        assert_eq!(speakers.len(), 2);
+        assert_eq!(speakers.get("42"), Some(&20.0));
+        assert_eq!(speakers.get("7"), Some(&94.0));
+        // A level beyond the 7-bit scale reads as silence, never louder.
+        let speakers = speakers_by_user(&[(vincent, 200)], &owners);
+        assert_eq!(speakers.get("42"), Some(&127.0));
+    }
 
     fn video_track(publisher_user_id: i64, stream: &str, track: &str) -> PublishedTrack {
         PublishedTrack {
