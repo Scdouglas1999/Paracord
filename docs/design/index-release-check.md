@@ -201,3 +201,91 @@ owner's display.
 | Info | The scene's cast pages go idle after about 10 minutes without input, so a server's "N here now" drops to 1 in long runs. That is presence working as designed. |
 | Info | `@someone` for people the client does not know, `lib/attention`'s light model, the engines' `ambient` token, the legacy classes pinned by `cascade.test.ts`: as IX-19 left them. |
 | Info | Every process this pass started was stopped: the nested KWin and the app, the drive server, the scene holder and its browsers, the private PipeWire and WirePlumber, the instance on :18480, the PostgreSQL container. A Vite dev server left on :4173 by an earlier package (orphaned, parent gone) was stopped at the start so the e2e configs could start their own. |
+
+## Older servers and the talking indicators, 2026-10-05
+
+A pass after IX-20, on two questions: does the Index client work against an
+older Paracord server, and can the talking indicators cost less.
+
+### Against an older server
+
+People connect to friends' instances that run older versions; the owner's own
+server is a 2026-09-22 build (3.1.1 plus the Sports work). A copy of that binary
+ran on a throwaway data dir and config (:18640, voice UDP :18641, router
+forwarding off, `PULSE_SINK=glass_g23_out`), with this client from a Vite dev
+server, driven by `client/scripts/index-scene.mjs` and small Playwright drivers.
+The original binary, its data and the owner's running server were not touched.
+
+What broke, and what changed:
+
+| Found | Change |
+|---|---|
+| READY's guilds and the server list were rejected: IX-2 made `hue` (and, since 3.2, the summary's `banner_hash`) required, and that server sends neither. The dock was empty. | `hue`, `banner_hash`, and the voice state's `mode`, `self_stream_started_at` and `joined_at` are optional in the contract (`absent_on_older_servers` in `paracord-contracts`); this server still always sends them. Absent reads as null. A guild without `hue` is a server that cannot store a color: Server settings › Server color says so instead of offering swatches (`serverStoresColor`). A room without join times reads "live", never "live N min". |
+| **Every request to a route the server lacks reconnected the account.** The router's fallback 404 carries no history epoch, and the client read the missing header as "database history changed": a full handshake, after which the sidebar asked again (9 to 10 times per server open for previews and Together). | `isMissingRoute` (a 404 or 405 with an empty body) skips the epoch check; a 404 the API answered still has to carry it. `lib/serverFeatures.ts` records what a server showed it lacks (cleared on the next READY, in case it was updated). |
+| Watch on a stream: `POST /api/v2/voice/{id}/view` is a 404, and the server has no watching without joining. | The card asks once (`GET .../watchers`) and Watch stays, disabled, saying "join the call to watch". In the call the stream rides the call, unregistered, as before view sessions. |
+| Listen in: that server ignores `?mode=listen` and admits a full member. | No Listen control where the channel's features have no `listen_in_enabled`; a listen join answered without `mode: listen` is given back at once and says why. Channel settings say "needs a newer server". |
+| **Rejoining a running call failed** ("a media key ... was not sealed to this call's keys"): that relay pushes the stored stream keys before `session_join`, sealed to the previous call key (fixed on the server in `9ee1ccd0`; older clients failed the same way). | `TrackKeyGrace`: an unopenable stream key ends the call only if no key for that track that opens follows within 8 s. The publishers' fresh keys arrive on the rejoin, so the rejoin works. Voice keys stay strict. |
+| Previews, reminders: 404s shown as "Preview unavailable" on every row and "Failed to load reminders: 404". | Rows draw no line where nothing is loaded; Remind me is disabled with the reason; Inbox › Reminders says the server has none. |
+
+Seen working against that server: sign-in, the dock and sidebar, channel
+messages both ways (live, no reload), end-to-end encrypted DMs both ways between
+two fresh accounts (enrolled, sent and read in the new client), joining voice
+with Chromium's fake devices and seeing the talker, the stream in the call
+view, a rejoin into the running call, and the Server color section. Encrypted
+DMs need the server's `public_url` to be the origin the client is served from
+(the identity challenge names it), so that run set it to the Vite origin.
+
+Not covered: an old *client* in the same call as a new one (a client-to-client
+question), and the add-on pages (Feeds, Game servers, Daily word, Sports
+standings, Together, the soundboard), which quietly find nothing on that server.
+
+The current server against this client: a release server from this tree (the
+dist embedded) passed `live-drive.mjs` 25/25.
+
+### Talking indicators
+
+The waveform in a call now steps five times a second (`VOICE_GRID_MS` 200, was
+100), the same cadence as the waveform for a room you are not in. At that rate
+a level alone moves four bars in lockstep and reads as a meter, so while the
+voice is up the bars trade heights on every step (`data-voice-phase`, four
+permutations of the same gains); a frame strip of the card over 3 s shows the
+new one livelier than the old. The talking ring (card rows and call tiles)
+keeps its 150ms in / 300ms out, in 3 and 5 even steps instead of a curve. The
+motion gate's ring case still passes unchanged.
+
+Measured as IX-20 did (nested KWin, private PipeWire graph with null nodes only,
+the release `paracord-desktop` loading each build's `dist`, 30 s of `top`,
+% of one core; the real graph had 0 clients from the app across 171 polls):
+
+| State | Before (WebKitWebProcess / app) | After |
+|---|---|---|
+| In a call, call view closed, Jeremy talking | 10.9 / 6.8, 9.7 / 6.4 | **6.6 / 3.8, 6.4 / 3.7** |
+| Same, bars in lockstep (5 steps a second, no phase) | | 6.9 / 3.8, 6.2 / 3.6 |
+| Call view open, Jeremy talking | 11.7 / 6.3 | **8.2 / 3.7** |
+| Not in the call, Jeremy talking on the card | 8.3 / 4.6, 8.0 / 4.7 | **7.1 / 3.7, 6.8 / 3.7** |
+
+In the call nothing loops (`talksample`: no infinite animation; the ring's
+stepped fades run 13 to 15% of the time).
+
+Commits: `90c7df21` (older servers), `37522767` (talking indicators). Gates
+at `37522767`: `npm run typecheck`; `npm run test:unit` (443 files; three
+contract tests that pinned `hue` as required were updated); `npm run lint`
+(0 errors, 213 warnings, as before); `contracts:check` and
+`export-contracts --check`; `test:motion-lint`; `npm run test:e2e:index`
+(CI=1, 261 passed); `npm run test:motion` (CI=1, 20 passed); `cargo fmt
+--check`; `cargo clippy -p paracord-contracts --all-targets -D warnings` (1.91
+and local); `cargo test -p paracord-contracts`, `paracord-api --lib`, its
+`contract_wire_shapes` and `index_hue_joined_at`, and `paracord-ws`'s
+`gateway_integration`.
+
+The binary, built from `37522767` as IX-20's was (`npx tauri build --no-bundle`,
+default features `custom-protocol` and `vpx`, `libvpx.so.12` linked, the shared
+Glass target): `/home/scdouglas/Documents/Paracord-glass/target/release/paracord-desktop`,
+embedding `index-DGZBFMTa.js`, sha256
+`bc448352793e9ac6942c21655efb35650955acad6178d7a7a4fcda16ee61899d`. It was not
+installed or run on the owner's display.
+
+Every process this pass started was stopped: the copy of the old server, the
+Vite dev servers, the scene holders and their browsers, the nested KWin and
+the app, the drive server, the private PipeWire graph, and the instance on
+:18480.
