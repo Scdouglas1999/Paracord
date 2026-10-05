@@ -10,15 +10,15 @@ export interface DividerProps extends React.HTMLAttributes<HTMLElement> {
 }
 
 /**
- * Divider: a hairline, and only where a pane needs an internal division (the
- * catch-up divider's rule). Depth between surfaces comes from tone; a border is
- * never how two surfaces are told apart. A label is the instrument cut.
+ * Divider: a hairline (`--ix-line`), and only where a surface needs an internal
+ * division. Depth between surfaces comes from tone; a border is never how two
+ * surfaces are told apart. A label is the time divider's 12/500.
  */
 export const Divider = React.forwardRef<HTMLElement, DividerProps>(function Divider(
   { orientation = 'horizontal', strong = false, label, className, ...props },
   ref,
 ) {
-  const line = strong ? 'bg-border-strong' : 'bg-border-subtle';
+  const line = strong ? 'bg-[var(--ix-edge-strong)]' : 'bg-[var(--ix-line)]';
 
   if (label != null && orientation === 'horizontal') {
     return (
@@ -29,7 +29,7 @@ export const Divider = React.forwardRef<HTMLElement, DividerProps>(function Divi
         {...props}
       >
         <span className={cn('h-px flex-1', line)} aria-hidden />
-        <span className="glass-instrument shrink-0 text-meta font-semibold text-text-secondary">{label}</span>
+        <span className="shrink-0 text-[12px] font-medium tabular-nums text-[var(--ix-ink-2)]">{label}</span>
         <span className={cn('h-px flex-1', line)} aria-hidden />
       </div>
     );

@@ -16,6 +16,7 @@ import { ErrorBanner } from '../components/ui/Feedback';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Divider } from '../components/ui/Divider';
+import { ServerMark } from '../components/ix/identity';
 import { AUTH_FORM, AuthCanvas, AuthCard, AuthScroll, Field } from './authScaffold';
 import type { InvitePreview } from '../api/generated/InvitePreview';
 
@@ -121,42 +122,36 @@ export function InvitePage() {
 
   const guild = invitePreview?.guild;
   const iconSrc = safeStoredImageDataUrl(guild?.icon_hash);
-  const guildInitial = (guild?.name ?? '?').trim().charAt(0).toUpperCase() || '?';
   const memberCount = typeof guild?.member_count === 'number' ? guild.member_count : null;
 
   return (
     <AuthCanvas>
-      <AuthCard className="max-w-md">
+      <AuthCard>
         <div className={AUTH_FORM}>
           {/* Who is inviting you — one identity row, no gradient banner and no
               floating circle (spec §6.1, §6.2). */}
           <div>
-            <p className="glass-kicker text-text-faint">You’re invited</p>
-            <div className="mt-4 flex items-center gap-4">
-              <div className="pc-well flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-[var(--radius-card)]">
-                {iconSrc ? (
-                  <img src={iconSrc} alt="" className="h-full w-full object-cover" />
-                ) : (
-                  <span className="pc-display text-heading text-text-secondary">{guildInitial}</span>
-                )}
-              </div>
+            <div className="flex items-center gap-4">
+              {/* The server's own mark (its picture, else its monogram on its hue), never the app's. */}
+              <ServerMark guildId={guild?.id ?? code ?? '0'} name={guild?.name ?? ''} icon={iconSrc} size={64} />
               <div className="min-w-0">
-                <h1 className="truncate pc-display text-title text-text-primary">
+                <p className="text-[12.5px] font-semibold text-[var(--ix-ink-3)]">You’re invited</p>
+                <h1 className="ix-auth__title mt-0.5 truncate">
                   {loadingPreview ? 'Loading invite…' : guild?.name ?? 'Join this server'}
                 </h1>
-                <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] text-text-faint">
-                  {memberCount !== null && (
-                    <span className="inline-flex items-center gap-1.5">
-                      <Users size={13} aria-hidden />
-                      {memberCount.toLocaleString()} {memberCount === 1 ? 'member' : 'members'}
-                    </span>
-                  )}
-                  <span className="inline-flex items-center gap-1 pc-mono">
-                    <Hash size={12} aria-hidden />
-                    {code}
-                  </span>
-                </div>
               </div>
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] text-[var(--ix-ink-3)]">
+              {memberCount !== null && (
+                <span className="inline-flex items-center gap-1.5">
+                  <Users size={13} aria-hidden />
+                  {memberCount.toLocaleString()} {memberCount === 1 ? 'member' : 'members'}
+                </span>
+              )}
+              <span className="inline-flex items-center gap-1 pc-mono">
+                <Hash size={12} aria-hidden />
+                {code}
+              </span>
             </div>
           </div>
 
@@ -168,7 +163,7 @@ export function InvitePage() {
               <button
                 type="button"
                 onClick={() => navigate('/app')}
-                className="pc-focusable self-start rounded-[var(--r-chip)] text-label font-semibold text-text-link underline-offset-4 hover:underline"
+                className="pc-focusable ix-auth__link self-start rounded-[6px]"
               >
                 Back to Paracord
               </button>
@@ -177,7 +172,7 @@ export function InvitePage() {
 
           <AuthScroll>
           {!error && (
-            <p className="text-body text-text-secondary">
+            <p className="text-[14px] leading-[1.5] text-[var(--ix-ink-2)]">
               {guild?.name
                 ? `Join ${guild.name} to chat, hop into voice, and stream together.`
                 : 'Accept to join this community and start chatting, streaming, and hanging out.'}
@@ -186,7 +181,7 @@ export function InvitePage() {
 
           {gate && (
             <div className="flex flex-col gap-3">
-              <p className="text-label text-text-secondary">
+              <p className="text-[14px] text-[var(--ix-ink-2)]">
                 {guild?.name ?? 'This server'} asks new people for the following before they join.
               </p>
               {questions.map((question, index) => (
@@ -206,7 +201,7 @@ export function InvitePage() {
                 </Field>
               ))}
               {gate.require_ack && (
-                <label className="flex cursor-pointer items-start gap-2.5 text-label leading-relaxed text-text-secondary">
+                <label className="flex cursor-pointer items-start gap-2.5 text-[13.5px] leading-relaxed text-[var(--ix-ink-2)]">
                   <input
                     type="checkbox"
                     checked={verificationAck}
@@ -248,14 +243,14 @@ export function InvitePage() {
               has it, and one download away for somebody who does not. Inside
               the app there is nothing to offer. */}
           {!isTauri() && code && (
-            <p className="text-[13px] leading-relaxed text-text-faint">
+            <p className="text-[13px] leading-relaxed text-[var(--ix-ink-3)]">
               Prefer the desktop app?{' '}
-              <a className="text-text-link hover:underline" href={toPortableUri(window.location.origin, code)}>
+              <a className="font-semibold text-[var(--ix-ink-2)] hover:text-[var(--ix-ink)] hover:underline" href={toPortableUri(window.location.origin, code)}>
                 Open this invite in it
               </a>
               , or{' '}
               <a
-                className="text-text-link hover:underline"
+                className="font-semibold text-[var(--ix-ink-2)] hover:text-[var(--ix-ink)] hover:underline"
                 href={APP_DOWNLOAD_URL}
                 target="_blank"
                 rel="noreferrer noopener"

@@ -41,8 +41,7 @@ vi.mock('../lib/clipboard', () => ({
   writeClipboardText: vi.fn(),
 }));
 
-// The portal is a settings surface: the shell owns a close control (which
-// navigates) and a phone breakpoint, so it needs a router and matchMedia.
+// The portal is a page in main: its back chevron and Esc navigate, so it needs a router.
 function renderDeveloperPage() {
   render(
     <MemoryRouter initialEntries={['/app/developers']}>
@@ -51,9 +50,9 @@ function renderDeveloperPage() {
   );
 }
 
-/** Open an application's section from the portal index. */
+/** Open an application from the segmented control under the title. */
 async function openApp(user: ReturnType<typeof userEvent.setup>, name: string) {
-  await user.click(screen.getByRole('button', { name }));
+  await user.click(screen.getByRole('tab', { name }));
 }
 
 describe('DeveloperPage metrics', () => {

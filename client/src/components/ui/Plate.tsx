@@ -22,13 +22,12 @@ export interface PlateProps extends React.HTMLAttributes<HTMLElement> {
 }
 
 /**
- * A plate (spec §1.1, §4): the surface that holds content — the Stage, the
- * Lobby, a text room, the chat ribbon, a card. Depth is a 1px warm top
- * highlight plus a deep shadow, never a border.
+ * A plate (docs/index-spec.md §2.5, §4.11): the card color (`--ix-card`) at radius
+ * 20 with the event card's depth. A surface that holds content on the page, never
+ * a window.
  *
  * Never nest a plate in a plate. Inside a plate you get one more step: a
- * {@link Well} (recessed) or a raised row/card. That is the whole elevation
- * system.
+ * {@link Well} (a field fill) or a raised row. That is the whole elevation system.
  */
 export const Plate = React.forwardRef<HTMLElement, PlateProps>(function Plate(
   { as = 'div', lit = false, bare = false, className, children, ...props },

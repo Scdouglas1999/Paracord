@@ -37,18 +37,18 @@ export function AccountSetupPage() {
     if (!user || (expectedUser && expectedUser !== user.id)) {
       return (
         <AuthCanvas>
-          <AuthCard className="max-w-md">
+          <AuthCard>
             <div className={`${AUTH_FORM} items-start`}>
               <AuthHeading
                 title={user ? 'Account changed' : 'Waiting for your instance account'}
                 subtitle="Sign in to the intended instance account before setting up encryption."
               />
-              <p className="text-label text-text-secondary">
+              <p className="text-[14px] text-[var(--ix-ink-2)]">
                 Setup continues when that account is available.
               </p>
               <Link
                 to="/app"
-                className="pc-focusable rounded-[var(--r-chip)] text-label font-semibold text-text-link underline underline-offset-4"
+                className="pc-focusable rounded-[6px] text-[14px] font-semibold text-[var(--ix-ink)] underline underline-offset-4"
               >
                 Return to Paracord
               </Link>
@@ -183,17 +183,16 @@ function OwnedAccountSetupPage() {
   if (accountAlreadyHasIdentity) {
     return (
       <AuthCanvas>
-        <AuthCard className="max-w-md">
+        <AuthCard>
           <div className={`${AUTH_FORM} items-start`}>
             <AuthHeading
-              mark={false}
               dense
               title="This account already has an identity"
               subtitle={`${signedInUser?.username ?? 'This account'} has a device identity on another device. Restore it here with your 24-word recovery phrase, so your key — and everything encrypted to it — stays the same.`}
             />
-            <p className="pc-well px-4 py-3 text-[13px] text-text-secondary">
+            <p className="pc-well px-4 py-3 text-[13px] leading-[1.5] text-[var(--ix-ink-2)]">
               Its key ends in{' '}
-              <span className="pc-mono text-text-primary">
+              <span className="pc-mono text-[var(--ix-ink)]">
                 {(signedInUser?.public_key ?? '').slice(-8)}
               </span>
               . Creating a new identity here instead would replace it, and nobody who has already
@@ -204,13 +203,13 @@ function OwnedAccountSetupPage() {
               Recover from phrase
             </Button>
             {/* One way out per line: a wrapped separator reads as a typo. */}
-            <div className="flex flex-col items-start gap-1 text-[13px] text-text-secondary">
+            <div className="flex flex-col items-start gap-1.5 text-[13.5px] text-[var(--ix-ink-3)]">
               <p>
                 Lost the phrase?{' '}
                 <button
                   type="button"
                   onClick={() => navigate('/app?settings=identity')}
-                  className="pc-focusable rounded-[var(--r-chip)] font-semibold text-text-link underline-offset-4 hover:underline"
+                  className="pc-focusable ix-auth__link rounded-[6px]"
                 >
                   Import the account from a file
                 </button>
@@ -218,7 +217,7 @@ function OwnedAccountSetupPage() {
               <button
                 type="button"
                 onClick={() => navigate('/login')}
-                className="pc-focusable rounded-[var(--r-chip)] font-semibold text-text-link underline-offset-4 hover:underline"
+                className="pc-focusable ix-auth__link rounded-[6px]"
               >
                 Use a different account
               </button>
@@ -233,12 +232,10 @@ function OwnedAccountSetupPage() {
     const words = recoveryPhrase.split(' ');
     return (
       <AuthCanvas>
-        <AuthCard className="max-w-lg">
+        <AuthCard>
           <div className={AUTH_FORM}>
-            <div className="flex flex-col gap-2">
-              <AuthSteps step={2} count={2} />
+            <div className="flex flex-col gap-4">
               <AuthHeading
-                mark={false}
                 dense
                 title="Recovery phrase"
                 subtitle={
@@ -248,11 +245,12 @@ function OwnedAccountSetupPage() {
                   </>
                 }
               />
+              <AuthSteps step={2} count={2} />
             </div>
 
             {/* A caution is a well carrying warning ink, never a tinted box
                 with a colored border (spec §1.1, §1.6). */}
-            <div className="pc-well flex items-start gap-2.5 px-4 py-3 text-[15px] font-medium text-text-primary">
+            <div className="pc-well flex items-start gap-2.5 px-4 py-3 text-[14px] font-medium text-[var(--ix-ink)]">
               <ShieldAlert size={16} className="mt-px shrink-0" />
               <span className="leading-relaxed">
                 Never share these words. Anyone who has them can take over your account.
@@ -261,16 +259,16 @@ function OwnedAccountSetupPage() {
 
             <AuthScroll>
               <div>
-              <div className="pc-well grid grid-cols-2 gap-2 p-4 sm:grid-cols-3">
+              <div className="pc-well grid grid-cols-2 gap-1.5 p-3 sm:grid-cols-3">
                 {words.map((word, i) => (
                   <div
                     key={i}
-                    className="flex items-center gap-2 rounded-[var(--r-chip)] bg-bg-raised px-2.5 py-1.5 shadow-[var(--shadow-chip)]"
+                    className="flex items-center gap-2 rounded-[8px] bg-[var(--ix-fill)] px-2.5 py-1"
                   >
-                    <span className="glass-instrument text-[13px] text-text-faint">
+                    <span className="text-[12px] tabular-nums text-[var(--ix-ink-3)]">
                       {String(i + 1).padStart(2, '0')}
                     </span>
-                    <span className="pc-mono text-label text-text-primary">{word}</span>
+                    <span className="pc-mono text-[13.5px] text-[var(--ix-ink)]">{word}</span>
                   </div>
                 ))}
               </div>
@@ -278,7 +276,7 @@ function OwnedAccountSetupPage() {
                 type="button"
                 aria-label={copied ? 'Recovery phrase copied' : 'Copy recovery phrase'}
                 onClick={handleCopyPhrase}
-                className="pc-focusable mt-3 inline-flex h-[var(--h-control)] items-center gap-1.5 rounded-[var(--radius-control)] px-2.5 text-[13px] font-semibold text-text-link transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle"
+                className="pc-focusable mt-3 inline-flex h-9 items-center gap-1.5 rounded-[10px] px-2.5 text-[13.5px] font-semibold text-[var(--ix-ink-2)] transition-colors duration-[120ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill)] hover:text-[var(--ix-ink)]"
               >
                 {copied ? <Check size={14} /> : <Copy size={14} />}
                 {copied ? 'Copied to clipboard' : 'Copy phrase'}
@@ -290,14 +288,14 @@ function OwnedAccountSetupPage() {
             {/* The control that enables Continue never lives inside the scroll
                 region: on a short window it landed below the fold, so Continue
                 stayed disabled with nothing on screen explaining why. */}
-            <label className="flex cursor-pointer items-start gap-2.5 rounded-[var(--radius-control)] bg-bg-raised px-4 py-3.5 shadow-[var(--shadow-raised)] transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-strong">
+            <label className="flex cursor-pointer items-start gap-2.5 rounded-[12px] bg-[var(--ix-fill-card)] px-4 py-3.5 shadow-[inset_0_0_0_1px_var(--ix-line)] transition-colors duration-[120ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill-card-hover)]">
               <input
                 type="checkbox"
                 checked={savedPhrase}
                 onChange={(e) => setSavedPhrase(e.target.checked)}
                 className="pc-checkbox mt-0.5"
               />
-              <span className="text-label leading-relaxed text-text-secondary">
+              <span className="text-[13.5px] leading-relaxed text-[var(--ix-ink-2)]">
                 I’ve written down my recovery phrase and stored it somewhere safe.
               </span>
             </label>
@@ -313,12 +311,10 @@ function OwnedAccountSetupPage() {
 
   return (
     <AuthCanvas>
-      <AuthCard className="max-w-md short-window:max-w-2xl">
+      <AuthCard className="short-window:max-w-2xl">
         <form onSubmit={handleCreate} className={AUTH_FORM}>
-          <div className="flex flex-col gap-2">
-            <AuthSteps step={1} count={2} />
+          <div className="flex flex-col gap-4">
             <AuthHeading
-              mark={false}
               dense
               title={isMigration ? 'Secure your account' : 'Set up a local identity'}
               subtitle={
@@ -327,11 +323,12 @@ function OwnedAccountSetupPage() {
                   : 'Create a device-held identity for passwordless, challenge-response sign-in. Optional — you can skip it.'
               }
             />
+            <AuthSteps step={1} count={2} />
           </div>
 
-          {isMigration && scope && <p className="text-label text-text-secondary">Instance account: {targetUser?.username} ({serverName})</p>}
+          {isMigration && scope && <p className="text-[14px] text-[var(--ix-ink-2)]">Instance account: {targetUser?.username} ({serverName})</p>}
           {existingIdentity && (
-            <p className="text-[13px] text-text-secondary">
+            <p className="text-[13px] text-[var(--ix-ink-3)]">
               Using saved identity <span className="pc-mono">{existingIdentity.slice(0, 12)}…</span>
             </p>
           )}
@@ -408,12 +405,12 @@ function OwnedAccountSetupPage() {
           </Button>
 
           {!isMigration ? (
-            <p className="text-[13px] text-text-secondary">
+            <p className="text-[13.5px] text-[var(--ix-ink-3)]">
               Already have an account?{' '}
               <button
                 type="button"
                 onClick={() => navigate('/login')}
-                className="pc-focusable rounded-[var(--r-chip)] font-semibold text-text-link underline-offset-4 hover:underline"
+                className="pc-focusable ix-auth__link rounded-[6px]"
               >
                 Sign in
               </button>
@@ -421,17 +418,17 @@ function OwnedAccountSetupPage() {
               <button
                 type="button"
                 onClick={() => navigate('/recover')}
-                className="pc-focusable rounded-[var(--r-chip)] font-semibold text-text-link underline-offset-4 hover:underline"
+                className="pc-focusable ix-auth__link rounded-[6px]"
               >
                 Recover from phrase
               </button>
             </p>
           ) : (
-            <p className="text-[13px] text-text-secondary">
+            <p className="text-[13.5px] text-[var(--ix-ink-3)]">
               <button
                 type="button"
                 onClick={() => navigate('/app')}
-                className="pc-focusable rounded-[var(--r-chip)] font-semibold text-text-link underline-offset-4 hover:underline"
+                className="pc-focusable ix-auth__link rounded-[6px]"
               >
                 Skip for now
               </button>

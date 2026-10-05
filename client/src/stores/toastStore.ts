@@ -32,7 +32,7 @@ const dismissTimers = new Map<string, ReturnType<typeof setTimeout>>();
 export const useToastStore = create<ToastState>()((set, get) => ({
   toasts: [],
 
-  addToast: (type, message, duration = 5000, action) => {
+  addToast: (type, message, duration = 4000, action) => {
     const id = String(++nextId);
     set((state) => ({
       toasts: [...state.toasts, { id, type, message, duration, action }],

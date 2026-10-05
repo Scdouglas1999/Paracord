@@ -161,7 +161,7 @@ export function BotAdvancedTabs({
                     </Button>
                     <IconButton
                       label={`Delete command ${cmd.name}`}
-                      className="hover:bg-danger-well hover:text-accent-danger"
+                      className="hover:bg-[var(--ix-danger-fill)] hover:text-[var(--ix-danger-ink)]"
                       onClick={() => onDeleteCommand(cmd.id)}
                     >
                       <Trash2 size={14} />

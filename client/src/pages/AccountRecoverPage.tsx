@@ -7,9 +7,9 @@ import { Input, Textarea } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
 import {
   AUTH_FORM,
-  AppMark,
   AuthCanvas,
   AuthCard,
+  AuthHeading,
   AuthScroll,
   AuthStep,
   AuthSteps,
@@ -144,12 +144,9 @@ export function AccountRecoverPage() {
 
   return (
     <AuthCanvas>
-      <AuthCard className="max-w-md short-window:max-w-2xl">
+      <AuthCard className="short-window:max-w-2xl">
         <form ref={formRef} onSubmit={handleSubmit} noValidate className={AUTH_FORM}>
-          <header className="flex items-center gap-3">
-            <AppMark size={34} />
-            <h1 className="pc-display text-title text-text-primary">Recover your account</h1>
-          </header>
+          <AuthHeading title="Recover your account" />
 
           {error && <ErrorBanner multiline message={error} />}
 

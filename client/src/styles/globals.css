@@ -106,6 +106,8 @@
 @import './ix-conversation.css';
 @import './ix-call.css';
 @import './ix-people.css';
+/* The long tail (IX-17): settings, dialogs, the entry pages; the scope and what a layered recipe cannot do. */
+@import './ix-longtail.css';
 @import './ix-phone.css';
 @import './utilities.css';
 /* Last, and in a layer of its own: the §9 focus ring outranks the utilities, so

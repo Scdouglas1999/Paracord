@@ -76,8 +76,8 @@ import { ResourceImage } from '../ui/ResourceImage';
 import { clearAuthenticatedImageCache } from '../../lib/authenticatedImage';
 import { BannerEditor } from './BannerEditor';
 import { displayName as resolveDisplayName } from '../../lib/displayName';
-import { getIdentityColor } from '../../lib/colors';
-import { Face } from '../glass/places/Lead';
+import { Avatar, PresenceDot } from '../ix/identity';
+import { PEOPLE_HUE, paletteHue } from '../../lib/identityHue';
 import { presenceLabel } from '../../lib/presence';
 import { formatShortcut } from '../../lib/keyboardShortcuts';
 import { CustomCSS } from '../customization/CustomCSS';
@@ -996,6 +996,13 @@ export function UserSettings({ onClose }: UserSettingsProps) {
     <SettingsShell
       label="User settings"
       title={user ? resolveDisplayName(user) : 'Settings'}
+      subtitle="User settings"
+      lead={
+        user ? (
+          <Avatar userId={user.id} name={resolveDisplayName(user)} avatar={user.avatar_hash ?? null} size={40} />
+        ) : undefined
+      }
+      hue={PEOPLE_HUE}
       groups={navGroups}
       active={activeSection}
       onSelect={(id) => (isMobile ? selectMobileSection(id as SettingsSection) : setActiveSection(id as SettingsSection))}
@@ -1018,7 +1025,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
           </NavRow>
           <NavRow
             icon={<LogOut size={16} />}
-            className="text-accent-danger hover:bg-danger-well hover:text-accent-danger"
+            className="text-[var(--ix-danger-ink)] hover:bg-[var(--ix-danger-fill)] hover:text-[var(--ix-danger-ink)]"
             onClick={() => {
               void logout();
               onClose();
@@ -1049,42 +1056,35 @@ export function UserSettings({ onClose }: UserSettingsProps) {
             {activeSection === 'account' && (
               <div>
                 <header className="mb-8 flex items-center gap-4">
-                  {/* Your own face, with the same presence mark as your face in the
-                      header. A preview of an avatar you have not saved yet is
-                      already a resolved URL, which the face's resolver (it only
+                  {/* Your own face, with the same presence dot as your face in the
+                      toolbar. A preview of an avatar you have not saved yet is
+                      already a resolved URL, which the avatar's resolver (it only
                       knows stored values) would refuse, so it is drawn directly. */}
-                  <span className="glass-person" style={{ width: 64, height: 64 }}>
+                  <span className="relative shrink-0">
                     {avatarPreview ? (
                       <span
-                        className="glass-face"
-                        style={{
-                          width: 64,
-                          height: 64,
-                          fontSize: 24,
-                          backgroundColor: getIdentityColor(user?.id ?? 'me'),
-                        }}
+                        className="ix-av ix-has-img ix-has-dot"
+                        style={{ '--ix-h': paletteHue(user?.id ?? 'me'), width: 64, height: 64 } as React.CSSProperties}
                         aria-hidden
                       >
                         <ResourceImage src={avatarPreview} alt="" draggable={false} />
+                        <PresenceDot status={ownStatus} ring="var(--ix-main)" />
                       </span>
                     ) : (
-                      <Face
-                        face={{
-                          userId: user?.id ?? 'me',
-                          name: resolveDisplayName(user),
-                          avatar: user?.avatar_hash ?? null,
-                        }}
+                      <Avatar
+                        userId={user?.id ?? 'me'}
+                        name={resolveDisplayName(user)}
+                        avatar={user?.avatar_hash ?? null}
                         size={64}
+                        presence={ownStatus}
+                        ring="var(--ix-main)"
                       />
                     )}
-                    <span className="glass-presence" data-status={ownStatus} aria-hidden />
                     <span className="sr-only">{ownStatus === 'invisible' ? 'Invisible' : presenceLabel(ownStatus)}</span>
                   </span>
                   <div className="min-w-0">
-                    <h2 className="truncate text-heading text-text-primary">{user ? resolveDisplayName(user) : 'My account'}</h2>
-                    <p className="mt-0.5 text-body text-text-secondary">
-                      Manage your profile, security, and how you sign in.
-                    </p>
+                    <h2 className="ix-settings__title truncate">{user ? resolveDisplayName(user) : 'My account'}</h2>
+                    <p className="ix-settings__desc">Manage your profile, security, and how you sign in.</p>
                   </div>
                 </header>
                 <div className="mb-10">
@@ -1111,7 +1111,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
 
                 {/* Public profile */}
                 <section>
-                  <h3 className="glass-kicker text-text-muted">Public profile</h3>
+                  <h3 className="ix-label text-text-muted">Public profile</h3>
                   <div className="mt-2 divide-y divide-border-subtle">
                     <div className="flex flex-wrap items-center justify-between gap-4 py-4">
                       <div className="min-w-0">
@@ -1199,7 +1199,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
 
                 {/* Security & sign-in */}
                 <section className="mt-9 border-t border-border-subtle pt-8">
-                  <h3 className="glass-kicker text-text-muted">Security &amp; sign-in</h3>
+                  <h3 className="ix-label text-text-muted">Security &amp; sign-in</h3>
 
                   <div className="mt-5">
                     <div className="text-label text-text-primary">Email address</div>
@@ -1339,7 +1339,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
 
                     {mfaBackupCodes.length > 0 && (
                       <div className="mt-4 max-w-md">
-                        <div className="glass-kicker text-text-primary">Save these backup codes</div>
+                        <div className="ix-label text-text-primary">Save these backup codes</div>
                         <div className="mt-2 pc-well p-3 font-code text-body leading-relaxed text-text-primary">
                           {mfaBackupCodes.map((code) => (
                             <div key={code}>{code}</div>
@@ -1484,7 +1484,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
 
                 {/* Your data */}
                 <section className="mt-9 border-t border-border-subtle pt-8">
-                  <h3 className="glass-kicker text-text-muted">Your data</h3>
+                  <h3 className="ix-label text-text-muted">Your data</h3>
                   <div className="mt-4 flex flex-wrap items-center justify-between gap-4">
                     <div className="min-w-0">
                       <div className="text-label text-text-primary">Download your data</div>
@@ -1499,7 +1499,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
 
                 {/* Device security */}
                 <section className="mt-9 border-t border-border-subtle pt-8">
-                  <h3 className="glass-kicker text-text-muted">Device security</h3>
+                  <h3 className="ix-label text-text-muted">Device security</h3>
                   <div className="mt-2 divide-y divide-border-subtle">
                     <ToggleRow
                       title="Device crypto security"
@@ -1561,13 +1561,13 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 </section>
 
                 <section className="mt-9 border-t border-border-subtle pt-8">
-                  <h3 className="glass-kicker text-text-muted">Display</h3>
+                  <h3 className="ix-label text-text-muted">Display</h3>
                   <div className="mt-2 divide-y divide-border-subtle">
                     <div className="flex flex-wrap items-center justify-between gap-4 py-4">
                       <div className="min-w-0">
                         <div className="text-label text-text-primary">Message density</div>
                         <p className="mt-0.5 text-meta text-text-secondary">
-                          Comfortable gives each message room to breathe; compact fits more on screen.
+                          Comfortable gives each message more space; compact fits more on screen.
                         </p>
                       </div>
                       <Segmented
@@ -1596,11 +1596,11 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 </section>
 
                 <section className="mt-9 border-t border-border-subtle pt-8">
-                  <h3 className="glass-kicker text-text-muted">Custom CSS</h3>
+                  <h3 className="ix-label text-text-muted">Custom CSS</h3>
                   <p className="mt-2 max-w-xl text-body text-text-secondary">
                     For power users — inject your own styles. Applies instantly on save.
                   </p>
-                  <div className="mt-3 pc-well p-4">
+                  <div className="mt-3">
                     <CustomCSS initialCSS={customCss} onSave={(css) => setCustomCss(css)} />
                   </div>
                 </section>
@@ -1618,7 +1618,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                   description="Choose your devices and how your mic behaves in calls."
                 />
                 <section>
-                  <h3 className="glass-kicker text-text-muted">Devices</h3>
+                  <h3 className="ix-label text-text-muted">Devices</h3>
                   {deviceNamingWarning && (
                     <p className="pc-well mt-2 px-3 py-2 text-[13px] text-text-secondary">
                       {deviceNamingWarning}
@@ -1718,7 +1718,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 </section>
 
                 <section className="mt-9 border-t border-border-subtle pt-8">
-                  <h3 className="glass-kicker text-text-muted">Input mode</h3>
+                  <h3 className="ix-label text-text-muted">Input mode</h3>
                   <div className="mt-4 flex flex-wrap items-center justify-between gap-4">
                     <div className="min-w-0">
                       <div className="text-label text-text-primary">How your mic activates</div>
@@ -1741,7 +1741,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 </section>
 
                 <section className="mt-9 border-t border-border-subtle pt-8">
-                  <h3 className="glass-kicker text-text-muted">Processing</h3>
+                  <h3 className="ix-label text-text-muted">Processing</h3>
                   <div className="mt-2 divide-y divide-border-subtle">
                     <ToggleRow
                       title="Noise suppression"
@@ -1765,7 +1765,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 </section>
 
                 <section className="mt-9 border-t border-border-subtle pt-8">
-                  <h3 className="glass-kicker text-text-muted">Soundboard</h3>
+                  <h3 className="ix-label text-text-muted">Soundboard</h3>
                   <div className="mt-2 divide-y divide-border-subtle">
                     <ToggleRow
                       title="Play soundboard sounds"
@@ -1801,7 +1801,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                           }
                           className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-bg-mod-strong accent-accent-primary [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent-primary"
                         />
-                        <span className="glass-instrument w-10 shrink-0 text-right text-meta text-text-muted">
+                        <span className="tabular-nums w-10 shrink-0 text-right text-meta text-text-muted">
                           {Math.round(Number(mergedNotifications['soundboardVolume'] ?? 100))}%
                         </span>
                       </div>
@@ -1811,7 +1811,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
 
                 {systemAudioGrant && (
                   <section className="mt-9 border-t border-border-subtle pt-8">
-                    <h3 className="glass-kicker text-text-muted">Desktop audio</h3>
+                    <h3 className="ix-label text-text-muted">Desktop audio</h3>
                     {systemAudioGrant.required ? (
                       <>
                         <p className="mt-2 max-w-xl text-body text-text-secondary">
@@ -1851,7 +1851,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 )}
 
                 <section className="mt-9 border-t border-border-subtle pt-8">
-                  <h3 className="glass-kicker text-text-muted">Trouble with calls</h3>
+                  <h3 className="ix-label text-text-muted">Trouble with calls</h3>
                   <p className="mt-2 max-w-xl text-body text-text-secondary">
                     Calls travel over a different network path than chat, so they can fail on their
                     own. The connection check tests your microphone, speaker, this device&rsquo;s
@@ -2001,7 +2001,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 </section>
 
                 <section className="mt-9 border-t border-border-subtle pt-8">
-                  <h3 className="glass-kicker text-text-muted">Detected apps</h3>
+                  <h3 className="ix-label text-text-muted">Detected apps</h3>
                   <p className="mt-2 max-w-xl text-body text-text-secondary">
                     Turn off any app you'd rather keep private. Paracord stops reporting it right away.
                   </p>
@@ -2122,13 +2122,13 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 )}
 
                 <section>
-                  <h3 className="glass-kicker text-text-muted">Current identity key</h3>
+                  <h3 className="ix-label text-text-muted">Current identity key</h3>
                   <p className="mt-2 max-w-xl text-body text-text-secondary">
                     Share this fingerprint with trusted contacts so they can confirm it's really you.
                   </p>
                   {ownIdentityFingerprint ? (
                     <div className="mt-3 pc-well px-4 py-3">
-                      <div className="glass-kicker text-text-muted">Fingerprint</div>
+                      <div className="ix-label text-text-muted">Fingerprint</div>
                       <div className="mt-1.5 break-all font-code text-body text-text-primary">{ownIdentityFingerprint}</div>
                     </div>
                   ) : (
@@ -2139,7 +2139,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 </section>
 
                 <section className="mt-9 border-t border-border-subtle pt-8">
-                  <h3 className="glass-kicker text-text-muted">Export identity</h3>
+                  <h3 className="ix-label text-text-muted">Export identity</h3>
                   <p className="mt-2 max-w-xl text-body text-text-secondary">
                     Download a signed bundle you can import into another Paracord instance.
                   </p>
@@ -2166,7 +2166,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 </section>
 
                 <section className="mt-9 border-t border-border-subtle pt-8">
-                  <h3 className="glass-kicker text-text-muted">Import identity</h3>
+                  <h3 className="ix-label text-text-muted">Import identity</h3>
                   <p className="mt-2 max-w-xl text-body text-text-secondary">
                     Bring in a bundle from another instance. Imported data is merged with this account.
                   </p>
@@ -2186,7 +2186,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
 
                   {importPreview && (
                     <div className="mt-5 pc-well px-4 py-4">
-                      <div className="glass-kicker text-text-muted">Import preview</div>
+                      <div className="ix-label text-text-muted">Import preview</div>
                       <dl className="mt-3 space-y-2 text-body">
                         {([
                           ['Origin instance', String(importPreview.origin_server ?? 'Unknown')],
@@ -2281,7 +2281,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                       <AppMark size={56} />
                       <div className="font-display text-title text-text-primary">{APP_NAME}</div>
                     </div>
-                    <div className="font-code text-meta text-text-muted">Version {APP_VERSION}</div>
+                    <div className="text-[12.5px] tabular-nums text-text-muted">Version {APP_VERSION}</div>
                   </div>
                   <p className="mt-5 max-w-xl text-body text-text-secondary">
                     A decentralized, self-hostable Discord alternative built with Rust, Tauri, and React — with its own

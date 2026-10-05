@@ -94,4 +94,18 @@ describe('CustomCSS', () => {
     expect(rendered).toContain('color: red');
     expect(rendered).not.toContain('color: blue');
   });
+
+  it('Save is a quiet control: the page has one cream action and this is not it', () => {
+    render(<CustomCSS initialCSS="" />);
+    const save = screen.getByRole('button', { name: 'Save custom CSS' });
+    expect(save.className).toContain('bg-[var(--ix-fill-ctl)]');
+    expect(save.className).not.toContain('bg-accent-primary');
+  });
+
+  it('the example in the editor is not a color', () => {
+    render(<CustomCSS initialCSS="" />);
+    const placeholder = screen.getByRole('textbox', { name: 'Custom CSS' }).getAttribute('placeholder') ?? '';
+    expect(placeholder).toContain(':root');
+    expect(placeholder).not.toMatch(/#[0-9a-f]{3,8}\b/i);
+  });
 });

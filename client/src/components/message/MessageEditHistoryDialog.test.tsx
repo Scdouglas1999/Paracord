@@ -142,4 +142,16 @@ describe('owned edit history', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('no longer signed in');
     expect(adapter).not.toHaveBeenCalled();
   });
+
+  it('is a centered card dialog: each version a quiet row with its time, one primary Done', async () => {
+    clients.byId.get('a')!.defaults.adapter = async config => response(config, [entry('First words'), { ...entry('Second words'), id: '2' }]);
+    render(<MessageEditHistoryDialog {...props()} />);
+    const dialog = screen.getByRole('dialog', { name: 'Edit history' });
+    expect(dialog).toHaveClass('max-w-[440px]', 'pc-dialog');
+    expect(await within(dialog).findByText('First words')).toBeVisible();
+    const rows = within(dialog).getAllByRole('listitem');
+    expect(rows).toHaveLength(2);
+    expect(within(rows[0]).getByText(/^Version 1/)).toHaveClass('text-[12px]', 'tabular-nums');
+    expect(within(dialog).getByRole('button', { name: 'Done' }).className).toContain('bg-accent-primary');
+  });
 });

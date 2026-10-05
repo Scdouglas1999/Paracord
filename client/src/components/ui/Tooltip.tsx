@@ -17,11 +17,14 @@ interface TooltipProps {
 
 const GAP = 8; // space between trigger and tooltip
 
+/** A tooltip waits before it shows (docs/index-spec.md §6.11). */
+const TOOLTIP_DELAY_MS = 400;
+
 export function Tooltip({
     content,
     children,
     side = "top",
-    delay = 0,
+    delay = TOOLTIP_DELAY_MS,
     className,
 }: TooltipProps) {
     const [isVisible, setIsVisible] = useState(false);
@@ -130,12 +133,12 @@ export function Tooltip({
                         id={tooltipId}
                         role="tooltip"
                         className={cn(
-                            // A floating label (docs/glass-spec.md §5): near-solid
-                            // at .97 with a hairline and no arrow. No backdrop blur
-                            // (`pc-tip`): over Linux underlay holes a translucent
+                            // A floating label (docs/index-spec.md §6.11): near-solid
+                            // (`--ix-tip`), radius 8, 12.5/600, no arrow. No backdrop
+                            // blur (`pc-tip`): over Linux underlay holes a translucent
                             // tooltip composites into the live stream and can stick
                             // there as a ghost label.
-                            "pc-tip pointer-events-none fixed z-[9999] whitespace-nowrap px-2.5 py-1.5 text-[13px] font-medium text-text-primary",
+                            "pc-tip pointer-events-none fixed z-[9999] whitespace-nowrap px-2.5 py-1.5 text-[12.5px] font-semibold text-[var(--ix-ink)]",
                             exiting ? "pc-pop-out" : "pc-pop-in",
                             className
                         )}

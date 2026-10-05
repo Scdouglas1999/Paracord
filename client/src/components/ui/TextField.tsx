@@ -18,8 +18,9 @@ export interface TextFieldProps extends React.InputHTMLAttributes<HTMLInputEleme
 }
 
 /**
- * TextField: a well you type into (docs/glass-spec.md §2.4: radius 12, recessed
- * inside its pane, a 15px value). Focus is the §9 ring.
+ * TextField: a field you type into (docs/index-spec.md §6.14: 44 tall, radius
+ * 12, the field fill and a hairline, a 15px value). Focus brightens the edge and
+ * draws the one focus ring around the whole field.
  */
 export const TextField = React.forwardRef<HTMLInputElement, TextFieldProps>(
   function TextField(
@@ -35,19 +36,18 @@ export const TextField = React.forwardRef<HTMLInputElement, TextFieldProps>(
       <div className={cn('flex w-full flex-col gap-1.5', className)}>
         <label
           htmlFor={inputId}
-          className={cn('text-[13px] font-medium text-text-secondary', hideLabel && 'sr-only')}
+          className={cn('text-[13px] font-medium text-[var(--ix-ink-2)]', hideLabel && 'sr-only')}
         >
           {label}
         </label>
         <div
           className={cn(
-            'pc-well flex h-[var(--h-control-phone)] items-center gap-2.5 rounded-[var(--r-ctl)] px-3',
-            'focus-within:shadow-[var(--shadow-well),var(--focus-ring)]',
-            error && 'shadow-[var(--shadow-well),0_0_0_1px_var(--accent-danger)]',
+            'pc-field flex h-[var(--h-control-phone)] items-center gap-2.5 px-3',
+            error && 'shadow-[inset_0_0_0_1px_var(--ix-danger-ink)]',
           )}
         >
           {icon != null && (
-            <span className="flex shrink-0 items-center text-text-faint" aria-hidden>
+            <span className="flex shrink-0 items-center text-[var(--ix-ink-3)]" aria-hidden>
               {icon}
             </span>
           )}
@@ -57,19 +57,19 @@ export const TextField = React.forwardRef<HTMLInputElement, TextFieldProps>(
             aria-invalid={error ? true : undefined}
             aria-describedby={error ? errorId : hint ? hintId : undefined}
             className={cn(
-              'min-w-0 flex-1 bg-transparent text-[15px] text-text-primary outline-none',
-              'placeholder:text-[var(--ink-placeholder)] disabled:cursor-not-allowed disabled:opacity-60',
+              'min-w-0 flex-1 bg-transparent text-[15px] text-[var(--ix-ink)] outline-none',
+              'placeholder:text-[var(--ix-ink-3)] disabled:cursor-not-allowed disabled:opacity-60',
             )}
             {...props}
           />
           {trailing != null && <span className="flex shrink-0 items-center">{trailing}</span>}
         </div>
         {error ? (
-          <p id={errorId} className="text-[13px] text-accent-danger">
+          <p id={errorId} className="text-[13px] text-[var(--ix-danger-ink)]">
             {error}
           </p>
         ) : hint ? (
-          <p id={hintId} className="text-[13px] text-text-secondary">
+          <p id={hintId} className="text-[13px] text-[var(--ix-ink-3)]">
             {hint}
           </p>
         ) : null}
@@ -88,21 +88,21 @@ export interface SearchWellProps extends React.InputHTMLAttributes<HTMLInputElem
 }
 
 /**
- * SearchWell: a 38px search well (radius 12). A label-less TextField with a
- * shortcut hint; the accessible name comes from `aria-label`.
+ * SearchWell: a 38px search field (radius 12), the sidebar field's look. A
+ * label-less TextField with a shortcut hint; the accessible name comes from
+ * `aria-label`.
  */
 export const SearchWell = React.forwardRef<HTMLInputElement, SearchWellProps>(
   function SearchWell({ label = 'Search', icon, shortcut, className, ...props }, ref) {
     return (
       <div
         className={cn(
-          'pc-well flex h-[var(--h-search-well)] items-center gap-2.5 rounded-[var(--r-ctl)] px-3',
-          'focus-within:shadow-[var(--shadow-well),var(--focus-ring)]',
+          'pc-field flex h-[var(--h-search-well)] items-center gap-2.5 px-3',
           className,
         )}
       >
         {icon != null && (
-          <span className="flex shrink-0 items-center text-text-faint" aria-hidden>
+          <span className="flex shrink-0 items-center text-[var(--ix-ink-3)]" aria-hidden>
             {icon}
           </span>
         )}
@@ -111,7 +111,7 @@ export const SearchWell = React.forwardRef<HTMLInputElement, SearchWellProps>(
           type="search"
           aria-label={label}
           placeholder={label}
-          className="min-w-0 flex-1 bg-transparent text-[15px] text-text-primary outline-none placeholder:text-[var(--ink-placeholder)]"
+          className="min-w-0 flex-1 bg-transparent text-[15px] text-[var(--ix-ink)] outline-none placeholder:text-[var(--ix-ink-3)]"
           {...props}
         />
         {shortcut != null && <span className="flex shrink-0 items-center">{shortcut}</span>}

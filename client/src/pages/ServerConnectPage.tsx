@@ -462,8 +462,8 @@ export function ServerConnectPage() {
 
   return (
     <AuthCanvas>
-      <div className="mx-auto flex w-full min-h-0 max-w-md flex-col gap-5 sm:max-h-full short-window:max-w-2xl">
-        <AuthCard>
+      <div className="mx-auto flex w-full min-h-0 max-w-[400px] flex-col gap-8 sm:max-h-full short-window:max-w-[840px] short-window:flex-row short-window:items-start short-window:gap-10">
+        <AuthCard className="short-window:flex-1">
           <form onSubmit={handleSubmit} className={AUTH_FORM}>
             <AuthHeading
               title="Join a server"
@@ -491,7 +491,7 @@ export function ServerConnectPage() {
             {/* One sentence, not a table of URL formats: the person on this
                 screen was sent a link, and the box takes whatever they paste —
                 an invite, a paracord:// link, or a bare address. */}
-            <p className="text-[13px] leading-relaxed text-text-secondary">
+            <p className="text-[13px] leading-relaxed text-[var(--ix-ink-3)]">
               No invite link? The address of the server works too, for example{' '}
               <span className="pc-mono">chat.example.com</span>. Whoever runs it can tell you.
             </p>
@@ -499,10 +499,10 @@ export function ServerConnectPage() {
 
             {status && (
               <div
-                className="pc-well flex items-center gap-2 px-4 py-2.5 text-label text-text-secondary"
+                className="pc-well flex items-center gap-2 px-4 py-2.5 text-[14px] text-[var(--ix-ink-2)]"
                 aria-live="polite"
               >
-                <Loader2 size={15} className="shrink-0 animate-spin text-accent-primary" />
+                <Loader2 size={15} className="shrink-0 animate-spin text-[var(--ix-ink-2)]" />
                 <span>{status}</span>
               </div>
             )}
@@ -525,16 +525,16 @@ export function ServerConnectPage() {
           </form>
         </AuthCard>
 
-        {/* Recent instances — selectable rows on their own plate, divided by a
-            hairline rather than tiled as identical cards (spec §6.8). */}
+        {/* Recent instances — selectable rows under the form, divided by a hairline
+            rather than tiled as identical cards. Beside it on a short, wide window. */}
         {servers.length > 0 && (
-          <AuthCard>
-            <div className="flex min-h-0 flex-col p-4 sm:p-5">
-              <div className="flex items-center justify-between px-2 pb-1">
-                <h2 className="pc-display text-heading text-text-primary">Servers you have joined</h2>
-                <span className="glass-instrument text-[13px] text-text-faint">{servers.length}</span>
+          <AuthCard className="short-window:flex-1">
+            <div className="flex min-h-0 flex-col">
+              <div className="flex items-center justify-between pb-1">
+                <h2 className="ix-auth__step">Servers you have joined</h2>
+                <span className="text-[12.5px] font-medium tabular-nums text-[var(--ix-ink-3)]">{servers.length}</span>
               </div>
-              <ul className="mt-1 flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain">
+              <ul className="-mx-2 mt-1 flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain">
                 {servers.map((server, index) => {
                   // Presence here is a word, never a colored dot (spec §1.5, §6.6).
                   const stateLabel = server.connected
@@ -545,21 +545,21 @@ export function ServerConnectPage() {
                   const reconnecting = reconnectingId === server.id;
                   return (
                     <li key={server.id}>
-                      {index > 0 && <Divider className="mx-2" />}
-                      <div className="flex items-center gap-3 rounded-[var(--radius-control)] px-2 py-3 transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle">
+                      {index > 0 && <Divider className="mx-2 w-auto" />}
+                      <div className="flex items-center gap-3 rounded-[12px] px-2 py-3 transition-colors duration-[120ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill)]">
                         <span
-                          className="pc-well flex h-9 w-9 shrink-0 items-center justify-center text-text-secondary"
+                          className="pc-well flex h-9 w-9 shrink-0 items-center justify-center text-[var(--ix-ink-2)]"
                           aria-hidden
                         >
                           <Server size={17} />
                         </span>
                         <div className="min-w-0 flex-1">
-                          <div className="truncate pc-display text-name text-text-primary">
+                          <div className="truncate text-[14.5px] font-semibold text-[var(--ix-ink)]">
                             {server.name}
                           </div>
                           <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
-                            <span className="shrink-0 text-[13px] text-text-secondary">{stateLabel}</span>
-                            <span className="truncate pc-mono text-[13px] text-text-faint">
+                            <span className="shrink-0 text-[13px] text-[var(--ix-ink-2)]">{stateLabel}</span>
+                            <span className="truncate pc-mono text-[13px] text-[var(--ix-ink-3)]">
                               · {server.url}
                             </span>
                           </div>
@@ -588,9 +588,9 @@ export function ServerConnectPage() {
                   );
                 })}
               </ul>
-              <Divider className="mx-2 mt-1" />
-              <div className="px-2 pt-4">
-                <Button size="lg" onClick={() => navigate('/app')} className="w-full">
+              <Divider className="mt-1" />
+              <div className="pt-4">
+                <Button size="lg" variant="glass" onClick={() => navigate('/app')} className="w-full">
                   Continue to app
                 </Button>
               </div>

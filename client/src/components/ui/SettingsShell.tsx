@@ -23,10 +23,20 @@ export interface SettingsNavGroup {
 }
 
 export interface SettingsShellProps {
-  /** Accessible name of the index — "User settings", "Space settings". */
+  /** Accessible name of the index — "User settings", "Server settings". */
   label: string;
-  /** What is being configured: the person's name, the space's name. */
+  /** What is being configured: the person's name, the server's name. */
   title: string;
+  /** The line under the title ("User settings", "Server settings"). */
+  subtitle?: string;
+  /** The mark in the index's head: your `Avatar`, the server's `ServerMark` (40px). */
+  lead?: React.ReactNode;
+  /**
+   * The window's hue, a number 0-359 (docs/index-spec.md §2.2): People's 210 for
+   * user settings, the server's hue for server settings. It tints the index and
+   * the selected row; nothing animates it.
+   */
+  hue?: number;
   groups: SettingsNavGroup[];
   active: string;
   onSelect: (id: string) => void;
@@ -50,11 +60,12 @@ export interface SettingsShellProps {
 }
 
 /**
- * SettingsShell: settings open as **one near-solid pane over the dimmed app**
- * (docs/glass-spec.md §2.4, radius 28): a left index of sections under kickers,
- * and the selected section's content beside it in wells and tonal rows. There
- * is no second pane inside; the index and the content share this one, parted by
- * a hairline. The close control is a glass circle; Esc closes.
+ * SettingsShell (docs/index-spec.md §6.7): settings are a full-window surface on
+ * the ground. A 240px index on the left (a mark and the name, sentence-case group
+ * labels, rows 34 tall at radius 10 with the hue selection) and the selected
+ * section's column beside it (720 wide, a 28/700 title). Close and Esc sit at the
+ * top right. The index and the content share the one surface, parted by a
+ * hairline; there is no second pane inside.
  *
  * Presentation only: the caller owns which section is active, what the content
  * is, and — on phones, where the index and the content are two screens — the
@@ -63,6 +74,9 @@ export interface SettingsShellProps {
 export function SettingsShell({
   label,
   title,
+  subtitle,
+  lead,
+  hue = 210,
   groups,
   active,
   onSelect,
@@ -83,59 +97,79 @@ export function SettingsShell({
   const phoneScreenRef = useContentSwap<HTMLDivElement>(showIndex ? '' : active);
   const allItems = groups.flatMap((group) => group.items);
   const activeLabel = allItems.find((item) => item.id === active)?.label ?? active;
+  const hueStyle = { '--ix-hue': hue } as React.CSSProperties;
+
+  const head = (
+    <div className="ix-settings__head">
+      {lead}
+      <div className="ix-settings__who">
+        <p className="ix-settings__name">{title}</p>
+        {subtitle && <p className="ix-settings__line">{subtitle}</p>}
+      </div>
+    </div>
+  );
+
+  const index = (phone: boolean) => (
+    <>
+      {groups.map((group, index) => (
+        <div key={group.label ?? `group-${index}`} className="ix-settings__group">
+          {group.label && <SectionLabel>{group.label}</SectionLabel>}
+          {group.items.map((item) => (
+            <NavRow
+              key={item.id}
+              icon={item.icon}
+              className={phone ? 'h-[var(--h-control-phone)]' : undefined}
+              trailing={
+                phone ? (
+                  <>
+                    {item.meta}
+                    <ChevronRight size={16} className="text-[var(--ix-ink-3)]" aria-hidden />
+                  </>
+                ) : (
+                  item.meta
+                )
+              }
+              active={!phone && item.id === active}
+              onClick={() => onSelect(item.id)}
+            >
+              {item.label}
+            </NavRow>
+          ))}
+        </div>
+      ))}
+      {indexFooter && (
+        <div className="ix-settings__foot">
+          <Divider />
+          {indexFooter}
+        </div>
+      )}
+    </>
+  );
 
   if (isMobile) {
     return (
       <div
         ref={phoneScreenRef}
-        className={cn('pc-plate flex h-full min-h-0 flex-col overflow-hidden p-0', className)}
+        className={cn('ix-settings ix-settings--phone ix-lt', showIndex ? 'ix-hue-side' : 'ix-hue-main', className)}
+        style={hueStyle}
         onKeyDown={onKeyDown}
         tabIndex={-1}
       >
         {showIndex ? (
           <>
-            <header className="flex items-center justify-between gap-3 px-4 pb-3 pt-[calc(var(--safe-top)+0.75rem)]">
-              <h1 className="pc-display glass-title-channel min-w-0 truncate text-text-primary">{title}</h1>
+            <header className="ix-settings__bar">
+              {head}
               <IconButton label={closeLabel} size="lg" tone="raised" onClick={onClose}>
                 <X size={18} />
               </IconButton>
             </header>
-            <nav
-              aria-label={label}
-              className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-3 pb-[calc(var(--safe-bottom)+1rem)]"
-            >
-              {groups.map((group, index) => (
-                <div key={group.label ?? `group-${index}`} className="flex flex-col gap-0.5">
-                  {group.label && <SectionLabel className="pt-1">{group.label}</SectionLabel>}
-                  {group.items.map((item) => (
-                    <NavRow
-                      key={item.id}
-                      icon={item.icon}
-                      className="h-[var(--h-control-phone)]"
-                      trailing={
-                        <>
-                          {item.meta}
-                          <ChevronRight size={16} className="text-text-faint" aria-hidden />
-                        </>
-                      }
-                      onClick={() => onSelect(item.id)}
-                    >
-                      {item.label}
-                    </NavRow>
-                  ))}
-                </div>
-              ))}
-              {indexFooter && (
-                <div className="flex flex-col gap-0.5">
-                  <Divider className="my-1" />
-                  {indexFooter}
-                </div>
-              )}
+            <nav aria-label={label} className="ix-settings__phone-index">
+              {index(true)}
             </nav>
           </>
         ) : (
           <>
-            <header className="flex shrink-0 items-center gap-2 px-3 pb-2.5 pt-[calc(var(--safe-top)+0.75rem)]">
+            <header className="ix-settings__bar ix-settings__bar--section">
               <IconButton
                 label="Back to the settings index"
                 size="lg"
@@ -147,21 +181,13 @@ export function SettingsShell({
               {/* The section's own name is the first thing in the content
                   below, so this bar carries what is being configured instead —
                   context without saying the same word twice. */}
-              <p className="glass-secondary min-w-0 flex-1 truncate text-text-faint">{title}</p>
+              <p className="ix-settings__line min-w-0 flex-1 truncate">{title}</p>
               <span className="sr-only">{activeLabel}</span>
               <IconButton label={closeLabel} size="lg" tone="raised" onClick={onClose}>
                 <X size={18} />
               </IconButton>
             </header>
-            <Divider />
-            <div
-              className={cn(
-                'min-h-0 flex-1 overflow-y-auto px-4 pb-[calc(var(--safe-bottom)+1.5rem)] pt-5',
-                contentClassName,
-              )}
-            >
-              {children}
-            </div>
+            <div className={cn('ix-settings__phone-body', contentClassName)}>{children}</div>
           </>
         )}
       </div>
@@ -169,53 +195,21 @@ export function SettingsShell({
   }
 
   return (
-    <div
-      className={cn('pc-plate flex h-full min-h-0 overflow-hidden p-0', className)}
-      onKeyDown={onKeyDown}
-      tabIndex={-1}
-    >
-      <nav
-        aria-label={label}
-        className="flex w-[clamp(13rem,22vw,17rem)] shrink-0 flex-col overflow-y-auto px-3 py-5"
-      >
-        <p className="pc-display glass-title-section shrink-0 truncate px-2.5 pb-2 text-text-primary">{title}</p>
-        <div className="flex flex-col gap-4">
-          {groups.map((group, index) => (
-            <div key={group.label ?? `group-${index}`} className="flex flex-col gap-0.5">
-              {group.label && <SectionLabel className="pt-1">{group.label}</SectionLabel>}
-              {group.items.map((item) => (
-                <NavRow
-                  key={item.id}
-                  icon={item.icon}
-                  trailing={item.meta}
-                  active={item.id === active}
-                  onClick={() => onSelect(item.id)}
-                >
-                  {item.label}
-                </NavRow>
-              ))}
-            </div>
-          ))}
-        </div>
-        {indexFooter && (
-          <div className="mt-auto flex flex-col gap-0.5 pt-5">
-            <Divider className="mb-2" />
-            {indexFooter}
-          </div>
-        )}
+    <div className={cn('ix-settings ix-lt', className)} style={hueStyle} onKeyDown={onKeyDown} tabIndex={-1}>
+      <nav aria-label={label} className="ix-settings__nav ix-hue-side">
+        {head}
+        <div className="ix-settings__groups">{index(false)}</div>
       </nav>
 
-      <Divider orientation="vertical" />
-
-      <div className="relative flex min-w-0 flex-1 flex-col">
-        <div className="absolute right-5 top-5 z-10 flex flex-col items-center gap-1">
+      <div className="ix-settings__main ix-hue-main">
+        <div className="ix-settings__close">
           <IconButton label={closeLabel} tone="raised" onClick={onClose}>
             <X size={18} />
           </IconButton>
           <Kbd>Esc</Kbd>
         </div>
-        <div className={cn('min-h-0 flex-1 overflow-y-auto px-6 py-8 lg:px-10 lg:py-9', contentClassName)}>
-          <div ref={sectionRef} className="mx-auto flex h-full min-h-0 w-full max-w-[46rem] flex-col pr-14">
+        <div className={cn('ix-settings__scroll', contentClassName)}>
+          <div ref={sectionRef} className="ix-settings__col">
             {children}
           </div>
         </div>
@@ -227,14 +221,14 @@ export function SettingsShell({
 export interface SettingsSectionHeaderProps {
   title: string;
   description?: React.ReactNode;
-  /** The one primary action for this screen (§7: one primary action per screen). */
+  /** The one primary action for this screen (§1.4: one cream button per surface). */
   action?: React.ReactNode;
   className?: string;
 }
 
 /**
- * The head of a settings section: a window title (20/600), one line of specific
- * explanation, and at most one primary action.
+ * The head of a settings section: a 28/700 title, one line of specific
+ * explanation (14, tertiary ink), and at most one primary action.
  */
 export function SettingsSectionHeader({
   title,
@@ -243,12 +237,10 @@ export function SettingsSectionHeader({
   className,
 }: SettingsSectionHeaderProps) {
   return (
-    <header className={cn('mb-6 flex flex-wrap items-start justify-between gap-4', className)}>
+    <header className={cn('ix-settings__header', className)}>
       <div className="min-w-0">
-        <h2 className="pc-display glass-title-channel text-text-primary">{title}</h2>
-        {description && (
-          <p className="glass-body mt-1.5 max-w-prose text-text-secondary">{description}</p>
-        )}
+        <h2 className="ix-settings__title">{title}</h2>
+        {description && <p className="ix-settings__desc">{description}</p>}
       </div>
       {action && <div className="shrink-0">{action}</div>}
     </header>

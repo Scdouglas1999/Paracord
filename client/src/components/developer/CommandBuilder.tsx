@@ -65,7 +65,7 @@ function AddButton({ label, onClick }: { label: string; onClick: () => void }) {
       size="sm"
       aria-label={label}
       onClick={onClick}
-      className="text-accent-primary"
+      className="text-[var(--ix-ink)]"
     >
       <Plus size={12} aria-hidden /> {label}
     </Button>
@@ -151,7 +151,7 @@ function OptionEditor({ option, index, depth, onChange, onRemove }: OptionEditor
         {option.name && <code className="pc-mono text-meta text-text-muted">{option.name}</code>}
         <IconButton
           label={`Remove option ${index + 1}`}
-          className="ml-auto hover:bg-danger-well hover:text-accent-danger"
+          className="ml-auto hover:bg-[var(--ix-danger-fill)] hover:text-[var(--ix-danger-ink)]"
           onClick={onRemove}
         >
           <Trash2 size={13} />
@@ -249,7 +249,7 @@ function OptionEditor({ option, index, depth, onChange, onRemove }: OptionEditor
                   />
                   <IconButton
                     label={`Remove choice ${ci + 1} from option ${index + 1}`}
-                    className="hover:bg-danger-well hover:text-accent-danger"
+                    className="hover:bg-[var(--ix-danger-fill)] hover:text-[var(--ix-danger-ink)]"
                     onClick={() => removeChoice(ci)}
                   >
                     <Trash2 size={13} />

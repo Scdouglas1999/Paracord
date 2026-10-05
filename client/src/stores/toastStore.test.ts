@@ -17,7 +17,7 @@ describe('toastStore', () => {
     expect(toasts).toHaveLength(1);
     expect(toasts[0].type).toBe('success');
     expect(toasts[0].message).toBe('Test message');
-    expect(toasts[0].duration).toBe(5000);
+    expect(toasts[0].duration).toBe(4000);
   });
 
   it('adds a toast with custom duration', () => {

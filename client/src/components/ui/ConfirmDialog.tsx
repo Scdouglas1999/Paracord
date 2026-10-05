@@ -37,7 +37,7 @@ export function ConfirmDialog() {
           <ModalHeader
             icon={
               options.variant === 'danger' ? (
-                <div className="flex h-10 w-10 items-center justify-center rounded-[var(--r-row)] bg-danger-well text-accent-danger">
+                <div className="flex h-10 w-10 items-center justify-center rounded-[12px] bg-[var(--ix-danger-fill)] text-[var(--ix-danger-ink)]">
                   <AlertTriangle size={20} />
                 </div>
               ) : undefined

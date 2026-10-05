@@ -14,6 +14,9 @@ interface OnboardingWizardProps {
   onTryDemo?: () => void;
 }
 
+/** A block of quiet facts: the action-card fill and its hairline (§3.1), radius 18. */
+const CARD = 'rounded-[18px] bg-[var(--ix-fill-card)] px-4 py-1 shadow-[inset_0_0_0_1px_var(--ix-line)]';
+
 interface FeatureRow {
   icon: typeof Server;
   title: string;
@@ -21,24 +24,24 @@ interface FeatureRow {
 }
 
 /**
- * A divided list of value props inside one well — not a stack of identical
- * bordered cards (spec §6.8), and not three icons in three different colors:
- * color here would be decoration, and the only colors this app spends are
- * light (a person is there) and the emerald (an action you can take).
+ * A divided list of value props inside one quiet card — not a stack of identical
+ * bordered cards, and not three icons in three different colors: color here would
+ * be decoration, and the only colors this app spends are amber (live) and cream
+ * (the one action).
  */
 function FeatureList({ rows }: { rows: FeatureRow[] }) {
   return (
-    <div className="pc-well px-3.5 py-1">
+    <div className={CARD}>
       {rows.map((row, index) => {
         const Icon = row.icon;
         return (
           <div key={row.title}>
             {index > 0 && <Divider />}
             <div className="flex items-start gap-3 py-3">
-              <Icon size={18} className="mt-0.5 shrink-0 text-text-secondary" aria-hidden />
+              <Icon size={18} className="mt-0.5 shrink-0 text-[var(--ix-ink-2)]" aria-hidden />
               <div className="min-w-0">
-                <div className="text-label text-text-primary">{row.title}</div>
-                <div className="text-meta leading-relaxed text-text-faint">{row.body}</div>
+                <div className="text-[14px] font-semibold text-[var(--ix-ink)]">{row.title}</div>
+                <div className="text-[13px] leading-[1.4] text-[var(--ix-ink-3)]">{row.body}</div>
               </div>
             </div>
           </div>
@@ -56,9 +59,9 @@ const STEPS = [
     icon: null,
     content: (
       <>
-        <p className="text-body text-text-secondary">
+        <p className="text-[14px] leading-[1.5] text-[var(--ix-ink-2)]">
           Unlike centralized platforms, Paracord gives you{' '}
-          <strong className="font-semibold text-text-primary">full control</strong> over your
+          <strong className="font-semibold text-[var(--ix-ink)]">full control</strong> over your
           conversations. Your data lives on instances that you or your community operate.
         </p>
         <FeatureList
@@ -89,21 +92,21 @@ const STEPS = [
     icon: Server,
     content: (
       <>
-        <p className="text-body text-text-secondary">
+        <p className="text-[14px] leading-[1.5] text-[var(--ix-ink-2)]">
           Paracord has no central company server. Every community runs on a computer that belongs
           to somebody in it.
         </p>
-        <div className="pc-well px-3.5 py-1">
+        <div className={CARD}>
           <div className="py-3">
-            <div className="text-label text-text-primary">A friend sent you an invite</div>
-            <div className="mt-0.5 text-meta leading-relaxed text-text-faint">
+            <div className="text-[14px] font-semibold text-[var(--ix-ink)]">A friend sent you an invite</div>
+            <div className="mt-0.5 text-[13px] leading-[1.4] text-[var(--ix-ink-3)]">
               Paste the link and you are in. That is the whole job.
             </div>
           </div>
           <Divider />
           <div className="py-3">
-            <div className="text-label text-text-primary">You want to start one</div>
-            <div className="mt-0.5 text-meta leading-relaxed text-text-faint">
+            <div className="text-[14px] font-semibold text-[var(--ix-ink)]">You want to start one</div>
+            <div className="mt-0.5 text-[13px] leading-[1.4] text-[var(--ix-ink-3)]">
               Run the one-line installer from paracord&rsquo;s download page on any computer that
               stays on. It sets everything up and opens a link for you to finish in your browser.
             </div>
@@ -141,7 +144,7 @@ export function OnboardingWizard({ onComplete, onTryDemo }: OnboardingWizardProp
 
   return (
     <AuthCanvas>
-      <AuthCard className="max-w-lg short-window:max-w-3xl">
+      <AuthCard className="short-window:max-w-3xl">
         <div className={AUTH_FORM}>
           {/* Step indicator — the count is in the DOM as words too, so the bars
               are never the only cue (spec §9). */}
@@ -157,13 +160,13 @@ export function OnboardingWizard({ onComplete, onTryDemo }: OnboardingWizardProp
               <span
                 key={i}
                 aria-hidden
-                className={`h-1.5 rounded-[var(--radius-full)] transition-colors ${
-                  i <= step ? 'bg-accent-primary' : 'bg-bg-mod-strong'
+                className={`h-1.5 rounded-[var(--radius-full)] transition-colors duration-[200ms] ease-[var(--ix-ease)] ${
+                  i <= step ? 'bg-[var(--ix-cream)]' : 'bg-[var(--ix-fill-2)]'
                 }`}
                 style={{ width: i === step ? 26 : 8 }}
               />
             ))}
-            <span className="ml-1 pc-mono text-meta text-text-faint">
+            <span className="ml-1 text-[12.5px] font-medium tabular-nums text-[var(--ix-ink-3)]">
               {step + 1} of {STEPS.length}
             </span>
           </div>
@@ -172,20 +175,18 @@ export function OnboardingWizard({ onComplete, onTryDemo }: OnboardingWizardProp
           <div>
             {Icon ? (
               <div
-                className="pc-well mb-4 flex h-12 w-12 items-center justify-center text-text-secondary short-window:hidden"
+                className="ix-hue-tile mb-4 flex h-12 w-12 items-center justify-center rounded-[14px] short-window:hidden"
                 aria-hidden
               >
                 <Icon size={24} />
               </div>
             ) : (
-              <AppMark size={48} className="mb-3 short-window:hidden" />
+              <AppMark size={40} className="mb-4 short-window:hidden" />
             )}
-            <h1 className="pc-display text-title text-text-primary">{current.title}</h1>
+            <h1 className="ix-auth__title">{current.title}</h1>
             {/* The step's one-line gloss is what a short window gives up: the
                 title carries the meaning, and the content below it does not. */}
-            <p className="mt-1.5 text-body text-text-secondary short-window:hidden">
-              {current.subtitle}
-            </p>
+            <p className="ix-auth__sub mt-2 short-window:hidden">{current.subtitle}</p>
           </div>
 
           {/* Content — the one region that may scroll, so the step indicator
@@ -224,7 +225,7 @@ export function OnboardingWizard({ onComplete, onTryDemo }: OnboardingWizardProp
           <button
             type="button"
             onClick={handleComplete}
-            className="pc-focusable self-start rounded-[var(--radius-chip)] text-meta text-text-faint transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:text-text-secondary"
+            className="pc-focusable self-start rounded-[8px] text-[13px] font-medium text-[var(--ix-ink-3)] transition-colors duration-[120ms] ease-[var(--ix-ease)] hover:text-[var(--ix-ink-2)]"
           >
             Skip introduction
           </button>

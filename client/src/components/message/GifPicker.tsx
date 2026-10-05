@@ -149,20 +149,20 @@ export function GifPicker({ onSelect, onClose, leaving = false }: GifPickerProps
   return (
     <div
       ref={pickerRef}
-      className={`${leaving ? 'pc-pop-out' : 'pc-pop-in'} pc-floating flex w-[min(25rem,calc(100vw-1rem))] max-h-[min(28.75rem,calc(100dvh-1rem))] flex-col overflow-hidden rounded-[var(--r-bubble)]`}
+      className={`${leaving ? 'pc-pop-out' : 'pc-pop-in'} pc-floating flex w-[min(360px,calc(100vw-1rem))] h-[min(420px,calc(100dvh-1rem))] flex-col overflow-hidden rounded-[16px]`}
       aria-hidden={leaving || undefined}
     >
-      {/* Inset search */}
+      {/* The search field: the field fill and a hairline (§6.14). */}
       <div className="shrink-0 px-3 pb-1.5 pt-3">
-        <div className="flex items-center gap-2 rounded-[var(--r-ctl)] bg-bg-well px-2.5 py-2 focus-within:shadow-[var(--focus-ring-input)]">
-          <Search size={16} className="shrink-0 text-text-muted" />
+        <div className="pc-field flex h-10 items-center gap-2 px-3">
+          <Search size={16} className="shrink-0 text-[var(--ix-ink-3)]" />
           <input
             type="text"
             placeholder="Search GIFs..."
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             autoFocus
-            className="flex-1 bg-transparent text-[15px] text-text-primary placeholder:text-[var(--ink-placeholder)] outline-none"
+            className="flex-1 bg-transparent text-[15px] text-[var(--ix-ink)] placeholder:text-[var(--ix-ink-3)] outline-none"
           />
         </div>
       </div>
@@ -177,9 +177,9 @@ export function GifPicker({ onSelect, onClose, leaving = false }: GifPickerProps
             role="alert"
             icon={
               error.kind === 'unconfigured' ? (
-                <Search size={20} className="text-text-muted" />
+                <Search size={20} />
               ) : (
-                <WifiOff size={20} className="text-accent-danger" />
+                <WifiOff size={20} className="text-[var(--ix-danger-ink)]" />
               )
             }
             title={
@@ -222,7 +222,7 @@ export function GifPicker({ onSelect, onClose, leaving = false }: GifPickerProps
                 onClick={() => handleSelect(gif)}
                 title={gif.title || 'GIF'}
                 aria-label={`Select GIF ${gif.title || gif.id}`}
-                className="mb-2 block w-full overflow-hidden rounded-[12px] outline-none [break-inside:avoid] pc-hover-lift focus-visible:shadow-[var(--focus-ring)]"
+                className="pc-focusable mb-2 block w-full overflow-hidden rounded-[12px] outline-none [break-inside:avoid] pc-hover-lift"
                 style={{ aspectRatio: String(renderData.aspectRatio) }}
               >
                 <img
@@ -238,7 +238,7 @@ export function GifPicker({ onSelect, onClose, leaving = false }: GifPickerProps
       </SkeletonSwap>
 
       {/* Attribution */}
-      <div className="shrink-0 border-t border-border-subtle px-3 py-1.5 text-right text-[12px] text-text-muted">
+      <div className="shrink-0 px-3 py-2 text-right text-[12px] text-[var(--ix-ink-3)] shadow-[inset_0_1px_0_var(--ix-line)]">
         Powered by Tenor
       </div>
     </div>

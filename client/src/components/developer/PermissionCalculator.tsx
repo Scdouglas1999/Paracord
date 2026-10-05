@@ -135,7 +135,7 @@ export function PermissionCalculator({ value, onChange }: PermissionCalculatorPr
           {current.toString()}
         </code>
         <IconButton label="Copy permission value" onClick={() => void copyValue()}>
-          {copied ? <Check size={15} className="text-accent-success" /> : <Copy size={15} />}
+          {copied ? <Check size={15} aria-hidden /> : <Copy size={15} />}
         </IconButton>
       </Well>
     </div>

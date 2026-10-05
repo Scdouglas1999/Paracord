@@ -1,6 +1,6 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { inviteApi } from '../../api/invites';
 import { writeClipboardText } from '../../lib/clipboard';
 import { InviteModal, isPrivateNetworkOrigin } from './InviteModal';
@@ -32,6 +32,47 @@ describe('InviteModal', () => {
       data: { url: 'https://203.0.113.7:8443', reach: 'internet' },
     } as never);
     vi.mocked(writeClipboardText).mockResolvedValue(undefined);
+  });
+
+  it('is a dialog of the card size, titled for the server, with Copy as the one primary button', async () => {
+    render(<InviteModal guildName="Launch Guild" channelId="channel-1" onClose={vi.fn()} />);
+    const dialog = await screen.findByRole('dialog', { name: 'Invite people to Launch Guild' });
+    // Max 440 wide (§6.12), at the confirm's size.
+    expect(dialog).toHaveClass('max-w-[440px]', 'pc-dialog');
+    await screen.findByDisplayValue('https://203.0.113.7:8443/invite/abc123');
+    const primary = within(dialog).getAllByRole('button').filter((button) => button.className.includes('bg-accent-primary'));
+    expect(primary.map((button) => button.getAttribute('aria-label'))).toEqual(['Copy invite link']);
+  });
+
+  describe('copy feedback (§5.16)', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('crossfades the label to "Link copied" and back after two seconds', async () => {
+      render(<InviteModal guildName="Launch Guild" channelId="channel-1" onClose={vi.fn()} />);
+      await screen.findByDisplayValue('https://203.0.113.7:8443/invite/abc123');
+      const button = screen.getByRole('button', { name: 'Copy invite link' });
+      const words = () => Array.from(button.querySelectorAll('.ix-copy > span'));
+      // Both words are in the button at all times; one is lit.
+      expect(words().map((word) => word.textContent?.trim())).toEqual(['Copy link', 'Link copied']);
+      expect(words().map((word) => word.getAttribute('data-on'))).toEqual(['true', 'false']);
+
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      fireEvent.click(button);
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(screen.getByRole('button', { name: 'Invite link copied' })).toBeInTheDocument();
+      expect(words().map((word) => word.getAttribute('data-on'))).toEqual(['false', 'true']);
+      expect(writeClipboardText).toHaveBeenCalledWith('https://203.0.113.7:8443/invite/abc123');
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_100);
+      });
+      expect(screen.getByRole('button', { name: 'Copy invite link' })).toBeInTheDocument();
+      expect(words().map((word) => word.getAttribute('data-on'))).toEqual(['true', 'false']);
+    });
   });
 
   it('shows an alert and disables copy actions when invite generation fails', async () => {

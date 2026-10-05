@@ -6,7 +6,7 @@ import { extractApiError } from '../../api/client';
 import { toast } from '../../stores/toastStore';
 import { isAdmin, UserFlags } from '../../types';
 import { confirm } from '../../stores/confirmStore';
-import { getIdentityColor } from '../../lib/colors';
+import { Avatar } from '../../components/ix/identity';
 import {
   Button,
   Chip,
@@ -22,16 +22,12 @@ type UserRow = {
   discriminator: number;
   email: string;
   display_name: string | null;
+  avatar_hash?: string | null;
   flags: number;
   created_at: string;
 };
 
 type SortKey = 'name' | 'joined';
-
-function initials(name: string): string {
-  const parts = name.trim().split(/\s+/).slice(0, 2);
-  return parts.map((p) => p[0]?.toUpperCase() ?? '').join('') || '?';
-}
 
 export function UsersPanel() {
   const currentUser = useCurrentUser();
@@ -143,7 +139,7 @@ export function UsersPanel() {
       <button
         type="button"
         onClick={() => toggleSort(keyName)}
-        className="pc-focusable inline-flex h-[var(--h-control-sm)] items-center gap-1 rounded-[var(--radius-chip)] text-section text-text-faint transition-colors hover:text-text-primary"
+        className="pc-focusable inline-flex h-[var(--h-control-sm)] items-center gap-1 rounded-[8px] text-section text-text-faint transition-colors hover:text-text-primary"
       >
         {label}
         {sortKey === keyName && (sortAsc ? <ArrowUp size={12} /> : <ArrowDown size={12} />)}
@@ -160,7 +156,7 @@ export function UsersPanel() {
             <span className="pc-mono tabular-nums text-text-primary">
               {total.toLocaleString()}
             </span>{' '}
-            {total === 1 ? ' account' : ' accounts'} on this server, bots included.
+            {total === 1 ? ' account' : ' accounts'} on this instance, bots included.
             {/* Says "bots included" because it is: this total is every row the
                 list renders, while the Overview panel's "Registered users"
                 counts people (paracord_db::users::count_human_users excludes
@@ -207,13 +203,7 @@ export function UsersPanel() {
                 >
                   <td className="px-3 py-2.5">
                     <div className="flex items-center gap-3">
-                      <span
-                        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius-full)] text-meta font-semibold text-text-on-light"
-                        style={{ backgroundColor: getIdentityColor(u.id) }}
-                        aria-hidden
-                      >
-                        {initials(u.display_name || u.username)}
-                      </span>
+                      <Avatar userId={u.id} name={u.display_name || u.username} avatar={u.avatar_hash ?? null} size={36} />
                       <span className="min-w-0">
                         <span className="pc-display block truncate text-name text-text-primary">
                           {u.display_name || u.username}
@@ -254,7 +244,7 @@ export function UsersPanel() {
                           <IconButton
                             label={`Delete user ${u.display_name || u.username}`}
                             onClick={() => deleteUser(u.id, u.username)}
-                            className="hover:bg-danger-well hover:text-accent-danger"
+                            className="hover:bg-[var(--ix-danger-fill)] hover:text-[var(--ix-danger-ink)]"
                           >
                             <Trash2 size={16} />
                           </IconButton>

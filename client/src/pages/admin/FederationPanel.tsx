@@ -531,7 +531,7 @@ export function FederationPanel() {
                         <ShieldCheck size={12} aria-hidden /> Trusted
                       </Chip>
                     ) : (
-                      <Chip size="sm" className="text-accent-warning">
+                      <Chip size="sm" className="text-[var(--ix-ink)]">
                         <ShieldAlert size={12} aria-hidden /> Untrusted
                       </Chip>
                     )}
@@ -712,7 +712,7 @@ export function FederationPanel() {
                     <ShieldAlert size={12} aria-hidden /> Blocked
                   </Chip>
                 ) : mode === 'quarantine' ? (
-                  <Chip size="sm" className="text-accent-warning">
+                  <Chip size="sm" className="text-[var(--ix-ink)]">
                     <ShieldAlert size={12} aria-hidden /> Quarantined
                   </Chip>
                 ) : (

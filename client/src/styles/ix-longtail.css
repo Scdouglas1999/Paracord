@@ -1,0 +1,815 @@
+/* =============================================================================
+   IX-17: the long tail (docs/index-spec.md §6.7, §6.8, §6.10-6.14, §10).
+   User and server settings, dialogs and confirms, toasts, menus, pickers, the
+   media viewer, the entry pages, Admin and Developer. Owner: IX-17.
+
+   Two jobs:
+
+     1. The scope. Hundreds of call sites in settings, the entry pages and the
+        admin panels write the Glass names (`text-text-secondary`, `bg-bg-raised`,
+        `border-border-subtle`, `var(--ink-3)`, `pc-well`). A custom property is
+        substituted where it is DECLARED, so a Tailwind utility or a raw
+        `var(--ink-3)` inside one of these surfaces reads the Index value only if
+        the surface re-declares the name AND the `--color-*` that points at it.
+        `.ix-lt` does both, once, and the surfaces carry it.
+     2. What the layered recipes (primitives.css, components.css) cannot do: they
+        sit in `@layer components`, below Tailwind's utilities. These rules are
+        unlayered because they must beat an utility the AppShell writes on the
+        settings overlay, or the focus ring's layer.
+
+   Every color is a token (tokens.css, the Index block) or a hue built from a
+   number; `npm run test:tokens` fails on a literal. Only transform and opacity
+   animate (the motion lint); hover and press are color changes over 120ms.
+   ============================================================================= */
+
+/* ---- 1. The scope --------------------------------------------------------------- */
+
+.ix-lt,
+.ix-lt--card,
+.ix-lt--pop,
+.ix-lt--main,
+.pc-floating,
+.pc-dialog {
+  color: var(--ix-ink);
+  font-family: var(--font-primary);
+
+  /* The ink ramp. */
+  --ink-1: var(--ix-ink);
+  --ink-2: var(--ix-ink-2);
+  --ink-3: var(--ix-ink-3);
+  --ink-placeholder: var(--ix-ink-3);
+  --text-primary: var(--ix-ink);
+  --text-body-ink: var(--ix-ink);
+  --text-secondary: var(--ix-ink-2);
+  --text-muted: var(--ix-ink-3);
+  --text-faint: var(--ix-ink-3);
+  --text-link: var(--ix-ink);
+  --text-on-accent: var(--ix-cream-ink);
+  --text-on-light: var(--ix-cream-ink);
+  --interactive-normal: var(--ix-ink-2);
+  --interactive-hover: var(--ix-ink);
+  --interactive-active: var(--ix-ink);
+  --interactive-muted: var(--ix-ink-3);
+  --channel-icon: var(--ix-ink-3);
+
+  /* The one action, and the one danger. */
+  --accent-primary: var(--ix-cream);
+  --accent-primary-hover: var(--ix-cream-hover);
+  --accent-primary-active: var(--ix-cream-press);
+  --join: var(--ix-cream);
+  --join-ink: var(--ix-cream-ink);
+  --join-hover: var(--ix-cream-hover);
+  --join-press: var(--ix-cream-press);
+  --accent-danger: var(--ix-danger-ink);
+  --danger-well: var(--ix-danger-fill);
+  --danger-well-hover: var(--ix-danger-fill-call);
+  --danger-tint: var(--ix-danger-fill);
+  --text-on-danger: var(--ix-danger-ink);
+
+  /* Fills: quiet, one step per state. */
+  --bg-raised: var(--ix-fill-ctl);
+  --bg-well: var(--ix-fill-field);
+  --bg-mod-subtle: var(--ix-fill);
+  --bg-mod-strong: var(--ix-fill-2);
+  --bg-floating: var(--ix-pop-solid);
+  --bg-selected: var(--ix-fill-2);
+  --row-selected: var(--ix-fill-2);
+  --bub: var(--ix-fill-card);
+  --raise: var(--ix-card);
+  --sel: var(--ix-fill-2);
+  --solid: var(--ix-pop-solid);
+  --wash-hover: var(--ix-wash-hover);
+  --wash-press: var(--ix-fill);
+  --glass-fill: var(--ix-fill-ctl);
+  --glass-fill-hover: var(--ix-fill-ctl-hover);
+  --glass-fill-press: var(--ix-fill);
+  --glass-fill-quiet: var(--ix-fill);
+  --glass-fill-on: var(--ix-fill-2);
+  --glass-edge: inset 0 0 0 0 transparent;
+  --glass-hair: var(--ix-line);
+  --accent-tint: var(--ix-fill-2);
+  --accent-tint-strong: var(--ix-fill-ctl-hover);
+  --overlay-backdrop: var(--ix-scrim);
+
+  /* Edges and depth: a hairline, never a glow. */
+  --border-subtle: var(--ix-line);
+  --border-strong: var(--ix-edge-strong);
+  --shadow-well: inset 0 0 0 1px var(--ix-line);
+  --shadow-raised: 0 0 0 0 transparent;
+  --shadow-chip: 0 0 0 0 transparent;
+  --shadow-tile: 0 0 0 0 transparent;
+  --shadow-lifted: var(--ix-shadow-room);
+  --sh-content: 0 0 0 0 transparent;
+  --sh-raised: var(--ix-shadow-room);
+  --sh-pane: var(--ix-shadow-call);
+
+  /* Shape (§2.5): controls 10-11, rows 12, cards 18-20. */
+  --r-ctl: 11px;
+  --r-row: 12px;
+  --r-bubble: 18px;
+  --r-tile: 16px;
+  --r-chip: 8px;
+  --radius-control: 11px;
+  --radius-well: 12px;
+  --radius-card: 20px;
+  --radius-chip: 8px;
+
+  /* The Tailwind namespace points at the names above (see tokens.css, "Re-substitute"). */
+  --color-bg-raised: var(--bg-raised);
+  --color-bg-well: var(--bg-well);
+  --color-bg-floating: var(--bg-floating);
+  --color-bg-mod-subtle: var(--bg-mod-subtle);
+  --color-bg-mod-strong: var(--bg-mod-strong);
+  --color-accent-primary: var(--accent-primary);
+  --color-accent-primary-hover: var(--accent-primary-hover);
+  --color-accent-primary-active: var(--accent-primary-active);
+  --color-accent-danger: var(--accent-danger);
+  --color-danger-well: var(--danger-well);
+  --color-danger-well-hover: var(--danger-well-hover);
+  --color-accent-tint: var(--accent-tint);
+  --color-accent-tint-strong: var(--accent-tint-strong);
+  --color-danger-tint: var(--danger-tint);
+  --color-text-primary: var(--text-primary);
+  --color-text-body: var(--text-body-ink);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+  --color-text-faint: var(--text-faint);
+  --color-text-on-light: var(--text-on-light);
+  --color-text-on-accent: var(--text-on-accent);
+  --color-text-on-danger: var(--text-on-danger);
+  --color-text-link: var(--text-link);
+  --color-border-subtle: var(--border-subtle);
+  --color-border-strong: var(--border-strong);
+  --color-channel-icon: var(--channel-icon);
+  --color-interactive-normal: var(--interactive-normal);
+  --color-interactive-hover: var(--interactive-hover);
+  --color-interactive-active: var(--interactive-active);
+  --color-interactive-muted: var(--interactive-muted);
+}
+
+/* The surface the scope sits on decides three names: the base a Tailwind
+   `bg-bg-base` paints, the ground a skeleton or well reads, and the gap inside
+   the focus ring (a ring is a box-shadow here, so its gap is painted). */
+.ix-lt {
+  --bg-base: var(--ix-ground);
+  --bg-plate: var(--ix-ground);
+  --street: var(--ix-ground);
+  --color-bg-base: var(--ix-ground);
+  --color-bg-plate: var(--ix-ground);
+  --focus-ring: 0 0 0 2px var(--ix-ground), 0 0 0 4px var(--focus-ring-color);
+  --focus-ring-input: 0 0 0 2px var(--ix-ground), 0 0 0 4px var(--focus-ring-color);
+}
+
+.ix-lt--main {
+  --bg-base: var(--ix-main);
+  --bg-plate: var(--ix-main);
+  --street: var(--ix-main);
+  --color-bg-base: var(--ix-main);
+  --color-bg-plate: var(--ix-main);
+  --focus-ring: 0 0 0 2px var(--ix-main), 0 0 0 4px var(--focus-ring-color);
+  --focus-ring-input: 0 0 0 2px var(--ix-main), 0 0 0 4px var(--focus-ring-color);
+}
+
+.ix-lt--card,
+.pc-dialog {
+  --bg-base: var(--ix-card);
+  --bg-plate: var(--ix-card);
+  --street: var(--ix-card);
+  --color-bg-base: var(--ix-card);
+  --color-bg-plate: var(--ix-card);
+  --focus-ring: 0 0 0 2px var(--ix-card), 0 0 0 4px var(--focus-ring-color);
+  --focus-ring-input: 0 0 0 2px var(--ix-card), 0 0 0 4px var(--focus-ring-color);
+}
+
+.ix-lt--pop,
+.pc-floating {
+  --bg-base: var(--ix-pop-solid);
+  --bg-plate: var(--ix-pop-solid);
+  --street: var(--ix-pop-solid);
+  --color-bg-base: var(--ix-pop-solid);
+  --color-bg-plate: var(--ix-pop-solid);
+  --focus-ring: 0 0 0 2px var(--ix-pop-solid), 0 0 0 4px var(--focus-ring-color);
+  --focus-ring-input: 0 0 0 2px var(--ix-pop-solid), 0 0 0 4px var(--focus-ring-color);
+}
+
+/* The Glass type roles keep their class names where other packages still carry
+   them; inside the scope they read Index: sentence-case labels, no uppercase
+   kicker (§1.5), no narrow cut. */
+:where(.ix-lt, .ix-lt--card, .ix-lt--pop, .ix-lt--main, .pc-floating, .pc-dialog) .glass-kicker {
+  font-stretch: 100%;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+:where(.ix-lt, .ix-lt--card, .ix-lt--pop, .ix-lt--main, .pc-floating, .pc-dialog) .glass-title-channel {
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+
+:where(.ix-lt, .ix-lt--card, .ix-lt--pop, .ix-lt--main, .pc-floating, .pc-dialog) .glass-title-section {
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+
+:where(.ix-lt, .ix-lt--card, .ix-lt--pop, .ix-lt--main, .pc-floating, .pc-dialog) .glass-body {
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+:where(.ix-lt, .ix-lt--card, .ix-lt--pop, .ix-lt--main, .pc-floating, .pc-dialog) .glass-instrument {
+  font-stretch: 100%;
+  font-size: inherit;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+:where(.ix-lt, .ix-lt--card, .ix-lt--pop, .ix-lt--main, .pc-floating, .pc-dialog) .glass-secondary {
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+/* ---- 2. Focus: the one ring (§2.1 `--ix-focus`) ------------------------------------
+   focus.css draws a box-shadow ring (its own layer, above the utilities). The Index
+   ring is a 2px outline at offset 2: the same pixels, and the same everywhere. A
+   control that keeps a resting shadow keeps it under the ring. */
+
+.pc-focusable:focus-visible,
+.pc-checkbox:focus-visible,
+.btn-primary:focus-visible,
+.icon-btn:focus-visible,
+.context-menu-item:focus-visible,
+.command-icon-btn:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+  box-shadow: none;
+}
+
+.pc-focusable-composed:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+  box-shadow: var(--pc-base-shadow, none);
+}
+
+/* A field: the edge brightens and the ring draws outside it. A wrapper (TextField,
+   SearchWell) answers to `:focus-within`, a bare control to `:focus-visible`. */
+.pc-field:focus-within,
+.pc-field:focus-visible,
+.input-field:focus-visible {
+  background: var(--ix-fill);
+  box-shadow: inset 0 0 0 1px var(--ix-edge-open);
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset);
+}
+
+.pc-field[aria-invalid='true']:focus-within,
+.pc-field[aria-invalid='true']:focus-visible,
+.pc-field[data-invalid='true']:focus-within,
+.input-field[aria-invalid='true']:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--ix-danger-ink);
+}
+
+/* ---- 3. Settings (§6.7) ---------------------------------------------------------------
+   User settings and Server settings keep their overlays, routes and sections. The
+   overlay AppShell draws is a windowed dialog (`max-w-6xl`, padded); here it is the
+   whole window on the ground, so the wrapper and the dialog yield. */
+
+.modal-backdrop:has(> [role='dialog'] > .ix-settings) {
+  padding: 0;
+  align-items: stretch;
+  justify-content: stretch;
+  background: var(--ix-ground);
+}
+
+[role='dialog']:has(> .ix-settings) {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  border-radius: 0;
+}
+
+/* The settings route (`/app/guilds/:g/settings`) draws the same surface inside main, and
+   Admin and Developer are large-title pages; AppShell's `p-3` on the outlet for those
+   routes would float them 12px off main's edges. */
+.glass-outlet:has(> .ix-settings, > .ix-page, > .ix-hued > .ix-page) {
+  padding: 0;
+}
+
+.ix-settings {
+  position: relative;
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  color: var(--ix-ink);
+  background: var(--ix-ground);
+  outline: none;
+}
+
+/* The index: 240 wide on the sidebar's hue gradient, a hairline on its right edge. */
+.ix-settings__nav {
+  position: relative;
+  display: flex;
+  flex: 0 0 240px;
+  flex-direction: column;
+  width: 240px;
+  min-height: 0;
+  padding: 16px 12px 12px;
+  overflow-y: auto;
+  scrollbar-width: none;
+  box-shadow: inset -1px 0 0 var(--ix-edge-side);
+}
+
+.ix-settings__nav::-webkit-scrollbar {
+  display: none;
+}
+
+/* The head echoes the sidebar header: the mark at 40, the name 17/700, a line 12.5 ink-3. */
+.ix-settings__head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 4px 6px 6px;
+}
+
+.ix-settings__who {
+  min-width: 0;
+}
+
+.ix-settings__name {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  color: var(--ix-ink);
+}
+
+.ix-settings__line {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  font-weight: 400;
+  line-height: 1.3;
+  color: var(--ix-ink-3);
+}
+
+.ix-settings__groups {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 6px;
+}
+
+.ix-settings__group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* The rows pinned under the index (Developer portal, Log out), parted by a hairline. */
+.ix-settings__foot {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-top: auto;
+  padding-top: 14px;
+}
+
+.ix-settings__foot > hr {
+  margin: 0 6px 8px;
+}
+
+.ix-settings__main {
+  position: relative;
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+}
+
+/* Close at the top right with its key under it. */
+.ix-settings__close {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.ix-settings__scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 48px 56px 72px;
+}
+
+/* The column: 720 wide, centered in the room beside the index. */
+.ix-settings__col {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 720px;
+  min-height: 0;
+  margin: 0 auto;
+}
+
+.ix-settings__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.ix-settings__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.025em;
+  color: var(--ix-ink);
+}
+
+.ix-settings__desc {
+  max-width: 62ch;
+  margin: 6px 0 0;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--ix-ink-3);
+}
+
+/* A narrow window gives the column the whole room, clear of the close control. */
+@media (max-width: 1100px) {
+  .ix-settings__scroll {
+    padding: 40px 72px 64px 32px;
+  }
+}
+
+/* The phone: the index and a section are two screens (the caller owns the history). */
+.ix-settings--phone {
+  flex-direction: column;
+}
+
+.ix-settings__bar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 12px;
+  padding: calc(var(--safe-top, 0px) + 12px) 12px 12px 16px;
+}
+
+.ix-settings__bar > .ix-settings__head {
+  flex: 1 1 auto;
+  padding: 0;
+}
+
+.ix-settings__bar--section {
+  padding-left: 12px;
+  box-shadow: inset 0 -1px 0 var(--ix-line);
+}
+
+.ix-settings__phone-index {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  padding: 0 12px calc(var(--safe-bottom, 0px) + 16px);
+  overflow-y: auto;
+}
+
+.ix-settings__phone-body {
+  flex: 1 1 0;
+  min-height: 0;
+  padding: 20px 16px calc(var(--safe-bottom, 0px) + 24px);
+  overflow-y: auto;
+}
+
+/* ---- Entry pages (IX-17, area A) -------------------------------------------------------
+   Login, register, connect, first-owner setup, account setup / unlock / recover, invite,
+   bot authorize, the onboarding wizard (§6.14): the ground with the main glow at hue 210
+   (`ix-hue-main`, set by AuthCanvas) and a centered 400px column on it. The page title is
+   28/700 on the same tracking as a large title (§2.4), a step's heading 17/700. */
+
+.ix-auth {
+  color: var(--ix-ink);
+}
+
+.ix-auth__title {
+  font-family: var(--font-display);
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1.12;
+  letter-spacing: -0.025em;
+  color: var(--ix-ink);
+}
+
+.ix-auth__sub {
+  max-width: 62ch;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--ix-ink-3);
+}
+
+.ix-auth__step {
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  color: var(--ix-ink);
+}
+
+/* A quiet text action: ink-2, 13.5/600, ink and an underline on hover. */
+.ix-auth__link {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ix-ink-2);
+  text-underline-offset: 4px;
+  cursor: pointer;
+}
+
+.ix-auth__link:hover {
+  color: var(--ix-ink);
+  text-decoration: underline;
+}
+
+/* ---- Admin and Developer (IX-17, area B) ------------------------------------------------
+   Pages in main (§6.1, §8.1): the large title, a segmented control for the sections
+   under it, the section's panel below. The panels keep their own markup and read the
+   Index inks through `ix-lt--main` (the page carries it). */
+
+/* The row under the title: the sections at the left (scrolling sideways, never
+   wrapping, when there are more than the window holds), the page's own tools at the right. */
+.ix-adm__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  margin-bottom: 22px;
+}
+
+/* The scroller pads and pulls back by the focus ring's reach, so the ring is never clipped. */
+.ix-adm__tabs {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin: -4px;
+  padding: 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.ix-adm__tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.ix-adm__tabs > .ix-seg {
+  width: max-content;
+}
+
+.ix-adm .ix-seg__tab {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ix-adm__tools {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+}
+
+.ix-adm__tools .ix-chip {
+  text-decoration: none;
+}
+
+.ix-adm__panel {
+  min-width: 0;
+}
+
+/* A panel's own head: the page already has the 36/700 title, so the section's is a
+   step down. */
+.ix-adm .ix-settings__header {
+  margin-bottom: 18px;
+}
+
+.ix-adm .ix-settings__title {
+  font-size: 20px;
+  line-height: 1.2;
+  letter-spacing: -0.015em;
+}
+
+.ix-adm .ix-settings__desc {
+  margin-top: 4px;
+}
+
+/* On a narrow window the tools drop under the sections. */
+@container ix-main (max-width: 639px) {
+  .ix-adm__bar {
+    flex-wrap: wrap;
+  }
+}
+
+/* ---- Dialogs and pickers (IX-17, area C) ----------------------------------------------
+   The invite dialog's copy label, the who-reacted list. The dialogs themselves are
+   the shared Modal (primitives.css `.pc-dialog`); the pickers' insides are Tailwind
+   on Index tokens in components/ui/EmojiPicker and components/message/{Gif,Sticker}Picker. */
+
+/* A button label that crossfades to its done word and back (§5.16, 200ms; the owner
+   holds `data-on` for 2s). Both words share one grid cell, so the button keeps the
+   width of the longer one and nothing beside it moves. Opacity only. */
+.ix-copy {
+  display: inline-grid;
+}
+
+.ix-copy > span {
+  display: inline-flex;
+  grid-area: 1 / 1;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  white-space: nowrap;
+  transition: opacity 200ms var(--ix-ease);
+}
+
+.ix-copy > span[data-on='false'] {
+  opacity: 0;
+}
+
+/* Who reacted (§6.11, the menu look): the glyph and the count, then 24px faces and
+   names in rows of 32 at radius 10. */
+.ix-rp {
+  padding: 6px;
+}
+
+.ix-rp__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 6px 8px;
+}
+
+.ix-rp__glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 28px;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.ix-rp__glyph img {
+  width: 28px;
+  height: 28px;
+}
+
+.ix-rp__count {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ix-ink-3);
+}
+
+.ix-rp__note {
+  margin: 0;
+  padding: 6px;
+  font-size: 13px;
+  color: var(--ix-ink-3);
+}
+
+.ix-rp__note[data-tone='error'] {
+  color: var(--ix-danger-ink);
+}
+
+.ix-rp__list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ix-rp__list[data-expanded] {
+  max-height: 256px;
+  overflow-y: auto;
+}
+
+.ix-rp__person {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+  padding: 0 6px;
+  border-radius: 10px;
+}
+
+.ix-rp__person:hover {
+  background: var(--ix-fill);
+}
+
+.ix-rp__name {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ix-ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ix-rp__more {
+  width: 100%;
+  min-height: 32px;
+  margin-top: 2px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--ix-ink-3);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 120ms var(--ix-ease), color 120ms var(--ix-ease);
+}
+
+.ix-rp__more:hover {
+  background: var(--ix-fill);
+  color: var(--ix-ink);
+}
+
+.ix-rp__more:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: -2px;
+}
+
+/* Page prose is 14 like the section descriptions (the panels write `text-body`, 15). */
+.ix-adm .text-body {
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* A phone gives the column a 20px gutter (the shell's 48 is a desktop's; the phone's own
+   metrics are IX-16's) so a wide code line and a table have the width they need. */
+.ix-frame[data-layout='phone'] .ix-adm {
+  --ix-col-pad: 20px;
+}
+
+/* ---- 4. Opaque and legible: Reduced transparency and High contrast (§10) ------------
+   A toast is near-solid; under Reduced transparency it is fully opaque, and in High
+   contrast a dialog and a toast carry the .2 hairline the theme sets. */
+:root[data-reduced-transparency='true'] .ix-toast {
+  background-color: var(--ix-pop-solid);
+}
+
+[data-theme='glass-contrast'] .pc-dialog {
+  box-shadow:
+    0 0 0 1px var(--ix-line),
+    var(--ix-shadow-room);
+}
+
+[data-theme='glass-contrast'] .ix-toast {
+  box-shadow:
+    0 0 0 1px var(--ix-line),
+    var(--ix-shadow-capsule);
+}
+
+/* A label above a block of settings: sentence case, 12.5/600 (§2.4 section label). The
+   color comes from the call site (`text-text-muted`); the Glass kicker it replaces was an
+   uppercase, tracked, narrow-cut 12/700. */
+.ix-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: 0;
+}

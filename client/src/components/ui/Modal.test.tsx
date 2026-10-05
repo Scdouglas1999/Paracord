@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { Modal, ModalTitle } from './Modal';
+import { Modal, ModalDescription, ModalFooter, ModalHeader, ModalTitle } from './Modal';
 
 function Harness({ onClose = vi.fn() }: { onClose?: () => void }) {
   return (
@@ -63,5 +63,40 @@ describe('Modal', () => {
     expect(backdrop).toBeTruthy();
     await user.pointer({ keys: '[MouseLeft>]', target: backdrop! });
     expect(onClose).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe('Modal look (docs/index-spec.md §6.12)', () => {
+  it('is the card at radius 20 over a scrim, and enters on the dialog recipe (not the page one)', () => {
+    render(
+      <Modal open onClose={() => {}} labeledBy="t" size="sm">
+        <ModalTitle id="t">Leave Fuel?</ModalTitle>
+      </Modal>,
+    );
+    const dialog = screen.getByRole('dialog', { name: 'Leave Fuel?' });
+    expect(dialog).toHaveClass('pc-dialog', 'pc-dialog-enter', 'max-w-[440px]');
+    expect(dialog).not.toHaveClass('pc-enter');
+    const backdrop = dialog.parentElement!;
+    expect(backdrop).toHaveClass('modal-backdrop', 'pc-scrim-in');
+    expect(backdrop.className).toContain('bg-[var(--ix-scrim)]');
+  });
+
+  it('title 17/700, body 14 ink-2, actions right-aligned', () => {
+    render(
+      <Modal open onClose={() => {}} labeledBy="t">
+        <ModalHeader>
+          <ModalTitle id="t">Delete plans?</ModalTitle>
+          <ModalDescription>It cannot be undone.</ModalDescription>
+        </ModalHeader>
+        <ModalFooter>
+          <button type="button">Cancel</button>
+        </ModalFooter>
+      </Modal>,
+    );
+    expect(screen.getByText('Delete plans?').className).toContain('text-[17px]');
+    expect(screen.getByText('Delete plans?').className).toContain('font-bold');
+    expect(screen.getByText('It cannot be undone.').className).toContain('text-[14px]');
+    expect(screen.getByText('It cannot be undone.').className).toContain('text-[var(--ix-ink-2)]');
+    expect(screen.getByRole('button', { name: 'Cancel' }).parentElement).toHaveClass('justify-end');
   });
 });

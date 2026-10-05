@@ -97,7 +97,7 @@ describe('Index tokens (§2.1)', () => {
 describe('Index stylesheets', () => {
   const ORDER = [
     'ix-base', 'ix-shell', 'ix-sidebar', 'ix-dock', 'ix-card', 'ix-cards', 'ix-sheets',
-    'ix-pages', 'ix-timeline', 'ix-composer', 'ix-conversation', 'ix-call', 'ix-people', 'ix-phone',
+    'ix-pages', 'ix-timeline', 'ix-composer', 'ix-conversation', 'ix-call', 'ix-people', 'ix-longtail', 'ix-phone',
   ];
 
   it('creates every file the plan names', () => {

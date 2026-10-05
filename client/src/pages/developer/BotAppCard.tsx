@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
-import { Bot, Check, ChevronDown, ChevronRight, Copy, Key, RefreshCw, Trash2, ShieldAlert, ExternalLink } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, Copy, Key, RefreshCw, Trash2, ShieldAlert, ExternalLink } from 'lucide-react';
 import type { BotApplication } from '../../api/bots';
-import { getIdentityColor } from '../../lib/colors';
+import { Avatar } from '../../components/ix/identity';
 import { Button, Divider, TextField, Well } from '../../components/ui';
 
 interface BotAppCardProps {
@@ -30,9 +30,10 @@ interface BotAppCardProps {
 }
 
 /**
- * One application, as the content of the developer portal's plate — so it is
- * not a plate itself (spec §4). Secrets and links sit in wells; the actions are
- * a single row of ghost controls with the destructive one in the danger well.
+ * One application, as the content of the developer portal page (docs/index-spec.md
+ * §6.1): its bot's flat tonal face, the name and ids, then secrets and links in
+ * wells; the actions are a single row of text controls with the destructive one
+ * in the danger fill.
  */
 export function BotAppCard({
   app,
@@ -61,13 +62,7 @@ export function BotAppCard({
   return (
     <div className="flex flex-col gap-5">
       <div className="flex flex-wrap items-start gap-3">
-        <span
-          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[var(--radius-well)] text-text-on-light"
-          style={{ backgroundColor: getIdentityColor(app.id) }}
-          aria-hidden
-        >
-          <Bot size={22} />
-        </span>
+        <Avatar userId={app.bot_user_id || app.id} name={app.name} size={44} />
         <div className="min-w-0 flex-1">
           {isEditing ? (
             <div className="flex flex-col gap-2">
@@ -90,7 +85,7 @@ export function BotAppCard({
             </div>
           ) : (
             <>
-              <h2 className="pc-display text-title text-text-primary">{app.name}</h2>
+              <h2 className="pc-display text-[20px] font-bold leading-[1.2] tracking-[-0.015em] text-[var(--ix-ink)]">{app.name}</h2>
               {app.description && (
                 <p className="mt-1 max-w-prose text-body text-text-secondary">{app.description}</p>
               )}
@@ -111,7 +106,7 @@ export function BotAppCard({
         <div className="flex flex-wrap items-center justify-between gap-2">
           <span className="text-section text-text-faint">Bot token</span>
           {token && (
-            <span className="inline-flex items-center gap-1 text-meta font-medium text-accent-warning">
+            <span className="inline-flex items-center gap-1 text-meta font-medium text-[var(--ix-ink-2)]">
               <ShieldAlert size={13} aria-hidden />
               Treat like a password
             </span>
@@ -120,7 +115,7 @@ export function BotAppCard({
         <Well className="flex flex-wrap items-center gap-2 px-3 py-2">
           {token ? (
             <>
-              <code className="pc-mono min-w-0 flex-1 break-all text-meta text-text-secondary">
+              <code className="pc-mono min-w-[12rem] flex-1 basis-[12rem] break-all text-meta text-text-secondary">
                 {token}
               </code>
               <Button variant="ghost" size="sm" aria-label="Copy bot token" onClick={onCopyToken}>
@@ -139,7 +134,7 @@ export function BotAppCard({
       <div className="flex flex-col gap-2">
         <span className="text-section text-text-faint">Install link</span>
         <Well className="flex flex-wrap items-center gap-2 px-3 py-2">
-          <code className="pc-mono min-w-0 flex-1 break-all text-meta text-text-secondary">
+          <code className="pc-mono min-w-[12rem] flex-1 basis-[12rem] break-all text-meta text-text-secondary">
             {installUrl}
           </code>
           <Button
@@ -154,7 +149,7 @@ export function BotAppCard({
             href={installUrl}
             target="_blank"
             rel="noreferrer"
-            className="pc-focusable inline-flex h-[var(--h-control-sm)] items-center gap-1.5 rounded-[var(--radius-control)] px-2.5 text-meta font-medium text-text-secondary transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary"
+            className="pc-focusable inline-flex h-[var(--h-control-sm)] items-center gap-1.5 rounded-[10px] px-2.5 text-meta font-medium text-[var(--ix-ink-2)] transition-colors duration-[120ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill)] hover:text-[var(--ix-ink)]"
           >
             <ExternalLink size={13} aria-hidden /> Open
           </a>
@@ -182,7 +177,7 @@ export function BotAppCard({
             size="sm"
             onClick={onToggleAdvanced}
             aria-expanded={isExpanded}
-            className={isExpanded ? 'bg-bg-mod-strong text-text-primary' : undefined}
+            className={isExpanded ? 'bg-[var(--ix-fill-2)] text-[var(--ix-ink)]' : undefined}
           >
             {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
             Advanced

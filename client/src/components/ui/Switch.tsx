@@ -13,10 +13,10 @@ export interface SwitchProps
 }
 
 /**
- * Switch: the one boolean control in the app (docs/glass-spec.md §1, §9).
+ * Switch: the one boolean control in the app (docs/index-spec.md §1.4, §3.1).
  *
- * Off is a glass capsule (the glass fill, a muted knob). On is cream with a dark
- * knob: white means it is for you, the way the send circle turns cream (§1.3).
+ * Off is a quiet capsule (the control fill, a muted knob). On is cream with a dark
+ * knob: cream is the one action, the way the send circle turns cream (§5.13).
  * Amber stays with what is live, so the knob carries no glow. Hover is one step
  * lighter, press one step darker, over 120ms; nothing scales.
  *
@@ -50,12 +50,12 @@ export const Switch = React.forwardRef<HTMLButtonElement, SwitchProps>(function 
       onClick={() => onChange(!checked)}
       className={cn(
         'pc-focusable relative inline-flex shrink-0 items-center rounded-[var(--radius-full)]',
-        'transition-colors duration-[var(--glass-ms)] ease-[var(--glass-ease)]',
-        'disabled:cursor-not-allowed disabled:opacity-40',
+        'transition-colors duration-[120ms] ease-[var(--ix-ease)]',
+        'disabled:cursor-not-allowed disabled:opacity-[.45]',
         track,
         checked
           ? 'bg-accent-primary hover:bg-accent-primary-hover active:bg-accent-primary-active'
-          : 'bg-[var(--glass-fill)] shadow-[var(--glass-edge)] hover:bg-[var(--glass-fill-hover)] active:bg-[var(--glass-fill-press)]',
+          : 'bg-[var(--ix-fill-ctl-hover)] hover:bg-[var(--ix-fill-2)] active:bg-[var(--ix-fill)]',
         className,
       )}
       {...props}
@@ -67,7 +67,7 @@ export const Switch = React.forwardRef<HTMLButtonElement, SwitchProps>(function 
           // The thumb slides on the ease-out over --duration-normal, never a jump.
           'transition-transform duration-[var(--duration-normal)] ease-[var(--ease-out)]',
           knob,
-          checked ? 'bg-text-on-accent' : 'bg-text-secondary',
+          checked ? 'bg-text-on-accent' : 'bg-[var(--ix-ink-2)]',
           travel,
         )}
       />
@@ -107,11 +107,11 @@ export function ToggleRow({
   return (
     <div className={cn('flex items-start justify-between gap-4 py-3', className)}>
       <div className="min-w-0">
-        <div id={labelId} className="text-[15px] font-medium text-text-primary">
+        <div id={labelId} className="text-[15px] font-medium text-[var(--ix-ink)]">
           {label}
         </div>
         {description && (
-          <p className="mt-0.5 text-[13px] leading-relaxed text-text-secondary">{description}</p>
+          <p className="mt-0.5 text-[13px] leading-relaxed text-[var(--ix-ink-3)]">{description}</p>
         )}
         {children}
       </div>

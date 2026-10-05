@@ -117,21 +117,20 @@ export function StickerPicker({ guildId, onSelect, onClose, leaving = false }: S
   return (
     <div
       ref={pickerRef}
-      className={`${leaving ? 'pc-pop-out' : 'pc-pop-in'} pc-floating flex w-[min(21.25rem,calc(100vw-1rem))] max-h-[min(26.25rem,calc(100dvh-1rem))] flex-col overflow-hidden rounded-[var(--r-bubble)]`}
+      className={`${leaving ? 'pc-pop-out' : 'pc-pop-in'} pc-floating flex w-[min(360px,calc(100vw-1rem))] h-[min(420px,calc(100dvh-1rem))] flex-col overflow-hidden rounded-[16px]`}
       aria-hidden={leaving || undefined}
     >
-      {/* Header */}
-      <div className="shrink-0 border-b border-border-subtle px-3 pb-2.5 pt-3">
-        <div className="glass-kicker mb-2 text-text-muted">Stickers</div>
-        <div className="flex items-center gap-2 rounded-[var(--r-ctl)] bg-bg-well px-2.5 py-2 focus-within:shadow-[var(--focus-ring-input)]">
-          <Search size={16} className="shrink-0 text-text-muted" />
+      {/* The search field (the host's tab already says Stickers). */}
+      <div className="shrink-0 px-3 pb-1.5 pt-3">
+        <div className="pc-field flex h-10 items-center gap-2 px-3">
+          <Search size={16} className="shrink-0 text-[var(--ix-ink-3)]" />
           <input
             type="text"
             placeholder="Search stickers..."
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             autoFocus
-            className="flex-1 bg-transparent text-[15px] text-text-primary placeholder:text-[var(--ink-placeholder)] outline-none"
+            className="flex-1 bg-transparent text-[15px] text-[var(--ix-ink)] placeholder:text-[var(--ix-ink-3)] outline-none"
           />
         </div>
       </div>
@@ -141,7 +140,7 @@ export function StickerPicker({ guildId, onSelect, onClose, leaving = false }: S
         {error ? (
           <EmptyState
             role="alert"
-            icon={<AlertCircle size={20} className="text-accent-danger" />}
+            icon={<AlertCircle size={20} className="text-[var(--ix-danger-ink)]" />}
             title="Couldn't load stickers"
             description={error}
             action={
@@ -186,15 +185,15 @@ export function StickerPicker({ guildId, onSelect, onClose, leaving = false }: S
                   onClick={() => onSelect(sticker.id)}
                   title={sticker.name}
                   aria-label={`Select sticker ${sticker.name}`}
-                  className="flex aspect-square items-center justify-center rounded-[10px] p-1 outline-none transition-colors duration-[var(--glass-ms)] ease-[var(--glass-ease)] hover:bg-[var(--wash-hover)] active:bg-[var(--wash-press)] focus-visible:bg-[var(--wash-hover)] focus-visible:shadow-[var(--focus-ring)]"
+                  className="pc-focusable flex aspect-square items-center justify-center rounded-[10px] p-1 outline-none transition-colors duration-[120ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill)] active:bg-[var(--ix-fill-2)]"
                 >
                   <ResourceImage
                     src={imageUrl}
                     alt={sticker.name}
                     loading="lazy"
-                    className="block h-full w-full rounded-[var(--r-chip)] object-contain"
+                    className="block h-full w-full rounded-[8px] object-contain"
                     fallback={
-                      <span className="flex h-full w-full items-center justify-center break-words p-0.5 text-center text-[10px] text-text-muted">
+                      <span className="flex h-full w-full items-center justify-center break-words p-0.5 text-center text-[10px] text-[var(--ix-ink-3)]">
                         {sticker.name}
                       </span>
                     }
@@ -208,7 +207,7 @@ export function StickerPicker({ guildId, onSelect, onClose, leaving = false }: S
 
       {/* Footer: sticker count */}
       {stickers.length > 0 && (
-        <div className="shrink-0 border-t border-border-subtle px-3 py-1.5 text-right text-[12px] text-text-muted">
+        <div className="shrink-0 px-3 py-2 text-right text-[12px] tabular-nums text-[var(--ix-ink-3)] shadow-[inset_0_1px_0_var(--ix-line)]">
           {filtered.length} sticker{filtered.length !== 1 ? 's' : ''}
         </div>
       )}

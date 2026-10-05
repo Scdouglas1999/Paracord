@@ -52,9 +52,11 @@ describe('GifPicker', () => {
 
     const { container } = render(<GifPicker onSelect={onSelect} onClose={vi.fn()} />);
 
+    // The one picker's size (docs/index-spec.md §6.11): 360 by 420 at radius 16.
     expect(container.firstElementChild).toHaveClass(
-      'w-[min(25rem,calc(100vw-1rem))]',
-      'max-h-[min(28.75rem,calc(100dvh-1rem))]',
+      'w-[min(360px,calc(100vw-1rem))]',
+      'h-[min(420px,calc(100dvh-1rem))]',
+      'rounded-[16px]',
     );
     await user.click(await screen.findByRole('button', { name: 'Select GIF Safe' }));
 

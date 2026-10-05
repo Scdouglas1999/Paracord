@@ -242,9 +242,9 @@ describe('UserSettings session management', () => {
     const { container } = renderSettings();
 
     await screen.findByText('Old laptop');
-    // Initials on your identity color (no photo), and the same ink mark the header's face has.
-    expect(container.querySelector('.glass-face')).toHaveTextContent('A');
-    expect(container.querySelector('.glass-presence')).toHaveAttribute('data-status', 'online');
+    // One letter on your hue (no photo), and the same presence dot the toolbar's face has.
+    expect(container.querySelector('.ix-settings__col .ix-av')).toHaveTextContent('A');
+    expect(container.querySelector('.ix-settings__col .ix-presence--online')).not.toBeNull();
     expect(screen.getByText('Online')).toHaveClass('sr-only');
   });
 

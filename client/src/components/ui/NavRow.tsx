@@ -20,10 +20,10 @@ export interface NavRowProps extends Omit<React.HTMLAttributes<HTMLElement>, 'ti
 }
 
 /**
- * NavRow: a 34px row (docs/glass-spec.md §2.4: radius 12 here, the small
- * control step). Grid is `icon, name, trailing`; the active row is the
- * selected-row tone, never an accent bar. Hover is one step lighter, press one
- * step darker.
+ * NavRow: a 34px row at radius 10 (docs/index-spec.md §6.7). Grid is `icon,
+ * name, trailing`; the active row wears the hue selection (`ix-hue-selected`,
+ * the place's `--ix-hue`), never an accent bar. Hover is one step lighter,
+ * press one step darker.
  */
 export const NavRow = React.forwardRef<HTMLElement, NavRowProps>(function NavRow(
   { icon, children, trailing, active = false, display = false, href, className, ...props },
@@ -40,23 +40,21 @@ export const NavRow = React.forwardRef<HTMLElement, NavRowProps>(function NavRow
       // `aria-selected`, which the Lobby plate carries too without being a row.
       data-selected-row={active || undefined}
       className={cn(
-        'pc-focusable pc-pressable-row flex w-full select-none items-center gap-2.5 text-left',
-        'h-[var(--h-nav-row)] rounded-[var(--radius-control)] px-2.5',
-        'text-[15px] font-medium text-text-secondary',
-        // The transition and the press belong to `.pc-pressable-row`: a row
-        // darkens a step under the finger rather than shrinking (§5.1).
-        // The selected row is a wash in the base hue rather than a gray step,
-        // and inside a server's group it is a wash in THAT server's color —
-        // `--row-selected` is written per group by BuildingSection (§7.1).
+        'pc-focusable flex w-full select-none items-center gap-2.5 text-left',
+        'h-[var(--h-nav-row)] rounded-[10px] px-2.5',
+        'text-[14px] font-medium',
+        'transition-[background-color,color] duration-[120ms] ease-[var(--ix-ease)]',
+        // The selected row is the hue wash with its hairline (`.ix-hue-selected`);
+        // the others are quiet until the pointer is on them.
         active
-          ? 'bg-[var(--row-selected)] text-text-primary shadow-[var(--shadow-raised)]'
-          : 'hover:bg-bg-mod-subtle hover:text-text-primary',
+          ? 'ix-hue-selected text-[var(--ix-ink)]'
+          : 'text-[var(--ix-ink-2)] hover:bg-[var(--ix-fill)] hover:text-[var(--ix-ink)] active:bg-[var(--ix-fill-2)]',
         className,
       )}
       {...props}
     >
       {icon != null && (
-        <span className="flex h-4 w-4 shrink-0 items-center justify-center" aria-hidden>
+        <span className="flex h-4 w-4 shrink-0 items-center justify-center text-[var(--ix-ink-3)]" aria-hidden>
           {icon}
         </span>
       )}

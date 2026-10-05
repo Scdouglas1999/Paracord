@@ -19,9 +19,10 @@ export interface TabsProps<T extends string = string>
   /** Accessible name for the tab list. */
   label: string;
   /**
-   * `segmented` (default) is a glass control with a lighter pill sliding inside
-   * it, for a small either/or choice. `underline` is a row of labels under a
-   * hairline, for the top of a panel with several pages of content.
+   * `segmented` (default) is the Index segmented control (§6.1, §6.6): a quiet
+   * tile with a lit segment sliding inside it, for a small either/or choice.
+   * `underline` is a row of labels under a hairline, for the top of a panel with
+   * several pages of content.
    */
   variant?: 'segmented' | 'underline';
   size?: 'sm' | 'md';
@@ -31,12 +32,13 @@ export interface TabsProps<T extends string = string>
 
 /**
  * Tabs: one control for every "pick one of these views" in the app
- * (docs/glass-spec.md §1 controls are glass, §9 focus + roving keyboard).
+ * (docs/index-spec.md §6.1, §6.6; focus and the roving keyboard §10).
  *
- * Selection is the "on" glass fill on a pill inside a quieter glass control,
- * the way Listen lights when it is on: never an accent bar on the segmented
- * pill, never a color. That pill is ONE element the engine slides between the
- * tabs on the one ease-out (`useIndicator`): it travels, it never jumps.
+ * Selection is the lit fill (`--ix-fill-2`) on a segment inside the quiet tile
+ * (`--ix-fill`), 32 tall at radius 9 in a tile of radius 12: never an accent
+ * bar on the segment, never a color. That segment is ONE element the engine
+ * slides between the tabs on the one ease-out (`useIndicator`): it travels,
+ * it never jumps.
  * Arrow keys move between tabs; Home/End jump to the ends (WAI-ARIA tabs
  * pattern). Hover is one step lighter, press one step darker; nothing scales.
  *
@@ -104,8 +106,8 @@ export function Tabs<T extends string = string>({
       className={cn(
         'relative flex items-center',
         variant === 'segmented'
-          ? 'gap-1 rounded-[var(--r-ctl)] bg-[var(--glass-fill-quiet)] p-1 shadow-[var(--glass-edge)]'
-          : 'gap-1 border-b border-border-subtle',
+          ? 'gap-0.5 rounded-[12px] bg-[var(--ix-fill)] p-[3px]'
+          : 'gap-1 border-b border-[var(--ix-line)]',
         fill && 'w-full',
         className,
       )}
@@ -120,7 +122,7 @@ export function Tabs<T extends string = string>({
         className={cn(
           'pointer-events-none absolute left-0 top-0 opacity-0',
           variant === 'segmented'
-            ? 'rounded-[9px] bg-[var(--glass-fill-on)]'
+            ? 'rounded-[9px] bg-[var(--ix-fill-2)]'
             : 'rounded-[var(--radius-full)] bg-accent-primary',
         )}
       />
@@ -142,22 +144,22 @@ export function Tabs<T extends string = string>({
             onKeyDown={(event) => onKeyDown(event, index)}
             className={cn(
               'pc-focusable relative inline-flex shrink-0 select-none items-center justify-center gap-2 whitespace-nowrap',
-              'text-[15px] font-medium transition-[color,background-color] duration-[var(--glass-ms)] ease-[var(--glass-ease)]',
-              'disabled:pointer-events-none disabled:opacity-40',
-              size === 'sm' ? 'h-[var(--h-control-sm)] px-2.5' : 'h-[var(--h-control)] px-3',
+              'text-[13.5px] font-semibold transition-[color,background-color] duration-[120ms] ease-[var(--ix-ease)]',
+              'disabled:pointer-events-none disabled:opacity-[.45]',
+              size === 'sm' ? 'h-[var(--h-control-sm)] px-2.5' : 'h-8 px-3.5',
               fill && 'flex-1',
               variant === 'segmented'
                 ? cn(
                     'rounded-[9px]',
                     selected
-                      ? 'font-semibold text-text-primary'
-                      : 'text-text-secondary hover:bg-[var(--wash-hover)] hover:text-text-primary active:bg-[var(--wash-press)]',
+                      ? 'text-[var(--ix-ink)]'
+                      : 'text-[var(--ix-ink-2)] hover:text-[var(--ix-ink)]',
                   )
                 : cn(
-                    'rounded-t-[var(--r-chip)] px-3',
+                    'rounded-t-[8px] px-3',
                     selected
-                      ? 'font-semibold text-text-primary'
-                      : 'text-text-secondary hover:text-text-primary',
+                      ? 'text-[var(--ix-ink)]'
+                      : 'text-[var(--ix-ink-2)] hover:text-[var(--ix-ink)]',
                   ),
             )}
           >
@@ -168,7 +170,7 @@ export function Tabs<T extends string = string>({
             )}
             <span className="min-w-0 truncate">{item.label}</span>
             {item.meta != null && (
-              <span className="glass-instrument shrink-0 text-meta tabular-nums text-text-faint">{item.meta}</span>
+              <span className="shrink-0 text-[12px] font-medium tabular-nums text-[var(--ix-ink-3)]">{item.meta}</span>
             )}
           </button>
         );

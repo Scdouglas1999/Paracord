@@ -4,51 +4,49 @@ import { Loader2 } from "lucide-react";
 import { cn } from "../../lib/utils";
 
 /**
- * Button (docs/glass-spec.md §1.4, §1.5, §2.3, §9), on the same roles as the
- * Glass primitives in `components/glass/primitives` (GlassButton):
+ * Button (docs/index-spec.md §3.1, §6.12), on the Index controls:
  *
- *   primary  cream, dark ink, hover white, press #e8e3d8 (Join). The ONE filled
+ *   primary  the cream action (`--ix-cream`, dark ink, 14/700). The ONE filled
  *            button on a screen: use it only where it is THE primary action of
  *            the dialog or page ("Save changes", "Log in", "Confirm").
- *   ghost    a text decision: transparent, ink, a wash on hover, a darker one on
- *            press ("Cancel", "Back", "Skip").
- *   glass    a control you press over content: a white fill at 12%, one step
- *            lighter on hover, one darker on press. For an action that is not
- *            the primary one ("Upload", "Copy", "Add").
- *   danger   the danger *well* carrying the one danger ink: the button that
- *            makes a destructive choice ("Delete channel", "Leave server").
- *            Never a red fill.
+ *   ghost    a text decision: transparent, ink-2, a wash on hover ("Cancel",
+ *            "Back", "Skip").
+ *   glass    a quiet control (the control fill, ink): an action that is not the
+ *            primary one ("Upload", "Copy", "Add"). The name is the Glass one;
+ *            the look is the card's wide control.
+ *   danger   the danger fill carrying the one danger ink: the button that makes
+ *            a destructive choice ("Delete channel", "Leave server"). Never a
+ *            red fill, and never cream.
  *
- * Sizes: sm 32, md 36 (default), lg 44 (phone and the auth screens). Capsules
- * for primary and glass, radius 12 for ghost (a text button). Hover is one
- * token step lighter, press one step darker, 120ms ease-out; nothing scales.
+ * Sizes: sm 32, md 36 (default), lg 44 (phone and the entry pages). Radius 11
+ * (10 at `sm`). Hover is one token step lighter, press one step darker, 120ms;
+ * nothing scales.
  *
  * Legacy variant/size names (`default`, `destructive`, `secondary`, `outline`,
  * `light`, `link`) are kept as aliases so the un-restyled app keeps building:
- * `light` is the same cream as `primary` (Join is the light fill), `secondary`
- * and `outline` are `glass`.
+ * `light` is the same cream as `primary`, `secondary` and `outline` are `glass`.
  */
 const PRIMARY =
-    "rounded-[var(--r-capsule)] bg-accent-primary text-text-on-accent hover:bg-accent-primary-hover active:bg-accent-primary-active";
+    "rounded-[11px] bg-accent-primary text-text-on-accent font-bold hover:bg-accent-primary-hover active:bg-accent-primary-active";
 // `light` is the same cream (`--light-white` is `--join`); it keeps its own
 // token classes so a caller that asks for "the light fill" still gets exactly that.
 const LIGHT =
-    "rounded-[var(--r-capsule)] bg-light-white text-text-on-light hover:bg-accent-primary-hover active:bg-accent-primary-active";
+    "rounded-[11px] bg-light-white text-text-on-light font-bold hover:bg-accent-primary-hover active:bg-accent-primary-active";
 const GLASS =
-    "rounded-[var(--r-capsule)] bg-[var(--glass-fill)] text-text-primary shadow-[var(--glass-edge)] hover:bg-[var(--glass-fill-hover)] active:bg-[var(--glass-fill-press)] aria-pressed:bg-[var(--glass-fill-on)]";
+    "rounded-[11px] bg-[var(--ix-fill-ctl)] text-[var(--ix-ink)] hover:bg-[var(--ix-fill-ctl-hover)] active:bg-[var(--ix-fill-2)] aria-pressed:bg-[var(--ix-fill-2)]";
 const DANGER =
-    "rounded-[var(--r-capsule)] bg-danger-well text-accent-danger hover:bg-danger-well-hover active:[background-image:linear-gradient(var(--wash-press),var(--wash-press))]";
+    "rounded-[11px] bg-[var(--ix-danger-fill)] text-[var(--ix-danger-ink)] hover:bg-[var(--ix-danger-fill-call)] active:bg-[var(--ix-danger-fill-call)]";
 
 const buttonVariants = cva(
     [
-        // pc-focusable: the §9 ring (focus.css).
+        // pc-focusable: the one focus ring (focus.css, ix-longtail.css).
         "pc-focusable",
-        "relative inline-flex select-none items-center justify-center gap-[7px] whitespace-nowrap",
+        "relative inline-flex select-none items-center justify-center gap-2 whitespace-nowrap",
         "font-semibold outline-none",
-        // Color only, over --duration-fast on the one ease-out (§9). A press
-        // never moves or resizes the button.
-        "transition-[background-color,color] duration-[var(--glass-ms)] ease-[var(--glass-ease)]",
-        "disabled:pointer-events-none disabled:opacity-40",
+        // Color only, over 120ms on the one ease (§5.15). A press never moves
+        // or resizes the button.
+        "transition-[background-color,color] duration-[120ms] ease-[var(--ix-ease)]",
+        "disabled:pointer-events-none disabled:opacity-[.45]",
     ].join(" "),
     {
         variants: {
@@ -56,7 +54,7 @@ const buttonVariants = cva(
                 primary: PRIMARY,
                 light: LIGHT,
                 ghost:
-                    "rounded-[var(--r-ctl)] bg-transparent text-text-primary hover:bg-[var(--wash-hover)] active:bg-[var(--wash-press)]",
+                    "rounded-[11px] bg-transparent text-[var(--ix-ink-2)] hover:bg-[var(--ix-fill)] hover:text-[var(--ix-ink)] active:bg-[var(--ix-fill-2)]",
                 glass: GLASS,
                 danger: DANGER,
                 // ---- legacy aliases (deprecated) ----
@@ -70,13 +68,13 @@ const buttonVariants = cva(
                 // pc-touch (§9, primitives.css): on a coarse pointer the hit
                 // area is carried out to 44px around the control without
                 // changing the control.
-                sm: "pc-touch h-8 px-3.5 text-[13px]",
-                md: "pc-touch h-9 px-4 text-name",
-                lg: "h-[var(--h-control-phone)] px-5 text-name",
-                icon: "h-9 w-9 p-0 text-name",
-                "icon-lg": "h-[var(--h-control-phone)] w-[var(--h-control-phone)] p-0 text-name",
+                sm: "pc-touch h-8 rounded-[10px] px-3 text-[13.5px]",
+                md: "pc-touch h-9 px-4 text-[14px]",
+                lg: "h-[var(--h-control-phone)] rounded-[12px] px-5 text-[14.5px]",
+                icon: "h-9 w-9 p-0 text-[14px]",
+                "icon-lg": "h-[var(--h-control-phone)] w-[var(--h-control-phone)] p-0 text-[14px]",
                 // ---- legacy alias (deprecated) ----
-                default: "h-9 px-4 text-name",
+                default: "h-9 px-4 text-[14px]",
             },
         },
         defaultVariants: {

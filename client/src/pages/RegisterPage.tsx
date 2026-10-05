@@ -20,9 +20,9 @@ import {
 import type { RegistrationMode } from '../api/auth';
 import {
   AUTH_FORM,
-  AppMark,
   AuthCanvas,
   AuthCard,
+  AuthHeading,
   AuthScroll,
   AuthStep,
   AuthSteps,
@@ -263,17 +263,14 @@ export function RegisterPage() {
   if (unavailable) {
     return (
       <AuthCanvas>
-        <AuthCard className="max-w-md">
+        <AuthCard>
           <div className={AUTH_FORM}>
-            <header className="flex items-center gap-3">
-              <AppMark size={34} />
-              <h1 className="pc-display text-title text-text-primary">{unavailable.title}</h1>
-            </header>
-            <p className="text-body leading-relaxed text-text-secondary" role="status">
+            <AuthHeading title={unavailable.title} />
+            <p className="text-[14px] leading-relaxed text-[var(--ix-ink-2)]" role="status">
               {unavailable.message}
             </p>
             {registrationEnabled && (
-              <p className="text-[13px] leading-relaxed text-text-faint">
+              <p className="text-[13px] leading-relaxed text-[var(--ix-ink-3)]">
                 When you have the link, open it in this browser and choose “Create an account to
                 join”.
               </p>
@@ -293,12 +290,9 @@ export function RegisterPage() {
 
   return (
     <AuthCanvas>
-      <AuthCard className="max-w-md short-window:max-w-2xl">
+      <AuthCard className="short-window:max-w-2xl">
         <form ref={formRef} onSubmit={handleSubmit} noValidate className={AUTH_FORM}>
-          <header className="flex items-center gap-3">
-            <AppMark size={34} />
-            <h1 className="pc-display text-title text-text-primary">Create your account</h1>
-          </header>
+          <AuthHeading title="Create your account" />
 
           {error && <ErrorBanner multiline message={error} />}
 
@@ -426,7 +420,7 @@ export function RegisterPage() {
                     field half its width. */}
                 <p
                   id={passwordHintId}
-                  className="pc-auth-span text-[13px] leading-relaxed text-text-faint"
+                  className="pc-auth-span text-[13px] leading-relaxed text-[var(--ix-ink-3)]"
                 >
                   {PASSWORD_REQUIREMENTS_HINT}
                 </p>
@@ -436,7 +430,7 @@ export function RegisterPage() {
 
           {stepId === 'password' && (
               <div>
-                <label className="flex cursor-pointer items-start gap-3 rounded-[var(--r-row)] bg-bg-mod-subtle px-4 py-3.5 transition-colors duration-[var(--glass-ms)] hover:bg-bg-mod-strong">
+                <label className="flex cursor-pointer items-start gap-3 rounded-[12px] bg-[var(--ix-fill-card)] px-4 py-3.5 shadow-[inset_0_0_0_1px_var(--ix-line)] transition-colors duration-[120ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill-card-hover)]">
                   <input
                     type="checkbox"
                     checked={draft.agreed}
@@ -445,7 +439,7 @@ export function RegisterPage() {
                     aria-invalid={Boolean(errorFor('agreed')) || undefined}
                     aria-describedby={errorFor('agreed') ? termsErrorId : undefined}
                   />
-                  <span className="text-[13px] leading-relaxed text-text-secondary">
+                  <span className="text-[13px] leading-relaxed text-[var(--ix-ink-2)]">
                     I have read and agree to the{' '}
                     <Link
                       to="/terms"
@@ -464,7 +458,7 @@ export function RegisterPage() {
                   </span>
                 </label>
                 {errorFor('agreed') && (
-                  <p id={termsErrorId} className="mt-2 text-[13px] text-accent-danger">
+                  <p id={termsErrorId} className="mt-2 text-[13px] text-[var(--ix-danger-ink)]">
                     {errorFor('agreed')}
                   </p>
                 )}
@@ -482,7 +476,7 @@ export function RegisterPage() {
             </Button>
           </div>
 
-          <p className="text-label text-text-secondary">
+          <p className="text-[13.5px] text-[var(--ix-ink-3)]">
             Already have an account?{' '}
             <Link
               to="/login"

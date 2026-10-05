@@ -65,11 +65,12 @@ function position(
 }
 
 /**
- * Popover: the floating-surface shell (docs/glass-spec.md §5), a near-solid
- * black at .97 with the heavier blur, a hairline and the raised shadow (the
- * `pc-floating` recipe, which also goes fully opaque under reduced transparency
- * and High contrast). It owns placement, Escape, outside-click and scroll
- * dismissal; what goes inside is the caller's business.
+ * Popover: the floating-surface shell (docs/index-spec.md §6.2, §6.11), a
+ * near-solid popover (`--ix-pop`) at radius 14 with a hairline and the room
+ * card's shadow (the `pc-floating` recipe, which also goes fully opaque under
+ * reduced transparency and High contrast). It owns placement, Escape,
+ * outside-click and scroll dismissal; what goes inside is the caller's
+ * business, and reads the Index inks (`ix-lt--pop`).
  */
 export function Popover({
   anchor,
@@ -137,7 +138,7 @@ export function Popover({
       aria-label={label}
       data-native-overlay-occlude
       className={cn(
-        'pc-floating pc-transition fixed z-[1100] min-w-[10rem] max-w-[calc(100vw-1rem)] p-1',
+        'pc-floating ix-lt--pop fixed z-[1100] min-w-[10rem] max-w-[calc(100vw-1rem)] p-1.5',
         exiting ? 'pc-pop-out' : 'pc-pop-in',
         className,
       )}
@@ -177,28 +178,33 @@ export const MenuItem = React.forwardRef<HTMLButtonElement, MenuItemProps>(funct
       role="menuitem"
       className={cn(
         'pc-focusable flex w-full items-center gap-2.5 rounded-[10px] px-2.5 text-left',
-        'h-[var(--h-list-row)] text-[15px] font-medium',
-        'pc-pressable-row',
+        'h-9 text-[14px] font-medium',
+        'transition-[background-color,color] duration-[120ms] ease-[var(--ix-ease)]',
         danger
-          ? 'text-accent-danger hover:bg-danger-well'
-          : 'text-text-secondary hover:bg-[var(--wash-hover)] hover:text-text-primary',
-        'disabled:pointer-events-none disabled:opacity-40',
+          ? 'text-[var(--ix-danger-ink)] hover:bg-[var(--ix-danger-fill)]'
+          : 'text-[var(--ix-ink)] hover:bg-[var(--ix-fill)] active:bg-[var(--ix-fill-2)]',
+        'disabled:pointer-events-none disabled:opacity-[.45]',
         className,
       )}
       {...props}
     >
       {icon != null && (
-        <span className="flex h-4 w-4 shrink-0 items-center justify-center" aria-hidden>
+        <span
+          className={cn('flex h-4 w-4 shrink-0 items-center justify-center', !danger && 'text-[var(--ix-ink-3)]')}
+          aria-hidden
+        >
           {icon}
         </span>
       )}
       <span className="min-w-0 flex-1 truncate">{children}</span>
-      {trailing != null && <span className="glass-instrument ml-auto shrink-0 text-meta font-normal text-text-faint">{trailing}</span>}
+      {trailing != null && (
+        <span className="ml-auto shrink-0 text-[12px] font-medium tabular-nums text-[var(--ix-ink-3)]">{trailing}</span>
+      )}
     </button>
   );
 });
 
-/** A quiet group heading inside a menu: the Glass kicker (12/700, uppercase). */
+/** A quiet group heading inside a menu: sentence case, 12.5/600, tertiary ink. */
 export function MenuLabel({ children }: { children: React.ReactNode }) {
-  return <div className="glass-kicker px-2.5 pb-1 pt-2.5 text-text-faint">{children}</div>;
+  return <div className="px-2.5 pb-1 pt-2.5 text-[12.5px] font-semibold text-[var(--ix-ink-3)]">{children}</div>;
 }

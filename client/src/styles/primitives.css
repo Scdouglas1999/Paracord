@@ -1,124 +1,116 @@
 /* =============================================================================
-   Paracord primitive recipes, on Glass (docs/glass-spec.md §1, §2, §5, §9).
+   Paracord primitive recipes, on Index (docs/index-spec.md §2, §6.7, §6.11, §6.12).
 
    The shared, tokens-only implementation of the surfaces and effects the
    React primitives in src/components/ui/ compose. Every class here reads from
    src/styles/tokens.css and nothing else: no hex, no literal shadow, no ad-hoc
-   spacing. A feature component that needs a plate, a well, a dialog or a
+   spacing. A feature component that needs a card, a field, a dialog or a
    floating surface uses these rather than re-deriving the recipe.
 
-   The rules they carry (docs/glass-spec.md §1): content is solid and has no
-   outline; translucency, blur and a hairline belong to what you press or what
-   floats over text (menus, popovers, pickers). Hover is one step lighter and
-   press one step darker, over 120ms; nothing scales on press.
+   Flat tonal identity (§1.7): a surface is a fill and a hairline, never a glow.
+   Fields are `--ix-fill-field` with a hairline, cards are `--ix-card`, what
+   floats over text (a menu, a picker) is near-solid `--ix-pop`. Hover is one
+   step lighter and press one step darker, in 120ms, and nothing scales on
+   press. Only color animates on a control; a surface that arrives does so on
+   transform and opacity.
 
    NAMING: `pc-` prefix so a recipe class can never collide with a Tailwind
    utility. Modifiers are plain adjectives applied alongside (`pc-plate is-lit`).
    ============================================================================= */
 
 /* -----------------------------------------------------------------------------
-   Elevation. A pane (the settings window, an auth card) is near-solid at radius
-   28. Inside it, a well is recessed (`--well`), a raised card is a tonal step
-   (`--bub`, `--raise`), and neither carries an outline. Only what floats over
-   text (a menu, a picker, a tooltip) is glass: near-solid black at .97 with the
-   heavier blur (§5), and a hairline because it is a control you press.
-   Never nest a plate in a plate.
+   Surfaces. A plate is the card (event, poll, file: `--ix-card`, radius 20, the
+   event shadow). Inside a surface a well is the field fill with a hairline, and
+   a raised row is the quiet control fill. Neither carries a shadow. Never nest
+   a plate in a plate.
    -------------------------------------------------------------------------- */
 
 .pc-plate {
-  background: var(--bg-plate);
-  border-radius: var(--r-pane);
-  box-shadow: var(--shadow-plate);
+  background: var(--ix-card);
+  border-radius: 20px;
+  box-shadow: var(--ix-shadow-event);
 }
 
-/* A plate whose room is live: the lit ring sits ON TOP of the plate shadow. */
+/* A plate whose room is live: the amber edge sits ON TOP of the plate shadow. */
 .pc-plate.is-lit {
-  box-shadow: var(--shadow-plate), var(--ring-lit-plate);
+  box-shadow: var(--ix-shadow-event), inset 0 0 0 1px var(--ix-amber-edge);
 }
 
+/* A field, or a recessed block of text: the field fill and a hairline (§6.14). */
 .pc-well {
-  background: var(--bg-well);
-  border-radius: var(--r-row);
-  box-shadow: var(--shadow-well);
+  background: var(--ix-fill-field);
+  border-radius: 12px;
+  box-shadow: inset 0 0 0 1px var(--ix-line);
+}
+
+/* A field you type into: the well that also answers to focus. The focus edge and
+   the one ring are drawn in ix-longtail.css (a ring never lives in a recipe a
+   utility can override, cascade.test.ts). An invalid field keeps its danger edge. */
+.pc-field {
+  background: var(--ix-fill-field);
+  border-radius: 12px;
+  box-shadow: inset 0 0 0 1px var(--ix-line);
+  transition: background-color 120ms var(--ix-ease);
+}
+
+.pc-field[aria-invalid='true'],
+.pc-field[data-invalid='true'] {
+  box-shadow: inset 0 0 0 1px var(--ix-danger-ink);
 }
 
 .pc-raised {
-  background: var(--bg-raised);
-  border-radius: var(--r-ctl);
-  box-shadow: var(--shadow-raised);
+  background: var(--ix-fill-ctl);
+  border-radius: 11px;
 }
 
-/* Menus, popovers, pickers and the small floating bars over content (§5): a
-   near-solid fill so text behind never ghosts through, the heavier blur, a
-   hairline, and the raised shadow. Rows inside sit at radius 8-12. */
+/* Menus, popovers and the small bars that float over content: near-solid, a
+   hairline edge and the room card's shadow (§6.2, §6.11). Rows inside sit at
+   radius 10. No blur: nothing here may sit over a scrolling list (§1.9). */
 .pc-floating {
-  background: var(--popover);
-  border-radius: var(--r-row);
-  box-shadow: inset 0 0 0 1px var(--border-subtle), var(--sh-raised);
-  -webkit-backdrop-filter: blur(30px) saturate(1.2);
-  backdrop-filter: blur(30px) saturate(1.2);
+  background: var(--ix-pop);
+  border-radius: 14px;
+  box-shadow: 0 0 0 1px var(--ix-edge-lit), var(--ix-shadow-room);
 }
 
-/* A tooltip: the same near-solid fill and hairline, no blur (it is a few words
-   long, and a translucent label can stick over a native video hole on Linux),
-   and the small-control radius. */
+/* A tooltip (§6.11): near-solid, radius 8, no arrow. */
 .pc-tip {
-  background: var(--popover);
-  border-radius: var(--r-ctl);
-  box-shadow: inset 0 0 0 1px var(--border-subtle), var(--sh-raised);
+  background: var(--ix-tip);
+  border-radius: 8px;
+  box-shadow: 0 0 0 1px var(--ix-edge-lit), var(--ix-shadow-room);
 }
 
-/* A dialog is a near-solid pane that floats over the dimmed app: the pane's
-   fill and depth, no border. `Modal` sets `--pc-dialog-r` per size (24 for a
-   confirm, 28 for a window); a bare `pc-dialog` is a pane. */
+/* A dialog (§6.12): the card color, radius 20, the call surface's depth. `Modal`
+   sets the width by size; a bare `pc-dialog` is a card. */
 .pc-dialog {
-  background: var(--bg-plate);
-  border-radius: var(--pc-dialog-r, var(--r-pane));
-  box-shadow: var(--shadow-plate);
+  background: var(--ix-card);
+  border-radius: 20px;
+  box-shadow: var(--ix-shadow-call);
 }
 
-/* A floating sheet (the command palette, the channel switcher): a dialog that is
-   glass rather than a pane, so it takes the popover's near-solid black at .97,
-   the heavier blur and a hairline, at the dialog's radius and depth. The
-   compound selector is what lets it beat `.pc-dialog` regardless of order. */
+/* A floating sheet (the quick switcher style): a dialog that is a near-solid
+   popover instead of a card, at the dialog's radius and depth. */
 .pc-dialog.pc-sheet {
-  background: var(--popover);
-  box-shadow: inset 0 0 0 1px var(--border-subtle), var(--sh-pane);
-  -webkit-backdrop-filter: blur(30px) saturate(1.2);
-  backdrop-filter: blur(30px) saturate(1.2);
+  background: var(--ix-pop);
+  box-shadow: 0 0 0 1px var(--ix-edge-lit), var(--ix-shadow-call);
 }
 
 /* A card that floats over the page without a scrim (a profile card) carries
-   text of its own, so the page must not read through it. The floating color
-   laid over the opaque plate: the same shade, with nothing ghosting behind. */
+   text of its own, so the page must not read through it. */
 .pc-dialog-opaque {
-  background: linear-gradient(var(--bg-floating), var(--bg-floating)), var(--bg-plate);
-}
-
-/* §3: on a phone, panes round up. */
-@media (max-width: 640px) {
-  .pc-dialog {
-    border-radius: var(--radius-plate-phone);
-    box-shadow: var(--shadow-plate-phone);
-  }
+  background: var(--ix-pop-solid);
 }
 
 /* Reduced transparency (Settings › Appearance writes the attribute, following
-   the device when it is left on "Match my system"): a floating surface becomes
-   opaque and drops its blur. */
+   the device when it is left on "Match my system"): a floating surface is
+   fully opaque (§10). */
 :root[data-reduced-transparency='true'] :where(.pc-floating, .pc-tip, .pc-dialog.pc-sheet) {
-  background: var(--solid);
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
+  background: var(--ix-pop-solid);
 }
 
-/* High contrast: nothing is see-through. The edge comes from the shadow tokens
-   (`--sh-raised`, `--sh-pane`), which that theme draws as a 1px line, so a
-   surface needs no border of its own. */
+/* High contrast: nothing is see-through, and the edge is the .2 hairline the
+   theme sets (`--ix-edge-lit`). */
 [data-theme='glass-contrast'] :where(.pc-floating, .pc-tip, .pc-dialog.pc-sheet) {
-  background: var(--solid);
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
+  background: var(--ix-pop-solid);
 }
 
 /* -----------------------------------------------------------------------------
@@ -408,7 +400,7 @@
 @keyframes pc-pop {
   from {
     opacity: 0;
-    transform: scale(0.96);
+    transform: scale(0.97);
   }
 }
 
@@ -419,7 +411,38 @@
 @keyframes pc-pop-out {
   to {
     opacity: 0;
-    transform: scale(0.96);
+    transform: scale(0.97);
+  }
+}
+
+/* A dialog (§6.12): scale(.97) and fade in on the spring, 220ms; out on the ease
+   in 150ms (inside the 170ms `usePresence` holds it for). The scrim fades with it. */
+@keyframes pc-dialog-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+
+@keyframes pc-dialog-out {
+  to {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+
+/* A toast (§5.18): from 8px above and a fade, 300ms on the spring; out 150ms. */
+@keyframes pc-toast-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, -8px, 0);
+  }
+}
+
+@keyframes pc-toast-out {
+  to {
+    opacity: 0;
+    transform: translate3d(0, -4px, 0);
   }
 }
 
@@ -512,11 +535,35 @@
 }
 
 .pc-pop-in {
-  animation: pc-pop var(--duration-normal) var(--ease-out) backwards;
+  animation: pc-pop 180ms var(--ix-ease) backwards;
 }
 
 .pc-pop-out {
-  animation: pc-pop-out var(--duration-exit) var(--ease-in) forwards;
+  animation: pc-pop-out 120ms var(--ix-ease) forwards;
+}
+
+.pc-dialog-enter {
+  animation: pc-dialog-in 220ms var(--ix-spring) backwards;
+}
+
+.pc-dialog-exit {
+  animation: pc-dialog-out 150ms var(--ix-ease) forwards;
+}
+
+.pc-scrim-in {
+  animation: pc-fade 200ms var(--ix-ease) backwards;
+}
+
+.pc-scrim-out {
+  animation: pc-fade-out 150ms var(--ix-ease) forwards;
+}
+
+.pc-toast-in {
+  animation: pc-toast-in 300ms var(--ix-spring) backwards;
+}
+
+.pc-toast-out {
+  animation: pc-toast-out 150ms var(--ix-ease) forwards;
 }
 
 .pc-content-in {
@@ -530,6 +577,9 @@
 .pc-exit,
 .pc-pop-out,
 .pc-fade-out,
+.pc-dialog-exit,
+.pc-scrim-out,
+.pc-toast-out,
 .pc-banner-out,
 .pc-drawer-out-left,
 .pc-drawer-out-right {
@@ -705,14 +755,9 @@
    §5 Loading and presence indicators.
    -------------------------------------------------------------------------- */
 
-/* A matte placeholder pulse — the breath timing, like every other slow pulse
-   in the product, and it stops dead under reduced motion rather than freezing
-   on its end frame through the global 0s override. */
+/* A placeholder is a flat wash and it is still: nothing moves unless something
+   happened (docs/index-spec.md §1.2). It crossfades to content (`SkeletonSwap`). */
 .pc-skeleton {
-  animation: skeleton-pulse var(--duration-breathe) var(--ease-in-out) infinite;
-}
-
-:root[data-motion='reduced'] .pc-skeleton {
   animation: none;
 }
 
@@ -1064,45 +1109,37 @@
 }
 
 /* -----------------------------------------------------------------------------
-   The first-run plates — login, register, the first-owner claim, account setup.
+   The first-run column — login, register, the first-owner claim, account setup.
 
-   §3's rhythm assumes a window with room in it. The desktop client's window
-   goes down to 940×560 (`client/src-tauri/tauri.conf.json`), and at that height
-   a plate laid out on the full rhythm is taller than the window — which is how
-   a native app ends up scrolling like a webpage, with its one action below the
+   The rhythm assumes a window with room in it. The desktop client's window goes
+   down to 940×560 (`client/src-tauri/tauri.conf.json`), and at that height a
+   column laid out on the full rhythm is taller than the window — which is how a
+   native app ends up scrolling like a webpage, with its one action below the
    fold. So the rhythm is a pair of custom properties and it tightens exactly
-   once, at the height where it has to. Still on the 4px grid.
+   once, at the height where it has to. Still on the 4px grid. The column has no
+   padding of its own: it sits on the ground (docs/index-spec.md §6.14).
 
    Below `sm` none of this applies: that is a browser at phone width, where a
    page that scrolls is the normal and correct thing.
    -------------------------------------------------------------------------- */
 .pc-auth-form {
-  --auth-pad: 28px;
   --auth-gap: 24px;
-  --auth-field-gap: 20px;
+  --auth-field-gap: 18px;
   display: flex;
   min-height: 0;
   flex: 1 1 auto;
   flex-direction: column;
   gap: var(--auth-gap);
-  padding: var(--auth-pad);
-}
-
-@media (min-width: 640px) {
-  .pc-auth-form {
-    --auth-pad: 32px;
-  }
 }
 
 @media (min-width: 640px) and (max-height: 700px) {
   .pc-auth-form {
-    --auth-pad: 16px;
     --auth-gap: 14px;
     --auth-field-gap: 12px;
   }
 }
 
-/* The one region inside a first-run plate that may scroll, for the surface that
+/* The one region inside the first-run column that may scroll, for the surface that
    genuinely cannot fit 940×500 — a 24-word phrase, a list of servers. The
    heading above it and the action below it never move, so "Continue" is never
    below a fold. */
@@ -1116,10 +1153,11 @@
      the ring off the left and right edges of every control inside it. */
   margin-inline: -4px;
   padding-inline: 4px;
-  padding-block: 1px;
+  margin-block: -3px;
+  padding-block: 4px;
 }
 
-/* Only a window that is being asked to hold the whole plate makes this a scroll
+/* Only a window that is being asked to hold the whole column makes this a scroll
    container. Below `sm` the page scrolls, so this must NOT be one: an
    `overflow` box with `overscroll-behavior: contain` swallows a wheel event
    that belongs to the page behind it, and the phone layout stops scrolling
@@ -1135,20 +1173,20 @@
    wash (§6.2), and an inset shadow rather than a border so it cannot change
    the height it is reporting on. `data-overflow` is set by AuthScroll. */
 .pc-auth-fields[data-overflow='top'] {
-  box-shadow: inset 0 1px 0 var(--border-subtle);
+  box-shadow: inset 0 1px 0 var(--ix-line);
 }
 
 .pc-auth-fields[data-overflow='bottom'] {
-  box-shadow: inset 0 -1px 0 var(--border-subtle);
+  box-shadow: inset 0 -1px 0 var(--ix-line);
 }
 
 .pc-auth-fields[data-overflow='both'] {
   box-shadow:
-    inset 0 1px 0 var(--border-subtle),
-    inset 0 -1px 0 var(--border-subtle);
+    inset 0 1px 0 var(--ix-line),
+    inset 0 -1px 0 var(--ix-line);
 }
 
-/* A short, wide window has room the plate is not using. A paired field region
+/* A short, wide window has room the column is not using. A paired field region
    lays its fields out in two columns there rather than making a native window
    scroll two inches of form — the app uses the window it was given. A field
    that must keep the full measure (a phrase box, a paragraph) carries

@@ -359,7 +359,7 @@ export function LoginPage() {
     <button
       type="button"
       onClick={() => { setError(''); setSuccessMsg(''); setMfaCode(''); setMfaTicket(''); setView('login'); }}
-      className="text-label font-semibold text-text-link underline-offset-4 hover:underline"
+      className="ix-auth__link"
     >
       Back to sign in
     </button>
@@ -369,7 +369,7 @@ export function LoginPage() {
   if (view === 'mfa-challenge') {
     return (
       <AuthCanvas>
-        <AuthCard className="max-w-md">
+        <AuthCard>
           <form onSubmit={handleMfaSubmit} className={AUTH_FORM}>
             <AuthHeading
               title="Two-factor authentication"
@@ -410,7 +410,7 @@ export function LoginPage() {
   if (view === 'forgot-password') {
     return (
       <AuthCanvas>
-        <AuthCard className="max-w-md">
+        <AuthCard>
           <form onSubmit={handleForgotPassword} className={AUTH_FORM}>
             <AuthHeading
               title="Reset your password"
@@ -437,11 +437,11 @@ export function LoginPage() {
               Request reset token
             </Button>
 
-            <div className="flex items-center justify-between text-label text-text-muted">
+            <div className="flex items-center justify-between text-[13.5px] text-[var(--ix-ink-3)]">
               <button
                 type="button"
                 onClick={() => { setError(''); setSuccessMsg(''); setView('reset-password'); }}
-                className="font-semibold text-text-link underline-offset-4 hover:underline"
+                className="ix-auth__link"
               >
                 Enter token
               </button>
@@ -457,7 +457,7 @@ export function LoginPage() {
   if (view === 'reset-password') {
     return (
       <AuthCanvas>
-        <AuthCard className="max-w-md">
+        <AuthCard>
           <form onSubmit={handleResetPassword} className={AUTH_FORM}>
             <AuthHeading
               title="Set new password"
@@ -508,11 +508,11 @@ export function LoginPage() {
               Set new password
             </Button>
 
-            <div className="flex items-center justify-between text-label text-text-muted">
+            <div className="flex items-center justify-between text-[13.5px] text-[var(--ix-ink-3)]">
               <button
                 type="button"
                 onClick={() => { setError(''); setSuccessMsg(''); setView('forgot-password'); }}
-                className="font-semibold text-text-link underline-offset-4 hover:underline"
+                className="ix-auth__link"
               >
                 Request a new token
               </button>
@@ -527,7 +527,7 @@ export function LoginPage() {
   if (view === 'verify-email') {
     return (
       <AuthCanvas>
-        <AuthCard className="max-w-md">
+        <AuthCard>
           <form onSubmit={handleVerifyEmail} className={AUTH_FORM}>
             <AuthHeading
               title="Verify email"
@@ -563,7 +563,7 @@ export function LoginPage() {
 
   return (
     <AuthCanvas>
-      <AuthCard className="max-w-md">
+      <AuthCard>
         <div>
           <form onSubmit={handleSubmit} className={AUTH_FORM}>
             <AuthHeading
@@ -574,9 +574,9 @@ export function LoginPage() {
             {sessionNotice && !error && (
               <div
                 role="status"
-                className="pc-well flex items-start gap-2.5 px-4 py-3 text-label text-text-secondary"
+                className="pc-well flex items-start gap-2.5 px-4 py-3 text-[14px] text-[var(--ix-ink-2)]"
               >
-                <Info size={16} className="mt-px shrink-0 text-text-tertiary" />
+                <Info size={16} className="mt-px shrink-0 text-[var(--ix-ink-3)]" />
                 <span className="leading-relaxed">{sessionNotice}</span>
               </div>
             )}
@@ -609,21 +609,21 @@ export function LoginPage() {
               </Field>
             </AuthScroll>
 
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] text-text-muted">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[13.5px] text-[var(--ix-ink-3)]">
               <button
                 type="button"
                 onClick={() => { setError(''); setView('forgot-password'); }}
-                className="font-semibold text-text-link underline-offset-4 hover:underline"
+                className="ix-auth__link"
               >
                 Forgot your password?
               </button>
-              <span className="text-text-faint" aria-hidden="true">
+              <span className="text-[var(--ix-ink-3)]" aria-hidden="true">
                 &middot;
               </span>
               <button
                 type="button"
                 onClick={() => { setError(''); setSuccessMsg(''); setView('verify-email'); }}
-                className="font-semibold text-text-link underline-offset-4 hover:underline"
+                className="ix-auth__link"
               >
                 Verify email token
               </button>
@@ -634,11 +634,11 @@ export function LoginPage() {
                 install reaches exactly this screen and nothing else. Its own
                 row: it is a different kind of way in from the two above, and a
                 wrapped middot reads as a typo. */}
-            <div className="text-[13px] text-text-muted">
+            <div className="text-[13.5px] text-[var(--ix-ink-3)]">
               <button
                 type="button"
                 onClick={() => navigate('/recover')}
-                className="font-semibold text-text-link underline-offset-4 hover:underline"
+                className="ix-auth__link"
               >
                 Recover from phrase
               </button>
@@ -653,7 +653,7 @@ export function LoginPage() {
               Log in
             </Button>
 
-            <p className="text-label text-text-secondary">
+            <p className="text-[13.5px] text-[var(--ix-ink-2)]">
               Need an account?{' '}
               <Link
                 to="/register"
@@ -664,16 +664,16 @@ export function LoginPage() {
             </p>
 
             {serverUrl && (
-              <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-border-subtle pt-5 text-[13px] text-text-muted">
+              <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-[var(--ix-line)] pt-5 text-[13px] text-[var(--ix-ink-3)]">
                 <span>Connected to</span>
-                <span className="font-code text-text-secondary">{serverUrl}</span>
-                <span className="text-text-faint" aria-hidden="true">
+                <span className="font-code text-[var(--ix-ink-2)]">{serverUrl}</span>
+                <span className="text-[var(--ix-ink-3)]" aria-hidden="true">
                   &middot;
                 </span>
                 <button
                   type="button"
                   onClick={handleChangeServer}
-                  className="font-semibold text-text-link underline-offset-4 hover:underline"
+                  className="ix-auth__link"
                 >
                   Change instance
                 </button>

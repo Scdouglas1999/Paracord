@@ -150,4 +150,13 @@ describe('ThemeSelector', () => {
     // The vocabulary lint's rule for page copy: no "room" or "building".
     expect(text).not.toMatch(/\broom\b|\bbuilding\b/i);
   });
+
+  it('never mentions stream reactions, in either motion state', () => {
+    const { container, rerender } = render(<ThemeSelector />);
+    expect(container.textContent).not.toMatch(/reaction/i);
+    configureMotion('full');
+    useUIStore.setState({ motion: 'full' });
+    rerender(<ThemeSelector />);
+    expect(container.textContent).not.toMatch(/reaction/i);
+  });
 });

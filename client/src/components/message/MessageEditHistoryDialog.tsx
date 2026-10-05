@@ -1,19 +1,19 @@
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
-import { X } from 'lucide-react';
+import { useCallback, useEffect, useId, useState } from 'react';
 import { createChannelApi, type MessageEditHistoryEntry } from '../../api/channels';
 import { extractApiError } from '../../api/client';
-import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { captureScopedOperation, type OperationContext } from '../../lib/operationContext';
 import type { AccountScope } from '../../lib/serverScope';
 import { formatTimestamp } from '../../lib/formatters';
+import { Button } from '../ui/Button';
 import { LoadingSpinner } from '../ui/Feedback';
+import { Modal, ModalFooter, ModalHeader, ModalTitle } from '../ui/Modal';
 
 interface Props {
   scope: AccountScope | null;
   channelId: string;
   messageId: string;
-  position: { x: number; y: number };
+  /** Where the edited mark was pressed. The history is a centered dialog now (§6.12), so it is not read. */
+  position?: { x: number; y: number };
   onClose: () => void;
 }
 
@@ -54,39 +54,37 @@ function HistoryContents({ scope, channelId, messageId, onClose, onRetry }: Omit
     };
   }, [serverId, userId, channelId, messageId, onClose]);
 
-  if (state.kind === 'loading') return <div className="px-3 py-4"><LoadingSpinner size="sm" label="Loading earlier versions" /></div>;
-  if (state.kind === 'error') return <div role="alert" className="space-y-3 px-3 py-4 text-sm">
-    <p className="font-semibold text-accent-danger">Couldn’t load edit history</p>
-    <p className="break-words text-text-secondary">{state.message}</p>
-    <button type="button" onClick={onRetry} className="min-h-11 rounded-[var(--radius-control)] bg-bg-raised px-3 text-label font-semibold text-text-primary shadow-[var(--shadow-chip)] hover:bg-bg-mod-strong focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]">Retry</button>
+  if (state.kind === 'loading') return <div className="px-[22px] py-4"><LoadingSpinner size="sm" label="Loading earlier versions" /></div>;
+  if (state.kind === 'error') return <div role="alert" className="space-y-3 px-[22px] py-4 text-[14px]">
+    <p className="font-semibold text-[var(--ix-danger-ink)]">Couldn’t load edit history</p>
+    <p className="break-words text-[var(--ix-ink-2)]">{state.message}</p>
+    <Button variant="glass" size="sm" onClick={onRetry}>Retry</Button>
   </div>;
-  if (state.entries.length === 0) return <p className="px-3 py-4 text-meta text-text-muted">No earlier versions are available.</p>;
-  return <div className="flex flex-col">
-    {state.entries.map((entry, index) => <div key={entry.id} className="border-b border-border-subtle px-3 py-2.5 last:border-b-0">
-      <div className="pc-mono mb-0.5 text-meta text-text-faint">Version {index + 1} · {formatTimestamp(entry.edited_at)}</div>
-      <div className="break-words text-body leading-relaxed text-text-secondary">{entry.content}</div>
-    </div>)}
-  </div>;
+  if (state.entries.length === 0) return <p className="px-[22px] py-4 text-[13px] text-[var(--ix-ink-3)]">No earlier versions are available.</p>;
+  return <ol className="flex flex-col gap-1.5 px-[22px] py-1">
+    {state.entries.map((entry, index) => <li key={entry.id} className="rounded-[12px] bg-[var(--ix-fill-card)] px-3 py-2.5 shadow-[inset_0_0_0_1px_var(--ix-line)]">
+      <div className="mb-0.5 text-[12px] font-medium tabular-nums text-[var(--ix-ink-3)]">Version {index + 1} · {formatTimestamp(entry.edited_at)}</div>
+      <div className="whitespace-pre-wrap break-words text-[14px] leading-[1.45] text-[var(--ix-ink-2)]">{entry.content}</div>
+    </li>)}
+  </ol>;
 }
 
-function OwnedHistoryDialog({ scope, channelId, messageId, position, onClose }: Props) {
-  const dialog = useRef<HTMLDivElement>(null);
+/**
+ * Edit history (docs/index-spec.md §6.12): a centered card dialog, each earlier
+ * version a quiet row with its time in 12 ink-3. Focus goes to the close
+ * control and comes back to the edited mark on close.
+ */
+function OwnedHistoryDialog({ scope, channelId, messageId, onClose }: Props) {
   const titleId = useId();
   const [attempt, setAttempt] = useState(0);
   const retry = useCallback(() => setAttempt(value => value + 1), []);
-  useFocusTrap(dialog, true, onClose);
-  return createPortal(<div className="fixed inset-0 z-[100]" onClick={event => { if (event.target === event.currentTarget) onClose(); }}>
-    <div ref={dialog} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}
-      className="pc-dialog absolute max-h-[min(20rem,calc(100dvh-1rem))] w-[min(20rem,calc(100vw-1rem))] overflow-y-auto focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-      style={{ left: `clamp(8px, ${position.x}px, calc(100vw - min(20rem, calc(100vw - 1rem)) - 8px))`,
-        top: `clamp(8px, ${position.y}px, calc(100dvh - min(20rem, calc(100dvh - 1rem)) - 8px))` }}>
-      <div className="flex items-center justify-between gap-2 border-b border-border-subtle pl-3 pr-1 text-label font-semibold text-text-primary">
-        <h2 id={titleId} className="pc-display py-2.5">Edit history</h2>
-        <button type="button" aria-label="Close edit history" onClick={onClose} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-text-muted hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"><X size={16} /></button>
-      </div>
+  return <Modal open onClose={onClose} labeledBy={titleId} size="sm" showCloseButton closeLabel="Close edit history" panelClassName="flex max-h-[min(34rem,calc(100dvh-2rem))] flex-col">
+    <ModalHeader className="pr-14 pb-3"><ModalTitle id={titleId}>Edit history</ModalTitle></ModalHeader>
+    <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
       <HistoryContents key={attempt} scope={scope} channelId={channelId} messageId={messageId} onClose={onClose} onRetry={retry} />
     </div>
-  </div>, document.body);
+    <ModalFooter className="pt-3"><Button onClick={onClose}>Done</Button></ModalFooter>
+  </Modal>;
 }
 
 /** Remount on any ownership change so a preceding account/message never flashes. */

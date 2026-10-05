@@ -32,4 +32,11 @@ describe('operator mirror admission', () => {
     await user.click(screen.getByRole('button', { name: 'Save changes' }));
     expect(mocks.update).toHaveBeenCalledWith('12', { name: 'Peer mirror', description: undefined, visibility: 'public' });
   });
+
+  it('marks each server with its own mark (one letter), not initials on an identity color', async () => {
+    const { container } = render(<GuildsPanel />);
+    await screen.findByText('Peer mirror');
+    const marks = Array.from(container.querySelectorAll('table .ix-sq'));
+    expect(marks.map((mark) => mark.textContent)).toEqual(['P']);
+  });
 });

@@ -1,26 +1,29 @@
-import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
 import { AlertCircle, CheckCircle2 } from 'lucide-react';
 import { AppMark } from '../components/brand/AppMark';
+import { PEOPLE_HUE } from '../lib/identityHue';
 import { cn } from '../lib/utils';
 
 /**
  * Shared building blocks for the unauthenticated entry surfaces (login,
  * register, connect, invite, account setup/recover/unlock, first-owner setup,
- * bot authorize).
- *
- * These are the first screens anyone sees, so they are held to the same law as
- * the rest of the app (docs/glass-spec.md): **one near-solid pane, centered on a
- * dark room.** Instrument Sans throughout, cream for the one filled action.
- * No gradient hero, no marketing rail, no illustration filler; the only light
- * is the pane's own faint glow.
+ * bot authorize), on Index (docs/index-spec.md §6.14): **the ground with the main
+ * glow at hue 210 and one centered 400px column** on it: the Paracord mark, a
+ * 28/700 title, fields 44 tall at radius 12, one cream primary action and text
+ * secondary actions. No card, no plate, no illustration filler; the only light is
+ * the window's own tint.
  */
 
 /** The app mark, re-exported for the entry surfaces that import it from here. */
 export { AppMark };
 
+/** The column's width (§6.14). A surface that needs more room says so with its own `max-w`. */
+const COLUMN = 'max-w-[400px]';
+
 /**
- * Full-page canvas: the street (`--bg-base`), matte, with the room's faint glow
- * behind the pane (`--glow`, the same token the panes carry in their far corner).
+ * Full-page canvas: the ground (`--ix-main`) with the place's main glow at hue 210
+ * (People's, the neutral blue every window starts with: `ix-hue-main`), and the
+ * Index scope so the controls inside read the Index inks (`ix-lt--main`).
  *
  * **The fit law.** At the desktop client's window sizes — 1280×800 default,
  * 940×560 minimum (`client/src-tauri/tauri.conf.json`) — a first-run surface
@@ -28,7 +31,7 @@ export { AppMark };
  * webpage someone wrapped in a frame, and it puts the one action below the
  * fold. So from `sm` up the canvas is exactly the window and clips nothing
  * out of it: {@link AuthCard} is bounded to the same height, and the one
- * region inside a plate that may scroll is {@link AuthScroll}, which leaves
+ * region inside the column that may scroll is {@link AuthScroll}, which leaves
  * the heading and the action where they are.
  *
  * Below `sm` this is a browser at phone width, where a page that scrolls is
@@ -41,10 +44,8 @@ export function AuthCanvas({ children, className }: { children: ReactNode; class
       aria-label="Account access"
       // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- Keyboard users must be able to scroll this viewport with Page Up/Down and Home/End.
       tabIndex={0}
-      className={cn(
-        'h-dvh w-full overflow-y-auto bg-bg-base bg-[radial-gradient(56rem_40rem_at_50%_42%,var(--glow),transparent_70%)] sm:overflow-hidden',
-        className,
-      )}
+      className={cn('ix-auth ix-hue-main ix-lt--main h-dvh w-full overflow-y-auto sm:overflow-hidden', className)}
+      style={{ '--ix-hue': PEOPLE_HUE } as CSSProperties}
     >
       <div className="flex min-h-full w-full items-center justify-center px-4 py-10 sm:h-full sm:min-h-0 sm:py-6">
         {children}
@@ -54,31 +55,28 @@ export function AuthCanvas({ children, className }: { children: ReactNode; class
 }
 
 /**
- * One pane on the dark room: the pane surface (near-solid, radius 28, the pane
- * shadow, a faint corner glow), which reduced transparency makes fully opaque.
- *
- * A column, and bounded by the window from `sm` up — see {@link AuthCanvas}.
- * `min-h-0` is what lets an {@link AuthScroll} inside it actually shrink
- * instead of pushing the action off the bottom of a flex parent.
+ * The column on the ground: 400 wide, with no surface of its own (the window is the
+ * frame, §3). A column, and bounded by the window from `sm` up — see
+ * {@link AuthCanvas}. `min-h-0` is what lets an {@link AuthScroll} inside it
+ * actually shrink instead of pushing the action off the bottom of a flex parent.
  */
 export function AuthCard({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <div className={cn('glass-pane glass-pane--glow flex w-full min-h-0 flex-col p-0 sm:max-h-full', className)}>
+    <div className={cn('ix-auth__col flex w-full min-h-0 flex-col sm:max-h-full', COLUMN, className)}>
       {children}
     </div>
   );
 }
 
 /**
- * The padded column inside a plate: `.pc-auth-form` in primitives.css, which
- * owns the rhythm and tightens it once when the window is short. Used as the
- * className of a `<form>` or a plain `<div>`, so it is a constant rather than a
- * component.
+ * The column's rhythm: `.pc-auth-form` in primitives.css, which owns the gaps and
+ * tightens them once when the window is short. Used as the className of a
+ * `<form>` or a plain `<div>`, so it is a constant rather than a component.
  */
 export const AUTH_FORM = 'pc-auth-form';
 
 /**
- * The one region inside a plate that is allowed to scroll, for the surface
+ * The one region inside the column that is allowed to scroll, for the surface
  * that genuinely cannot fit 940×500 (a 24-word phrase, a list of servers).
  * Everything above and below it — the heading, the error, the action — stays
  * put, so "Continue" is never below a fold.
@@ -146,8 +144,8 @@ export function useFocusRejectedField(
 }
 
 /**
- * Heading block: optional app mark, a window title (20/600), and one specific
- * line of `--text-secondary` subcopy.
+ * Heading block: the app mark, a 28/700 title (`ix-auth__title`) and one
+ * specific line of the tertiary ink under it.
  */
 export function AuthHeading({
   title,
@@ -168,23 +166,14 @@ export function AuthHeading({
 }) {
   return (
     <div className={cn(align === 'center' && 'flex flex-col items-center text-center')}>
-      {mark && <AppMark size={48} className="mb-3" />}
-      <h1 className="pc-display text-title text-text-primary">{title}</h1>
-      {subtitle && (
-        <p
-          className={cn(
-            'mt-2 max-w-prose text-body text-text-secondary',
-            dense && 'short-window:hidden',
-          )}
-        >
-          {subtitle}
-        </p>
-      )}
+      {mark && <AppMark size={40} className="mb-4 short-window:mb-3" />}
+      <h1 className="ix-auth__title">{title}</h1>
+      {subtitle && <p className={cn('ix-auth__sub mt-2', dense && 'short-window:hidden')}>{subtitle}</p>}
     </div>
   );
 }
 
-/** Sentence-case label above a control (13/500 secondary, matching TextField). */
+/** Sentence-case label above a control (13/500 in ink-2, matching TextField). */
 export function FieldLabel({
   children,
   required,
@@ -193,11 +182,11 @@ export function FieldLabel({
   required?: boolean;
 }) {
   return (
-    <span className="mb-1.5 flex items-center gap-1 text-[13px] font-medium text-text-secondary">
+    <span className="mb-1.5 flex items-center gap-1 text-[13px] font-medium text-[var(--ix-ink-2)]">
       {children}
       {required && (
         // A required mark is a sign, not an error: ink, not the danger color.
-        <span className="text-text-muted" aria-hidden>
+        <span className="text-[var(--ix-ink-3)]" aria-hidden>
           *
         </span>
       )}
@@ -236,13 +225,13 @@ export function Field({
         {children}
       </label>
       {error ? (
-        <p id={descriptionId} className="mt-2 flex items-start gap-1.5 text-[13px] text-accent-danger">
+        <p id={descriptionId} className="mt-2 flex items-start gap-1.5 text-[13px] text-[var(--ix-danger-ink)]">
           <AlertCircle size={13} className="mt-px shrink-0" />
           <span className="leading-relaxed">{error}</span>
         </p>
       ) : (
         hint && (
-          <p id={descriptionId} className="mt-2 text-[13px] leading-relaxed text-text-faint">
+          <p id={descriptionId} className="mt-2 text-[13px] leading-relaxed text-[var(--ix-ink-3)]">
             {hint}
           </p>
         )
@@ -251,10 +240,10 @@ export function Field({
   );
 }
 
-/** Success callout: a well carrying ink, never a green fill. */
+/** Success callout: a field-fill block carrying ink, never a green fill. */
 export function SuccessNote({ children }: { children: ReactNode }) {
   return (
-    <div className="pc-well flex items-start gap-2.5 px-4 py-3 text-[15px] text-text-primary">
+    <div className="pc-well flex items-start gap-2.5 px-4 py-3 text-[14px] text-[var(--ix-ink)]">
       <CheckCircle2 size={16} className="mt-px shrink-0" />
       <span className="leading-relaxed [&_strong]:font-semibold">{children}</span>
     </div>
@@ -266,9 +255,9 @@ export function SuccessNote({ children }: { children: ReactNode }) {
  * screen reader can read out, and a row of segments the eye reads at a glance.
  *
  * The segments are 3px bars, not numbered circles: a badge loud enough to be a
- * circle outranks the step it counts (§6.8), and four of them across the top
- * of a plate is the same tiling the kill-list rejects. Done and current carry
- * the emerald; the rest carry the plate's own wash.
+ * circle outranks the step it counts, and four of them across the top of the
+ * column is the same tiling the kill-list rejects. Done and current are cream
+ * (the one action's color); the rest are the quiet fill.
  */
 export function AuthSteps({
   step,
@@ -282,7 +271,7 @@ export function AuthSteps({
 }) {
   return (
     <div className="flex flex-col gap-2">
-      <p id={id} className="glass-instrument text-[13px] tabular-nums text-text-faint">
+      <p id={id} className="text-[12.5px] font-medium tabular-nums text-[var(--ix-ink-3)]">
         Step {step} of {count}
       </p>
       <div className="flex items-center gap-1.5" aria-hidden="true">
@@ -290,8 +279,8 @@ export function AuthSteps({
           <span
             key={index}
             className={cn(
-              'h-[3px] flex-1 rounded-[var(--radius-full)] transition-colors duration-[var(--duration-normal)] ease-[var(--ease-out)]',
-              index < step ? 'bg-accent-primary' : 'bg-bg-mod-strong',
+              'h-[3px] flex-1 rounded-[var(--radius-full)] transition-colors duration-[200ms] ease-[var(--ix-ease)]',
+              index < step ? 'bg-[var(--ix-cream)]' : 'bg-[var(--ix-fill-2)]',
             )}
           />
         ))}
@@ -353,11 +342,11 @@ export function AuthStep({
       <div aria-live="polite" aria-atomic="true" className="flex flex-col gap-3">
         {progress}
         <div>
-          <h2 className="pc-display text-heading text-text-primary">{title}</h2>
+          <h2 className="ix-auth__step">{title}</h2>
           {description && (
             <p
               className={cn(
-                'mt-1.5 text-[13px] leading-relaxed text-text-secondary',
+                'mt-1.5 text-[13.5px] leading-[1.45] text-[var(--ix-ink-3)]',
                 dense && 'short-window:hidden',
               )}
             >

@@ -12,10 +12,8 @@ import {
   ModalTitle,
 } from '../ui/Modal';
 import { Button } from '../ui/Button';
-import { Divider } from '../ui/Divider';
 import { Select } from '../ui/Input';
 import { ErrorBanner } from '../ui/Feedback';
-import { FieldLabel } from './SettingsPrimitives';
 import { extractApiError } from '../../api/client';
 import { writeClipboardText } from '../../lib/clipboard';
 import { toast } from '../../stores/toastStore';
@@ -43,11 +41,16 @@ const MAX_USES_MAP: Record<string, number | undefined> = {
   'unlimited': 0,
 };
 
+/** A field's label above it: 12.5/600 in the tertiary ink, sentence case (§6.12). */
+function FieldLabel({ children }: { children: ReactNode }) {
+  return <span className="mb-1.5 block text-[12.5px] font-semibold text-[var(--ix-ink-3)]">{children}</span>;
+}
+
 /**
- * The readout a person copies from: a **well** inside the dialog plate
- * (spec §1.1, §4) — recessed, depth from the inset shadow, never a border.
- * While changed options are waiting to be applied it dims, and the copy control
- * beside it is disabled, so nobody hands out a link that is about to be revoked.
+ * The readout a person copies from: the field fill and a hairline (`pc-well`),
+ * the Copy control inside it. While changed options are waiting to be applied
+ * it dims, and the copy control beside it is disabled, so nobody hands out a
+ * link that is about to be revoked.
  */
 function InviteReadout({
   dimmed,
@@ -59,16 +62,34 @@ function InviteReadout({
   return (
     <div
       className={cn(
-        'pc-well flex items-center gap-2 p-1.5 pl-3',
-        'transition-opacity duration-[var(--duration-fast)] ease-[var(--ease-out)]',
+        'pc-well flex h-11 items-center gap-2 py-1 pl-3 pr-1',
+        'transition-opacity duration-[120ms] ease-[var(--ix-ease)]',
         // Keyed on the field, not `focus-within`: this well also holds Copy,
-        // which draws its own ring. §9 is one ring per control.
-        'has-[>input:focus-visible]:shadow-[var(--shadow-well),var(--focus-ring)]',
+        // which draws its own ring. One ring per control.
+        'has-[>input:focus-visible]:[outline:var(--ix-focus)] has-[>input:focus-visible]:[outline-offset:var(--ix-focus-offset)]',
         dimmed && 'opacity-60',
       )}
     >
       {children}
     </div>
+  );
+}
+
+/**
+ * A button's label that crossfades to its done word and back (§5.16, 200ms; the
+ * parent holds `done` for 2s). Both words sit in one grid cell so the button
+ * keeps the width of the longer one and nothing around it moves.
+ */
+function CopyLabel({ done, idle, copied, size }: { done: boolean; idle: string; copied: string; size: number }) {
+  return (
+    <span className="ix-copy">
+      <span data-on={!done}>
+        <Copy size={size} aria-hidden /> {idle}
+      </span>
+      <span data-on={done} aria-hidden>
+        <Check size={size} aria-hidden /> {copied}
+      </span>
+    </span>
   );
 }
 
@@ -235,7 +256,6 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
       setCopyError(null);
       await writeClipboardText(inviteLink);
       setCopiedPortable(true);
-      toast.success('Invite link copied to clipboard.');
       setTimeout(() => setCopiedPortable(false), 2000);
     } catch (err) {
       setCopyError(`Failed to copy the invite link: ${extractApiError(err)}`);
@@ -258,7 +278,6 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
       setCopyError(null);
       await writeClipboardText(inviteCode);
       setCopiedCode(true);
-      toast.success('Invite code copied to clipboard.');
       setTimeout(() => setCopiedCode(false), 2000);
     } catch (err) {
       setCopyError(`Failed to copy invite code: ${extractApiError(err)}`);
@@ -272,24 +291,23 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
       labeledBy="invite-modal-title"
       describedBy="invite-modal-description"
       showCloseButton
-      panelClassName="w-[min(92vw,32rem)]"
+      size="sm"
     >
-      <div className="flex max-h-[min(86dvh,42rem)] flex-col">
-        <ModalHeader className="pb-4 pr-14">
-          <ModalTitle id="invite-modal-title">Invite friends to {guildName}</ModalTitle>
+      <div className="flex max-h-[min(86dvh,40rem)] flex-col">
+        <ModalHeader className="pr-14">
+          <ModalTitle id="invite-modal-title">Invite people to {guildName}</ModalTitle>
           <ModalDescription id="invite-modal-description">
-            Share a link or code — anyone with it can join the conversation.
+            Share a link or code. Anyone with it can join.
           </ModalDescription>
         </ModalHeader>
-        <Divider />
 
-        <ModalBody className="min-h-0 flex-1 space-y-6 overflow-auto py-5">
+        <ModalBody className="min-h-0 flex-1 space-y-4 overflow-auto pb-4 pt-2">
           {inviteError && <ErrorBanner message={inviteError} multiline />}
           {copyError && <ErrorBanner message={copyError} multiline />}
 
-          {/* The invite link — the one primary action in this dialog. An
-              ordinary https link, because that is what works for a friend who
-              has never heard of Paracord: it opens in their browser. */}
+          {/* The invite link — the one cream action in this dialog. An ordinary
+              https link, because that is what works for a friend who has never
+              heard of Paracord: it opens in their browser. */}
           <div>
             <FieldLabel>Invite link</FieldLabel>
             <InviteReadout dimmed={optionsDirty}>
@@ -298,10 +316,12 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
                 value={loading ? 'Generating…' : inviteLink || 'No link that other people can use yet'}
                 readOnly
                 aria-label="Invite link"
-                className="min-w-0 flex-1 bg-transparent text-label text-text-primary outline-none"
+                title={inviteLink || undefined}
+                className="min-w-0 flex-1 bg-transparent text-[13.5px] text-[var(--ix-ink)] outline-none"
               />
               <Button
                 variant="primary"
+                size="sm"
                 onClick={handleCopyPortable}
                 disabled={loading || !inviteLink || optionsDirty}
                 aria-label={
@@ -312,26 +332,22 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
                       : 'Copy invite link'
                 }
               >
-                {copiedPortable ? (
-                  <><Check size={15} /> Copied</>
-                ) : (
-                  <><Copy size={15} /> Copy</>
-                )}
+                <CopyLabel done={copiedPortable} idle="Copy link" copied="Link copied" size={14} />
               </Button>
             </InviteReadout>
-            <p className="mt-1.5 text-meta leading-relaxed text-text-muted">{reachNote(reach, asksRouter)}</p>
+            <p className="mt-2 text-[12.5px] leading-[1.45] text-[var(--ix-ink-3)]">{reachNote(reach, asksRouter)}</p>
             {portableLink && !optionsDirty && (
               <button
                 type="button"
                 onClick={handleCopyAppLink}
-                className="pc-focusable mt-1 rounded-chip text-meta font-medium text-text-link hover:underline"
+                className="pc-focusable mt-1.5 block rounded-[6px] text-left text-[12.5px] font-medium text-[var(--ix-ink-2)] underline-offset-2 hover:text-[var(--ix-ink)] hover:underline"
               >
                 Friend already has the Paracord app? Copy a link that opens it directly
               </button>
             )}
           </div>
 
-          {/* Raw invite code — mono, because it is an id you read out loud. */}
+          {/* The raw invite code — an id you read out loud. */}
           <div>
             <FieldLabel>Invite code</FieldLabel>
             <InviteReadout dimmed={optionsDirty}>
@@ -340,10 +356,10 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
                 value={loading ? 'Generating…' : inviteCode}
                 readOnly
                 aria-label="Invite code"
-                className="pc-mono min-w-0 flex-1 bg-transparent text-label text-text-secondary outline-none"
+                className="pc-mono min-w-0 flex-1 bg-transparent text-[14px] text-[var(--ix-ink-2)] outline-none"
               />
               <Button
-                variant="ghost"
+                variant="glass"
                 size="sm"
                 onClick={handleCopyCode}
                 disabled={loading || !inviteCode || optionsDirty}
@@ -355,17 +371,13 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
                       : 'Copy invite code'
                 }
               >
-                {copiedCode ? (
-                  <><Check size={13} /> Copied</>
-                ) : (
-                  <><Copy size={13} /> Copy</>
-                )}
+                <CopyLabel done={copiedCode} idle="Copy code" copied="Code copied" size={13} />
               </Button>
             </InviteReadout>
           </div>
 
           {/* Options */}
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3 min-[420px]:grid-cols-2">
             <label className="block">
               <FieldLabel>Expire after</FieldLabel>
               <Select
@@ -406,18 +418,17 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
         </ModalBody>
 
         {/* Regenerate — option changes only take effect when applied here. */}
-        <Divider />
-        <ModalFooter className="flex-col items-stretch gap-3 pt-4 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-meta leading-relaxed text-text-muted">
+        <ModalFooter className="items-center justify-between gap-3 pt-2">
+          <p className="min-w-0 flex-1 text-[12.5px] leading-[1.4] text-[var(--ix-ink-3)]">
             {optionsDirty
-              ? 'Options changed — regenerate to apply them to a fresh link.'
+              ? 'Options changed. Regenerate to apply them to a fresh link.'
               : 'Regenerating revokes the current link and issues a new one.'}
           </p>
           <Button
             variant="ghost"
             onClick={handleRegenerate}
             disabled={loading}
-            className="shrink-0 gap-2 self-end sm:self-auto"
+            className="shrink-0 gap-2"
           >
             <RefreshCw size={15} className={loading ? 'animate-spin' : undefined} />
             {loading ? 'Regenerating…' : 'Regenerate'}

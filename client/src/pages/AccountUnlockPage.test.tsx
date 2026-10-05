@@ -35,6 +35,13 @@ const mockAccount = vi.hoisted(() => ({
   hasAccount: vi.fn(),
 }));
 
+// The marks are presentational (tested in components/ix/identity); mocked so this page's
+// other module mocks do not have to cover the image and download-ticket plumbing they pull in.
+vi.mock('../components/ix/identity', () => ({
+  Avatar: ({ name }: { name: string }) => <span data-testid="avatar">{name.slice(0, 1)}</span>,
+  ServerMark: ({ name }: { name: string }) => <span data-testid="server-mark">{name.slice(0, 1)}</span>,
+}));
+
 vi.mock('../stores/accountStore', () => ({
   useAccountStore: (selector: (state: typeof mockAccountState) => unknown) =>
     selector(mockAccountState),

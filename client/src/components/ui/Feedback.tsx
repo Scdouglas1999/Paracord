@@ -28,10 +28,10 @@ export function ErrorBanner({
     <div
       role="alert"
       className={cn(
-        // An error is the danger *well* carrying the one danger ink (§1.3),
+        // An error is the danger fill carrying the one danger ink (§1.4, §6.8),
         // never a saturated red fill and never a border-only edge.
-        'flex justify-between gap-3 rounded-[var(--r-row)] bg-danger-well px-4 py-3',
-        'text-[15px] text-accent-danger',
+        'flex justify-between gap-3 rounded-[12px] bg-[var(--ix-danger-fill)] px-4 py-3',
+        'text-[14px] text-[var(--ix-danger-ink)]',
         multiline ? 'items-start' : 'items-center',
         className,
       )}
@@ -44,7 +44,7 @@ export function ErrorBanner({
         <button
           type="button"
           onClick={onRetry}
-          className="pc-focusable shrink-0 rounded-[var(--r-capsule)] bg-[var(--glass-fill)] px-3 py-1 text-[13px] font-semibold text-text-primary shadow-[var(--glass-edge)] transition-colors duration-[var(--glass-ms)] ease-[var(--glass-ease)] hover:bg-[var(--glass-fill-hover)] active:bg-[var(--glass-fill-press)]"
+          className="pc-focusable shrink-0 rounded-[10px] bg-[var(--ix-fill-ctl)] px-3 py-1 text-[13px] font-semibold text-[var(--ix-ink)] transition-colors duration-[120ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill-ctl-hover)] active:bg-[var(--ix-fill-2)]"
         >
           {retryLabel}
         </button>
@@ -72,12 +72,12 @@ export function LoadingSpinner({
 }: LoadingSpinnerProps) {
   return (
     <div
-      className={cn('flex items-center justify-center gap-2 text-text-muted', className)}
+      className={cn('flex items-center justify-center gap-2 text-[var(--ix-ink-3)]', className)}
       aria-live="polite"
       aria-busy="true"
     >
-      <Loader2 className={cn('animate-spin text-accent-primary', spinnerSizeClass[size])} />
-      {label && <span className="text-[15px]">{label}</span>}
+      <Loader2 className={cn('animate-spin text-[var(--ix-ink-2)]', spinnerSizeClass[size])} />
+      {label && <span className="text-[14px]">{label}</span>}
     </div>
   );
 }
@@ -92,9 +92,9 @@ interface EmptyStateProps {
   role?: 'alert' | 'status';
 }
 
-// Left-aligned, never a centered icon-in-circle. A line icon in a well, a
-// section-title heading (17/600), one specific line of copy, then one action.
-// Never "No data" / "It's quiet here".
+// Left-aligned, never a centered icon-in-circle. A line icon in a quiet tile, a
+// heading (17/700), one specific line of copy, then one action. Never "No data" /
+// "It's quiet here". A whole-page empty state is `ix/page/EmptyPage`.
 export function EmptyState({
   title,
   description,
@@ -106,13 +106,13 @@ export function EmptyState({
   return (
     <div role={role} className={cn('flex flex-col items-start px-2 py-8', className)}>
       {icon && (
-        <div className="pc-well mb-4 flex h-10 w-10 items-center justify-center rounded-[var(--r-ctl)] text-text-muted">
+        <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-[12px] bg-[var(--ix-fill-ctl)] text-[var(--ix-ink-2)]">
           {icon}
         </div>
       )}
-      <h3 className="pc-display glass-title-section text-text-primary">{title}</h3>
+      <h3 className="pc-display text-[17px] font-bold leading-[1.25] tracking-[-0.01em] text-[var(--ix-ink)]">{title}</h3>
       {description && (
-        <p className="glass-body mt-1.5 max-w-prose text-text-secondary">{description}</p>
+        <p className="mt-1.5 max-w-prose text-[14px] leading-[1.5] text-[var(--ix-ink-2)]">{description}</p>
       )}
       {action && <div className="mt-5">{action}</div>}
     </div>

@@ -7,8 +7,8 @@ export interface ChipProps extends React.HTMLAttributes<HTMLSpanElement> {
   /** 24px (default) or the 20px inline variant used inside rows and wells. */
   size?: 'sm' | 'md';
   /**
-   * `talking` / `reading` carry a light token and therefore an assertion: a
-   * person is in that room right now (spec §0). Never pick them for emphasis.
+   * `talking` / `reading` are amber and therefore an assertion: somebody is
+   * live right now ("amber means live", §1.4). Never pick them for emphasis.
    */
   tone?: ChipTone;
   /** Render as a button — for a dismissible or selectable chip. */
@@ -16,17 +16,17 @@ export interface ChipProps extends React.HTMLAttributes<HTMLSpanElement> {
 }
 
 const TONES: Record<ChipTone, string> = {
-  neutral: 'text-text-secondary',
-  accent: 'text-accent-primary',
-  talking: 'text-light-white',
-  reading: 'text-light-amber',
-  danger: 'text-accent-danger',
+  neutral: 'text-[var(--ix-ink-2)]',
+  accent: 'text-[var(--ix-ink)]',
+  talking: 'text-[var(--ix-amber)]',
+  reading: 'text-[var(--ix-amber)]',
+  danger: 'text-[var(--ix-danger-ink)]',
 };
 
 /**
- * Chip: a small solid tonal chip for a count, a shortcut, a filter or a label
- * (docs/glass-spec.md §2.4: radius 8, height 24), with no outline. Counts and
- * durations in it use the instrument cut when it is a `tabular-nums` figure.
+ * Chip: a small flat chip for a count, a shortcut, a filter or a label
+ * (docs/index-spec.md §3.1 tool chips: radius 8, the quiet fill, 12.5 ink-2),
+ * with no outline. Counts and durations in it are tabular figures.
  */
 export const Chip = React.forwardRef<HTMLSpanElement, ChipProps>(function Chip(
   { size = 'md', tone = 'neutral', as = 'span', className, children, ...props },
@@ -38,16 +38,14 @@ export const Chip = React.forwardRef<HTMLSpanElement, ChipProps>(function Chip(
       ref={ref}
       className={cn(
         'inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap',
-        'rounded-[var(--radius-chip)] bg-bg-raised shadow-[var(--shadow-chip)]',
+        'rounded-[8px] bg-[var(--ix-fill)]',
         'font-medium tabular-nums',
         size === 'sm'
           ? 'h-[var(--h-chip-sm)] px-1.5 text-[11px] font-bold'
-          : 'h-[var(--h-chip)] px-2 text-meta',
+          : 'h-[var(--h-chip)] px-2 text-[12.5px]',
         TONES[tone],
         as === 'button' &&
-          // No `transition-colors` beside `pc-pressable`: the recipe's list
-          // already covers color and carries the §9 hover and press with it.
-          'pc-focusable pc-pressable hover:text-text-primary',
+          'pc-focusable cursor-pointer transition-[background-color,color] duration-[120ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill-2)] hover:text-[var(--ix-ink)]',
         className,
       )}
       {...props}

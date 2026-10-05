@@ -3,7 +3,7 @@ import { Pencil, Trash2, Server } from 'lucide-react';
 import { adminApi } from '../../api/admin';
 import { extractApiError } from '../../api/client';
 import { toast } from '../../stores/toastStore';
-import { getIdentityColor } from '../../lib/colors';
+import { ServerMark } from '../../components/ix/identity';
 import {
   Button,
   EmptyState,
@@ -11,7 +11,7 @@ import {
   SettingsSectionHeader,
   TextField,
 } from '../../components/ui';
-import { Textarea } from '../../components/ui/Input';
+import { Select, Textarea } from '../../components/ui/Input';
 import {
   Modal,
   ModalBody,
@@ -26,14 +26,10 @@ type GuildRow = {
   name: string;
   description: string | null;
   owner_id: string;
+  icon_hash?: string | null;
   visibility?: 'private' | 'public' | 'roles';
   created_at: string;
 };
-
-function initials(name: string): string {
-  const parts = name.trim().split(/\s+/).slice(0, 2);
-  return parts.map((p) => p[0]?.toUpperCase() ?? '').join('') || '?';
-}
 
 export function GuildsPanel() {
   const [guilds, setGuilds] = useState<GuildRow[]>([]);
@@ -151,13 +147,7 @@ export function GuildsPanel() {
                 >
                   <td className="px-3 py-2.5">
                     <div className="flex items-center gap-3">
-                      <span
-                        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius-well)] text-meta font-semibold text-text-on-light"
-                        style={{ backgroundColor: getIdentityColor(g.id) }}
-                        aria-hidden
-                      >
-                        {initials(g.name)}
-                      </span>
+                      <ServerMark guildId={g.id} name={g.name} icon={g.icon_hash ?? null} size={36} />
                       <span className="pc-display truncate text-name text-text-primary">
                         {g.name}
                       </span>
@@ -181,7 +171,7 @@ export function GuildsPanel() {
                       <IconButton
                         label={`Delete server ${g.name}`}
                         onClick={() => deleteGuild(g.id, g.name)}
-                        className="hover:bg-danger-well hover:text-accent-danger"
+                        className="hover:bg-[var(--ix-danger-fill)] hover:text-[var(--ix-danger-ink)]"
                       >
                         <Trash2 size={16} />
                       </IconButton>
@@ -231,16 +221,15 @@ export function GuildsPanel() {
             <label htmlFor="admin-edit-guild-visibility" className="text-label font-medium text-text-secondary">
               Local admission
             </label>
-            <select
+            <Select
               id="admin-edit-guild-visibility"
               value={editVisibility}
               onChange={(event) => setEditVisibility(event.target.value as 'private' | 'public' | 'roles')}
-              className="rounded-md border border-border-subtle bg-bg-primary px-3 py-2 text-text-primary"
             >
               <option value="private">Private — invite required</option>
               <option value="public">Public — local users can join</option>
               {editingGuild?.visibility === 'roles' && <option value="roles" disabled>Existing role restrictions</option>}
-            </select>
+            </Select>
             <p className="text-meta text-text-muted">
               Public communities appear in discovery. For a federation mirror, this lets local users join through the trusted origin.
             </p>

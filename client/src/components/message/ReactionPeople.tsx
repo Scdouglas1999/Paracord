@@ -175,9 +175,9 @@ export function useReactionPeople({
 }
 
 /**
- * The list a reaction opens: its glyph and how many, then the people (faces and
- * names, solid and plain as the timeline's own faces are), "and N more" while
- * it is the short list.
+ * The list a reaction opens (docs/index-spec.md §6.11, the menu look): its glyph
+ * and how many, then the people (24px faces and names, the timeline's own
+ * avatars), "and N more" while it is the short list.
  */
 export function ReactionPeopleList({
   state,
@@ -205,31 +205,31 @@ export function ReactionPeopleList({
       side="top"
       align="start"
       label={`People who reacted with ${emoji}`}
-      className="w-60 p-0"
+      className="ix-rp-pop w-60 p-0"
     >
-      <div onPointerEnter={cancelClose} onPointerLeave={scheduleClose} className="glass-bite__people">
-        <div className="glass-bite__people-head">
-          <span className="glass-bite__people-glyph" aria-hidden>
+      <div onPointerEnter={cancelClose} onPointerLeave={scheduleClose} className="ix-rp">
+        <div className="ix-rp__head">
+          <span className="ix-rp__glyph" aria-hidden>
             {glyph}
           </span>
-          <span className="glass-bite__people-count">
+          <span className="ix-rp__count">
             {people ? (people.length === 1 ? '1 person' : `${people.length} people`) : `${count} ${count === 1 ? 'person' : 'people'}`}
           </span>
         </div>
-        {error && <p role="alert" className="glass-bite__people-note" data-tone="error">{error}</p>}
-        {!error && !people && <p className="glass-bite__people-note">Loading who reacted…</p>}
+        {error && <p role="alert" className="ix-rp__note" data-tone="error">{error}</p>}
+        {!error && !people && <p className="ix-rp__note">Loading who reacted…</p>}
         {people && (
-          <ul className="glass-bite__people-list" data-expanded={expanded || undefined}>
+          <ul className="ix-rp__list" data-expanded={expanded || undefined}>
             {visible.map((person) => (
-              <li key={person.id} className="glass-bite__person">
-                <TimelineAvatar userId={person.id} name={personName(person)} avatar={person.avatar_hash} size={22} />
-                <span className="glass-bite__person-name">{personName(person)}</span>
+              <li key={person.id} className="ix-rp__person">
+                <TimelineAvatar userId={person.id} name={personName(person)} avatar={person.avatar_hash} size={24} />
+                <span className="ix-rp__name">{personName(person)}</span>
               </li>
             ))}
           </ul>
         )}
         {!expanded && hidden > 0 && (
-          <button type="button" className="glass-bite__more glass-focusable" onClick={state.expand}>
+          <button type="button" className="ix-rp__more" onClick={state.expand}>
             and {hidden} more
           </button>
         )}

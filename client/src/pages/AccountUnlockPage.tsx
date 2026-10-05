@@ -10,6 +10,7 @@ import { ErrorBanner } from '../components/ui/Feedback';
 import { Divider } from '../components/ui/Divider';
 import { Input } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
+import { Avatar } from '../components/ix/identity';
 import { AUTH_FORM, AuthCanvas, AuthCard, AuthHeading, AuthScroll, Field } from './authScaffold';
 
 export function AccountUnlockPage() {
@@ -113,18 +114,17 @@ export function AccountUnlockPage() {
 
   return (
     <AuthCanvas>
-      <AuthCard className="max-w-md">
+      <AuthCard>
         <form onSubmit={handleSubmit} className={AUTH_FORM}>
           <AuthHeading title="Welcome back" subtitle="Unlock your local identity to pick up where you left off." />
 
           {username && (
             <div className="pc-well flex items-center gap-3 px-4 py-3">
-              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[var(--radius-full)] bg-bg-raised pc-display text-heading font-semibold text-text-primary">
-                {username[0].toUpperCase()}
-              </div>
+              {/* The identity on this device has no account id yet: its key picks the hue. */}
+              <Avatar userId={publicKey || username} name={username} size={40} ring="var(--ix-main)" />
               <div className="min-w-0">
-                <p className="truncate pc-display text-name text-text-primary">{username}</p>
-                <p className="truncate pc-mono text-[13px] text-text-faint">{shortKey}</p>
+                <p className="truncate text-[14.5px] font-semibold text-[var(--ix-ink)]">{username}</p>
+                <p className="truncate pc-mono text-[13px] text-[var(--ix-ink-3)]">{shortKey}</p>
               </div>
             </div>
           )}
@@ -157,18 +157,18 @@ export function AccountUnlockPage() {
 
           <Divider />
 
-          <div className="flex flex-col items-start gap-2 text-[13px] text-text-secondary">
+          <div className="flex flex-col items-start gap-2.5">
             <button
               type="button"
               onClick={() => navigate('/recover')}
-              className="pc-focusable rounded-[var(--r-chip)] font-semibold text-text-link underline-offset-4 hover:underline"
+              className="pc-focusable ix-auth__link rounded-[6px]"
             >
               Forgot password? Recover from phrase
             </button>
             <button
               type="button"
               onClick={() => navigate('/app?settings=identity')}
-              className="pc-focusable rounded-[var(--r-chip)] font-semibold text-text-link underline-offset-4 hover:underline"
+              className="pc-focusable ix-auth__link rounded-[6px]"
             >
               Import account from file
             </button>
@@ -178,7 +178,7 @@ export function AccountUnlockPage() {
             <button
               type="button"
               onClick={() => navigate('/login')}
-              className="pc-focusable rounded-[var(--r-chip)] font-semibold text-text-link underline-offset-4 hover:underline"
+              className="pc-focusable ix-auth__link rounded-[6px]"
             >
               Sign in with a password instead
             </button>

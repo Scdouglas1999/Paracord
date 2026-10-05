@@ -2,11 +2,14 @@ import { useEffect, useRef, useState } from 'react';
 import { useCurrentGuilds } from '../hooks/useGuilds';
 import { GuildSettings } from '../components/guild/GuildSettings';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
-import { ShieldAlert } from 'lucide-react';
+import type { CSSProperties } from 'react';
 import { usePermissions } from '../hooks/usePermissions';
 import { canAccessGuildSettings } from '../lib/guildSettingsAccess';
 import { useUIStore } from '../stores/uiStore';
-import { Button, EmptyState, LoadingSpinner } from '../components/ui';
+import { LoadingSpinner } from '../components/ui';
+import { EmptyPage } from '../components/ix/page';
+import { CreamButton } from '../components/ix/primitives';
+import { serverHue } from '../lib/identityHue';
 
 export { canAccessGuildSettings } from '../lib/guildSettingsAccess';
 
@@ -58,11 +61,13 @@ export function GuildSettingsPage() {
     }
   };
 
-  // Both pre-flight states render on the settings plate itself (spec §4), so the
-  // surface the reader lands on is the same one the settings will occupy.
+  // Both pre-flight states render on the settings surface itself (the ground, in
+  // the server's hue), so the surface the reader lands on is the one the settings
+  // will occupy.
+  const preflightStyle = { '--ix-hue': serverHue({ id: guildId ?? '', hue: guild?.hue ?? null }) } as CSSProperties;
   if (awaitingFirstAnswer) {
     return (
-      <div className="pc-plate flex h-full min-h-0 items-center px-6 sm:px-10">
+      <div className="ix-settings ix-lt ix-hue-main items-center justify-center" style={preflightStyle}>
         <LoadingSpinner size="sm" label="Checking your permissions in this server" />
       </div>
     );
@@ -70,13 +75,13 @@ export function GuildSettingsPage() {
 
   if (!canOpenSettings) {
     return (
-      <div className="pc-plate flex h-full min-h-0 items-center px-6 sm:px-10">
-        <EmptyState
-          className="w-full max-w-prose"
-          icon={<ShieldAlert size={20} strokeWidth={2} />}
+      <div className="ix-settings ix-lt ix-hue-main" style={preflightStyle}>
+        <EmptyPage
+          glyph="lock"
+          role="alert"
           title="Server settings are locked"
-          description="You need a moderation or management permission — Manage Server, Manage Channels, Ban Members or View Audit log — to open settings here. Ask an admin to grant one, or head back to the conversation."
-          action={<Button onClick={closeSettings}>Back to the server</Button>}
+          line="You need a moderation or management permission (Manage Server, Manage Channels, Ban Members or View Audit log) to open settings here. Ask an admin to grant one, or head back to the conversation."
+          action={<CreamButton onClick={closeSettings}>Back to the server</CreamButton>}
         />
       </div>
     );

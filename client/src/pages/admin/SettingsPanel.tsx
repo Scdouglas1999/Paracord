@@ -248,7 +248,7 @@ export function SettingsPanel() {
               {saving ? 'Saving…' : 'Save changes'}
             </Button>
             {saved && (
-              <span className="inline-flex items-center gap-1.5 text-label font-medium text-accent-success">
+              <span className="inline-flex items-center gap-1.5 text-label font-medium text-[var(--ix-ink-2)]">
                 <Check size={16} aria-hidden />
                 Saved
               </span>

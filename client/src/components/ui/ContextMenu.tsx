@@ -182,7 +182,7 @@ export function ContextMenu({ items, position, open = true, onClose, label = 'Co
     <div
       ref={menuRef}
       className={cn(
-        'pc-floating fixed z-[100] min-w-[min(13rem,calc(100vw-1rem))] max-w-[calc(100vw-1rem)] max-h-[calc(100dvh-1rem)] overflow-y-auto p-1.5 outline-none',
+        'pc-floating ix-lt--pop fixed z-[100] min-w-[min(13rem,calc(100vw-1rem))] max-w-[calc(100vw-1rem)] max-h-[calc(100dvh-1rem)] overflow-y-auto p-1.5 outline-none',
         exiting ? 'pc-pop-out' : 'pc-pop-in',
       )}
       style={
@@ -212,7 +212,7 @@ export function ContextMenu({ items, position, open = true, onClose, label = 'Co
       */}
       {items.map((item, i) => {
         if (item.divider) {
-          return <div key={i} className="mx-2 my-1 h-px bg-border-subtle" />;
+          return <div key={i} className="mx-2 my-1 h-px bg-[var(--ix-line)]" />;
         }
         const active = focusedIndex === i;
         return (
@@ -223,15 +223,15 @@ export function ContextMenu({ items, position, open = true, onClose, label = 'Co
             role={item.selected === undefined ? 'menuitem' : 'menuitemradio'}
             aria-checked={item.selected === undefined ? undefined : item.selected}
             className={cn(
-              'flex w-full items-center justify-between gap-3 rounded-[10px] px-2.5 py-1.5 text-left text-[15px] font-medium outline-none transition-colors duration-[var(--glass-ms)] ease-[var(--glass-ease)] [@media(pointer:coarse)]:min-h-11',
-              // A destructive item takes the one danger INK, never a red fill
-              // (§1.3). Hover is one step lighter, press one step darker.
-              item.danger ? 'text-accent-danger' : 'text-text-secondary',
-              item.disabled && 'cursor-not-allowed text-text-muted',
-              !item.disabled && 'active:bg-[var(--wash-press)]',
+              'flex min-h-9 w-full items-center justify-between gap-3 rounded-[10px] px-2.5 py-1.5 text-left text-[14px] font-medium outline-none transition-colors duration-[120ms] ease-[var(--ix-ease)] [@media(pointer:coarse)]:min-h-11',
+              // A destructive item takes the one danger INK on its fill, never a
+              // red surface (§1.4). Hover is one step lighter, press one darker.
+              item.danger ? 'text-[var(--ix-danger-ink)]' : 'text-[var(--ix-ink)]',
+              item.disabled && 'cursor-not-allowed text-[var(--ix-ink-3)]',
+              !item.disabled && 'active:bg-[var(--ix-fill-2)]',
               active &&
                 !item.disabled &&
-                (item.danger ? 'bg-[var(--wash-hover)]' : 'bg-[var(--wash-hover)] text-text-primary'),
+                (item.danger ? 'bg-[var(--ix-danger-fill)]' : 'bg-[var(--ix-fill)]'),
             )}
             disabled={item.disabled}
             onClick={() => {
@@ -244,15 +244,20 @@ export function ContextMenu({ items, position, open = true, onClose, label = 'Co
           >
             <span className="flex min-w-0 items-center gap-2.5">
               {(item.icon || anyIcon) && (
-                <span className="flex h-4 w-4 shrink-0 items-center justify-center">
+                <span
+                  className={cn(
+                    'flex h-4 w-4 shrink-0 items-center justify-center',
+                    !item.danger && 'text-[var(--ix-ink-3)]',
+                  )}
+                >
                   {item.icon}
                 </span>
               )}
-              <span className="min-w-0"><span className="block truncate">{item.label}</span>{item.description && <span className="mt-0.5 block max-w-56 whitespace-normal text-[13px] font-normal text-text-muted">{item.description}</span>}</span>
+              <span className="min-w-0"><span className="block truncate">{item.label}</span>{item.description && <span className="mt-0.5 block max-w-56 whitespace-normal text-[12.5px] font-normal text-[var(--ix-ink-3)]">{item.description}</span>}</span>
             </span>
-            {item.selected && <Check size={14} aria-hidden className="shrink-0 text-text-primary" />}
+            {item.selected && <Check size={14} aria-hidden className="shrink-0 text-[var(--ix-ink)]" />}
             {item.shortcut && (
-              <span className="glass-instrument shrink-0 text-meta font-normal text-text-muted">{item.shortcut}</span>
+              <span className="shrink-0 text-[12px] font-medium tabular-nums text-[var(--ix-ink-3)]">{item.shortcut}</span>
             )}
           </button>
         );

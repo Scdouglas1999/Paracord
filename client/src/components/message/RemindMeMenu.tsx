@@ -79,13 +79,13 @@ export function RemindMeMenu({
   }
 
   return (
-    <Popover anchor={anchor} open={open} onClose={close} role="menu" label="Remind me" className="w-64 p-1">
+    <Popover anchor={anchor} open={open} onClose={close} role="menu" label="Remind me" className="w-[260px]">
       <MenuLabel>Remind me</MenuLabel>
       {reminderChoices().map((choice) => (
         <MenuItem
           key={choice.label}
           disabled={saving}
-          trailing={choice.label.startsWith('In ') ? <span className="pc-mono">{wallClock(choice.at)}</span> : undefined}
+          trailing={choice.label.startsWith('In ') ? wallClock(choice.at).toUpperCase() : undefined}
           onClick={() => void save(choice.at)}
         >
           {choice.label}
@@ -96,7 +96,7 @@ export function RemindMeMenu({
       </MenuItem>
       {picking && (
         <form
-          className="pc-enter flex flex-col gap-2 px-2 pb-2 pt-1"
+          className="pc-enter flex flex-col gap-2 px-1.5 pb-1.5 pt-1.5"
           onSubmit={(event) => {
             event.preventDefault();
             void save(new Date(custom));
@@ -116,7 +116,7 @@ export function RemindMeMenu({
           </Button>
         </form>
       )}
-      {error && <p role="alert" className="px-2 pb-1.5 pt-1 text-meta text-accent-danger">{error}</p>}
+      {error && <p role="alert" className="px-2.5 pb-1.5 pt-1 text-[12.5px] text-[var(--ix-danger-ink)]">{error}</p>}
     </Popover>
   );
 }

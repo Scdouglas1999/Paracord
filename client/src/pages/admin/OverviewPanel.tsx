@@ -39,14 +39,16 @@ function formatAge(hours: number | null): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
-// §9: color is never the only cue — every severity carries its own word.
+// §10: color is never the only cue — every severity carries its own glyph and
+// word. The one danger ink is for what needs attention; the rest is ink (there is
+// no yellow, green or blue in the chrome, §2.1).
 const SEVERITY: Record<
   HealthCheck['severity'],
   { icon: typeof AlertTriangle; tone: string; label: string }
 > = {
-  critical: { icon: ShieldAlert, tone: 'text-accent-danger', label: 'Needs attention' },
-  warning: { icon: AlertTriangle, tone: 'text-accent-warning', label: 'Worth fixing' },
-  info: { icon: Info, tone: 'text-accent-info', label: 'For your information' },
+  critical: { icon: ShieldAlert, tone: 'text-[var(--ix-danger-ink)]', label: 'Needs attention' },
+  warning: { icon: AlertTriangle, tone: 'text-[var(--ix-ink)]', label: 'Worth fixing' },
+  info: { icon: Info, tone: 'text-[var(--ix-ink-3)]', label: 'For your information' },
 };
 
 export function OverviewPanel() {
@@ -178,7 +180,7 @@ function HealthBody({ health }: { health: HealthReport }) {
       <section>
         {checks.length === 0 ? (
           <Well className="flex items-start gap-3 px-4 py-3.5">
-            <CheckCircle2 size={18} className="mt-0.5 shrink-0 text-accent-success" />
+            <CheckCircle2 size={18} className="mt-0.5 shrink-0 text-[var(--ix-ink-2)]" />
             <div className="min-w-0">
               <p className="text-label text-text-primary">Everything looks healthy</p>
               <p className="mt-0.5 text-meta text-text-secondary">

@@ -25,10 +25,10 @@ import {
   AUTH_FORM,
   AuthCanvas,
   AuthCard,
+  AuthHeading,
   AuthScroll,
   AuthStep,
   AuthSteps,
-  AppMark,
   Field,
   useFocusRejectedField,
 } from './authScaffold';
@@ -462,10 +462,9 @@ export function InstanceSetupPage() {
   if (checking) {
     return (
       <AuthCanvas>
-        <AuthCard className="max-w-md">
+        <AuthCard>
           <div className={AUTH_FORM}>
-            <AppMark size={40} />
-            <p className="mt-6 text-body text-text-secondary">Checking this instance…</p>
+            <AuthHeading title="Checking this instance…" />
           </div>
         </AuthCard>
       </AuthCanvas>
@@ -478,14 +477,9 @@ export function InstanceSetupPage() {
 
   return (
     <AuthCanvas>
-      <AuthCard className="max-w-lg short-window:max-w-2xl">
+      <AuthCard className="short-window:max-w-2xl">
         <form ref={formRef} onSubmit={handleSubmit} noValidate className={AUTH_FORM}>
-          <header className="flex items-center gap-3">
-            <AppMark size={34} />
-            <h1 className="pc-display text-title text-text-primary">
-              Set up your Paracord instance
-            </h1>
-          </header>
+          <AuthHeading title="Set up your Paracord instance" />
 
           {/* These messages are instructions, not labels: they must wrap rather
               than ellipsize, or the operator is told something went wrong and
@@ -666,7 +660,7 @@ export function InstanceSetupPage() {
                     boxes it governs. */}
                 <p
                   id={passwordHintId}
-                  className="pc-auth-span text-[13px] leading-relaxed text-text-faint"
+                  className="pc-auth-span text-[13px] leading-relaxed text-[var(--ix-ink-3)]"
                 >
                   {PASSWORD_REQUIREMENTS_HINT}
                 </p>
@@ -737,7 +731,7 @@ export function InstanceSetupPage() {
             >
               <AuthScroll>
                 <div className="flex flex-col gap-2">
-                  <span id={accessLabelId} className="text-label font-medium text-text-secondary">
+                  <span id={accessLabelId} className="text-[13px] font-medium text-[var(--ix-ink-2)]">
                     Who can create an account
                   </span>
                   <ChoiceCards
@@ -749,11 +743,11 @@ export function InstanceSetupPage() {
                 </div>
                 {reachExplanation(routerForwarding) && (
                   <div className="pc-well flex flex-col gap-1 px-4 py-3">
-                    <span className="text-[13px] text-text-faint">How this server was installed</span>
-                    <span className="text-label font-semibold text-text-primary">
+                    <span className="text-[13px] text-[var(--ix-ink-3)]">How this server was installed</span>
+                    <span className="text-[14px] font-semibold text-[var(--ix-ink)]">
                       {reachLabel(Boolean(routerForwarding))}
                     </span>
-                    <span className="text-[13px] leading-relaxed text-text-secondary">
+                    <span className="text-[13px] leading-relaxed text-[var(--ix-ink-2)]">
                       {reachExplanation(routerForwarding)}
                     </span>
                   </div>
@@ -780,7 +774,7 @@ export function InstanceSetupPage() {
           </div>
 
           {stepIndex === 0 && (
-            <p className="text-[13px] leading-relaxed text-text-secondary">
+            <p className="text-[13px] leading-relaxed text-[var(--ix-ink-3)]">
               Joining someone else’s server instead? You don’t need a setup code — ask them for an
               invite link and sign up there.
             </p>

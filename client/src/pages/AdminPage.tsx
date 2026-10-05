@@ -1,17 +1,13 @@
-import { useCurrentUser } from '../hooks/useCurrentUser';
-import { useState, type KeyboardEvent } from 'react';
+import { useCallback, useState, type CSSProperties } from 'react';
 import { useNavigate } from 'react-router';
-import { Users, Server, Settings, BarChart3, Shield, HardDrive, Globe2, Puzzle } from 'lucide-react';
+import { useCurrentUser } from '../hooks/useCurrentUser';
 import { isAdmin } from '../types';
-import {
-  Button,
-  EmptyState,
-  LoadingSpinner,
-  Plate,
-  SettingsShell,
-  type SettingsNavGroup,
-} from '../components/ui';
-import { useMobile } from '../hooks/useMobile';
+import { LoadingSpinner } from '../components/ui';
+import { EmptyPage, LargeTitlePage } from '../components/ix/page';
+import { CreamButton } from '../components/ix/primitives';
+import { Segmented, segmentedIds } from '../components/ix/people/Segmented';
+import { usePushedPageKeys } from '../components/rooms/lobby/usePushedPageKeys';
+import { PEOPLE_HUE } from '../lib/identityHue';
 import { OverviewPanel } from './admin/OverviewPanel';
 import { UsersPanel } from './admin/UsersPanel';
 import { GuildsPanel } from './admin/GuildsPanel';
@@ -24,100 +20,91 @@ import { AddonsPanel } from './admin/AddonsPanel';
 type Tab = 'overview' | 'users' | 'guilds' | 'settings' | 'federation' | 'security' | 'backups' | 'addons';
 
 /**
- * The control plane is a settings surface (spec §4): one plate over the street,
- * a left index of sections in sentence case, the section's content beside it.
- * Every tab id, the admin gate and the route are unchanged — only the shape is.
+ * The control plane is a page in main (docs/index-spec.md §6.1, §8.1): the large
+ * title "Admin", and under it a segmented control for its sections, with the
+ * section's panel below. Every tab id, the admin gate and the route are unchanged.
+ * It is reached from the account menu; Esc and the toolbar's back chevron go back
+ * to the place you came from (`/app` opens the last place).
  */
-const NAV_GROUPS: SettingsNavGroup[] = [
-  {
-    items: [{ id: 'overview', label: 'Overview', icon: <BarChart3 size={16} /> }],
-  },
-  {
-    label: 'People and servers',
-    items: [
-      { id: 'users', label: 'Users', icon: <Users size={16} /> },
-      { id: 'guilds', label: 'Servers', icon: <Server size={16} /> },
-      { id: 'federation', label: 'Federation', icon: <Globe2 size={16} /> },
-    ],
-  },
-  {
-    label: 'This deployment',
-    items: [
-      { id: 'settings', label: 'Settings', icon: <Settings size={16} /> },
-      { id: 'addons', label: 'Add-ons', icon: <Puzzle size={16} /> },
-      { id: 'security', label: 'Security', icon: <Shield size={16} /> },
-      { id: 'backups', label: 'Backups', icon: <HardDrive size={16} /> },
-    ],
-  },
+const TABS: ReadonlyArray<{ value: Tab; label: string }> = [
+  { value: 'overview', label: 'Overview' },
+  { value: 'users', label: 'Users' },
+  { value: 'guilds', label: 'Servers' },
+  { value: 'federation', label: 'Federation' },
+  { value: 'settings', label: 'Settings' },
+  { value: 'addons', label: 'Add-ons' },
+  { value: 'security', label: 'Security' },
+  { value: 'backups', label: 'Backups' },
 ];
+
+const PAGE_CLASS = 'ix-sp ix-lt--main ix-adm';
+const SUBTITLE = 'Instance administration';
 
 export function AdminPage() {
   const navigate = useNavigate();
   const currentUser = useCurrentUser();
-  const isMobile = useMobile();
   const [activeTab, setActiveTab] = useState<Tab>('overview');
-  const [showIndex, setShowIndex] = useState(true);
 
-  const goHome = () => navigate('/app');
+  // `/app` is not a page any more: it opens the place you were in.
+  const goBack = useCallback(() => navigate('/app'), [navigate]);
+  usePushedPageKeys(goBack);
+
+  const hue = { '--ix-hue': PEOPLE_HUE } as CSSProperties;
 
   if (!currentUser) {
     return (
-      <div className="flex h-full items-center justify-center px-4">
-        <Plate className="w-full max-w-md px-6 py-8">
-          <LoadingSpinner size="sm" label="Checking admin access..." />
-        </Plate>
+      <div className="ix-hued" style={hue}>
+        <LargeTitlePage title="Admin" subtitle={SUBTITLE} onBack={goBack} className={PAGE_CLASS} data-testid="ix-admin">
+          <LoadingSpinner size="sm" label="Checking admin access..." className="justify-start" />
+        </LargeTitlePage>
       </div>
     );
   }
 
   if (!isAdmin(currentUser.flags ?? 0)) {
     return (
-      <div className="flex h-full items-center justify-center px-4">
-        <Plate className="w-full max-w-md px-6 py-2">
-          <EmptyState
+      <div className="ix-hued" style={hue}>
+        <LargeTitlePage title="Admin" subtitle={SUBTITLE} onBack={goBack} className={PAGE_CLASS} data-testid="ix-admin">
+          <EmptyPage
+            inline
             role="alert"
-            icon={<Shield size={20} />}
+            glyph="lock"
             title="Access denied"
-            description="The control plane is limited to instance administrators. Ask an admin to grant you access, then come back."
-            action={<Button onClick={goHome}>Go back</Button>}
+            line="The control plane is limited to instance administrators. Ask an admin to grant you access, then come back."
+            action={<CreamButton onClick={goBack}>Back</CreamButton>}
           />
-        </Plate>
+        </LargeTitlePage>
       </div>
     );
   }
 
-  // Escape closes the surface, which is what the shell's Esc hint promises.
-  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key !== 'Escape') return;
-    event.stopPropagation();
-    goHome();
-  };
+  const ids = segmentedIds('admin-section', activeTab);
 
   return (
-    <SettingsShell
-      label="Instance administration"
-      title="Admin"
-      groups={NAV_GROUPS}
-      active={activeTab}
-      onSelect={(id) => {
-        setActiveTab(id as Tab);
-        setShowIndex(false);
-      }}
-      onClose={goHome}
-      closeLabel="Back to home"
-      isMobile={isMobile}
-      showIndex={showIndex}
-      onShowIndex={setShowIndex}
-      onKeyDown={onKeyDown}
-    >
-      {activeTab === 'overview' && <OverviewPanel />}
-      {activeTab === 'users' && <UsersPanel />}
-      {activeTab === 'guilds' && <GuildsPanel />}
-      {activeTab === 'settings' && <SettingsPanel />}
-      {activeTab === 'federation' && <FederationPanel />}
-      {activeTab === 'security' && <SecurityPanel />}
-      {activeTab === 'backups' && <BackupsPanel />}
-      {activeTab === 'addons' && <AddonsPanel />}
-    </SettingsShell>
+    <div className="ix-hued" style={hue}>
+      <LargeTitlePage title="Admin" subtitle={SUBTITLE} onBack={goBack} className={PAGE_CLASS} data-testid="ix-admin">
+        <div className="ix-adm__bar">
+          <div className="ix-adm__tabs">
+            <Segmented
+              label="Administration sections"
+              idBase="admin-section"
+              items={TABS}
+              value={activeTab}
+              onChange={setActiveTab}
+            />
+          </div>
+        </div>
+        <div role="tabpanel" id={ids.panel} aria-labelledby={ids.tab} className="ix-adm__panel">
+          {activeTab === 'overview' && <OverviewPanel />}
+          {activeTab === 'users' && <UsersPanel />}
+          {activeTab === 'guilds' && <GuildsPanel />}
+          {activeTab === 'settings' && <SettingsPanel />}
+          {activeTab === 'federation' && <FederationPanel />}
+          {activeTab === 'security' && <SecurityPanel />}
+          {activeTab === 'backups' && <BackupsPanel />}
+          {activeTab === 'addons' && <AddonsPanel />}
+        </div>
+      </LargeTitlePage>
+    </div>
   );
 }

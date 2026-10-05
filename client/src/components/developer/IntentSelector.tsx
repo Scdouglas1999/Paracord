@@ -77,7 +77,7 @@ export function IntentSelector({ value, onChange }: IntentSelectorProps) {
               <span className="flex flex-wrap items-center gap-1.5">
                 <span className="pc-mono text-meta text-text-primary">{intent.name}</span>
                 {intent.privileged && (
-                  <Chip size="sm" className="text-accent-warning">
+                  <Chip size="sm" className="text-[var(--ix-ink)]">
                     Privileged
                   </Chip>
                 )}
@@ -93,7 +93,7 @@ export function IntentSelector({ value, onChange }: IntentSelectorProps) {
         <span className="shrink-0 text-section text-text-faint">Value</span>
         <code className="pc-mono min-w-0 flex-1 truncate text-meta text-text-primary">{value}</code>
         <IconButton label="Copy intent value" onClick={() => void copyValue()}>
-          {copied ? <Check size={15} className="text-accent-success" /> : <Copy size={15} />}
+          {copied ? <Check size={15} aria-hidden /> : <Copy size={15} />}
         </IconButton>
       </Well>
     </div>

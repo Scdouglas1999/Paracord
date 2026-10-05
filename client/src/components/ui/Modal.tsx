@@ -15,10 +15,13 @@ import { usePresence } from '../../lib/motion';
 import { cn } from '../../lib/utils';
 
 /**
- * Single base modal/dialog primitive for the app. Owns the portal, backdrop,
- * enter/exit motion (the shared overlay recipe: fade + 6px rise and
- * 0.98 scale in on ease-out, fade out on the quicker ease-in), ARIA wiring, focus trap and
- * Escape handling. Complex consumers that already manage their own focus trap
+ * Single base modal/dialog primitive for the app (docs/index-spec.md §6.12):
+ * centered, max 440 wide at `sm`, radius 20, the card color, a title 17/700, a
+ * body 14 ink-2 and actions right-aligned (a text Cancel and one cream confirm;
+ * a destructive confirm is the danger ink on its fill). Owns the portal, the scrim
+ * (`--ix-scrim`, fading 200ms), the enter/exit motion (the panel from scale(.97) and
+ * a fade, 220ms on the spring), ARIA wiring, focus trap and Escape handling.
+ * Complex consumers that already manage their own focus trap
  * can opt out with `manageFocus={false}` and pass their own `panelRef`.
  *
  * Imported (not edited) by other lanes — keep this export surface stable.
@@ -27,12 +30,12 @@ import { cn } from '../../lib/utils';
 type ModalPlacement = 'center' | 'top';
 type ModalSize = 'sm' | 'md' | 'lg' | 'xl' | 'auto';
 
-// A dialog is a near-solid pane over the dimmed app (docs/glass-spec.md §2.4):
-// radius 24 for a confirm or a short form, 28 for a window. `--pc-dialog-r`
-// is what `.pc-dialog` reads (primitives.css).
+// A dialog is the card color over the scrim at radius 20 (`.pc-dialog`,
+// primitives.css). `sm` is the confirm's 440; the rest are for forms and lists
+// that need the room.
 const SIZE_CLASS: Record<ModalSize, string> = {
-  sm: 'w-full max-w-md [--pc-dialog-r:24px]',
-  md: 'w-full max-w-xl [--pc-dialog-r:24px]',
+  sm: 'w-full max-w-[440px]',
+  md: 'w-full max-w-xl',
   lg: 'w-full max-w-2xl',
   xl: 'w-full max-w-3xl',
   auto: '',
@@ -128,8 +131,8 @@ export function Modal({
     // behind); the opaque panel below carries the content and reads clearly.
     <div
       className={cn(
-        'fixed inset-0 flex modal-backdrop',
-        exiting ? 'pc-fade-out' : 'pc-fade-in',
+        'fixed inset-0 flex modal-backdrop bg-[var(--ix-scrim)]',
+        exiting ? 'pc-scrim-out' : 'pc-scrim-in',
         zIndexClassName,
         PLACEMENT_CLASS[placement],
         backdropClassName,
@@ -151,10 +154,10 @@ export function Modal({
         aria-label={labeledBy ? undefined : ariaLabel}
         tabIndex={-1}
         className={cn(
-          // A dialog is a near-solid pane that floats over the dimmed app:
-          // the pane's fill and depth, a radius by size, and no border.
-          'pc-dialog relative max-h-[calc(100dvh-2rem)] max-w-[calc(100vw-2rem)] overflow-hidden',
-          exiting ? 'pc-exit' : 'pc-enter',
+          // A dialog is the card color over the scrim (§6.12); its contents read
+          // the Index inks (`ix-lt--card`).
+          'pc-dialog ix-lt--card relative max-h-[calc(100dvh-2rem)] max-w-[calc(100vw-2rem)] overflow-hidden text-[var(--ix-ink)]',
+          exiting ? 'pc-dialog-exit' : 'pc-dialog-enter',
           SIZE_CLASS[size],
           panelClassName,
         )}
@@ -181,9 +184,9 @@ export function ModalCloseButton({ className }: { className?: string }) {
       onClick={ctx.onClose}
       aria-label={ctx.closeLabel}
       className={cn(
-        'pc-focusable absolute right-4 top-4 flex h-9 w-9 items-center justify-center',
-        'rounded-[var(--r-capsule)] text-text-muted',
-        'transition-colors duration-[var(--glass-ms)] ease-[var(--glass-ease)] hover:bg-[var(--wash-hover)] hover:text-text-primary active:bg-[var(--wash-press)]',
+        'pc-focusable absolute right-3.5 top-3.5 flex h-9 w-9 items-center justify-center',
+        'rounded-[11px] text-[var(--ix-ink-3)]',
+        'transition-colors duration-[120ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill)] hover:text-[var(--ix-ink)] active:bg-[var(--ix-fill-2)]',
         className,
       )}
     >
@@ -202,7 +205,7 @@ export function ModalHeader({
   icon?: ReactNode;
 }) {
   return (
-    <div className={cn('flex items-start gap-3 px-6 pb-3 pt-6', className)}>
+    <div className={cn('flex items-start gap-3 px-[22px] pb-3 pt-[22px]', className)}>
       {icon && <div className="shrink-0">{icon}</div>}
       <div className="min-w-0 flex-1">{children}</div>
     </div>
@@ -221,7 +224,7 @@ export function ModalTitle({
   return (
     <h2
       id={id}
-      className={cn('pc-display glass-title-channel text-text-primary', className)}
+      className={cn('pc-display text-[17px] font-bold leading-[1.25] tracking-[-0.01em] text-[var(--ix-ink)]', className)}
     >
       {children}
     </h2>
@@ -240,7 +243,7 @@ export function ModalDescription({
   return (
     <p
       id={id}
-      className={cn('glass-body mt-2 max-w-prose text-text-secondary', className)}
+      className={cn('mt-1.5 max-w-prose text-[14px] leading-[1.45] text-[var(--ix-ink-2)]', className)}
     >
       {children}
     </p>
@@ -254,7 +257,7 @@ export function ModalBody({
   children: ReactNode;
   className?: string;
 }) {
-  return <div className={cn('px-6 py-3', className)}>{children}</div>;
+  return <div className={cn('px-[22px] py-2', className)}>{children}</div>;
 }
 
 export function ModalFooter({
@@ -266,7 +269,7 @@ export function ModalFooter({
 }) {
   return (
     <div
-      className={cn('flex flex-wrap items-center justify-end gap-2 px-6 pb-6 pt-5', className)}
+      className={cn('flex flex-wrap items-center justify-end gap-2 px-[22px] pb-[18px] pt-4', className)}
     >
       {children}
     </div>

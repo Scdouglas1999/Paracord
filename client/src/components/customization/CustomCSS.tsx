@@ -103,7 +103,9 @@ export function CustomCSS({ initialCSS = '', onSave }: CustomCSSProps) {
           <RotateCcw size={15} aria-hidden />
           Reset
         </Button>
+        {/* Quiet, not cream: the page's own Save is the one cream action. */}
         <Button
+          variant="glass"
           onClick={handleSave}
           aria-label={saved ? 'Custom CSS saved' : 'Save custom CSS'}
         >
@@ -112,12 +114,12 @@ export function CustomCSS({ initialCSS = '', onSave }: CustomCSSProps) {
         </Button>
       </div>
 
-      {/* A caution is a well carrying warning ink, not a tinted panel. */}
+      {/* A caution is a well carrying ink, not a tinted panel (no yellow in the chrome). */}
       <div className="pc-well flex gap-2.5 px-3.5 py-3" role="note">
-        <ShieldAlert size={16} className="mt-px shrink-0 text-accent-warning" aria-hidden />
+        <ShieldAlert size={16} className="mt-px shrink-0 text-[var(--ix-ink)]" aria-hidden />
         <p className="text-meta leading-relaxed">
-          <span className="font-semibold text-accent-warning">Only paste CSS you trust. </span>
-          <span className="text-text-secondary">
+          <span className="font-semibold text-[var(--ix-ink)]">Only paste CSS you trust. </span>
+          <span className="text-[var(--ix-ink-2)]">
             Custom styles run against the whole interface. Unsafe directives (<code className="pc-mono">@import</code>,
             {' '}
             <code className="pc-mono">url()</code>, <code className="pc-mono">behavior</code>,
@@ -128,20 +130,19 @@ export function CustomCSS({ initialCSS = '', onSave }: CustomCSSProps) {
         </p>
       </div>
 
-      {/* The editor is one well: recessed inside its plate, depth from the inset
-          shadow, the §9 focus ring layered over it. */}
-      <div className="pc-well overflow-hidden focus-within:shadow-[var(--shadow-well),var(--focus-ring)]">
+      {/* The editor is one field: the field fill and a hairline, the one focus ring around it. */}
+      <div className="pc-field overflow-hidden">
         <div className="flex items-center gap-2 px-3.5 py-2">
-          <Code2 size={13} className="text-text-faint" aria-hidden />
-          <span className="pc-mono text-meta text-text-faint">custom.css</span>
+          <Code2 size={13} className="text-[var(--ix-ink-3)]" aria-hidden />
+          <span className="pc-mono text-meta text-[var(--ix-ink-3)]">custom.css</span>
         </div>
         <textarea
           value={css}
           onChange={(e) => setCss(e.target.value)}
           aria-label="Custom CSS"
-          placeholder={`/* Restyle Paracord with your own CSS. */\n\n:root {\n  --accent-primary: #24d196;\n}`}
+          placeholder={`/* Restyle Paracord with your own CSS. */\n\n:root {\n  --font-primary: Georgia, serif;\n}`}
           rows={16}
-          className="block w-full resize-y bg-transparent p-4 pc-mono text-label leading-relaxed text-text-primary outline-none placeholder:text-text-faint"
+          className="block w-full resize-y bg-transparent p-4 pc-mono text-label leading-relaxed text-[var(--ix-ink)] outline-none placeholder:text-[var(--ix-ink-3)]"
           style={{ tabSize: 2, minHeight: '260px' }}
           spellCheck={false}
         />
@@ -149,7 +150,7 @@ export function CustomCSS({ initialCSS = '', onSave }: CustomCSSProps) {
 
       {!applied && (
         <div
-          className="flex items-start gap-2 rounded-[var(--radius-well)] bg-danger-well px-3.5 py-2.5 text-meta font-medium leading-relaxed text-accent-danger shadow-[var(--shadow-well)]"
+          className="flex items-start gap-2 rounded-[12px] bg-[var(--ix-danger-fill)] px-3.5 py-2.5 text-meta font-medium leading-relaxed text-[var(--ix-danger-ink)]"
           role="alert"
         >
           <AlertTriangle size={15} className="mt-px shrink-0" aria-hidden />
@@ -160,7 +161,7 @@ export function CustomCSS({ initialCSS = '', onSave }: CustomCSSProps) {
 
       {sanitized && (
         <div
-          className="flex items-start gap-2 rounded-[var(--radius-well)] bg-danger-well px-3.5 py-2.5 text-meta font-medium leading-relaxed text-accent-danger shadow-[var(--shadow-well)]"
+          className="flex items-start gap-2 rounded-[12px] bg-[var(--ix-danger-fill)] px-3.5 py-2.5 text-meta font-medium leading-relaxed text-[var(--ix-danger-ink)]"
           role="alert"
         >
           <AlertTriangle size={15} className="mt-px shrink-0" aria-hidden />
@@ -168,7 +169,7 @@ export function CustomCSS({ initialCSS = '', onSave }: CustomCSSProps) {
         </div>
       )}
 
-      <p className="max-w-prose text-meta leading-relaxed text-text-faint">
+      <p className="max-w-prose text-meta leading-relaxed text-[var(--ix-ink-3)]">
         If a theme ever leaves you unable to read the interface, press{' '}
         <kbd className="pc-mono">Ctrl</kbd>+<kbd className="pc-mono">Alt</kbd>+
         <kbd className="pc-mono">Shift</kbd>+<kbd className="pc-mono">C</kbd> to remove your custom

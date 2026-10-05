@@ -61,11 +61,12 @@ describe('Well and Raised', () => {
     expect(container.firstElementChild).toHaveClass('pc-well');
   });
 
-  it('Raised uses the lifted shadow only when asked', () => {
+  it('Raised is the quiet control fill and takes the room card shadow only when lifted', () => {
     const { container, rerender } = render(<Raised>row</Raised>);
-    expect(container.firstElementChild?.className).toContain('var(--shadow-raised)');
+    expect(container.firstElementChild?.className).toContain('bg-[var(--ix-fill-ctl)]');
+    expect(container.firstElementChild?.className).not.toContain('shadow');
     rerender(<Raised lifted>row</Raised>);
-    expect(container.firstElementChild?.className).toContain('var(--shadow-lifted)');
+    expect(container.firstElementChild?.className).toContain('shadow-[var(--ix-shadow-room)]');
   });
 });
 
@@ -102,18 +103,24 @@ describe('Button', () => {
     }
   });
 
-  it('ghost is a text decision and glass is the 12% white control', () => {
+  it('ghost is a text decision and glass is the quiet control fill (radius 11)', () => {
     const { rerender } = render(<Button variant="ghost">Cancel</Button>);
-    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveClass('bg-transparent', 'hover:bg-[var(--wash-hover)]');
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveClass('bg-transparent', 'hover:bg-[var(--ix-fill)]', 'rounded-[11px]');
     rerender(<Button variant="glass">Upload</Button>);
-    expect(screen.getByRole('button', { name: 'Upload' })).toHaveClass('bg-[var(--glass-fill)]', 'hover:bg-[var(--glass-fill-hover)]');
+    expect(screen.getByRole('button', { name: 'Upload' })).toHaveClass('bg-[var(--ix-fill-ctl)]', 'hover:bg-[var(--ix-fill-ctl-hover)]', 'rounded-[11px]');
   });
 
-  it('danger is the danger well carrying danger ink, never a red fill', () => {
+  it('danger is the danger fill carrying the danger ink, never a red fill and never cream', () => {
     render(<Button variant="danger">Leave</Button>);
     const btn = screen.getByRole('button', { name: 'Leave' });
-    expect(btn).toHaveClass('bg-danger-well');
-    expect(btn).toHaveClass('text-accent-danger');
+    expect(btn).toHaveClass('bg-[var(--ix-danger-fill)]');
+    expect(btn).toHaveClass('text-[var(--ix-danger-ink)]');
+    expect(btn.className).not.toContain('accent-primary');
+  });
+
+  it('the cream action is 36 tall at radius 11 and 14/700', () => {
+    render(<Button>Save</Button>);
+    expect(screen.getByRole('button', { name: 'Save' })).toHaveClass('h-9', 'rounded-[11px]', 'text-[14px]', 'font-bold');
   });
 
   it('sizes are 32 / 36 / 44', () => {
@@ -140,7 +147,7 @@ describe('Button', () => {
 
   it('keeps the legacy variant names building', () => {
     render(<Button variant="secondary">Cancel</Button>);
-    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveClass('bg-[var(--glass-fill)]');
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveClass('bg-[var(--ix-fill-ctl)]');
   });
 });
 
@@ -173,30 +180,41 @@ describe('IconButton', () => {
     expect(screen.getByRole('button')).toHaveClass('pc-focusable');
   });
 
-  it('is a circle that never scales, with a glass tone for the raised look', () => {
+  it('is a 36px tile at radius 11 that never scales, with a control fill for the raised look', () => {
     render(
       <IconButton label="Close" tone="raised">
         x
       </IconButton>,
     );
     const cls = screen.getByRole('button').className;
-    expect(cls).toContain('rounded-[var(--r-capsule)]');
-    expect(cls).toContain('bg-[var(--glass-fill)]');
+    expect(cls).toContain('rounded-[11px]');
+    expect(cls).toContain('bg-[var(--ix-fill-ctl)]');
     expect(cls).not.toMatch(/scale|pc-pressable|brightness/);
+  });
+
+  it('a call control is a circle', () => {
+    render(
+      <IconButton label="Share" size="stage">
+        S
+      </IconButton>,
+    );
+    expect(screen.getByRole('button').className).toContain('rounded-full');
   });
 });
 
 describe('Chip', () => {
-  it('renders neutral by default', () => {
+  it('renders neutral by default: the quiet fill at radius 8 in ink-2', () => {
     render(<Chip>3</Chip>);
-    expect(screen.getByText('3')).toHaveClass('text-text-secondary');
+    expect(screen.getByText('3')).toHaveClass('text-[var(--ix-ink-2)]', 'bg-[var(--ix-fill)]', 'rounded-[8px]');
   });
 
-  it('light tones map to the two light tokens', () => {
+  it('live tones are amber and the danger tone is the one danger ink', () => {
     const { rerender } = render(<Chip tone="talking">3 talking</Chip>);
-    expect(screen.getByText('3 talking')).toHaveClass('text-light-white');
+    expect(screen.getByText('3 talking')).toHaveClass('text-[var(--ix-amber)]');
     rerender(<Chip tone="reading">5 here</Chip>);
-    expect(screen.getByText('5 here')).toHaveClass('text-light-amber');
+    expect(screen.getByText('5 here')).toHaveClass('text-[var(--ix-amber)]');
+    rerender(<Chip tone="danger">2</Chip>);
+    expect(screen.getByText('2')).toHaveClass('text-[var(--ix-danger-ink)]');
   });
 
   it('becomes a real button when asked', () => {
@@ -221,9 +239,9 @@ describe('NavRow', () => {
     render(<NavRow active>Shop floor</NavRow>);
     const row = screen.getByRole('button', { name: 'Shop floor' });
     expect(row).toHaveAttribute('aria-current', 'page');
-    // The row you are on is the selection wash, which a server's own color can
-    // take over (`--row-selected`), not a fixed gray step.
-    expect(row).toHaveClass('bg-[var(--row-selected)]');
+    // The row you are on wears the hue selection (the place's `--ix-hue`), not a
+    // fixed gray step and not an accent bar.
+    expect(row).toHaveClass('ix-hue-selected');
   });
 
   it('uses the 34px nav-row height token', () => {
@@ -238,21 +256,21 @@ describe('NavRow', () => {
 });
 
 describe('SectionLabel', () => {
-  it('is the Glass kicker (12/700, uppercase by CSS) and keeps its text as written', () => {
+  it('is 12.5/600 sentence case in the tertiary ink, never an uppercase kicker', () => {
     const { container } = render(<SectionLabel meta="24 in">Coming up</SectionLabel>);
-    // The words stay as typed (a screen reader reads them, and a test can find
-    // them); the uppercase is `.glass-kicker`'s `text-transform`.
     expect(screen.getByText('Coming up')).toBeInTheDocument();
-    expect(container.firstElementChild).toHaveClass('glass-kicker');
-    expect(screen.getByText('24 in')).toHaveClass('glass-instrument');
+    const label = container.firstElementChild!;
+    expect(label).toHaveClass('text-[12.5px]', 'font-semibold', 'text-[var(--ix-ink-3)]');
+    expect(label.className).not.toMatch(/uppercase|glass-kicker/);
+    expect(screen.getByText('24 in')).toHaveClass('tabular-nums');
   });
 });
 
 describe('Kbd', () => {
-  it('renders a kbd element in the instrument cut', () => {
+  it('renders a kbd element: 11/500 tabular on a hairline key cap', () => {
     const { container } = render(<Kbd>⌘K</Kbd>);
     const kbd = container.querySelector('kbd')!;
-    expect(kbd).toHaveClass('glass-instrument');
+    expect(kbd).toHaveClass('tabular-nums', 'text-[11px]');
     expect(kbd).toHaveTextContent('⌘K');
   });
 });
@@ -283,9 +301,9 @@ describe('TextField and SearchWell', () => {
     expect(screen.getByLabelText('Room name')).toHaveValue('Shop floor');
   });
 
-  it('SearchWell is a well with an accessible name and a shortcut hint', () => {
+  it('SearchWell is a field with an accessible name and a shortcut hint', () => {
     const { container } = render(<SearchWell shortcut={<Kbd>⌘K</Kbd>} />);
-    expect(container.firstElementChild).toHaveClass('pc-well');
+    expect(container.firstElementChild).toHaveClass('pc-field');
     expect(screen.getByLabelText('Search')).toBeInTheDocument();
     expect(screen.getByText('⌘K')).toBeInTheDocument();
   });
@@ -294,7 +312,7 @@ describe('TextField and SearchWell', () => {
 describe('Divider', () => {
   it('renders a hairline rule', () => {
     const { container } = render(<Divider />);
-    expect(container.querySelector('hr')).toHaveClass('bg-border-subtle');
+    expect(container.querySelector('hr')).toHaveClass('bg-[var(--ix-line)]');
   });
 
   it('renders a labeled separator', () => {
@@ -370,7 +388,7 @@ describe('Popover', () => {
   it('a destructive item takes danger ink, not a red fill', async () => {
     render(<PopoverHarness />);
     await userEvent.click(screen.getByRole('button', { name: 'Open' }));
-    expect(screen.getByRole('menuitem', { name: 'Leave' })).toHaveClass('text-accent-danger');
+    expect(screen.getByRole('menuitem', { name: 'Leave' })).toHaveClass('text-[var(--ix-danger-ink)]');
   });
 });
 
@@ -399,9 +417,9 @@ describe('Switch', () => {
     expect(onChange).toHaveBeenCalledWith(false);
   });
 
-  it('off is glass, on is cream, and neither glows amber (amber means live)', () => {
+  it('off is the quiet control fill, on is cream, and neither glows amber (amber means live)', () => {
     const { rerender, container } = render(<Switch checked={false} onChange={() => {}} label="a" />);
-    expect(screen.getByRole('switch')).toHaveClass('bg-[var(--glass-fill)]');
+    expect(screen.getByRole('switch')).toHaveClass('bg-[var(--ix-fill-ctl-hover)]');
     rerender(<Switch checked onChange={() => {}} label="a" />);
     const on = screen.getByRole('switch');
     expect(on).toHaveClass('bg-accent-primary');
@@ -436,14 +454,14 @@ describe('Tabs', () => {
     expect(within(list).getByRole('tab', { name: 'General' })).toHaveAttribute('aria-selected', 'false');
   });
 
-  it('selection is the "on" glass fill, never an accent bar', () => {
+  it('selection is the lit fill on a segment, never an accent bar', () => {
     render(<Tabs items={TAB_ITEMS} value="general" onChange={() => {}} label="Server settings" />);
     // The selected pill is ONE element the engine slides between the tabs (it
     // slides, it never jumps), so it is the indicator that carries the fill,
     // and no tab carries a fill of its own.
     const list = screen.getByRole('tablist', { name: 'Server settings' });
     const indicator = list.querySelector('[aria-hidden="true"]');
-    expect(indicator).toHaveClass('bg-[var(--glass-fill-on)]');
+    expect(indicator).toHaveClass('bg-[var(--ix-fill-2)]', 'rounded-[9px]');
     expect(screen.getByRole('tab', { name: 'General' })).not.toHaveClass('bg-accent-primary');
     expect(screen.getByRole('tab', { name: 'General' }).className).not.toMatch(/scale/);
   });
@@ -479,7 +497,7 @@ const SETTINGS_GROUPS = [
 ];
 
 describe('SettingsShell', () => {
-  it('is one plate carrying a named index and the selected section', () => {
+  it('is one full-window surface carrying a named index and the selected section', () => {
     const { container } = render(
       <SettingsShell
         label="User settings"
@@ -493,7 +511,7 @@ describe('SettingsShell', () => {
         <SettingsSectionHeader title="Voice and video" description="Pick the microphone you use." />
       </SettingsShell>,
     );
-    expect(container.firstElementChild).toHaveClass('pc-plate');
+    expect(container.firstElementChild).toHaveClass('ix-settings');
     const index = screen.getByRole('navigation', { name: 'User settings' });
     expect(within(index).getByRole('button', { name: 'Voice and video' })).toHaveAttribute(
       'aria-current',
@@ -502,7 +520,7 @@ describe('SettingsShell', () => {
     expect(screen.getByRole('heading', { name: 'Voice and video' })).toBeInTheDocument();
   });
 
-  it('section labels are Glass kickers', () => {
+  it('section labels are sentence case, never an uppercase kicker', () => {
     render(
       <SettingsShell
         label="User settings"
@@ -516,7 +534,8 @@ describe('SettingsShell', () => {
         content
       </SettingsShell>,
     );
-    expect(screen.getByText('Preferences').parentElement).toHaveClass('glass-kicker');
+    expect(screen.getByText('Preferences').parentElement?.className).not.toMatch(/glass-kicker|uppercase/);
+    expect(screen.getByText('Preferences').parentElement).toHaveClass('text-[12.5px]');
   });
 
   it('selects a section from the index', async () => {

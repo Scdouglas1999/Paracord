@@ -1,37 +1,36 @@
-import { useState, useEffect, useCallback, type KeyboardEvent } from 'react';
-import { Bot, RefreshCw, BookOpen, Plus } from 'lucide-react';
+import { useState, useEffect, useCallback, type CSSProperties } from 'react';
 import { useNavigate } from 'react-router';
+import { BookOpen, RefreshCw } from 'lucide-react';
 import { botApi, type BotApplication, type BotGuildInstall } from '../api/bots';
 import { botStoreApi, type BotMetricsResult } from '../api/botStore';
 import { commandApi } from '../api/commands';
 import { extractApiError } from '../api/client';
 import type { ApplicationCommand } from '../types/commands';
 import { confirm } from '../stores/confirmStore';
-import {
-  ErrorBanner,
-  LoadingSpinner,
-  NavRow,
-  SettingsShell,
-  type SettingsNavGroup,
-} from '../components/ui';
-import { useMobile } from '../hooks/useMobile';
+import { ErrorBanner, LoadingSpinner } from '../components/ui';
+import { LargeTitlePage } from '../components/ix/page';
+import { Segmented, segmentedIds } from '../components/ix/people/Segmented';
+import { ToolChip } from '../components/ix/primitives';
+import { usePushedPageKeys } from '../components/rooms/lobby/usePushedPageKeys';
+import { PEOPLE_HUE } from '../lib/identityHue';
 import { writeClipboardText } from '../lib/clipboard';
 import { CreateBotForm } from './developer/CreateBotForm';
 import { BotAppCard } from './developer/BotAppCard';
 import { BotAdvancedTabs, type AdvancedTab } from './developer/BotAdvancedTabs';
 import { BotMetricsPanel } from './developer/BotMetricsPanel';
 
+/** The "New application" segment's value; an application's own id is every other one. */
+const NEW_APP = 'new';
+
 export function DeveloperPage() {
   const [apps, setApps] = useState<BotApplication[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Which section of the portal is open: an application's id, or the create
-  // form when nothing is selected. The index in the shell drives this.
+  // Which application is open: its id, or the create form when nothing is
+  // selected. The segmented control under the title drives this.
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [showIndex, setShowIndex] = useState(true);
   const navigate = useNavigate();
-  const isMobile = useMobile();
 
   // Create form
   const [newName, setNewName] = useState('');
@@ -266,32 +265,16 @@ export function DeveloperPage() {
 
 
   const selectedApp = apps.find((app) => app.id === selectedId) ?? null;
-  const active = selectedApp ? selectedApp.id : 'new';
+  const active = selectedApp ? selectedApp.id : NEW_APP;
 
-  const groups: SettingsNavGroup[] = [
-    { items: [{ id: 'new', label: 'New application', icon: <Plus size={16} /> }] },
-    ...(apps.length > 0
-      ? [
-          {
-            label: 'Your apps',
-            items: apps.map((app) => ({
-              id: app.id,
-              label: app.name,
-              icon: <Bot size={16} />,
-            })),
-          },
-        ]
-      : []),
+  const items = [
+    { value: NEW_APP, label: 'New application' },
+    ...apps.map((app) => ({ value: app.id, label: app.name })),
   ];
 
-  const goHome = () => navigate('/app');
-
-  // Escape closes the surface, which is what the shell's Esc hint promises.
-  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key !== 'Escape') return;
-    event.stopPropagation();
-    goHome();
-  };
+  // `/app` is not a page any more: it opens the place you were in.
+  const goBack = useCallback(() => navigate('/app'), [navigate]);
+  usePushedPageKeys(goBack);
 
   const renderApp = (app: BotApplication) => {
     const isExpanded = expandedId === app.id;
@@ -374,56 +357,53 @@ export function DeveloperPage() {
     );
   };
 
+  const ids = segmentedIds('developer-app', active);
+
   return (
-    <SettingsShell
-      label="Your applications"
-      title="Developer portal"
-      groups={groups}
-      active={active}
-      onSelect={(id) => {
-        setSelectedId(id === 'new' ? null : id);
-        setShowIndex(false);
-      }}
-      onClose={goHome}
-      closeLabel="Back to home"
-      isMobile={isMobile}
-      showIndex={showIndex}
-      onShowIndex={setShowIndex}
-      onKeyDown={onKeyDown}
-      indexFooter={
-        <>
-          <NavRow icon={<RefreshCw size={16} />} onClick={() => void fetchApps()}>
-            Reload applications
-          </NavRow>
-          {/* The API reference lives outside the SPA, so it opens in its own
-              tab; same row recipe as the index above it. */}
-          <a
-            href="/api/docs"
-            target="_blank"
-            rel="noreferrer"
-            className="pc-focusable flex h-[var(--h-nav-row)] w-full select-none items-center gap-2.5 rounded-[var(--radius-control)] px-2.5 text-label text-text-secondary transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary"
-          >
-            <span className="flex h-4 w-4 shrink-0 items-center justify-center" aria-hidden>
-              <BookOpen size={16} />
-            </span>
-            <span className="min-w-0 flex-1 truncate">API docs</span>
-          </a>
-        </>
-      }
-    >
-      <div className="flex flex-col gap-6">
-        {error && <ErrorBanner message={error} multiline onRetry={() => void fetchApps()} />}
-        {loading && <LoadingSpinner size="sm" label="Loading developer apps..." />}
-        {selectedApp ? renderApp(selectedApp) : (
-          <CreateBotForm
-            name={newName}
-            description={newDescription}
-            onNameChange={setNewName}
-            onDescriptionChange={setNewDescription}
-            onCreate={() => void createApp()}
-          />
-        )}
-      </div>
-    </SettingsShell>
+    <div className="ix-hued" style={{ '--ix-hue': PEOPLE_HUE } as CSSProperties}>
+      <LargeTitlePage
+        title="Developer portal"
+        subtitle="Applications and bots built on this instance"
+        onBack={goBack}
+        className="ix-sp ix-lt--main ix-adm ix-dev"
+        data-testid="ix-developer"
+      >
+        <div className="ix-adm__bar">
+          <div className="ix-adm__tabs">
+            <Segmented
+              label="Your applications"
+              idBase="developer-app"
+              items={items}
+              value={active}
+              onChange={(id) => setSelectedId(id === NEW_APP ? null : id)}
+            />
+          </div>
+          <div className="ix-adm__tools">
+            <ToolChip onClick={() => void fetchApps()}>
+              <RefreshCw aria-hidden />
+              Reload applications
+            </ToolChip>
+            {/* The API reference lives outside the SPA, so it opens in its own tab. */}
+            <a className="ix-chip" href="/api/docs" target="_blank" rel="noreferrer">
+              <BookOpen aria-hidden />
+              API docs
+            </a>
+          </div>
+        </div>
+        <div role="tabpanel" id={ids.panel} aria-labelledby={ids.tab} className="ix-adm__panel flex flex-col gap-6">
+          {error && <ErrorBanner message={error} multiline onRetry={() => void fetchApps()} />}
+          {loading && <LoadingSpinner size="sm" label="Loading developer apps..." className="justify-start" />}
+          {selectedApp ? renderApp(selectedApp) : (
+            <CreateBotForm
+              name={newName}
+              description={newDescription}
+              onNameChange={setNewName}
+              onDescriptionChange={setNewDescription}
+              onCreate={() => void createApp()}
+            />
+          )}
+        </div>
+      </LargeTitlePage>
+    </div>
   );
 }

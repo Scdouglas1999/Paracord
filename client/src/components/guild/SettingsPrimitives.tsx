@@ -27,7 +27,7 @@ export function SectionHeader({ className, ...props }: SettingsSectionHeaderProp
  * (docs/glass-spec.md §2.3), 12/700, uppercase, narrow, tracked.
  */
 export function GroupLabel({ children, className }: { children: ReactNode; className?: string }) {
-  return <div className={cn('glass-kicker text-text-faint', className)}>{children}</div>;
+  return <div className={cn('ix-label text-text-faint', className)}>{children}</div>;
 }
 
 /**

@@ -4,8 +4,8 @@ import { cn } from '../../lib/utils';
 export type KbdProps = React.HTMLAttributes<HTMLElement>;
 
 /**
- * Kbd: a keyboard hint ("Ctrl K", "Esc") in the instrument cut, on a quiet glass
- * chip so it reads as a key cap (docs/glass-spec.md §2.3: 12px and up).
+ * Kbd: a keyboard hint ("Ctrl K", "Esc"): 11/500 tabular, a hairline and a
+ * quiet fill so it reads as a key cap (docs/index-spec.md §3.1 search field).
  */
 export const Kbd = React.forwardRef<HTMLElement, KbdProps>(function Kbd(
   { className, children, ...props },
@@ -16,9 +16,9 @@ export const Kbd = React.forwardRef<HTMLElement, KbdProps>(function Kbd(
       ref={ref}
       className={cn(
         // `kbd` defaults to the UA monospace face; a key cap here is Instrument Sans.
-        'font-primary glass-instrument inline-flex h-[var(--h-chip-sm)] shrink-0 items-center justify-center',
-        'rounded-[var(--r-chip)] bg-[var(--glass-fill-quiet)] px-1.5',
-        'text-[12px] font-medium text-text-secondary',
+        'font-primary inline-flex h-[var(--h-chip-sm)] shrink-0 items-center justify-center tabular-nums',
+        'rounded-[6px] bg-[var(--ix-fill)] px-1.5 shadow-[inset_0_0_0_1px_var(--ix-line)]',
+        'text-[11px] font-medium text-[var(--ix-ink-2)]',
         className,
       )}
       {...props}

@@ -22,30 +22,31 @@ export interface IconButtonProps extends React.ButtonHTMLAttributes<HTMLButtonEl
 }
 
 const SIZES: Record<IconButtonSize, string> = {
-  sm: 'h-[var(--h-control-sm)] w-[var(--h-control-sm)]',
-  md: 'h-9 w-9',
-  lg: 'h-[var(--h-control-phone)] w-[var(--h-control-phone)]',
-  stage: 'h-[var(--h-stage-control)] w-[var(--h-stage-control)]',
+  sm: 'h-[var(--h-control-sm)] w-[var(--h-control-sm)] rounded-[9px]',
+  md: 'h-9 w-9 rounded-[11px]',
+  lg: 'h-[var(--h-control-phone)] w-[var(--h-control-phone)] rounded-[12px]',
+  // The call view's controls are 46 tall at radius 23 (§3.1): a circle.
+  stage: 'h-[var(--h-stage-control)] w-[var(--h-stage-control)] rounded-full',
 };
 
-// An icon-only control is a circle (§1.5, GlassButton `icon`). Hover is one
-// step lighter, press one step darker, and a pressed toggle is the "on" fill.
+// An icon-only control is a quiet tile (§3.1: 36x36, radius 11): transparent
+// until you reach for it, a control fill when it is the raised kind. Hover is one
+// step lighter, press one step darker, and a pressed toggle is the lit fill.
 const TONES: Record<IconButtonTone, string> = {
   ghost:
-    'bg-transparent text-text-secondary hover:bg-[var(--wash-hover)] hover:text-text-primary active:bg-[var(--wash-press)]',
+    'bg-transparent text-[var(--ix-ink-2)] hover:bg-[var(--ix-fill)] hover:text-[var(--ix-ink)] active:bg-[var(--ix-fill-2)]',
   raised:
-    'bg-[var(--glass-fill)] text-text-primary shadow-[var(--glass-edge)] hover:bg-[var(--glass-fill-hover)] active:bg-[var(--glass-fill-press)]',
+    'bg-[var(--ix-fill-ctl)] text-[var(--ix-ink-2)] hover:bg-[var(--ix-fill-ctl-hover)] hover:text-[var(--ix-ink)] active:bg-[var(--ix-fill-2)]',
   light:
     'bg-accent-primary text-text-on-accent hover:bg-accent-primary-hover active:bg-accent-primary-active',
   danger:
-    'bg-danger-well text-accent-danger hover:bg-danger-well-hover active:[background-image:linear-gradient(var(--wash-press),var(--wash-press))]',
+    'bg-[var(--ix-danger-fill)] text-[var(--ix-danger-ink)] hover:bg-[var(--ix-danger-fill-call)] active:bg-[var(--ix-danger-fill-call)]',
 };
 
 /**
- * IconButton: an icon-only circle (docs/glass-spec.md §1.5, §9), 28 / 36 / 44,
- * and 46 for a stage control. Pass the icon as the child and its name as
- * `label`. Hover is one step lighter, press one step darker, 120ms ease-out;
- * nothing scales.
+ * IconButton: an icon-only control (docs/index-spec.md §3.1), 28 / 36 / 44, and
+ * 46 for a call control. Pass the icon as the child and its name as `label`.
+ * Hover is one step lighter, press one step darker, 120ms; nothing scales.
  */
 export const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(
   function IconButton(
@@ -60,14 +61,14 @@ export const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(
         title={label}
         aria-pressed={active || undefined}
         className={cn(
-          'pc-focusable inline-flex shrink-0 select-none items-center justify-center rounded-[var(--r-capsule)]',
-          'transition-[background-color,color] duration-[var(--glass-ms)] ease-[var(--glass-ease)]',
-          'disabled:pointer-events-none disabled:opacity-40',
+          'pc-focusable inline-flex shrink-0 select-none items-center justify-center',
+          'transition-[background-color,color] duration-[120ms] ease-[var(--ix-ease)]',
+          'disabled:pointer-events-none disabled:opacity-[.45]',
           SIZES[size],
           TONES[tone],
           active &&
             (tone === 'ghost' || tone === 'raised') &&
-            'bg-[var(--glass-fill-on)] text-text-primary hover:bg-[var(--glass-fill-on)]',
+            'bg-[var(--ix-fill-2)] text-[var(--ix-ink)] hover:bg-[var(--ix-fill-2)]',
           className,
         )}
         {...props}

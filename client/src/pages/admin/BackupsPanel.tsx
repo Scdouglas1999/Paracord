@@ -143,9 +143,9 @@ export function BackupsPanel() {
       </div>
 
       <Well className="mb-6 flex items-start gap-3 px-4 py-3.5">
-        <AlertTriangle size={18} className="mt-0.5 shrink-0 text-accent-warning" aria-hidden />
+        <AlertTriangle size={18} className="mt-0.5 shrink-0 text-[var(--ix-ink)]" aria-hidden />
         <p className="text-body leading-relaxed text-text-secondary">
-          <span className="font-semibold text-accent-warning">
+          <span className="font-semibold text-[var(--ix-ink)]">
             Recovery is an offline operation.
           </span>{' '}
           Download an archive and retain the server configuration, encryption key environment, TLS
@@ -267,7 +267,7 @@ export function BackupsPanel() {
                         label={`Delete backup ${b.name}`}
                         onClick={() => handleDelete(b.name)}
                         disabled={deletingName === b.name}
-                        className="hover:bg-danger-well hover:text-accent-danger"
+                        className="hover:bg-[var(--ix-danger-fill)] hover:text-[var(--ix-danger-ink)]"
                       >
                         {deletingName === b.name ? (
                           <Loader2 size={16} className="animate-spin" />

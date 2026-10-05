@@ -16,23 +16,25 @@ interface ThemeSelectorProps {
 }
 
 /**
- * Settings › Appearance › the settings that change how Glass is drawn.
+ * Settings › Appearance › the settings that change how the interface is drawn.
  *
- * Glass is the only look (docs/glass-spec.md), so there is no palette to pick,
- * no accent and no base color: what is live in the current server supplies the
- * color. What is left is what a person may need in order to read it:
+ * There is one look (docs/index-spec.md): flat tonal surfaces, tinted by the
+ * server's hue, so there is no palette to pick, no accent and no base color. What
+ * is left is what a person may need in order to read it:
  *
- *   High contrast         a second theme (`glass-contrast`), synced with the account
- *   Reduced transparency  per device; `glass.css` reads `data-reduced-transparency`
+ *   High contrast         a second theme (`glass-contrast`, the stored id), synced
+ *                         with the account
+ *   Reduced transparency  per device; `data-reduced-transparency` makes every
+ *                         sheet, menu and popover opaque (§10)
  *   Reduced motion        per device; the one switch in `lib/motion/reducedMotion`
  *
- * Custom CSS lives beside this in Settings, not here. `lib/themes.ts` owns the
- * ids and `hooks/useTheme.ts` writes the attributes; this only reads and sets
- * the stored choices.
+ * Density and Custom CSS live beside this in Settings, not here. `lib/themes.ts`
+ * owns the ids and `hooks/useTheme.ts` writes the attributes; this only reads and
+ * sets the stored choices.
  */
 const TRANSPARENCY_OPTIONS: Array<{ id: TransparencyPreference; label: string; hint: string }> = [
   { id: 'system', label: 'Match my system', hint: 'Follow this device’s reduce-transparency setting' },
-  { id: 'standard', label: 'Standard', hint: 'Panels are near-solid, with a hint of what is live behind them' },
+  { id: 'standard', label: 'Standard', hint: 'Panels are near-solid, with a hint of what is behind them' },
   { id: 'reduced', label: 'Reduced', hint: 'Panels are fully solid and nothing is see-through' },
 ];
 
@@ -75,7 +77,7 @@ export function ThemeSelector({ currentTheme, onThemeChange }: ThemeSelectorProp
   return (
     <div className="flex flex-col gap-7">
       <section aria-labelledby={contrastLabelId}>
-        <h3 id={contrastLabelId} className="mb-1 text-section text-text-secondary">
+        <h3 id={contrastLabelId} className="mb-1 text-[12.5px] font-semibold text-[var(--ix-ink-3)]">
           Contrast
         </h3>
         <ToggleRow
@@ -88,7 +90,7 @@ export function ThemeSelector({ currentTheme, onThemeChange }: ThemeSelectorProp
       </section>
 
       <section aria-labelledby={transparencyLabelId}>
-        <h3 id={transparencyLabelId} className="mb-3 text-section text-text-secondary">
+        <h3 id={transparencyLabelId} className="mb-3 text-[12.5px] font-semibold text-[var(--ix-ink-3)]">
           Transparency
         </h3>
         <ChoiceCards
@@ -98,13 +100,13 @@ export function ThemeSelector({ currentTheme, onThemeChange }: ThemeSelectorProp
           onChange={setTransparency}
           layout="row"
         />
-        <p className="mt-3 max-w-prose text-meta leading-relaxed text-text-faint">
+        <p className="mt-3 max-w-prose text-[12.5px] leading-relaxed text-[var(--ix-ink-3)]">
           Reduced makes every panel fully solid, so nothing shows through.
         </p>
       </section>
 
       <section aria-labelledby={motionLabelId}>
-        <h3 id={motionLabelId} className="mb-3 text-section text-text-secondary">
+        <h3 id={motionLabelId} className="mb-3 text-[12.5px] font-semibold text-[var(--ix-ink-3)]">
           Motion
         </h3>
         <ChoiceCards
@@ -114,9 +116,9 @@ export function ThemeSelector({ currentTheme, onThemeChange }: ThemeSelectorProp
           onChange={setMotion}
           layout="row"
         />
-        <p className="mt-3 max-w-prose text-meta leading-relaxed text-text-faint">
+        <p className="mt-3 max-w-prose text-[12.5px] leading-relaxed text-[var(--ix-ink-3)]">
           {reduced
-            ? 'Motion is reduced right now: views fade quickly, and the waveform and floating reactions hold still.'
+            ? 'Motion is reduced right now: views fade quickly, and the talking waveform holds still.'
             : 'Motion is on right now. Only what is live, and what you do, ever moves.'}
         </p>
       </section>

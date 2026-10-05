@@ -54,6 +54,8 @@ import {
   type SettingsNavGroup,
 } from '../ui';
 import { displayName } from '../../lib/displayName';
+import { ServerMark } from '../ix/identity';
+import { serverHue } from '../../lib/identityHue';
 
 interface GuildSettingsProps {
   guildId: string;
@@ -1139,6 +1141,17 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
     <SettingsShell
       label="Server settings"
       title={guild?.name || guildName}
+      subtitle="Server settings"
+      lead={
+        <ServerMark
+          guildId={guildId}
+          name={guild?.name || guildName}
+          icon={guild?.icon_hash ?? guild?.icon ?? null}
+          hue={guild?.hue ?? null}
+          size={40}
+        />
+      }
+      hue={serverHue({ id: guildId, hue: guild?.hue ?? null })}
       groups={navGroups}
       active={activeSection}
       onSelect={handleSelectSection}

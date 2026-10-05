@@ -11,11 +11,9 @@ interface SkeletonProps {
   className?: string;
 }
 
-// A placeholder is a matte wash, gently pulsed — never a sweeping sheen
-// (§6.2: no gradient wash across a surface). The pulse is opacity-only, and it
-// lives in `.pc-skeleton` so the one reduced-motion switch can stop it dead
-// rather than landing it on its end frame through the global 0s override (§5.3:
-// "loading skeletons crossfade to content, they do not pulse forever").
+// A placeholder is a flat wash (`--ix-fill-2`), still: nothing moves unless
+// something happened (docs/index-spec.md §1.2), and a sweep or a pulse is an idle
+// loop. Loading skeletons crossfade to content (`SkeletonSwap`).
 export function Skeleton({ width, height, borderRadius = 'var(--radius-chip)', className = '' }: SkeletonProps) {
   return (
     <div
@@ -24,7 +22,7 @@ export function Skeleton({ width, height, borderRadius = 'var(--radius-chip)', c
         width,
         height,
         borderRadius,
-        backgroundColor: 'var(--bg-mod-strong)',
+        backgroundColor: 'var(--ix-fill-2)',
       }}
     />
   );

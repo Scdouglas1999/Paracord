@@ -13,8 +13,7 @@ interface CreateBotFormProps {
 
 export function CreateBotForm({ name, description, onNameChange, onDescriptionChange, onCreate }: CreateBotFormProps) {
   return (
-    // Inside the settings plate, so no box of its own (spec §4: never nest a
-    // plate in a plate) — a heading and two fields, which are already wells.
+    // A heading and two fields on the page itself, so no box of its own.
     <section>
       <SettingsSectionHeader
         title="Create an application"
@@ -38,8 +37,7 @@ export function CreateBotForm({ name, description, onNameChange, onDescriptionCh
         <TextField
           id="new-bot-description"
           label="Description"
-          hint="Optional"
-          placeholder="What it does, in one line"
+          placeholder="What it does, in one line (optional)"
           value={description}
           maxLength={400}
           onChange={(e) => onDescriptionChange(e.target.value)}
