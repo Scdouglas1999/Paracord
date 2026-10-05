@@ -192,7 +192,7 @@ export function FileStorageSection({ guildId, canManage }: FileStorageSectionPro
             </div>
             {quota != null && quota > 0 && (
               <div
-                className="mt-3 h-2.5 w-full overflow-hidden rounded-[var(--radius-full)] bg-bg-mod-strong"
+                className="pc-meter mt-3 h-2.5 w-full rounded-[var(--radius-full)] bg-bg-mod-strong"
                 role="progressbar"
                 aria-valuenow={Math.round(usagePercent)}
                 aria-valuemin={0}

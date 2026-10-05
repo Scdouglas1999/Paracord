@@ -666,15 +666,25 @@
 /* A determinate meter or progress bar: the fill is a full-width bar slid in
    from the left by `--pc-fill` (0–1), so a change is a composited transform
    rather than a width that re-lays-out the row on every step. The track clips
-   it, so the fill's right end keeps the track's rounded corner. */
+   it, so the fill's right end keeps the track's rounded corner.
+
+   The fill is IN FLOW, a block that is as wide and as tall as the track. It was
+   `position: absolute; inset: 0`, which only works inside a positioned track: in
+   one that is static (File storage's was) the fill took the nearest positioned
+   ancestor, the whole settings window, as its box, slid left over the index by
+   the unused share of the quota and wore the track's full-pill radius: a giant
+   half circle. In flow, a track that forgets `position: relative` cannot release
+   its fill. The track needs a height of its own and `overflow: hidden`
+   (`.pc-meter` is the clip). */
 .pc-meter {
   position: relative;
   overflow: hidden;
 }
 
 .pc-meter-fill {
-  position: absolute;
-  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
   border-radius: inherit;
   transform: translate3d(calc((var(--pc-fill, 0) - 1) * 100%), 0, 0);
   transition: transform var(--duration-normal) var(--ease-out);

@@ -124,7 +124,7 @@ export function ActivityCard({ view, className }: { view: ActivityView; classNam
         {progress && (
           <div className="mt-2">
             <div
-              className="h-1 w-full overflow-hidden rounded-[var(--radius-full)] bg-bg-mod-strong"
+              className="pc-meter h-1 w-full rounded-[var(--radius-full)] bg-bg-mod-strong"
               role="progressbar"
               aria-label="Track progress"
               aria-valuemin={0}
