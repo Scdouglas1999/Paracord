@@ -51,31 +51,6 @@ async function tauriWindow() {
   return getCurrentWindow();
 }
 
-/**
- * Frames before leaving full screen. On Linux each native surface is a GLArea
- * in a `gtk::Fixed` under the webview, and a visible GLArea's size is part of
- * the window's minimum size: a stream drawn over the whole screen keeps the
- * window from shrinking back (the window manager restores the frame but the
- * client stays screen-sized). The move guard is already up when this runs;
- * a native tile closes its hole on its next frame and hides its surface two
- * frames later (`NativeVideoTile`), so after these frames (and a margin for
- * the IPC to land) no visible surface holds the window's size.
- */
-const SURFACES_HIDDEN_FRAMES = 4;
-const SURFACES_HIDDEN_MARGIN_MS = 40;
-
-function surfacesHidden(): Promise<void> {
-  return new Promise((resolve) => {
-    let left = SURFACES_HIDDEN_FRAMES;
-    const tick = () => {
-      left -= 1;
-      if (left > 0) requestAnimationFrame(tick);
-      else setTimeout(resolve, SURFACES_HIDDEN_MARGIN_MS);
-    };
-    requestAnimationFrame(tick);
-  });
-}
-
 /** Resolves once the page has a new size and has painted it twice, or after `maxMs`. */
 function windowSettled(maxMs = WINDOW_SETTLE_MAX_MS): Promise<void> {
   return new Promise((resolve) => {
@@ -120,7 +95,6 @@ async function exitTauri(): Promise<void> {
   confirmed = false;
   const win = await tauriWindow();
   if (await win.isFullscreen()) {
-    await surfacesHidden();
     const settled = windowSettled();
     await win.setFullscreen(false);
     await settled;

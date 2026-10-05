@@ -86,14 +86,16 @@ changed by that line only).
   sample (15ms), the hole closed by 56ms, the window full screen by 56ms, the
   hole reopened at 338ms on `0,0,1440x928`. Out: closed by 111ms, reopened at
   1088ms on the main box.
-- **Found and fixed**: on Linux each surface is a `GtkGLArea` in a
-  `gtk::Fixed`, and a visible GLArea's size is part of the window's minimum
-  size. Leaving full screen with the stream still drawn screen-sized kept the
-  client at 1440x928 under a restored title bar (dock cut off). The exit now
-  waits four frames (+40ms) for the guard to have hidden every surface before
-  `setFullscreen(false)`; a maximized window that still comes back at the
-  wrong size is maximized anew. After the fix: one resize each way, 1440x900
-  back every time (4 cycles), a 1307x760 unmaximized window back to 1307x760.
+- **Found, then fixed at the root**: on Linux each surface was a `GtkGLArea`
+  in a plain `gtk::Fixed`, and a visible GLArea's size was part of the
+  window's minimum size, so leaving full screen with the stream still drawn
+  screen-sized kept the client at 1440x928 under a restored title bar. This
+  package first worked around it on exit (wait four frames for the guard to
+  hide every surface before `setFullscreen(false)`). The host now asks for no
+  size at all (`UnderlayFixed` in `native_render/linux.rs`, see
+  `video-min-size.md`), so the wait is gone; `restore()` (re-maximize a
+  maximized window that comes back at the wrong size, put back an
+  unmaximized window's size and position) stays as the general restore.
 
 ## Verification
 
@@ -150,9 +152,12 @@ changed by that line only).
 
 ## Left open
 
-- **Native, not this package's file**: the same `gtk::Fixed` minimum size
-  means that while any video is visible the window cannot be made smaller than
-  the video's right and bottom edge (an unmaximize gave 1410x800, a
-  `setSize(1200x760)` gave 1307x760). The fix belongs in
-  `native_render/linux.rs` (a host that requests no size from its children,
-  e.g. `gtk::Layout`); full screen works around it on exit only.
+- ~~**Native, not this package's file**: while any video was visible the
+  window could not be made smaller than the video's right and bottom edge.~~
+  Fixed in `native_render/linux.rs` (`video-min-size.md`).
+- Leaving full screen from outside the app (the compositor's own toggle) is not
+  followed on the desktop: Tauri's `isFullscreen()` on Linux returns tao's
+  cached request (`tao` `Window::fullscreen()`), not the window's state, so
+  `watchTauri` never sees the exit and the call view stays in its full layout
+  inside the restored window until F, Esc or the control. Found by
+  `video-min-size`; not fixed there.

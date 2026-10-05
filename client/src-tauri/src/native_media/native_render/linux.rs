@@ -3,8 +3,8 @@
 //! `gtk::Overlay`.
 //!
 //! # Underlay compositing (spec §3.3, 2026-07-07 revision)
-//! The `Overlay`'s main child is a `gtk::Fixed` hosting the GLAreas; the
-//! webview is the overlay child on top with its background cleared to
+//! The `Overlay`'s main child is an [`UnderlayFixed`] (a `gtk::Fixed` that
+//! requests no size) hosting the GLAreas; the webview is the overlay child on top with its background cleared to
 //! transparent. The DOM punches a transparent hole at each stream tile
 //! (`data-native-underlay` + tile-local transparency), so the video shows
 //! through while every piece of DOM chrome — control bars, badges, modals,
@@ -711,6 +711,84 @@ unsafe fn program_info_log(gl: &GlFns, program: GLuint) -> String {
     String::from_utf8_lossy(&log).into_owned()
 }
 
+// ── The underlay container ───────────────────────────────────────────────────
+
+/// The container the GLAreas live in: a `gtk::Fixed` that asks for no size.
+///
+/// A plain `gtk::Fixed` asks for the union of its children's rects, so a shown
+/// GLArea at (x, y, w, h) made the overlay, and through it the toplevel, ask
+/// for at least `x + w` by `y + h`. GTK turns that into the window's minimum
+/// size (`xdg_toplevel.set_min_size` on Wayland), so while any video was shown
+/// the window could not be made smaller than the video's right and bottom
+/// edge: an unmaximize landed at 1410x800, a 1200x760 request at 1307x760, and
+/// a stream drawn screen-sized kept the window screen-sized after leaving full
+/// screen.
+///
+/// The video follows the page, never the other way round: the page lays the
+/// tile out in the window it has and reports the rect, and a surface that
+/// pushes the window bigger only moves the page under it. So this container
+/// asks for nothing (minimum and natural 0x0) and the window's size is the
+/// webview's business alone. Allocation is unchanged: `gtk::Fixed` still gives
+/// each child its requested size at its position (`move_` + `set_size_request`
+/// in [`update_geometry_on_main`]), so the video lands exactly where the page
+/// asked. It is still a no-window widget, so stacking and drawing under the
+/// webview are what they were.
+mod underlay_fixed {
+    use gtk::glib;
+    use gtk::subclass::prelude::*;
+
+    mod imp {
+        use super::*;
+
+        #[derive(Default)]
+        pub struct UnderlayFixed;
+
+        #[glib::object_subclass]
+        impl ObjectSubclass for UnderlayFixed {
+            const NAME: &'static str = "ParacordUnderlayFixed";
+            type Type = super::UnderlayFixed;
+            type ParentType = gtk::Fixed;
+        }
+
+        impl ObjectImpl for UnderlayFixed {}
+
+        impl WidgetImpl for UnderlayFixed {
+            fn preferred_width(&self) -> (i32, i32) {
+                (0, 0)
+            }
+
+            fn preferred_height(&self) -> (i32, i32) {
+                (0, 0)
+            }
+
+            fn preferred_width_for_height(&self, _height: i32) -> (i32, i32) {
+                (0, 0)
+            }
+
+            fn preferred_height_for_width(&self, _width: i32) -> (i32, i32) {
+                (0, 0)
+            }
+        }
+
+        impl ContainerImpl for UnderlayFixed {}
+        impl FixedImpl for UnderlayFixed {}
+    }
+
+    glib::wrapper! {
+        pub struct UnderlayFixed(ObjectSubclass<imp::UnderlayFixed>)
+            @extends gtk::Fixed, gtk::Container, gtk::Widget;
+    }
+
+    impl UnderlayFixed {
+        /// Main thread, after GTK is initialized.
+        pub fn new() -> Self {
+            glib::Object::new()
+        }
+    }
+}
+
+use underlay_fixed::UnderlayFixed;
+
 // ── Main-thread surface registry (thread-local) ──────────────────────────────
 
 /// A track's GLArea, owned by the GTK main thread. The keep-latest frame slot
@@ -732,7 +810,7 @@ struct ShownState {
 
 /// Main-thread widgets that make up the native-video underlay stack.
 struct RenderHost {
-    fixed: gtk::Fixed,
+    fixed: UnderlayFixed,
     overlay: gtk::Overlay,
     webview: gtk::Widget,
     /// The provider that paints the toplevel the app's ground color. Held so
@@ -834,7 +912,7 @@ fn gl_context_is_usable(window: &gtk::gdk::Window) -> Result<(), String> {
     }
 }
 
-/// Reparent the main webview into a `gtk::Overlay` and install the `Fixed` host
+/// Reparent the main webview into a `gtk::Overlay` and install the [`UnderlayFixed`] host
 /// that native GLAreas render inside (spec §3.3). Runs on the GTK main thread
 /// (the Tauri `setup` hook).
 pub fn install_render_host(app: &tauri::AppHandle) -> Result<(), String> {
@@ -881,7 +959,7 @@ pub fn install_render_host(app: &tauri::AppHandle) -> Result<(), String> {
     overlay.set_hexpand(true);
     overlay.set_vexpand(true);
     vbox.remove(&webview);
-    let fixed = gtk::Fixed::new();
+    let fixed = UnderlayFixed::new();
     fixed.set_halign(gtk::Align::Fill);
     fixed.set_valign(gtk::Align::Fill);
     fixed.set_hexpand(true);
