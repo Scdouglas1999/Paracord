@@ -283,7 +283,8 @@ describe('IxMenu: the popover', () => {
     const { user, opener } = await openMenu();
     await user.keyboard('{Escape}');
     await waitFor(() => expect(screen.queryByRole('menu', { name: 'Test menu' })).not.toBeInTheDocument());
-    expect(opener).toHaveFocus();
+    // Focus goes back once the menu has let go of it, which a loaded runner can see a beat later.
+    await waitFor(() => expect(opener).toHaveFocus());
     expect(lower).not.toHaveBeenCalled();
     window.removeEventListener('keydown', lower);
   });
