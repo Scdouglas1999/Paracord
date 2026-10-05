@@ -13,13 +13,13 @@ import { prefersReducedMotion } from './reducedMotion';
  * out of `--voice-level`, so the ring rises from where it rests and can never
  * fall below it. This module is the other half — the thing that writes that
  * number — and everything about its shape is about cost, because it is the only
- * part of the engine that runs on EVERY frame for as long as somebody is
+ * part of the engine that runs on every tick for as long as somebody is
  * talking.
  *
  * Four rules, and each of them is load-bearing:
  *
  *   1. **One loop for every tile.** Not one per `StageTile`, not one per
- *      `LitAvatar`. A ten-person room is one `requestAnimationFrame` callback,
+ *      `LitAvatar`. A ten-person room is one timer on the 100ms grid,
  *      and it exits the moment the last voice has released to silence.
  *   2. **No React state, ever.** A level is 50 updates a second; a store write
  *      would re-render the room fifty times a second to change a glow. The
@@ -43,6 +43,15 @@ export const VOICE_LEVEL_VAR = '--voice-level';
 export const VOICE_ATTACK_MS = 60;
 /** §5.1: and takes 240ms to let go of it, so it never chatters. */
 export const VOICE_RELEASE_MS = 240;
+
+/**
+ * The loop ticks on the shared 100ms grid (docs/index-spec.md §4.4), not every
+ * animation frame. On the Linux desktop (WebKitGTK with shared-memory frames)
+ * every painted frame copies the whole window, and a per-frame envelope kept a
+ * call with one talker at about a quarter of a core in the web process. Ten
+ * steps a second is the same cadence as the waveform's own loop.
+ */
+export const VOICE_GRID_MS = 100;
 
 /**
  * The level is written at 1/64, which is finer than the 15% of an alpha it
@@ -77,7 +86,7 @@ interface Tracked {
 
 const published = new Map<VoiceLevelSource, Map<string, number>>();
 const tracked = new Map<string, Tracked>();
-let frame: number | null = null;
+let frame: ReturnType<typeof setTimeout> | null = null;
 /**
  * -1 while the loop is not running: a frame timestamp can legitimately be 0,
  * and the first frame after a report has had no time to advance anything.
@@ -135,7 +144,7 @@ function release(entry: Tracked): void {
  */
 function tick(now: number): void {
   frame = null;
-  const elapsed = lastFrameAt < 0 ? 0 : Math.min(64, Math.max(0, now - lastFrameAt));
+  const elapsed = lastFrameAt < 0 ? 0 : Math.min(VOICE_GRID_MS, Math.max(0, now - lastFrameAt));
   lastFrameAt = now;
 
   let alive = false;
@@ -158,13 +167,24 @@ function tick(now: number): void {
     alive = true;
   }
 
-  if (alive) frame = requestAnimationFrame(tick);
+  if (alive) schedule();
   else lastFrameAt = -1;
 }
 
+/** The next tick, on the next 100ms boundary of the page's clock. */
+function schedule(): void {
+  const now = performance.now();
+  frame = setTimeout(() => tick(performance.now()), VOICE_GRID_MS - (now % VOICE_GRID_MS));
+}
+
 function start(): void {
-  if (frame != null || typeof requestAnimationFrame !== 'function') return;
-  frame = requestAnimationFrame(tick);
+  if (frame != null) return;
+  schedule();
+}
+
+function cancel(): void {
+  if (frame != null) clearTimeout(frame);
+  frame = null;
 }
 
 /**
@@ -223,8 +243,7 @@ export function clearVoiceLevels(): void {
   published.clear();
   for (const entry of tracked.values()) release(entry);
   tracked.clear();
-  if (frame != null && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frame);
-  frame = null;
+  cancel();
   lastFrameAt = -1;
 }
 
@@ -265,7 +284,6 @@ export function voiceLevelsForTests(): Map<string, { level: number; target: numb
 
 /** For tests: run one frame of the envelope by hand. */
 export function stepVoiceLevelsForTests(nowMs: number): void {
-  if (frame != null && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frame);
-  frame = null;
+  cancel();
   tick(nowMs);
 }

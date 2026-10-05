@@ -304,7 +304,9 @@
 .ix-wave[data-real] > i {
   animation: none;
   transform: scaleY(calc(0.35 + 0.65 * min(1, var(--voice-level, 0) * var(--ix-wave-gain, 1))));
-  transition: transform 90ms linear;
+  /* Each level is one step on the 100ms grid, like the loop above; a transition
+     between steps would paint every frame while anyone talks. */
+  transition: none;
 }
 
 .ix-wave[data-real] > i:nth-child(1) {
