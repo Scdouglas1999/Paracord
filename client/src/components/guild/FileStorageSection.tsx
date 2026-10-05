@@ -1,7 +1,11 @@
-import { useEffect, useState, useCallback, type CSSProperties } from 'react';
+import { useEffect, useRef, useState, useCallback, type CSSProperties } from 'react';
 import { Trash2, HardDrive } from 'lucide-react';
+import { apiErrorStatus } from '../../api/client';
 import { guildStorageApi, type GuildStoragePolicy, type GuildStorageInfo, type GuildFile } from '../../api/guildStorage';
+import { noteMissingRoute, olderServerReason, serverLacks, useServerLacks } from '../../lib/serverFeatures';
+import { LOCAL_SERVER_ID } from '../../lib/serverScope';
 import { confirm } from '../../stores/confirmStore';
+import { useServerListStore } from '../../stores/serverListStore';
 import { Button, Divider, EmptyState, ErrorBanner, Input, Well } from '../ui';
 import { Skeleton } from '../ui/Skeleton';
 import { SectionHeader, FieldLabel, GroupLabel, GateNotice } from './SettingsPrimitives';
@@ -30,7 +34,20 @@ function mbToBytes(mb: string): number | null {
   return Math.round(val * 1024 * 1024);
 }
 
+/**
+ * Why the first read of a server's storage did not give a readout. An older
+ * server (no such route) is not a failure and is held in `lib/serverFeatures`;
+ * these are the other two: the server refused (403), or something went wrong.
+ */
+type LoadFailure = { kind: 'forbidden' } | { kind: 'failed'; message: string };
+
 export function FileStorageSection({ guildId, canManage }: FileStorageSectionProps) {
+  // The server that answers is the one the app is connected to; a server that
+  // has no storage routes is remembered for it (lib/serverFeatures.ts).
+  const serverId = useServerListStore((state) => state.activeServerId) ?? LOCAL_SERVER_ID;
+  const olderServer = useServerLacks(serverId, 'fileStorage');
+  const [failure, setFailure] = useState<LoadFailure | null>(null);
+  const loadedOnce = useRef(false);
   const [storageInfo, setStorageInfo] = useState<GuildStorageInfo | null>(null);
   const [files, setFiles] = useState<GuildFile[]>([]);
   const [selectedFileIds, setSelectedFileIds] = useState<string[]>([]);
@@ -55,8 +72,14 @@ export function FileStorageSection({ guildId, canManage }: FileStorageSectionPro
   };
 
   const loadStorage = useCallback(async () => {
+    // An older server has already shown it lacks the routes: ask nothing, say so.
+    if (serverLacks(serverId, 'fileStorage')) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
+    setFailure(null);
     try {
       const [usageRes, filesRes] = await Promise.all([
         guildStorageApi.getUsage(guildId),
@@ -72,16 +95,33 @@ export function FileStorageSection({ guildId, canManage }: FileStorageSectionPro
       setRetentionDays(policy?.retention_days != null ? String(policy.retention_days) : '');
       setAllowedTypes(policy?.allowed_types?.join(', ') ?? '');
       setBlockedTypes(policy?.blocked_types?.join(', ') ?? '');
+      loadedOnce.current = true;
     } catch (err: unknown) {
-      setError(getApiErrorMessage(err, 'Failed to load storage info'));
+      // A route the server lacks flips `olderServer`; nothing else to record.
+      if (noteMissingRoute(serverId, 'fileStorage', err)) return;
+      if (apiErrorStatus(err) === 403) {
+        setFailure({ kind: 'forbidden' });
+        return;
+      }
+      const message = getApiErrorMessage(err, 'Failed to load storage info');
+      // Refreshing after a save keeps the readout it has and says what failed;
+      // a first read that failed has no readout to keep, so it shows only the error.
+      if (loadedOnce.current) setError(message);
+      else setFailure({ kind: 'failed', message });
     } finally {
       setLoading(false);
     }
-  }, [guildId]);
+  }, [guildId, serverId]);
 
   useEffect(() => {
+    loadedOnce.current = false;
+  }, [guildId]);
+
+  // `olderServer` is a dependency so a reconnect that forgets what the server
+  // lacked (it may have been updated) reads its storage again.
+  useEffect(() => {
     void loadStorage();
-  }, [loadStorage]);
+  }, [loadStorage, olderServer]);
 
   const loadMoreFiles = async () => {
     if (!files.length) return;
@@ -166,9 +206,25 @@ export function FileStorageSection({ guildId, canManage }: FileStorageSectionPro
         description="Track how much storage this server is using and set the rules for what members can upload."
       />
 
+      {/* A save, a delete or a refresh that failed, over the readout it leaves in place. */}
       {error && <ErrorBanner message={error} multiline />}
 
-      {loading ? (
+      {olderServer ? (
+        <section data-testid="file-storage-unavailable">
+          <GateNotice>{olderServerReason('fileStorage')}</GateNotice>
+        </section>
+      ) : failure?.kind === 'forbidden' ? (
+        <section data-testid="file-storage-forbidden">
+          <GateNotice>Only members with the Manage Server permission can see this server&rsquo;s file storage.</GateNotice>
+        </section>
+      ) : failure?.kind === 'failed' ? (
+        <section className="flex flex-col items-start gap-4" data-testid="file-storage-failed">
+          <ErrorBanner message={failure.message} multiline />
+          <Button variant="secondary" size="sm" onClick={() => void loadStorage()} loading={loading} disabled={loading}>
+            Try again
+          </Button>
+        </section>
+      ) : loading || !storageInfo ? (
         <div className="flex flex-col gap-4">
           <Skeleton height={96} borderRadius="var(--radius-well)" />
           <Skeleton height={44} borderRadius="var(--radius-control)" />

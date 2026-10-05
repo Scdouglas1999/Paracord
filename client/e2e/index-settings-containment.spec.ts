@@ -93,6 +93,8 @@ const files = (count: number) =>
 
 interface StorageCase {
   name: string;
+  /** What the section must say: the readout, or why there is none. */
+  shows?: 'older-server' | 'forbidden' | 'error';
   storage?: Answer;
   files?: Answer;
 }
@@ -116,12 +118,27 @@ const STORAGE_CASES: StorageCase[] = [
   { name: 'quota-full', storage: { body: { usage: 5 * GB, quota: 5 * GB, policy: null } }, files: { body: files(2) } },
   { name: 'no-quota-files', storage: { body: { usage: 41 * MB, quota: null, policy: null } }, files: { body: files(4) } },
   { name: 'no-quota-empty', storage: { body: { usage: 0, quota: null, policy: null } }, files: { body: [] } },
-  { name: 'older-server-404', storage: { status: 404 }, files: { status: 404 } },
   {
     name: 'forbidden-403',
-    storage: { status: 403, body: { error: 'forbidden', message: 'Missing permission' } },
-    files: { status: 403, body: { error: 'forbidden', message: 'Missing permission' } },
+    shows: 'forbidden',
+    storage: { status: 403, body: { code: 'MISSING_PERMISSIONS', message: 'Missing permissions' } },
+    files: { status: 403, body: { code: 'MISSING_PERMISSIONS', message: 'Missing permissions' } },
   },
+  {
+    name: 'route-answered-404',
+    shows: 'error',
+    storage: { status: 404, body: { code: 'NOT_FOUND', message: 'Unknown guild' } },
+    files: { body: [] },
+  },
+  {
+    name: 'server-error-500',
+    shows: 'error',
+    storage: { status: 500, body: { code: 'INTERNAL_ERROR', message: 'Something went wrong on the server' } },
+    files: { body: [] },
+  },
+  // Last: the page remembers an older server until it reconnects. The owner's server is one,
+  // and its router answers a route it lacks with an empty 404 (no body, no history epoch).
+  { name: 'older-server-404', shows: 'older-server', storage: { status: 404 }, files: { status: 404 } },
 ];
 
 /** Economy: your level a third of the way to the next, a leaderboard with you on it. */
@@ -330,7 +347,27 @@ test.describe('settings paint inside their surface', () => {
       // The meter, when the server reports a quota, is a bar inside its own track.
       const quota = (c.storage?.body as { quota?: number | null } | undefined)?.quota;
       const meter = page.getByRole('progressbar');
-      if (quota) {
+      const section = page.locator('.ix-settings__col');
+      if (c.shows) {
+        // No readout was given, so none is drawn: no 0 B, no empty policy form, no "no files".
+        await expect(section.getByText('Storage used'), `${c.name}: no readout`).toHaveCount(0);
+        await expect(section.getByText('no quota set'), `${c.name}: no readout`).toHaveCount(0);
+        await expect(meter, `${c.name}: no meter`).toHaveCount(0);
+        await expect(section.getByRole('button', { name: 'Save policy' }), `${c.name}: no policy form`).toHaveCount(0);
+        await expect(section.getByText('No files stored yet'), `${c.name}: no empty list`).toHaveCount(0);
+        const unavailable = section.getByTestId('file-storage-unavailable');
+        const forbidden = section.getByTestId('file-storage-forbidden');
+        const failed = section.getByTestId('file-storage-failed');
+        await expect(unavailable).toHaveCount(c.shows === 'older-server' ? 1 : 0);
+        await expect(forbidden).toHaveCount(c.shows === 'forbidden' ? 1 : 0);
+        await expect(failed).toHaveCount(c.shows === 'error' ? 1 : 0);
+        if (c.shows === 'older-server') await expect(unavailable).toContainText('older version of Paracord');
+        if (c.shows === 'forbidden') await expect(forbidden).toContainText('Manage Server permission');
+        if (c.shows === 'error') {
+          await expect(failed).toContainText((c.storage?.body as { message: string }).message);
+          await expect(failed.getByRole('button', { name: 'Try again' })).toBeVisible();
+        }
+      } else if (quota) {
         const track = await meter.boundingBox();
         const fill = await meter.locator('.pc-meter-fill').boundingBox();
         expect(track, `${c.name}: the track`).not.toBeNull();
@@ -341,6 +378,7 @@ test.describe('settings paint inside their surface', () => {
         expect(fill!.width).toBeLessThanOrEqual(track!.width + 1);
       } else {
         await expect(meter).toHaveCount(0);
+        await expect(section.getByText('no quota set')).toHaveCount(1);
       }
       await shoot(page, `file-storage-${c.name}`, { size: 'desktop', settle: 150 });
       await callStore(page, '/src/stores/uiStore.ts', 'useUIStore', 'setGuildSettingsId', null);

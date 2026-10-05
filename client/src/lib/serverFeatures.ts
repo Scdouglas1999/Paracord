@@ -26,7 +26,9 @@ export type ServerFeature =
   /** Listening in (`listen_in_enabled` on a channel's features, `?mode=listen` joins). */
   | 'listenIn'
   /** Remind me (`/users/@me/reminders`, `/channels/{id}/messages/{id}/reminder`). */
-  | 'reminders';
+  | 'reminders'
+  /** Server settings > File storage (`/guilds/{id}/storage`, `/guilds/{id}/files`). */
+  | 'fileStorage';
 
 interface ServerFeatureState {
   /** serverId -> the features that server has shown it lacks. */
@@ -83,6 +85,8 @@ export function olderServerReason(feature: ServerFeature): string {
       return 'This server runs an older version of Paracord that has no listening in. Join the call instead.';
     case 'reminders':
       return 'This server runs an older version of Paracord that has no reminders.';
+    case 'fileStorage':
+      return 'This server runs an older version of Paracord that cannot manage file storage. Update the server to see its usage and set an upload policy.';
   }
 }
 
