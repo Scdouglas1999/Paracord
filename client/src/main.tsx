@@ -13,6 +13,8 @@ import { getDesktopDiagnosticsLogPath, logVoiceDiagnostic } from './lib/desktopD
 import { isTauri } from './lib/tauriEnv';
 import { useBootSplashHandoff } from './lib/bootSplash';
 import { syncTrustedHosts } from './lib/trustedHosts';
+import { getStoredServerUrl } from './lib/config/apiBaseUrl';
+import { sameServerUrl } from './lib/serverScope';
 import { useServerListStore } from './stores/serverListStore';
 import { toast } from './stores/toastStore';
 
@@ -56,7 +58,14 @@ if (isTauri() && 'serviceWorker' in navigator) {
 const TRUST_RESYNC_WHILE_DISCONNECTED_MS = 30_000;
 if (isTauri()) {
   let syncedUrls = '';
-  const serverUrls = () => useServerListStore.getState().servers.map((s) => s.url);
+  // The stored home server too: session bootstrap refreshes against it at once,
+  // and the shell refuses an origin this sync has not verified.
+  const serverUrls = () => {
+    const urls = useServerListStore.getState().servers.map((s) => s.url);
+    const home = getStoredServerUrl();
+    if (home && !urls.some((url) => sameServerUrl(url, home))) urls.push(home);
+    return urls;
+  };
   const sync = () => {
     const urls = serverUrls();
     syncedUrls = JSON.stringify(urls);

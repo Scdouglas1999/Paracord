@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PLACE_MEMORY_KEY } from './lastPlace';
 import { useRememberRoute } from './useRememberRoute';
 
-const world = vi.hoisted(() => ({ userId: 'me' as string | null, guilds: [{ id: 'g1' }] as Array<{ id: string }> }));
+const world = vi.hoisted(() => ({ userId: 'me' as string | null, guilds: [{ id: 'g1', scope: { serverId: 's1' } }] as Array<{ id: string; scope: { serverId: string } }> }));
 vi.mock('../../../hooks/useCurrentUser', () => ({ useCurrentUser: () => (world.userId ? { id: world.userId } : null) }));
 vi.mock('../../../hooks/useGuilds', () => ({ useAvailableGuilds: () => world.guilds }));
 
@@ -20,7 +20,7 @@ const stored = () => JSON.parse(window.localStorage.getItem(PLACE_MEMORY_KEY) ??
 beforeEach(() => {
   window.localStorage.clear();
   world.userId = 'me';
-  world.guilds = [{ id: 'g1' }];
+  world.guilds = [{ id: 'g1', scope: { serverId: 's1' } }];
 });
 
 describe('useRememberRoute', () => {
@@ -35,7 +35,7 @@ describe('useRememberRoute', () => {
     world.guilds = [];
     const { rerender } = render(<MemoryRouter initialEntries={['/app/guilds/g1/channels/c1']}><Probe /></MemoryRouter>);
     expect(stored()).toBeNull();
-    world.guilds = [{ id: 'g1' }];
+    world.guilds = [{ id: 'g1', scope: { serverId: 's1' } }];
     rerender(<MemoryRouter initialEntries={['/app/guilds/g1/channels/c1']}><Probe /></MemoryRouter>);
     expect(stored()).toMatchObject({ place: 'g1' });
   });

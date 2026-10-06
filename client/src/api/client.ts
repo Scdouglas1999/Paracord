@@ -20,6 +20,8 @@ import {
   type SessionRefreshResult,
 } from '../lib/authRefreshCoordinator';
 import { noteSessionEnded, SESSION_REVOKED_MESSAGE } from '../lib/sessionEnded';
+import { getStoredServerUrl } from '../lib/config/apiBaseUrl';
+import { sameServerUrl } from '../lib/serverScope';
 
 const API_SLOW_REQUEST_MS = 800;
 const API_TIMING_VERBOSE =
@@ -103,10 +105,27 @@ function readTraceIdFromHeaders(headers: unknown): string | null {
   return null;
 }
 
-function shouldAttachCsrf(method?: string): boolean {
+/**
+ * Whether a request carries this page's CSRF token.
+ *
+ * Only a write, and only to this page's own origin. The token is the double
+ * submit for a cookie session on this origin; another server never issued it
+ * and authenticates with a bearer token instead. Sending it there leaked one
+ * server's token to the next, and the header (which the other server's CORS
+ * does not allow) failed the preflight of every write a browser made to a
+ * second saved server: its realtime session could never be created.
+ */
+function shouldAttachCsrf(method?: string, url?: string, baseURL?: string): boolean {
   if (!method) return false;
   const normalized = method.toUpperCase();
-  return normalized === 'POST' || normalized === 'PUT' || normalized === 'PATCH' || normalized === 'DELETE';
+  if (normalized !== 'POST' && normalized !== 'PUT' && normalized !== 'PATCH' && normalized !== 'DELETE') return false;
+  if (typeof window === 'undefined') return true;
+  try {
+    const base = new URL(baseURL ?? '', window.location.href);
+    return new URL(url ?? '', base.href.endsWith('/') ? base.href : `${base.href}/`).origin === window.location.origin;
+  } catch {
+    return false;
+  }
 }
 
 /** Standardized API error response shape from the server. */
@@ -290,12 +309,60 @@ export class NoRefreshCredentialError extends Error {
   }
 }
 
+/**
+ * How a refresh request travels.
+ *
+ * With the rotating token in the body, the body is the credential and the
+ * request goes without cookies. The server reads a refresh *cookie* before the
+ * body, so a stale cookie riding along (another server on the same host, an
+ * old session's) would be presented instead of the token in hand: a spent
+ * credential, which the server reads as theft. Only a refresh that has nothing
+ * but the cookie (a browser on the server's own origin) sends cookies.
+ */
+export function refreshRequestOptions(refreshToken: string | null): { withCredentials: boolean } {
+  return { withCredentials: !refreshToken };
+}
+
 /** Whether a refresh may be attempted at all with the credential we hold. */
 export function canAttemptRefresh(refreshToken: string | null): boolean {
   return Boolean(refreshToken) || !isTauri();
 }
 
+/**
+ * Hand a rotated home credential to every copy of it.
+ *
+ * The saved-server entry for the home server carries its own copy of the home
+ * session's tokens (it is the same session under a second name). A rotation
+ * done here used to land only in the home slot, so the entry kept the token the
+ * server had just retired: its next refresh presented a spent credential, which
+ * the server reads as theft and answers by revoking every session the account
+ * has. The authStore's token is the home session's public face; it follows too,
+ * so a refresh that brings the session back is seen by everything waiting on it.
+ */
+function adoptRotatedHomeCredential(
+  previousAccess: string | null,
+  previousRefresh: string | null,
+  result: SessionRefreshResult,
+): void {
+  const store = useServerListStore.getState();
+  const homeUrl = getStoredServerUrl();
+  for (const server of store.servers) {
+    const carriesHomeCredential =
+      (!!previousAccess && server.token === previousAccess) ||
+      (!!previousRefresh && server.refreshToken === previousRefresh) ||
+      (!!homeUrl && sameServerUrl(server.url, homeUrl));
+    if (!carriesHomeCredential) continue;
+    if (server.token !== result.token) store.updateToken(server.id, result.token);
+    if (result.refreshToken && server.refreshToken !== result.refreshToken) {
+      store.updateRefreshToken(server.id, result.refreshToken);
+    }
+  }
+  if (useAuthStore.getState().token !== result.token) useAuthStore.setState({ token: result.token });
+}
+
 async function refreshLegacyToken(context?: ApiRequestContext): Promise<string> {
+  const previousAccess = getAccessToken();
+  const previousRefresh = getRefreshToken();
   const result = await coordinateRefresh(HOME_REFRESH_SCOPE, async () => {
     // Read the stored refresh token *inside* the flight: a value captured
     // before someone else's rotation is precisely the spent credential that
@@ -305,7 +372,7 @@ async function refreshLegacyToken(context?: ApiRequestContext): Promise<string> 
     const refresh = await apiClient.post<{ token: string; refresh_token?: string }>(
       '/auth/refresh',
       refreshToken ? { refresh_token: refreshToken } : undefined,
-      context ? { _paracordContext: context, signal: context.signal } : undefined,
+      { ...refreshRequestOptions(refreshToken), ...(context ? { _paracordContext: context, signal: context.signal } : {}) },
     );
     return { token: refresh.data.token, refreshToken: refresh.data.refresh_token ?? null };
   });
@@ -314,6 +381,7 @@ async function refreshLegacyToken(context?: ApiRequestContext): Promise<string> 
   // flight, so nobody is left holding the pre-rotation credential.
   setAccessToken(result.token);
   if (result.refreshToken) setRefreshToken(result.refreshToken);
+  adoptRotatedHomeCredential(previousAccess, previousRefresh, result);
   return result.token;
 }
 
@@ -336,7 +404,7 @@ apiClient.interceptors.request.use((config) => {
   config.baseURL = config._paracordContext?.baseURL ?? resolveApiBaseUrl();
   startTiming(config as TimedRequestConfig);
   const token = getAccessToken();
-  if (shouldAttachCsrf(config.method)) {
+  if (shouldAttachCsrf(config.method, config.url, config.baseURL)) {
     const csrf = getCsrfToken();
     if (csrf) {
       config.headers['X-Paracord-CSRF'] = csrf;
@@ -480,7 +548,7 @@ export function createApiClient(
         const refresh = await client.post<{ token: string; refresh_token?: string }>(
           '/auth/refresh',
           refreshToken ? { refresh_token: refreshToken } : undefined,
-          context ? { _paracordContext: context, signal: context.signal } : undefined,
+          { ...refreshRequestOptions(refreshToken), ...(context ? { _paracordContext: context, signal: context.signal } : {}) },
         );
         return { token: refresh.data.token, refreshToken: refresh.data.refresh_token ?? null };
       },
@@ -503,7 +571,7 @@ export function createApiClient(
     if (config._paracordContext) config.baseURL = config._paracordContext.baseURL;
     startTiming(config as TimedRequestConfig);
     const token = getToken();
-    if (shouldAttachCsrf(config.method)) {
+    if (shouldAttachCsrf(config.method, config.url, config.baseURL)) {
       const csrf = getCsrfToken();
       if (csrf) {
         config.headers['X-Paracord-CSRF'] = csrf;
@@ -587,8 +655,10 @@ export function createApiClient(
           original?._paracordContext?.assertCurrent();
           // A refresh that failed because the server was unreachable or
           // restarting is not a reason to throw the credential away; only the
-          // server saying the session is gone is.
-          if (isSessionGoneError(refreshErr)) onAuthFailed?.();
+          // server saying the session is gone is, or there being no refresh
+          // credential at all (an expired access token is then the end of it:
+          // keeping it only kept the server "connecting" forever).
+          if (isSessionGoneError(refreshErr) || refreshErr instanceof NoRefreshCredentialError) onAuthFailed?.();
           return Promise.reject(err);
         }
       }

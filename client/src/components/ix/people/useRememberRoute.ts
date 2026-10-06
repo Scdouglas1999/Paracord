@@ -15,9 +15,11 @@ export function useRememberRoute(enabled: boolean): void {
   const { pathname } = useLocation();
   const userId = useCurrentUser()?.id ?? null;
   const guilds = useAvailableGuilds();
-  const guildKey = useMemo(() => guilds.map((guild) => guild.id).join(','), [guilds]);
+  // `id:server` pairs, so the effect runs when the list changes, not when its array does.
+  const guildKey = useMemo(() => guilds.map((guild) => `${guild.id}:${guild.scope.serverId}`).join(','), [guilds]);
   useEffect(() => {
     if (!enabled || !userId) return;
-    rememberRoute(pathname, userId, new Set(guildKey ? guildKey.split(',') : []));
+    const pairs = guildKey ? guildKey.split(',').map((pair) => pair.split(':') as [string, string]) : [];
+    rememberRoute(pathname, userId, new Set(pairs.map(([id]) => id)), new Map(pairs));
   }, [enabled, pathname, userId, guildKey]);
 }

@@ -24,6 +24,7 @@ import { ChannelList, keepsVisible } from './ChannelList';
 import { ComingUp, comingUp, eventIdOf } from './ComingUp';
 import { RoomList } from './RoomList';
 import { SearchField } from './SearchField';
+import { ServerUnavailable } from './ServerUnavailable';
 import { SidebarHeader } from './SidebarHeader';
 import { ADDON_ID, useAddons, type AddonModel } from './useAddons';
 import { useCollapse } from './useCollapse';
@@ -60,13 +61,7 @@ export function ServerSidebar({ guildId, leaving = false }: ServerSidebarProps) 
   useServerRoster(guild);
   // What each room plays together, for the room card's line (RoomCard).
   useGuildTogether(leaving ? null : guild?.id);
-  if (!guild) {
-    return (
-      <div className="ix-sb">
-        <p className="ix-sb__note">This server is not available.</p>
-      </div>
-    );
-  }
+  if (!guild) return <ServerUnavailable guildId={guildId} />;
   return (
     <ErrorBoundary variant="section" label="Channels">
       <ServerPane guild={guild} leaving={leaving} />

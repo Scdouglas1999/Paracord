@@ -91,6 +91,31 @@ describe('LastPlaceRedirect', () => {
     expect(screen.getByRole('status')).toBeInTheDocument();
   });
 
+  it('while the server you were in is still connecting it goes nowhere, then opens your channel when it arrives', async () => {
+    // A launch where the saved server's connect is still in flight (or being retried): there is no
+    // account to ask as yet, so it must not land on that server's route (the pane would be dead) nor
+    // give the place up for People.
+    remember({ userId: 'me', place: 'g2', path: '/app/guilds/g2/channels/lounge', people: '/app/friends', serverId: 'srv' });
+    world.userId = null;
+    world.guilds = [];
+    const view = renderAt('/app');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(screen.queryByTestId('where')).toBeNull();
+    expect(screen.getByRole('status')).toBeInTheDocument();
+
+    world.userId = 'me';
+    world.guilds = [{ id: 'g2', name: 'Game Night', scope: { serverId: 'srv', userId: 'me' } }];
+    view.rerender(
+      <MemoryRouter initialEntries={['/app']}>
+        <Routes>
+          <Route path="/app" element={<LastPlaceRedirect mode="app" />} />
+          <Route path="*" element={<Where />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(where()).toHaveTextContent('/app/guilds/g2/channels/lounge'));
+  });
+
   it('/app opens the channel you were in', async () => {
     remember({ userId: 'me', place: 'g2', path: '/app/guilds/g2/channels/lounge', people: null });
     renderAt('/app');

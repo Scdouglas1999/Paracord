@@ -83,6 +83,32 @@ describe('refresh coordination', () => {
     expect(perform).toHaveBeenCalledTimes(1);
   });
 
+  it('asks again after a refresh that got no answer, instead of replaying it', async () => {
+    // The desktop shell refused the request before it left the machine (its trust
+    // check had not finished): nothing was decided about the credential.
+    const unanswered = Object.assign(new Error('Native fetch target is not in the trusted server list'), { code: 'ERR_NETWORK' });
+    const perform = vi
+      .fn<() => Promise<{ token: string }>>()
+      .mockRejectedValueOnce(unanswered)
+      .mockRejectedValueOnce(Object.assign(new Error('restarting'), { response: { status: 503 } }))
+      .mockResolvedValueOnce({ token: 'access-v2' });
+
+    await expect(coordinateRefresh(HOME_REFRESH_SCOPE, perform)).rejects.toBe(unanswered);
+    await expect(coordinateRefresh(HOME_REFRESH_SCOPE, perform)).rejects.toThrow('restarting');
+    await expect(coordinateRefresh(HOME_REFRESH_SCOPE, perform)).resolves.toEqual({ token: 'access-v2' });
+    expect(perform).toHaveBeenCalledTimes(3);
+  });
+
+  it('replays a missing refresh credential like the server\'s own refusal', async () => {
+    const missing = Object.assign(new Error('no saved session'), { name: 'NoRefreshCredentialError' });
+    const perform = vi.fn(async () => {
+      throw missing;
+    });
+    await expect(coordinateRefresh(HOME_REFRESH_SCOPE, perform)).rejects.toBe(missing);
+    await expect(coordinateRefresh(HOME_REFRESH_SCOPE, perform)).rejects.toBe(missing);
+    expect(perform).toHaveBeenCalledTimes(1);
+  });
+
   it('refreshes again once the settled window has passed', async () => {
     vi.useFakeTimers();
     const perform = vi.fn(async () => ({ token: 'access-v2', refreshToken: 'refresh-v2' }));

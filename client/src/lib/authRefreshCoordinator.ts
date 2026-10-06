@@ -41,9 +41,16 @@ export interface SessionRefreshResult {
  * for minutes, so handing the same one to everyone who asks within a couple of
  * seconds is always correct.
  *
- * Failures are cached for the same window for the same reason: once the server
- * has said "this session is gone", twenty more requests asking again in the
- * same second learn nothing and cost the user twenty error log lines.
+ * A failure is cached for the same window only when it is a verdict on the
+ * credential: once the server has said "this session is gone", twenty more
+ * requests asking again in the same second learn nothing and cost the user
+ * twenty error log lines. A failure that never reached a verdict (the request
+ * did not leave the machine, the server was restarting, a timeout) is not
+ * remembered: replaying it told the next caller that a credential nobody had
+ * presented yet was unusable. On a cold desktop start the bootstrap refresh was
+ * refused by the shell before its trust check finished; the saved server's
+ * connect, a moment later, was handed that refusal for its own expired token
+ * and gave up, and the app stayed on "This server is not available".
  */
 const REFRESH_SETTLE_WINDOW_MS = 2_000;
 
@@ -58,6 +65,20 @@ const settled = new Map<string, SettledRefresh>();
 
 class RefreshSupersededError extends Error {
   constructor() { super('Session refresh was superseded by a credential replacement.'); }
+}
+
+/**
+ * Whether a refresh failure is the server's (or this device's) verdict on the
+ * credential, as opposed to a refresh that never got an answer.
+ *
+ * A verdict: the server answered 400, 401 or 403 (the token is gone, spent or
+ * malformed), or there is no credential to present at all. Everything else (no
+ * response, a timeout, a 5xx, a 429) is "ask again later".
+ */
+export function isRefreshVerdict(error: unknown): boolean {
+  if (error instanceof Error && error.name === 'NoRefreshCredentialError') return true;
+  const status = (error as { response?: { status?: unknown } } | null)?.response?.status;
+  return status === 400 || status === 401 || status === 403;
 }
 
 function now(): number {
@@ -111,7 +132,7 @@ export function coordinateRefresh(
       },
       (error: unknown) => {
         if (inFlight.get(scopeKey) !== flight) throw new RefreshSupersededError();
-        settled.set(scopeKey, { at: now(), error });
+        if (isRefreshVerdict(error)) settled.set(scopeKey, { at: now(), error });
         throw error;
       },
     )

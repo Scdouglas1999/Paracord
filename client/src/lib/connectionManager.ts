@@ -1,4 +1,4 @@
-﻿import { type AxiosInstance } from 'axios';
+﻿import axios, { type AxiosInstance } from 'axios';
 import { apiErrorStatus, createApiClient } from '../api/client';
 import { responseContract } from '../api/responseContracts';
 import { isCurrentUser } from '../api/contractValidators';
@@ -13,6 +13,7 @@ import {
 import { getAccessToken, getRefreshToken, setAccessToken, setRefreshToken } from './authToken';
 import { getCurrentOriginServerUrl, getStoredServerUrl } from './config/apiBaseUrl';
 import { isTauri } from './tauriEnv';
+import { getTauriAdapter } from './tauriAxiosAdapter';
 import { syncTrustedHosts } from './trustedHosts';
 import { inflateSync } from 'fflate';
 import type { Activity, GatewayPayload } from '../types';
@@ -21,7 +22,12 @@ import { dispatchGatewayEvent } from '../gateway/dispatch';
 import { logVoiceDiagnostic } from './desktopDiagnostics';
 import { LOCAL_SERVER_ID, sameServerUrl } from './serverScope';
 import { configuredHomeServerUrl, findHomeServerEntry, getServerAccountScope, resolveHomeServerUrl } from './serverIdentity';
-import { coordinateRefresh, HOME_REFRESH_SCOPE, serverRefreshScope } from './authRefreshCoordinator';
+import { coordinateRefresh, HOME_REFRESH_SCOPE, resetRefreshCoordination, serverRefreshScope } from './authRefreshCoordinator';
+import {
+  useServerConnectionStore,
+  type ServerConnectionPhase,
+  type ServerConnectionState,
+} from '../stores/serverConnectionStore';
 import { clearSessionEndedNotice, noteSessionEnded, SESSION_REVOKED_MESSAGE } from './sessionEnded';
 import { acceptDatabaseHistoryEpoch, getDatabaseHistoryEpoch, registerHistoryReconciler } from './databaseHistory';
 import { toast } from '../stores/toastStore';
@@ -244,6 +250,14 @@ class ConnectionManager {
   /** Timer for automatic recovery when the gateway lands in 'disconnected'. */
   private recoveryTimer: ReturnType<typeof setTimeout> | null = null;
   private recoveryAttempts = 0;
+  /**
+   * The next connect attempt for a saved server whose last one failed without
+   * a verdict on its credential. See `noteConnectFailure`.
+   */
+  private serverRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** First retry after a failed connect, doubled each time up to the ceiling. */
+  private static readonly SERVER_RETRY_BASE_MS = 1_000;
+  private static readonly SERVER_RETRY_MAX_MS = 60_000;
 
   constructor() {
     registerHistoryReconciler(scope => {
@@ -545,7 +559,7 @@ class ConnectionManager {
     conn.connected = false; conn.connecting = false;
     this.cleanupConnection(conn);
     ws?.close(); es?.close();
-    if (conn.serverId !== LOCAL_SERVER_ID) useServerListStore.getState().setConnected(conn.serverId, false);
+    if (conn.serverId !== LOCAL_SERVER_ID) this.noteTransport(conn.serverId, false);
     this.reconnectGateway(conn);
   }
 
@@ -677,6 +691,142 @@ class ConnectionManager {
     }
   }
 
+  /* ---- Each saved server's connection, as the UI reads it ------------------ */
+
+  private setServerPhase(serverId: string, phase: ServerConnectionPhase, extra: Partial<ServerConnectionState> = {}): void {
+    if (serverId === LOCAL_SERVER_ID) return;
+    const current = useServerConnectionStore.getState().servers[serverId];
+    useServerConnectionStore.getState().set(serverId, {
+      phase,
+      attempts: extra.attempts ?? (phase === 'connected' ? 0 : current?.attempts ?? 0),
+      retryAt: extra.retryAt ?? null,
+      // Kept until the server is connected again: a reconnect attempt in between
+      // does not make the session that ended any less ended.
+      endedHere: extra.endedHere ?? (phase === 'connected' ? false : current?.endedHere ?? false),
+    });
+  }
+
+  /** The realtime transport of a saved server came up or went away. */
+  private noteTransport(serverId: string, connected: boolean): void {
+    useServerListStore.getState().setConnected(serverId, connected);
+    if (connected) {
+      // Connected for the UI once READY (or RESUMED) has been applied, when the
+      // server's list is in the stores: until then its places cannot be shown.
+      this.clearServerRetry(serverId);
+      return;
+    }
+    // A stream that dropped reconnects on its own back-off (`reconnectGateway`);
+    // until it is back the server is connecting again, not lost.
+    if (useServerConnectionStore.getState().servers[serverId]?.phase === 'connected') {
+      this.setServerPhase(serverId, 'connecting');
+    }
+  }
+
+  private clearServerRetry(serverId: string): void {
+    const timer = this.serverRetryTimers.get(serverId);
+    if (timer) clearTimeout(timer);
+    this.serverRetryTimers.delete(serverId);
+  }
+
+  /**
+   * A saved server's connect failed. Decide whether it can come back by itself.
+   *
+   * It cannot when the server has refused the credential (the refresh answered
+   * 401/403 and the credential was thrown away) or there is none left to
+   * present: that needs the person to sign in again, and retrying would only
+   * repeat the refusal. Everything else (unreachable, restarting, a refresh
+   * that never got an answer, an access token that expired while the refresh
+   * failed for one of those reasons) is retried with back-off until it works.
+   *
+   * This used to be nobody's job. A connect that failed at launch was logged and
+   * forgotten: no connection was registered, so nothing reconnected it, and the
+   * app showed "This server is not available" until it was restarted.
+   */
+  private noteConnectFailure(serverId: string, error: unknown): void {
+    const server = useServerListStore.getState().getServer(serverId);
+    if (!server) {
+      this.forgetServer(serverId);
+      return;
+    }
+    const status = apiErrorStatus(error);
+    const refused = status !== null && status >= 400 && status < 500 && status !== 408 && status !== 429;
+    const account = useAccountStore.getState();
+    const canSignInWithKey = account.isUnlocked && !!account.publicKey && !!account.username && hasUnlockedPrivateKey();
+    if (this.credentialIsGone(serverId) && (!canSignInWithKey || refused)) {
+      this.clearServerRetry(serverId);
+      this.setServerPhase(serverId, 'signed-out');
+      return;
+    }
+    const attempts = (useServerConnectionStore.getState().servers[serverId]?.attempts ?? 0) + 1;
+    const ceiling = Math.min(
+      ConnectionManager.SERVER_RETRY_BASE_MS * 2 ** Math.min(attempts - 1, 10),
+      ConnectionManager.SERVER_RETRY_MAX_MS,
+    );
+    // A little jitter so several clients of one restarting server do not all
+    // come back on the same tick.
+    const delay = Math.round(ceiling * (0.8 + Math.random() * 0.2));
+    this.clearServerRetry(serverId);
+    this.setServerPhase(serverId, 'retrying', { attempts, retryAt: Date.now() + delay });
+    this.serverRetryTimers.set(
+      serverId,
+      setTimeout(() => {
+        this.serverRetryTimers.delete(serverId);
+        if (!useServerListStore.getState().getServer(serverId)) return;
+        // Through `connectAll`, not straight to this server: it re-verifies
+        // every origin with the desktop shell first, and a server that was down
+        // when the app started was left out of the trusted set.
+        void this.connectAll();
+      }, delay),
+    );
+  }
+
+  /** The credential this connection was built on was refused; nothing reconnects it but a sign-in. */
+  private noteSignedOut(serverId: string): void {
+    this.clearServerRetry(serverId);
+    this.setServerPhase(serverId, 'signed-out', { endedHere: true });
+  }
+
+  private forgetServer(serverId: string): void {
+    this.clearServerRetry(serverId);
+    useServerConnectionStore.getState().forget(serverId);
+  }
+
+  /** Try a server again now ("Try now"), instead of waiting out its back-off. */
+  retryServer(serverId: string): Promise<void> {
+    this.clearServerRetry(serverId);
+    return this.connectAll();
+  }
+
+  /**
+   * Take a session the person just signed in with for a saved server, and connect it.
+   *
+   * The server's entry holds it; for the entry that is the home server it is the
+   * home session too, exactly as a sign-in on the sign-in screen would be.
+   */
+  async adoptServerSession(serverId: string, token: string, refreshToken: string | null): Promise<void> {
+    const store = useServerListStore.getState();
+    const server = store.getServer(serverId);
+    if (!server) throw new Error('This server is no longer in your list.');
+    resetRefreshCoordination(serverRefreshScope(serverId));
+    if (this.isConfiguredLocalServerUrl(server.url)) {
+      resetRefreshCoordination(HOME_REFRESH_SCOPE);
+      this.promoteLocalAuthSession(token, refreshToken);
+    }
+    clearSessionEndedNotice();
+    // The dead connection, if one is left, was built on the refused credential.
+    this.disconnectServer(serverId);
+    store.updateToken(serverId, token);
+    store.updateRefreshToken(serverId, refreshToken);
+    this.clearServerRetry(serverId);
+    this.setServerPhase(serverId, 'connecting', { attempts: 0 });
+    // The session is the person's now whatever the connect does next: a server
+    // that is unreachable a moment after the sign-in is retried like any other
+    // (and its state says so), not reported as a failed sign-in.
+    await this.connectServer(serverId).catch((error: unknown) => {
+      logVoiceDiagnostic('[gateway] connect after sign-in failed', { server: serverId, error: String(error) });
+    });
+  }
+
   /** Get or create a connection for a server */
   getConnection(serverId: string): ServerConnection | undefined {
     return this.connections.get(serverId);
@@ -710,10 +860,22 @@ class ConnectionManager {
       return;
     }
 
+    const existing = this.connections.get(serverId);
+    const current = useServerConnectionStore.getState().servers[serverId];
+    // A signed-out server with nothing to sign in with stays signed out: this
+    // attempt can only end the same way, and flashing "Connecting…" between
+    // the two says something that is not true.
+    const stillSignedOut = current?.phase === 'signed-out' && this.credentialIsGone(serverId);
+    if ((!existing || !this.isConnectionHealthy(existing)) && !stillSignedOut) {
+      this.setServerPhase(serverId, 'connecting', { attempts: current?.attempts ?? 0 });
+    }
     const connectTask = this.connectServerInternal(serverId, options.inviteCode);
     this.connecting.set(serverId, connectTask);
     try {
       await connectTask;
+    } catch (error) {
+      if (this.connecting.get(serverId) === connectTask) this.noteConnectFailure(serverId, error);
+      throw error;
     } finally {
       const current = this.connecting.get(serverId);
       if (current === connectTask) {
@@ -833,7 +995,8 @@ class ConnectionManager {
         const { data } = await client.post<{ token?: string; refresh_token?: string }>(
           '/auth/refresh',
           { refresh_token: refreshToken },
-          { timeout: 10_000 },
+          // The token in the body is the credential; no cookie rides along (see refreshRequestOptions).
+          { timeout: 10_000, withCredentials: false },
         );
         if (!data.token) throw new Error('Refresh response carried no token');
         return { token: data.token, refreshToken: data.refresh_token ?? null };
@@ -873,6 +1036,7 @@ class ConnectionManager {
         const endsHomeSession = promoteToLocalAuth && this.entryCarriesHomeCredential(serverId);
         store.updateToken(serverId, '');
         store.updateRefreshToken(serverId, null);
+        this.noteSignedOut(serverId);
         if (endsHomeSession) {
           setAccessToken(null);
           setRefreshToken(null);
@@ -887,48 +1051,39 @@ class ConnectionManager {
     }
   }
 
+  /**
+   * Is the home session's access token also a session on this loopback server?
+   *
+   * A probe and nothing more: it never refreshes. It used to go through a full
+   * API client in the home refresh flight, so a 401 here (the home token is not
+   * a session on this server, the usual answer) refreshed the *home* credential
+   * against this other server. That refresh was refused, and the refusal was
+   * then handed to every real refresh of the home session for the next two
+   * seconds, which signed the home server out.
+   */
   private async verifyLocalSessionForServer(
     serverId: string,
     apiBaseUrl: string,
     candidateToken: string,
     candidateRefreshToken: string | null,
   ): Promise<string | null> {
-    let verifiedToken = candidateToken;
-    let verifiedRefreshToken = candidateRefreshToken;
-    const probeClient = createApiClient(
-      apiBaseUrl,
-      () => verifiedToken,
-      (nextToken, nextRefreshToken) => {
-        verifiedToken = nextToken;
-        if (nextRefreshToken) {
-          verifiedRefreshToken = nextRefreshToken;
-        }
-        this.promoteLocalAuthSession(nextToken, nextRefreshToken);
-      },
-      undefined,
-      (reachable) => useServerListStore.getState().setApiReachable(serverId, reachable),
-      () => verifiedRefreshToken,
-      // This probe carries the *home* session's tokens, so it must share the
-      // home refresh flight and not open one of its own.
-      HOME_REFRESH_SCOPE,
-    );
-
+    const probe = axios.create({
+      baseURL: apiBaseUrl,
+      timeout: 10_000,
+      adapter: getTauriAdapter(),
+      headers: { Authorization: `Bearer ${candidateToken}` },
+    });
     try {
-      const { data } = await responseContract(
-        probeClient.get('/users/@me', { timeout: 10_000 }),
-        isCurrentUser,
-        'CurrentUser',
-      );
-      useServerListStore.getState().updateToken(serverId, verifiedToken);
-      if (verifiedRefreshToken) {
-        useServerListStore.getState().updateRefreshToken(serverId, verifiedRefreshToken);
+      const { data } = await responseContract(probe.get('/users/@me'), isCurrentUser, 'CurrentUser');
+      useServerListStore.getState().updateToken(serverId, candidateToken);
+      if (candidateRefreshToken) {
+        useServerListStore.getState().updateRefreshToken(serverId, candidateRefreshToken);
       }
       if (data?.id) {
         useServerListStore.getState().setAuthenticatedUser(serverId, data);
       }
-      this.promoteLocalAuthSession(verifiedToken, verifiedRefreshToken);
       logVoiceDiagnostic('[gateway] verified local auth token for saved server', { server: serverId });
-      return verifiedToken;
+      return candidateToken;
     } catch (err) {
       logVoiceDiagnostic('[gateway] local auth token not valid for saved server', {
         server: serverId,
@@ -1150,13 +1305,18 @@ class ConnectionManager {
           useAuthStore.setState({ token: null, user: null });
           noteSessionEnded(SESSION_REVOKED_MESSAGE);
         }
+        this.noteSignedOut(serverId);
         this.disconnectServer(serverId);
       },
       (reachable) => useServerListStore.getState().setApiReachable(serverId, reachable),
       () => {
         const current = useServerListStore.getState().getServer(serverId);
         if (isLocalServerEntry) {
-          return current?.refreshToken || getRefreshToken();
+          // The home session's own slot first: every rotation of the home
+          // credential lands there, and the entry's copy has been known to lag
+          // behind it. Presenting the lagging copy is presenting a spent token,
+          // which the server answers by revoking every session the account has.
+          return getRefreshToken() || current?.refreshToken || null;
         }
         return current?.refreshToken || null;
       },
@@ -1420,6 +1580,7 @@ class ConnectionManager {
         // Mark this connection as connected since the other one covers it
         conn.connected = true;
         conn.connecting = false;
+        this.setServerPhase(conn.serverId, 'connected', { attempts: 0 });
         this.syncUiConnectionStatus();
         return;
       }
@@ -1502,7 +1663,7 @@ class ConnectionManager {
           conn.connected = true;
           conn.missedAcks = 0;
           if (conn.serverId !== LOCAL_SERVER_ID) {
-            useServerListStore.getState().setConnected(conn.serverId, true);
+            this.noteTransport(conn.serverId, true);
           }
           // EventSource has no built-in heartbeat, so run a liveness watchdog
           // that reconnects if the stream goes silent (mirrors the WS path).
@@ -1545,7 +1706,7 @@ class ConnectionManager {
           conn.eventSource = null;
           es.close();
           if (conn.serverId !== LOCAL_SERVER_ID) {
-            useServerListStore.getState().setConnected(conn.serverId, false);
+            this.noteTransport(conn.serverId, false);
           }
           this.cleanupConnection(conn);
           if (conn.allowReconnect) {
@@ -1617,7 +1778,7 @@ class ConnectionManager {
         conn.reconnectTimer = null;
       }
       if (conn.serverId !== LOCAL_SERVER_ID) {
-        useServerListStore.getState().setConnected(conn.serverId, true);
+        this.noteTransport(conn.serverId, true);
       }
       this.syncUiConnectionStatus();
     };
@@ -1658,7 +1819,7 @@ class ConnectionManager {
       conn.connecting = false;
       conn.connected = false;
       if (conn.serverId !== LOCAL_SERVER_ID) {
-        useServerListStore.getState().setConnected(conn.serverId, false);
+        this.noteTransport(conn.serverId, false);
       }
       this.cleanupConnection(conn);
       if (conn.allowReconnect) {
@@ -1810,7 +1971,7 @@ class ConnectionManager {
       conn.eventSource = null;
       es.close();
       if (conn.serverId !== LOCAL_SERVER_ID) {
-        useServerListStore.getState().setConnected(conn.serverId, false);
+        this.noteTransport(conn.serverId, false);
       }
       this.cleanupConnection(conn);
       if (conn.allowReconnect) {
@@ -1877,6 +2038,7 @@ class ConnectionManager {
         if (event === GatewayEvents.READY) conn.sessionId = lifecycle.session_id ?? null;
         else if (lifecycle.session_id) conn.sessionId = lifecycle.session_id;
         if (!this.durableFailures.has(conn)) conn.reconnectAttempts = 0;
+        this.setServerPhase(conn.serverId, 'connected', { attempts: 0 });
         this.flushPendingMessages(conn);
         this.syncUiConnectionStatus();
       }
@@ -2243,6 +2405,10 @@ class ConnectionManager {
         this.disconnectServer(serverId);
       }
     }
+    const listed = new Set(useServerListStore.getState().servers.map((server) => server.id));
+    for (const serverId of Object.keys(useServerConnectionStore.getState().servers)) {
+      if (!listed.has(serverId)) this.forgetServer(serverId);
+    }
   }
 
   /** Reconcile current runtime connections with the latest server list state. */
@@ -2257,6 +2423,8 @@ class ConnectionManager {
       this.recoveryTimer = null;
     }
     this.recoveryAttempts = 0;
+    for (const serverId of Array.from(this.serverRetryTimers.keys())) this.clearServerRetry(serverId);
+    useServerConnectionStore.getState().reset();
     for (const serverId of Array.from(this.connections.keys())) {
       this.disconnectServer(serverId);
     }

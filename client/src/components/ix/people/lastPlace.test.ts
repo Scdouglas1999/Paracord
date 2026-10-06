@@ -40,6 +40,17 @@ describe('what is remembered', () => {
     expect(readPlaceMemory()).toBeNull();
   });
 
+  it('keeps the saved server a place is on, and only for a server place', () => {
+    store({ userId: 'me', place: 'g1', path: null, people: null, serverId: 's_lan' });
+    expect(readPlaceMemory()?.serverId).toBe('s_lan');
+    store({ userId: 'me', place: 'people', path: null, people: '/app/friends', serverId: 's_lan' });
+    expect(readPlaceMemory()?.serverId).toBeUndefined();
+    rememberRoute('/app/guilds/g1/channels/c1', 'me', new Set(['g1']), new Map([['g1', 's_lan']]));
+    expect(stored()).toMatchObject({ place: 'g1', serverId: 's_lan' });
+    rememberRoute('/app/friends', 'me', new Set(['g1']), new Map([['g1', 's_lan']]));
+    expect(stored().serverId).toBeUndefined();
+  });
+
   it('keeps only routes that can be restored: a channel of that server, a conversation, Friends, Inbox', () => {
     // A route of another server, a bare `/app` and `/app/dms` (a redirect loop), and a page that is not a conversation are dropped.
     store({ userId: 'me', place: 'g1', path: '/app/guilds/g2/channels/c1', people: '/app' });

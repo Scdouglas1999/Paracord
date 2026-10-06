@@ -10,6 +10,8 @@ import { useGuildStore } from '../stores/guildStore';
 import { useMemberStore } from '../stores/memberStore';
 import { cancelMessageFetch } from '../stores/messageStore';
 import { BuildingNotFound } from '../components/guild/BuildingNotFound';
+import { ServerSignedOutPage } from '../components/ix/session/ServerSignedOutPage';
+import { useGuildServerState } from '../hooks/useGuildServerState';
 import { GuildOnboardingGate } from '../components/guild/GuildOnboardingGate';
 import { createChannelApi } from '../api/channels';
 import { ChannelType } from '../types';
@@ -39,6 +41,7 @@ export function GuildPage() {
 
   const guilds = useCurrentGuilds();
   const currentGuild = guilds.find((g) => g.id === guildId);
+  const guildServer = useGuildServerState(guildId);
   // "Pick roles" in the joiner welcome brings the onboarding page back: a new key mounts the gate
   // afresh (it asks the server again and is no longer put away).
   const [gateRun, setGateRun] = useState(0);
@@ -82,6 +85,12 @@ export function GuildPage() {
       .catch(() => { /* The channel list exposes its request error. */ });
     return () => context.dispose();
   }, [channelId, memberScope]);
+
+  // A place on a saved server that is not connected yet is waited for (or, signed out, asked
+  // to sign in), never reported gone: its channels are simply not here yet.
+  if (!currentGuild && guildServer && guildServer.state?.phase !== 'connected') {
+    return guildServer.state?.phase === 'signed-out' ? <ServerSignedOutPage server={guildServer.server} /> : <GuildLoadingScreen />;
+  }
 
   if (isLoading) {
     return <GuildLoadingScreen />;

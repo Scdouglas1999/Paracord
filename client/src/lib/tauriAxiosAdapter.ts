@@ -15,6 +15,7 @@
 import axios, { AxiosError, AxiosHeaders } from 'axios';
 import type { AxiosResponse, InternalAxiosRequestConfig } from 'axios';
 import { isTauri } from './tauriEnv';
+import { trustSettled } from './trustedHosts';
 
 interface NativeFetchResponse {
   status: number;
@@ -163,6 +164,10 @@ function axiosError(
 
 export async function tauriAdapter(config: InternalAxiosRequestConfig): Promise<AxiosResponse> {
   const invoke = await getInvoke();
+  // The shell refuses every origin until the launch's first trust sync has
+  // verified it; a request sent before then fails without leaving the machine
+  // (see `trustSettled`). Wait for that verdict instead of racing it.
+  await trustSettled();
 
   const signal = config.signal as AbortSignal | undefined;
   // A request the caller has already given up on must not be sent at all — an

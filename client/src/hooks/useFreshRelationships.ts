@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useRelationshipStore } from '../stores/relationshipStore';
 import { useUIStore } from '../stores/uiStore';
+import { useServerListStore } from '../stores/serverListStore';
 
 /**
  * Load relationships once there is a session to load them with.
@@ -15,8 +16,14 @@ import { useUIStore } from '../stores/uiStore';
  */
 export function useFreshRelationships() {
   const connected = useUIStore((s) => s.connectionStatus) === 'connected';
+  // The list is the selected server's, so it waits for that server: "some
+  // server is connected" while the selected one is still connecting (or signed
+  // out) asked a connection that did not exist yet and toasted the error.
+  const activeServerReady = useServerListStore((s) =>
+    s.activeServerId ? s.servers.some((server) => server.id === s.activeServerId && server.connected) : true,
+  );
   useEffect(() => {
-    if (!connected) return;
+    if (!connected || !activeServerReady) return;
     void useRelationshipStore.getState().fetchRelationships();
-  }, [connected]);
+  }, [connected, activeServerReady]);
 }

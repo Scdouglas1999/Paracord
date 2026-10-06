@@ -11,6 +11,9 @@ import { useIxPlaceStore } from '../shell/usePlace';
  *   place    `people`, or the id of the server you were in
  *   path     the route you were on in that server (a channel), or null
  *   people   the route you were on in People (a conversation, Friends or Inbox)
+ *   serverId the saved server that place belongs to, so a launch can say which
+ *            server it is still connecting to (or that wants a sign-in) before
+ *            any of its servers have arrived
  *
  * It is a convenience, never a source of truth: storage may be blocked, cleared or
  * from another account, and the server may be gone by the time it is read. Every
@@ -24,6 +27,8 @@ export interface PlaceMemory {
   place: string;
   path: string | null;
   people: string | null;
+  /** The saved server (`ServerEntry.id`) the place is on; absent in memories written before it. */
+  serverId?: string | null;
 }
 
 export const PLACE_MEMORY_KEY = 'paracord:ix-last-place';
@@ -54,6 +59,7 @@ export function readPlaceMemory(storage: Pick<Storage, 'getItem'> | null = safeS
       place,
       path: path && place !== 'people' && SERVER_ROUTE.exec(path)?.[1] === place ? path : null,
       people: people && PEOPLE_ROUTE.test(people) ? people : null,
+      serverId: (place !== 'people' && stringOrNull(record.serverId)) || undefined,
     };
   } catch {
     return null;
@@ -92,8 +98,16 @@ export function memoryOfRoute(pathname: string, guildIds: ReadonlySet<string>): 
   return PEOPLE_ROUTE.test(pathname) ? { place: 'people', people: pathname } : null;
 }
 
-/** Remember the route you are on. Cheap and idempotent: it writes only when something changed. */
-export function rememberRoute(pathname: string, userId: string, guildIds: ReadonlySet<string>): void {
+/**
+ * Remember the route you are on. Cheap and idempotent: it writes only when something changed.
+ * `serverOf` names the saved server each of your servers' places is on.
+ */
+export function rememberRoute(
+  pathname: string,
+  userId: string,
+  guildIds: ReadonlySet<string>,
+  serverOf: ReadonlyMap<string, string> = new Map(),
+): void {
   const seen = memoryOfRoute(pathname, guildIds);
   if (!seen) return;
   const before = readPlaceMemory();
@@ -104,8 +118,17 @@ export function rememberRoute(pathname: string, userId: string, guildIds: Readon
     // A server keeps the route you left it on until you open another channel there; another server starts over.
     path: seen.path ?? (mine && mine.place === seen.place ? mine.path : null),
     people: seen.people ?? mine?.people ?? null,
+    serverId: seen.place === 'people' ? undefined : serverOf.get(seen.place),
   };
-  if (mine && mine.place === next.place && mine.path === next.path && mine.people === next.people) return;
+  if (
+    mine &&
+    mine.place === next.place &&
+    mine.path === next.path &&
+    mine.people === next.people &&
+    (mine.serverId ?? null) === (next.serverId ?? null)
+  ) {
+    return;
+  }
   writePlaceMemory(next);
 }
 
