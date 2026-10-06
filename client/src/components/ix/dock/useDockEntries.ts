@@ -1,9 +1,9 @@
 import { useMemo } from 'react';
 
 import { useCurrentUser } from '../../../hooks/useCurrentUser';
-import { useAvailableGuilds } from '../../../hooks/useGuilds';
 import { useMutedGuilds } from '../../../hooks/useMutedGuilds';
 import { useUnifiedConversations } from '../../../hooks/useUnifiedConversations';
+import { usePlaceKeys } from '../shell/placeKeys';
 import { displayName } from '../../../lib/displayName';
 import { useVoiceStore } from '../../../stores/voiceStore';
 import { dockAttention, liveGuildIds, PEOPLE_KEY, type DockEntry } from './dockModel';
@@ -23,7 +23,7 @@ export interface DockData {
  * channel) with the pending friend requests.
  */
 export function useDockEntries(): DockData {
-  const guilds = useAvailableGuilds();
+  const { guilds, keys } = usePlaceKeys();
   const user = useCurrentUser();
   const { mutedGuildKeys } = useMutedGuilds();
   const conversations = useUnifiedConversations(mutedGuildKeys);
@@ -59,7 +59,7 @@ export function useDockEntries(): DockData {
     for (const guild of guilds) {
       const say = attention.guilds.get(guild.id);
       list.push({
-        key: guild.id,
+        key: keys.keyOf(guild),
         kind: 'server',
         name: guild.name,
         live: live.has(guild.id),
@@ -72,7 +72,7 @@ export function useDockEntries(): DockData {
       });
     }
     return list;
-  }, [me, guilds, live, attention]);
+  }, [me, guilds, keys, live, attention]);
 
   return { entries, me };
 }

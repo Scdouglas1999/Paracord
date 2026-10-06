@@ -17,6 +17,11 @@ interface Props {
   variant?: 'page' | 'section';
   /** What failed, as the section fallback names it: "Something went wrong showing {label}" ("messages"). */
   label?: string;
+  /**
+   * When this changes while the boundary is showing its fallback, it tries its children
+   * again (the route's pathname: going somewhere else is a way out of a broken page).
+   */
+  resetKey?: unknown;
 }
 interface State {
   hasError: boolean;
@@ -39,6 +44,12 @@ export class ErrorBoundary extends Component<Props, State> {
 
   static getDerivedStateFromError(error: Error): Partial<State> {
     return { hasError: true, error };
+  }
+
+  componentDidUpdate(previous: Props) {
+    if (this.state.hasError && previous.resetKey !== this.props.resetKey) {
+      this.setState({ hasError: false, error: null, errorInfo: null, retryCount: 0 });
+    }
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {

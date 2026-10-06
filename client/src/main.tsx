@@ -12,7 +12,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { getDesktopDiagnosticsLogPath, logVoiceDiagnostic } from './lib/desktopDiagnostics';
 import { isTauri } from './lib/tauriEnv';
 import { useBootSplashHandoff } from './lib/bootSplash';
-import { syncTrustedHosts } from './lib/trustedHosts';
+import { setTrustSource, syncTrustedHosts } from './lib/trustedHosts';
 import { getStoredServerUrl } from './lib/config/apiBaseUrl';
 import { sameServerUrl } from './lib/serverScope';
 import { useServerListStore } from './stores/serverListStore';
@@ -55,6 +55,10 @@ if (isTauri() && 'serviceWorker' in navigator) {
 //     sign-in screen answered "Login failed. Check your credentials" with
 //     nothing on the wire, and only relaunching the app fixed it. So re-probe
 //     on a slow beat whenever no server is connected, and never while they are.
+//     (A server the user already approved no longer needs the beat: the shell
+//     keeps trusting it while it is down, `update_trusted_server_hosts`. The beat
+//     is for one it has never verified, and a refused request does not wait for
+//     it, `recheckTrust`.)
 const TRUST_RESYNC_WHILE_DISCONNECTED_MS = 30_000;
 if (isTauri()) {
   let syncedUrls = '';
@@ -71,6 +75,10 @@ if (isTauri()) {
     syncedUrls = JSON.stringify(urls);
     void syncTrustedHosts(urls);
   };
+  // A request the shell refuses for want of a check (a server that was down when the app
+  // started, back now) asks for one itself and is sent again, instead of waiting for the
+  // beat below: `lib/trustedHosts.ts` `recheckTrust`, called by the desktop HTTP adapter.
+  setTrustSource(serverUrls);
   sync();
   useServerListStore.subscribe(() => {
     if (JSON.stringify(serverUrls()) !== syncedUrls) sync();

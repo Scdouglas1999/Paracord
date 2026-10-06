@@ -5,9 +5,11 @@ import { isHappeningNow, resetGuildEventsForTests, toEventView, useGuildEvent } 
 
 const api = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn(), delete: vi.fn() }));
 const toastError = vi.hoisted(() => vi.fn());
+const server = vi.hoisted(() => ({ ready: true }));
 
 vi.mock('../../../api/activeClient', () => ({ getApi: () => api }));
 vi.mock('../../../stores/toastStore', () => ({ toast: { error: toastError } }));
+vi.mock('../../../hooks/useServerReady', () => ({ useServerReady: () => server.ready }));
 vi.mock('../../../stores/serverListStore', () => ({
   useServerListStore: { getState: () => ({ activeServerId: 'srv-a' }) },
 }));
@@ -29,6 +31,7 @@ const wire = (over: Record<string, unknown> = {}) => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  server.ready = true;
   resetGuildEventsForTests();
 });
 
@@ -118,5 +121,17 @@ describe('useGuildEvent', () => {
   it('does not ask when there is no server to ask', () => {
     renderHook(() => useGuildEvent(null, '7001'));
     expect(api.get).not.toHaveBeenCalled();
+  });
+
+  it('waits for a server that is not connected yet, loading and quiet, then asks', async () => {
+    server.ready = false;
+    api.get.mockResolvedValue({ data: wire() });
+    const { result, rerender } = renderHook(() => useGuildEvent('g1', '7001'));
+    expect(result.current.status).toBe('loading');
+    expect(api.get).not.toHaveBeenCalled();
+    server.ready = true;
+    rerender();
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+    expect(api.get).toHaveBeenCalledTimes(1);
   });
 });

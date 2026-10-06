@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { getApi } from '../../../api/activeClient';
 import { extractApiError } from '../../../api/client';
 import { useCurrentAccountScope } from '../../../hooks/useCurrentUser';
+import { useServerReady } from '../../../hooks/useServerReady';
 import { guildLandingPath } from '../../../lib/guildNavigation';
 import type { ScopedGuild } from '../../../lib/guildScope';
 import { isAllowedImageMimeType } from '../../../lib/security';
@@ -55,11 +56,15 @@ export function useGuildTemplates(enabled: boolean): TemplateList {
   // until an answer for the current attempt has come.
   const [answer, setAnswer] = useState<{ attempt: number; templates: GuildTemplate[]; error: string | null } | null>(null);
 
+  // The templates are the selected server's. When it is not connected the answer is the
+  // "not connected" line (with Reload), never a throw out of this effect, and the list is
+  // asked again by itself when the server comes up.
+  const ready = useServerReady();
+
   useEffect(() => {
     if (!enabled) return;
     const controller = new AbortController();
-    getApi()
-      .get<GuildTemplate[]>('/templates', { signal: controller.signal })
+    void (async () => getApi().get<GuildTemplate[]>('/templates', { signal: controller.signal }))()
       .then((response) => {
         if (!controller.signal.aborted) setAnswer({ attempt, templates: response.data, error: null });
       })
@@ -69,7 +74,7 @@ export function useGuildTemplates(enabled: boolean): TemplateList {
         }
       });
     return () => controller.abort();
-  }, [enabled, attempt]);
+  }, [enabled, attempt, ready]);
 
   const reload = useCallback(() => setAttempt((count) => count + 1), []);
   const current = answer?.attempt === attempt ? answer : null;

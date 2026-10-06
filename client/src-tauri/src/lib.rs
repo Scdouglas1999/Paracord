@@ -701,7 +701,7 @@ impl rustls::client::danger::ServerCertVerifier for TofuPinningVerifier {
                 Ok(rustls::client::danger::ServerCertVerified::assertion())
             }
             Some(_) => Err(rustls::Error::General(format!(
-                "TLS certificate pin mismatch for {host}"
+                "{PIN_MISMATCH_MESSAGE} for {host}"
             ))),
             None => {
                 // Trust-on-first-use: record for the caller to promote to a pin
@@ -747,23 +747,193 @@ impl rustls::client::danger::ServerCertVerifier for TofuPinningVerifier {
     }
 }
 
+/// How one `/health` probe of a saved server ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ServerProbe {
+    /// The answer identifies a Paracord server.
+    Verified,
+    /// Something answered and it is not what the user approved: not Paracord (a
+    /// different body, a status that is not a server's trouble), a body no
+    /// health check is, or a certificate that does not match the pin. This is a
+    /// positive failure: the origin stops being trusted.
+    Rejected,
+    /// No answer: unreachable, refused, timed out, restarting (5xx), or an
+    /// answer that broke off. It says nothing about who is there, so it must
+    /// not undo trust the user's saved server already had.
+    Unreachable,
+}
+
+/// What a probe does to one origin's trust: a verified origin is trusted, a
+/// rejected one is not, and one that did not answer keeps whatever it had.
+///
+/// The trust set used to be rebuilt from scratch on every sync, from the probes
+/// that succeeded in that sync alone. A saved server that was down for the
+/// seconds a sync ran lost its trust until the next sync (the app re-syncs every
+/// thirty seconds while anything is disconnected), and every native request to
+/// it was refused before it left the machine, "Could not reach" on the sign-in
+/// screen for a server that was already back.
+fn trust_after_probe(probe: ServerProbe, was_trusted: bool) -> bool {
+    match probe {
+        ServerProbe::Verified => true,
+        ServerProbe::Rejected => false,
+        ServerProbe::Unreachable => was_trusted,
+    }
+}
+
+/// The trusted set once a sync has the user's list in hand, before it probes
+/// anything: what was trusted and is still listed (a server that was removed
+/// stops being trusted at once), plus every listed origin the user already
+/// approved. Approval is only ever recorded after a probe identified the server
+/// as Paracord, so an approved origin in the list is a saved, previously
+/// verified server: it stays trusted until it is removed or a probe positively
+/// rejects it, not merely because it was down when the app started or when the
+/// last sync ran. An origin never approved is not here: it needs the native
+/// dialog and a verifying probe first.
+fn trusted_origins_after_listing(
+    current: &HashSet<String>,
+    listed: &HashSet<String>,
+    previously_verified: &HashSet<String>,
+) -> HashSet<String> {
+    current
+        .iter()
+        .chain(previously_verified.iter())
+        .filter(|origin| listed.contains(*origin))
+        .cloned()
+        .collect()
+}
+
+/// A TLS failure the pinning verifier raised for a certificate that is not the
+/// one pinned for the host. It reaches here wrapped in reqwest's and hyper's
+/// connect errors, so the chain is walked.
+fn error_chain_is_pin_mismatch(error: &(dyn std::error::Error + 'static)) -> bool {
+    let mut next: Option<&(dyn std::error::Error + 'static)> = Some(error);
+    while let Some(current) = next {
+        if current.to_string().contains(PIN_MISMATCH_MESSAGE) {
+            return true;
+        }
+        next = current.source();
+    }
+    false
+}
+
+/// The text of the verifier's refusal ([`TofuPinningVerifier`]); the probe tells a
+/// pin mismatch (a different certificate: a positive failure) from a refused
+/// connection by it.
+const PIN_MISMATCH_MESSAGE: &str = "TLS certificate pin mismatch";
+
+/// What `read_limited_response` says when a body is over its limit (as opposed to
+/// a body that broke off): a health answer that large is not a Paracord server's.
+const RESPONSE_LIMIT_ERROR: &str = "Response exceeds the";
+
+/// Ask a server's `/health` who it is, and sort the answer into what it means
+/// for trust (see [`ServerProbe`]).
+async fn probe_server_identity(client: &reqwest::Client, health_url: &str) -> ServerProbe {
+    let response = match client.get(health_url).send().await {
+        Ok(response) => response,
+        Err(err) => {
+            return if error_chain_is_pin_mismatch(&err) {
+                ServerProbe::Rejected
+            } else {
+                ServerProbe::Unreachable
+            };
+        }
+    };
+    let status = response.status();
+    if !status.is_success() {
+        // A server that is up but in trouble (a proxy with nothing behind it, a
+        // restart, rate limiting) has not said it is someone else; anything else
+        // that is not a success is not Paracord's `/health`.
+        return if status.is_server_error()
+            || status == reqwest::StatusCode::REQUEST_TIMEOUT
+            || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+        {
+            ServerProbe::Unreachable
+        } else {
+            ServerProbe::Rejected
+        };
+    }
+    let bytes = match read_limited_response(response, MAX_NATIVE_JSON_RESPONSE_BYTES).await {
+        Ok(bytes) => bytes,
+        Err(message) if message.starts_with(RESPONSE_LIMIT_ERROR) => return ServerProbe::Rejected,
+        Err(_) => return ServerProbe::Unreachable,
+    };
+    match serde_json::from_slice::<serde_json::Value>(&bytes) {
+        Ok(body) if health_body_identifies_paracord(&body) => ServerProbe::Verified,
+        _ => ServerProbe::Rejected,
+    }
+}
+
+/// Trust syncs run one at a time. The app asks for one on every change of its
+/// server list and on a timer, and two overlapping runs would each commit what
+/// they found: the one that finished last would win, whichever list it started
+/// from.
+static TRUST_SYNC_LOCK: LazyLock<tokio::sync::Mutex<()>> =
+    LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+/// An HTTPS origin on a host that is not loopback and has no certificate pin yet:
+/// never contacted, or its pin was lost. Trust in it has to be (re-)approved.
+fn external_https_without_pin(raw_url: &str, host: &str) -> bool {
+    url::Url::parse(raw_url).is_ok_and(|parsed| parsed.scheme() == "https")
+        && !is_loopback_host(host)
+        && pinned_fingerprint(host).is_none()
+}
+
+fn commit_trusted_origin(origin: &str, trusted: bool) {
+    if let Ok(mut guard) = TRUSTED_SERVER_ORIGINS.write() {
+        if trusted {
+            guard.insert(origin.to_string());
+        } else {
+            guard.remove(origin);
+        }
+    }
+}
+
 /// Update the set of trusted server origins for TLS certificate override.
 /// Called from JS whenever the server list changes. An origin is admitted only
 /// after the user approves it in a native dialog, Rust verifies its `/health`
 /// response identifies Paracord, and (for HTTPS) its certificate matches or
 /// establishes a TOFU pin. Renderer-controlled input can therefore reconcile
 /// the active list but cannot silently grant native networking authority.
+///
+/// The set only ever holds the user's saved servers (the list this is given;
+/// nothing outside it stays trusted), and trust is sticky for those the user has
+/// already approved: it is taken away when the server is removed from the list
+/// or a probe positively fails its identity (not Paracord, a pin mismatch), never
+/// because the server did not answer. Each origin is committed as soon as it is
+/// decided, so a slow or dead server earlier in the list does not hold up the
+/// ones after it.
 #[tauri::command]
 async fn update_trusted_server_hosts(app: tauri::AppHandle, server_urls: Vec<String>) {
     if server_urls.len() > 100 {
         eprintln!("refusing oversized trusted server list");
         return;
     }
-    let mut origins = HashSet::new();
+    let _one_sync_at_a_time = TRUST_SYNC_LOCK.lock().await;
     let client = match tls_pinning_client_with_timeout(Duration::from_secs(5)) {
         Ok(client) => client,
         Err(_) => return,
     };
+
+    // The list first: a server taken out of it is untrusted at once, and a server
+    // the user approved before (and, for HTTPS, still holds a pin for) is trusted
+    // before any probe, so a server that is down right now is not locked out.
+    let listed: HashSet<String> = server_urls
+        .iter()
+        .filter_map(|raw_url| trusted_origin_from_url(raw_url))
+        .collect();
+    let previously_verified: HashSet<String> = server_urls
+        .iter()
+        .filter_map(|raw_url| {
+            let origin = trusted_origin_from_url(raw_url)?;
+            let host = pin_host_from_url(raw_url)?;
+            (is_user_approved_server_origin(&origin) && !external_https_without_pin(raw_url, &host))
+                .then_some(origin)
+        })
+        .collect();
+    if let Ok(mut guard) = TRUSTED_SERVER_ORIGINS.write() {
+        *guard = trusted_origins_after_listing(&guard, &listed, &previously_verified);
+    }
+
     for raw_url in &server_urls {
         let Some(origin) = trusted_origin_from_url(raw_url) else {
             continue;
@@ -773,41 +943,33 @@ async fn update_trusted_server_hosts(app: tauri::AppHandle, server_urls: Vec<Str
         let Some(host) = pin_host_from_url(raw_url) else {
             continue;
         };
-        let external_https_without_pin = url::Url::parse(raw_url)
-            .is_ok_and(|parsed| parsed.scheme() == "https")
-            && !is_loopback_host(&host)
-            && pinned_fingerprint(&host).is_none();
         // A first use must be approved before making any request. In particular,
         // this keeps an XSS from using the native client as a localhost SSRF
         // primitive against arbitrary loopback ports. A previously approved
         // origin whose pin disappeared must also be re-approved; silently
         // re-establishing it would turn a corrupt/deleted pin file into a MITM
         // opportunity.
-        if (!previously_approved || external_https_without_pin)
+        if (!previously_approved || external_https_without_pin(raw_url, &host))
             && !request_native_server_trust_confirmation(&app, &origin).await
         {
+            commit_trusted_origin(&origin, false);
             continue;
         }
 
         let Ok(health_url) = health_url_for_server(raw_url) else {
+            commit_trusted_origin(&origin, false);
             continue;
         };
         clear_observed_fingerprint(&host);
-        // A pin mismatch aborts the TLS handshake, so `send` fails and the
-        // origin is left untrusted (never silently re-trusted).
-        let Ok(resp) = client.get(&health_url).send().await else {
-            continue;
-        };
-        if !resp.status().is_success() {
-            continue;
-        }
-        let Ok(bytes) = read_limited_response(resp, MAX_NATIVE_JSON_RESPONSE_BYTES).await else {
-            continue;
-        };
-        let Ok(body) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
-            continue;
-        };
-        if !health_body_identifies_paracord(&body) {
+        // A pin mismatch aborts the TLS handshake, so the probe fails with the
+        // verifier's refusal and the origin loses its trust (never silently
+        // re-trusted). A server that merely does not answer keeps what it had.
+        let was_trusted = TRUSTED_SERVER_ORIGINS
+            .read()
+            .is_ok_and(|trusted| trusted.contains(&origin));
+        let probe = probe_server_identity(&client, &health_url).await;
+        if probe != ServerProbe::Verified {
+            commit_trusted_origin(&origin, trust_after_probe(probe, was_trusted));
             continue;
         }
         // Identity confirmed. On first contact, promote the captured fingerprint
@@ -818,6 +980,7 @@ async fn update_trusted_server_hosts(app: tauri::AppHandle, server_urls: Vec<Str
                 if let Err(err) = persist_pinned_certs(&app) {
                     eprintln!("failed to persist certificate pin: {err}");
                     remove_pinned_fingerprint(&host);
+                    commit_trusted_origin(&origin, false);
                     continue;
                 }
             }
@@ -829,18 +992,17 @@ async fn update_trusted_server_hosts(app: tauri::AppHandle, server_urls: Vec<Str
                     // A trust grant that cannot survive a restart must not be
                     // usable for the current session either.
                     remove_user_approved_server_origin(&origin);
+                    commit_trusted_origin(&origin, false);
                     continue;
                 }
             } else {
                 // Never activate an origin whose approval could not be retained;
                 // this avoids a one-session trust grant after a storage failure.
+                commit_trusted_origin(&origin, false);
                 continue;
             }
         }
-        origins.insert(origin);
-    }
-    if let Ok(mut guard) = TRUSTED_SERVER_ORIGINS.write() {
-        *guard = origins;
+        commit_trusted_origin(&origin, true);
     }
 }
 
@@ -2435,5 +2597,234 @@ mod bridge_contract_tests {
             build_native_multipart_form(Vec::new()).is_err(),
             "a multipart request with no parts is not a request"
         );
+    }
+}
+
+/// Trust for the user's saved servers is sticky: only a positive failure (not
+/// Paracord, a pin mismatch) or the server leaving the list takes it away, never
+/// a server that did not answer.
+#[cfg(test)]
+mod sticky_trust_tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    fn origins(items: &[&str]) -> HashSet<String> {
+        items.iter().map(|item| item.to_string()).collect()
+    }
+
+    #[test]
+    fn a_probe_that_got_no_answer_keeps_the_trust_a_server_had() {
+        // Was trusted, and the server is down for this sync: still trusted.
+        assert!(trust_after_probe(ServerProbe::Unreachable, true));
+        // Never trusted, and not answering: nothing to keep, nothing granted.
+        assert!(!trust_after_probe(ServerProbe::Unreachable, false));
+        // A verified answer trusts either way; a positive failure takes it away
+        // from a server that had it.
+        assert!(trust_after_probe(ServerProbe::Verified, false));
+        assert!(trust_after_probe(ServerProbe::Verified, true));
+        assert!(!trust_after_probe(ServerProbe::Rejected, true));
+        assert!(!trust_after_probe(ServerProbe::Rejected, false));
+    }
+
+    #[test]
+    fn the_list_decides_who_can_be_trusted_before_any_probe() {
+        let current = origins(&["https://a.example:8443", "https://removed.example:8443"]);
+        let listed = origins(&[
+            "https://a.example:8443",
+            "https://down.example:8443",
+            "https://new.example:8443",
+        ]);
+        let approved = origins(&[
+            "https://down.example:8443",
+            "https://not-listed.example:8443",
+        ]);
+
+        let after = trusted_origins_after_listing(&current, &listed, &approved);
+
+        // Still listed and trusted: stays (a server that is down right now keeps its trust).
+        assert!(after.contains("https://a.example:8443"));
+        // Approved before and listed, but not yet trusted this run (a launch with the
+        // server down): trusted before its probe, so the app can talk to it the
+        // moment it is back.
+        assert!(after.contains("https://down.example:8443"));
+        // Removed from the list: untrusted at once.
+        assert!(!after.contains("https://removed.example:8443"));
+        // Approved once but no longer in the user's list: never trusted again.
+        assert!(!after.contains("https://not-listed.example:8443"));
+        // Listed but never approved or verified: needs the dialog and a probe first.
+        assert!(!after.contains("https://new.example:8443"));
+    }
+
+    #[test]
+    fn an_empty_list_trusts_nothing() {
+        let current = origins(&["https://a.example:8443"]);
+        let approved = origins(&["https://a.example:8443"]);
+        assert!(trusted_origins_after_listing(&current, &HashSet::new(), &approved).is_empty());
+    }
+
+    #[test]
+    fn a_pin_mismatch_is_recognized_through_the_error_chain() {
+        #[derive(Debug)]
+        struct Wrapper(Box<dyn std::error::Error + 'static>, &'static str);
+        impl std::fmt::Display for Wrapper {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(self.1)
+            }
+        }
+        impl std::error::Error for Wrapper {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                Some(self.0.as_ref())
+            }
+        }
+        let refusal =
+            rustls::Error::General("TLS certificate pin mismatch for lan.example".to_string());
+        let wrapped = Wrapper(
+            Box::new(Wrapper(Box::new(refusal), "invalid peer certificate")),
+            "error sending request for url (https://lan.example:8443/health)",
+        );
+        assert!(error_chain_is_pin_mismatch(&wrapped));
+
+        let refused = Wrapper(
+            Box::new(std::io::Error::from(std::io::ErrorKind::ConnectionRefused)),
+            "error sending request",
+        );
+        assert!(!error_chain_is_pin_mismatch(&refused));
+    }
+
+    /// Answer each connection with `raw`, then close it. Returns the base URL.
+    async fn serve(raw: &'static [u8]) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut seen = Vec::new();
+                    let mut buffer = [0u8; 1024];
+                    while !seen.windows(4).any(|window| window == b"\r\n\r\n") {
+                        match stream.read(&mut buffer).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(read) => seen.extend_from_slice(&buffer[..read]),
+                        }
+                    }
+                    let _ = stream.write_all(raw).await;
+                    let _ = stream.shutdown().await;
+                });
+            }
+        });
+        format!("http://127.0.0.1:{port}/health")
+    }
+
+    async fn probe(url: &str) -> ServerProbe {
+        let client = tls_pinning_client_with_timeout(Duration::from_millis(700)).unwrap();
+        probe_server_identity(&client, url).await
+    }
+
+    const OK_PARACORD: &[u8] = b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 36\r\nconnection: close\r\n\r\n{\"service\":\"paracord\",\"status\":\"ok\"}";
+
+    #[tokio::test]
+    async fn a_health_answer_that_names_paracord_verifies() {
+        assert_eq!(
+            probe(&serve(OK_PARACORD).await).await,
+            ServerProbe::Verified
+        );
+    }
+
+    #[tokio::test]
+    async fn an_answer_that_is_not_paracord_is_a_positive_failure() {
+        let other: &[u8] = b"HTTP/1.1 200 OK\r\ncontent-length: 20\r\nconnection: close\r\n\r\n{\"service\":\"other\"}\n";
+        assert_eq!(probe(&serve(other).await).await, ServerProbe::Rejected);
+        let html: &[u8] =
+            b"HTTP/1.1 200 OK\r\ncontent-length: 8\r\nconnection: close\r\n\r\n<html/>\n";
+        assert_eq!(probe(&serve(html).await).await, ServerProbe::Rejected);
+        let missing: &[u8] =
+            b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
+        assert_eq!(probe(&serve(missing).await).await, ServerProbe::Rejected);
+        let forbidden: &[u8] =
+            b"HTTP/1.1 403 Forbidden\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
+        assert_eq!(probe(&serve(forbidden).await).await, ServerProbe::Rejected);
+    }
+
+    #[tokio::test]
+    async fn a_body_larger_than_any_health_answer_is_a_positive_failure() {
+        let huge: &[u8] =
+            b"HTTP/1.1 200 OK\r\ncontent-length: 999999999\r\nconnection: close\r\n\r\n";
+        assert_eq!(probe(&serve(huge).await).await, ServerProbe::Rejected);
+    }
+
+    #[tokio::test]
+    async fn a_server_in_trouble_is_not_a_server_that_says_it_is_someone_else() {
+        let unavailable: &[u8] =
+            b"HTTP/1.1 503 Service Unavailable\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
+        assert_eq!(
+            probe(&serve(unavailable).await).await,
+            ServerProbe::Unreachable
+        );
+        let gateway: &[u8] =
+            b"HTTP/1.1 502 Bad Gateway\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
+        assert_eq!(probe(&serve(gateway).await).await, ServerProbe::Unreachable);
+        let limited: &[u8] =
+            b"HTTP/1.1 429 Too Many Requests\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
+        assert_eq!(probe(&serve(limited).await).await, ServerProbe::Unreachable);
+    }
+
+    #[tokio::test]
+    async fn nothing_listening_and_an_answer_that_breaks_off_are_no_answer() {
+        // A port that was just closed.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        assert_eq!(
+            probe(&format!("http://127.0.0.1:{port}/health")).await,
+            ServerProbe::Unreachable
+        );
+        // Says 200 and 36 bytes, and hangs up after ten.
+        let truncated: &[u8] =
+            b"HTTP/1.1 200 OK\r\ncontent-length: 36\r\nconnection: close\r\n\r\n{\"service\"";
+        assert_eq!(
+            probe(&serve(truncated).await).await,
+            ServerProbe::Unreachable
+        );
+    }
+
+    #[tokio::test]
+    async fn a_server_that_never_answers_is_no_answer() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            // Accept and say nothing.
+            let mut held = Vec::new();
+            while let Ok((stream, _)) = listener.accept().await {
+                held.push(stream);
+            }
+        });
+        assert_eq!(
+            probe(&format!("http://127.0.0.1:{port}/health")).await,
+            ServerProbe::Unreachable
+        );
+    }
+
+    /// The decisions together, as one sync makes them for a list of three servers:
+    /// one answers, one is down, one answers as someone else.
+    #[tokio::test]
+    async fn one_sync_trusts_the_server_that_answers_and_keeps_the_one_that_is_down() {
+        let answering = serve(OK_PARACORD).await;
+        let impostor =
+            serve(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}").await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let down = format!("http://127.0.0.1:{port}/health");
+
+        let mut trusted = origins(&["a", "b", "c"]);
+        for (name, url) in [("a", &answering), ("b", &down), ("c", &impostor)] {
+            let was_trusted = trusted.contains(name);
+            let verdict = trust_after_probe(probe(url).await, was_trusted);
+            if verdict {
+                trusted.insert(name.to_string());
+            } else {
+                trusted.remove(name);
+            }
+        }
+        assert_eq!(trusted, origins(&["a", "b"]));
     }
 }

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 
 import { extractApiError } from '../../../../api/client';
 import { economyApi, type EconomyLeaderboardEntry } from '../../../../api/economy';
+import { useServerReady } from '../../../../hooks/useServerReady';
 import { displayName } from '../../../../lib/displayName';
 import { FeedAvatar } from '../feedParts';
 import { WidgetCard, WidgetError, WidgetLink } from './WidgetCard';
@@ -23,8 +24,11 @@ const TOP = 4;
 export function MostActiveWidget({ guildId, onOpenLeaderboard }: MostActiveWidgetProps) {
   const [entries, setEntries] = useState<EconomyLeaderboardEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The leaderboard is the selected server's; wait for it rather than report it as an error.
+  const ready = useServerReady();
 
   useEffect(() => {
+    if (!ready) return;
     let canceled = false;
     setEntries(null);
     setError(null);
@@ -40,7 +44,7 @@ export function MostActiveWidget({ guildId, onOpenLeaderboard }: MostActiveWidge
     return () => {
       canceled = true;
     };
-  }, [guildId]);
+  }, [guildId, ready]);
 
   const top = entries ?? [];
 

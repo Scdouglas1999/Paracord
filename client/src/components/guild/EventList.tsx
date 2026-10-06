@@ -1,9 +1,10 @@
 import { useCurrentUser } from '../../hooks/useCurrentUser';
-import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Download } from 'lucide-react';
 import { extractApiError } from '../../api/client';
 import { getApi } from '../../api/activeClient';
 import { usePermissions } from '../../hooks/usePermissions';
+import { useServerReadiness } from '../../hooks/useServerReady';
 import { Permissions, hasPermission } from '../../types';
 import { Modal, ModalTitle } from '../ui/Modal';
 import {
@@ -22,6 +23,7 @@ import { dayTile, planWhen } from '../glass/cards/eventTime';
 import { EventButton } from '../glass/cards/EventCard';
 import { useMinuteNow } from '../glass/cards/useNow';
 import { IxGlyph } from '../ix/glyphs';
+import { ServerWaitNote } from '../ix/session/ServerWaitNote';
 import { EmptyPage } from '../ix/page/EmptyPage';
 import { CreamButton, ToolChip } from '../ix/primitives';
 import { Skeleton } from '../ui/Skeleton';
@@ -395,12 +397,20 @@ export function EventList({ guildId, variant = 'settings', onUpcomingCount }: Ev
   const channelNames = useMemo(() => new Map(channels.map((channel) => [channel.id, channel.name ?? ''])), [channels]);
   const { permissions, isAdmin } = usePermissions(guildId);
   const canManageEvents = isAdmin || hasPermission(permissions, Permissions.MANAGE_GUILD);
+  // The calendar is the selected server's. While that server is still connecting (a
+  // relaunch, a restart) there is nothing to ask: the page keeps its loading state and
+  // asks once the server is there. Asking at once threw "This server is not connected"
+  // out of this effect and into the error boundary, which took the whole page down.
+  const readiness = useServerReadiness();
+  const { ready } = readiness;
 
+  const loadedFor = useRef<string | null>(null);
   const fetchEvents = useCallback(() => {
     setLoading(true);
-    getApi()
-      .get(`/guilds/${guildId}/events`)
-      .then(({ data }) => {
+    // `async` so a client that is gone by now is a rejection, handled below, not a throw.
+    void (async () => (await getApi().get<ScheduledEvent[]>(`/guilds/${guildId}/events`)).data)()
+      .then((data) => {
+        loadedFor.current = guildId;
         setEvents(data);
         setLoadError('');
       })
@@ -413,12 +423,15 @@ export function EventList({ guildId, variant = 'settings', onUpcomingCount }: Ev
       });
   }, [guildId]);
 
+  // Once the server is there (at once for the home server). After a blip of its connection
+  // the list is already on screen and the gateway's own change events keep it current.
   useEffect(() => {
-    fetchEvents();
-  }, [fetchEvents]);
+    if (ready && loadedFor.current !== guildId) fetchEvents();
+  }, [ready, guildId, fetchEvents]);
 
   // Listen for real-time scheduled event changes from the gateway
   useEffect(() => {
+    if (!ready) return;
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (detail?.guild_id === guildId) {
@@ -427,7 +440,7 @@ export function EventList({ guildId, variant = 'settings', onUpcomingCount }: Ev
     };
     window.addEventListener('paracord:scheduled-events-changed', handler);
     return () => window.removeEventListener('paracord:scheduled-events-changed', handler);
-  }, [guildId, fetchEvents]);
+  }, [ready, guildId, fetchEvents]);
 
   const handleRsvp = async (eventId: string, hasRsvp: boolean) => {
     try {
@@ -492,6 +505,8 @@ export function EventList({ guildId, variant = 'settings', onUpcomingCount }: Ev
   if (loading) {
     return (
       <div className="flex flex-col gap-3">
+        {/* A server that is away or signed out says so; connecting is just this loading state. */}
+        {!ready && <ServerWaitNote readiness={readiness} />}
         {Array.from({ length: 3 }, (_, i) => (
           <Skeleton key={i} height={104} borderRadius="var(--radius-well)" />
         ))}
@@ -771,25 +786,24 @@ function EventCard({
 
 export function EventsIndicator({ guildId }: { guildId: string }) {
   const [count, setCount] = useState(0);
+  const ready = useServerReadiness().ready;
 
   const fetchCount = useCallback(() => {
-    getApi()
-      .get(`/guilds/${guildId}/events`)
-      .then(({ data }) => {
-        const upcoming = (data as ScheduledEvent[]).filter(
-          (e) => e.status === 1 || e.status === 2
-        );
+    void (async () => (await getApi().get<ScheduledEvent[]>(`/guilds/${guildId}/events`)).data)()
+      .then((data) => {
+        const upcoming = data.filter((e) => e.status === 1 || e.status === 2);
         setCount(upcoming.length);
       })
       .catch(() => setCount(0));
   }, [guildId]);
 
   useEffect(() => {
-    fetchCount();
-  }, [fetchCount]);
+    if (ready) fetchCount();
+  }, [ready, fetchCount]);
 
   // Listen for real-time scheduled event changes from the gateway
   useEffect(() => {
+    if (!ready) return;
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (detail?.guild_id === guildId) {
@@ -798,7 +812,7 @@ export function EventsIndicator({ guildId }: { guildId: string }) {
     };
     window.addEventListener('paracord:scheduled-events-changed', handler);
     return () => window.removeEventListener('paracord:scheduled-events-changed', handler);
-  }, [guildId, fetchCount]);
+  }, [ready, guildId, fetchCount]);
 
   if (count === 0) return null;
 

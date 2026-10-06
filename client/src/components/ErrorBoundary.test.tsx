@@ -95,3 +95,43 @@ describe('ErrorBoundary variant="section"', () => {
     vi.unstubAllGlobals();
   });
 });
+
+describe('ErrorBoundary resetKey', () => {
+  afterEach(() => {
+    cleanup();
+    vi.resetModules();
+  });
+
+  it('tries its children again when the key changes (a route change leaves a broken page)', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { ErrorBoundary } = await import('./ErrorBoundary');
+    function Page({ broken }: { broken: boolean }): ReactNode {
+      if (broken) throw new Error('this page broke');
+      return <p>a working page</p>;
+    }
+    const view = render(
+      <ErrorBoundary variant="section" label="this page" resetKey="/app/guilds/1/events">
+        <Page broken />
+      </ErrorBoundary>,
+    );
+    expect(screen.getByRole('heading', { name: 'Something went wrong showing this page' })).toBeInTheDocument();
+
+    // Same key: it stays on the fallback.
+    view.rerender(
+      <ErrorBoundary variant="section" label="this page" resetKey="/app/guilds/1/events">
+        <Page broken={false} />
+      </ErrorBoundary>,
+    );
+    expect(screen.queryByText('a working page')).toBeNull();
+
+    // Another route: it shows the new page, with its retries back.
+    view.rerender(
+      <ErrorBoundary variant="section" label="this page" resetKey="/app/guilds/1/channels/2">
+        <Page broken={false} />
+      </ErrorBoundary>,
+    );
+    expect(screen.getByText('a working page')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+    consoleError.mockRestore();
+  });
+});

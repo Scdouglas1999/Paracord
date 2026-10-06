@@ -137,20 +137,92 @@ Files outside this fix's own new files, each a small change: `api/client.ts`,
   a restart reconnected, a revoked session signed out, Sign in again
   connected).
 
-## Left open
+## Follow-up (2026-10-05): the four leftovers
 
-- The owner's 2-second-window race is closed on the client; the shell still
-  replaces its trusted set wholesale on every sync (`update_trusted_server_hosts`),
-  so a server that is down during a sync is untrusted until the next one (the
-  30 s re-probe while any server is not connected brings it back). Committing
-  each origin as it is verified, in Rust, would remove that window.
-- A synchronous `getApi()` in an effect throws "This server is not connected"
-  into the root error boundary when the selected server has no connection
-  (`EventList` `fetchEvents`/`EventsIndicator`; the owner's log shows the root
-  boundary catching exactly that at 00:34). With the connection fixed this is
-  rare; those call sites should go through a promise.
-- Two fresh servers can mint the same snowflake for their first guild; the
-  dock keys places by guild id. Not new, seen only in the test.
-- The sign-in screen on the desktop can say "Could not reach" for up to 30 s
-  after a server that was down at launch comes back (its origin is re-trusted
-  on the next re-probe).
+What was "Left open" above is closed:
+
+1. **No window-level crash from a server that is not connected.** `getApi()` still
+   throws `ServerNotConnectedError` when the selected saved server has no client (it must not
+   stand in another server's), but nothing that runs during a render or an effect reaches it
+   any more.
+   - `hooks/useServerReady.ts`: `useServerReadiness()` / `useServerReady()`: the home
+     server is always ready, a saved server once its connection phase is `connected`.
+     A section that fetches when it mounts waits for it (its effect depends on `ready`, so
+     it runs by itself when the server comes up) and keeps its own loading state:
+     `EventList` and `EventsIndicator`, `useUpcomingEvents` (Coming up, the Overview, the
+     places list), `useServerFeed`, `useGuildEvent`, the Overview's media, pins and
+     leaderboard widgets, the daily word, game server and sports settings hooks (the sidebar's
+     add-on rows), the Add a server sheet's templates.
+     A blip of the connection later does not clear what is on screen or ask again.
+   - `components/ix/session/ServerWaitNote.tsx`: for an unreachable server ("Can't reach X
+     right now. Trying again." with Try now) or a refused session ("You're signed out of X."
+     with Sign in again), shown above the Events skeleton and the Overview skeleton;
+     connecting is just the loading state. The Overview of a signed-out server is
+     `ServerSignedOutPage`, as the channel page already was.
+   - `api/restClient.ts` `rejectWhenUnavailable`: the domain APIs that are not `async`
+     themselves (daily word, feeds, game servers, sports, gallery, server feed) now return a
+     rejected promise instead of throwing, so `api.list().then().catch()` in an effect is safe.
+   - Found by the e2e: `ServerHome` called `fetchChannels` with no account in scope, which
+     throws "Sign in to this instance before continuing" out of its effect (now guarded by the
+     scope, and the action itself rejects). `instanceStore.getActiveMaxUploadSize()` is read
+     while the composer renders and threw the same way (now `null` until known).
+   - Defense in depth: pages inside the shell (`/app/...`) have a *section* error boundary
+     (`ShellRoute` in `App.tsx`, `ErrorBoundary variant="section"` with a `resetKey` of the
+     pathname): a page that does throw says "Something went wrong showing this page" in main,
+     with the dock, the sidebar and the connection up, and going elsewhere clears it.
+   - Tests: `components/guild/EventList.notConnected.test.tsx`,
+     `components/rooms/lobby/useUpcomingEvents.notConnected.test.tsx`,
+     `components/ix/dock/useAddServer.notConnected.test.tsx`, `hooks/useServerReady.test.tsx`,
+     `api/notConnected.test.ts`, `stores/instanceStore.notConnected.test.ts`, the
+     `useGuildEvent` and `ErrorBoundary` tests, and in `e2e/index-connection.spec.ts` the
+     Events page, the Overview, a conversation and the Add a server sheet while the selected
+     server is connecting, unreachable and signed out (shots `conn-events-*` and
+     `conn-overview-*` in `output/design-reference/index-build/ixconn/`).
+2. **The shell keeps trusting a saved server that is down** (`update_trusted_server_hosts`,
+   `client/src-tauri/src/lib.rs`). The trusted set used to be rebuilt from the probes that
+   succeeded in that one sync. Now:
+   - the list the app gives is the only thing that can be trusted: a server taken out of it
+     stops being trusted at once, and an origin the user never approved is never added without
+     the native dialog and a probe that identifies Paracord (unchanged);
+   - an origin the user already approved (approval is only ever recorded after a probe
+     identified the server, and persisted) and still holds a pin for (HTTPS) is trusted before
+     any probe, so a server that is down at launch is not locked out;
+   - a probe sorts into verified, rejected or no answer (`ServerProbe`): trust is added,
+     taken away (not Paracord, a status that is not a server's trouble, a body no health
+     check is, a pin mismatch) or left alone (unreachable, refused, timed out, 5xx/408/429, an
+     answer that broke off);
+   - each origin is committed as soon as it is decided, not after the whole list, and syncs
+     run one at a time (`TRUST_SYNC_LOCK`).
+   Rust tests: `sticky_trust_tests` (the decisions, the probe against local servers that
+   answer, answer as someone else, are in trouble, break off, hang or are not there).
+3. **The sign-in screen no longer waits for the 30-second beat.** A native request the shell
+   refuses for want of a check ("not in the trusted server list": nothing was sent) now asks
+   for one itself and is sent again, once (`lib/trustedHosts.ts` `recheckTrust`, called from
+   `lib/tauriAxiosAdapter.ts`; the trust source is registered in `main.tsx`). It waits for a
+   check that is already running (at most 8 s), starts one otherwise, and does not probe
+   again within 3 s of the last. Together with 2, a previously approved server that was down
+   at launch is trusted from the start, so its failures are real connection failures that the
+   connection manager's back-off retries. Tests: `lib/trustedHosts.recheck.test.ts`.
+4. **Two servers that mint the same id are two places.** Why: a server's id is whatever its
+   instance mints, and every instance's snowflake generator carries the same worker number
+   (`generate(1)` at nearly every call site) and starts a fresh process at sequence zero, so two
+   fresh servers that each make their first server in the same millisecond mint the same
+   snowflake (the real-server test did it). The client cannot change that, and a place's key
+   was its id: two dock items under one `data-place`, one React key, and both "current".
+   `components/ix/shell/placeKeys.ts` keeps the keys apart: the key stays the bare id (every
+   stored order, last place and driver keeps working) unless two available servers share it,
+   and then the home server, else the first saved one, keeps the bare id and each other one is
+   `<id>@<saved server id>`. The dock entries, Ctrl+Alt+Up/Down, Ctrl+1..9, the dock's
+   "current", its context menu, the place's hue and name, and the sidebar's lookup use it. A
+   route is still `/app/guilds/<id>`: it means the guild on the selected saved server, as it
+   always did (going to a place selects its server first). Not covered: the unread/live signals
+   are still keyed by the bare id (`useUnifiedConversations`, `liveGuildIds`), so a colliding
+   pair shares those two dots. A server-side fix (a per-instance worker number) would remove
+   the collision at its source; it is a one-line change in `paracord-util`'s generator but needs
+   a server build, so it was left. Tests: `components/ix/shell/placeKeys.test.tsx`, the dock,
+   dock entries and navigation tests.
+
+Still open: the shell holds each request until the launch's first trust sync has finished
+(`trustSettled`), which with a dead server first in the list is up to its 5-second probe;
+the sync now commits per origin, so that wait could be shortened (the refused request would
+re-check itself), but nothing needs it yet.

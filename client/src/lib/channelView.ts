@@ -8,7 +8,9 @@ const actions = new Map<string, ReturnType<typeof buildActions>>();
 function buildActions(scope: AccountScope | null) {
   const requireScope = () => { if (!scope) throw new Error('Sign in to this instance before continuing.'); return scope; };
   return {
-    fetchChannels: (id: string) => useChannelStore.getState().fetchChannels(id, requireScope()),
+    // `async`: with no account to ask as (a server that is not connected yet) this is a
+    // rejection the caller can handle, not a throw out of the effect that called it.
+    fetchChannels: async (id: string) => useChannelStore.getState().fetchChannels(id, requireScope()),
     selectChannel: (id: string | null) => useChannelStore.getState().selectChannel(id ? { id, scope: requireScope() } : null),
     addChannel: (channel: Parameters<ChannelState['addChannel']>[0]) => useChannelStore.getState().addChannel(channel, requireScope()),
     updateChannel: (channel: Parameters<ChannelState['updateChannel']>[0]) => useChannelStore.getState().updateChannel(channel, requireScope()),

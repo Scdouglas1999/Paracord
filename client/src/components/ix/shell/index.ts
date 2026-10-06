@@ -10,6 +10,8 @@
  *   place.ts ........ Place, placeKey, samePlace, placeOfPath, placeDirection
  *   usePlace.ts ..... useCurrentPlace, usePlaceOrder (dock order), usePlaceHue,
  *                     usePlaceName, useIxPlaceStore (the last place)
+ *   placeKeys.ts .... usePlaceKeys: a place's key, unique per saved server (the
+ *                     server's id; qualified only when two servers share one)
  *   IxShellContext .. useIxShell(): { layout, place, guildId, channelId }
  *   useIxLayout ..... 'wide' | 'narrow' | 'phone'
  *   toolbarStore .... useToolbar(page): what the page tells the toolbar
@@ -28,6 +30,8 @@ export { IX_CALL_HOST_ID, IX_SHEET_HOST_ID } from './slots';
 export { PEOPLE_PLACE, placeDirection, placeKey, placeOfPath, samePlace, serverPlace } from './place';
 export type { Place } from './place';
 export { useCurrentPlace, useIxPlaceStore, usePlaceHue, usePlaceName, usePlaceOrder } from './usePlace';
+export { placeKeysFor, resolvePlaceKeys, usePlaceKeys } from './placeKeys';
+export type { PlaceKeys } from './placeKeys';
 export { useIxShell, useOptionalIxShell } from './IxShellContext';
 export type { IxShellValue } from './IxShellContext';
 export { IX_NARROW_MAX_WIDTH, useIxLayout } from './useIxLayout';

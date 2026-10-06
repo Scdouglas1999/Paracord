@@ -1,6 +1,6 @@
 import { getApi as getActiveApi } from './activeClient';
 import { extractApiError } from './client';
-import type { RestClient } from './restClient';
+import { rejectWhenUnavailable, type RestClient } from './restClient';
 
 /** Where a feed comes from. */
 export type FeedKind = 'rss' | 'youtube' | 'github' | 'twitch' | 'jellyfin';
@@ -147,7 +147,7 @@ export function createFeedsApi(getApi: () => RestClient) {
   };
 }
 
-export const feedsApi = createFeedsApi(getActiveApi);
+export const feedsApi = createFeedsApi(rejectWhenUnavailable(getActiveApi));
 
 /**
  * A feeds error as the person should read it. The server's 400s arrive as

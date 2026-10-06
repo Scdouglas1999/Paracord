@@ -1,5 +1,5 @@
 import type { AxiosRequestConfig, AxiosResponse } from 'axios';
-import { getApi } from './activeClient';
+import { getApi, isServerNotConnectedError } from './activeClient';
 import { getAccessToken, getCsrfToken } from '../lib/authToken';
 import type { Attachment } from '../types';
 import {
@@ -59,6 +59,22 @@ export function resolveActiveApiOrigin(): string {
     origin = typeof window !== 'undefined' ? window.location.origin : '';
   }
   return origin;
+}
+
+/**
+ * {@link resolveActiveApiOrigin} for a reader that must not fail: null while the
+ * active server has no connection (connecting, retrying, signed out).
+ *
+ * The composer reads the upload limit while it renders, so a throw here took the
+ * whole conversation down with it; "not known yet" is the honest answer.
+ */
+export function resolveActiveApiOriginIfConnected(): string | null {
+  try {
+    return resolveActiveApiOrigin();
+  } catch (error) {
+    if (isServerNotConnectedError(error)) return null;
+    throw error;
+  }
 }
 
 function resolveActiveV1ApiUrl(path: string): string {

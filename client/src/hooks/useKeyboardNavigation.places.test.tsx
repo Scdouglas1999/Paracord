@@ -22,6 +22,9 @@ vi.mock('../components/ix/shell/usePlace', () => ({
   usePlaceOrder: () => mocks.order,
   useCurrentPlace: () => mocks.place,
 }));
+vi.mock('../components/ix/shell/placeKeys', () => ({
+  usePlaceKeys: () => ({ keys: { currentKey: (place: Place) => (place.kind === 'server' ? place.guildId : 'people') } }),
+}));
 vi.mock('../components/ix/dock/usePlaceNavigation', () => ({ useGoToPlace: () => mocks.go }));
 vi.mock('../lib/keyboardShortcuts', () => ({ isMacOS: () => mocks.mac }));
 vi.mock('./useGuilds', () => ({ useSelectedGuildId: () => null }));

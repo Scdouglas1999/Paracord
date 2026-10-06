@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { configureMotion, resetMotionSwitchForTests } from '../../../lib/motion/reducedMotion';
 import { installWaapiStub, type WaapiStub } from '../../../lib/motion/waapiStub';
+import { useServerListStore } from '../../../stores/serverListStore';
 import { IxShellProvider, type IxShellValue } from '../shell/IxShellContext';
 import { PEOPLE_PLACE, serverPlace, type Place } from '../shell/place';
 import { useAddServerStore } from './addServerStore';
@@ -11,7 +12,13 @@ import { Dock } from './Dock';
 import type { DockEntry } from './dockModel';
 import { TIP_DELAY_MS } from './useDockTooltip';
 
+const DEFAULT_GUILDS = [
+  { id: 'fuel', name: 'Fuel', scope: { serverId: '__local__', userId: 'me' } },
+  { id: 'game', name: 'Game Night', scope: { serverId: '__local__', userId: 'me' } },
+];
+
 const mocks = vi.hoisted(() => ({
+  guilds: [] as unknown[],
   data: { entries: [] as unknown[], me: null as unknown },
   go: vi.fn(async () => {}),
   openServerMenu: vi.fn(),
@@ -25,12 +32,7 @@ vi.mock('../menus', () => ({
   anchorFromEvent: (event: { clientX: number; clientY: number; currentTarget: HTMLElement }) =>
     event.clientX === 0 && event.clientY === 0 ? { element: event.currentTarget, align: 'start' } : { x: event.clientX, y: event.clientY },
 }));
-vi.mock('../../../hooks/useGuilds', () => ({
-  useAvailableGuilds: () => [
-    { id: 'fuel', name: 'Fuel', scope: { serverId: '__local__', userId: 'me' } },
-    { id: 'game', name: 'Game Night', scope: { serverId: '__local__', userId: 'me' } },
-  ],
-}));
+vi.mock('../../../hooks/useGuilds', () => ({ useAvailableGuilds: () => mocks.guilds }));
 // The sheet is IX-9's frame; here it is just a place to put the content.
 vi.mock('../../glass/sheets', () => ({
   SheetFrame: ({ open, children }: { open: boolean; children: React.ReactNode }) => (open ? <div role="dialog">{children}</div> : null),
@@ -91,6 +93,8 @@ const stops = () => [...document.querySelectorAll<HTMLElement>('[data-dock-stop]
 const tabStop = () => stops().filter((node) => node.getAttribute('tabindex') === '0').map((node) => node.dataset.dockStop);
 
 beforeEach(() => {
+  mocks.guilds = DEFAULT_GUILDS;
+  useServerListStore.setState({ activeServerId: null, servers: [] });
   waapi = installWaapiStub();
   resetMotionSwitchForTests();
   configureMotion('full');
@@ -103,6 +107,42 @@ afterEach(() => {
   waapi.restore();
   resetMotionSwitchForTests();
   vi.useRealTimers();
+});
+
+describe('two servers that minted the same id', () => {
+  const TWIN = entry({ key: 'twin', name: 'Cedar place' });
+  const TWIN_ON_LANTERN = entry({ key: 'twin@s_lantern', name: 'Lantern place' });
+
+  beforeEach(() => {
+    mocks.guilds = [
+      { id: 'twin', name: 'Cedar place', scope: { serverId: '__local__', userId: 'me' } },
+      { id: 'twin', name: 'Lantern place', scope: { serverId: 's_lantern', userId: 'me2' } },
+    ];
+  });
+
+  it('shows both, each under its own place', () => {
+    mount([PEOPLE, TWIN, TWIN_ON_LANTERN], serverPlace('twin'));
+    expect(screen.getAllByTestId('ix-dock-item').map((node) => node.dataset.place)).toEqual(['people', 'twin', 'twin@s_lantern']);
+  });
+
+  it('marks the one on the selected saved server as the current place', () => {
+    mount([PEOPLE, TWIN, TWIN_ON_LANTERN], serverPlace('twin'));
+    expect(item('twin')).toHaveAttribute('aria-current', 'page');
+    expect(item('twin@s_lantern')).not.toHaveAttribute('aria-current');
+
+    act(() => useServerListStore.setState({ activeServerId: 's_lantern' }));
+    expect(item('twin@s_lantern')).toHaveAttribute('aria-current', 'page');
+    expect(item('twin')).not.toHaveAttribute('aria-current');
+  });
+
+  it('opens the server menu for the server the item is on', () => {
+    mount([PEOPLE, TWIN, TWIN_ON_LANTERN], serverPlace('twin'));
+    fireEvent.contextMenu(item('twin@s_lantern'), { clientX: 40, clientY: 50 });
+    expect(mocks.openServerMenu).toHaveBeenCalledWith(
+      { guildId: 'twin', scope: { serverId: 's_lantern', userId: 'me2' }, name: 'Lantern place' },
+      expect.anything(),
+    );
+  });
 });
 
 describe('the dock', () => {

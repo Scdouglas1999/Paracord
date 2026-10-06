@@ -1,4 +1,5 @@
-import { getApi } from './activeClient';
+import { getApi as getActiveApi } from './activeClient';
+import { rejectWhenUnavailable } from './restClient';
 import { hasListField, responseContract } from './responseContracts';
 
 export interface GalleryAuthor {
@@ -55,6 +56,8 @@ function queryString(query: GalleryQuery): string {
   const text = params.toString();
   return text ? `?${text}` : '';
 }
+
+const getApi = rejectWhenUnavailable(getActiveApi);
 
 export const galleryApi = {
   channelAttachments: (channelId: string, query: GalleryQuery = {}) =>

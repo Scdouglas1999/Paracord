@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 
 import { extractApiError } from '../../../../api/client';
 import { galleryApi, type GalleryAttachment } from '../../../../api/gallery';
+import { useServerReady } from '../../../../hooks/useServerReady';
 import { displayName } from '../../../../lib/displayName';
 import type { Attachment } from '../../../../types';
 import { Photo } from '../feedParts';
@@ -34,8 +35,11 @@ function asAttachment(item: GalleryAttachment): Attachment {
 export function MediaWidget({ guildId, onOpenMedia }: MediaWidgetProps) {
   const [items, setItems] = useState<GalleryAttachment[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Pictures come from the selected server; wait for it rather than report it as an error.
+  const ready = useServerReady();
 
   useEffect(() => {
+    if (!ready) return;
     let canceled = false;
     setItems(null);
     setError(null);
@@ -50,7 +54,7 @@ export function MediaWidget({ guildId, onOpenMedia }: MediaWidgetProps) {
     return () => {
       canceled = true;
     };
-  }, [guildId]);
+  }, [guildId, ready]);
 
   if (error) {
     return (

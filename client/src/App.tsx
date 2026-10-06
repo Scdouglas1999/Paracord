@@ -297,6 +297,26 @@ function lazyRoute(children: React.ReactNode) {
   );
 }
 
+/**
+ * A page inside the shell (`/app/...`) gets a *section* boundary: if its own render
+ * or effects throw, main shows "Something went wrong showing this page" and the
+ * dock, the sidebar, the call and the connection stay up. The full-viewport
+ * recovery screen belongs to surfaces with no shell around them. The boundary
+ * resets when the route changes, so leaving the broken page is a way out.
+ */
+function ShellRoute({ children }: { children: React.ReactNode }) {
+  const { pathname } = useLocation();
+  return (
+    <ErrorBoundary variant="section" label="this page" resetKey={pathname}>
+      <Suspense fallback={<LazyFallback />}>{children}</Suspense>
+    </ErrorBoundary>
+  );
+}
+
+function shellRoute(children: React.ReactNode) {
+  return <ShellRoute>{children}</ShellRoute>;
+}
+
 /** Same per-route isolation for the eagerly-imported auth/legal surfaces. */
 function route(children: React.ReactNode) {
   return <ErrorBoundary>{children}</ErrorBoundary>;
@@ -498,24 +518,24 @@ export default function App() {
           </ProtectedRoute>
         }
       >
-        <Route index element={route(<LastPlaceRedirect mode="app" />)} />
-        <Route path="guilds/:guildId" element={lazyRoute(<GuildHomePage />)} />
-        <Route path="guilds/:guildId/settings" element={lazyRoute(<GuildSettingsPage />)} />
-        <Route path="guilds/:guildId/sports" element={lazyRoute(<GuildSportsPage />)} />
-        <Route path="guilds/:guildId/sports/:sport/:league/:eventId" element={lazyRoute(<GuildSportsGamePage />)} />
-        <Route path="guilds/:guildId/daily-word" element={lazyRoute(<GuildDailyWordPage />)} />
-        <Route path="guilds/:guildId/events" element={lazyRoute(<GuildEventsPage />)} />
-        <Route path="guilds/:guildId/game-servers" element={lazyRoute(<GuildGameServersPage />)} />
-        <Route path="guilds/:guildId/channels/:channelId" element={lazyRoute(<GuildPage />)} />
-        <Route path="dms" element={route(<LastPlaceRedirect mode="dms" />)} />
-        <Route path="dms/:channelId" element={lazyRoute(<DMPage />)} />
-        <Route path="friends" element={lazyRoute(<FriendsPage />)} />
-        <Route path="inbox" element={lazyRoute(<InboxPage />)} />
-        <Route path="admin" element={lazyRoute(<AdminPage />)} />
-        <Route path="discovery" element={lazyRoute(<DiscoveryPage />)} />
-        <Route path="templates" element={lazyRoute(<TemplateGalleryPage />)} />
-        <Route path="oauth2/authorize" element={lazyRoute(<BotAuthorizePage />)} />
-        <Route path="developers" element={lazyRoute(<DeveloperPage />)} />
+        <Route index element={shellRoute(<LastPlaceRedirect mode="app" />)} />
+        <Route path="guilds/:guildId" element={shellRoute(<GuildHomePage />)} />
+        <Route path="guilds/:guildId/settings" element={shellRoute(<GuildSettingsPage />)} />
+        <Route path="guilds/:guildId/sports" element={shellRoute(<GuildSportsPage />)} />
+        <Route path="guilds/:guildId/sports/:sport/:league/:eventId" element={shellRoute(<GuildSportsGamePage />)} />
+        <Route path="guilds/:guildId/daily-word" element={shellRoute(<GuildDailyWordPage />)} />
+        <Route path="guilds/:guildId/events" element={shellRoute(<GuildEventsPage />)} />
+        <Route path="guilds/:guildId/game-servers" element={shellRoute(<GuildGameServersPage />)} />
+        <Route path="guilds/:guildId/channels/:channelId" element={shellRoute(<GuildPage />)} />
+        <Route path="dms" element={shellRoute(<LastPlaceRedirect mode="dms" />)} />
+        <Route path="dms/:channelId" element={shellRoute(<DMPage />)} />
+        <Route path="friends" element={shellRoute(<FriendsPage />)} />
+        <Route path="inbox" element={shellRoute(<InboxPage />)} />
+        <Route path="admin" element={shellRoute(<AdminPage />)} />
+        <Route path="discovery" element={shellRoute(<DiscoveryPage />)} />
+        <Route path="templates" element={shellRoute(<TemplateGalleryPage />)} />
+        <Route path="oauth2/authorize" element={shellRoute(<BotAuthorizePage />)} />
+        <Route path="developers" element={shellRoute(<DeveloperPage />)} />
       </Route>
 
       {/* Media engine test harness — registered in dev builds only, stripped from production. */}

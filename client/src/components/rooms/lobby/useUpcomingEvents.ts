@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { getApi } from '../../../api/activeClient';
 import { extractApiError } from '../../../api/client';
+import { useServerReady } from '../../../hooks/useServerReady';
 import { toast } from '../../../stores/toastStore';
 
 interface ScheduledEventPayload {
@@ -111,6 +112,9 @@ export function useUpcomingEvents(guildId: string): UpcomingEvents {
   const [events, setEvents] = useState<HomeEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+  // The calendar is the selected server's: until that server is connected there is
+  // nothing to ask, and no error to show for it (the page's own state says it is waiting).
+  const ready = useServerReady();
 
   const load = useCallback(
     async (signal: AbortSignal) => {
@@ -130,7 +134,7 @@ export function useUpcomingEvents(guildId: string): UpcomingEvents {
   );
 
   useEffect(() => {
-    if (!guildId) return;
+    if (!guildId || !ready) return;
     const controller = new AbortController();
     setLoaded(false);
     void load(controller.signal);
@@ -144,7 +148,7 @@ export function useUpcomingEvents(guildId: string): UpcomingEvents {
       controller.abort();
       window.removeEventListener(CHANGED_EVENT, onChanged);
     };
-  }, [guildId, load]);
+  }, [guildId, ready, load]);
 
   const toggleRsvp = useCallback(
     async (eventId: string) => {

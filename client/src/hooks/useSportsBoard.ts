@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { configureSportsPolling, watchSportsBoard, type SportsPollKind } from '../components/sports/poll';
 import { useSportsStore } from '../stores/sportsStore';
+import { useServerReady } from './useServerReady';
 
 configureSportsPolling({
   refresh: (guildId) => useSportsStore.getState().refreshBoard(guildId),
@@ -11,10 +12,12 @@ configureSportsPolling({
 /** One settings read per server per session, shared by the sidebar, the page and the strip. */
 export function useSportsSettings(guildId: string) {
   const entry = useSportsStore((state) => state.byGuild[guildId]);
+  // Asked of the selected server once it is connected, not recorded as a failure before then.
+  const ready = useServerReady();
   useEffect(() => {
-    if (!guildId) return;
+    if (!guildId || !ready) return;
     void useSportsStore.getState().ensureSettings(guildId);
-  }, [guildId]);
+  }, [guildId, ready]);
   return {
     settings: entry?.settings ?? null,
     status: entry?.settingsStatus ?? 'idle',

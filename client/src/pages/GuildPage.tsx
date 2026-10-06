@@ -79,7 +79,14 @@ export function GuildPage() {
 
   useEffect(() => {
     if (!channelId || !memberScope) return;
-    const context = captureScopedOperation(memberScope);
+    // A server whose connection dropped while its account is still shown has no client to
+    // capture; this refresh is only a refinement of the list's own, so it simply waits.
+    let context: ReturnType<typeof captureScopedOperation>;
+    try {
+      context = captureScopedOperation(memberScope);
+    } catch {
+      return;
+    }
     createChannelApi(() => context.api).get(channelId)
       .then(({ data }) => { context.assertCurrent(); useChannelStore.getState().updateChannel(data, memberScope); })
       .catch(() => { /* The channel list exposes its request error. */ });

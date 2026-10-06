@@ -205,7 +205,9 @@ test.beforeAll(async () => {
   await Promise.all([start(lantern), start(cedar)]);
   await waitFor(async () => (await fetch(APP)).ok, 'the dev server');
   // One after the other: two fresh servers minting in the same millisecond give their
-  // servers the same snowflake, and the app keys a place by its id.
+  // servers the same snowflake. The dock keeps two places with one id apart (`placeKeys`),
+  // but a real server cannot be made to collide on demand, and this test asserts on a
+  // place by its plain id.
   lanternAccount = await account(lantern, 'Lantern place');
   await new Promise((resolve) => setTimeout(resolve, 20));
   cedarAccount = await account(cedar, 'Cedar place');

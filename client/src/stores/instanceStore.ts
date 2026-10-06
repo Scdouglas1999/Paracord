@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { instanceApi } from '../api/instance';
-import { resolveActiveApiOrigin } from '../api/files';
+import { resolveActiveApiOriginIfConnected } from '../api/files';
 
 interface InstanceState {
   /** Server-advertised max upload size (bytes), keyed by server origin. */
@@ -14,7 +14,9 @@ interface InstanceState {
 export const useInstanceStore = create<InstanceState>((set, get) => ({
   maxUploadSizeByOrigin: {},
   fetchInstanceInfo: async (force = false) => {
-    const origin = resolveActiveApiOrigin();
+    // A server that is not connected yet has no limit to ask for; the next
+    // call (the composer asks again when it mounts) finds it.
+    const origin = resolveActiveApiOriginIfConnected();
     if (!origin) return;
     if (!force && get().maxUploadSizeByOrigin[origin] != null) return;
     try {
@@ -31,7 +33,7 @@ export const useInstanceStore = create<InstanceState>((set, get) => ({
     }
   },
   getActiveMaxUploadSize: () => {
-    const origin = resolveActiveApiOrigin();
-    return get().maxUploadSizeByOrigin[origin] ?? null;
+    const origin = resolveActiveApiOriginIfConnected();
+    return origin ? get().maxUploadSizeByOrigin[origin] ?? null : null;
   },
 }));

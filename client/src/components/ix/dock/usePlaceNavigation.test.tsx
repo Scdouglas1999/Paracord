@@ -8,17 +8,17 @@ import { useGoToPlace } from './usePlaceNavigation';
 const mocks = vi.hoisted(() => ({
   landing: vi.fn(),
   toast: vi.fn(),
+  guilds: [] as unknown[],
 }));
+const DEFAULT_GUILDS = [
+  { id: 'fuel', name: 'Fuel', scope: { serverId: '__local__', userId: 'me' } },
+  { id: 'game', name: 'Game Night', scope: { serverId: '__local__', userId: 'me' } },
+];
 
 vi.mock('../../../lib/guildNavigation', () => ({ guildLandingPath: mocks.landing }));
 vi.mock('../../../stores/toastStore', () => ({ toast: { error: mocks.toast } }));
 vi.mock('../../../api/client', () => ({ extractApiError: (error: Error) => error.message }));
-vi.mock('../../../hooks/useGuilds', () => ({
-  useAvailableGuilds: () => [
-    { id: 'fuel', name: 'Fuel', scope: { serverId: '__local__', userId: 'me' } },
-    { id: 'game', name: 'Game Night', scope: { serverId: '__local__', userId: 'me' } },
-  ],
-}));
+vi.mock('../../../hooks/useGuilds', () => ({ useAvailableGuilds: () => mocks.guilds }));
 
 let here = '';
 
@@ -44,9 +44,26 @@ function setup(path: string) {
 }
 
 beforeEach(() => {
+  mocks.guilds = DEFAULT_GUILDS;
   mocks.landing.mockReset();
   mocks.toast.mockReset();
   mocks.landing.mockImplementation(async (guild: { id: string }) => `/app/guilds/${guild.id}/channels/general`);
+});
+
+describe('useGoToPlace with two servers that minted the same id', () => {
+  it('goes to the server the key names, not the first with that id', async () => {
+    mocks.guilds = [
+      { id: 'twin', name: 'Cedar place', scope: { serverId: '__local__', userId: 'me' } },
+      { id: 'twin', name: 'Lantern place', scope: { serverId: 's_lantern', userId: 'me2' } },
+    ];
+    const lantern = setup('/app/guilds/fuel/channels/c1');
+    await go(lantern.result.current, 'twin@s_lantern');
+    expect(mocks.landing).toHaveBeenCalledWith(expect.objectContaining({ name: 'Lantern place' }));
+    mocks.landing.mockClear();
+    const cedar = setup('/app/guilds/fuel/channels/c1');
+    await go(cedar.result.current, 'twin');
+    expect(mocks.landing).toHaveBeenCalledWith(expect.objectContaining({ name: 'Cedar place' }));
+  });
 });
 
 describe('useGoToPlace', () => {

@@ -3,6 +3,7 @@ import { create } from 'zustand';
 
 import { getApi } from '../../../api/activeClient';
 import { extractApiError } from '../../../api/client';
+import { useServerReady } from '../../../hooks/useServerReady';
 import { LOCAL_SERVER_ID } from '../../../lib/serverScope';
 import { registerSessionReset } from '../../../stores/sessionReset';
 import { useServerListStore } from '../../../stores/serverListStore';
@@ -186,14 +187,17 @@ export function useGuildEvent(guildId: string | null | undefined, eventId: strin
   const server = serverKey();
   const key = guildId ? keyOf(server, guildId, eventId) : null;
   const entry = useGuildEventStore((state) => (key ? state.entries[key] : undefined)) ?? NONE;
+  // The event is the selected server's: it is asked for once that server is connected,
+  // and until then the row stays in its loading state rather than showing an error.
+  const ready = useServerReady();
 
   useEffect(() => {
-    if (!key || !guildId) return;
+    if (!key || !guildId || !ready) return;
     listenForChanges();
     // A failed ask is asked again the next time the row is drawn.
     const known = useGuildEventStore.getState().entries[key];
     if (!known || known.status === 'error') void load(key, guildId, eventId);
-  }, [key, guildId, eventId]);
+  }, [key, guildId, eventId, ready]);
 
   const toggleRsvp = useCallback(async () => {
     if (!key || !guildId) return;

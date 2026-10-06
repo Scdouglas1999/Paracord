@@ -15,7 +15,7 @@
 import axios, { AxiosError, AxiosHeaders } from 'axios';
 import type { AxiosResponse, InternalAxiosRequestConfig } from 'axios';
 import { isTauri } from './tauriEnv';
-import { trustSettled } from './trustedHosts';
+import { isTrustRefusal, recheckTrust, trustSettled } from './trustedHosts';
 
 interface NativeFetchResponse {
   status: number;
@@ -250,17 +250,26 @@ export async function tauriAdapter(config: InternalAxiosRequestConfig): Promise<
     };
   }
 
+  // `invoke` has no cancellation, so an abort cannot stop the request in
+  // flight — but it must still reject the caller's promise the moment the
+  // signal fires, which is the contract the browser adapter honors and
+  // every `assertCurrent()`/lease teardown in this app depends on.
+  const send = () =>
+    raceAbort(invoke(command, { req }) as Promise<NativeFetchResponse>, signal, config);
+
   let resp: NativeFetchResponse;
   try {
-    // `invoke` has no cancellation, so an abort cannot stop the request in
-    // flight — but it must still reject the caller's promise the moment the
-    // signal fires, which is the contract the browser adapter honors and
-    // every `assertCurrent()`/lease teardown in this app depends on.
-    resp = (await raceAbort(
-      invoke(command, { req }) as Promise<NativeFetchResponse>,
-      signal,
-      config,
-    )) as NativeFetchResponse;
+    try {
+      resp = await send();
+    } catch (error) {
+      // The shell refused the origin because it has not verified it (a server that was
+      // down when the app started, or when the last check ran) and nothing was sent.
+      // Ask it to verify now instead of waiting out the 30-second beat, then send the
+      // request again, once: it never left the machine, so sending it again is safe.
+      if (error instanceof AxiosError || !isTrustRefusal(error) || !(await recheckTrust())) throw error;
+      if (signal?.aborted) throw axiosError('canceled', AxiosError.ERR_CANCELED, config);
+      resp = await send();
+    }
   } catch (error) {
     if (error instanceof AxiosError) throw error;
     const message = typeof error === 'string' ? error : (error as Error)?.message ?? 'Network Error';

@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { getApi as getActiveApi } from './activeClient';
-import type { RestClient } from './restClient';
+import { rejectWhenUnavailable, type RestClient } from './restClient';
 
 /** What one letter of a guess says about the answer. */
 export type LetterState = 'correct' | 'present' | 'absent';
@@ -107,4 +107,4 @@ export function createDailyWordApi(getApi: () => RestClient) {
   };
 }
 
-export const dailyWordApi = createDailyWordApi(getActiveApi);
+export const dailyWordApi = createDailyWordApi(rejectWhenUnavailable(getActiveApi));

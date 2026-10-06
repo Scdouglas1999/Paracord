@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 
 import { channelApi } from '../../../../api/channels';
 import { extractApiError } from '../../../../api/client';
+import { useServerReady } from '../../../../hooks/useServerReady';
 import { displayName } from '../../../../lib/displayName';
 import { parseMarkdown } from '../../../../lib/markdown';
 import type { Message } from '../../../../types';
@@ -33,8 +34,11 @@ export function PinnedWidget({ guildId, announcementChannels, mentionNames, onOp
   const key = channels.map((channel) => channel.id).join(',');
   const [pin, setPin] = useState<{ message: Message; channelName: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Pins are the selected server's; wait for it rather than report it as an error.
+  const ready = useServerReady();
 
   useEffect(() => {
+    if (!ready) return;
     let canceled = false;
     setPin(null);
     setError(null);
@@ -59,7 +63,7 @@ export function PinnedWidget({ guildId, announcementChannels, mentionNames, onOp
     };
     // `key` is the identity of the channel list.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key]);
+  }, [key, ready]);
 
   const nodes = useMemo(
     () => (pin?.message.content ? parseMarkdown(pin.message.content, guildId, mentionNames) : []),

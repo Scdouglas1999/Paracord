@@ -2,10 +2,10 @@ import { useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 
 import { extractApiError } from '../../../api/client';
-import { useAvailableGuilds } from '../../../hooks/useGuilds';
 import { guildLandingPath } from '../../../lib/guildNavigation';
 import { toast } from '../../../stores/toastStore';
 import { placeOfPath } from '../shell/place';
+import { usePlaceKeys } from '../shell/placeKeys';
 import { PEOPLE_KEY } from './dockModel';
 
 /** Where People opens (IX-14 makes this the last People item). */
@@ -28,7 +28,7 @@ export const PEOPLE_PATH = '/app/dms';
 export function useGoToPlace(): (key: string) => Promise<void> {
   const navigate = useNavigate();
   const { pathname } = useLocation();
-  const guilds = useAvailableGuilds();
+  const { keys } = usePlaceKeys();
 
   return useCallback(
     async (key: string) => {
@@ -39,15 +39,15 @@ export function useGoToPlace(): (key: string) => Promise<void> {
         navigate(PEOPLE_PATH);
         return;
       }
-      const guild = guilds.find((candidate) => candidate.id === key);
+      const guild = keys.guildOf(key);
       if (!guild) return;
-      if (here?.kind === 'server' && here.guildId === key && inChannel) return;
+      if (here?.kind === 'server' && keys.currentKey(here) === key && inChannel) return;
       try {
         navigate(await guildLandingPath(guild));
       } catch (error) {
         toast.error(`Failed to open ${guild.name}: ${extractApiError(error)}`);
       }
     },
-    [guilds, navigate, pathname],
+    [keys, navigate, pathname],
   );
 }

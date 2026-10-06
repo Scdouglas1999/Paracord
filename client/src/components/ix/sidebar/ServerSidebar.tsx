@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from 'react-router';
 
 import { extractApiError } from '../../../api/client';
 import { useGuildTogether } from '../../../hooks/useGuildTogether';
-import { useAvailableGuilds } from '../../../hooks/useGuilds';
+import type { ScopedGuild } from '../../../lib/guildScope';
 import { activateGuild } from '../../../lib/guildNavigation';
 import { serverHue } from '../../../lib/identityHue';
 import { useChannelStore } from '../../../stores/channelStore';
@@ -18,7 +18,7 @@ import type { HomeEvent } from '../../rooms/lobby/useUpcomingEvents';
 import { ContextMenu, useContextMenu } from '../../ui/ContextMenu';
 import { CardSlot, useInlineCardRoom } from '../card';
 import { anchorFromEvent, openCreateChannel, openServerMenu, useServerMenuOpenFor } from '../menus';
-import { serverPlace, useOptionalIxShell } from '../shell';
+import { serverPlace, useOptionalIxShell, usePlaceKeys } from '../shell';
 import { AddonList } from './AddonList';
 import { ChannelList, keepsVisible } from './ChannelList';
 import { ComingUp, comingUp, eventIdOf } from './ComingUp';
@@ -55,7 +55,9 @@ export interface ServerSidebarProps {
 }
 
 export function ServerSidebar({ guildId, leaving = false }: ServerSidebarProps) {
-  const guild = useAvailableGuilds().find((candidate) => candidate.id === guildId) ?? null;
+  // The place's server; when two servers share an id, the one in the selected account.
+  const { keys } = usePlaceKeys();
+  const guild = keys.guildOfPlace(serverPlace(guildId)) ?? null;
   // The roster and channel list of a server the pane is about to show: the route's page loads them
   // for the server you are in, and nothing else does for one you are sliding to.
   useServerRoster(guild);
@@ -69,7 +71,7 @@ export function ServerSidebar({ guildId, leaving = false }: ServerSidebarProps) 
   );
 }
 
-type Guild = NonNullable<ReturnType<typeof useAvailableGuilds>[number]>;
+type Guild = ScopedGuild;
 
 function useServerRoster(guild: Guild | null) {
   const guildId = guild?.id ?? null;

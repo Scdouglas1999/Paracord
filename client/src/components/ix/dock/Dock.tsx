@@ -11,11 +11,10 @@ import {
   type PointerEvent,
 } from 'react';
 
-import { useAvailableGuilds } from '../../../hooks/useGuilds';
 import { IxGlyph } from '../glyphs';
 import { anchorFromEvent, openServerMenu } from '../menus';
 import { useIxShell } from '../shell/IxShellContext';
-import { placeKey } from '../shell/place';
+import { usePlaceKeys } from '../shell/placeKeys';
 import type { DockSlotProps } from '../shell/slots';
 import { AddServerSheet } from './AddServerSheet';
 import { useAddServerStore } from './addServerStore';
@@ -56,9 +55,10 @@ const tipTarget = (event: { target: EventTarget | null }) =>
  */
 export function Dock(_props: DockSlotProps) {
   const { place } = useIxShell();
-  const current = placeKey(place);
+  const { keys } = usePlaceKeys();
+  // The place's key among the dock's: the server's id, qualified only when two servers share one.
+  const current = keys.currentKey(place);
   const { entries, me } = useDockEntries();
-  const guilds = useAvailableGuilds();
   const goToPlace = useGoToPlace();
   const addOpen = useAddServerStore((state) => state.open);
   const toggleAdd = useAddServerStore((state) => state.toggleSheet);
@@ -148,7 +148,7 @@ export function Dock(_props: DockSlotProps) {
   const onContextMenu = (event: MouseEvent<HTMLDivElement>) => {
     const item = (event.target as Element).closest<HTMLElement>('[data-dock-item][data-kind="server"]');
     if (!item) return;
-    const guild = guilds.find((candidate) => candidate.id === item.dataset.place);
+    const guild = keys.guildOf(item.dataset.place ?? '');
     if (!guild) return;
     event.preventDefault();
     leaveTip();

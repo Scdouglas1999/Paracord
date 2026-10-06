@@ -1,4 +1,5 @@
-import { getApi } from './activeClient';
+import { getApi as getActiveApi } from './activeClient';
+import { rejectWhenUnavailable } from './restClient';
 import { hasListField, responseContract } from './responseContracts';
 import type { Message } from '../types';
 
@@ -94,6 +95,8 @@ export interface FeedPage {
   items: FeedItem[];
   next_cursor: string | null;
 }
+
+const getApi = rejectWhenUnavailable(getActiveApi);
 
 export const serverFeedApi = {
   page: (guildId: string, before: string | null, limit = 20) => {

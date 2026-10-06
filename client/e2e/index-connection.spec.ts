@@ -1,5 +1,5 @@
 import { expect, test, type Page, type Request, type Route } from '@playwright/test';
-import { installIndexScene, shoot, sidebar, type IndexHarness } from './fixtures/index';
+import { GUILD, installIndexScene, shoot, sidebar, type IndexHarness } from './fixtures/index';
 
 /**
  * A saved server you cannot see yet (docs/index-spec.md §4.1 list states, §6.8 strips,
@@ -197,3 +197,141 @@ test.describe('a saved server that is not connected yet', () => {
     await expect(unavailable(page)).not.toHaveAttribute('data-state', 'signed-out');
   });
 });
+
+/**
+ * The pages that ask the SELECTED server for their data (Events, Coming up, the Overview's
+ * widgets, the add-on rows, the composer's upload limit) while that server has no connection.
+ * Each used to ask at once, and `getApi()` threw "This server is not connected" out of an
+ * effect, into the error boundary: the whole window went to the recovery screen (seen in the
+ * owner's log). Now they wait and say where the server stands, with the dock, the sidebar and
+ * the rest of the window up. The selected server is Lantern; the scene's own server (Fuel) is
+ * the place on screen, which is exactly the mismatch a relaunch leaves behind.
+ */
+const FUEL = GUILD.fuel.id;
+
+const away = [
+  { mode: 'hang', state: 'connecting' },
+  { mode: 'down', state: 'retrying' },
+  { mode: 'refused', state: 'signed-out' },
+] as const;
+
+for (const { mode, state } of away) {
+  test.describe(`while the selected server is ${state}`, () => {
+    test('Events and the Overview wait for it and never take the window down', async ({ page }) => {
+      const thrown: string[] = [];
+      page.on('pageerror', (error) => thrown.push(error.message));
+      if (process.env.PARACORD_E2E_CONN_DEBUG) page.on('console', (message) => message.type() === 'error' && console.log('console.error', message.text().slice(0, 600)));
+      const asked: string[] = [];
+      page.on('request', (request) => {
+        if (request.url().startsWith(LANTERN)) asked.push(new URL(request.url()).pathname);
+      });
+      const h = await installIndexScene(page);
+      await scriptLantern(page, mode);
+      await openLantern(page, h);
+      await addLantern(page, { token: 'lan-access-expired', refreshToken: mode === 'refused' ? 'lan-refresh-revoked' : 'lan-refresh-1' });
+      await expect(unavailable(page)).toHaveCount(0); // Fuel is the place on screen, not Lantern.
+
+      const wp = process.env.PARACORD_E2E_INDEX_WP ?? 'ixconn';
+      const noRecoveryScreen = async () => {
+        await expect(page.locator('.ix-fatal')).toHaveCount(0);
+        await expect(page.getByTestId('ix-section-error')).toHaveCount(0);
+        await expect(page.getByTestId('ix-dock')).toBeVisible();
+        await expect(sidebar(page)).toBeVisible();
+      };
+
+      // Events.
+      await goTo(page, `/app/guilds/${FUEL}/events`);
+      await expect(page.getByTestId('ix-events')).toBeVisible();
+      await expect(page.getByTestId('ix-title')).toHaveText('Events');
+      await expect(page.locator('.pc-skeleton')).toHaveCount(3);
+      await noRecoveryScreen();
+      await expect(page.getByText(/Failed to load events/)).toHaveCount(0);
+      await expectNote(page, state);
+      await shoot(page, `conn-events-${state}`, { wp });
+
+      // The Overview.
+      await goTo(page, `/app/guilds/${FUEL}`);
+      await noRecoveryScreen();
+      if (state === 'signed-out') {
+        await expect(page.getByTestId('ix-server-signed-out')).toContainText('You’re signed out of Lantern');
+      } else {
+        await expect(page.getByTestId('ix-loading')).toBeVisible();
+      }
+      await expect(page.getByText(/Could not load/)).toHaveCount(0);
+      await expectNote(page, state === 'signed-out' ? null : state);
+      await shoot(page, `conn-overview-${state}`, { wp });
+
+      // A conversation's composer reads the upload limit as it renders: still fine.
+      await goTo(page, h.routes.channel('fuelGeneral'));
+      await noRecoveryScreen();
+      await expect(page.locator('.ix-fatal')).toHaveCount(0);
+
+      // Nothing the page asked for went to Lantern except the connection manager's own attempts.
+      expect(asked.filter((path) => /\/events|\/feed|\/attachments|\/templates/.test(path))).toEqual([]);
+      expect(thrown.filter((message) => /not connected/i.test(message))).toEqual([]);
+    });
+  });
+}
+
+test('the Add a server sheet opens while the selected server is away', async ({ page }) => {
+  const h = await installIndexScene(page);
+  await scriptLantern(page, 'down');
+  await openLantern(page, h);
+  await addLantern(page, { token: 'lan-access-expired', refreshToken: 'lan-refresh-1' });
+  await expect(page.getByTestId('ix-dock')).toBeVisible();
+  await page.getByRole('button', { name: /add a server/i }).click();
+  await expect(page.locator('.ix-fatal')).toHaveCount(0);
+  await expect(page.getByTestId('ix-section-error')).toHaveCount(0);
+  await expect(page.getByTestId('ix-dock')).toBeVisible();
+});
+
+/**
+ * Whatever else goes wrong in a page, it goes wrong in main: the dock, the sidebar and the
+ * connection stay up, and going somewhere else is the way out (the shell's section boundary,
+ * `ShellRoute`). Here the server answers Events with an event whose name is not text, which
+ * the page cannot draw.
+ */
+test('a page that cannot be drawn says so in main and leaves the window up', async ({ page }) => {
+  const h = await installIndexScene(page);
+  await page.route(new RegExp(`/api/v1/guilds/${FUEL}/events$`), (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([{ id: '1', guild_id: FUEL, name: { not: 'text' }, status: 1, scheduled_start: '2026-10-02T21:00:00-05:00' }]),
+    }),
+  );
+  await h.open(`/app/guilds/${FUEL}/events`);
+  await expect(page.getByTestId('ix-section-error')).toContainText('Something went wrong showing this page');
+  await expect(page.locator('.ix-fatal')).toHaveCount(0);
+  await expect(page.getByTestId('ix-dock')).toBeVisible();
+  await expect(sidebar(page)).toBeVisible();
+  await shoot(page, 'conn-page-error', { wp: process.env.PARACORD_E2E_INDEX_WP ?? 'ixconn' });
+
+  await goTo(page, h.routes.channel('fuelGeneral'));
+  await expect(page.getByTestId('ix-section-error')).toHaveCount(0);
+  await expect(page.getByTestId('ix-composer')).toBeVisible();
+});
+
+/** Go to a route inside the app, without a reload (the saved server lives in memory on the web). */
+async function goTo(page: Page, route: string) {
+  await page.evaluate((target) => {
+    window.history.pushState({}, '', target);
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  }, route);
+}
+
+/** The quiet note a section shows for an unreachable or signed-out server; none while it is connecting. */
+async function expectNote(page: Page, state: 'connecting' | 'retrying' | 'signed-out' | null) {
+  const note = page.getByTestId('ix-section-waiting');
+  if (state === 'retrying') {
+    await expect(note).toHaveAttribute('data-state', 'retrying');
+    await expect(note).toContainText('Can’t reach Lantern right now. Trying again.');
+    await expect(note.getByRole('button', { name: 'Try now' })).toBeVisible();
+  } else if (state === 'signed-out') {
+    await expect(note).toHaveAttribute('data-state', 'signed-out');
+    await expect(note).toContainText('You’re signed out of Lantern.');
+    await expect(note.getByRole('button', { name: 'Sign in again' })).toBeVisible();
+  } else {
+    await expect(note).toHaveCount(0);
+  }
+}

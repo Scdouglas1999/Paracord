@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { channelApi } from '../../../api/channels';
 import { extractApiError } from '../../../api/client';
 import { serverFeedApi, type FeedItem, type FeedMessageItem } from '../../../api/serverFeed';
+import { useServerReady } from '../../../hooks/useServerReady';
 import { toast } from '../../../stores/toastStore';
 import type { Reaction } from '../../../types';
 
@@ -57,6 +58,11 @@ export function useServerFeed(guildId: string): ServerFeed {
   const [done, setDone] = useState(false);
   const generation = useRef(0);
   const inFlight = useRef(false);
+  // The feed is the selected server's: it is read once that server is connected, and
+  // until then it stays in its loading state instead of showing a connection error.
+  const ready = useServerReady();
+  /** The guild whose first page has been asked for; a reconnect does not ask again. */
+  const asked = useRef<string | null>(null);
 
   const fetchPage = useCallback(
     async (before: string | null) => {
@@ -87,13 +93,21 @@ export function useServerFeed(guildId: string): ServerFeed {
   useEffect(() => {
     generation.current += 1;
     inFlight.current = false;
+    asked.current = null;
     setItems([]);
     setCursor(null);
     setDone(false);
     setError(null);
     setLoading(true);
+  }, [guildId]);
+
+  // Once the server is there (at once for the home server). A blip of its connection later
+  // neither clears the feed nor reads it again.
+  useEffect(() => {
+    if (!ready || asked.current === guildId) return;
+    asked.current = guildId;
     void fetchPage(null);
-  }, [fetchPage]);
+  }, [ready, guildId, fetchPage]);
 
   const loadMore = useCallback(() => {
     if (inFlight.current || done || !cursor || error) return;

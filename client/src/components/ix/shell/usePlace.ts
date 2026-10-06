@@ -2,10 +2,10 @@ import { useLayoutEffect, useMemo } from 'react';
 import { useLocation } from 'react-router';
 import { create } from 'zustand';
 
-import { useAvailableGuilds } from '../../../hooks/useGuilds';
 import { PEOPLE_HUE, paletteHue, serverHue } from '../../../lib/identityHue';
 import { registerSessionReset } from '../../../stores/sessionReset';
 import { PEOPLE_PLACE, placeKey, placeOfPath, type Place } from './place';
+import { usePlaceKeys } from './placeKeys';
 
 /**
  * The current place, the dock order, and a place's hue and name.
@@ -52,21 +52,21 @@ export function useCurrentPlace(): Place {
  * it, so the two always agree.
  */
 export function usePlaceOrder(): string[] {
-  const guilds = useAvailableGuilds();
-  return useMemo(() => ['people', ...guilds.map((guild) => guild.id)], [guilds]);
+  const { guilds, keys } = usePlaceKeys();
+  return useMemo(() => ['people', ...guilds.map((guild) => keys.keyOf(guild))], [guilds, keys]);
 }
 
 /** The window hue of a place (§2.2): People 210; a server its own hue, else its id's. */
 export function usePlaceHue(place: Place): number {
-  const guilds = useAvailableGuilds();
+  const { keys } = usePlaceKeys();
   if (place.kind === 'people') return PEOPLE_HUE;
-  const guild = guilds.find((candidate) => candidate.id === place.guildId);
+  const guild = keys.guildOfPlace(place);
   return guild ? serverHue(guild) : paletteHue(place.guildId);
 }
 
 /** The place's name: the server's, or "People". Empty while a server is not loaded. */
 export function usePlaceName(place: Place): string {
-  const guilds = useAvailableGuilds();
+  const { keys } = usePlaceKeys();
   if (place.kind === 'people') return 'People';
-  return guilds.find((candidate) => candidate.id === place.guildId)?.name ?? '';
+  return keys.guildOfPlace(place)?.name ?? '';
 }

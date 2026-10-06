@@ -1,5 +1,5 @@
 import { getApi as getActiveApi } from './activeClient';
-import type { RestClient } from './restClient';
+import { rejectWhenUnavailable, type RestClient } from './restClient';
 
 /** ESPN "{sport}/{league}" path. Exactly one slash, ASCII letters, digits, "." and "-". */
 const LEAGUE_PATH = /^[A-Za-z0-9.-]+\/[A-Za-z0-9.-]+$/;
@@ -451,4 +451,4 @@ export function createSportsApi(getApi: () => RestClient) {
   };
 }
 
-export const sportsApi = createSportsApi(getActiveApi);
+export const sportsApi = createSportsApi(rejectWhenUnavailable(getActiveApi));

@@ -129,6 +129,12 @@
   overflow: hidden;
 }
 
+/* A server that is away says so above the blocks that wait for it (`ServerWaitNote`). */
+.ix-skeleton > .ix-note {
+  flex: none;
+  margin-bottom: 18px;
+}
+
 .ix-skeleton__title,
 .ix-skeleton__sub,
 .ix-skeleton__face,

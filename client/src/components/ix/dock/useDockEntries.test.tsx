@@ -52,6 +52,17 @@ beforeEach(() => {
 });
 
 describe('useDockEntries', () => {
+  it('keeps two servers that minted the same id apart: distinct keys, each with its own name', () => {
+    const lantern = { serverId: 's_lantern', userId: '43' };
+    mocks.guilds = [guild('g1', 'Cedar place'), guild('g1', 'Lantern place', { scope: lantern, key: 'lantern-g1' })];
+    const { result } = renderHook(() => useDockEntries());
+    expect(result.current.entries.map((entry) => [entry.key, entry.name])).toEqual([
+      ['people', 'People'],
+      ['g1', 'Cedar place'],
+      ['g1@s_lantern', 'Lantern place'],
+    ]);
+  });
+
   it('is People first, then every server in the client\'s order, with its hue and icon', () => {
     const { result } = renderHook(() => useDockEntries());
     expect(result.current.entries.map((entry) => [entry.key, entry.kind, entry.name])).toEqual([

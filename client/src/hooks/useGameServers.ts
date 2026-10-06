@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { useGameServerStore } from '../stores/gameServerStore';
+import { useServerReady } from './useServerReady';
 
 /** The instance checks each game server once a minute; reading more often shows nothing new. */
 export const GAME_SERVER_REFRESH_MS = 60_000;
@@ -11,16 +12,18 @@ export const GAME_SERVER_REFRESH_MS = 60_000;
 export function useGameServers(guildId: string | null | undefined) {
   const entry = useGameServerStore((state) => (guildId ? state.byGuild[guildId] : undefined));
   const enabled = entry?.list?.enabled === true;
+  // Asked of the selected server once it is connected, not recorded as a failure before then.
+  const ready = useServerReady();
 
   // Read once; keep re-reading only while the add-on is on.
   useEffect(() => {
-    if (!guildId) return;
+    if (!guildId || !ready) return;
     const refresh = () => void useGameServerStore.getState().refresh(guildId, GAME_SERVER_REFRESH_MS / 2);
     refresh();
     if (!enabled) return;
     const timer = window.setInterval(refresh, GAME_SERVER_REFRESH_MS);
     return () => window.clearInterval(timer);
-  }, [guildId, enabled]);
+  }, [guildId, enabled, ready]);
 
   const list = entry?.list ?? null;
   return {

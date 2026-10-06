@@ -1,6 +1,6 @@
 import { getApi as getActiveApi } from './activeClient';
 import { extractApiError } from './client';
-import type { RestClient } from './restClient';
+import { rejectWhenUnavailable, type RestClient } from './restClient';
 
 /** Which protocol a game server speaks. */
 export type GameServerKind = 'minecraft_java' | 'minecraft_bedrock' | 'source' | 'tcp';
@@ -102,7 +102,7 @@ export function createGameServersApi(getApi: () => RestClient) {
   };
 }
 
-export const gameServersApi = createGameServersApi(getActiveApi);
+export const gameServersApi = createGameServersApi(rejectWhenUnavailable(getActiveApi));
 
 /** An error as the person should read it, without the "bad request:" prefix. */
 export function gameServerErrorMessage(err: unknown): string {

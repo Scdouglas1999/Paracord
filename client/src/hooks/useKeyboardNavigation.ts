@@ -3,7 +3,7 @@ import { useSelectedGuildId } from './useGuilds';
 import { useCurrentAccountScope } from './useCurrentUser';
 import { nthServer, placeKeyAction, stepPlace } from '../components/ix/dock/dockModel';
 import { useGoToPlace } from '../components/ix/dock/usePlaceNavigation';
-import { placeKey } from '../components/ix/shell/place';
+import { usePlaceKeys } from '../components/ix/shell/placeKeys';
 import { useCurrentPlace, usePlaceOrder } from '../components/ix/shell/usePlace';
 import { useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router';
@@ -32,6 +32,7 @@ export function useKeyboardNavigation() {
   const scope = useCurrentAccountScope();
   const order = usePlaceOrder();
   const place = useCurrentPlace();
+  const { keys: placeKeys } = usePlaceKeys();
   const goToPlace = useGoToPlace();
 
   useEffect(() => {
@@ -137,7 +138,7 @@ export function useKeyboardNavigation() {
       if (placeAction) {
         if (document.querySelector('[role="dialog"][aria-modal="true"]:not([data-sheet])')) return;
         const target = placeAction.kind === 'step'
-          ? stepPlace(order, placeKey(place), placeAction.delta)
+          ? stepPlace(order, placeKeys.currentKey(place), placeAction.delta)
           : nthServer(order, placeAction.n);
         if (!target) return;
         e.preventDefault();
@@ -186,7 +187,7 @@ export function useKeyboardNavigation() {
 
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [navigate, guildId, selectedGuildId, scope, order, place, goToPlace]);
+  }, [navigate, guildId, selectedGuildId, scope, order, place, placeKeys, goToPlace]);
 }
 
 

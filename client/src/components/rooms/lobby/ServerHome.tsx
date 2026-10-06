@@ -11,6 +11,7 @@ import { useGuild } from '../../../hooks/useGuilds';
 import { useBuildingLight } from '../../../hooks/useLights';
 import { useMutedGuilds } from '../../../hooks/useMutedGuilds';
 import { usePermissions } from '../../../hooks/usePermissions';
+import { useServerReadiness, type ServerReadiness } from '../../../hooks/useServerReady';
 import { activateChannel } from '../../../lib/channelNavigation';
 import { displayName } from '../../../lib/displayName';
 import { markGuildRead } from '../../../lib/guildActions';
@@ -28,6 +29,8 @@ import { BuildingNotFound } from '../../guild/BuildingNotFound';
 import { eventsHref } from '../../guild/eventsRoute';
 import { InviteModal } from '../../guild/InviteModal';
 import { toggleSheet } from '../../glass/sheets';
+import { ServerSignedOutPage } from '../../ix/session/ServerSignedOutPage';
+import { ServerWaitNote } from '../../ix/session/ServerWaitNote';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '../../ui/ContextMenu';
 import { ServerBanner } from './ServerBanner';
 import { ServerBar } from './ServerBar';
@@ -70,10 +73,14 @@ function Enter({ index, className, children }: { index: number; className?: stri
   );
 }
 
-/** Static blocks in the page's own geometry while the server is still loading. */
-function OverviewSkeleton() {
+/**
+ * Static blocks in the page's own geometry while the server is still loading. A server that
+ * is unreachable says so above them (connecting is just this loading state).
+ */
+function OverviewSkeleton({ readiness }: { readiness: ServerReadiness }) {
   return (
     <div className="ix-skeleton" role="status" aria-label="Opening the server" aria-busy="true" data-testid="ix-loading">
+      {!readiness.ready && <ServerWaitNote readiness={readiness} />}
       <div className="ix-skeleton__head" aria-hidden>
         <span className="ix-skeleton__title" />
         <span className="ix-skeleton__sub" />
@@ -119,12 +126,16 @@ export function ServerHome({ guildId }: ServerHomeProps) {
   const [showInvite, setShowInvite] = useState(false);
 
   useEffect(() => {
-    if (guildId && channels.length === 0) void fetchChannels(guildId);
-  }, [guildId, channels.length, fetchChannels]);
+    // Nothing to ask as until this server's account is here (it is not connected yet).
+    if (guildId && scope && channels.length === 0) void fetchChannels(guildId);
+  }, [guildId, scope, channels.length, fetchChannels]);
   useEffect(() => {
     if (guildId && scope && !members) void fetchMembers(guildId, scope);
   }, [guildId, scope, members, fetchMembers]);
 
+  // The Overview reads the selected server; while that server is not connected its widgets
+  // wait (no request, no error) and the page says where the server stands.
+  const readiness = useServerReadiness();
   const feed = useServerFeed(guildId);
   const { events, error: eventsError, toggleRsvp } = useUpcomingEvents(guildId);
 
@@ -230,7 +241,8 @@ export function ServerHome({ guildId }: ServerHomeProps) {
       channelName, rsvp, openCalendar, openMedia, openLeaderboard, openMessage, sayHiLater],
   );
   if (!guild && denied) return <BuildingNotFound onGoHome={() => navigate('/app')} />;
-  if (!guild) return <OverviewSkeleton />;
+  if (!guild && readiness.server && readiness.phase === 'signed-out') return <ServerSignedOutPage server={readiness.server} />;
+  if (!guild) return <OverviewSkeleton readiness={readiness} />;
 
   const description = (guild.hub_settings?.welcome_text as string | undefined)?.trim()
     || guild.description?.trim()
