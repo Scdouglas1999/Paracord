@@ -4,7 +4,7 @@ import { RefreshCw, Server, Sparkles, X } from 'lucide-react';
 import { useServerListStore, resolveDefaultServerTarget } from '../stores/serverListStore';
 import { gateway } from '../gateway/manager';
 import { setStoredServerUrl, normalizeConnectInput } from '../lib/config/apiBaseUrl';
-import { isPortableLink, decodePortableLink } from '../lib/portableLinks';
+import { parseInviteLink } from '../lib/inviteLinks';
 import { OnboardingWizard, hasCompletedOnboarding } from '../components/onboarding/OnboardingWizard';
 import { ErrorBanner } from '../components/ui/Feedback';
 import { Button } from '../components/ui/Button';
@@ -42,23 +42,9 @@ function canonicalServerBaseFromResolvedUrl(value: string): string {
 function parseInput(input: string): { serverUrl: string; inviteCode?: string } {
   const trimmed = input.trim();
 
-  // 1. Portable link (paracord://invite/...)
-  if (isPortableLink(trimmed)) {
-    const decoded = decodePortableLink(trimmed);
-    return { serverUrl: normalizeConnectInput(decoded.serverUrl), inviteCode: decoded.inviteCode };
-  }
-
-  // 2. Regular URL containing /invite/<code>
-  const inviteMatch = trimmed.match(/^(https?:\/\/.+?)\/invite\/([A-Za-z0-9_-]+)\/?$/i);
-  if (inviteMatch) {
-    return { serverUrl: normalizeConnectInput(inviteMatch[1]), inviteCode: inviteMatch[2] };
-  }
-
-  // Also handle without protocol: host:port/invite/CODE
-  const inviteMatchNoProto = trimmed.match(/^([^/]+)\/invite\/([A-Za-z0-9_-]+)\/?$/i);
-  if (inviteMatchNoProto) {
-    return { serverUrl: normalizeConnectInput(inviteMatchNoProto[1]), inviteCode: inviteMatchNoProto[2] };
-  }
+  // 1-2. An invite link of any accepted shape (lib/inviteLinks.ts is the one parser)
+  const link = parseInviteLink(trimmed);
+  if (link) return { serverUrl: link.serverUrl, inviteCode: link.code };
 
   // 3. Plain server URL / address
   return { serverUrl: normalizeConnectInput(trimmed) };

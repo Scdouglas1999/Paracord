@@ -7,7 +7,11 @@ import { useServerReady } from '../../../hooks/useServerReady';
 import { guildLandingPath } from '../../../lib/guildNavigation';
 import type { ScopedGuild } from '../../../lib/guildScope';
 import { isAllowedImageMimeType } from '../../../lib/security';
+import { parseInviteLink } from '../../../lib/inviteLinks';
+import { getServerAccountScope } from '../../../lib/serverIdentity';
+import { LOCAL_SERVER_ID, type AccountScope } from '../../../lib/serverScope';
 import { useGuildStore } from '../../../stores/guildStore';
+import { normalizeServerUrl, resolveDefaultServerTarget, useServerListStore } from '../../../stores/serverListStore';
 
 /**
  * What the Add a server sheet does: make a server, join one with an invite,
@@ -28,10 +32,51 @@ export interface GuildTemplate {
   created_at: string;
 }
 
-/** The code of an invite: a pasted link (`https://paracord.gg/hTKzmak`) or the code itself. */
-export function inviteCodeOf(input: string): string {
+/** Where an invite points: its code and, when the person pasted a link, the server it names. */
+export interface InviteTarget {
+  code: string;
+  /** The server the link names; null when only a code was pasted (it is for the server in view). */
+  serverUrl: string | null;
+}
+
+const BARE_CODE = /^[A-Za-z0-9_-]{1,64}$/;
+
+/**
+ * Read what was pasted into the Join tab: an invite link of any shape
+ * `lib/inviteLinks.ts` accepts (including a link to another server), or a bare
+ * code. Anything else is null; the sheet says so instead of guessing.
+ */
+export function inviteTargetOf(input: string): InviteTarget | null {
   const trimmed = input.trim();
-  return trimmed.split('/').pop() || trimmed;
+  const link = parseInviteLink(trimmed);
+  if (link) return { code: link.code, serverUrl: link.serverUrl };
+  return BARE_CODE.test(trimmed) ? { code: trimmed, serverUrl: null } : null;
+}
+
+/**
+ * The account an invite is accepted with. A link to the server in view, or a
+ * bare code, uses the account in view; a link to another saved server uses that
+ * server's account. A server this app does not know, or one that is not signed
+ * in, stops with the reason: joining must not quietly go somewhere else.
+ */
+export function accountForInvite(target: InviteTarget, inView: AccountScope): AccountScope {
+  if (!target.serverUrl) return inView;
+  const saved = useServerListStore.getState().getServerByUrl(target.serverUrl);
+  let serverId: string | null = saved?.id ?? null;
+  if (!serverId) {
+    const own = resolveDefaultServerTarget();
+    if (own && normalizeServerUrl(own) === normalizeServerUrl(target.serverUrl)) serverId = LOCAL_SERVER_ID;
+  }
+  const host = new URL(target.serverUrl).host;
+  if (!serverId) {
+    throw new Error(`This invite is for ${host}, which you have not added yet. Add that server first, then paste the link again.`);
+  }
+  if (serverId === inView.serverId) return inView;
+  const account = getServerAccountScope(serverId);
+  if (!account) {
+    throw new Error(`This invite is for ${saved?.name ?? host}, which you are not signed in to. Sign in there first, then paste the link again.`);
+  }
+  return account;
 }
 
 /** The suggested name for a new server. */
@@ -196,7 +241,11 @@ export function useAddServerActions(onDone: (path: string) => void): AddServerAc
     async (invite: string) => {
       if (!invite.trim() || !scope) return;
       await run('Failed to join server', async () => {
-        await land(await useGuildStore.getState().acceptInvite(inviteCodeOf(invite), scope));
+        const target = inviteTargetOf(invite);
+        if (!target) {
+          throw new Error('That is not an invite link or code. Paste the whole link, or just the code at the end of it.');
+        }
+        await land(await useGuildStore.getState().acceptInvite(target.code, accountForInvite(target, scope)));
       });
     },
     [land, run, scope],

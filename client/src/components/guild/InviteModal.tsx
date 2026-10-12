@@ -181,7 +181,7 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
   const [copiedPortable, setCopiedPortable] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
   const [expiration, setExpiration] = useState('7days');
-  const [maxUses, setMaxUses] = useState('unlimited');
+  const [maxUses, setMaxUses] = useState('25');
   const [inviteCode, setInviteCode] = useState('');
   const [portableLink, setPortableLink] = useState('');
   const [inviteLink, setInviteLink] = useState('');

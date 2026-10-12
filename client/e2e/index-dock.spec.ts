@@ -646,13 +646,13 @@ test.describe('Add a server (§4.8, §6.1)', () => {
     await page.route('**/api/v1/invites/*', (route) =>
       route.fulfill({ status: 404, headers: epoch, json: { code: 'NOT_FOUND', message: 'That invite has expired.' } }),
     );
-    await sheet.getByLabel('Invite link').fill('https://paracord.gg/hTKzmak');
+    await sheet.getByLabel('Invite link').fill('hTKzmak');
     await page.waitForTimeout(SETTLE);
     await shoot(page, 'add-a-server-join');
     await sheet.getByRole('button', { name: 'Join server' }).click();
     await expect(sheet.getByRole('alert')).toContainText('That invite has expired.');
     // The form stays as it was.
-    await expect(sheet.getByLabel('Invite link')).toHaveValue('https://paracord.gg/hTKzmak');
+    await expect(sheet.getByLabel('Invite link')).toHaveValue('hTKzmak');
     await page.waitForTimeout(400);
     await shoot(page, 'add-a-server-join-error');
   });

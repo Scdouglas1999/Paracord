@@ -265,11 +265,21 @@ describe('Join', () => {
     open('join');
     const join = within(sheet()).getByRole('button', { name: 'Join server' });
     expect(join).toBeDisabled();
-    await user.type(within(sheet()).getByLabelText('Invite link'), 'https://paracord.gg/hTKzmak');
+    await user.type(within(sheet()).getByLabelText('Invite link'), `${window.location.origin}/invite/hTKzmak`);
     await user.click(join);
     await waitFor(() => expect(mocks.acceptInvite).toHaveBeenCalledWith('hTKzmak', scope));
     await waitFor(() => expect(here).toBe('/app/guilds/joined-1/channels/general'));
     expect(useAddServerStore.getState().open).toBe(false);
+  });
+
+  it('says so when what was pasted is neither a link nor a code', async () => {
+    const user = userEvent.setup();
+    mount();
+    open('join');
+    await user.type(within(sheet()).getByLabelText('Invite link'), 'https://chat.example.com/hTKzmak');
+    await user.click(within(sheet()).getByRole('button', { name: 'Join server' }));
+    expect(await within(sheet()).findByRole('alert')).toHaveTextContent('That is not an invite link or code.');
+    expect(mocks.acceptInvite).not.toHaveBeenCalled();
   });
 
   it('takes the code alone, and Enter submits', async () => {
