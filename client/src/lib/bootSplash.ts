@@ -28,6 +28,13 @@ let holds = 0;
 let committed = false;
 let state: 'showing' | 'waiting' | 'gone' = 'showing';
 const goneListeners = new Set<() => void>();
+let removeTimer = 0;
+// Bumped whenever a wait is abandoned, so a stale wait cannot take a revived screen down.
+let generation = 0;
+
+function notifyGone() {
+  for (const listener of [...goneListeners]) listener();
+}
 
 function bootNode(): HTMLElement | null {
   return document.getElementById('pc-boot');
@@ -36,11 +43,28 @@ function bootNode(): HTMLElement | null {
 function takeDown() {
   if (state === 'gone') return;
   state = 'gone';
-  for (const listener of [...goneListeners]) listener();
+  notifyGone();
   const node = bootNode();
   if (!node) return;
   node.classList.add('is-leaving');
-  window.setTimeout(() => node.remove(), LEAVE_MS);
+  removeTimer = window.setTimeout(() => node.remove(), LEAVE_MS);
+}
+
+/**
+ * A splash arrived while the loading screen was already fading out (the app's
+ * first commit had none, the next one did). Fading a half-drawn mark over the
+ * splash's whole one reads as a glitch, so the loading screen comes back,
+ * plays its sequence to the end, and leaves over the splash as usual.
+ */
+function revive() {
+  const node = bootNode();
+  if (state !== 'gone' || !node || !node.classList.contains('is-leaving')) return;
+  window.clearTimeout(removeTimer);
+  node.classList.remove('is-leaving');
+  state = 'showing';
+  generation += 1;
+  notifyGone();
+  evaluate();
 }
 
 function evaluate() {
@@ -63,7 +87,11 @@ function evaluate() {
     const target = (animation.effect as KeyframeEffect | null)?.target;
     return !target?.classList.contains('pc-boot__slow');
   });
-  void Promise.all(sequence.map((animation) => animation.finished)).then(takeDown, takeDown);
+  const waitFor = generation;
+  const done = () => {
+    if (waitFor === generation) takeDown();
+  };
+  void Promise.all(sequence.map((animation) => animation.finished)).then(done, done);
 }
 
 /**
@@ -94,6 +122,7 @@ export function useBootSplashHandoff() {
 export function useBootSplashHold() {
   useLayoutEffect(() => {
     holds += 1;
+    if (committed) revive();
     return () => {
       holds -= 1;
       scheduleEvaluate();
@@ -122,4 +151,6 @@ export function resetBootSplashForTests() {
   holds = 0;
   committed = false;
   state = 'showing';
+  window.clearTimeout(removeTimer);
+  generation += 1;
 }

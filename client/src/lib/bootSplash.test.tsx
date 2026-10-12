@@ -97,6 +97,30 @@ describe('loading screen hand-off', () => {
     expect(node).toHaveClass('is-leaving');
   });
 
+  it('comes back and plays to the end when a splash arrives while it is fading out', async () => {
+    const { node, finish } = mountBootScreen();
+    const { rerender } = render(
+      <Root>
+        <p>Sign in</p>
+      </Root>,
+    );
+    await flush();
+    expect(node).toHaveClass('is-leaving');
+    rerender(
+      <Root>
+        <BrandSplash label="Just a moment..." />
+      </Root>,
+    );
+    await flush();
+    expect(node).not.toHaveClass('is-leaving');
+    expect(document.querySelector('[data-testid="brand-splash"] svg.pc-cord')).toHaveAttribute('data-paused', 'true');
+    await new Promise((resolve) => setTimeout(resolve, 220));
+    expect(document.getElementById('pc-boot')).not.toBeNull();
+    finish();
+    await flush();
+    expect(node).toHaveClass('is-leaving');
+  });
+
   it('keeps the static splash still: the final frame and a status line', () => {
     const { container, getByRole } = render(<BrandSplash label="Connecting..." />);
     expect(container.querySelector('.pc-boot')).toHaveClass('is-static');

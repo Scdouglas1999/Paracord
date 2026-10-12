@@ -104,7 +104,7 @@ export function CordMark({
           <defs>
             <mask id={`${id}m`} maskUnits="userSpaceOnUse" {...box}>
               <path d={CORD_GEO.paths.under} className="pc-cord__u" stroke="#fff" strokeWidth={lw} {...round} />
-              <path d={CORD_GEO.paths.halo} className="pc-cord__h" stroke="#000" strokeWidth={haloWidth} {...round} />
+              <path d={CORD_GEO.paths.halo} className="pc-cord__h" stroke="#000" strokeWidth={haloWidth} fill="none" />
               <path d={CORD_GEO.paths.over} className="pc-cord__o" stroke="#fff" strokeWidth={lw} {...round} />
             </mask>
           </defs>
@@ -142,8 +142,10 @@ function EmberLayers({
         </mask>
         <mask id={`${id}u`} maskUnits="userSpaceOnUse" {...box}>
           <path d={CORD_GEO.paths.under} className="pc-cord__u" stroke="#fff" strokeWidth={revealWidth} {...round} />
-          {/* The gap around the stem, cut only where the stem has been drawn. */}
-          <path d={CORD_GEO.paths.halo} className="pc-cord__h" stroke="#000" strokeWidth={haloWidth} {...round} />
+          {/* The gap around the stem, cut only where the stem has been drawn. Butt caps,
+              so the cut ends where the stem's reveal does and never notches the under
+              strand behind a stem that is pulling out. */}
+          <path d={CORD_GEO.paths.halo} className="pc-cord__h" stroke="#000" strokeWidth={haloWidth} fill="none" />
         </mask>
       </defs>
       <g mask={`url(#${id}u)`}>

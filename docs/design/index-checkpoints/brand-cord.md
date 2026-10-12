@@ -114,9 +114,16 @@ messages…", "Loading invite…").
 
 ## Open
 
-- Verified in Chromium only; WebKitGTK (the Linux desktop webview) and
-  WKWebView/WebView2 should render CSS-animated mask strokes the same, but
-  nobody has looked at it in the desktop app yet.
+- WebKitGTK (offscreen snapshots, scratchpad `wk-snap.py`) renders every
+  motion at 16/40/56/184 px and mono the same as Chromium, and the boot splash
+  draws on in it. The dark-brown bowl seen there was not a mask difference: it
+  was the loading screen fading out half-drawn over a BrandSplash that mounted
+  after the app's first commit. bootSplash now brings the loading screen back
+  when a splash arrives during its fade, plays it to the end, and leaves over
+  the splash. A glossy blue cord under file:// is WebKit's missing-image
+  placeholder (the art's absolute /brand/ paths); served normally it is fine.
+  The halo cut now has butt caps, so a stem pulling out no longer notches the
+  under strand. WKWebView/WebView2 are still unchecked.
 - The tray still uses the window icon (`tray.rs`, unchanged). A monochrome
   tray asset is emitted (`src-tauri/icons/tray-mono-64.png`); switching to it
   is a Rust change and a per-platform decision (light panels).

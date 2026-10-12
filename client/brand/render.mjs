@@ -210,7 +210,7 @@ export function animatedMarkup(geo, { level, idPrefix, cls, href = (name) => `/b
   return `<svg class="${cls}" viewBox="${geo.viewBox.join(' ')}" aria-hidden="true" focusable="false">`
     + `<defs><mask id="${idPrefix}o" maskUnits="userSpaceOnUse" ${box}><path d="${geo.paths.over}" ${stroke('o', mw, '#fff')}/></mask>`
     + `<mask id="${idPrefix}u" maskUnits="userSpaceOnUse" ${box}><path d="${geo.paths.under}" ${stroke('u', mw, '#fff')}/>`
-    + `<path d="${geo.paths.halo}" ${stroke('h', hw, '#000')}/></mask></defs>`
+    + `<path d="${geo.paths.halo}" class="${cls}__h" fill="none" stroke="#000" stroke-width="${hw}"/></mask></defs>`
     + `<g mask="url(#${idPrefix}u)"><image href="${href(`cord-${level}-under`)}" ${box}/></g>`
     + `<g mask="url(#${idPrefix}o)"><image href="${href(`cord-${level}`)}" ${box}/></g></svg>`;
 }
