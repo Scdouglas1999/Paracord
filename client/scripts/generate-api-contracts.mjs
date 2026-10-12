@@ -20,6 +20,13 @@ const ajv = new Ajv2020({ strict: true, allErrors: false, code: { source: true, 
 // Other unknown formats still fail strict compilation.
 ajv.addFormat('int32', true);
 ajv.addFormat('uint32', true);
+// First-run setup contracts carry u8/u16/i16 (KDF log N, ports, hues) and
+// i64/u64 (credential epochs, proof timestamps, backup intervals).
+ajv.addFormat('uint8', true);
+ajv.addFormat('uint16', true);
+ajv.addFormat('int16', true);
+ajv.addFormat('int64', true);
+ajv.addFormat('uint64', true);
 const outputs = new Map();
 const exports = {};
 const declarations = [];

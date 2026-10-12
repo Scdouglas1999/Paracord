@@ -276,8 +276,8 @@ pub async fn create_user_typed(
 ) -> Result<UserRow, DbError> {
     let normalized_email = normalize_email(email);
     let row = sqlx::query_as::<_, UserRow>(
-        "INSERT INTO users (id, username, discriminator, email, password_hash)
-         VALUES ($1, $2, $3, $4, $5)
+        "INSERT INTO users (id, username, discriminator, email, password_hash, credential_version)
+         VALUES ($1, $2, $3, $4, $5, CASE WHEN $5 LIKE '$argon2%' THEN 1 ELSE 0 END)
          RETURNING id, username, discriminator, email, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key, email_verified",
     )
     .bind(id)
@@ -335,8 +335,8 @@ pub async fn create_user_as_first_admin_typed(
     };
 
     let row = sqlx::query_as::<_, UserRow>(
-        "INSERT INTO users (id, username, discriminator, email, password_hash, flags)
-         VALUES ($1, $2, $3, $4, $5, $6)
+        "INSERT INTO users (id, username, discriminator, email, password_hash, flags, credential_version)
+         VALUES ($1, $2, $3, $4, $5, $6, CASE WHEN $5 LIKE '$argon2%' THEN 1 ELSE 0 END)
          RETURNING id, username, discriminator, email, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key, email_verified",
     )
     .bind(id)
@@ -683,8 +683,8 @@ async fn ensure_deleted_user_tombstone(
     executor: &mut sqlx::AnyConnection,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "INSERT INTO users (id, username, discriminator, email, password_hash, display_name, flags)
-         VALUES ($1, $2, 0, $3, $4, 'Deleted User', 0)
+        "INSERT INTO users (id, username, discriminator, email, password_hash, display_name, flags, credential_version)
+         VALUES ($1, $2, 0, $3, $4, 'Deleted User', 0, 0)
          ON CONFLICT(id) DO NOTHING",
     )
     .bind(DELETED_USER_ID)
@@ -1418,8 +1418,8 @@ pub async fn create_user_from_pubkey_typed(
 ) -> Result<UserRow, DbError> {
     let placeholder_email = format!("{}@pubkey", public_key);
     let row = sqlx::query_as::<_, UserRow>(
-        "INSERT INTO users (id, username, discriminator, email, password_hash, display_name, public_key)
-         VALUES ($1, $2, 0, $3, '', $4, $5)
+        "INSERT INTO users (id, username, discriminator, email, password_hash, display_name, public_key, credential_version)
+         VALUES ($1, $2, 0, $3, '', $4, $5, 0)
          RETURNING id, username, discriminator, email, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key, email_verified",
     )
     .bind(id)
@@ -1473,8 +1473,8 @@ pub async fn create_user_from_pubkey_as_first_admin_typed(
     let placeholder_email = format!("{}@pubkey", public_key);
 
     let row = sqlx::query_as::<_, UserRow>(
-        "INSERT INTO users (id, username, discriminator, email, password_hash, display_name, public_key, flags)
-         VALUES ($1, $2, 0, $3, '', $4, $5, $6)
+        "INSERT INTO users (id, username, discriminator, email, password_hash, display_name, public_key, flags, credential_version)
+         VALUES ($1, $2, 0, $3, '', $4, $5, $6, 0)
          RETURNING id, username, discriminator, email, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key, email_verified",
     )
     .bind(id)

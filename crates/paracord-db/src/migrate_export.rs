@@ -61,6 +61,8 @@ pub const MIGRATION_TABLE_ORDER: &[&str] = &[
     "stage_instances",
     "users",
     // Depend on users.
+    // One row per account: the server-held wrapped identity (first-run setup).
+    "account_key_backups",
     "auth_sessions",
     "bot_applications",
     "bot_reviews",

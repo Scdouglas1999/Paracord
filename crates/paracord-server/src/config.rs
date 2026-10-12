@@ -1,4 +1,5 @@
 use anyhow::Result;
+use paracord_contracts::host::{KeySource, Protection};
 use paracord_media::S3Config;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -66,6 +67,11 @@ pub struct Config {
     pub integrations: IntegrationsConfig,
     #[serde(default)]
     pub setup: SetupConfig,
+    /// Hosting from the desktop app (`init --profile desktop-host` writes it).
+    #[serde(default)]
+    pub host: HostConfig,
+    #[serde(default)]
+    pub link_previews: LinkPreviewsConfig,
     /// True when `Config::load` generated the config file fresh on this run
     /// (genuine first run). Not persisted; always deserializes to false.
     /// Consumed by the startup path (main.rs) to drive first-run onboarding.
@@ -99,6 +105,11 @@ pub struct ServerConfig {
     /// Public URL of this server (e.g., https://chat.example.com).
     /// Used for CORS auto-configuration and invite links.
     pub public_url: Option<String>,
+    /// With TLS on, also listen for plain HTTP and redirect it to HTTPS. The
+    /// desktop-host profile turns it off: nothing there should answer in plain
+    /// text. Env: `PARACORD_REDIRECT_LISTENER`.
+    #[serde(default = "default_true")]
+    pub redirect_listener: bool,
 }
 
 impl Default for ServerConfig {
@@ -109,6 +120,7 @@ impl Default for ServerConfig {
             permission_cache_max_entries: default_permission_cache_max_entries(),
             web_dir: None,
             public_url: None,
+            redirect_listener: true,
         }
     }
 }
@@ -322,10 +334,12 @@ pub struct NetworkConfig {
     #[serde(default = "default_false")]
     pub windows_firewall_auto_allow: bool,
     /// Ask the router, on startup, to let people outside this network reach the
-    /// server (UPnP IGD, then NAT-PMP/PCP). Off unless the owner chose it: the
-    /// installers ask, and the admin page can turn it on later. Opening a home
-    /// network to the internet is a decision for the person who owns it, not a
-    /// default. A config that says `true` keeps it.
+    /// server (UPnP IGD, then NAT-PMP/PCP). New configs write `true` (setup spec
+    /// §8.1: friends should be able to join without the owner learning port
+    /// forwarding, and the setup screen says exactly what the router answered).
+    /// A config file without the key means `false`, so an upgrade never starts
+    /// asking a router the owner never chose to ask. A config that says either
+    /// keeps it.
     #[serde(default = "default_false")]
     pub auto_port_forward: bool,
     /// How long each requested mapping should last, in seconds. Refreshed at
@@ -333,14 +347,19 @@ pub struct NetworkConfig {
     /// costs at most half a lease.
     #[serde(default = "default_port_forward_lease_seconds")]
     pub port_forward_lease_seconds: u32,
+    /// While the router refused, did not answer, or shares its address: how
+    /// often to ask again, in seconds. Env: `PARACORD_REACHABILITY_RETRY_SECONDS`.
+    #[serde(default = "default_reachability_retry_seconds")]
+    pub reachability_retry_seconds: u64,
 }
 
 impl Default for NetworkConfig {
     fn default() -> Self {
         Self {
             windows_firewall_auto_allow: false,
-            auto_port_forward: false,
+            auto_port_forward: true,
             port_forward_lease_seconds: default_port_forward_lease_seconds(),
+            reachability_retry_seconds: default_reachability_retry_seconds(),
         }
     }
 }
@@ -451,12 +470,38 @@ impl Default for RetentionConfig {
     }
 }
 
+/// Stored-data encryption (setup spec §4).
+///
+/// `enabled = true` is written into a config only after the key has been
+/// generated, stored in `key_source` and read back (spec §4.3). That step
+/// belongs to `init` and the first-run generation, so [`Default`] keeps it off:
+/// a config written before a key exists must not claim one.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AtRestConfig {
     #[serde(default = "default_false")]
     pub enabled: bool,
+    /// Where the 32-byte storage key lives. A config with `enabled = true` and
+    /// no `key_source` means `env`, which is what it meant before the key
+    /// sources existed. Env: `PARACORD_AT_REST_KEY_SOURCE`.
+    #[serde(default = "default_at_rest_key_source")]
+    pub key_source: KeySource,
+    /// `env` source: the environment variable that holds the key.
     #[serde(default = "default_at_rest_key_env")]
     pub key_env: String,
+    /// `file` source: the key file (0600, owned by the server's user).
+    /// Env: `PARACORD_AT_REST_KEY_FILE`.
+    #[serde(default)]
+    pub key_file: Option<String>,
+    /// `keychain` source: the credential's service name.
+    #[serde(default = "default_keychain_service")]
+    pub keychain_service: String,
+    /// `keychain` source: the credential's account name,
+    /// `host-storage-key:<instance_id>` for a desktop host.
+    #[serde(default)]
+    pub keychain_account: Option<String>,
+    /// What protects the key, recorded when it was stored (spec §4.2, §4.6).
+    #[serde(default)]
+    pub protection: Option<Protection>,
     #[serde(default = "default_false")]
     pub encrypt_sqlite: bool,
     #[serde(default = "default_false")]
@@ -469,7 +514,12 @@ impl Default for AtRestConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            key_source: default_at_rest_key_source(),
             key_env: default_at_rest_key_env(),
+            key_file: None,
+            keychain_service: default_keychain_service(),
+            keychain_account: None,
+            protection: None,
             encrypt_sqlite: false,
             encrypt_files: false,
             allow_plaintext_file_reads: false,
@@ -528,6 +578,10 @@ pub struct BackupConfig {
     pub max_backups: u32,
 }
 
+/// New configs back up daily and keep two weeks (setup spec §8.1). The serde
+/// defaults above are what a config file *without* these keys means (off, 10
+/// kept); they differ on purpose and are not changed, because changing a serde
+/// default would silently change existing installs.
 impl Default for BackupConfig {
     fn default() -> Self {
         Self {
@@ -535,8 +589,42 @@ impl Default for BackupConfig {
             auto_backup_enabled: true,
             auto_backup_interval_seconds: default_auto_backup_interval(),
             include_media: true,
-            max_backups: default_max_backups(),
+            max_backups: NEW_CONFIG_MAX_BACKUPS,
         }
+    }
+}
+
+/// `[host]`: this server runs as "Paracord on this computer" for the desktop
+/// app (setup spec §2.5, §2.7). Only the desktop-host profile turns it on.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct HostConfig {
+    /// Serve `/api/v1/host/*` to the desktop app on loopback, guarded by the
+    /// control token.
+    #[serde(default = "default_false")]
+    pub enabled: bool,
+    /// A UUID v4 naming this hosted instance (keychain account, escrow AAD).
+    #[serde(default)]
+    pub instance_id: Option<String>,
+    /// Written fresh (0600) at every start; the desktop app reads it.
+    #[serde(default)]
+    pub control_token_file: Option<String>,
+    /// `storage-key.escrow` (spec §4.7).
+    #[serde(default)]
+    pub escrow_file: Option<String>,
+}
+
+/// `[link_previews]` (setup spec §8.3).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LinkPreviewsConfig {
+    /// Unfurl links into previews, for authors who leave their own setting
+    /// on. Env: `PARACORD_LINK_PREVIEWS_ENABLED`.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+impl Default for LinkPreviewsConfig {
+    fn default() -> Self {
+        Self { enabled: true }
     }
 }
 
@@ -652,6 +740,20 @@ fn registration_mode_for_existing_configs() -> paracord_core::registration::Regi
 fn default_port_forward_lease_seconds() -> u32 {
     3600
 }
+fn default_reachability_retry_seconds() -> u64 {
+    60
+}
+/// A config with `[at_rest] enabled = true` from before key sources existed
+/// took its key from `key_env`; that is still what it means.
+fn default_at_rest_key_source() -> KeySource {
+    KeySource::Env
+}
+fn default_keychain_service() -> String {
+    "Paracord".into()
+}
+/// How many backups a newly generated config keeps (a config file without
+/// `max_backups` keeps [`default_max_backups`]).
+const NEW_CONFIG_MAX_BACKUPS: u32 = 14;
 fn default_storage_type() -> String {
     "local".into()
 }
@@ -803,6 +905,19 @@ fn validate_secret_configuration(config: &Config) -> Result<()> {
     Ok(())
 }
 
+/// `key = "value"` for a set optional string, or the same line commented out
+/// with an example when unset. Values are written as TOML basic strings.
+fn optional_string_line(key: &str, value: Option<&str>, example: &str) -> String {
+    match value {
+        Some(value) => format!("{key} = {}", toml_basic_string(value)),
+        None => format!("# {key} = {}", toml_basic_string(example)),
+    }
+}
+
+fn toml_basic_string(value: &str) -> String {
+    toml::Value::String(value.to_string()).to_string()
+}
+
 /// Generate a commented config file template with the given values filled in.
 fn generate_config_template(config: &Config) -> String {
     format!(
@@ -815,6 +930,10 @@ server_name = "{server_name}"
 permission_cache_max_entries = {permission_cache_max_entries}
 # Set explicitly for internet-facing deployments:
 # public_url = "https://your-domain-or-ip:8443"
+# With TLS on, bind_address answers plain HTTP with a redirect to HTTPS (and
+# serves ACME HTTP-01 challenges). false = no plain-HTTP listener at all.
+# Env override: PARACORD_REDIRECT_LISTENER
+redirect_listener = {redirect_listener}
 
 [database]
 engine = "{db_engine}"
@@ -941,15 +1060,20 @@ allow_discovery = {federation_allow_discovery}
 [network]
 # On Windows, optionally auto-create local firewall allow rules.
 windows_firewall_auto_allow = {windows_firewall_auto_allow}
-# Ask your router (UPnP / NAT-PMP) to let friends outside your home network reach
-# this server. false = only people on your home network can connect. Turn it on
-# here or in Admin -> Settings (restart the server afterwards). If you set up port
-# forwarding by hand or use a domain, leave it off (see docs/port-forwarding.md).
+# Ask your router (UPnP / NAT-PMP / PCP) to let friends outside your home network
+# reach this server. New configs turn this on; a config file without this line
+# means off. false = only people on your home network can connect. Change it here
+# or in Admin -> Settings (restart the server afterwards). If you set up port
+# forwarding by hand or use a domain, turn it off (see docs/port-forwarding.md).
 # Env override: PARACORD_AUTO_PORT_FORWARD
 auto_port_forward = {auto_port_forward}
 # How long each router entry lasts, in seconds. It is refreshed automatically
 # while the server runs. Env override: PARACORD_PORT_FORWARD_LEASE_SECONDS
 port_forward_lease_seconds = {port_forward_lease_seconds}
+# When the router refused, did not answer, or shares its public address with
+# others: how often to ask again, in seconds.
+# Env override: PARACORD_REACHABILITY_RETRY_SECONDS
+reachability_retry_seconds = {reachability_retry_seconds}
 
 [tls]
 # HTTPS support — required for getUserMedia() on non-localhost origins.
@@ -995,11 +1119,31 @@ batch_size = {retention_batch}
 # session_days = 90
 
 [at_rest]
-# Optional encryption-at-rest profile. Disabled by default.
+# Encrypt stored messages and files on this server's disk. Turned on when the
+# storage key has been generated and stored (installers, `init`, first run);
+# never true without a key the server can read.
+# Env override: PARACORD_AT_REST_ENABLED
 enabled = {at_rest_enabled}
-# Name of environment variable that contains the 32-byte master key
-# (hex or base64 encoded).
+# Where the 32-byte storage key lives:
+#   "keychain"      - the system keychain of the user the server runs as
+#   "systemd-creds" - a systemd credential (LoadCredentialEncrypted=paracord-at-rest-key:...)
+#   "file"          - key_file below (0600, owned by the server's user)
+#   "env"           - the environment variable named by key_env
+# A config with enabled = true and no key_source means "env". If the key cannot
+# be read at start, the server exits with status 78 and says why; it never
+# starts unencrypted.
+# Env override: PARACORD_AT_REST_KEY_SOURCE
+key_source = "{at_rest_key_source}"
+# "env": name of the environment variable that holds the key (hex or base64).
 key_env = "{at_rest_key_env}"
+# "file": path to the key file. Env override: PARACORD_AT_REST_KEY_FILE
+{at_rest_key_file}
+# "keychain": the keychain entry's service and account.
+keychain_service = "{at_rest_keychain_service}"
+{at_rest_keychain_account}
+# What protects the key: "login", "tpm", "machine" or "same_disk". Recorded when
+# the key is stored; shown to admins.
+{at_rest_protection}
 # SQLCipher mode for SQLite (requires SQLCipher-enabled SQLite build).
 encrypt_sqlite = {at_rest_encrypt_sqlite}
 # AES-256-GCM encryption for attachment payload bytes on disk.
@@ -1010,14 +1154,33 @@ allow_plaintext_file_reads = {at_rest_allow_plaintext}
 [backup]
 # Backup configuration.
 backup_dir = "{backup_dir}"
-# Enable automatic periodic backups.
+# Enable automatic periodic backups. New configs turn this on; a config file
+# without this line means off. Admin -> Settings can change it while the server
+# runs, and that saved choice then takes precedence over this line.
 auto_backup_enabled = {backup_auto_enabled}
 # Interval between automatic backups in seconds (default: 86400 = 24h).
 auto_backup_interval_seconds = {backup_interval}
 # Include media files (uploads, files) in backups.
 include_media = {backup_include_media}
-# Maximum number of backups to keep (oldest are pruned).
+# Maximum number of backups to keep (oldest are pruned). New configs keep 14; a
+# config file without this line keeps 10.
 max_backups = {backup_max_backups}
+
+[link_previews]
+# Turn links into previews (title, description, image). The server fetches the
+# linked page itself, and only for people who leave "Link previews" on in their
+# own settings. Encrypted direct messages never get previews.
+# Env override: PARACORD_LINK_PREVIEWS_ENABLED
+enabled = {link_previews_enabled}
+
+[host]
+# "Paracord on this computer": set only by `init --profile desktop-host`, for a
+# server the desktop app runs in the background. It serves the app's control
+# routes on loopback, guarded by a token file rewritten at every start.
+enabled = {host_enabled}
+{host_instance_id}
+{host_control_token_file}
+{host_escrow_file}
 
 [ai]
 # Optional AI provider configuration used by summarize/catch-up features.
@@ -1030,6 +1193,7 @@ timeout_seconds = {ai_timeout_seconds}
 "#,
         bind_address = config.server.bind_address,
         server_name = config.server.server_name,
+        redirect_listener = config.server.redirect_listener,
         permission_cache_max_entries = config.server.permission_cache_max_entries,
         db_engine = match config.database.engine {
             DatabaseEngine::Sqlite => "sqlite",
@@ -1072,6 +1236,7 @@ timeout_seconds = {ai_timeout_seconds}
         windows_firewall_auto_allow = config.network.windows_firewall_auto_allow,
         auto_port_forward = config.network.auto_port_forward,
         port_forward_lease_seconds = config.network.port_forward_lease_seconds,
+        reachability_retry_seconds = config.network.reachability_retry_seconds,
         tls_enabled = config.tls.enabled,
         tls_port = config.tls.port,
         tls_cert = config.tls.cert_path,
@@ -1090,6 +1255,23 @@ timeout_seconds = {ai_timeout_seconds}
         retention_batch = config.retention.batch_size,
         at_rest_enabled = config.at_rest.enabled,
         at_rest_key_env = config.at_rest.key_env,
+        at_rest_key_source = config.at_rest.key_source.as_str(),
+        at_rest_key_file = optional_string_line(
+            "key_file",
+            config.at_rest.key_file.as_deref(),
+            "/path/to/at-rest.key"
+        ),
+        at_rest_keychain_service = config.at_rest.keychain_service,
+        at_rest_keychain_account = optional_string_line(
+            "keychain_account",
+            config.at_rest.keychain_account.as_deref(),
+            "host-storage-key:<instance_id>",
+        ),
+        at_rest_protection = optional_string_line(
+            "protection",
+            config.at_rest.protection.map(Protection::as_str),
+            "same_disk",
+        ),
         at_rest_encrypt_sqlite = config.at_rest.encrypt_sqlite,
         at_rest_encrypt_files = config.at_rest.encrypt_files,
         at_rest_allow_plaintext = config.at_rest.allow_plaintext_file_reads,
@@ -1098,6 +1280,23 @@ timeout_seconds = {ai_timeout_seconds}
         backup_interval = config.backup.auto_backup_interval_seconds,
         backup_include_media = config.backup.include_media,
         backup_max_backups = config.backup.max_backups,
+        link_previews_enabled = config.link_previews.enabled,
+        host_enabled = config.host.enabled,
+        host_instance_id = optional_string_line(
+            "instance_id",
+            config.host.instance_id.as_deref(),
+            "00000000-0000-4000-8000-000000000000",
+        ),
+        host_control_token_file = optional_string_line(
+            "control_token_file",
+            config.host.control_token_file.as_deref(),
+            "/path/to/config/host-control.token",
+        ),
+        host_escrow_file = optional_string_line(
+            "escrow_file",
+            config.host.escrow_file.as_deref(),
+            "/path/to/storage-key.escrow",
+        ),
         ai_timeout_seconds = config.ai.timeout_seconds,
     )
 }
@@ -1171,6 +1370,11 @@ impl Config {
         }
         if let Ok(value) = std::env::var("PARACORD_WEB_DIR") {
             config.server.web_dir = Some(value);
+        }
+        if let Ok(value) = std::env::var("PARACORD_REDIRECT_LISTENER") {
+            if let Ok(parsed) = value.parse::<bool>() {
+                config.server.redirect_listener = parsed;
+            }
         }
         if let Ok(value) = std::env::var("PARACORD_PUBLIC_URL") {
             config.server.public_url = Some(value);
@@ -1348,6 +1552,13 @@ impl Config {
         if let Ok(value) = std::env::var("PARACORD_PORT_FORWARD_LEASE_SECONDS") {
             if let Ok(parsed) = value.parse::<u32>() {
                 config.network.port_forward_lease_seconds = parsed;
+            }
+        }
+        if let Ok(value) = std::env::var("PARACORD_REACHABILITY_RETRY_SECONDS") {
+            if let Ok(parsed) = value.parse::<u64>() {
+                if parsed > 0 {
+                    config.network.reachability_retry_seconds = parsed;
+                }
             }
         }
         if let Ok(value) = std::env::var("PARACORD_TLS_ENABLED") {
@@ -1538,6 +1749,20 @@ impl Config {
                 config.at_rest.key_env = value;
             }
         }
+        if let Ok(value) = std::env::var("PARACORD_AT_REST_KEY_SOURCE") {
+            // The key source decides where the storage key is read from; a typo
+            // must stop the server, not pick another source.
+            config.at_rest.key_source = KeySource::parse(&value).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "PARACORD_AT_REST_KEY_SOURCE is '{value}'; it must be \"keychain\", \"systemd-creds\", \"file\" or \"env\""
+                )
+            })?;
+        }
+        if let Ok(value) = std::env::var("PARACORD_AT_REST_KEY_FILE") {
+            if !value.trim().is_empty() {
+                config.at_rest.key_file = Some(value);
+            }
+        }
         if let Ok(value) = std::env::var("PARACORD_AT_REST_ENCRYPT_SQLITE") {
             if let Ok(parsed) = value.parse::<bool>() {
                 config.at_rest.encrypt_sqlite = parsed;
@@ -1551,6 +1776,11 @@ impl Config {
         if let Ok(value) = std::env::var("PARACORD_AT_REST_ALLOW_PLAINTEXT_FILE_READS") {
             if let Ok(parsed) = value.parse::<bool>() {
                 config.at_rest.allow_plaintext_file_reads = parsed;
+            }
+        }
+        if let Ok(value) = std::env::var("PARACORD_LINK_PREVIEWS_ENABLED") {
+            if let Ok(parsed) = value.parse::<bool>() {
+                config.link_previews.enabled = parsed;
             }
         }
         if let Ok(value) = std::env::var("PARACORD_BACKUP_DIR") {
@@ -1851,26 +2081,27 @@ mod tests {
         assert!(config.s3.use_aws_credential_chain);
     }
 
-    /// A new server does not open the owner's home network to the internet
-    /// unless they chose it (the installers ask, and the admin page can).
+    /// A new server asks the router (setup spec §8.1); the setup screen and
+    /// Settings say exactly what the router answered.
     #[test]
-    fn asking_the_router_is_off_by_default() {
+    fn a_new_config_asks_the_router() {
         let config = Config::default();
-        assert!(!config.network.auto_port_forward);
+        assert!(config.network.auto_port_forward);
         assert_eq!(config.network.port_forward_lease_seconds, 3600);
+        assert_eq!(config.network.reachability_retry_seconds, 60);
     }
 
-    /// An existing config that turned it on keeps it, and one that never
-    /// mentioned it reads as off.
+    /// An existing config keeps whatever it says, and one that never
+    /// mentioned it reads as off: an upgrade never starts asking a router.
     #[test]
     fn an_existing_config_keeps_its_router_choice() {
-        let mut on = generate_config_template(&Config::default());
-        on = on.replace("auto_port_forward = false", "auto_port_forward = true");
-        let parsed: Config = toml::from_str(&on).expect("template must parse");
-        assert!(parsed.network.auto_port_forward);
+        let template = generate_config_template(&Config::default());
+        let off = template.replace("auto_port_forward = true", "auto_port_forward = false");
+        let parsed: Config = toml::from_str(&off).expect("template must parse");
+        assert!(!parsed.network.auto_port_forward);
 
-        let without_key =
-            generate_config_template(&Config::default()).replace("auto_port_forward = false\n", "");
+        let without_key = template.replace("auto_port_forward = true\n", "");
+        assert!(!without_key.contains("auto_port_forward ="));
         let parsed: Config = toml::from_str(&without_key).expect("template must parse");
         assert!(!parsed.network.auto_port_forward);
     }
@@ -1934,7 +2165,7 @@ mod tests {
     fn generated_config_documents_and_round_trips_auto_port_forward() {
         let template = generate_config_template(&Config::default());
         assert!(
-            template.contains("auto_port_forward = false"),
+            template.contains("auto_port_forward = true"),
             "generated config must set the option explicitly:\n{template}"
         );
         assert!(
@@ -1946,7 +2177,7 @@ mod tests {
             "generated config must set the lease:\n{template}"
         );
         let parsed: Config = toml::from_str(&template).expect("template must round-trip");
-        assert!(!parsed.network.auto_port_forward);
+        assert!(parsed.network.auto_port_forward);
         assert_eq!(parsed.network.port_forward_lease_seconds, 3600);
     }
 
@@ -1973,15 +2204,203 @@ mod tests {
         assert!(on.network.auto_port_forward);
         assert_eq!(on.network.port_forward_lease_seconds, 3600);
 
-        // A value that is not a boolean must leave the file's value alone
-        // rather than silently turning the feature on.
+        // A value that is not a boolean leaves the file's value alone (a new
+        // file says true).
         std::env::set_var("PARACORD_AUTO_PORT_FORWARD", "maybe");
         let junk_path = temp.path().join("junk.toml");
+        let junk =
+            Config::load(junk_path.to_str().expect("config path utf8")).expect("load config");
+        assert!(junk.network.auto_port_forward);
+        std::fs::write(
+            &junk_path,
+            std::fs::read_to_string(&junk_path)
+                .expect("read config")
+                .replace("auto_port_forward = true", "auto_port_forward = false"),
+        )
+        .expect("write config");
         let junk =
             Config::load(junk_path.to_str().expect("config path utf8")).expect("load config");
         assert!(!junk.network.auto_port_forward);
 
         std::env::remove_var("PARACORD_AUTO_PORT_FORWARD");
         std::env::remove_var("PARACORD_JWT_SECRET");
+    }
+
+    /// Setup spec §8.1: what a generated config says, and what a config file
+    /// from before these keys existed means.
+    #[test]
+    fn first_run_defaults_differ_for_new_and_existing_configs() {
+        use paracord_contracts::host::KeySource;
+        let template = generate_config_template(&Config::default());
+        let new: Config = toml::from_str(&template).expect("template must round-trip");
+        assert!(new.backup.auto_backup_enabled);
+        assert_eq!(new.backup.max_backups, 14);
+        assert_eq!(new.backup.auto_backup_interval_seconds, 86400);
+        assert!(new.network.auto_port_forward);
+        assert_eq!(new.network.reachability_retry_seconds, 60);
+        assert!(new.server.redirect_listener);
+        assert!(new.link_previews.enabled);
+        assert!(!new.host.enabled);
+        assert_eq!(new.host.instance_id, None);
+        // Stored-data encryption is written on only once a key exists (§4.3).
+        assert!(!new.at_rest.enabled);
+        assert_eq!(new.at_rest.keychain_service, "Paracord");
+
+        // An existing file with none of the new keys and no [backup] values.
+        let mut old = String::new();
+        let mut section = "";
+        for line in template.lines() {
+            if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+                section = if name == "host" || name == "link_previews" {
+                    "skip"
+                } else {
+                    name
+                };
+                if section == "skip" {
+                    continue;
+                }
+            }
+            if section == "skip" {
+                continue;
+            }
+            let key = line.split('=').next().unwrap_or("").trim();
+            let dropped = matches!(
+                (section, key),
+                ("server", "redirect_listener")
+                    | ("network", "auto_port_forward")
+                    | ("network", "reachability_retry_seconds")
+                    | ("backup", "auto_backup_enabled")
+                    | ("backup", "max_backups")
+                    | ("backup", "auto_backup_interval_seconds")
+                    | ("at_rest", "key_source")
+                    | ("at_rest", "keychain_service")
+            );
+            if !dropped {
+                old.push_str(line);
+                old.push('\n');
+            }
+        }
+        assert!(!old.contains("[host]") && !old.contains("max_backups ="));
+        let existing: Config = toml::from_str(&old).expect("an old config must parse");
+        assert!(!existing.backup.auto_backup_enabled);
+        assert_eq!(existing.backup.max_backups, 10);
+        assert_eq!(existing.backup.auto_backup_interval_seconds, 86400);
+        assert!(!existing.network.auto_port_forward);
+        assert_eq!(existing.network.reachability_retry_seconds, 60);
+        assert!(existing.server.redirect_listener);
+        assert!(existing.link_previews.enabled);
+        assert!(!existing.host.enabled);
+        assert!(!existing.at_rest.enabled);
+        assert_eq!(existing.at_rest.key_source, KeySource::Env);
+        assert_eq!(existing.at_rest.keychain_service, "Paracord");
+    }
+
+    /// The desktop-host profile's values survive the template: set options
+    /// are written, unset ones are left as commented examples.
+    #[test]
+    fn host_and_key_source_values_round_trip_through_the_template() {
+        use paracord_contracts::host::{KeySource, Protection};
+        let mut config = Config::default();
+        config.server.redirect_listener = false;
+        config.at_rest.enabled = true;
+        config.at_rest.key_source = KeySource::Keychain;
+        config.at_rest.keychain_account =
+            Some("host-storage-key:7c1f0b6e-4a8e-4f8e-9a51-2d6c1f0b6e4a".into());
+        config.at_rest.protection = Some(Protection::Login);
+        config.at_rest.key_file = Some(r"C:\Users\sam\AppData\at-rest.key".into());
+        config.host.enabled = true;
+        config.host.instance_id = Some("7c1f0b6e-4a8e-4f8e-9a51-2d6c1f0b6e4a".into());
+        config.host.control_token_file = Some("/home/sam/host/config/host-control.token".into());
+        config.host.escrow_file = Some("/home/sam/host/storage-key.escrow".into());
+        config.link_previews.enabled = false;
+        let template = generate_config_template(&config);
+        assert!(template.contains("key_source = \"keychain\""), "{template}");
+        let parsed: Config = toml::from_str(&template).expect("template must round-trip");
+        assert!(!parsed.server.redirect_listener);
+        assert!(parsed.at_rest.enabled);
+        assert_eq!(parsed.at_rest.key_source, KeySource::Keychain);
+        assert_eq!(
+            parsed.at_rest.keychain_account,
+            config.at_rest.keychain_account
+        );
+        assert_eq!(parsed.at_rest.protection, Some(Protection::Login));
+        assert_eq!(parsed.at_rest.key_file, config.at_rest.key_file);
+        assert!(parsed.host.enabled);
+        assert_eq!(parsed.host.instance_id, config.host.instance_id);
+        assert_eq!(
+            parsed.host.control_token_file,
+            config.host.control_token_file
+        );
+        assert_eq!(parsed.host.escrow_file, config.host.escrow_file);
+        assert!(!parsed.link_previews.enabled);
+
+        let unset = generate_config_template(&Config::default());
+        assert!(unset.contains("# instance_id = "));
+        assert!(unset.contains("# key_file = "));
+        let systemd = unset.replace("key_source = \"env\"", "key_source = \"systemd-creds\"");
+        let parsed: Config = toml::from_str(&systemd).expect("systemd-creds parses");
+        assert_eq!(parsed.at_rest.key_source, KeySource::SystemdCreds);
+        let typo = unset.replace("key_source = \"env\"", "key_source = \"systemd_creds\"");
+        assert!(
+            toml::from_str::<Config>(&typo).is_err(),
+            "an unknown key source must be refused"
+        );
+    }
+
+    #[test]
+    fn the_template_names_every_new_env_override() {
+        let template = generate_config_template(&Config::default());
+        for name in [
+            "PARACORD_AT_REST_KEY_SOURCE",
+            "PARACORD_AT_REST_KEY_FILE",
+            "PARACORD_LINK_PREVIEWS_ENABLED",
+            "PARACORD_REDIRECT_LISTENER",
+            "PARACORD_REACHABILITY_RETRY_SECONDS",
+        ] {
+            assert!(template.contains(name), "template must document {name}");
+        }
+    }
+
+    #[test]
+    fn env_overrides_set_the_first_run_options_and_refuse_an_unknown_key_source() {
+        use paracord_contracts::host::KeySource;
+        let _guard = ENV_LOCK.lock().expect("env lock poisoned");
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::env::set_var("PARACORD_JWT_SECRET", "0123456789abcdef0123456789abcdef");
+        std::env::set_var("PARACORD_AT_REST_KEY_SOURCE", "file");
+        std::env::set_var("PARACORD_AT_REST_KEY_FILE", "/srv/paracord/at-rest.key");
+        std::env::set_var("PARACORD_LINK_PREVIEWS_ENABLED", "false");
+        std::env::set_var("PARACORD_REDIRECT_LISTENER", "false");
+        std::env::set_var("PARACORD_REACHABILITY_RETRY_SECONDS", "300");
+        let path = temp.path().join("env.toml");
+        let loaded = Config::load(path.to_str().expect("utf8"));
+
+        std::env::set_var("PARACORD_AT_REST_KEY_SOURCE", "vault");
+        let refused = Config::load(path.to_str().expect("utf8"));
+
+        for name in [
+            "PARACORD_AT_REST_KEY_SOURCE",
+            "PARACORD_AT_REST_KEY_FILE",
+            "PARACORD_LINK_PREVIEWS_ENABLED",
+            "PARACORD_REDIRECT_LISTENER",
+            "PARACORD_REACHABILITY_RETRY_SECONDS",
+            "PARACORD_JWT_SECRET",
+        ] {
+            std::env::remove_var(name);
+        }
+        let config = loaded.expect("load config");
+        assert_eq!(config.at_rest.key_source, KeySource::File);
+        assert_eq!(
+            config.at_rest.key_file.as_deref(),
+            Some("/srv/paracord/at-rest.key")
+        );
+        assert!(!config.link_previews.enabled);
+        assert!(!config.server.redirect_listener);
+        assert_eq!(config.network.reachability_retry_seconds, 300);
+        let err = refused.expect_err("an unknown key source must stop the server");
+        assert!(
+            err.to_string().contains("PARACORD_AT_REST_KEY_SOURCE"),
+            "{err}"
+        );
     }
 }

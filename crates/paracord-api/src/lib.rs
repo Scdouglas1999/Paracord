@@ -218,6 +218,27 @@ pub fn build_router(state: &AppState) -> Router<AppState> {
             get(routes::setup::password_requirements),
         )
         .route("/api/v1/setup/claim", post(routes::setup::claim_instance))
+        // First-run setup: one password (docs/setup-spec.md §3, §9.1).
+        .route(
+            "/api/v1/setup/credential-claim",
+            post(routes::credential::claim),
+        )
+        .route(
+            "/api/v1/auth/credential/params",
+            post(routes::credential::params),
+        )
+        .route(
+            "/api/v1/auth/credential/register",
+            post(routes::credential::register),
+        )
+        .route(
+            "/api/v1/auth/credential/login",
+            post(routes::credential::login),
+        )
+        .route(
+            "/api/v1/auth/credential/upgrade",
+            post(routes::credential::upgrade),
+        )
         .route("/api/v1/auth/refresh", post(routes::auth::refresh))
         .route("/api/v1/auth/logout", post(routes::auth::logout))
         .route("/api/v1/auth/challenge", post(routes::auth::challenge))
@@ -280,6 +301,22 @@ pub fn build_router(state: &AppState) -> Router<AppState> {
         .route(
             "/api/v1/users/@me/password",
             put(routes::users::change_password),
+        )
+        .route(
+            "/api/v1/users/@me/credential",
+            put(routes::credential::change),
+        )
+        .route(
+            "/api/v1/users/@me/credential/reset",
+            post(routes::credential::reset),
+        )
+        .route(
+            "/api/v1/users/@me/key-backup",
+            get(routes::credential::get_key_backup),
+        )
+        .route(
+            "/api/v1/users/@me/key-backup/recovery-confirmed",
+            post(routes::credential::recovery_confirmed),
         )
         .route("/api/v1/users/@me/email", put(routes::users::change_email))
         .route(
@@ -1186,11 +1223,39 @@ pub fn build_router(state: &AppState) -> Router<AppState> {
         )
         // Admin backups
         .route("/api/v1/admin/backup", post(routes::admin::create_backup))
-        .route("/api/v1/admin/backups", get(routes::admin::list_backups))
+        .route(
+            "/api/v1/admin/backups",
+            get(routes::admin::list_backups).patch(routes::host_status::update_backups),
+        )
         .route("/api/v1/admin/restore", post(routes::admin::restore_backup))
         .route(
             "/api/v1/admin/backups/{name}",
             get(routes::admin::download_backup).delete(routes::admin::delete_backup),
+        )
+        // Instance status for admins (docs/setup-spec.md §4.7, §5.5, §9.1)
+        .route(
+            "/api/v1/admin/host-status",
+            get(routes::host_status::get_host_status),
+        )
+        .route(
+            "/api/v1/admin/reachability/retry",
+            post(routes::host_status::retry_reachability),
+        )
+        .route(
+            "/api/v1/admin/storage-key/escrow",
+            post(routes::host_status::write_escrow),
+        )
+        // "Paracord on this computer": the desktop app's control routes
+        // (loopback + host token, docs/setup-spec.md §2.5)
+        .route("/api/v1/host/status", get(routes::host::status))
+        .route(
+            "/api/v1/host/reachability/retry",
+            post(routes::host::retry_reachability),
+        )
+        .route("/api/v1/host/backup-now", post(routes::host::backup_now))
+        .route(
+            "/api/v1/host/storage-key/escrow",
+            post(routes::host::write_escrow),
         )
         // LiveKit reverse proxy (voice signaling + Twirp API on the same port)
         .route(

@@ -53,6 +53,15 @@ describe('the older-server record', () => {
     expect(serverLacks('B', 'listenIn')).toBe(true);
   });
 
+  it('names the server when the first run refuses an older one', () => {
+    expect(olderServerReason('oneCredential', 'Friday Night Crew')).toBe(
+      'Friday Night Crew runs an older version of Paracord. Ask the person who runs it to update, then try again.',
+    );
+    expect(olderServerReason('oneCredential')).toMatch(/^This server runs an older version of Paracord\. Ask/);
+    expect(olderServerReason('hostStatus', '  ')).toMatch(/^This server runs an older version/);
+    expect(new OlderServerError('oneCredential').message).toBe(olderServerReason('oneCredential'));
+  });
+
   it('says what is missing and what to do', () => {
     expect(new OlderServerError('voiceViews').message).toBe(olderServerReason('voiceViews'));
     expect(olderServerReason('voiceViews')).toMatch(/older version of Paracord\. Join the call to watch\.$/);

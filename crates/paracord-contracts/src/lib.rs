@@ -2,8 +2,10 @@
 //! and OpenAPI. Database rows and client-only state are intentionally separate.
 
 pub mod channel;
+pub mod credential;
 pub mod emoji;
 pub mod guild;
+pub mod host;
 pub mod invite;
 pub mod relationship;
 pub mod user;
@@ -187,6 +189,85 @@ pub fn schemas() -> Value {
     schemas.insert(
         "VoiceWatchers".into(),
         response_schema::<voice::VoiceWatchers>(),
+    );
+    // First-run setup: one password (spec §3, §9.1).
+    schemas.insert(
+        "CredentialParamsRequest".into(),
+        request_schema::<credential::CredentialParamsRequest>(),
+    );
+    schemas.insert(
+        "CredentialParams".into(),
+        response_schema::<credential::CredentialParams>(),
+    );
+    schemas.insert(
+        "CredentialRegister".into(),
+        request_schema::<credential::CredentialRegister>(),
+    );
+    schemas.insert(
+        "CredentialLoginRequest".into(),
+        request_schema::<credential::CredentialLoginRequest>(),
+    );
+    schemas.insert(
+        "CredentialUpgradeRequest".into(),
+        request_schema::<credential::CredentialUpgradeRequest>(),
+    );
+    schemas.insert(
+        "ChangeCredentialRequest".into(),
+        request_schema::<credential::ChangeCredentialRequest>(),
+    );
+    schemas.insert(
+        "ResetCredentialRequest".into(),
+        request_schema::<credential::ResetCredentialRequest>(),
+    );
+    schemas.insert(
+        "CredentialEmailResetRequest".into(),
+        request_schema::<credential::CredentialEmailResetRequest>(),
+    );
+    schemas.insert(
+        "CredentialEpochResponse".into(),
+        response_schema::<credential::CredentialEpochResponse>(),
+    );
+    schemas.insert(
+        "KeyBackup".into(),
+        response_schema::<credential::KeyBackup>(),
+    );
+    schemas.insert(
+        "NewOwnerClaim".into(),
+        request_schema::<credential::NewOwnerClaim>(),
+    );
+    schemas.insert(
+        "CredentialClaimRequest".into(),
+        request_schema::<credential::CredentialClaimRequest>(),
+    );
+    schemas.insert(
+        "PasswordRequirements".into(),
+        response_schema::<credential::PasswordRequirements>(),
+    );
+    // First-run setup: hosting and instance status (spec §2, §4, §5, §9.5).
+    schemas.insert("HostStatus".into(), response_schema::<host::HostStatus>());
+    schemas.insert(
+        "InstanceStatusUpdate".into(),
+        response_schema::<host::InstanceStatusUpdate>(),
+    );
+    schemas.insert(
+        "StorageKeyEscrowRequest".into(),
+        request_schema::<host::StorageKeyEscrowRequest>(),
+    );
+    schemas.insert(
+        "UpdateBackupsRequest".into(),
+        request_schema::<host::UpdateBackupsRequest>(),
+    );
+    schemas.insert(
+        "BackupNowResponse".into(),
+        response_schema::<host::BackupNowResponse>(),
+    );
+    schemas.insert(
+        "HostPreflight".into(),
+        response_schema::<host::HostPreflight>(),
+    );
+    schemas.insert(
+        "HostProgress".into(),
+        response_schema::<host::HostProgress>(),
     );
     for (name, schema) in &mut schemas {
         schema["title"] = json!(name);
@@ -463,5 +544,90 @@ mod tests {
         }
         assert_eq!(properties["created_at"]["type"], json!("string"));
         assert_eq!(properties["created_at"]["minLength"], json!(1));
+    }
+
+    #[test]
+    fn first_run_contracts_are_exported_with_their_wire_shapes() {
+        let schemas = schemas();
+        let params = &schemas["schemas"]["CredentialParams"];
+        let variants = params["oneOf"].as_array().unwrap();
+        assert_eq!(variants[0]["properties"]["version"]["const"], json!(1));
+        assert_eq!(variants[1]["properties"]["version"]["const"], json!(2));
+        assert_eq!(
+            variants[1]["required"],
+            json!(["version", "kdf", "salt", "epoch"])
+        );
+
+        let backup = &schemas["schemas"]["KeyBackup"];
+        let required = backup["required"].as_array().unwrap();
+        for name in [
+            "public_key",
+            "wrapped_key",
+            "wrap_alg",
+            "epoch",
+            "recovery_confirmed",
+        ] {
+            assert!(required.contains(&json!(name)), "KeyBackup: {name}");
+        }
+
+        let claim = &schemas["schemas"]["CredentialClaimRequest"];
+        let claim_properties = claim["properties"].as_object().unwrap();
+        for name in [
+            "token",
+            "username",
+            "credential",
+            "identity",
+            "initial_space_hue",
+            "initial_space_template",
+        ] {
+            assert!(claim_properties.contains_key(name), "claim: {name}");
+        }
+        assert!(
+            !claim_properties.contains_key("password"),
+            "the credential claim never carries a password"
+        );
+
+        let status = &schemas["schemas"]["HostStatus"];
+        for name in [
+            "version",
+            "started_at",
+            "setup_required",
+            "storage",
+            "reachability",
+            "backups",
+            "tls",
+        ] {
+            assert!(
+                status["required"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!(name)),
+                "HostStatus: {name}"
+            );
+        }
+
+        // Older servers: the invite card's new fields may be absent.
+        let preview = &schemas["schemas"]["InvitePreview"];
+        let required = preview["required"].as_array().unwrap();
+        for name in ["faces", "expires_at", "instance"] {
+            assert!(!required.contains(&json!(name)), "optional: {name}");
+            assert!(preview["properties"].get(name).is_some(), "present: {name}");
+        }
+        assert!(required.contains(&json!("code")));
+        let older: invite::InviteGuildPreview = serde_json::from_value(json!({
+            "id": "1", "name": "Space", "icon_hash": null, "member_count": 2
+        }))
+        .unwrap();
+        assert_eq!(older.hue, None);
+        assert_eq!(older.online_count, 0);
+
+        let requirements = &schemas["schemas"]["PasswordRequirements"];
+        assert!(!requirements["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("enforced_by")));
+
+        let settings = &schemas["schemas"]["UpdateSettingsRequest"];
+        assert!(settings["properties"].get("link_previews").is_some());
     }
 }

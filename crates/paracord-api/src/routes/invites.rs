@@ -6,7 +6,7 @@ use axum::{
 use chrono::Utc;
 use paracord_contracts::invite::{
     AcceptInviteRequest, CreateInviteRequest, GuildInvite, InviteAcceptGuild, InviteAcceptResponse,
-    InviteGuildPreview, InviteJoinGate, InvitePreview,
+    InviteGuildPreview, InviteInstance, InviteJoinGate, InvitePreview,
 };
 use paracord_core::AppState;
 use paracord_federation::client::{FederationInviteRequest, FederationJoinRequest};
@@ -331,6 +331,41 @@ pub async fn get_invite(
         .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
         .and_then(|settings| join_gate_preview(&settings));
 
+    // First-run contract fields (setup spec §6.1). S0 fills what is already
+    // known; S9 adds the faces query and owns this handler. `credential_version`
+    // stays 1 until the one-password routes exist (S2 sets 2).
+    let online_count = space_id
+        .map(|sid| {
+            state
+                .member_index
+                .members_of(sid)
+                .into_iter()
+                .filter(|user_id| state.online_users.contains(user_id))
+                .count()
+        })
+        .unwrap_or(0);
+    let online_count = u32::try_from(online_count)
+        .map_err(|_| ApiError::Internal(anyhow::anyhow!("Invalid online count")))?;
+    let expires_at = invite
+        .max_age
+        .filter(|age| *age > 0)
+        .map(|age| (invite.created_at + chrono::Duration::seconds(i64::from(age))).to_rfc3339());
+    let instance = {
+        let runtime = state.runtime.read().await;
+        let setup = paracord_db::instance_setup::get(&state.db)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+        InviteInstance {
+            name: setup
+                .instance_name
+                .unwrap_or_else(|| runtime.server_name.clone()),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            credential_version: 1,
+            registration_mode: runtime.registration_mode.into(),
+            require_email: state.config.require_email,
+        }
+    };
+
     Ok(Json(InvitePreview {
         code: invite.code.clone(),
         join_gate,
@@ -339,7 +374,12 @@ pub async fn get_invite(
             name: g.name.clone(),
             icon_hash: g.icon_hash.clone(),
             member_count,
+            hue: g.hue.and_then(|hue| i16::try_from(hue).ok()),
+            online_count,
         }),
+        faces: Vec::new(),
+        expires_at,
+        instance,
     }))
 }
 

@@ -37,6 +37,25 @@ impl RegistrationMode {
     }
 }
 
+/// The wire spelling (invite previews, the credential claim). Same values.
+impl From<RegistrationMode> for paracord_contracts::credential::RegistrationMode {
+    fn from(mode: RegistrationMode) -> Self {
+        match mode {
+            RegistrationMode::Open => Self::Open,
+            RegistrationMode::InviteOnly => Self::InviteOnly,
+        }
+    }
+}
+
+impl From<paracord_contracts::credential::RegistrationMode> for RegistrationMode {
+    fn from(mode: paracord_contracts::credential::RegistrationMode) -> Self {
+        match mode {
+            paracord_contracts::credential::RegistrationMode::Open => Self::Open,
+            paracord_contracts::credential::RegistrationMode::InviteOnly => Self::InviteOnly,
+        }
+    }
+}
+
 /// What a refused invite-less registration is told.
 pub const INVITE_REQUIRED_MESSAGE: &str =
     "This server is invite-only. Ask the person who runs it for an invite link.";

@@ -160,6 +160,10 @@ pub struct UpdateSettingsRequest {
     pub crypto_auth_enabled: Option<bool>,
     pub notifications: Option<Value>,
     pub keybinds: Option<Value>,
+    /// Whether links this person posts are unfurled into previews, and whether
+    /// they see previews (spec §8.3). Stored in `user_settings.link_previews`.
+    #[serde(default)]
+    pub link_previews: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]

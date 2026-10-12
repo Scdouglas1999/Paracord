@@ -426,14 +426,12 @@ async fn pre_feed_migration_marks_unprovable_history_without_inventing_envelopes
             .collect(),
     );
     previous.run(&app.db).await.unwrap();
-    paracord_db::users::create_user(
-        &app.db,
-        59001,
-        "legacy-recovery",
-        1,
-        "legacy-recovery@example.com",
-        "hash",
+    // Raw SQL: this schema predates `users.credential_version`.
+    sqlx::query(
+        "INSERT INTO users (id, username, discriminator, email, password_hash)
+         VALUES (59001, 'legacy-recovery', 1, 'legacy-recovery@example.com', 'hash')",
     )
+    .execute(&app.db)
     .await
     .unwrap();
     sqlx::query("INSERT INTO channels(id, channel_type) VALUES(59002, 1)")

@@ -616,7 +616,14 @@ async fn the_index_migration_backfills_voice_states_in_progress() -> anyhow::Res
 
     // The schema as it stood: no hue, no joined_at.
     let (user_id, guild_id, channel_id) = (9_100_000_001_i64, 9_100_000_002_i64, 9_100_000_003_i64);
-    paracord_db::users::create_user(db, user_id, "caller", 1, "caller@example.com", "hash").await?;
+    // Raw SQL: this schema also predates `users.credential_version`.
+    sqlx::query(
+        "INSERT INTO users (id, username, discriminator, email, password_hash)
+         VALUES ($1, 'caller', 1, 'caller@example.com', 'hash')",
+    )
+    .bind(user_id)
+    .execute(db)
+    .await?;
     sqlx::query(
         "INSERT INTO spaces (id, name, owner_id, visibility) VALUES ($1, $2, $3, 'private')",
     )

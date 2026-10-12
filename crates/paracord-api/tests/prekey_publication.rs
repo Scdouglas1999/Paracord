@@ -234,14 +234,12 @@ async fn ownership_migration_preserves_existing_signed_keys_and_their_timestamps
             .collect(),
     );
     previous.run(&app.db).await.unwrap();
-    paracord_db::users::create_user(
-        &app.db,
-        70001,
-        "oldkeyowner",
-        1,
-        "oldkeys@example.com",
-        "hash",
+    // Raw SQL: this schema predates `users.credential_version`.
+    sqlx::query(
+        "INSERT INTO users (id, username, discriminator, email, password_hash)
+         VALUES (70001, 'oldkeyowner', 1, 'oldkeys@example.com', 'hash')",
     )
+    .execute(&app.db)
     .await
     .unwrap();
     let original = paracord_db::prekeys::upsert_signed_prekey(

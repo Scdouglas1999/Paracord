@@ -15,6 +15,7 @@ arc-swap = { workspace = true }
 paracord-models = { workspace = true }
 paracord-db = { workspace = true }
 paracord-util = { workspace = true }
+paracord-contracts = { workspace = true }
 paracord-media = { workspace = true }
 paracord-federation = { workspace = true }
 paracord-relay = { workspace = true, optional = true }

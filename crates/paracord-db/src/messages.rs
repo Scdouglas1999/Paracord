@@ -2096,11 +2096,12 @@ mod tests {
         let user_id = 1;
         let guild_id = 100;
         let channel_id = 200;
-        crate::users::create_user(pool, user_id, "author", 1, "author@example.com", "hash")
-            .await
-            .unwrap();
-        // Raw SQL, not `guilds::create_guild`: the migration tests call this on a
-        // schema that predates later `spaces` columns (Index's `hue`).
+        // Raw SQL, not `users::create_user` / `guilds::create_guild`: the
+        // migration tests call this on a schema that predates later `users`
+        // columns (first-run setup's `credential_version`) and `spaces`
+        // columns (Index's `hue`).
+        sqlx::query("INSERT INTO users (id, username, discriminator, email, password_hash) VALUES ($1, 'author', 1, 'author@example.com', 'hash')")
+            .bind(user_id).execute(pool).await.unwrap();
         sqlx::query("INSERT INTO spaces (id, name, owner_id, visibility) VALUES ($1, 'Test Guild', $2, 'private')")
             .bind(guild_id).bind(user_id).execute(pool).await.unwrap();
         sqlx::query("INSERT INTO channels (id, space_id, name, channel_type, position) VALUES ($1, $2, 'general', 0, 0)")
@@ -2122,16 +2123,9 @@ mod tests {
         previous.run(&pool).await.unwrap();
         let (author, _, channel) = setup_channel(&pool).await;
         let recipient = 2;
-        crate::users::create_user(
-            &pool,
-            recipient,
-            "recipient",
-            2,
-            "recipient@example.com",
-            "hash",
-        )
-        .await
-        .unwrap();
+        // Raw SQL: this schema predates `users.credential_version`.
+        sqlx::query("INSERT INTO users (id, username, discriminator, email, password_hash) VALUES ($1, 'recipient', 2, 'recipient@example.com', 'hash')")
+            .bind(recipient).execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO messages (id, channel_id, author_id, content) VALUES (1000, $1, $2, 'old context')")
             .bind(channel).bind(author).execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO read_states (user_id, channel_id, last_message_id, mention_count) VALUES ($1, $2, 0, 2)")

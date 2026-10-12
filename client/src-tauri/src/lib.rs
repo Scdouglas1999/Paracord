@@ -8,6 +8,7 @@
 
 mod audio_capture;
 mod commands;
+mod host;
 #[cfg(target_os = "linux")]
 mod linux_frame_clock;
 #[cfg(target_os = "linux")]
@@ -17,6 +18,7 @@ mod now_playing;
 #[cfg(target_os = "linux")]
 mod pulse_router;
 mod tray;
+mod trust_cmds;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -2014,6 +2016,23 @@ pub fn run() {
         native_media::native_render::native_render_set_ground_color,
         native_media::native_render::native_render_still,
         native_media::native_render::native_render_attach_sampler,
+        // First-run setup: hosting (docs/setup-spec.md §2, §9.5)
+        host::host_preflight,
+        host::host_setup_start,
+        host::host_claim,
+        host::host_write_escrow,
+        host::host_status,
+        host::host_retry_reachability,
+        host::host_backup_now,
+        host::host_start,
+        host::host_stop,
+        host::host_set_autostart,
+        host::host_remove,
+        host::host_logs_tail,
+        host::host_restore,
+        // First-run setup: server identity (docs/setup-spec.md §7)
+        trust_cmds::trust_server,
+        trust_cmds::accept_changed_identity,
     ]);
 
     let app = builder

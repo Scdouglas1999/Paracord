@@ -286,6 +286,26 @@ pub struct AppConfig {
     pub federation_enabled: bool,
     /// Process start time, for uptime reporting.
     pub started_at: chrono::DateTime<chrono::Utc>,
+
+    // --- First-run setup (docs/setup-spec.md §2.5, §8.1, §8.3) --------------
+    /// `[link_previews] enabled`: the server unfurls links at all.
+    pub link_previews_enabled: bool,
+    /// `[backup] max_backups`: how many automatic backups are kept.
+    pub max_backups: u32,
+    /// `[host]`: this server runs as "Paracord on this computer".
+    pub host: HostRuntimeConfig,
+}
+
+/// `[host]` as the running server needs it (setup spec §2.5, §4.7).
+#[derive(Clone, Debug, Default)]
+pub struct HostRuntimeConfig {
+    /// Serve `/api/v1/host/*` on loopback, guarded by the control token.
+    pub enabled: bool,
+    pub instance_id: Option<String>,
+    /// Where the control token is written at every start.
+    pub control_token_file: Option<String>,
+    /// `storage-key.escrow`.
+    pub escrow_file: Option<String>,
 }
 
 #[cfg(test)]
@@ -338,6 +358,9 @@ impl AppConfig {
             auto_backup_interval_seconds: 86_400,
             federation_enabled: false,
             started_at: chrono::Utc::now(),
+            link_previews_enabled: true,
+            max_backups: 10,
+            host: HostRuntimeConfig::default(),
         }
     }
 }

@@ -61,3 +61,13 @@ export const isGuildEmoji = validator('isGuildEmoji');
 export const isGuildEmojiList = validator('isGuildEmojiList');
 export const isRelationshipList = validator('isRelationshipList');
 export const isReadyGuildCore = validator('isReadyGuildCore');
+// First-run setup (docs/setup-spec.md §9): one password, hosting, instance status.
+export const isCredentialParams = validator('isCredentialParams');
+export const isCredentialEpochResponse = validator('isCredentialEpochResponse');
+export const isKeyBackup = validator('isKeyBackup');
+export const isPasswordRequirements = validator('isPasswordRequirements');
+export const isHostStatus = validator('isHostStatus');
+export const isInstanceStatusUpdate = validator('isInstanceStatusUpdate');
+export const isBackupNowResponse = validator('isBackupNowResponse');
+export const isHostPreflight = validator('isHostPreflight');
+export const isHostProgress = validator('isHostProgress');

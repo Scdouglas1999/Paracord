@@ -28,7 +28,15 @@ export type ServerFeature =
   /** Remind me (`/users/@me/reminders`, `/channels/{id}/messages/{id}/reminder`). */
   | 'reminders'
   /** Server settings > File storage (`/guilds/{id}/storage`, `/guilds/{id}/files`). */
-  | 'fileStorage';
+  | 'fileStorage'
+  /**
+   * One-password sign-up and sign-in (`/auth/credential/*`, `/users/@me/key-backup`,
+   * docs/setup-spec.md §3.12). Without it the first run refuses that server, and
+   * signing in to an existing account uses the legacy pages.
+   */
+  | 'oneCredential'
+  /** The hosting status an owner sees (`/admin/host-status`, `INSTANCE_STATUS_UPDATE`). */
+  | 'hostStatus';
 
 interface ServerFeatureState {
   /** serverId -> the features that server has shown it lacks. */
@@ -74,8 +82,12 @@ export function noteMissingRoute(serverId: string | null | undefined, feature: S
   return true;
 }
 
-/** What the UI says about a feature an older server lacks. */
-export function olderServerReason(feature: ServerFeature): string {
+/**
+ * What the UI says about a feature an older server lacks. `serverName`, when
+ * given, names the server in the sentences that start with it.
+ */
+export function olderServerReason(feature: ServerFeature, serverName?: string): string {
+  const server = serverName?.trim() || 'This server';
   switch (feature) {
     case 'voiceViews':
       return 'This server runs an older version of Paracord. Join the call to watch.';
@@ -87,6 +99,10 @@ export function olderServerReason(feature: ServerFeature): string {
       return 'This server runs an older version of Paracord that has no reminders.';
     case 'fileStorage':
       return 'This server runs an older version of Paracord that cannot manage file storage. Update the server to see its usage and set an upload policy.';
+    case 'oneCredential':
+      return `${server} runs an older version of Paracord. Ask the person who runs it to update, then try again.`;
+    case 'hostStatus':
+      return `${server} runs an older version of Paracord that doesn't report how it is hosted. Update the server to see it here.`;
   }
 }
 

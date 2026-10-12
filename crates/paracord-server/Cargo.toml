@@ -17,6 +17,7 @@ paracord-db = { workspace = true }
 paracord-federation = { workspace = true }
 paracord-models = { workspace = true }
 paracord-util = { workspace = true }
+paracord-contracts = { workspace = true }
 axum = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }

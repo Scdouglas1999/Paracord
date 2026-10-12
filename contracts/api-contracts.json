@@ -25,6 +25,111 @@
       "title": "AcceptInviteRequest",
       "type": "object"
     },
+    "BackupNowResponse": {
+      "$id": "urn:paracord:contract:BackupNowResponse",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`POST /api/v1/host/backup-now` response.",
+      "properties": {
+        "name": {
+          "description": "The archive's file name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "BackupNowResponse",
+      "type": "object"
+    },
+    "ChangeCredentialRequest": {
+      "$defs": {
+        "KdfParams": {
+          "description": "scrypt parameters as sent on the wire. Stored per credential as\n`\"scrypt:<log_n>:<r>:<p>\"` (see [`KdfParams::to_db_text`]).",
+          "properties": {
+            "alg": {
+              "description": "Always `\"scrypt\"`.",
+              "type": "string"
+            },
+            "log_n": {
+              "description": "log2 of scrypt's N.",
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "p": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "r": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "alg",
+            "log_n",
+            "r",
+            "p"
+          ],
+          "type": "object"
+        },
+        "NewCredential": {
+          "description": "A freshly derived credential: what the server stores in place of a password.",
+          "properties": {
+            "auth_key": {
+              "description": "b64url of the 32-byte HKDF output `paracord/credential/v2/auth`.",
+              "type": "string"
+            },
+            "kdf": {
+              "$ref": "#/$defs/KdfParams"
+            },
+            "salt": {
+              "description": "b64url of 32 random bytes.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "salt",
+            "kdf",
+            "auth_key"
+          ],
+          "type": "object"
+        }
+      },
+      "$id": "urn:paracord:contract:ChangeCredentialRequest",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`PUT /api/v1/users/@me/credential`: change the password (spec §3.7).",
+      "properties": {
+        "credential": {
+          "$ref": "#/$defs/NewCredential"
+        },
+        "current_auth_key": {
+          "description": "b64url auth key derived from the current password.",
+          "type": "string"
+        },
+        "mfa_code": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "wrapped_key": {
+          "description": "The same identity, wrapped under the new password's wrap key.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "current_auth_key",
+        "credential",
+        "wrapped_key"
+      ],
+      "title": "ChangeCredentialRequest",
+      "type": "object"
+    },
     "ChangeEmailRequest": {
       "$id": "urn:paracord:contract:ChangeEmailRequest",
       "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -425,6 +530,755 @@
         }
       },
       "title": "CreateRelationshipRequest",
+      "type": "object"
+    },
+    "CredentialClaimRequest": {
+      "$defs": {
+        "IdentityProof": {
+          "description": "A signature over a server challenge, proving possession of the identity key.",
+          "properties": {
+            "nonce": {
+              "description": "The nonce `/auth/challenge` issued.",
+              "type": "string"
+            },
+            "signature": {
+              "description": "hex Ed25519 signature over\n`\"<purpose>:\" + nonce + \":\" + timestamp + \":\" + origin`, where purpose is\n`paracord/credential/v2/register` or `paracord/credential/v2/reset`.",
+              "type": "string"
+            },
+            "timestamp": {
+              "description": "The timestamp `/auth/challenge` issued (Unix seconds).",
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "nonce",
+            "timestamp",
+            "signature"
+          ],
+          "type": "object"
+        },
+        "InitialServerTemplate": {
+          "description": "The first server a desktop host or a headless install creates at the claim.",
+          "oneOf": [
+            {
+              "const": "friends",
+              "description": "Text channels `general`, `clips`, `plans`; voice channels `Lounge`,\n`Gaming` (spec §2.7).",
+              "type": "string"
+            }
+          ]
+        },
+        "KdfParams": {
+          "description": "scrypt parameters as sent on the wire. Stored per credential as\n`\"scrypt:<log_n>:<r>:<p>\"` (see [`KdfParams::to_db_text`]).",
+          "properties": {
+            "alg": {
+              "description": "Always `\"scrypt\"`.",
+              "type": "string"
+            },
+            "log_n": {
+              "description": "log2 of scrypt's N.",
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "p": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "r": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "alg",
+            "log_n",
+            "r",
+            "p"
+          ],
+          "type": "object"
+        },
+        "NewCredential": {
+          "description": "A freshly derived credential: what the server stores in place of a password.",
+          "properties": {
+            "auth_key": {
+              "description": "b64url of the 32-byte HKDF output `paracord/credential/v2/auth`.",
+              "type": "string"
+            },
+            "kdf": {
+              "$ref": "#/$defs/KdfParams"
+            },
+            "salt": {
+              "description": "b64url of 32 random bytes.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "salt",
+            "kdf",
+            "auth_key"
+          ],
+          "type": "object"
+        },
+        "NewIdentity": {
+          "description": "The identity as the server keeps it: the public key and the private key\nwrapped under the password-derived wrap key.",
+          "properties": {
+            "proof": {
+              "$ref": "#/$defs/IdentityProof"
+            },
+            "public_key": {
+              "description": "hex of the 32-byte Ed25519 public key.",
+              "type": "string"
+            },
+            "wrap_alg": {
+              "description": "`\"aes256gcm-v2\"` ([`WRAP_ALG_V2`]).",
+              "type": "string"
+            },
+            "wrapped_key": {
+              "description": "b64url of `iv12 || ciphertext+tag` (12 + 48 bytes).",
+              "type": "string"
+            }
+          },
+          "required": [
+            "public_key",
+            "wrapped_key",
+            "wrap_alg",
+            "proof"
+          ],
+          "type": "object"
+        },
+        "RegistrationMode": {
+          "description": "Who can create an account on an instance. The same spelling as the\n`[auth] registration_mode` config value.",
+          "enum": [
+            "open",
+            "invite_only"
+          ],
+          "type": "string"
+        }
+      },
+      "$id": "urn:paracord:contract:CredentialClaimRequest",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`POST /api/v1/setup/credential-claim`: the legacy `ClaimRequest` minus\n`password`, plus the credential, identity, hue and template. Answers 201\nwith the same `ClaimResponse` as `/setup/claim`.",
+      "properties": {
+        "credential": {
+          "$ref": "#/$defs/NewCredential"
+        },
+        "display_name": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "email": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "identity": {
+          "$ref": "#/$defs/NewIdentity"
+        },
+        "initial_space_hue": {
+          "description": "The first server's color, 0-359.",
+          "format": "int16",
+          "maximum": 359,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "initial_space_icon": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "initial_space_name": {
+          "type": "string"
+        },
+        "initial_space_template": {
+          "$ref": "#/$defs/InitialServerTemplate"
+        },
+        "instance_name": {
+          "type": "string"
+        },
+        "registration_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RegistrationMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Saved with the server when given; otherwise the config file's\n`[auth] registration_mode` stands."
+        },
+        "token": {
+          "type": "string"
+        },
+        "username": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "token",
+        "username",
+        "instance_name",
+        "initial_space_name",
+        "initial_space_hue",
+        "initial_space_template",
+        "credential",
+        "identity"
+      ],
+      "title": "CredentialClaimRequest",
+      "type": "object"
+    },
+    "CredentialEmailResetRequest": {
+      "$defs": {
+        "IdentityProof": {
+          "description": "A signature over a server challenge, proving possession of the identity key.",
+          "properties": {
+            "nonce": {
+              "description": "The nonce `/auth/challenge` issued.",
+              "type": "string"
+            },
+            "signature": {
+              "description": "hex Ed25519 signature over\n`\"<purpose>:\" + nonce + \":\" + timestamp + \":\" + origin`, where purpose is\n`paracord/credential/v2/register` or `paracord/credential/v2/reset`.",
+              "type": "string"
+            },
+            "timestamp": {
+              "description": "The timestamp `/auth/challenge` issued (Unix seconds).",
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "nonce",
+            "timestamp",
+            "signature"
+          ],
+          "type": "object"
+        },
+        "KdfParams": {
+          "description": "scrypt parameters as sent on the wire. Stored per credential as\n`\"scrypt:<log_n>:<r>:<p>\"` (see [`KdfParams::to_db_text`]).",
+          "properties": {
+            "alg": {
+              "description": "Always `\"scrypt\"`.",
+              "type": "string"
+            },
+            "log_n": {
+              "description": "log2 of scrypt's N.",
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "p": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "r": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "alg",
+            "log_n",
+            "r",
+            "p"
+          ],
+          "type": "object"
+        },
+        "NewCredential": {
+          "description": "A freshly derived credential: what the server stores in place of a password.",
+          "properties": {
+            "auth_key": {
+              "description": "b64url of the 32-byte HKDF output `paracord/credential/v2/auth`.",
+              "type": "string"
+            },
+            "kdf": {
+              "$ref": "#/$defs/KdfParams"
+            },
+            "salt": {
+              "description": "b64url of 32 random bytes.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "salt",
+            "kdf",
+            "auth_key"
+          ],
+          "type": "object"
+        },
+        "NewIdentity": {
+          "description": "The identity as the server keeps it: the public key and the private key\nwrapped under the password-derived wrap key.",
+          "properties": {
+            "proof": {
+              "$ref": "#/$defs/IdentityProof"
+            },
+            "public_key": {
+              "description": "hex of the 32-byte Ed25519 public key.",
+              "type": "string"
+            },
+            "wrap_alg": {
+              "description": "`\"aes256gcm-v2\"` ([`WRAP_ALG_V2`]).",
+              "type": "string"
+            },
+            "wrapped_key": {
+              "description": "b64url of `iv12 || ciphertext+tag` (12 + 48 bytes).",
+              "type": "string"
+            }
+          },
+          "required": [
+            "public_key",
+            "wrapped_key",
+            "wrap_alg",
+            "proof"
+          ],
+          "type": "object"
+        }
+      },
+      "$id": "urn:paracord:contract:CredentialEmailResetRequest",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`POST /api/v1/auth/reset-password` for a v2 account (\"Start over\", spec\n§3.9): the emailed token, a new credential and a brand-new identity.",
+      "properties": {
+        "credential": {
+          "$ref": "#/$defs/NewCredential"
+        },
+        "identity": {
+          "$ref": "#/$defs/NewIdentity"
+        },
+        "token": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "token",
+        "credential",
+        "identity"
+      ],
+      "title": "CredentialEmailResetRequest",
+      "type": "object"
+    },
+    "CredentialEpochResponse": {
+      "$id": "urn:paracord:contract:CredentialEpochResponse",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`{ epoch }`: the answer of upgrade, change and reset.",
+      "properties": {
+        "epoch": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "epoch"
+      ],
+      "title": "CredentialEpochResponse",
+      "type": "object"
+    },
+    "CredentialLoginRequest": {
+      "$id": "urn:paracord:contract:CredentialLoginRequest",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`POST /api/v1/auth/credential/login`. The response is the same\n`LoginResponse` as `/auth/login`, including its MFA ticket branch.",
+      "properties": {
+        "auth_key": {
+          "description": "b64url of the 32-byte auth key.",
+          "type": "string"
+        },
+        "identifier": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "identifier",
+        "auth_key"
+      ],
+      "title": "CredentialLoginRequest",
+      "type": "object"
+    },
+    "CredentialParams": {
+      "$defs": {
+        "KdfParams": {
+          "description": "scrypt parameters as sent on the wire. Stored per credential as\n`\"scrypt:<log_n>:<r>:<p>\"` (see [`KdfParams::to_db_text`]).",
+          "properties": {
+            "alg": {
+              "description": "Always `\"scrypt\"`.",
+              "type": "string"
+            },
+            "log_n": {
+              "description": "log2 of scrypt's N.",
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "p": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "r": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "alg",
+            "log_n",
+            "r",
+            "p"
+          ],
+          "type": "object"
+        }
+      },
+      "$id": "urn:paracord:contract:CredentialParams",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "oneOf": [
+        {
+          "properties": {
+            "version": {
+              "const": 1
+            }
+          },
+          "required": [
+            "version"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "epoch": {
+              "type": "integer"
+            },
+            "kdf": {
+              "$ref": "#/$defs/KdfParams"
+            },
+            "salt": {
+              "type": "string"
+            },
+            "version": {
+              "const": 2
+            }
+          },
+          "required": [
+            "version",
+            "kdf",
+            "salt",
+            "epoch"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "CredentialParams"
+    },
+    "CredentialParamsRequest": {
+      "$id": "urn:paracord:contract:CredentialParamsRequest",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`POST /api/v1/auth/credential/params`.",
+      "properties": {
+        "identifier": {
+          "description": "Username or email, as typed.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "identifier"
+      ],
+      "title": "CredentialParamsRequest",
+      "type": "object"
+    },
+    "CredentialRegister": {
+      "$defs": {
+        "IdentityProof": {
+          "description": "A signature over a server challenge, proving possession of the identity key.",
+          "properties": {
+            "nonce": {
+              "description": "The nonce `/auth/challenge` issued.",
+              "type": "string"
+            },
+            "signature": {
+              "description": "hex Ed25519 signature over\n`\"<purpose>:\" + nonce + \":\" + timestamp + \":\" + origin`, where purpose is\n`paracord/credential/v2/register` or `paracord/credential/v2/reset`.",
+              "type": "string"
+            },
+            "timestamp": {
+              "description": "The timestamp `/auth/challenge` issued (Unix seconds).",
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "nonce",
+            "timestamp",
+            "signature"
+          ],
+          "type": "object"
+        },
+        "KdfParams": {
+          "description": "scrypt parameters as sent on the wire. Stored per credential as\n`\"scrypt:<log_n>:<r>:<p>\"` (see [`KdfParams::to_db_text`]).",
+          "properties": {
+            "alg": {
+              "description": "Always `\"scrypt\"`.",
+              "type": "string"
+            },
+            "log_n": {
+              "description": "log2 of scrypt's N.",
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "p": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "r": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "alg",
+            "log_n",
+            "r",
+            "p"
+          ],
+          "type": "object"
+        },
+        "NewCredential": {
+          "description": "A freshly derived credential: what the server stores in place of a password.",
+          "properties": {
+            "auth_key": {
+              "description": "b64url of the 32-byte HKDF output `paracord/credential/v2/auth`.",
+              "type": "string"
+            },
+            "kdf": {
+              "$ref": "#/$defs/KdfParams"
+            },
+            "salt": {
+              "description": "b64url of 32 random bytes.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "salt",
+            "kdf",
+            "auth_key"
+          ],
+          "type": "object"
+        },
+        "NewIdentity": {
+          "description": "The identity as the server keeps it: the public key and the private key\nwrapped under the password-derived wrap key.",
+          "properties": {
+            "proof": {
+              "$ref": "#/$defs/IdentityProof"
+            },
+            "public_key": {
+              "description": "hex of the 32-byte Ed25519 public key.",
+              "type": "string"
+            },
+            "wrap_alg": {
+              "description": "`\"aes256gcm-v2\"` ([`WRAP_ALG_V2`]).",
+              "type": "string"
+            },
+            "wrapped_key": {
+              "description": "b64url of `iv12 || ciphertext+tag` (12 + 48 bytes).",
+              "type": "string"
+            }
+          },
+          "required": [
+            "public_key",
+            "wrapped_key",
+            "wrap_alg",
+            "proof"
+          ],
+          "type": "object"
+        }
+      },
+      "$id": "urn:paracord:contract:CredentialRegister",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`POST /api/v1/auth/credential/register`.",
+      "properties": {
+        "credential": {
+          "$ref": "#/$defs/NewCredential"
+        },
+        "display_name": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "email": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "identity": {
+          "$ref": "#/$defs/NewIdentity"
+        },
+        "invite_code": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "username": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "username",
+        "credential",
+        "identity"
+      ],
+      "title": "CredentialRegister",
+      "type": "object"
+    },
+    "CredentialUpgradeRequest": {
+      "$defs": {
+        "IdentityProof": {
+          "description": "A signature over a server challenge, proving possession of the identity key.",
+          "properties": {
+            "nonce": {
+              "description": "The nonce `/auth/challenge` issued.",
+              "type": "string"
+            },
+            "signature": {
+              "description": "hex Ed25519 signature over\n`\"<purpose>:\" + nonce + \":\" + timestamp + \":\" + origin`, where purpose is\n`paracord/credential/v2/register` or `paracord/credential/v2/reset`.",
+              "type": "string"
+            },
+            "timestamp": {
+              "description": "The timestamp `/auth/challenge` issued (Unix seconds).",
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "nonce",
+            "timestamp",
+            "signature"
+          ],
+          "type": "object"
+        },
+        "KdfParams": {
+          "description": "scrypt parameters as sent on the wire. Stored per credential as\n`\"scrypt:<log_n>:<r>:<p>\"` (see [`KdfParams::to_db_text`]).",
+          "properties": {
+            "alg": {
+              "description": "Always `\"scrypt\"`.",
+              "type": "string"
+            },
+            "log_n": {
+              "description": "log2 of scrypt's N.",
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "p": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "r": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "alg",
+            "log_n",
+            "r",
+            "p"
+          ],
+          "type": "object"
+        },
+        "NewCredential": {
+          "description": "A freshly derived credential: what the server stores in place of a password.",
+          "properties": {
+            "auth_key": {
+              "description": "b64url of the 32-byte HKDF output `paracord/credential/v2/auth`.",
+              "type": "string"
+            },
+            "kdf": {
+              "$ref": "#/$defs/KdfParams"
+            },
+            "salt": {
+              "description": "b64url of 32 random bytes.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "salt",
+            "kdf",
+            "auth_key"
+          ],
+          "type": "object"
+        },
+        "NewIdentity": {
+          "description": "The identity as the server keeps it: the public key and the private key\nwrapped under the password-derived wrap key.",
+          "properties": {
+            "proof": {
+              "$ref": "#/$defs/IdentityProof"
+            },
+            "public_key": {
+              "description": "hex of the 32-byte Ed25519 public key.",
+              "type": "string"
+            },
+            "wrap_alg": {
+              "description": "`\"aes256gcm-v2\"` ([`WRAP_ALG_V2`]).",
+              "type": "string"
+            },
+            "wrapped_key": {
+              "description": "b64url of `iv12 || ciphertext+tag` (12 + 48 bytes).",
+              "type": "string"
+            }
+          },
+          "required": [
+            "public_key",
+            "wrapped_key",
+            "wrap_alg",
+            "proof"
+          ],
+          "type": "object"
+        }
+      },
+      "$id": "urn:paracord:contract:CredentialUpgradeRequest",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`POST /api/v1/auth/credential/upgrade`: move a legacy (v1) account to one\npassword (spec §3.11).",
+      "properties": {
+        "credential": {
+          "$ref": "#/$defs/NewCredential"
+        },
+        "current_password": {
+          "description": "The legacy sign-in password, which the server checks as today.",
+          "type": "string"
+        },
+        "identity": {
+          "$ref": "#/$defs/NewIdentity"
+        }
+      },
+      "required": [
+        "current_password",
+        "credential",
+        "identity"
+      ],
+      "title": "CredentialUpgradeRequest",
       "type": "object"
     },
     "CurrentUser": {
@@ -1251,6 +2105,744 @@
       "title": "GuildSummaryList",
       "type": "array"
     },
+    "HostPreflight": {
+      "$defs": {
+        "HostPreflightReason": {
+          "description": "Why the desktop app cannot host on this computer (spec §2.3).",
+          "oneOf": [
+            {
+              "enum": [
+                "no_user_services",
+                "no_keychain",
+                "existing_server",
+                "no_port",
+                "no_space"
+              ],
+              "type": "string"
+            },
+            {
+              "const": "already_hosting",
+              "description": "Never blocks: setup resumes at the first incomplete row.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "$id": "urn:paracord:contract:HostPreflight",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "Tauri `host_preflight()`: `{ ok: true, port }` or\n`{ ok: false, reason, detail?, existing_url? }`; `already_hosting` comes\nwith `ok: true`.",
+      "properties": {
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "existing_url": {
+          "description": "With `existing_server`: the URL to sign in to instead.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "port": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HostPreflightReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "ok"
+      ],
+      "title": "HostPreflight",
+      "type": "object"
+    },
+    "HostProgress": {
+      "$defs": {
+        "HostProgressState": {
+          "description": "The state a setup row is in.",
+          "enum": [
+            "run",
+            "ok",
+            "warn",
+            "fail"
+          ],
+          "type": "string"
+        },
+        "HostSetupStep": {
+          "description": "A step of `host_setup_start` (spec §2.6). Row 3 (the account) runs in JS.",
+          "enum": [
+            "install",
+            "init",
+            "service",
+            "start",
+            "storage",
+            "reach",
+            "backup"
+          ],
+          "type": "string"
+        }
+      },
+      "$id": "urn:paracord:contract:HostProgress",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "Tauri event `host://progress`.",
+      "properties": {
+        "code": {
+          "description": "A machine-readable reason, e.g. a reachability state or exit code.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "row": {
+          "description": "The setup row, 1-5.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "state": {
+          "$ref": "#/$defs/HostProgressState"
+        },
+        "step": {
+          "$ref": "#/$defs/HostSetupStep"
+        }
+      },
+      "required": [
+        "row",
+        "step",
+        "state"
+      ],
+      "title": "HostProgress",
+      "type": "object"
+    },
+    "HostStatus": {
+      "$defs": {
+        "BackupStatus": {
+          "description": "Automatic backups.",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "interval_seconds": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "keep": {
+              "description": "How many backups are kept.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "last_backup_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "last_error": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "enabled",
+            "interval_seconds",
+            "keep",
+            "last_backup_at",
+            "last_error"
+          ],
+          "type": "object"
+        },
+        "KeySource": {
+          "description": "Where the at-rest storage key lives (`[at_rest] key_source`, spec §4.2).\nSpelled the same in the config file and on the wire.",
+          "oneOf": [
+            {
+              "const": "keychain",
+              "description": "The OS credential store of the user the server runs as.",
+              "type": "string"
+            },
+            {
+              "const": "systemd-creds",
+              "description": "A `systemd-creds` credential loaded by the unit.",
+              "type": "string"
+            },
+            {
+              "const": "file",
+              "description": "A 0600 key file.",
+              "type": "string"
+            },
+            {
+              "const": "env",
+              "description": "An environment variable (`[at_rest] key_env`).",
+              "type": "string"
+            }
+          ]
+        },
+        "Protection": {
+          "description": "What protects the storage key, which decides the copy (spec §4.6).",
+          "oneOf": [
+            {
+              "const": "login",
+              "description": "Unlocked by the user's sign-in (login keychain).",
+              "type": "string"
+            },
+            {
+              "const": "tpm",
+              "description": "Sealed to the machine's TPM.",
+              "type": "string"
+            },
+            {
+              "const": "machine",
+              "description": "Protected by the machine's own credentials.",
+              "type": "string"
+            },
+            {
+              "const": "same_disk",
+              "description": "Stored on the same disk as the data.",
+              "type": "string"
+            }
+          ]
+        },
+        "Reachability": {
+          "description": "The current reachability, as the server holds it.",
+          "properties": {
+            "confirmed_at": {
+              "description": "When a connection from outside this network was observed.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "external_ip": {
+              "description": "Only ever what the router reported.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "gateway_ip": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "lan_ip": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "last_error": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "lease_expires_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "method": {
+              "description": "`\"upnp\"`, `\"nat-pmp\"` or `\"pcp\"`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "next_retry_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "port": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "state": {
+              "$ref": "#/$defs/ReachabilityState"
+            }
+          },
+          "required": [
+            "state",
+            "method",
+            "external_ip",
+            "gateway_ip",
+            "lan_ip",
+            "port",
+            "lease_expires_at",
+            "next_retry_at",
+            "last_error",
+            "confirmed_at"
+          ],
+          "type": "object"
+        },
+        "ReachabilityState": {
+          "description": "What the router said, or what this computer knows, about whether people\noutside the home network can reach this server (spec §5.2).",
+          "oneOf": [
+            {
+              "const": "off",
+              "description": "Automatic forwarding is off, or the server binds loopback.",
+              "type": "string"
+            },
+            {
+              "const": "asking",
+              "description": "An attempt is in flight.",
+              "type": "string"
+            },
+            {
+              "const": "open",
+              "description": "The router accepted both mappings and reported a public IPv4.",
+              "type": "string"
+            },
+            {
+              "const": "shared_address",
+              "description": "The router's own external address is private (carrier-grade NAT or\nanother router in front).",
+              "type": "string"
+            },
+            {
+              "const": "refused",
+              "description": "A gateway answered and refused.",
+              "type": "string"
+            },
+            {
+              "const": "no_answer",
+              "description": "No UPnP IGD, NAT-PMP or PCP gateway answered in time.",
+              "type": "string"
+            },
+            {
+              "const": "direct",
+              "description": "The bind interface has a public IPv4 itself.",
+              "type": "string"
+            },
+            {
+              "const": "firewall_blocked",
+              "description": "Windows only: the firewall rule is missing.",
+              "type": "string"
+            }
+          ]
+        },
+        "StorageStatus": {
+          "description": "Stored-data encryption as the running server observes it (spec §4.5).",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "escrowed": {
+              "description": "The storage key is escrowed under the owner's recovery phrase (§4.7).",
+              "type": "boolean"
+            },
+            "files_encrypted": {
+              "type": "boolean"
+            },
+            "key_source": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/KeySource"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "protection": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Protection"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "sqlite_encrypted": {
+              "description": "From `PRAGMA cipher_version` on the live pool, not from config.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "enabled",
+            "sqlite_encrypted",
+            "files_encrypted",
+            "key_source",
+            "protection",
+            "escrowed"
+          ],
+          "type": "object"
+        },
+        "TlsStatus": {
+          "description": "This server's TLS identity. Trust words are computed from the fingerprint by\nthe client (spec §7.1).",
+          "properties": {
+            "fingerprint_sha256": {
+              "description": "hex SHA-256 of the leaf certificate's DER.",
+              "type": "string"
+            },
+            "self_signed": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "fingerprint_sha256",
+            "self_signed"
+          ],
+          "type": "object"
+        }
+      },
+      "$id": "urn:paracord:contract:HostStatus",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`GET /api/v1/host/status` (loopback + host token) and\n`GET /api/v1/admin/host-status` (admins).",
+      "properties": {
+        "backups": {
+          "$ref": "#/$defs/BackupStatus"
+        },
+        "reachability": {
+          "$ref": "#/$defs/Reachability"
+        },
+        "setup_required": {
+          "description": "True until the first owner claims the instance.",
+          "type": "boolean"
+        },
+        "started_at": {
+          "type": "string"
+        },
+        "storage": {
+          "$ref": "#/$defs/StorageStatus"
+        },
+        "tls": {
+          "$ref": "#/$defs/TlsStatus"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "version",
+        "started_at",
+        "setup_required",
+        "storage",
+        "reachability",
+        "backups",
+        "tls"
+      ],
+      "title": "HostStatus",
+      "type": "object"
+    },
+    "InstanceStatusUpdate": {
+      "$defs": {
+        "BackupStatus": {
+          "description": "Automatic backups.",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "interval_seconds": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "keep": {
+              "description": "How many backups are kept.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "last_backup_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "last_error": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "enabled",
+            "interval_seconds",
+            "keep",
+            "last_backup_at",
+            "last_error"
+          ],
+          "type": "object"
+        },
+        "KeySource": {
+          "description": "Where the at-rest storage key lives (`[at_rest] key_source`, spec §4.2).\nSpelled the same in the config file and on the wire.",
+          "oneOf": [
+            {
+              "const": "keychain",
+              "description": "The OS credential store of the user the server runs as.",
+              "type": "string"
+            },
+            {
+              "const": "systemd-creds",
+              "description": "A `systemd-creds` credential loaded by the unit.",
+              "type": "string"
+            },
+            {
+              "const": "file",
+              "description": "A 0600 key file.",
+              "type": "string"
+            },
+            {
+              "const": "env",
+              "description": "An environment variable (`[at_rest] key_env`).",
+              "type": "string"
+            }
+          ]
+        },
+        "Protection": {
+          "description": "What protects the storage key, which decides the copy (spec §4.6).",
+          "oneOf": [
+            {
+              "const": "login",
+              "description": "Unlocked by the user's sign-in (login keychain).",
+              "type": "string"
+            },
+            {
+              "const": "tpm",
+              "description": "Sealed to the machine's TPM.",
+              "type": "string"
+            },
+            {
+              "const": "machine",
+              "description": "Protected by the machine's own credentials.",
+              "type": "string"
+            },
+            {
+              "const": "same_disk",
+              "description": "Stored on the same disk as the data.",
+              "type": "string"
+            }
+          ]
+        },
+        "Reachability": {
+          "description": "The current reachability, as the server holds it.",
+          "properties": {
+            "confirmed_at": {
+              "description": "When a connection from outside this network was observed.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "external_ip": {
+              "description": "Only ever what the router reported.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "gateway_ip": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "lan_ip": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "last_error": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "lease_expires_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "method": {
+              "description": "`\"upnp\"`, `\"nat-pmp\"` or `\"pcp\"`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "next_retry_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "port": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "state": {
+              "$ref": "#/$defs/ReachabilityState"
+            }
+          },
+          "required": [
+            "state",
+            "method",
+            "external_ip",
+            "gateway_ip",
+            "lan_ip",
+            "port",
+            "lease_expires_at",
+            "next_retry_at",
+            "last_error",
+            "confirmed_at"
+          ],
+          "type": "object"
+        },
+        "ReachabilityState": {
+          "description": "What the router said, or what this computer knows, about whether people\noutside the home network can reach this server (spec §5.2).",
+          "oneOf": [
+            {
+              "const": "off",
+              "description": "Automatic forwarding is off, or the server binds loopback.",
+              "type": "string"
+            },
+            {
+              "const": "asking",
+              "description": "An attempt is in flight.",
+              "type": "string"
+            },
+            {
+              "const": "open",
+              "description": "The router accepted both mappings and reported a public IPv4.",
+              "type": "string"
+            },
+            {
+              "const": "shared_address",
+              "description": "The router's own external address is private (carrier-grade NAT or\nanother router in front).",
+              "type": "string"
+            },
+            {
+              "const": "refused",
+              "description": "A gateway answered and refused.",
+              "type": "string"
+            },
+            {
+              "const": "no_answer",
+              "description": "No UPnP IGD, NAT-PMP or PCP gateway answered in time.",
+              "type": "string"
+            },
+            {
+              "const": "direct",
+              "description": "The bind interface has a public IPv4 itself.",
+              "type": "string"
+            },
+            {
+              "const": "firewall_blocked",
+              "description": "Windows only: the firewall rule is missing.",
+              "type": "string"
+            }
+          ]
+        },
+        "StorageStatus": {
+          "description": "Stored-data encryption as the running server observes it (spec §4.5).",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "escrowed": {
+              "description": "The storage key is escrowed under the owner's recovery phrase (§4.7).",
+              "type": "boolean"
+            },
+            "files_encrypted": {
+              "type": "boolean"
+            },
+            "key_source": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/KeySource"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "protection": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Protection"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "sqlite_encrypted": {
+              "description": "From `PRAGMA cipher_version` on the live pool, not from config.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "enabled",
+            "sqlite_encrypted",
+            "files_encrypted",
+            "key_source",
+            "protection",
+            "escrowed"
+          ],
+          "type": "object"
+        }
+      },
+      "$id": "urn:paracord:contract:InstanceStatusUpdate",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "Gateway `INSTANCE_STATUS_UPDATE`, sent to admins whenever any of these\nchanges (spec §5.5).",
+      "properties": {
+        "backups": {
+          "$ref": "#/$defs/BackupStatus"
+        },
+        "reachability": {
+          "$ref": "#/$defs/Reachability"
+        },
+        "storage": {
+          "$ref": "#/$defs/StorageStatus"
+        }
+      },
+      "required": [
+        "reachability",
+        "storage",
+        "backups"
+      ],
+      "title": "InstanceStatusUpdate",
+      "type": "object"
+    },
     "InviteAcceptResponse": {
       "$defs": {
         "InviteAcceptGuild": {
@@ -1323,9 +2915,39 @@
     },
     "InvitePreview": {
       "$defs": {
+        "InviteFace": {
+          "description": "One of up to three members shown on an invite card: only the first\ngrapheme of the display name and the avatar hue. No names, ids or images.",
+          "properties": {
+            "hue": {
+              "format": "int16",
+              "maximum": 359,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "initial": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "initial",
+            "hue"
+          ],
+          "type": "object"
+        },
         "InviteGuildPreview": {
           "description": "The guild card embedded in `GET /invites/{code}`.",
           "properties": {
+            "hue": {
+              "default": null,
+              "description": "The server's color as a hue, 0-359; null when unset. Always sent by this\nserver; absent from older ones.",
+              "format": "int16",
+              "maximum": 359,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "icon_hash": {
               "type": [
                 "string",
@@ -1343,6 +2965,14 @@
             },
             "name": {
               "type": "string"
+            },
+            "online_count": {
+              "default": 0,
+              "description": "Members online now. Always sent by this server; absent from older ones.",
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
             }
           },
           "required": [
@@ -1350,6 +2980,38 @@
             "name",
             "icon_hash",
             "member_count"
+          ],
+          "type": "object"
+        },
+        "InviteInstance": {
+          "description": "What the joining client needs to know about the instance before any\naccount work (spec §6.1, §3.12).",
+          "properties": {
+            "credential_version": {
+              "description": "2 on servers with one-password sign-up.",
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "name": {
+              "type": "string"
+            },
+            "registration_mode": {
+              "$ref": "#/$defs/RegistrationMode"
+            },
+            "require_email": {
+              "type": "boolean"
+            },
+            "version": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "version",
+            "credential_version",
+            "registration_mode",
+            "require_email"
           ],
           "type": "object"
         },
@@ -1373,6 +3035,14 @@
             "questions"
           ],
           "type": "object"
+        },
+        "RegistrationMode": {
+          "description": "Who can create an account on an instance. The same spelling as the\n`[auth] registration_mode` config value.",
+          "enum": [
+            "open",
+            "invite_only"
+          ],
+          "type": "string"
         }
       },
       "$id": "urn:paracord:contract:InvitePreview",
@@ -1381,6 +3051,22 @@
       "properties": {
         "code": {
           "type": "string"
+        },
+        "expires_at": {
+          "default": null,
+          "description": "RFC 3339; null when the invite never expires.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "faces": {
+          "default": [],
+          "description": "Up to three members, online first, then most recently joined.",
+          "items": {
+            "$ref": "#/$defs/InviteFace"
+          },
+          "type": "array"
         },
         "guild": {
           "anyOf": [
@@ -1391,6 +3077,9 @@
               "type": "null"
             }
           ]
+        },
+        "instance": {
+          "$ref": "#/$defs/InviteInstance"
         },
         "join_gate": {
           "anyOf": [
@@ -1411,6 +3100,243 @@
       "title": "InvitePreview",
       "type": "object"
     },
+    "KeyBackup": {
+      "$id": "urn:paracord:contract:KeyBackup",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`GET /api/v1/users/@me/key-backup`.",
+      "properties": {
+        "epoch": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "public_key": {
+          "description": "hex.",
+          "type": "string"
+        },
+        "recovery_confirmed": {
+          "description": "The person ticked \"I wrote it down\" for the recovery phrase.",
+          "type": "boolean"
+        },
+        "wrap_alg": {
+          "type": "string"
+        },
+        "wrapped_key": {
+          "description": "b64url.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "public_key",
+        "wrapped_key",
+        "wrap_alg",
+        "epoch",
+        "recovery_confirmed"
+      ],
+      "title": "KeyBackup",
+      "type": "object"
+    },
+    "NewOwnerClaim": {
+      "$defs": {
+        "IdentityProof": {
+          "description": "A signature over a server challenge, proving possession of the identity key.",
+          "properties": {
+            "nonce": {
+              "description": "The nonce `/auth/challenge` issued.",
+              "type": "string"
+            },
+            "signature": {
+              "description": "hex Ed25519 signature over\n`\"<purpose>:\" + nonce + \":\" + timestamp + \":\" + origin`, where purpose is\n`paracord/credential/v2/register` or `paracord/credential/v2/reset`.",
+              "type": "string"
+            },
+            "timestamp": {
+              "description": "The timestamp `/auth/challenge` issued (Unix seconds).",
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "nonce",
+            "timestamp",
+            "signature"
+          ],
+          "type": "object"
+        },
+        "InitialServerTemplate": {
+          "description": "The first server a desktop host or a headless install creates at the claim.",
+          "oneOf": [
+            {
+              "const": "friends",
+              "description": "Text channels `general`, `clips`, `plans`; voice channels `Lounge`,\n`Gaming` (spec §2.7).",
+              "type": "string"
+            }
+          ]
+        },
+        "KdfParams": {
+          "description": "scrypt parameters as sent on the wire. Stored per credential as\n`\"scrypt:<log_n>:<r>:<p>\"` (see [`KdfParams::to_db_text`]).",
+          "properties": {
+            "alg": {
+              "description": "Always `\"scrypt\"`.",
+              "type": "string"
+            },
+            "log_n": {
+              "description": "log2 of scrypt's N.",
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "p": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "r": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "alg",
+            "log_n",
+            "r",
+            "p"
+          ],
+          "type": "object"
+        },
+        "NewCredential": {
+          "description": "A freshly derived credential: what the server stores in place of a password.",
+          "properties": {
+            "auth_key": {
+              "description": "b64url of the 32-byte HKDF output `paracord/credential/v2/auth`.",
+              "type": "string"
+            },
+            "kdf": {
+              "$ref": "#/$defs/KdfParams"
+            },
+            "salt": {
+              "description": "b64url of 32 random bytes.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "salt",
+            "kdf",
+            "auth_key"
+          ],
+          "type": "object"
+        },
+        "NewIdentity": {
+          "description": "The identity as the server keeps it: the public key and the private key\nwrapped under the password-derived wrap key.",
+          "properties": {
+            "proof": {
+              "$ref": "#/$defs/IdentityProof"
+            },
+            "public_key": {
+              "description": "hex of the 32-byte Ed25519 public key.",
+              "type": "string"
+            },
+            "wrap_alg": {
+              "description": "`\"aes256gcm-v2\"` ([`WRAP_ALG_V2`]).",
+              "type": "string"
+            },
+            "wrapped_key": {
+              "description": "b64url of `iv12 || ciphertext+tag` (12 + 48 bytes).",
+              "type": "string"
+            }
+          },
+          "required": [
+            "public_key",
+            "wrapped_key",
+            "wrap_alg",
+            "proof"
+          ],
+          "type": "object"
+        },
+        "RegistrationMode": {
+          "description": "Who can create an account on an instance. The same spelling as the\n`[auth] registration_mode` config value.",
+          "enum": [
+            "open",
+            "invite_only"
+          ],
+          "type": "string"
+        }
+      },
+      "$id": "urn:paracord:contract:NewOwnerClaim",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "The owner and first server a claim creates, without the claim token. The\ndesktop app's `host_claim` command takes this; its Rust side reads the token\nfrom the claim file and sends [`CredentialClaimRequest`].",
+      "properties": {
+        "credential": {
+          "$ref": "#/$defs/NewCredential"
+        },
+        "display_name": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "email": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "identity": {
+          "$ref": "#/$defs/NewIdentity"
+        },
+        "initial_space_hue": {
+          "description": "The first server's color, 0-359.",
+          "format": "int16",
+          "maximum": 359,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "initial_space_icon": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "initial_space_name": {
+          "type": "string"
+        },
+        "initial_space_template": {
+          "$ref": "#/$defs/InitialServerTemplate"
+        },
+        "instance_name": {
+          "type": "string"
+        },
+        "registration_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RegistrationMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Saved with the server when given; otherwise the config file's\n`[auth] registration_mode` stands."
+        },
+        "username": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "username",
+        "instance_name",
+        "initial_space_name",
+        "initial_space_hue",
+        "initial_space_template",
+        "credential",
+        "identity"
+      ],
+      "title": "NewOwnerClaim",
+      "type": "object"
+    },
     "OwnershipTransferResponse": {
       "$id": "urn:paracord:contract:OwnershipTransferResponse",
       "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -1427,6 +3353,72 @@
         "owner_id"
       ],
       "title": "OwnershipTransferResponse",
+      "type": "object"
+    },
+    "PasswordRequirements": {
+      "$defs": {
+        "PasswordRulesEnforcedBy": {
+          "description": "Who enforces the password rules.",
+          "oneOf": [
+            {
+              "const": "client",
+              "description": "One password: the server never sees it, so the client checks it.",
+              "type": "string"
+            },
+            {
+              "const": "server",
+              "description": "Legacy accounts: the server checks the password it receives.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "$id": "urn:paracord:contract:PasswordRequirements",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`GET /api/v1/setup/password-requirements` (spec §3.4).",
+      "properties": {
+        "enforced_by": {
+          "$ref": "#/$defs/PasswordRulesEnforcedBy"
+        },
+        "length_unit": {
+          "description": "`\"utf8_bytes\"`.",
+          "type": "string"
+        },
+        "max_length": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "min_length": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "requires_digit": {
+          "type": "boolean"
+        },
+        "requires_lowercase": {
+          "type": "boolean"
+        },
+        "requires_symbol": {
+          "type": "boolean"
+        },
+        "requires_uppercase": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "min_length",
+        "max_length",
+        "requires_uppercase",
+        "requires_lowercase",
+        "requires_digit",
+        "requires_symbol",
+        "length_unit"
+      ],
+      "title": "PasswordRequirements",
       "type": "object"
     },
     "PublicUserProfile": {
@@ -1816,6 +3808,117 @@
       "title": "RelationshipList",
       "type": "array"
     },
+    "ResetCredentialRequest": {
+      "$defs": {
+        "IdentityProof": {
+          "description": "A signature over a server challenge, proving possession of the identity key.",
+          "properties": {
+            "nonce": {
+              "description": "The nonce `/auth/challenge` issued.",
+              "type": "string"
+            },
+            "signature": {
+              "description": "hex Ed25519 signature over\n`\"<purpose>:\" + nonce + \":\" + timestamp + \":\" + origin`, where purpose is\n`paracord/credential/v2/register` or `paracord/credential/v2/reset`.",
+              "type": "string"
+            },
+            "timestamp": {
+              "description": "The timestamp `/auth/challenge` issued (Unix seconds).",
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "nonce",
+            "timestamp",
+            "signature"
+          ],
+          "type": "object"
+        },
+        "KdfParams": {
+          "description": "scrypt parameters as sent on the wire. Stored per credential as\n`\"scrypt:<log_n>:<r>:<p>\"` (see [`KdfParams::to_db_text`]).",
+          "properties": {
+            "alg": {
+              "description": "Always `\"scrypt\"`.",
+              "type": "string"
+            },
+            "log_n": {
+              "description": "log2 of scrypt's N.",
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "p": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "r": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "alg",
+            "log_n",
+            "r",
+            "p"
+          ],
+          "type": "object"
+        },
+        "NewCredential": {
+          "description": "A freshly derived credential: what the server stores in place of a password.",
+          "properties": {
+            "auth_key": {
+              "description": "b64url of the 32-byte HKDF output `paracord/credential/v2/auth`.",
+              "type": "string"
+            },
+            "kdf": {
+              "$ref": "#/$defs/KdfParams"
+            },
+            "salt": {
+              "description": "b64url of 32 random bytes.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "salt",
+            "kdf",
+            "auth_key"
+          ],
+          "type": "object"
+        }
+      },
+      "$id": "urn:paracord:contract:ResetCredentialRequest",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`POST /api/v1/users/@me/credential/reset`: a new password after signing in\nwith the recovery phrase (spec §3.8). `proof` signs a fresh challenge with\npurpose `paracord/credential/v2/reset`.",
+      "properties": {
+        "credential": {
+          "$ref": "#/$defs/NewCredential"
+        },
+        "mfa_code": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "proof": {
+          "$ref": "#/$defs/IdentityProof"
+        },
+        "wrapped_key": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "credential",
+        "wrapped_key",
+        "proof"
+      ],
+      "title": "ResetCredentialRequest",
+      "type": "object"
+    },
     "StartVoiceViewRequest": {
       "$defs": {
         "VoiceViewKind": {
@@ -1848,6 +3951,22 @@
       "title": "StartVoiceViewRequest",
       "type": "object"
     },
+    "StorageKeyEscrowRequest": {
+      "$id": "urn:paracord:contract:StorageKeyEscrowRequest",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`POST /api/v1/host/storage-key/escrow` and\n`POST /api/v1/admin/storage-key/escrow`: the key that wraps the storage key\n(spec §4.7). Never stored.",
+      "properties": {
+        "wrapping_key": {
+          "description": "b64url of the 32-byte `escrow_key`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "wrapping_key"
+      ],
+      "title": "StorageKeyEscrowRequest",
+      "type": "object"
+    },
     "TransferOwnershipRequest": {
       "$id": "urn:paracord:contract:TransferOwnershipRequest",
       "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -1860,6 +3979,21 @@
         "new_owner_id"
       ],
       "title": "TransferOwnershipRequest",
+      "type": "object"
+    },
+    "UpdateBackupsRequest": {
+      "$id": "urn:paracord:contract:UpdateBackupsRequest",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`PATCH /api/v1/admin/backups` (spec §8.5).",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "enabled"
+      ],
+      "title": "UpdateBackupsRequest",
       "type": "object"
     },
     "UpdateEmojiRequest": {
@@ -2057,6 +4191,14 @@
           ]
         },
         "keybinds": true,
+        "link_previews": {
+          "default": null,
+          "description": "Whether links this person posts are unfurled into previews, and whether\nthey see previews (spec §8.3). Stored in `user_settings.link_previews`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "locale": {
           "type": [
             "string",

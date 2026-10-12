@@ -38,6 +38,8 @@ rand = "0.8"
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
 sha2 = "0.10"
 
+# Wire types shared with the server (first-run host and trust commands).
+paracord-contracts = { workspace = true }
 # Native QUIC media engine
 paracord-transport = { workspace = true }
 paracord-codec = { workspace = true }
