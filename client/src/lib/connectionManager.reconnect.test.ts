@@ -34,6 +34,10 @@ vi.mock('../gateway/dispatch', () => ({ dispatchGatewayEvent: vi.fn() }));
 vi.mock('./messages/accountMessagingRuntime', () => ({ pauseAccountMessagingForRecovery: vi.fn() }));
 vi.mock('./desktopDiagnostics', () => ({ logVoiceDiagnostic: vi.fn() }));
 vi.mock('./tauriEnv', () => ({ isTauri: vi.fn(() => false) }));
+// The desktop case below runs the trust sync: the shell verifies nothing here and
+// the identity-change listener has nothing to hear.
+vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => undefined) }));
+vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(async () => () => {}) }));
 vi.mock('./secureStorage', () => {
   const memory = new Map<string, string>();
   return {
@@ -51,7 +55,7 @@ vi.mock('./tauriAxiosAdapter', () => ({
 }));
 
 type Request = { method: string; origin: string; path: string; auth: string | null; body: Record<string, unknown> | null };
-type Reply = { status: number; data?: unknown } | 'unreachable';
+type Reply = { status: number; data?: unknown } | 'unreachable' | 'pin-mismatch';
 
 let requests: Request[] = [];
 let answer: (request: Request) => Reply = () => 'unreachable';
@@ -69,6 +73,10 @@ async function scripted(config: InternalAxiosRequestConfig): Promise<AxiosRespon
   requests.push(request);
   const reply = answer(request);
   if (reply === 'unreachable') throw new AxiosError('connect ECONNREFUSED', AxiosError.ERR_NETWORK, config, null);
+  // The shell's refusal of a certificate other than the pinned one (lib.rs `PIN_MISMATCH_MESSAGE`).
+  if (reply === 'pin-mismatch') {
+    throw new AxiosError(`TLS certificate pin mismatch for ${url.hostname}`, AxiosError.ERR_NETWORK, config, null);
+  }
   const response = { data: reply.data ?? {}, status: reply.status, statusText: '', headers: {}, config } as AxiosResponse;
   if (reply.status >= 400) {
     throw new AxiosError(`Request failed with status code ${reply.status}`, AxiosError.ERR_BAD_REQUEST, config, null, response);
@@ -304,6 +312,22 @@ describe('a saved server at launch', () => {
     expect(refreshes()).toHaveLength(0);
     expect(phase()?.phase).toBe('signed-out');
     expect(useServerListStore.getState().getServer('s_lan')?.token).toBe('');
+  });
+});
+
+describe('a saved server whose certificate changed (docs/setup-spec.md §7.4)', () => {
+  it('is identity-changed, not unreachable, and nothing retries it', async () => {
+    answer = () => 'pin-mismatch';
+    await connectionManager.connectAll().catch(() => {});
+    await settle();
+    expect(phase()?.phase).toBe('identity-changed');
+    expect(phase()?.retryAt).toBeNull();
+    const sent = requests.length;
+    await advance(120_000);
+    await settle();
+    expect(requests).toHaveLength(sent);
+    // The credential is not touched: the person may still trust the new identity.
+    expect(useServerListStore.getState().getServer('s_lan')).toMatchObject({ token: 'access-expired', refreshToken: 'refresh-1' });
   });
 });
 

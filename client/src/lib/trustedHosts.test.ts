@@ -9,6 +9,7 @@ import { AxiosHeaders, type InternalAxiosRequestConfig } from 'axios';
 import { invoke } from '@tauri-apps/api/core';
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
+vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(async () => () => {}) }));
 vi.mock('./tauriEnv', () => ({ isTauri: vi.fn(() => true) }));
 
 describe('the first trust sync of a launch', () => {

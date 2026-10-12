@@ -59,6 +59,10 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 # wired into reqwest via `use_preconfigured_tls`. Must match reqwest's rustls
 # major (0.23) and its `ring` crypto provider so the config downcasts correctly.
 rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12", "logging"] }
+# The public certificate authorities the verifier checks a server's chain
+# against before it falls back to the trust-on-first-use pin
+# (docs/setup-spec.md §7.2). Already in the graph through reqwest's rustls-tls.
+webpki-roots = "1"
 scap = "0.1.0-beta.1"
 
 [target.'cfg(windows)'.dependencies]
@@ -134,6 +138,10 @@ keyring = { version = "3", features = ["apple-native"] }
 # Native camera capture (AVFoundation). Compile-gated arm — unverified on the
 # Linux toolchain used here.
 nokhwa = { version = "0.10", features = ["input-avfoundation"] }
+
+[dev-dependencies]
+# Certificates and a private CA for the verifier's unit tests.
+rcgen = { workspace = true }
 
 [features]
 default = ["custom-protocol", "vpx"]

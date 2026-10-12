@@ -1,0 +1,39 @@
+/* =============================================================================
+   The identity-changed sheet (docs/setup-spec.md §7.4) in the Index dialog style
+   (docs/index-spec.md §6.12): the panel, title, body and error are the shared
+   `ix-dialog*` rules; this file only orders the two actions and sets the words.
+   Colors are tokens; nothing animates here (the Modal owns enter and leave).
+   ============================================================================= */
+
+/* "Stay disconnected" comes first in the DOM so the focus trap lands on it (the
+   default), and is drawn rightmost, where a dialog's main action sits. */
+.fr-idc__actions {
+  flex-direction: row-reverse;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+
+/* The danger action keeps its own width instead of filling the row. */
+.fr-idc__trust.ix-ctl--wide {
+  flex: none;
+  padding: 0 14px;
+  font-size: 14px;
+}
+
+.fr-idc__words {
+  font-weight: 650;
+  color: var(--ix-ink);
+}
+
+/* Too narrow for the two side by side (a phone): one per row, full width, the
+   default on top. */
+@media (max-width: 480px) {
+  .fr-idc__actions > * {
+    flex: 1 1 100%;
+  }
+
+  .fr-idc__trust.ix-ctl--wide {
+    flex: 1 1 100%;
+  }
+}

@@ -14,10 +14,14 @@ import { create } from 'zustand';
  *               next attempt is scheduled for `retryAt`
  *   signed-out  the server refused the credential, or there is none left to
  *               present: nothing will connect until you sign in again
+ *   identity-changed
+ *               the server presented a certificate other than the one pinned
+ *               for it (docs/setup-spec.md §7.4): nothing connects until the
+ *               person reviews it and trusts the new identity
  *
  * A server with no entry here has not been asked about yet.
  */
-export type ServerConnectionPhase = 'connecting' | 'connected' | 'retrying' | 'signed-out';
+export type ServerConnectionPhase = 'connecting' | 'connected' | 'retrying' | 'signed-out' | 'identity-changed';
 
 export interface ServerConnectionState {
   phase: ServerConnectionPhase;

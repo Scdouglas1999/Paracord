@@ -1,3 +1,5 @@
+import { create } from 'zustand';
+
 import { isTauri } from './tauriEnv';
 
 /**
@@ -21,7 +23,9 @@ let firstSync: Promise<void> | null = null;
  * so nothing is sent to an origin the shell is still verifying.
  */
 export function trustSettled(): Promise<void> {
-  return firstSync ?? Promise.resolve();
+  // Settled either way: a sync that failed has been reported by its caller, and
+  // the requests waiting on it get the shell's own refusal instead of hanging.
+  return firstSync ? firstSync.catch(() => undefined) : Promise.resolve();
 }
 
 /** Syncs that have been asked for and not finished (any caller's). */
@@ -116,10 +120,182 @@ async function runSync(serverUrls: string[]): Promise<void> {
     )
   );
   if (unique.length === 0) return;
+  // Listening before the shell verifies anything: an identity change it finds
+  // during this sync is announced once, and it must not be missed.
+  await listenForIdentityChanges();
+  const { invoke } = await import('@tauri-apps/api/core');
   try {
-    const { invoke } = await import('@tauri-apps/api/core');
     await invoke('update_trusted_server_hosts', { serverUrls: unique });
-  } catch {
-    // Silently ignore — worst case the cert override doesn't apply
+  } catch (error) {
+    // The shell could not verify anything (too many servers, no TLS client).
+    // Nothing is trusted that was not before; say why, loudly.
+    console.error('[trust] the shell could not verify the saved servers:', error);
+    throw error instanceof Error ? error : new Error(String(error));
   }
+}
+
+/* ---- Server identity (docs/setup-spec.md §7) ------------------------------------ */
+
+/** The verifier's refusal of a certificate that is not the one pinned for its host (`PIN_MISMATCH_MESSAGE` in lib.rs). */
+const PIN_MISMATCH_TEXT = 'TLS certificate pin mismatch';
+
+function errorText(error: unknown): string {
+  if (typeof error === 'string') return error;
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string') return error.message;
+  return '';
+}
+
+/**
+ * The server presented a certificate other than the one this app pinned for it:
+ * an identity change, never a network error. The text comes from the shell's
+ * verifier through `native_fetch`, `probe_server` and the trust gate, possibly
+ * wrapped once (an axios error, an error's `cause`).
+ */
+export function isPinMismatch(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; depth < 4 && current; depth += 1) {
+    if (errorText(current).includes(PIN_MISMATCH_TEXT)) return true;
+    current = current && typeof current === 'object' && 'cause' in current ? current.cause : null;
+  }
+  return false;
+}
+
+/** One server's identity change, as the shell recorded it (fingerprints as lowercase hex). */
+export interface IdentityChange {
+  host: string;
+  pinnedFp: string;
+  presentedFp: string;
+}
+
+interface IdentityChangeWire {
+  host: string;
+  pinned_fp: string;
+  presented_fp: string;
+}
+
+function fromWire(change: IdentityChangeWire): IdentityChange {
+  return { host: change.host, pinnedFp: change.pinned_fp, presentedFp: change.presented_fp };
+}
+
+interface IdentityChangeStore {
+  /** By host (lowercase, IPv6 without brackets: the shell's pin key). */
+  changes: Record<string, IdentityChange>;
+  record: (change: IdentityChange) => void;
+  clear: (host: string) => void;
+}
+
+/** Identity changes the shell announced this run and nobody has accepted yet. */
+export const useIdentityChangeStore = create<IdentityChangeStore>()((set) => ({
+  changes: {},
+  record: (change) => set((state) => ({ changes: { ...state.changes, [change.host]: change } })),
+  clear: (host) =>
+    set((state) => {
+      if (!state.changes[host]) return state;
+      const { [host]: _accepted, ...rest } = state.changes;
+      return { changes: rest };
+    }),
+}));
+
+/** The host a URL's certificate is pinned under (the shell's `pin_host_from_url`). */
+export function pinHostFromUrl(serverUrl: string): string | null {
+  try {
+    const host = new URL(serverUrl).hostname.toLowerCase();
+    return host.replace(/^\[/, '').replace(/\]$/, '') || null;
+  } catch {
+    return null;
+  }
+}
+
+/** The identity change recorded for a server, if its host has one. */
+export function identityChangeFor(serverUrl: string): IdentityChange | null {
+  const host = pinHostFromUrl(serverUrl);
+  return host ? useIdentityChangeStore.getState().changes[host] ?? null : null;
+}
+
+let identityListener: Promise<void> | null = null;
+
+/** Subscribe to `trust://identity-changed` once per page (desktop only). */
+export function listenForIdentityChanges(): Promise<void> {
+  if (!isTauri()) return Promise.resolve();
+  identityListener ??= (async () => {
+    const { listen } = await import('@tauri-apps/api/event');
+    await listen<IdentityChangeWire>('trust://identity-changed', (event) => {
+      useIdentityChangeStore.getState().record(fromWire(event.payload));
+    });
+  })().catch((error: unknown) => {
+    identityListener = null;
+    throw error;
+  });
+  return identityListener;
+}
+
+/**
+ * The shell's record of a server's identity change, for a page that was not
+ * listening when it was announced (a reload). Null when there is none.
+ */
+export async function loadIdentityChange(serverUrl: string): Promise<IdentityChange | null> {
+  const host = pinHostFromUrl(serverUrl);
+  if (!host) return null;
+  const known = useIdentityChangeStore.getState().changes[host];
+  if (known) return known;
+  if (!isTauri()) return null;
+  const { invoke } = await import('@tauri-apps/api/core');
+  const change = await invoke<IdentityChangeWire | null>('pending_identity_change', { host });
+  if (!change) return null;
+  const recorded = fromWire(change);
+  useIdentityChangeStore.getState().record(recorded);
+  return recorded;
+}
+
+/** What `probe_server` answers: the server's `/health`, plus its certificate (§7.3). */
+export interface ServerProbe {
+  service?: string;
+  name?: string;
+  /** Hex SHA-256 of the leaf certificate; null over plain HTTP. */
+  fingerprint: string | null;
+  /** A public certificate authority signed the chain (no pin is kept). */
+  caVerified: boolean;
+  [key: string]: unknown;
+}
+
+/** Ask the shell for a server's `/health` and identity (desktop only). Refusals and pin mismatches are thrown as they are. */
+export async function probeServerIdentity(serverUrl: string): Promise<ServerProbe> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  const answer = await invoke<Record<string, unknown>>('probe_server', { serverUrl });
+  const { fingerprint, ca_verified: caVerified, ...health } = answer;
+  return {
+    ...health,
+    fingerprint: typeof fingerprint === 'string' ? fingerprint : null,
+    caVerified: caVerified === true,
+  };
+}
+
+/**
+ * Trust the server whose words the person just confirmed (§7.3): the shell pins
+ * `fingerprint` only if the server still presents it, and otherwise refuses
+ * ("This server's identity changed while you were looking at it."). Throws the
+ * refusal as an Error.
+ */
+export async function trustServer(serverUrl: string, fingerprint: string): Promise<void> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  try {
+    await invoke('trust_server', { url: serverUrl, fingerprint });
+  } catch (error) {
+    throw error instanceof Error ? error : new Error(errorText(error) || String(error));
+  }
+}
+
+/**
+ * "Trust the new identity" (§7.4): the shell re-pins the host only to the
+ * certificate it recorded as the change. Throws the refusal as an Error.
+ */
+export async function acceptChangedIdentity(change: IdentityChange): Promise<void> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  try {
+    await invoke('accept_changed_identity', { host: change.host, presentedFp: change.presentedFp });
+  } catch (error) {
+    throw error instanceof Error ? error : new Error(errorText(error) || String(error));
+  }
+  useIdentityChangeStore.getState().clear(change.host);
 }

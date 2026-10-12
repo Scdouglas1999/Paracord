@@ -1,0 +1,51 @@
+{
+  "domain": "paracord/trust-words/v1",
+  "source": "Computed with Python hashlib from the BIP39 English list, independently of trustWords.ts (docs/setup-spec.md 7.1).",
+  "vectors": [
+    {
+      "fingerprint": "0000000000000000000000000000000000000000000000000000000000000000",
+      "words": [
+        "injury",
+        "burden",
+        "fortune",
+        "boil"
+      ]
+    },
+    {
+      "fingerprint": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "words": [
+        "student",
+        "deposit",
+        "glance",
+        "slight"
+      ]
+    },
+    {
+      "fingerprint": "3d08dcba07d29e02c5eb0ba20db21bb7133b55a69f7f122bb16f09dcbc37df27",
+      "words": [
+        "hundred",
+        "step",
+        "scare",
+        "venue"
+      ]
+    },
+    {
+      "fingerprint": "c96ba3550d2f89b83c128090aca8160c16b70bb4804e57b1346c413062fe932d",
+      "words": [
+        "broccoli",
+        "laugh",
+        "maze",
+        "awkward"
+      ]
+    },
+    {
+      "fingerprint": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "words": [
+        "shrug",
+        "mountain",
+        "oblige",
+        "cat"
+      ]
+    }
+  ]
+}

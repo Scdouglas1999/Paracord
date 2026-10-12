@@ -114,6 +114,13 @@ pub(crate) fn ensure_native_fetch_target_is_trusted(uri: &str) -> Result<(), Str
         _ => return Err("Native fetch only supports HTTP(S) URLs".to_string()),
     }
     if !is_trusted_cert_origin(uri) {
+        // A server whose identity changed lost its trust for that reason: say
+        // so, so the renderer shows "Identity changed", not a network error.
+        if let Some(host) = pin_host_from_url(uri) {
+            if recorded_pin_mismatch(&host).is_some() {
+                return Err(format!("{PIN_MISMATCH_MESSAGE} for {host}"));
+            }
+        }
         return Err("Native fetch target is not in the trusted server list".to_string());
     }
     Ok(())
@@ -381,6 +388,127 @@ static PINNED_CERTS: LazyLock<RwLock<HashMap<String, [u8; 32]>>> =
 /// response has been confirmed to identify as Paracord.
 static OBSERVED_CERTS: LazyLock<RwLock<HashMap<String, [u8; 32]>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
+
+/// Hosts whose certificate chain validated against the public certificate
+/// authorities (`webpki-roots`) during this run, with the leaf each presented
+/// last. Such a host is not pinned: an ACME certificate rotates every 60-90 days
+/// and would trip a pin (docs/setup-spec.md §7.2). For the rest of the run its
+/// last public leaf stands in for one, so the same host later presenting a
+/// certificate no public authority signed is an identity change, not a first
+/// contact.
+static PUBLIC_CHAIN_HOSTS: LazyLock<RwLock<HashMap<String, [u8; 32]>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
+
+/// A certificate that is not the one this app knows for its host: `pinned` is
+/// the pin (or the public leaf seen earlier this run), `presented` what the
+/// server showed most recently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PinMismatch {
+    pub(crate) pinned: [u8; 32],
+    pub(crate) presented: [u8; 32],
+}
+
+/// Every identity change seen this run, by host. `accept_changed_identity`
+/// re-pins a host only to the `presented` fingerprint recorded here.
+static PIN_MISMATCHES: LazyLock<RwLock<HashMap<String, PinMismatch>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
+
+/// An announced identity change: the host and the certificate it presented.
+type AnnouncedMismatch = (String, [u8; 32]);
+
+/// The identity changes already announced to the renderer: one
+/// `trust://identity-changed` per host and presented certificate per run.
+static ANNOUNCED_MISMATCHES: LazyLock<std::sync::Mutex<HashSet<AnnouncedMismatch>>> =
+    LazyLock::new(|| std::sync::Mutex::new(HashSet::new()));
+
+/// The app the verifier emits `trust://identity-changed` through, set once in
+/// `setup` (`trust_cmds::remember_app`). Unset in unit tests: nothing is emitted.
+static TRUST_EVENT_APP: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
+
+/// Emitted once per host and presented certificate per run when a server shows
+/// a certificate other than the one pinned for it (docs/setup-spec.md §7.2, §9.5).
+pub(crate) const IDENTITY_CHANGED_EVENT: &str = "trust://identity-changed";
+
+/// The payload of [`IDENTITY_CHANGED_EVENT`] and of `pending_identity_change`:
+/// fingerprints as lowercase hex, the words are the renderer's (`trustWords.ts`).
+#[derive(serde::Serialize, Clone, Debug, PartialEq, Eq)]
+pub(crate) struct IdentityChange {
+    pub(crate) host: String,
+    pub(crate) pinned_fp: String,
+    pub(crate) presented_fp: String,
+}
+
+impl IdentityChange {
+    pub(crate) fn new(host: &str, mismatch: PinMismatch) -> Self {
+        Self {
+            host: host.to_string(),
+            pinned_fp: encode_fingerprint_hex(&mismatch.pinned),
+            presented_fp: encode_fingerprint_hex(&mismatch.presented),
+        }
+    }
+}
+
+/// What one TLS handshake presented, for the commands that show a server's
+/// identity before it is trusted (`probe_server`, `trust_server`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PresentedIdentity {
+    pub(crate) fingerprint: [u8; 32],
+    pub(crate) ca_verified: bool,
+}
+
+/// Where a verifier built for one request writes what it accepted.
+pub(crate) type IdentityObserver = Arc<std::sync::Mutex<Option<PresentedIdentity>>>;
+
+fn public_chain_leaf(host: &str) -> Option<[u8; 32]> {
+    PUBLIC_CHAIN_HOSTS.read().ok()?.get(host).copied()
+}
+
+fn record_public_chain(host: &str, fp: [u8; 32]) {
+    if let Ok(mut guard) = PUBLIC_CHAIN_HOSTS.write() {
+        guard.insert(host.to_string(), fp);
+    }
+}
+
+fn forget_public_chain(host: &str) {
+    if let Ok(mut guard) = PUBLIC_CHAIN_HOSTS.write() {
+        guard.remove(host);
+    }
+}
+
+pub(crate) fn recorded_pin_mismatch(host: &str) -> Option<PinMismatch> {
+    PIN_MISMATCHES.read().ok()?.get(host).copied()
+}
+
+/// Record an identity change. True when this host and presented certificate
+/// have not been announced yet this run (the caller announces it).
+fn record_pin_mismatch(host: &str, mismatch: PinMismatch) -> bool {
+    if let Ok(mut guard) = PIN_MISMATCHES.write() {
+        guard.insert(host.to_string(), mismatch);
+    }
+    ANNOUNCED_MISMATCHES
+        .lock()
+        .map(|mut announced| announced.insert((host.to_string(), mismatch.presented)))
+        .unwrap_or(false)
+}
+
+/// Forget a host's identity change once it has been accepted, so a later change
+/// of the same host is announced again.
+fn clear_pin_mismatch(host: &str) {
+    if let Ok(mut guard) = PIN_MISMATCHES.write() {
+        guard.remove(host);
+    }
+    if let Ok(mut announced) = ANNOUNCED_MISMATCHES.lock() {
+        announced.retain(|(announced_host, _)| announced_host != host);
+    }
+}
+
+fn announce_identity_change(host: &str, mismatch: PinMismatch) {
+    if let Some(app) = TRUST_EVENT_APP.get() {
+        if let Err(err) = app.emit(IDENTITY_CHANGED_EVENT, IdentityChange::new(host, mismatch)) {
+            eprintln!("failed to announce the identity change of {host}: {err}");
+        }
+    }
+}
 
 fn is_loopback_host(host: &str) -> bool {
     matches!(host, "localhost" | "127.0.0.1" | "::1" | "[::1]")
@@ -656,19 +784,29 @@ async fn request_native_server_trust_confirmation(app: &tauri::AppHandle, origin
     approved
 }
 
-/// TLS certificate verifier implementing trust-on-first-use (TOFU) pinning.
+/// TLS certificate verifier: public certificate authorities first, then
+/// trust-on-first-use (TOFU) pinning (docs/setup-spec.md §7.2).
 ///
 /// SAFETY / TRUST MODEL: self-hosted Paracord servers usually present
-/// self-signed certificates, so neither the public CA hierarchy nor hostname
-/// (SAN) validation can be relied upon. Instead:
-///   * Loopback hosts are trusted unconditionally (local dev / same machine).
-///   * The FIRST time a non-loopback host is reached, the SHA-256 fingerprint of
-///     its leaf certificate is captured into [`OBSERVED_CERTS`].
-///     `update_trusted_server_hosts` promotes that fingerprint to a durable pin
-///     only after the `/health` response identifies the peer as Paracord.
-///   * On EVERY later handshake the presented leaf MUST match the pinned
-///     fingerprint; a mismatch aborts the handshake. A MITM or re-issued
-///     certificate is rejected outright and is never silently re-trusted.
+/// self-signed certificates, so the public CA hierarchy cannot be the only
+/// answer. In order:
+///   1. Loopback hosts are trusted unconditionally (local dev / same machine).
+///   2. A chain that validates against `webpki-roots` for the server name is
+///      accepted and the host is marked CA-verified for this run. It is not
+///      pinned: ACME certificates rotate every 60-90 days.
+///   3. A host with a pin must present exactly the pinned leaf.
+///   4. A different leaf aborts the handshake with [`PIN_MISMATCH_MESSAGE`], is
+///      recorded in [`PIN_MISMATCHES`] and announced once as
+///      `trust://identity-changed`. It is never silently re-trusted; only
+///      `accept_changed_identity` re-pins, and only to the recorded leaf. A host
+///      that was CA-verified earlier this run and now presents a chain no public
+///      authority signed is treated the same way, with its last public leaf as
+///      the pin.
+///   5. The FIRST time a host is reached, the SHA-256 fingerprint of its leaf
+///      is captured into [`OBSERVED_CERTS`]. `update_trusted_server_hosts`
+///      promotes it to a durable pin only after the `/health` response
+///      identifies the peer as Paracord, and `trust_server` only when it equals
+///      the fingerprint the person was shown.
 ///
 /// The handshake signature is always verified against the presented leaf key, so
 /// a captured certificate cannot be replayed without its private key. The sole
@@ -677,16 +815,89 @@ async fn request_native_server_trust_confirmation(app: &tauri::AppHandle, origin
 #[derive(Debug)]
 struct TofuPinningVerifier {
     provider: Arc<rustls::crypto::CryptoProvider>,
+    /// The public-authority check (`webpki-roots`; a test CA in unit tests).
+    public_roots: Arc<dyn rustls::client::danger::ServerCertVerifier>,
+    /// Set for a client built to show one server's identity: receives what each
+    /// accepted handshake presented.
+    observer: Option<IdentityObserver>,
+}
+
+/// How the verifier answers one non-loopback certificate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CertDecision {
+    /// The chain validates against the public authorities.
+    PublicChain,
+    /// The pinned leaf, or the public leaf this host showed earlier this run.
+    Known,
+    /// Not the certificate this app knows for the host.
+    Changed { expected: [u8; 32] },
+    /// Never seen: trust on first use, pending the caller's confirmation.
+    FirstUse,
+}
+
+/// The verification order of [`TofuPinningVerifier`], without the I/O.
+fn decide_server_cert(
+    presented: [u8; 32],
+    public_chain_valid: bool,
+    pinned: Option<[u8; 32]>,
+    public_leaf_this_run: Option<[u8; 32]>,
+) -> CertDecision {
+    if public_chain_valid {
+        return CertDecision::PublicChain;
+    }
+    match pinned.or(public_leaf_this_run) {
+        Some(known) if known == presented => CertDecision::Known,
+        Some(known) => CertDecision::Changed { expected: known },
+        None => CertDecision::FirstUse,
+    }
+}
+
+/// The public certificate authorities a server's chain is checked against.
+fn public_root_store() -> rustls::RootCertStore {
+    rustls::RootCertStore {
+        roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+    }
+}
+
+impl TofuPinningVerifier {
+    fn new(
+        provider: Arc<rustls::crypto::CryptoProvider>,
+        roots: rustls::RootCertStore,
+        observer: Option<IdentityObserver>,
+    ) -> Result<Self, String> {
+        let public_roots = rustls::client::WebPkiServerVerifier::builder_with_provider(
+            Arc::new(roots),
+            provider.clone(),
+        )
+        .build()
+        .map_err(|e| format!("Failed to configure certificate authorities: {e}"))?;
+        Ok(Self {
+            provider,
+            public_roots,
+            observer,
+        })
+    }
+
+    fn observe(&self, fingerprint: [u8; 32], ca_verified: bool) {
+        if let Some(observer) = &self.observer {
+            if let Ok(mut seen) = observer.lock() {
+                *seen = Some(PresentedIdentity {
+                    fingerprint,
+                    ca_verified,
+                });
+            }
+        }
+    }
 }
 
 impl rustls::client::danger::ServerCertVerifier for TofuPinningVerifier {
     fn verify_server_cert(
         &self,
         end_entity: &rustls::pki_types::CertificateDer<'_>,
-        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+        intermediates: &[rustls::pki_types::CertificateDer<'_>],
         server_name: &rustls::pki_types::ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: rustls::pki_types::UnixTime,
+        ocsp_response: &[u8],
+        now: rustls::pki_types::UnixTime,
     ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
         let host = server_name_host(server_name);
         if host.is_empty() {
@@ -694,21 +905,47 @@ impl rustls::client::danger::ServerCertVerifier for TofuPinningVerifier {
                 "unsupported server name for certificate pinning".to_string(),
             ));
         }
+        let fingerprint = sha256_fingerprint(end_entity.as_ref());
         if is_loopback_host(&host) {
+            self.observe(fingerprint, false);
             return Ok(rustls::client::danger::ServerCertVerified::assertion());
         }
-        let fingerprint = sha256_fingerprint(end_entity.as_ref());
-        match pinned_fingerprint(&host) {
-            Some(expected) if expected == fingerprint => {
+        let public_chain_valid = self
+            .public_roots
+            .verify_server_cert(end_entity, intermediates, server_name, ocsp_response, now)
+            .is_ok();
+        match decide_server_cert(
+            fingerprint,
+            public_chain_valid,
+            pinned_fingerprint(&host),
+            public_chain_leaf(&host),
+        ) {
+            CertDecision::PublicChain => {
+                record_public_chain(&host, fingerprint);
+                self.observe(fingerprint, true);
                 Ok(rustls::client::danger::ServerCertVerified::assertion())
             }
-            Some(_) => Err(rustls::Error::General(format!(
-                "{PIN_MISMATCH_MESSAGE} for {host}"
-            ))),
-            None => {
+            CertDecision::Known => {
+                self.observe(fingerprint, false);
+                Ok(rustls::client::danger::ServerCertVerified::assertion())
+            }
+            CertDecision::Changed { expected } => {
+                let mismatch = PinMismatch {
+                    pinned: expected,
+                    presented: fingerprint,
+                };
+                if record_pin_mismatch(&host, mismatch) {
+                    announce_identity_change(&host, mismatch);
+                }
+                Err(rustls::Error::General(format!(
+                    "{PIN_MISMATCH_MESSAGE} for {host}"
+                )))
+            }
+            CertDecision::FirstUse => {
                 // Trust-on-first-use: record for the caller to promote to a pin
                 // once the peer's identity has been confirmed.
                 record_observed_fingerprint(&host, fingerprint);
+                self.observe(fingerprint, false);
                 Ok(rustls::client::danger::ServerCertVerified::assertion())
             }
         }
@@ -904,17 +1141,22 @@ fn commit_trusted_origin(origin: &str, trusted: bool) {
 /// because the server did not answer. Each origin is committed as soon as it is
 /// decided, so a slow or dead server earlier in the list does not hold up the
 /// ones after it.
+///
+/// Fails only when no verification could be run at all (a list over 100
+/// servers, a TLS client that could not be built); the renderer reports it.
 #[tauri::command]
-async fn update_trusted_server_hosts(app: tauri::AppHandle, server_urls: Vec<String>) {
+async fn update_trusted_server_hosts(
+    app: tauri::AppHandle,
+    server_urls: Vec<String>,
+) -> Result<(), String> {
     if server_urls.len() > 100 {
-        eprintln!("refusing oversized trusted server list");
-        return;
+        return Err(format!(
+            "Refusing to verify {} servers at once (the limit is 100).",
+            server_urls.len()
+        ));
     }
     let _one_sync_at_a_time = TRUST_SYNC_LOCK.lock().await;
-    let client = match tls_pinning_client_with_timeout(Duration::from_secs(5)) {
-        Ok(client) => client,
-        Err(_) => return,
-    };
+    let client = tls_pinning_client_with_timeout(Duration::from_secs(5))?;
 
     // The list first: a server taken out of it is untrusted at once, and a server
     // the user approved before (and, for HTTPS, still holds a pin for) is trusted
@@ -947,13 +1189,10 @@ async fn update_trusted_server_hosts(app: tauri::AppHandle, server_urls: Vec<Str
         };
         // A first use must be approved before making any request. In particular,
         // this keeps an XSS from using the native client as a localhost SSRF
-        // primitive against arbitrary loopback ports. A previously approved
-        // origin whose pin disappeared must also be re-approved; silently
-        // re-establishing it would turn a corrupt/deleted pin file into a MITM
-        // opportunity.
-        if (!previously_approved || external_https_without_pin(raw_url, &host))
-            && !request_native_server_trust_confirmation(&app, &origin).await
-        {
+        // primitive against arbitrary loopback ports. (An origin the person
+        // trusted from an invite card or the sign-in trust row went through
+        // `trust_server` instead and is approved already.)
+        if !previously_approved && !request_native_server_trust_confirmation(&app, &origin).await {
             commit_trusted_origin(&origin, false);
             continue;
         }
@@ -975,9 +1214,21 @@ async fn update_trusted_server_hosts(app: tauri::AppHandle, server_urls: Vec<Str
             continue;
         }
         // Identity confirmed. On first contact, promote the captured fingerprint
-        // to a durable pin; on later probes the pin already matched above.
-        if pinned_fingerprint(&host).is_none() {
+        // to a durable pin; on later probes the pin already matched above. A
+        // host whose chain a public authority signed is not pinned (§7.2).
+        if pinned_fingerprint(&host).is_none() && public_chain_leaf(&host).is_none() {
             if let Some(observed) = take_observed_fingerprint(&host) {
+                // A saved server whose pin disappeared is re-approved before it is
+                // pinned again: silently re-establishing it would turn a
+                // corrupt or deleted pin file into a MITM opportunity. (It is
+                // asked after the probe, not before, because a server with a
+                // public certificate has no pin to lose and must not ask.)
+                if previously_approved
+                    && !request_native_server_trust_confirmation(&app, &origin).await
+                {
+                    commit_trusted_origin(&origin, false);
+                    continue;
+                }
                 set_pinned_fingerprint(host.clone(), observed);
                 if let Err(err) = persist_pinned_certs(&app) {
                     eprintln!("failed to persist certificate pin: {err}");
@@ -1006,6 +1257,7 @@ async fn update_trusted_server_hosts(app: tauri::AppHandle, server_urls: Vec<Str
         }
         commit_trusted_origin(&origin, true);
     }
+    Ok(())
 }
 
 /// Build a reqwest client whose TLS layer enforces trust-on-first-use pinning
@@ -1013,14 +1265,48 @@ async fn update_trusted_server_hosts(app: tauri::AppHandle, server_urls: Vec<Str
 /// certificates are accepted only for loopback or on first contact with a host;
 /// a host with an established pin must present the recorded certificate.
 fn tls_pinning_client_builder() -> Result<reqwest::ClientBuilder, String> {
+    tls_client_builder(None)
+}
+
+fn tls_client_builder(
+    observer: Option<IdentityObserver>,
+) -> Result<reqwest::ClientBuilder, String> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let tls_config = rustls::ClientConfig::builder_with_provider(provider.clone())
+    let verifier = TofuPinningVerifier::new(provider.clone(), public_root_store(), observer)?;
+    let tls_config = rustls::ClientConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()
         .map_err(|e| format!("Failed to configure TLS: {e}"))?
         .dangerous()
-        .with_custom_certificate_verifier(Arc::new(TofuPinningVerifier { provider }))
+        .with_custom_certificate_verifier(Arc::new(verifier))
         .with_no_client_auth();
     Ok(reqwest::Client::builder().use_preconfigured_tls(tls_config))
+}
+
+/// GET a server's `/health` on a connection of its own and say what its
+/// certificate was: the fingerprint and whether a public authority signed it
+/// (`None` over plain HTTP). The same verifier as every other native request,
+/// so a pinned host that presents another certificate fails with
+/// [`PIN_MISMATCH_MESSAGE`].
+pub(crate) async fn observe_server(
+    server_url: &str,
+) -> Result<(serde_json::Value, Option<PresentedIdentity>), String> {
+    let observer = IdentityObserver::default();
+    // A client of its own: no pooled connection can skip the handshake.
+    let client = tls_client_builder(Some(observer.clone()))?
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {e}"))?;
+    let url = health_url_for_server(server_url)?;
+    let resp = client.get(&url).send().await.map_err(map_reqwest_error)?;
+    if !resp.status().is_success() {
+        return Err(format!("Server returned HTTP {}", resp.status()));
+    }
+    let body = read_limited_response(resp, MAX_NATIVE_JSON_RESPONSE_BYTES).await?;
+    let json = serde_json::from_slice(&body).map_err(|e| format!("Invalid JSON response: {e}"))?;
+    let presented = *observer
+        .lock()
+        .map_err(|_| "certificate observer poisoned".to_string())?;
+    Ok((json, presented))
 }
 
 fn tls_pinning_client_with_timeout(timeout: Duration) -> Result<reqwest::Client, String> {
@@ -1028,10 +1314,6 @@ fn tls_pinning_client_with_timeout(timeout: Duration) -> Result<reqwest::Client,
         .timeout(timeout)
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {e}"))
-}
-
-fn tls_pinning_client() -> Result<reqwest::Client, String> {
-    tls_pinning_client_with_timeout(Duration::from_secs(15))
 }
 
 fn tls_pinning_stream_client() -> Result<reqwest::Client, String> {
@@ -1045,6 +1327,16 @@ fn tls_pinning_stream_client() -> Result<reqwest::Client, String> {
 }
 
 fn map_reqwest_error(e: reqwest::Error) -> String {
+    // The verifier's refusal sits deep in the error chain and reqwest's own text
+    // does not include it; the renderer tells an identity change from a network
+    // failure by this message (`isPinMismatch` in trustedHosts.ts).
+    if error_chain_is_pin_mismatch(&e) {
+        let host = e
+            .url()
+            .and_then(|url| url.host_str())
+            .unwrap_or("this server");
+        return format!("{PIN_MISMATCH_MESSAGE} for {host}");
+    }
     if e.is_timeout() {
         "Connection timed out.".to_string()
     } else if e.is_connect() {
@@ -1082,17 +1374,52 @@ async fn read_limited_response(
 /// TLS restrictions. Self-signed certs are accepted only for loopback or on
 /// first contact; hosts with an established pin are enforced (see
 /// [`TofuPinningVerifier`]).
+///
+/// The answer is the server's `/health` object plus what its certificate was
+/// (docs/setup-spec.md §7.3): `fingerprint` (hex SHA-256 of the leaf, `null`
+/// over plain HTTP) and `ca_verified`. A server not trusted yet may be probed
+/// only over HTTPS and off this machine: that is the invite card's first
+/// contact, and loopback stays behind the native dialog so the renderer cannot
+/// use this to reach local services.
 #[tauri::command]
 async fn probe_server(server_url: String) -> Result<serde_json::Value, String> {
-    let client = tls_pinning_client()?;
     let url = health_url_for_server(&server_url)?;
-    ensure_native_fetch_target_is_trusted(&url)?;
-    let resp = client.get(&url).send().await.map_err(map_reqwest_error)?;
-    if !resp.status().is_success() {
-        return Err(format!("Server returned HTTP {}", resp.status()));
+    if let Err(refusal) = ensure_native_fetch_target_is_trusted(&url) {
+        if !is_first_contact_target(&url) {
+            return Err(refusal);
+        }
     }
-    let body = read_limited_response(resp, MAX_NATIVE_JSON_RESPONSE_BYTES).await?;
-    serde_json::from_slice(&body).map_err(|e| format!("Invalid JSON response: {e}"))
+    let (body, presented) = observe_server(&server_url).await?;
+    probe_answer(body, presented)
+}
+
+/// An HTTPS address off this machine: what an invite names on first contact.
+fn is_first_contact_target(url: &str) -> bool {
+    url::Url::parse(url).is_ok_and(|parsed| {
+        parsed.scheme() == "https"
+            && pin_host_from_url(url)
+                .is_some_and(|host| !host.is_empty() && !is_loopback_host(&host))
+    })
+}
+
+fn probe_answer(
+    body: serde_json::Value,
+    presented: Option<PresentedIdentity>,
+) -> Result<serde_json::Value, String> {
+    let serde_json::Value::Object(mut answer) = body else {
+        return Err("The server's health answer is not a JSON object.".to_string());
+    };
+    answer.insert(
+        "fingerprint".to_string(),
+        presented.map_or(serde_json::Value::Null, |seen| {
+            serde_json::Value::String(encode_fingerprint_hex(&seen.fingerprint))
+        }),
+    );
+    answer.insert(
+        "ca_verified".to_string(),
+        serde_json::Value::Bool(presented.is_some_and(|seen| seen.ca_verified)),
+    );
+    Ok(serde_json::Value::Object(answer))
 }
 
 /// Generic HTTP fetch via Rust for trusted Paracord servers.
@@ -1879,6 +2206,7 @@ pub fn run() {
             // Restore durably pinned server certificates so pin enforcement
             // survives restarts even before the server list is re-synced.
             load_pinned_certs(app.handle());
+            trust_cmds::remember_app(app.handle());
             load_user_approved_origins(app.handle());
 
             // --- paracord:// deep link handling ---
@@ -2033,6 +2361,7 @@ pub fn run() {
         // First-run setup: server identity (docs/setup-spec.md §7)
         trust_cmds::trust_server,
         trust_cmds::accept_changed_identity,
+        trust_cmds::pending_identity_change,
     ]);
 
     let app = builder

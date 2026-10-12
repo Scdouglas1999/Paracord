@@ -14,7 +14,7 @@ import { getAccessToken, getRefreshToken, setAccessToken, setRefreshToken } from
 import { getCurrentOriginServerUrl, getStoredServerUrl } from './config/apiBaseUrl';
 import { isTauri } from './tauriEnv';
 import { getTauriAdapter } from './tauriAxiosAdapter';
-import { syncTrustedHosts } from './trustedHosts';
+import { identityChangeFor, isPinMismatch, syncTrustedHosts } from './trustedHosts';
 import { inflateSync } from 'fflate';
 import type { Activity, GatewayPayload } from '../types';
 import { GatewayEvents } from '../gateway/events';
@@ -748,6 +748,13 @@ class ConnectionManager {
       this.forgetServer(serverId);
       return;
     }
+    // A certificate other than the pinned one is an identity change
+    // (docs/setup-spec.md §7.4), not a network failure: retrying cannot fix it,
+    // only the person can, from the sheet the sidebar's Review opens.
+    if (isPinMismatch(error) || identityChangeFor(server.url)) {
+      this.noteIdentityChanged(serverId);
+      return;
+    }
     const status = apiErrorStatus(error);
     const refused = status !== null && status >= 400 && status < 500 && status !== 408 && status !== 429;
     const account = useAccountStore.getState();
@@ -778,6 +785,21 @@ class ConnectionManager {
         void this.connectAll();
       }, delay),
     );
+  }
+
+  /**
+   * The server presented a certificate other than the one pinned for it. Its
+   * connection is dropped and nothing retries it: only the person can decide,
+   * from the identity-changed sheet, and accepting reconnects it (`retryServer`).
+   */
+  private noteIdentityChanged(serverId: string): void {
+    logVoiceDiagnostic('[gateway] identity changed; holding the server disconnected', { server: serverId });
+    // A restart it announced is over (it answered, with another certificate):
+    // "You'll reconnect automatically" is no longer true.
+    useUIStore.getState().setServerRestarting(false);
+    this.disconnectServer(serverId);
+    this.clearServerRetry(serverId);
+    this.setServerPhase(serverId, 'identity-changed');
   }
 
   /** The credential this connection was built on was refused; nothing reconnects it but a sign-in. */
@@ -866,7 +888,10 @@ class ConnectionManager {
     // attempt can only end the same way, and flashing "Connecting…" between
     // the two says something that is not true.
     const stillSignedOut = current?.phase === 'signed-out' && this.credentialIsGone(serverId);
-    if ((!existing || !this.isConnectionHealthy(existing)) && !stillSignedOut) {
+    // Likewise a server whose identity changed and has not been accepted.
+    const server = useServerListStore.getState().getServer(serverId);
+    const stillChanged = current?.phase === 'identity-changed' && !!server && !!identityChangeFor(server.url);
+    if ((!existing || !this.isConnectionHealthy(existing)) && !stillSignedOut && !stillChanged) {
       this.setServerPhase(serverId, 'connecting', { attempts: current?.attempts ?? 0 });
     }
     const connectTask = this.connectServerInternal(serverId, options.inviteCode);
@@ -1722,6 +1747,12 @@ class ConnectionManager {
       } catch (err) {
         if (!this.ownsTransport(conn, lane)) return;
         logVoiceDiagnostic('[gateway] SSE setup failed', { server: conn.serverId, error: err instanceof Error ? err.name : 'unknown' });
+        if (conn.serverId !== LOCAL_SERVER_ID && (isPinMismatch(err) || identityChangeFor(conn.serverUrl))) {
+          // The server came back with another certificate: reconnecting the stream
+          // cannot fix that (docs/setup-spec.md §7.4).
+          this.noteIdentityChanged(conn.serverId);
+          return;
+        }
         const events = conn.eventSource;
         conn.eventSource = null;
         this.cleanupConnection(conn);

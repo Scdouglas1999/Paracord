@@ -52,6 +52,18 @@ describe('the signed-out banner', () => {
   });
 });
 
+describe('the identity-changed banner (docs/setup-spec.md §7.4)', () => {
+  it('names a server whose certificate changed and opens the review sheet', async () => {
+    useServerConnectionStore.getState().set('s_lan', { phase: 'identity-changed', attempts: 0, retryAt: null, endedHere: false });
+    render(<ServerSessionBanner />);
+    expect(screen.getByTestId('ix-banner-identity-changed')).toHaveTextContent(
+      'Lantern has a new identity. It stays disconnected until you review it.',
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Review' }));
+    expect(await screen.findByRole('heading', { name: 'Lantern has a new identity' })).toBeInTheDocument();
+  });
+});
+
 describe('Sign in again', () => {
   it('signs in with the password and closes', async () => {
     signIn.signInToServer.mockResolvedValue({ kind: 'signed-in' });

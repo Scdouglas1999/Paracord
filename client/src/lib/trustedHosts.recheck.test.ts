@@ -10,6 +10,7 @@ import { AxiosError, AxiosHeaders, type InternalAxiosRequestConfig } from 'axios
 import { invoke } from '@tauri-apps/api/core';
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
+vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(async () => () => {}) }));
 const env = vi.hoisted(() => ({ tauri: true }));
 vi.mock('./tauriEnv', () => ({ isTauri: vi.fn(() => env.tauri) }));
 
