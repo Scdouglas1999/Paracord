@@ -66,6 +66,10 @@ async function scriptLantern(page: Page, initial: Mode): Promise<{ set: (mode: M
       valid.add('lan-access-2');
       return json(route, 200, { token: 'lan-access-2', refresh_token: 'lan-refresh-2' });
     }
+    // Lantern is an older server: no one-password routes, so the sign-in dialog
+    // asks for params, gets the bare 404 of a missing route, and signs in with
+    // the password (S3, docs/setup-spec.md §3.12).
+    if (pathname === '/api/v1/auth/credential/params') return route.fulfill({ status: 404, headers: cors(), body: '' });
     if (pathname === '/api/v1/auth/login') {
       log.logins.push(request.postDataJSON());
       valid.add('lan-access-signed-in');

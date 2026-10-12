@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { getPublicKeyAsync, verifyAsync } from '@noble/ed25519';
+import { getPublicKeyAsync, utils, verifyAsync } from '@noble/ed25519';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CredentialParams } from '../api/generated/CredentialParams';
 import type { NewCredential, NewIdentity } from '../api/generated/CredentialRegister';
@@ -138,12 +138,18 @@ vi.mock('../api/auth', () => ({
         kdf: body.credential.kdf, epoch: 1, publicKey: body.identity.public_key, backup: { wrapped_key: body.identity.wrapped_key, recovery_confirmed: false } });
       return { status: 200, data: { epoch: 1 } };
     },
-    verifyKey: async (body: { public_key: string; nonce: string; timestamp: number; signature: string }) => {
+    verifyKey: async (body: { public_key: string; nonce: string; timestamp: number; signature: string; username: string; existing_account_only?: boolean }) => {
       if (!server.nonces.delete(body.nonce)) throw apiError(401);
       if (!await verifyAsync(fromHex(body.signature), utf8(`${body.nonce}:${body.timestamp}:${ORIGIN}`), fromHex(body.public_key))) throw apiError(401);
       const user = server.users.find((candidate) => candidate.publicKey === body.public_key);
-      if (!user) throw apiError(401);
-      return session(user);
+      if (user) return session(user);
+      // As the real server: an unknown key makes a key-only account, unless the
+      // caller signs in only.
+      if (body.existing_account_only) throw apiError(404, { code: 'no_account_for_key', message: 'No account on this server uses that recovery phrase.' });
+      record('key-signup', body);
+      const created: FakeUser = { id: String(server.nextId++), username: body.username, email: `${body.public_key}@pubkey`, version: 1, epoch: 0, publicKey: body.public_key, settings: {} };
+      server.users.push(created);
+      return session(created);
     },
     resetCredential: async (body: { credential: NewCredential; wrapped_key: string; proof: NewIdentity['proof'] }) => {
       record('reset', body);
@@ -187,7 +193,7 @@ vi.mock('./config/apiBaseUrl', async (importOriginal) => ({
 const { setKdfWorkerFactory } = await import('./credential/derive');
 const { InlineKdfWorker, installTestLocks } = await import('./credential/testWorker');
 const { CredentialError } = await import('./credential/errors');
-const { privateKeyFromPhrase } = await import('./credential/phrase');
+const { phraseFromPrivateKey, privateKeyFromPhrase } = await import('./credential/phrase');
 const { readKeystoreV2, findCredentialPin } = await import('./credential/keystoreV2');
 const { createAccount, getStoredKeystore } = await import('./account');
 const { useAccountStore } = await import('../stores/accountStore');
@@ -392,6 +398,19 @@ describe('one-password flows', { timeout: 120_000 }, () => {
 
     newDevice();
     expect(await flows.signInWithPassword('sam', 'the brand new passphrase')).toMatchObject({ kind: 'signed-in' });
+  });
+
+  it('refuses a phrase no account on the server uses, and creates nothing', async () => {
+    await signUp();
+    newDevice();
+    const stranger = phraseFromPrivateKey(utils.randomSecretKey());
+    await expect(flows.recoverWithPhrase(stranger, 'someone')).rejects.toMatchObject({
+      code: 'no_account',
+      message: 'No account on this server uses that recovery phrase.',
+    });
+    expect(server.users).toHaveLength(1);
+    expect(server.requests.some((request) => request.startsWith('key-signup'))).toBe(false);
+    expect(useAuthStore.getState().token).toBeNull();
   });
 
   it('starts over with a new identity and moves this device’s pin to exactly it', async () => {

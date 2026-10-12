@@ -71,6 +71,22 @@ function wrap(wrapKey, iv, secretKey, publicKeyHex) {
   return { aad: aad.toString('utf8'), wrapped: Buffer.concat([iv, body]) };
 }
 
+// ── §4.7 storage-key escrow ────────────────────────────────────────────────
+// escrow_key = HKDF-SHA256(ikm = identity private key, salt = ESCROW_SALT,
+// info = instance_id, 32); the storage key is sealed with AES-256-GCM under it
+// with aad = ESCROW_AAD_PREFIX + instance_id. The client derives the key and
+// sends it as `wrapping_key` (b64url); the server seals and later opens.
+const ESCROW_SALT = 'paracord/host-storage-escrow/v1';
+const ESCROW_AAD_PREFIX = 'paracord/host-storage-escrow/v1|';
+function escrow(identitySecret, instanceId, storageKey, iv) {
+  const key = Buffer.from(crypto.hkdfSync('sha256', identitySecret, Buffer.from(ESCROW_SALT, 'utf8'), Buffer.from(instanceId, 'utf8'), 32));
+  const aad = Buffer.from(ESCROW_AAD_PREFIX + instanceId, 'utf8');
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  cipher.setAAD(aad);
+  const ciphertext = Buffer.concat([cipher.update(storageKey), cipher.final(), cipher.getAuthTag()]);
+  return { key, aad: aad.toString('utf8'), ciphertext };
+}
+
 // ── Ed25519 identity ───────────────────────────────────────────────────────
 const PKCS8_ED25519_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex');
 function ed25519(seed) {
@@ -166,6 +182,15 @@ function build() {
     throw new Error('word-103 vector must contain "artefact"');
   }
 
+  // The instance id S4 pinned in paracord-util's escrow test.
+  const escrowInstance = '7c1f0b6e-4a8e-4f8e-9a51-2d6c1f0b6e4a';
+  const storageKey = range(0x10, 32);
+  const escrowIv = range(0xe0, 12);
+  const sealedEscrow = escrow(seed, escrowInstance, storageKey, escrowIv);
+  if (hex(sealedEscrow.key) !== '03976eb9f4df480870ebee2d4d495ad22dcc239d87193d5fb9382ef36f2388cf') {
+    throw new Error('escrow key differs from the value paracord-util pins');
+  }
+
   const fingerprints = [
     { name: 'zeros', fp: Buffer.alloc(32, 0) },
     { name: 'ones', fp: Buffer.alloc(32, 0xff) },
@@ -183,6 +208,7 @@ function build() {
     labels: {
       salt: SALT_LABEL, auth_info: AUTH_INFO, wrap_info: WRAP_INFO, aad_prefix: AAD_PREFIX,
       wrap_alg: 'aes256gcm-v2', trust_words: 'paracord/trust-words/v1',
+      escrow_salt: ESCROW_SALT, escrow_aad_prefix: ESCROW_AAD_PREFIX,
     },
     derivation,
     wrap: [{
@@ -211,6 +237,21 @@ function build() {
     proofs,
     phrase: phraseKeys,
     trust_words,
+    // Spec §4.7: the host's storage key escrowed under the owner's identity
+    // (wrap[0]'s private key). `wrapping_key` is what the client sends to
+    // POST /host/storage-key/escrow (or host_write_escrow); the sealed form
+    // uses a fixed IV here only so the server can open a known ciphertext.
+    escrow: [{
+      name: 'identity',
+      private_key_hex: hex(seed),
+      instance_id: escrowInstance,
+      escrow_key_hex: hex(sealedEscrow.key),
+      wrapping_key: b64url(sealedEscrow.key),
+      storage_key_hex: hex(storageKey),
+      iv_hex: hex(escrowIv),
+      aad: sealedEscrow.aad,
+      ciphertext_hex: hex(sealedEscrow.ciphertext),
+    }],
     kdf_policy: {
       accept: [
         { alg: 'scrypt', log_n: 17, r: 8, p: 1 },

@@ -4053,6 +4053,22 @@ pub struct VerifyRequest {
     /// creates the account and the instance is invite-only.
     #[serde(default)]
     pub invite_code: Option<String>,
+    /// Sign in only: an unknown key is refused with 404 `no_account_for_key`
+    /// instead of creating an account. The one-password recovery sends it, so
+    /// a phrase that belongs to no account here never makes a new one. Absent
+    /// (false) keeps the key sign-up older clients and other servers rely on.
+    #[serde(default)]
+    pub existing_account_only: bool,
+}
+
+/// 404 `no_account_for_key`: a recovery phrase whose key no account on this
+/// server holds (sign-in only, `VerifyRequest::existing_account_only`).
+pub(crate) fn no_account_for_key() -> ApiError {
+    ApiError::Refused {
+        status: StatusCode::NOT_FOUND,
+        code: "no_account_for_key",
+        message: "No account on this server uses that recovery phrase.".into(),
+    }
 }
 
 pub async fn verify(
@@ -4243,6 +4259,11 @@ pub async fn verify(
                 }
             }
             user
+        }
+        None if body.existing_account_only => {
+            // The signature was valid, so the caller holds this key; saying no
+            // account uses it reveals nothing about anyone else's.
+            return Err(no_account_for_key());
         }
         None => {
             // A key creates an account here, so it answers to every rule

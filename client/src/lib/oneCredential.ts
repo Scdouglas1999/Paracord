@@ -9,9 +9,10 @@ import { useAuthStore } from '../stores/authStore';
 import type { LoginResponse, User } from '../types';
 import { deleteAccount as deleteLegacyKeystore, getStoredKeystore, signChallenge, unlockAccount } from './account';
 import { withUnlockedPrivateKey } from './accountSession';
+import { adoptAccountChoice, deviceAskChoice, setDeviceAskChoice } from './askForPassword';
 import { resolveApiBaseUrl } from './config/apiBaseUrl';
 import { createCredential, deriveCredentialKeysFromWire } from './credential/derive';
-import { CredentialError, isCredentialError, UNWRAP_FAILED_MESSAGE } from './credential/errors';
+import { CredentialError, isCredentialError, NO_ACCOUNT_FOR_PHRASE_MESSAGE, UNWRAP_FAILED_MESSAGE } from './credential/errors';
 import { toHex } from './credential/encoding';
 import {
   checkCredentialParams,
@@ -150,16 +151,21 @@ const identifiersOf = (typed: string | null, user: User): string[] =>
 
 /**
  * Desktop: keep the identity in the keychain unless "Ask for my password when
- * Paracord opens" is on. When the setting is not known yet it is read first;
- * if it cannot be read the key is not remembered (the next launch asks).
+ * Paracord opens" is on for this computer (`lib/askForPassword.ts`). A device
+ * that never chose adopts the account's old setting once; when that cannot be
+ * read, the key is not remembered (the next launch asks).
  */
 export async function applyRememberPolicy(keystore: AccountKeystoreV2): Promise<void> {
   if (!canRememberUnlock()) return;
-  const auth = useAuthStore.getState();
-  if (!auth.hasFetchedSettings) await auth.fetchSettings();
-  const settings = useAuthStore.getState().settings;
   const account = useAccountStore.getState();
-  if (!useAuthStore.getState().hasFetchedSettings || settings?.crypto_auth_enabled === true) {
+  let accountValue: boolean | undefined;
+  if (deviceAskChoice() === null) {
+    const auth = useAuthStore.getState();
+    if (!auth.hasFetchedSettings) await auth.fetchSettings();
+    const after = useAuthStore.getState();
+    accountValue = after.hasFetchedSettings ? after.settings?.crypto_auth_enabled === true : undefined;
+  }
+  if (adoptAccountChoice(accountValue)) {
     await forgetIdentity(keystore.homeOrigin, keystore.userId);
     return;
   }
@@ -171,8 +177,13 @@ export async function applyRememberPolicy(keystore: AccountKeystoreV2): Promise<
   }
 }
 
-/** "Ask for my password when Paracord opens" was switched: apply it to this device now. */
+/**
+ * "Ask for my password when Paracord opens" was switched on this computer:
+ * record it here (never on the account) and apply it now.
+ */
 export async function applyAskForPassword(ask: boolean): Promise<void> {
+  if (!canRememberUnlock()) return;
+  setDeviceAskChoice(ask);
   const keystore = await readKeystoreV2().catch(() => null);
   if (!keystore) return;
   if (ask) {
@@ -180,6 +191,21 @@ export async function applyAskForPassword(ask: boolean): Promise<void> {
     return;
   }
   if (useAccountStore.getState().isUnlocked) await applyRememberPolicy(keystore);
+}
+
+/**
+ * Account settings arrived. A device that never chose adopts the account's old
+ * `crypto_auth_enabled` once, and drops the remembered key when that says ask.
+ * A device that has chosen ignores the account value: another computer's
+ * choice does not reach this one.
+ */
+export async function adoptAccountAskForPassword(accountValue: boolean): Promise<void> {
+  if (!canRememberUnlock()) return;
+  const choice = deviceAskChoice();
+  if (choice === true || choice === false) return;
+  if (!adoptAccountChoice(accountValue)) return;
+  const keystore = await readKeystoreV2().catch(() => null);
+  if (keystore) await forgetIdentity(keystore.homeOrigin, keystore.userId);
 }
 
 // ── Installing an identity ─────────────────────────────────────────────────
@@ -723,7 +749,7 @@ export type RecoverOutcome =
 /**
  * Sign in to the home server with the identity the phrase holds
  * (`/auth/challenge` + `/auth/verify`). The account must already have this
- * key; the MFA gate applies.
+ * key (an unknown key is refused, never registered); the MFA gate applies.
  */
 export async function recoverWithPhrase(phrase: string, username: string): Promise<RecoverOutcome> {
   const privateKey = privateKeyFromPhrase(phrase);
@@ -739,7 +765,17 @@ export async function recoverWithPhrase(phrase: string, username: string): Promi
       throw new CredentialError('origin_mismatch', "The server signed this request for a different address. Paracord won't send it.");
     }
     const signature = await signChallenge(privateKey, challenge.nonce, challenge.timestamp, challenge.server_origin);
-    const { data } = await authApi.verifyKey({ public_key: publicKey, nonce: challenge.nonce, timestamp: challenge.timestamp, signature, username: username.trim() });
+    // Sign in only: a phrase that belongs to no account here must not create one.
+    let data: LoginResponse;
+    try {
+      ({ data } = await authApi.verifyKey({
+        public_key: publicKey, nonce: challenge.nonce, timestamp: challenge.timestamp, signature,
+        username: username.trim(), existing_account_only: true,
+      }));
+    } catch (error) {
+      if (responseCode(error) === 'no_account_for_key') throw new CredentialError('no_account', NO_ACCOUNT_FOR_PHRASE_MESSAGE);
+      throw error;
+    }
     const ticket = mfaTicketOf(data);
     if (ticket) return { kind: 'mfa', ticket, privateKey, publicKey };
     return { kind: 'signed-in', recovered: adoptRecoveredSession(data, privateKey, publicKey) };

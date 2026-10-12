@@ -121,4 +121,24 @@ describe('credential vectors', () => {
     for (const kdf of vectors.kdf_policy.refuse_weaker) expect(() => assertKdfPolicy(kdf)).toThrow(expect.objectContaining({ code: 'weak_kdf' }));
     for (const kdf of vectors.kdf_policy.refuse_heavier) expect(() => assertKdfPolicy(kdf)).toThrow(expect.objectContaining({ code: 'heavy_kdf' }));
   });
+  it.each(vectors.escrow.map((e) => [e.name, e] as const))('derives the %s storage-key escrow key and opens its sealed key', async (_name, e) => {
+    // Spec §4.7 with Web Crypto only: HKDF-SHA256(identity key, salt, instance id).
+    expect(e.private_key_hex).toBe(vectors.wrap[0].private_key_hex);
+    const ikm = await crypto.subtle.importKey('raw', new Uint8Array(fromHex(e.private_key_hex, 32)), 'HKDF', false, ['deriveBits']);
+    const bits = new Uint8Array(await crypto.subtle.deriveBits(
+      { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(utf8(vectors.labels.escrow_salt)), info: new Uint8Array(utf8(e.instance_id)) },
+      ikm,
+      256,
+    ));
+    expect(toHex(bits)).toBe(e.escrow_key_hex);
+    expect(toB64url(bits)).toBe(e.wrapping_key);
+    expect(e.aad).toBe(vectors.labels.escrow_aad_prefix + e.instance_id);
+    const key = await crypto.subtle.importKey('raw', bits, 'AES-GCM', false, ['decrypt']);
+    const opened = new Uint8Array(await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: new Uint8Array(fromHex(e.iv_hex, 12)), additionalData: new Uint8Array(utf8(e.aad)) },
+      key,
+      new Uint8Array(fromHex(e.ciphertext_hex, 48)),
+    ));
+    expect(toHex(opened)).toBe(e.storage_key_hex);
+  });
 });

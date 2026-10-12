@@ -96,6 +96,7 @@ import {
   pinForAccount,
   revealRecoveryPhrase,
 } from '../../lib/oneCredential';
+import { useAskForPasswordOnThisDevice } from '../../lib/askForPassword';
 import { canRememberUnlock } from '../../lib/rememberedUnlock';
 import { useServerLacks } from '../../lib/serverFeatures';
 import { LOCAL_SERVER_ID } from '../../lib/serverScope';
@@ -205,6 +206,8 @@ export function UserSettings({ onClose }: UserSettingsProps) {
   const [statusText, setStatusText] = useState<string | null>(null);
   const [statusKind, setStatusKind] = useState<'success' | 'error' | null>(null);
   const cryptoAuthEnabled = settings?.crypto_auth_enabled === true;
+  // One-password accounts: "Ask for my password" is this computer's choice.
+  const askOnThisDevice = useAskForPasswordOnThisDevice(cryptoAuthEnabled);
   // The Privacy section saves "Show what I'm playing" on its own, the moment it
   // is flipped. Keep this page's draft in step so a later Save does not write
   // the old answer back over it.
@@ -958,18 +961,17 @@ export function UserSettings({ onClose }: UserSettingsProps) {
   /**
    * "Ask for my password when Paracord opens" for a one-password device
    * (§3.5): on deletes the remembered key from the keychain, off remembers it
-   * (desktop). Saved as the account's `crypto_auth_enabled`.
+   * (desktop). Saved on this computer only, never on the account.
    */
   const handleAskForPassword = async (ask: boolean) => {
     setSaving(true);
     try {
-      await updateSettings({ crypto_auth_enabled: ask });
       await applyAskForPassword(ask);
       setSuccessStatus(ask
-        ? 'Paracord will ask for your password when it opens.'
+        ? 'Paracord will ask for your password when it opens on this computer.'
         : 'Paracord will open without asking on this computer.');
     } catch (err) {
-      setErrorStatus(`Failed to update the setting: ${extractApiError(err)}`);
+      setErrorStatus(`Failed to update the setting: ${err instanceof Error ? err.message : extractApiError(err)}`);
     } finally {
       setSaving(false);
     }
@@ -2069,7 +2071,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 <PrivacySection
                   askForPassword={onePasswordAccount
                     ? {
-                      on: cryptoAuthEnabled || !canRememberUnlock(),
+                      on: askOnThisDevice || !canRememberUnlock(),
                       disabled: !canRememberUnlock() || saving,
                       onChange: (next) => void handleAskForPassword(next),
                       note: !canRememberUnlock()

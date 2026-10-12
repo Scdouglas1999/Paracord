@@ -788,6 +788,9 @@ async fn main() -> Result<()> {
         paracord_core::reachability::hub().clone(),
         state.event_bus.clone(),
     );
+    // Backups report their status here once; every backup and every change
+    // of the switch reports it again (`host_status::publish_backups`).
+    paracord_api::routes::host_status::publish_backups(&state).await;
 
     // ── Native QUIC media server ─────────────────────────────────────────────
     // Uses a single UDP port (defaults to 8443, same as TLS) with ALPN-based

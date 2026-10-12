@@ -13,13 +13,16 @@ export const KDF_ALG_SCRYPT = 'scrypt';
 export const SCRYPT_MIN_LOG_N = 17;
 /** Ceiling: N = 2^20. Mirrors `SCRYPT_MAX_LOG_N`. */
 export const SCRYPT_MAX_LOG_N = 20;
+/** Mirrors `SCRYPT_R`. */
 export const SCRYPT_MIN_R = 8;
+/** Mirrors `SCRYPT_P`. */
 export const SCRYPT_MIN_P = 1;
 /**
  * N·r·p at most 2^23 — the cost of the ceiling N = 2^20 with r = 8, p = 1
- * (1 GiB, about eight times the default). The contract's `within_policy` has
- * no bound on r or p; without this one a server could ask a device for an
- * unbounded amount of memory or time.
+ * (1 GiB, about eight times the default). Without it a server could ask a
+ * device for an unbounded amount of memory or time. Mirrors
+ * `paracord-contracts` `SCRYPT_MAX_WORK`, which the server's
+ * `KdfParams::within_policy` applies; `kdfCore.test.ts` pins both sides.
  */
 export const SCRYPT_MAX_WORK = 2 ** 23;
 export const MASTER_BYTES = 32;

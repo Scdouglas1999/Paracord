@@ -110,23 +110,16 @@ pub fn check_credential(credential: &NewCredential) -> Result<CheckedCredential,
     })
 }
 
-/// The work ceiling the client enforces (`SCRYPT_MAX_WORK` in
-/// `client/src/lib/credential/kdfCore.ts`): N·r·p at most 2^23, the cost of
-/// N = 2^20 with r = 8, p = 1. The server refuses what a client would refuse,
-/// so it never stores a credential no client can sign in with.
-pub const SCRYPT_MAX_WORK: u64 = 1 << 23;
-
-/// The KDF must be scrypt between N = 2^17 and 2^20 with r ≥ 8 and p ≥ 1, and
-/// N·r·p within [`SCRYPT_MAX_WORK`].
+/// The KDF must be within the one policy in `paracord-contracts`
+/// ([`KdfParams::within_policy`]): scrypt between N = 2^17 and 2^20 with
+/// r ≥ 8 and p ≥ 1, and N·r·p at most 2^23. The server refuses what a client
+/// would refuse, so it never stores a credential no client can sign in with.
 pub fn check_kdf(kdf: &KdfParams) -> Result<(), CoreError> {
-    let work = (1u64 << kdf.log_n.min(63))
-        .saturating_mul(u64::from(kdf.r))
-        .saturating_mul(u64::from(kdf.p));
-    if kdf.within_policy() && work <= SCRYPT_MAX_WORK {
+    if kdf.within_policy() {
         Ok(())
     } else {
         Err(bad(
-            "The key derivation parameters are below what Paracord allows (scrypt N=2^17, r=8, p=1) or above its ceiling (N=2^20).",
+            "The key derivation parameters are below what Paracord allows (scrypt N=2^17, r=8, p=1) or above its ceiling (N=2^20, N·r·p at most 2^23).",
         ))
     }
 }

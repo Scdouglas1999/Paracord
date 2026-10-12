@@ -9,8 +9,9 @@ import { bytesToHex } from './crypto/util';
  * After a successful unlock the desktop app keeps the identity private key in
  * the OS keychain under `paracord:identity:<homeOrigin>:<userId>`, so a
  * relaunch opens without asking for the password. "Ask for my password when
- * Paracord opens" (Settings › Privacy, `crypto_auth_enabled`) turns this off:
- * the entry is deleted and `/unlock` asks at every launch.
+ * Paracord opens" (Settings › Privacy, a choice of this computer kept by
+ * `askForPassword.ts`) turns this off: the entry is deleted and `/unlock`
+ * asks at every launch.
  *
  * One path only: the OS keychain through `secure_store_*`. This module never
  * uses the generic secure store's encrypted-file or in-memory fallbacks. When

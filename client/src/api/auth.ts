@@ -65,7 +65,11 @@ export const authApi = {
   /** `POST /auth/challenge`: a single-use nonce to sign (key sign-in and credential proofs). */
   challenge: async () => getApi().post<AuthChallenge>('/auth/challenge'),
   /** `POST /auth/verify`: key sign-in (signature over the challenge). May answer with an MFA ticket. */
-  verifyKey: async (data: { public_key: string; nonce: string; timestamp: number; signature: string; username: string }) =>
+  /**
+   * `existing_account_only`: sign in only; an unknown key is refused (404
+   * `no_account_for_key`) instead of creating an account. Recovery sends it.
+   */
+  verifyKey: async (data: { public_key: string; nonce: string; timestamp: number; signature: string; username: string; existing_account_only?: boolean }) =>
     getApi().post<LoginResponse>('/auth/verify', data),
   // ── One password (docs/setup-spec.md §3, §9.1) ──────────────────────────
   credentialParams: async (identifier: string) =>

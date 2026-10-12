@@ -26,6 +26,11 @@ pub const SCRYPT_MIN_LOG_N: u8 = 17;
 pub const SCRYPT_MAX_LOG_N: u8 = 20;
 pub const SCRYPT_R: u32 = 8;
 pub const SCRYPT_P: u32 = 1;
+/// Work ceiling: N·r·p at most 2^23, the cost of N = 2^20 with r = 8, p = 1.
+/// Without it a server could pin a device's memory or CPU with a huge r or p.
+/// The client mirrors this as `SCRYPT_MAX_WORK` in
+/// `client/src/lib/credential/kdfCore.ts` (a test pins the same numbers).
+pub const SCRYPT_MAX_WORK: u64 = 1 << 23;
 /// The `wrap_alg` of a v2 wrapped identity:
 /// `b64url(iv12 || AES-256-GCM(wrap_key, iv, identity_sk, aad))` with
 /// `aad = "paracord/identity/v2|" + public_key_hex`.
@@ -58,13 +63,23 @@ impl KdfParams {
         }
     }
 
-    /// True when the parameters are scrypt within the floor and ceiling
-    /// (N between 2^17 and 2^20, r = 8 or more, p = 1 or more).
+    /// True when the parameters are scrypt within the floor and ceiling:
+    /// N between 2^17 and 2^20, r = 8 or more, p = 1 or more, and N·r·p at
+    /// most [`SCRYPT_MAX_WORK`]. This is the one definition of the KDF policy;
+    /// the server checks every credential with it.
     pub fn within_policy(&self) -> bool {
         self.alg == KDF_ALG_SCRYPT
             && (SCRYPT_MIN_LOG_N..=SCRYPT_MAX_LOG_N).contains(&self.log_n)
             && self.r >= SCRYPT_R
             && self.p >= SCRYPT_P
+            && self.work() <= SCRYPT_MAX_WORK
+    }
+
+    /// scrypt's N·r·p, saturating.
+    pub fn work(&self) -> u64 {
+        (1u64 << self.log_n.min(63))
+            .saturating_mul(u64::from(self.r))
+            .saturating_mul(u64::from(self.p))
     }
 
     /// The `users.credential_kdf` spelling: `"scrypt:17:8:1"`.
@@ -447,6 +462,23 @@ mod tests {
             .unwrap()
             .within_policy());
         assert!(!KdfParams::from_db_text("scrypt:21:8:1")
+            .unwrap()
+            .within_policy());
+        // The work ceiling: N·r·p ≤ 2^23.
+        assert_eq!(SCRYPT_MAX_WORK, 1 << 23);
+        assert!(KdfParams::from_db_text("scrypt:17:64:1")
+            .unwrap()
+            .within_policy());
+        assert!(!KdfParams::from_db_text("scrypt:17:64:2")
+            .unwrap()
+            .within_policy());
+        assert!(!KdfParams::from_db_text("scrypt:20:16:1")
+            .unwrap()
+            .within_policy());
+        assert!(!KdfParams::from_db_text("scrypt:17:8:4294967295")
+            .unwrap()
+            .within_policy());
+        assert!(!KdfParams::from_db_text("scrypt:17:7:1")
             .unwrap()
             .within_policy());
         assert_eq!(KdfParams::from_db_text("argon2id:1:2:3"), None);
