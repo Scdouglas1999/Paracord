@@ -92,9 +92,9 @@ const LOOPS = [
   ['styles/primitives.css', '.pc-typing-dots', 'typing dots (the design tokens page): only while someone is typing'],
   ['styles/primitives.css', '.pc-speaking', 'the speaking ring (the design tokens page): only while that person speaks'],
   ['styles/primitives.css', '.pc-window-breath.is-writing', 'only while someone is writing (`is-writing`)'],
-  ['styles/primitives.css', '.pc-mark-breathe', 'the mark on the app’s loading screen: only while the app starts'],
   ['styles/primitives.css', '.pc-sweep', 'an upload’s progress: only while the upload runs'],
-  ['styles/ix-cards.css', '.ix-bot-btn__busy', 'a bot button’s request in flight: only until it answers'],
+  ['components/brand/cordMark.css', '.pc-cord--loading', 'the loading and working loops of the brand mark: they last as long as the request or connection in flight, pause offscreen and while the window is hidden, and stop under reduced motion; they animate only the mask stroke-dasharray/dashoffset over static art, so nothing outside the small SVG lays out or paints'],
+  ['components/brand/cordMark.css', '.pc-cord--working', 'the loading and working loops of the brand mark: they last as long as the request or connection in flight, pause offscreen and while the window is hidden, and stop under reduced motion; they animate only the mask stroke-dasharray/dashoffset over static art, so nothing outside the small SVG lays out or paints'],
   ['styles/sports.css', '.pc-sports-skeleton-park', 'a loading skeleton: only until the game’s detail arrives'],
 ];
 

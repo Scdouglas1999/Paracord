@@ -253,7 +253,6 @@ ${cordMarkCss(geo)}
    holds its first frame. */
 .pc-cord[data-offscreen] *,.pc-cord[data-paused] *{animation-play-state:paused}
 /* Reduced motion: the resting style of every mask is the whole mark. */
-@media (prefers-reduced-motion: reduce){.pc-cord *{animation:none!important}}
 :root[data-motion='reduced'] .pc-cord *{animation:none!important}
 `;
   writeFileSync(join(COMPONENT, 'cordMark.css'), css);
