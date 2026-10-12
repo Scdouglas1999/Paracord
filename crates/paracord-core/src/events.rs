@@ -688,7 +688,9 @@ mod tests {
     /// replay, an admin must, and demotion takes effect at once.
     #[tokio::test]
     async fn instance_status_is_for_admins_only() {
-        let pool = paracord_db::create_pool("sqlite::memory:", 1).await.unwrap();
+        let pool = paracord_db::create_pool("sqlite::memory:", 1)
+            .await
+            .unwrap();
         paracord_db::run_migrations(&pool).await.unwrap();
         paracord_db::users::create_user(&pool, 1, "boss", 1, "boss@example.com", "x")
             .await
@@ -707,7 +709,9 @@ mod tests {
         assert!(!can_receive_replayed_event(&pool, 2, event, None, None, None).await);
         assert!(!can_receive_replayed_event(&pool, 999, event, None, None, None).await);
 
-        paracord_db::users::update_user_flags(&pool, 1, 0).await.unwrap();
+        paracord_db::users::update_user_flags(&pool, 1, 0)
+            .await
+            .unwrap();
         assert!(!can_receive_replayed_event(&pool, 1, event, None, None, None).await);
     }
 

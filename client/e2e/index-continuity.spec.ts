@@ -80,6 +80,10 @@ test('a window resized across the phone breakpoint keeps its dialog and its draf
   test.setTimeout(120_000);
   const h = await open(page);
   const target = h.world.messagesIn('gnLounge').find((m: { content: string }) => m.content === LINE)!;
+  const row = page.locator('[role="article"]', { hasText: LINE }).last();
+  // The history must be on screen before the edit arrives: an update for a
+  // message the page has not loaded yet is not applied to it.
+  await expect(row).toBeVisible();
   await page.route('**/api/v1/channels/*/messages/*/edits', (route) =>
     json(route, [
       { id: 'e1', message_id: target.id, content: 'bring the good guns', edited_at: '2026-10-01T20:52:10-05:00' },
@@ -98,8 +102,6 @@ test('a window resized across the phone breakpoint keeps its dialog and its draf
     },
   });
 
-  const row = page.locator('[role="article"]', { hasText: LINE }).last();
-  await expect(row).toBeVisible();
   await row.getByRole('button', { name: /Show the edit history/ }).click();
   const history = page.getByRole('dialog', { name: 'Edit history' });
   await expect(history).toBeVisible();

@@ -36,8 +36,7 @@ async fn host() -> anyhow::Result<Host> {
     host_with_database(None).await
 }
 
-/// A backup snapshots the database file, which an in-memory test database is
-/// not: the backup tests give the harness a file.
+/// The backup tests (which need a database file) live in `host_backups.rs`.
 async fn host_with_database(database_url: Option<String>) -> anyhow::Result<Host> {
     let dir = tempfile::tempdir()?;
     let token_file = dir.path().join("host-control.token");
@@ -61,17 +60,6 @@ async fn host_with_database(database_url: Option<String>) -> anyhow::Result<Host
         _dir: dir,
         _database_dir: None,
     })
-}
-
-async fn file_database_host() -> anyhow::Result<Host> {
-    let database_dir = tempfile::tempdir()?;
-    let url = format!(
-        "sqlite://{}?mode=rwc",
-        database_dir.path().join("backup-test.sqlite").display()
-    );
-    let mut host = host_with_database(Some(url)).await?;
-    host._database_dir = Some(database_dir);
-    Ok(host)
 }
 
 fn loopback() -> ConnectInfo<SocketAddr> {
@@ -307,34 +295,6 @@ async fn status_reports_an_escrow_that_exists() -> anyhow::Result<()> {
 // ── Backups ────────────────────────────────────────────────────────────────
 
 #[tokio::test]
-async fn backup_now_makes_an_archive_and_status_remembers_it() -> anyhow::Result<()> {
-    let host = file_database_host().await?;
-    let (status, payload) = call(
-        &host,
-        host_request(Method::POST, "/api/v1/host/backup-now", None, Some(TOKEN)),
-    )
-    .await?;
-    assert_eq!(status, StatusCode::OK, "{payload}");
-    let name = payload["name"].as_str().expect("archive name").to_string();
-    assert!(name.ends_with(".tar.gz"), "{name}");
-    assert!(std::path::Path::new(&host.app.state.config.backup_dir)
-        .join(&name)
-        .exists());
-
-    let (_, status_payload) = call(
-        &host,
-        host_request(Method::GET, "/api/v1/host/status", None, Some(TOKEN)),
-    )
-    .await?;
-    assert!(
-        status_payload["backups"]["last_backup_at"].is_string(),
-        "{status_payload}"
-    );
-    assert!(status_payload["backups"]["last_error"].is_null());
-    Ok(())
-}
-
-#[tokio::test]
 async fn admins_switch_automatic_backups_and_the_choice_beats_the_config() -> anyhow::Result<()> {
     let host = host().await?;
     let admin = admin_token(&host, "backupadmin").await?;
@@ -376,26 +336,6 @@ async fn admins_switch_automatic_backups_and_the_choice_beats_the_config() -> an
         let (_, payload) = call(&host, request).await?;
         assert_eq!(payload["backups"]["enabled"], enabled, "{payload}");
     }
-    Ok(())
-}
-
-#[tokio::test]
-async fn backup_pruning_never_removes_the_backup_just_made() -> anyhow::Result<()> {
-    let host = file_database_host().await?;
-    for _ in 0..3 {
-        paracord_api::routes::host_status::run_backup(&host.app.state, false, 2).await?;
-        // Archive names carry the second they were made in.
-        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
-    }
-    let kept = paracord_core::backup::list_backups(&host.app.state.config.backup_dir).await?;
-    assert_eq!(kept.len(), 2);
-    paracord_api::routes::host_status::run_backup(&host.app.state, false, 0).await?;
-    let kept = paracord_core::backup::list_backups(&host.app.state.config.backup_dir).await?;
-    assert_eq!(
-        kept.len(),
-        1,
-        "a configured 0 keeps the newest, not nothing"
-    );
     Ok(())
 }
 

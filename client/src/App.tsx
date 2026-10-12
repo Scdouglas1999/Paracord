@@ -59,7 +59,7 @@ import { useAuthStore } from './stores/authStore';
 import { hasAccount } from './lib/account';
 import { getStoredServerUrl, resolveApiBaseUrl, resolveServerRootUrl } from './lib/config/apiBaseUrl';
 import { isTauri } from './lib/tauriEnv';
-import { applyAskForPassword, moveDeferred, signedInAccountIsLegacy } from './lib/oneCredential';
+import { adoptAccountAskForPassword, moveDeferred, signedInAccountIsLegacy } from './lib/oneCredential';
 import { canRememberUnlock } from './lib/rememberedUnlock';
 
 /**
@@ -193,12 +193,12 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
     }
   }, [onePasswordDevice, isUnlocked, restoreState]);
 
-  // "Ask for my password" turned on (here or on another device): drop the
-  // remembered key the moment the setting is known.
-  const askForPassword = settings?.crypto_auth_enabled === true;
+  // "Ask for my password" is this computer's choice. A device that never made
+  // it adopts the account's old setting once, the moment that is known.
+  const accountAsksForPassword = settings?.crypto_auth_enabled === true;
   useEffect(() => {
-    if (onePasswordDevice && hasFetchedSettings && askForPassword) void applyAskForPassword(true);
-  }, [onePasswordDevice, hasFetchedSettings, askForPassword]);
+    if (onePasswordDevice && hasFetchedSettings) void adoptAccountAskForPassword(accountAsksForPassword);
+  }, [onePasswordDevice, hasFetchedSettings, accountAsksForPassword]);
 
   // A v1 account signed in before this version (§3.11): offer the move once a
   // session, asked of the server once (it alone knows the account's version).

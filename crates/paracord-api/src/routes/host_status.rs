@@ -311,6 +311,7 @@ pub async fn run_backup(
         Ok(name) => name,
         Err(err) => {
             record_backup_outcome(state, Err(&err.to_string())).await;
+            publish_backups(state).await;
             return Err(err);
         }
     };
@@ -327,7 +328,15 @@ pub async fn run_backup(
             }
         }
     }
+    publish_backups(state).await;
     Ok(name)
+}
+
+/// Report the current backup status to the reachability hub, which announces
+/// any change to admins as `INSTANCE_STATUS_UPDATE` (spec §5.5). Called once at
+/// startup and after every backup and every change of the switch.
+pub async fn publish_backups(state: &AppState) {
+    paracord_core::reachability::hub().set_backups(backup_status(state).await);
 }
 
 async fn backup_status(state: &AppState) -> BackupStatus {
@@ -465,6 +474,7 @@ pub async fn update_backups(
         if body.enabled { "true" } else { "false" },
     )
     .await?;
+    publish_backups(&state).await;
     security::log_security_event(
         &state,
         "admin.backups.update",

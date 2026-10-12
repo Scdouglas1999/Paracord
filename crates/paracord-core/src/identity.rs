@@ -56,6 +56,11 @@ pub struct UserSettingsExport {
     pub notifications: serde_json::Value,
     pub keybinds: serde_json::Value,
     pub updated_at: DateTime<Utc>,
+    /// Link previews for this person's messages (spec §8.3). Absent in bundles
+    /// made before the setting existed; skipped when absent so those bundles'
+    /// signatures still verify.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_previews: Option<bool>,
 }
 
 fn default_presence_status() -> String {
@@ -233,6 +238,7 @@ pub async fn export_identity(
             notifications: row.notifications,
             keybinds: row.keybinds,
             updated_at: row.updated_at,
+            link_previews: Some(row.link_previews),
         });
 
     // Fetch messages if requested
@@ -459,7 +465,24 @@ pub async fn import_identity(
         )
         .await
         {
-            Ok(_) => true,
+            Ok(_) => match settings.link_previews {
+                Some(enabled) => {
+                    match paracord_db::users::set_link_previews(
+                        pool,
+                        target_user_id.into(),
+                        enabled,
+                    )
+                    .await
+                    {
+                        Ok(()) => true,
+                        Err(e) => {
+                            warnings.push(format!("failed to import link previews: {}", e));
+                            false
+                        }
+                    }
+                }
+                None => true,
+            },
             Err(e) => {
                 warnings.push(format!("failed to import settings: {}", e));
                 false
@@ -661,6 +684,50 @@ mod tests {
         verify_subject_binding(&pool, &bundle, 1).await.unwrap();
         // Full import path succeeds for the rightful owner.
         import_identity(&pool, &bundle, 1).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn settings_round_trip_carries_link_previews() {
+        let pool = mem_pool().await;
+        paracord_db::users::create_user(&pool, 5, "previews", 5, "p@x", "h")
+            .await
+            .unwrap();
+        paracord_db::users::upsert_user_settings(
+            &pool, 5, "dark", "en-US", "cozy", None, None, None, None, None, None,
+        )
+        .await
+        .unwrap();
+        paracord_db::users::set_link_previews(&pool, 5_i64.into(), false)
+            .await
+            .unwrap();
+
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
+        let bundle = export_identity(&pool, 5, false, "example.test", &signing_key)
+            .await
+            .unwrap();
+        let exported = bundle.settings.as_ref().expect("settings exported");
+        assert_eq!(exported.link_previews, Some(false));
+
+        // A restored account keeps the choice instead of the default (on).
+        paracord_db::users::set_link_previews(&pool, 5_i64.into(), true)
+            .await
+            .unwrap();
+        let result = import_identity(&pool, &bundle, 5).await.unwrap();
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+        assert!(
+            !paracord_db::users::link_previews_enabled(&pool, 5_i64.into())
+                .await
+                .unwrap()
+        );
+
+        // A bundle made before the setting existed has no field and still
+        // serializes (and so verifies) exactly as it was signed.
+        let mut old = exported.clone();
+        old.link_previews = None;
+        let json = serde_json::to_value(&old).unwrap();
+        assert!(json.get("link_previews").is_none());
+        let parsed: UserSettingsExport = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed.link_previews, None);
     }
 
     #[tokio::test]

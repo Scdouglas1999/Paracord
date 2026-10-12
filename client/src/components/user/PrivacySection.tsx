@@ -6,9 +6,10 @@ import { ProtectedSheet, type ProtectedHostRows } from '../firstRun/ProtectedShe
 
 export interface PrivacySectionProps {
   /**
-   * "Ask for my password when Paracord opens" is `crypto_auth_enabled`. This
-   * is the switch only; what it does belongs to the device-security work, so
-   * the owner passes the state and the handler.
+   * "Ask for my password when Paracord opens": on a one-password account a
+   * choice of this computer (`lib/askForPassword.ts`), on an older server the
+   * account's `crypto_auth_enabled`. This is the switch only; the owner passes
+   * the state and the handler.
    */
   askForPassword: {
     on: boolean;

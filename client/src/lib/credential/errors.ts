@@ -19,7 +19,9 @@ export type CredentialErrorCode =
   /** The background worker could not run or failed. */
   | 'worker_failed'
   /** The challenge was issued for a different server origin. */
-  | 'origin_mismatch';
+  | 'origin_mismatch'
+  /** A recovery phrase whose key no account on the server holds. */
+  | 'no_account';
 
 export class CredentialError extends Error {
   readonly code: CredentialErrorCode;
@@ -34,6 +36,8 @@ export class CredentialError extends Error {
 export const isCredentialError = (value: unknown, code?: CredentialErrorCode): value is CredentialError =>
   value instanceof CredentialError && (code === undefined || value.code === code);
 
+/** Recovery with a phrase the server knows no account for (owner decision, M1). */
+export const NO_ACCOUNT_FOR_PHRASE_MESSAGE = 'No account on this server uses that recovery phrase.';
 /** Spec §3.2. */
 export const WEAK_KDF_MESSAGE = 'This server asked for weaker protection than Paracord allows.';
 /** Not in the spec's copy table; the ceiling's counterpart of `WEAK_KDF_MESSAGE`. */

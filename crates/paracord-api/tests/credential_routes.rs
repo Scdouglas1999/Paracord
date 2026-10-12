@@ -1380,6 +1380,56 @@ async fn key_sign_in(app: &TestApp, key: &SigningKey, username: &str) -> String 
     body["token"].as_str().unwrap().to_string()
 }
 
+/// `/auth/verify` for recovery only (`existing_account_only`).
+async fn recovery_sign_in(app: &TestApp, key: &SigningKey, username: &str) -> (StatusCode, Value) {
+    let (nonce, timestamp, origin) = challenge(app).await;
+    let signature = hex(&key
+        .sign(format!("{nonce}:{timestamp}:{origin}").as_bytes())
+        .to_bytes());
+    post(
+        app,
+        "/api/v1/auth/verify",
+        json!({
+            "public_key": public_hex(key),
+            "nonce": nonce,
+            "timestamp": timestamp,
+            "signature": signature,
+            "username": username,
+            "existing_account_only": true,
+        }),
+        None,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn recovery_with_an_unknown_phrase_makes_no_account() {
+    let app = app().await;
+    let signing = key(31);
+    registered(&app, "known", &Cred::new(31), &signing).await;
+
+    // A phrase whose key no account holds: refused, and nothing is created.
+    let stranger = key(32);
+    let (status, body) = recovery_sign_in(&app, &stranger, "stranger").await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["code"], "no_account_for_key");
+    assert_eq!(
+        body["message"],
+        "No account on this server uses that recovery phrase."
+    );
+    assert!(
+        paracord_db::users::get_user_by_public_key(&app.db, &public_hex(&stranger))
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // The account's own phrase still signs in.
+    let (status, body) = recovery_sign_in(&app, &signing, "known").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["token"].is_string());
+}
+
 #[tokio::test]
 async fn the_phrase_holder_resets_the_password() {
     let app = app().await;

@@ -310,6 +310,8 @@ export async function installSmokeApp(page: Page): Promise<SmokeApp> {
         status: 'online',
         custom_status: null,
         crypto_auth_enabled: false,
+        link_previews: true,
+        link_previews_available: true,
         notifications: {},
         keybinds: {},
       });
