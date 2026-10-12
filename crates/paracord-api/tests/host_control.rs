@@ -2,9 +2,10 @@
 //! (docs/setup-spec.md §2.5, §8.5, §9.1): the loopback + token guard, the
 //! status shape, backups, the backup toggle and the escrow pre-checks.
 //!
-//! The reachability retry and the escrow write itself belong to S5 and S4 and
-//! answer 501 `not_built` until those land (`routes/host_status.rs`, `seams`);
-//! the rows asserting that are the ones those packages replace.
+//! The escrow write itself belongs to S4 and answers 501 `not_built` until it
+//! lands (`routes/host_status.rs`, `seams`); the row asserting that is the one
+//! that package replaces. The reachability retry is S5's, wired to
+//! `paracord_core::reachability`.
 
 mod common;
 
@@ -436,9 +437,9 @@ async fn escrow_checks_its_input_before_anything_else() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// SEAM(S4)/SEAM(S5): replaced by the real behavior when those packages land.
+/// SEAM(S4): replaced by the real behavior when that package lands.
 #[tokio::test]
-async fn the_escrow_write_and_the_retry_say_so_until_their_packages_land() -> anyhow::Result<()> {
+async fn the_escrow_write_says_so_until_its_package_lands() -> anyhow::Result<()> {
     let host = host().await?;
     let (status, payload) = call(
         &host,
@@ -453,7 +454,14 @@ async fn the_escrow_write_and_the_retry_say_so_until_their_packages_land() -> an
     assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{payload}");
     assert_eq!(payload["code"], "not_built");
     assert!(!host.escrow_file.exists(), "nothing half-written");
+    Ok(())
+}
 
+/// With no router being asked there is nothing to retry, and the control
+/// channel says so instead of accepting a request that does nothing.
+#[tokio::test]
+async fn a_retry_with_no_router_in_play_is_refused_not_swallowed() -> anyhow::Result<()> {
+    let host = host().await?;
     let (status, payload) = call(
         &host,
         host_request(
@@ -464,8 +472,7 @@ async fn the_escrow_write_and_the_retry_say_so_until_their_packages_land() -> an
         ),
     )
     .await?;
-    assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{payload}");
-    assert_eq!(payload["code"], "not_built");
+    assert_eq!(status, StatusCode::CONFLICT, "{payload}");
     Ok(())
 }
 

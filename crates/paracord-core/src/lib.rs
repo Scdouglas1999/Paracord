@@ -24,6 +24,7 @@ pub mod observability;
 pub mod permissions;
 pub mod presence_manager;
 pub mod registration;
+pub mod reachability;
 pub mod router_access;
 pub mod share_address;
 pub mod shutdown;

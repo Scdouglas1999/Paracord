@@ -121,18 +121,21 @@ impl SkipReason {
     }
 }
 
-/// The single, always-logged result of the attempt.
+/// The single, always-logged result of the attempt, in the words the startup
+/// banner needs. The state machine in [`crate::reachability`] is the richer
+/// truth; this is derived from it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
-    /// The router accepted both mappings. `external_ip` is the address friends
-    /// type, when the router (or the public-IP lookup) told us what it is.
+    /// The router accepted both mappings and reported a public address.
     Mapped {
         external_ip: Option<IpAddr>,
         method: &'static str,
     },
-    /// Nothing opened the ports. `external_ip` is whatever was learned anyway,
-    /// so the banner can still name the address a hand-made forwarding rule
-    /// would be reachable at.
+    /// This computer has a public address of its own; there is nothing to map.
+    Direct { ip: IpAddr },
+    /// Nothing opened the ports. `external_ip` is only ever a public address a
+    /// router reported, so the banner can still name where a hand-made
+    /// forwarding rule would be reachable.
     NotAvailable {
         external_ip: Option<IpAddr>,
         reason: String,
@@ -142,42 +145,20 @@ pub enum Outcome {
 }
 
 impl Outcome {
-    /// Fill in a public address learned some other way (the HTTP lookup) when
-    /// the router did not report one. Never overwrites what the router said:
-    /// the gateway's own answer is the authority on its own address.
-    pub fn with_fallback_ip(self, fallback: Option<IpAddr>) -> Self {
-        match self {
-            Outcome::Mapped {
-                external_ip: None,
-                method,
-            } => Outcome::Mapped {
-                external_ip: fallback,
-                method,
-            },
-            Outcome::NotAvailable {
-                external_ip: None,
-                reason,
-            } => Outcome::NotAvailable {
-                external_ip: fallback,
-                reason,
-            },
-            other => other,
-        }
-    }
-
     /// The public address friends would use, when one is known.
     pub fn external_ip(&self) -> Option<IpAddr> {
         match self {
             Outcome::Mapped { external_ip, .. } | Outcome::NotAvailable { external_ip, .. } => {
                 *external_ip
             }
+            Outcome::Direct { ip } => Some(*ip),
             Outcome::Skipped(_) => None,
         }
     }
 
     /// True when a friend on the far side of the router can reach this server.
     pub fn is_mapped(&self) -> bool {
-        matches!(self, Outcome::Mapped { .. })
+        matches!(self, Outcome::Mapped { .. } | Outcome::Direct { .. })
     }
 
     /// The value for the banner's "Friends outside your network:" line, in words
@@ -191,6 +172,7 @@ impl Outcome {
             Outcome::Mapped {
                 external_ip: None, ..
             } => "Yes — set up automatically".to_string(),
+            Outcome::Direct { ip } => format!("Yes — this computer has its own address ({ip})"),
             Outcome::NotAvailable { .. } => {
                 "Not yet — your router needs one setting changed".to_string()
             }
@@ -220,6 +202,13 @@ impl Outcome {
                 external_ip,
                 "router opened the ports: friends outside this network can reach this server"
             ),
+            Outcome::Direct { .. } => tracing::info!(
+                target: "paracord::portmap",
+                tcp_port = request.tcp_port,
+                udp_port = request.udp_port,
+                external_ip,
+                "this computer has a public address of its own; no router is in the way"
+            ),
             Outcome::NotAvailable { reason, .. } => tracing::warn!(
                 target: "paracord::portmap",
                 tcp_port = request.tcp_port,
@@ -241,35 +230,88 @@ impl Outcome {
 /// Boxed future, so [`Router`] stays usable behind `Arc<dyn Router>`.
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
+/// Why a mapping attempt failed, which decides what the owner is told: a
+/// gateway that answered and said no is a different problem from silence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FailureKind {
+    /// A gateway answered and refused: a UPnP fault, a NAT-PMP/PCP result code
+    /// other than success, or an answer that left out its public address.
+    Refused,
+    /// Nothing answered within the budget.
+    NoAnswer,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MapFailure {
+    pub kind: FailureKind,
+    /// In plain words.
+    pub reason: String,
+}
+
+impl MapFailure {
+    pub fn refused(reason: impl Into<String>) -> Self {
+        Self {
+            kind: FailureKind::Refused,
+            reason: reason.into(),
+        }
+    }
+
+    pub fn no_answer(reason: impl Into<String>) -> Self {
+        Self {
+            kind: FailureKind::NoAnswer,
+            reason: reason.into(),
+        }
+    }
+}
+
 /// The gateway conversation, as the orchestrator sees it.
 ///
 /// Everything that talks to a real router is behind this trait, which is what
-/// makes the parts worth testing — fallback order, the budget, renewal timing —
-/// testable with a fake that never touches the network.
+/// makes the parts worth testing — fallback order, the budget, the state
+/// machine on top — testable with a fake that never touches the network.
 pub trait Router: Send + Sync {
     /// How this method is named to a human, in the log and the status line.
     fn method(&self) -> &'static str;
 
-    /// Install (or refresh) both mappings. `Err` carries a reason in plain words.
-    fn map(&self, request: PortRequest, lease: Duration) -> BoxFuture<'_, Result<Mapping, String>>;
+    /// Install (or refresh) both mappings. The result carries the router's own
+    /// public address: a mapping the router will not describe is a failure,
+    /// because nothing else is allowed to say what the address is.
+    fn map(
+        &self,
+        request: PortRequest,
+        lease: Duration,
+    ) -> BoxFuture<'_, Result<Mapping, MapFailure>>;
 
     /// Take the mappings back down.
     fn unmap(&self, request: PortRequest) -> BoxFuture<'_, Result<(), String>>;
 }
 
 /// What a router reported once it accepted the mappings.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Mapping {
-    /// The public address of this network, when the gateway knows it. NAT-PMP
-    /// (unlike PCP and UPnP) never reports one, hence the `Option`.
-    pub external_ip: Option<IpAddr>,
+    /// The public address of this network, as the router reports it. Never
+    /// looked up anywhere else.
+    pub external_ip: IpAddr,
+    /// `"upnp"`, `"nat-pmp"` or `"pcp"`.
+    pub protocol: &'static str,
+    /// The router that answered, when known.
+    pub gateway_ip: Option<IpAddr>,
+    /// This computer's address toward the router, when known.
+    pub lan_ip: Option<IpAddr>,
+    /// The lease the router actually granted; `None` for a permanent entry
+    /// that never expires. Routers commonly grant less than was asked.
+    pub granted: Option<Duration>,
 }
 
 /// The result of one attempt, plus the router that answered so renewal and
 /// removal keep talking to the same one.
 pub struct Attempt {
-    pub outcome: Outcome,
-    pub router: Option<Arc<dyn Router>>,
+    pub result: Result<Mapped, MapFailure>,
+}
+
+pub struct Mapped {
+    pub mapping: Mapping,
+    pub router: Arc<dyn Router>,
 }
 
 /// Clamp a configured lease to a range worth asking a router for.
@@ -290,6 +332,9 @@ pub fn renew_interval(lease: Duration) -> Duration {
 /// The budget is shared rather than per-method on purpose: the promise is that
 /// startup is never delayed by more than `budget`, whatever combination of
 /// silent and slow the network offers.
+///
+/// The failure is `Refused` when any method got an answer and was told no, and
+/// `NoAnswer` only when every method was silent.
 pub async fn establish(
     routers: &[Arc<dyn Router>],
     request: PortRequest,
@@ -298,6 +343,7 @@ pub async fn establish(
 ) -> Attempt {
     let deadline = tokio::time::Instant::now() + budget;
     let mut reasons: Vec<String> = Vec::new();
+    let mut refused = false;
 
     for router in routers {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
@@ -312,14 +358,16 @@ pub async fn establish(
         match tokio::time::timeout(remaining, router.map(request, lease)).await {
             Ok(Ok(mapping)) => {
                 return Attempt {
-                    outcome: Outcome::Mapped {
-                        external_ip: mapping.external_ip,
-                        method: router.method(),
-                    },
-                    router: Some(Arc::clone(router)),
+                    result: Ok(Mapped {
+                        mapping,
+                        router: Arc::clone(router),
+                    }),
                 };
             }
-            Ok(Err(reason)) => reasons.push(format!("{}: {reason}", router.method())),
+            Ok(Err(failure)) => {
+                refused |= failure.kind == FailureKind::Refused;
+                reasons.push(format!("{}: {}", router.method(), failure.reason));
+            }
             Err(_) => reasons.push(format!(
                 "{}: no answer within {}s",
                 router.method(),
@@ -328,16 +376,20 @@ pub async fn establish(
         }
     }
 
+    let reason = if reasons.is_empty() {
+        "no port-mapping method was available".to_string()
+    } else {
+        reasons.join("; ")
+    };
     Attempt {
-        outcome: Outcome::NotAvailable {
-            external_ip: None,
-            reason: if reasons.is_empty() {
-                "no port-mapping method was available".to_string()
+        result: Err(MapFailure {
+            kind: if refused {
+                FailureKind::Refused
             } else {
-                reasons.join("; ")
+                FailureKind::NoAnswer
             },
-        },
-        router: None,
+            reason,
+        }),
     }
 }
 
@@ -348,65 +400,6 @@ pub fn default_routers() -> Vec<Arc<dyn Router>> {
         Arc::new(UpnpRouter::default()) as Arc<dyn Router>,
         Arc::new(NatPmpRouter::default()) as Arc<dyn Router>,
     ]
-}
-
-/// Refresh the mapping for as long as the server runs.
-///
-/// Re-asking the same router (rather than "renewing" a handle) is deliberate: it
-/// is what survives a router reboot, which drops every mapping it held.
-pub fn spawn_renewal(
-    router: Arc<dyn Router>,
-    request: PortRequest,
-    lease: Duration,
-    shutdown: Arc<tokio::sync::Notify>,
-) {
-    spawn_renewal_every(router, request, lease, renew_interval(lease), shutdown);
-}
-
-/// [`spawn_renewal`] with the interval supplied rather than derived, so the loop
-/// itself can be exercised without waiting half a real lease.
-fn spawn_renewal_every(
-    router: Arc<dyn Router>,
-    request: PortRequest,
-    lease: Duration,
-    interval: Duration,
-    shutdown: Arc<tokio::sync::Notify>,
-) {
-    tracing::info!(
-        target: "paracord::portmap",
-        method = router.method(),
-        lease_seconds = lease.as_secs(),
-        renew_every_seconds = interval.as_secs(),
-        "keeping the router's port mappings alive"
-    );
-    tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                _ = shutdown.notified() => break,
-                _ = tokio::time::sleep(interval) => {
-                    match tokio::time::timeout(DISCOVERY_BUDGET, router.map(request, lease)).await {
-                        Ok(Ok(_)) => tracing::debug!(
-                            target: "paracord::portmap",
-                            method = router.method(),
-                            "refreshed the router's port mappings"
-                        ),
-                        Ok(Err(reason)) => tracing::warn!(
-                            target: "paracord::portmap",
-                            method = router.method(),
-                            reason = %reason,
-                            "could not refresh the router's port mappings; friends outside this \
-                             network may stop being able to join"
-                        ),
-                        Err(_) => tracing::warn!(
-                            target: "paracord::portmap",
-                            method = router.method(),
-                            "the router stopped answering while refreshing its port mappings"
-                        ),
-                    }
-                }
-            }
-        }
-    });
 }
 
 /// Take the mappings down on a graceful shutdown, within [`REMOVAL_BUDGET`].
@@ -446,7 +439,9 @@ async fn release_within(router: Arc<dyn Router>, request: PortRequest, budget: D
 // ── UPnP IGD ────────────────────────────────────────────────────────────────
 
 /// UPnP IGD, cached after the first successful discovery so renewal and removal
-/// do not pay for another search.
+/// do not pay for another search. The cache is dropped on any failure: a router
+/// that rebooted comes back with a new control URL, and the next attempt should
+/// find it rather than keep calling the old one.
 #[derive(Default)]
 struct UpnpRouter {
     gateway: tokio::sync::Mutex<Option<igd_next::aio::Gateway<igd_next::aio::tokio::Tokio>>>,
@@ -456,7 +451,7 @@ impl UpnpRouter {
     async fn gateway(
         &self,
         search_timeout: Duration,
-    ) -> Result<igd_next::aio::Gateway<igd_next::aio::tokio::Tokio>, String> {
+    ) -> Result<igd_next::aio::Gateway<igd_next::aio::tokio::Tokio>, MapFailure> {
         let mut cached = self.gateway.lock().await;
         if let Some(gateway) = cached.as_ref() {
             return Ok(gateway.clone());
@@ -466,9 +461,51 @@ impl UpnpRouter {
             ..Default::default()
         })
         .await
-        .map_err(|err| format!("no UPnP router answered ({err})"))?;
+        .map_err(|err| MapFailure::no_answer(format!("no UPnP router answered ({err})")))?;
         *cached = Some(gateway.clone());
         Ok(gateway)
+    }
+
+    async fn forget(&self) {
+        *self.gateway.lock().await = None;
+    }
+
+    async fn map_inner(
+        &self,
+        request: PortRequest,
+        lease: Duration,
+    ) -> Result<Mapping, MapFailure> {
+        // Bounded below the overall budget so a silent router still leaves
+        // time for NAT-PMP.
+        let gateway = self.gateway(Duration::from_secs(4)).await?;
+        let local_ip = local_ip_toward(gateway.addr).map_err(|err| {
+            MapFailure::refused(format!(
+                "could not work out this computer's address ({err})"
+            ))
+        })?;
+        let lease_seconds = u32::try_from(lease.as_secs()).unwrap_or(u32::MAX);
+
+        let mut granted = Some(lease);
+        for (port, transport) in request.entries() {
+            if add_upnp_mapping(&gateway, local_ip, port, transport, lease_seconds).await? {
+                // The router only keeps permanent entries: nothing expires, so
+                // there is no lease to renew against.
+                granted = None;
+            }
+        }
+
+        let external_ip = gateway.get_external_ip().await.map_err(|err| {
+            MapFailure::refused(format!(
+                "the router opened the ports but would not say its public address ({err})"
+            ))
+        })?;
+        Ok(Mapping {
+            external_ip,
+            protocol: "upnp",
+            gateway_ip: Some(gateway.addr.ip()),
+            lan_ip: Some(local_ip),
+            granted,
+        })
     }
 }
 
@@ -477,27 +514,26 @@ impl Router for UpnpRouter {
         "UPnP"
     }
 
-    fn map(&self, request: PortRequest, lease: Duration) -> BoxFuture<'_, Result<Mapping, String>> {
+    fn map(
+        &self,
+        request: PortRequest,
+        lease: Duration,
+    ) -> BoxFuture<'_, Result<Mapping, MapFailure>> {
         Box::pin(async move {
-            // Bounded below the overall budget so a silent router still leaves
-            // time for NAT-PMP.
-            let gateway = self.gateway(Duration::from_secs(4)).await?;
-            let local_ip = local_ip_toward(gateway.addr)
-                .map_err(|err| format!("could not work out this computer's address ({err})"))?;
-            let lease_seconds = u32::try_from(lease.as_secs()).unwrap_or(u32::MAX);
-
-            for (port, transport) in request.entries() {
-                add_upnp_mapping(&gateway, local_ip, port, transport, lease_seconds).await?;
+            let result = self.map_inner(request, lease).await;
+            if result.is_err() {
+                self.forget().await;
             }
-
-            let external_ip = gateway.get_external_ip().await.ok();
-            Ok(Mapping { external_ip })
+            result
         })
     }
 
     fn unmap(&self, request: PortRequest) -> BoxFuture<'_, Result<(), String>> {
         Box::pin(async move {
-            let gateway = self.gateway(Duration::from_secs(2)).await?;
+            let gateway = self
+                .gateway(Duration::from_secs(2))
+                .await
+                .map_err(|failure| failure.reason)?;
             let mut failures: Vec<String> = Vec::new();
             for (port, transport) in request.entries() {
                 if let Err(err) = gateway
@@ -524,13 +560,14 @@ fn upnp_protocol(transport: Transport) -> igd_next::PortMappingProtocol {
     }
 }
 
+/// `Ok(true)` when the router only keeps permanent entries and one was made.
 async fn add_upnp_mapping(
     gateway: &igd_next::aio::Gateway<igd_next::aio::tokio::Tokio>,
     local_ip: IpAddr,
     port: u16,
     transport: Transport,
     lease_seconds: u32,
-) -> Result<(), String> {
+) -> Result<bool, MapFailure> {
     let protocol = upnp_protocol(transport);
     let description = match transport {
         Transport::Tcp => UPNP_TCP_DESCRIPTION,
@@ -542,26 +579,34 @@ async fn add_upnp_mapping(
         .add_port(protocol, port, local_addr, lease_seconds, description)
         .await
     {
-        Ok(()) => Ok(()),
+        Ok(()) => Ok(false),
         // The mapping already exists. On a restart or a renewal that is our own
         // entry, which is exactly the state we wanted.
-        Err(igd_next::AddPortError::PortInUse) => Ok(()),
+        Err(igd_next::AddPortError::PortInUse) => Ok(false),
         // Some routers refuse timed leases outright and only keep permanent
         // entries. Asking again for a permanent one is the honest retry; it is
         // still removed on a graceful shutdown.
         Err(igd_next::AddPortError::OnlyPermanentLeasesSupported) => gateway
             .add_port(protocol, port, local_addr, 0, description)
             .await
-            .map_err(|err| {
-                format!(
-                    "this router only keeps permanent entries and refused one for {} {port} ({err})",
-                    transport.label()
-                )
-            }),
-        Err(err) => Err(format!(
-            "the router refused {} {port} ({err})",
-            transport.label()
-        )),
+            .map(|()| true)
+            .map_err(|err| upnp_add_failure(&err, transport, port)),
+        Err(err) => Err(upnp_add_failure(&err, transport, port)),
+    }
+}
+
+/// Silence on the control URL is "no answer"; everything the router said back
+/// is a refusal.
+fn upnp_add_failure(err: &igd_next::AddPortError, transport: Transport, port: u16) -> MapFailure {
+    let reason = format!("the router refused {} {port} ({err})", transport.label());
+    match err {
+        igd_next::AddPortError::RequestError(
+            igd_next::RequestError::IoError(_)
+            | igd_next::RequestError::HyperError(_)
+            | igd_next::RequestError::HyperClientError(_)
+            | igd_next::RequestError::AttoHttpError(_),
+        ) => MapFailure::no_answer(reason),
+        _ => MapFailure::refused(reason),
     }
 }
 
@@ -579,20 +624,31 @@ impl Router for NatPmpRouter {
         "NAT-PMP/PCP"
     }
 
-    fn map(&self, request: PortRequest, lease: Duration) -> BoxFuture<'_, Result<Mapping, String>> {
+    fn map(
+        &self,
+        request: PortRequest,
+        lease: Duration,
+    ) -> BoxFuture<'_, Result<Mapping, MapFailure>> {
         Box::pin(async move {
-            let gateway_ip = default_gateway_ipv4()
-                .map_err(|err| format!("could not find this network's router ({err})"))?;
-            let client_ip = local_ip_toward_ipv4(gateway_ip)
-                .map_err(|err| format!("could not work out this computer's address ({err})"))?;
+            let gateway_ip = default_gateway_ipv4().map_err(|err| {
+                MapFailure::no_answer(format!("could not find this network's router ({err})"))
+            })?;
+            let client_ip = local_ip_toward_ipv4(gateway_ip).map_err(|err| {
+                MapFailure::no_answer(format!(
+                    "could not work out this computer's address ({err})"
+                ))
+            })?;
             let lifetime = u32::try_from(lease.as_secs()).unwrap_or(u32::MAX);
 
             let mut fresh: Vec<crab_nat::PortMapping> = Vec::new();
             let mut external_ip: Option<IpAddr> = None;
+            let mut protocol = "pcp";
+            let mut granted: Option<Duration> = None;
 
             for (port, transport) in request.entries() {
-                let internal_port = NonZeroU16::new(port)
-                    .ok_or_else(|| format!("{} port 0 cannot be mapped", transport.label()))?;
+                let internal_port = NonZeroU16::new(port).ok_or_else(|| {
+                    MapFailure::refused(format!("{} port 0 cannot be mapped", transport.label()))
+                })?;
                 let options = crab_nat::PortMappingOptions {
                     external_port: Some(internal_port),
                     lifetime_seconds: Some(lifetime),
@@ -610,9 +666,7 @@ impl Router for NatPmpRouter {
                     options,
                 )
                 .await
-                .map_err(|err| {
-                    format!("the router refused {} {port} ({err})", transport.label())
-                })?;
+                .map_err(|err| natpmp_failure(&err, transport, port))?;
 
                 // A different outside port is not usable here: clients derive
                 // both the app URL and the media port from this one number, so
@@ -621,27 +675,64 @@ impl Router for NatPmpRouter {
                 if mapping.external_port() != internal_port {
                     let assigned = mapping.external_port();
                     let _ = mapping.try_drop().await;
-                    return Err(format!(
+                    return Err(MapFailure::refused(format!(
                         "this router mapped {} {port} to a different outside port ({assigned}), \
                          which Paracord cannot use",
                         transport.label()
-                    ));
+                    )));
                 }
 
-                if external_ip.is_none() {
-                    if let crab_nat::PortMappingType::Pcp {
+                let given = Duration::from_secs(u64::from(mapping.lifetime()));
+                granted = Some(granted.map_or(given, |least| least.min(given)));
+                match mapping.mapping_type() {
+                    crab_nat::PortMappingType::Pcp {
                         external_ip: reported,
                         ..
-                    } = mapping.mapping_type()
-                    {
-                        external_ip = Some(reported);
+                    } => {
+                        external_ip.get_or_insert(reported);
                     }
+                    crab_nat::PortMappingType::NatPmp => protocol = "nat-pmp",
                 }
                 fresh.push(mapping);
             }
 
+            // PCP answers with the external address. NAT-PMP does not, so ask
+            // the router for it (RFC 6886 §3.2): the only source allowed.
+            let external_ip = match (protocol, external_ip) {
+                ("pcp", Some(ip)) => ip,
+                _ => {
+                    let timeout = crab_nat::TimeoutConfig {
+                        initial_timeout: Duration::from_millis(400),
+                        max_retries: 2,
+                        max_retry_timeout: Some(Duration::from_secs(2)),
+                    };
+                    let ip = crab_nat::natpmp::external_address(gateway_ip.into(), Some(timeout))
+                        .await
+                        .map_err(|err| {
+                            let reason = format!(
+                                "the router opened the ports but would not say its public \
+                                 address ({err})"
+                            );
+                            match err {
+                                crab_nat::natpmp::Failure::Socket(_)
+                                | crab_nat::natpmp::Failure::Timeout => {
+                                    MapFailure::no_answer(reason)
+                                }
+                                _ => MapFailure::refused(reason),
+                            }
+                        })?;
+                    IpAddr::V4(ip)
+                }
+            };
+
             *self.mappings.lock().await = fresh;
-            Ok(Mapping { external_ip })
+            Ok(Mapping {
+                external_ip,
+                protocol,
+                gateway_ip: Some(IpAddr::V4(gateway_ip)),
+                lan_ip: Some(IpAddr::V4(client_ip)),
+                granted,
+            })
         })
     }
 
@@ -661,6 +752,28 @@ impl Router for NatPmpRouter {
                 Err(failures.join("; "))
             }
         })
+    }
+}
+
+/// A gateway that never answered (or whose socket failed) is "no answer"; every
+/// result code it sent back is a refusal.
+fn natpmp_failure(err: &crab_nat::MappingFailure, transport: Transport, port: u16) -> MapFailure {
+    let reason = format!("the router refused {} {port} ({err})", transport.label());
+    let silent = matches!(
+        err,
+        crab_nat::MappingFailure::NatPmp(
+            crab_nat::natpmp::Failure::Timeout | crab_nat::natpmp::Failure::Socket(_)
+        ) | crab_nat::MappingFailure::Pcp(
+            crab_nat::pcp::Failure::Timeout | crab_nat::pcp::Failure::Socket(_)
+        )
+    );
+    if silent {
+        MapFailure::no_answer(format!(
+            "the router did not answer for {} {port} ({err})",
+            transport.label()
+        ))
+    } else {
+        MapFailure::refused(reason)
     }
 }
 
@@ -690,6 +803,14 @@ fn local_ip_toward(target: SocketAddr) -> std::io::Result<IpAddr> {
     Ok(socket.local_addr()?.ip())
 }
 
+/// This computer's IPv4 address toward the internet. Nothing is sent.
+pub fn local_ipv4_toward_internet() -> Option<Ipv4Addr> {
+    match local_ip_toward((Ipv4Addr::new(8, 8, 8, 8), 53).into()) {
+        Ok(IpAddr::V4(ip)) => Some(ip),
+        _ => None,
+    }
+}
+
 fn local_ip_toward_ipv4(gateway: Ipv4Addr) -> std::io::Result<Ipv4Addr> {
     match local_ip_toward(SocketAddr::V4(SocketAddrV4::new(
         gateway,
@@ -702,10 +823,20 @@ fn local_ip_toward_ipv4(gateway: Ipv4Addr) -> std::io::Result<Ipv4Addr> {
     }
 }
 
-/// Best guess at this network's router: `.1` on the subnet this machine uses to
-/// reach the internet. NAT-PMP has no discovery step of its own — the protocol
-/// assumes the caller knows the gateway — and `.1` is what home routers use.
+/// This network's router, for NAT-PMP, which has no discovery step of its own.
+///
+/// Linux says exactly: the default route's gateway. Elsewhere the protocol's
+/// own assumption applies: `.1` on the subnet this machine uses to reach the
+/// internet, which is what home routers use.
 fn default_gateway_ipv4() -> std::io::Result<Ipv4Addr> {
+    #[cfg(target_os = "linux")]
+    if let Some(gateway) = std::fs::read_to_string("/proc/net/route")
+        .ok()
+        .as_deref()
+        .and_then(parse_proc_net_route)
+    {
+        return Ok(gateway);
+    }
     match local_ip_toward((Ipv4Addr::new(8, 8, 8, 8), 53).into())? {
         IpAddr::V4(ip) => {
             let o = ip.octets();
@@ -715,6 +846,26 @@ fn default_gateway_ipv4() -> std::io::Result<Ipv4Addr> {
             "this machine reaches the internet over IPv6; NAT-PMP needs an IPv4 router",
         )),
     }
+}
+
+/// The gateway of the default route in `/proc/net/route` (little-endian hex).
+#[cfg(any(target_os = "linux", test))]
+fn parse_proc_net_route(table: &str) -> Option<Ipv4Addr> {
+    const RTF_UP: u32 = 0x1;
+    const RTF_GATEWAY: u32 = 0x2;
+    table.lines().skip(1).find_map(|line| {
+        let columns: Vec<&str> = line.split_whitespace().collect();
+        let [_iface, destination, gateway, flags, ..] = columns[..] else {
+            return None;
+        };
+        let flags = u32::from_str_radix(flags, 16).ok()?;
+        if destination != "00000000" || flags & RTF_UP == 0 || flags & RTF_GATEWAY == 0 {
+            return None;
+        }
+        let raw = u32::from_str_radix(gateway, 16).ok()?;
+        let ip = Ipv4Addr::from(raw.swap_bytes());
+        (!ip.is_unspecified()).then_some(ip)
+    })
 }
 
 #[cfg(test)]
@@ -728,7 +879,7 @@ mod tests {
         method: &'static str,
         /// How long the fake "router" takes to answer.
         delay: Duration,
-        answer: Result<Mapping, String>,
+        answer: Result<Mapping, MapFailure>,
         map_calls: Arc<AtomicUsize>,
         unmap_calls: Arc<AtomicUsize>,
         /// Appended to in call order, shared across the fakes in one test.
@@ -736,7 +887,7 @@ mod tests {
     }
 
     impl FakeRouter {
-        fn new(method: &'static str, answer: Result<Mapping, String>) -> Self {
+        fn new(method: &'static str, answer: Result<Mapping, MapFailure>) -> Self {
             Self {
                 method,
                 delay: Duration::ZERO,
@@ -767,7 +918,7 @@ mod tests {
             &self,
             _request: PortRequest,
             _lease: Duration,
-        ) -> BoxFuture<'_, Result<Mapping, String>> {
+        ) -> BoxFuture<'_, Result<Mapping, MapFailure>> {
             Box::pin(async move {
                 self.order.lock().expect("order lock").push(self.method);
                 self.map_calls.fetch_add(1, Ordering::SeqCst);
@@ -794,10 +945,18 @@ mod tests {
         udp_port: 8443,
     };
 
-    fn mapped(ip: &str) -> Result<Mapping, String> {
+    fn mapped(ip: &str) -> Result<Mapping, MapFailure> {
         Ok(Mapping {
-            external_ip: Some(ip.parse().expect("test ip")),
+            external_ip: ip.parse().expect("test ip"),
+            protocol: "upnp",
+            gateway_ip: None,
+            lan_ip: None,
+            granted: Some(Duration::from_secs(3600)),
         })
+    }
+
+    fn refused(reason: &str) -> Result<Mapping, MapFailure> {
+        Err(MapFailure::refused(reason))
     }
 
     /// Both ports are asked for separately even when they are the same number:
@@ -839,24 +998,27 @@ mod tests {
         )
         .await;
 
+        let Ok(won) = attempt.result else {
+            panic!("the first router should have mapped");
+        };
         assert_eq!(
-            attempt.outcome,
-            Outcome::Mapped {
-                external_ip: Some("203.0.113.9".parse().unwrap()),
-                method: "first",
-            }
+            won.mapping.external_ip,
+            "203.0.113.9".parse::<IpAddr>().unwrap()
         );
+        assert_eq!(won.router.method(), "first");
         assert_eq!(*order.lock().unwrap(), vec!["first"]);
         assert_eq!(second_calls.load(Ordering::SeqCst), 0);
-        assert!(attempt.router.is_some());
     }
 
     #[tokio::test]
     async fn a_refusal_falls_through_to_the_next_method_in_order() {
         let order = Arc::new(std::sync::Mutex::new(Vec::new()));
         let upnp = Arc::new(
-            FakeRouter::new("UPnP", Err("no UPnP router answered".to_string()))
-                .sharing_order(Arc::clone(&order)),
+            FakeRouter::new(
+                "UPnP",
+                Err(MapFailure::no_answer("no UPnP router answered")),
+            )
+            .sharing_order(Arc::clone(&order)),
         );
         let pmp = Arc::new(
             FakeRouter::new("NAT-PMP/PCP", mapped("203.0.113.9")).sharing_order(Arc::clone(&order)),
@@ -871,13 +1033,10 @@ mod tests {
         )
         .await;
 
-        assert!(matches!(
-            attempt.outcome,
-            Outcome::Mapped {
-                method: "NAT-PMP/PCP",
-                ..
-            }
-        ));
+        let Ok(won) = attempt.result else {
+            panic!("the second method should have mapped");
+        };
+        assert_eq!(won.router.method(), "NAT-PMP/PCP");
         assert_eq!(*order.lock().unwrap(), vec!["UPnP", "NAT-PMP/PCP"]);
     }
 
@@ -907,14 +1066,10 @@ mod tests {
             spent < budget * 10,
             "budget overrun: {spent:?} for a {budget:?} budget"
         );
-        match attempt.outcome {
-            Outcome::NotAvailable { reason, .. } => {
-                assert!(reason.contains("UPnP"), "{reason}");
-                assert!(reason.contains("NAT-PMP/PCP"), "{reason}");
-            }
-            other => panic!("expected NotAvailable, got {other:?}"),
-        }
-        assert!(attempt.router.is_none());
+        let failure = attempt.result.err().expect("nothing answered");
+        assert_eq!(failure.kind, FailureKind::NoAnswer);
+        assert!(failure.reason.contains("UPnP"), "{}", failure.reason);
+        assert!(failure.reason.contains("NAT-PMP/PCP"), "{}", failure.reason);
     }
 
     /// The second method gets whatever the first one left of the budget, not a
@@ -923,8 +1078,7 @@ mod tests {
     async fn a_slow_first_method_does_not_hand_the_second_a_new_budget() {
         let budget = Duration::from_millis(300);
         let slow = Arc::new(
-            FakeRouter::new("UPnP", Err("refused".to_string()))
-                .with_delay(Duration::from_millis(150)),
+            FakeRouter::new("UPnP", refused("refused")).with_delay(Duration::from_millis(150)),
         );
         let also_slow = Arc::new(
             FakeRouter::new("NAT-PMP/PCP", mapped("203.0.113.9"))
@@ -941,18 +1095,18 @@ mod tests {
             spent < budget * 10,
             "the second method was handed a new budget: {spent:?}"
         );
-        assert!(matches!(attempt.outcome, Outcome::NotAvailable { .. }));
+        assert!(attempt.result.is_err());
     }
 
     #[tokio::test]
     async fn no_routers_at_all_is_reported_rather_than_assumed() {
         let attempt = establish(&[], REQUEST, Duration::from_secs(3600), DISCOVERY_BUDGET).await;
-        match attempt.outcome {
-            Outcome::NotAvailable { reason, .. } => {
-                assert!(reason.contains("no port-mapping method"), "{reason}");
-            }
-            other => panic!("expected NotAvailable, got {other:?}"),
-        }
+        let failure = attempt.result.err().expect("no routers");
+        assert!(
+            failure.reason.contains("no port-mapping method"),
+            "{}",
+            failure.reason
+        );
     }
 
     /// A restart must never hang on a router that stopped answering: removal is
@@ -972,47 +1126,6 @@ mod tests {
         assert!(spent >= budget, "gave up before the budget: {spent:?}");
         assert!(spent < budget * 10, "removal hung: {spent:?}");
         assert_eq!(calls.load(Ordering::SeqCst), 1);
-    }
-
-    /// The renewal loop refreshes on its interval and stops the moment shutdown
-    /// is signaled — a task that outlives the process it maps for would keep a
-    /// door open with nothing behind it.
-    #[tokio::test]
-    async fn renewal_refreshes_on_its_interval_and_stops_at_shutdown() {
-        let router = Arc::new(FakeRouter::new("UPnP", mapped("203.0.113.9")));
-        let calls = Arc::clone(&router.map_calls);
-        let shutdown = Arc::new(tokio::sync::Notify::new());
-        let interval = Duration::from_millis(40);
-
-        spawn_renewal_every(
-            Arc::clone(&router) as Arc<dyn Router>,
-            REQUEST,
-            Duration::from_secs(3600),
-            interval,
-            Arc::clone(&shutdown),
-        );
-
-        // Nothing happens before the first interval elapses: `establish` already
-        // installed the mapping, so an immediate tick would be a duplicate.
-        tokio::time::sleep(interval / 2).await;
-        assert_eq!(calls.load(Ordering::SeqCst), 0);
-
-        tokio::time::sleep(interval * 4).await;
-        let refreshed = calls.load(Ordering::SeqCst);
-        assert!(
-            refreshed >= 2,
-            "only {refreshed} refresh(es) in four intervals"
-        );
-
-        shutdown.notify_waiters();
-        tokio::time::sleep(interval * 2).await;
-        let after_shutdown = calls.load(Ordering::SeqCst);
-        tokio::time::sleep(interval * 4).await;
-        assert_eq!(
-            calls.load(Ordering::SeqCst),
-            after_shutdown,
-            "renewal kept running after shutdown"
-        );
     }
 
     #[test]
@@ -1102,53 +1215,53 @@ mod tests {
         }
     }
 
-    /// The public-address lookup fills the gap a NAT-PMP gateway leaves, and
-    /// never overrules a gateway that did report its own address.
+    /// A refusal anywhere outweighs silence, because it is the more useful
+    /// thing to tell the owner; silence everywhere is "no answer".
+    #[tokio::test]
+    async fn one_refusal_among_silent_methods_is_a_refusal() {
+        let routers: Vec<Arc<dyn Router>> = vec![
+            Arc::new(FakeRouter::new(
+                "UPnP",
+                Err(MapFailure::no_answer("no UPnP router answered")),
+            )),
+            Arc::new(FakeRouter::new("NAT-PMP/PCP", refused("result code 2"))),
+        ];
+        let attempt = establish(
+            &routers,
+            REQUEST,
+            Duration::from_secs(3600),
+            DISCOVERY_BUDGET,
+        )
+        .await;
+        assert_eq!(attempt.result.err().unwrap().kind, FailureKind::Refused);
+    }
+
+    /// The default route's gateway comes out of `/proc/net/route` the way the
+    /// kernel writes it: little-endian hex, flags UP|GATEWAY.
     #[test]
-    fn a_looked_up_address_only_fills_a_gap() {
-        let fallback: IpAddr = "203.0.113.9".parse().unwrap();
-
+    fn the_default_gateway_is_read_from_the_route_table() {
+        let table =
+            "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT\n\
+                     docker0\t000011AC\t00000000\t0001\t0\t0\t0\t0000FFFF\t0\t0\t0\n\
+                     eth0\t00000000\t0101A8C0\t0003\t0\t0\t100\t00000000\t0\t0\t0\n\
+                     eth0\t0001A8C0\t00000000\t0001\t0\t0\t100\t00FFFFFF\t0\t0\t0\n";
         assert_eq!(
-            Outcome::Mapped {
-                external_ip: None,
-                method: "NAT-PMP/PCP",
-            }
-            .with_fallback_ip(Some(fallback)),
-            Outcome::Mapped {
-                external_ip: Some(fallback),
-                method: "NAT-PMP/PCP",
-            }
+            parse_proc_net_route(table),
+            Some(Ipv4Addr::new(192, 168, 1, 1))
         );
+        // No default route: nothing is invented.
+        let none = "Iface\tDestination\tGateway\tFlags\n\
+                    eth0\t0001A8C0\t00000000\t0001\n";
+        assert_eq!(parse_proc_net_route(none), None);
+    }
 
-        let gateway_said: IpAddr = "198.51.100.7".parse().unwrap();
-        assert_eq!(
-            Outcome::Mapped {
-                external_ip: Some(gateway_said),
-                method: "UPnP",
-            }
-            .with_fallback_ip(Some(fallback))
-            .external_ip(),
-            Some(gateway_said)
-        );
-
-        // A failed attempt still learns the address a hand-made rule would be
-        // reachable at, so the banner can name it.
-        assert_eq!(
-            Outcome::NotAvailable {
-                external_ip: None,
-                reason: "no UPnP router answered".to_string(),
-            }
-            .with_fallback_ip(Some(fallback))
-            .external_ip(),
-            Some(fallback)
-        );
-
-        // A skip has no address to report and must not invent one.
-        assert_eq!(
-            Outcome::Skipped(SkipReason::LoopbackBind)
-                .with_fallback_ip(Some(fallback))
-                .external_ip(),
-            None
-        );
+    #[test]
+    fn a_direct_address_reads_as_reachable() {
+        let direct = Outcome::Direct {
+            ip: "198.51.100.20".parse().unwrap(),
+        };
+        assert!(direct.is_mapped());
+        assert_eq!(direct.external_ip(), Some("198.51.100.20".parse().unwrap()));
+        assert!(direct.status_line().contains("198.51.100.20"));
     }
 }

@@ -1030,7 +1030,8 @@ async fn session_pump(
                     continue;
                 }
 
-                if paracord_core::events::requires_report_moderator(&event.event_type)
+                if (paracord_core::events::requires_report_moderator(&event.event_type)
+                    || paracord_core::events::requires_instance_admin(&event.event_type))
                     && !paracord_core::events::can_receive_replayed_event(
                         &state.db,
                         user_id,

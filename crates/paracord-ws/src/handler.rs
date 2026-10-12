@@ -2662,6 +2662,14 @@ async fn run_session_with_events(
                             continue;
                         }
 
+                        // Instance status goes to admins only, checked at
+                        // delivery so a demoted admin stops receiving it.
+                        if paracord_core::events::requires_instance_admin(&event.event_type)
+                            && !paracord_core::events::is_instance_admin(&state.db, session.user_id).await
+                        {
+                            continue;
+                        }
+
                         // A report may have been queued while its target was a
                         // moderator. Recheck privileged audiences at delivery.
                         if paracord_core::events::requires_report_moderator(&event.event_type)

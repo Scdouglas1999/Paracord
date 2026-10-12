@@ -22,6 +22,22 @@ pub fn requires_report_moderator(event_type: &str) -> bool {
     event_type.starts_with("GUILD_REPORT_")
 }
 
+/// Instance status (reachability, storage, backups) is for server admins. It is
+/// dispatched without a recipient list so a new admin is covered, which means
+/// every delivery path has to check the flag itself.
+pub fn requires_instance_admin(event_type: &str) -> bool {
+    event_type == paracord_models::gateway::EVENT_INSTANCE_STATUS_UPDATE
+}
+
+/// Whether `user_id` is a server admin right now.
+pub async fn is_instance_admin(pool: &paracord_db::DbPool, user_id: i64) -> bool {
+    paracord_db::users::get_user_by_id(pool, user_id)
+        .await
+        .ok()
+        .flatten()
+        .is_some_and(|user| crate::is_admin(user.flags))
+}
+
 /// User-targeted report dispatches carry their guild only in the payload.
 /// Do not infer guild membership for personal notices such as a ban notice,
 /// whose intended recipient may already have left the guild.
@@ -50,6 +66,9 @@ pub async fn can_receive_replayed_event(
 ) -> bool {
     if target_user_ids.is_some_and(|targets| !targets.contains(&user_id)) {
         return false;
+    }
+    if requires_instance_admin(event_type) {
+        return is_instance_admin(pool, user_id).await;
     }
     if requires_report_moderator(event_type) {
         let Some(guild_id) = guild_id else {
@@ -664,6 +683,33 @@ impl Default for EventBus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Instance status is for admins: a member must not receive it live or on
+    /// replay, an admin must, and demotion takes effect at once.
+    #[tokio::test]
+    async fn instance_status_is_for_admins_only() {
+        let pool = paracord_db::create_pool("sqlite::memory:", 1).await.unwrap();
+        paracord_db::run_migrations(&pool).await.unwrap();
+        paracord_db::users::create_user(&pool, 1, "boss", 1, "boss@example.com", "x")
+            .await
+            .unwrap();
+        paracord_db::users::create_user(&pool, 2, "friend", 1, "friend@example.com", "x")
+            .await
+            .unwrap();
+        paracord_db::users::update_user_flags(&pool, 1, crate::USER_FLAG_ADMIN)
+            .await
+            .unwrap();
+
+        assert!(requires_instance_admin("INSTANCE_STATUS_UPDATE"));
+        assert!(!requires_instance_admin("MESSAGE_CREATE"));
+        let event = "INSTANCE_STATUS_UPDATE";
+        assert!(can_receive_replayed_event(&pool, 1, event, None, None, None).await);
+        assert!(!can_receive_replayed_event(&pool, 2, event, None, None, None).await);
+        assert!(!can_receive_replayed_event(&pool, 999, event, None, None, None).await);
+
+        paracord_db::users::update_user_flags(&pool, 1, 0).await.unwrap();
+        assert!(!can_receive_replayed_event(&pool, 1, event, None, None, None).await);
+    }
 
     fn test_event(guild_id: Option<i64>, target_user_ids: Option<Vec<i64>>) -> ServerEvent {
         ServerEvent {

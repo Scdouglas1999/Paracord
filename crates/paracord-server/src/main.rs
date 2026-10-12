@@ -19,10 +19,8 @@ mod logging;
 mod portmap;
 mod restore;
 mod tls;
+mod reachability;
 mod web_ui;
-
-const PUBLIC_IP_DETECTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
-const PUBLIC_IP_DETECTION_BODY_LIMIT: usize = 128;
 
 /// Bounded grace period granted to background workers to drain their current
 /// batch after shutdown is signaled, before the process tears down.
@@ -161,57 +159,6 @@ fn open_connection_summary() -> String {
         paracord_api::live_stream_count(),
         paracord_api::live_voice_signaling_count(),
     )
-}
-
-fn parse_detected_public_ip(text: &str) -> Option<String> {
-    let ip = text.trim();
-    if ip.is_empty() || ip.parse::<std::net::IpAddr>().is_err() {
-        return None;
-    }
-    Some(ip.to_string())
-}
-
-/// Ask an outside service what this network's public address is.
-///
-/// Two callers need it and neither can derive it locally: LiveKit, for ICE
-/// candidates, and the port mapper, because a NAT-PMP gateway (unlike PCP or
-/// UPnP) never reports the address it forwards from — and without the address
-/// the banner cannot tell the owner where friends should connect. Bounded by
-/// `PUBLIC_IP_DETECTION_TIMEOUT` and a tiny body limit; `None` on any failure,
-/// which every caller treats as "unknown" rather than as an error.
-async fn detect_public_ip_via_http() -> Option<String> {
-    let client = reqwest::Client::builder()
-        .timeout(PUBLIC_IP_DETECTION_TIMEOUT)
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .ok()?;
-    let response = client.get("https://api.ipify.org").send().await.ok()?;
-    if !response.status().is_success() {
-        return None;
-    }
-    let bytes = axum::body::to_bytes(
-        axum::body::Body::from_stream(response.bytes_stream()),
-        PUBLIC_IP_DETECTION_BODY_LIMIT,
-    )
-    .await
-    .ok()?;
-    parse_detected_public_ip(&String::from_utf8_lossy(&bytes))
-}
-
-/// Whether the startup path launched a port-mapping attempt, or decided not to.
-///
-/// Kept as one value so the decision is made once, in one place, and the banner
-/// reports what actually happened rather than re-deriving it.
-enum PortMapStart {
-    Skipped(portmap::SkipReason),
-    Running(tokio::task::JoinHandle<portmap::Attempt>),
-}
-
-#[derive(Clone, Default)]
-struct AtRestRuntimeProfile {
-    sqlite_key_hex: Option<String>,
-    file_cryptor: Option<paracord_util::at_rest::FileCryptor>,
-    totp_cryptor: Option<paracord_util::at_rest::FileCryptor>,
 }
 
 fn map_db_engine(engine: config::DatabaseEngine) -> paracord_db::DatabaseEngine {
@@ -415,9 +362,9 @@ async fn main() -> Result<()> {
         || config.server.bind_address.starts_with("[::1]:");
 
     // ── Ask the router to let friends in ────────────────────────────────────
-    // Started here and collected just before the banner, so the whole 8s budget
-    // overlaps the database migrations and TLS setup that follow. A router that
-    // never answers therefore costs a first-time owner nothing they can notice.
+    // Started here so the whole discovery budget overlaps the database
+    // migrations that follow; the first verdict is collected just before TLS
+    // setup, because the router's own answer is what goes into the certificate.
     //
     // Exactly two ports: the TCP port a browser reaches the app on, and the UDP
     // port native media uses. Under the generated defaults both are 8443.
@@ -426,22 +373,36 @@ async fn main() -> Result<()> {
         udp_port: config.voice.port,
     };
     let portmap_lease = portmap::lease_from_seconds(config.network.port_forward_lease_seconds);
-    let portmap_start = if !config.network.auto_port_forward {
-        PortMapStart::Skipped(portmap::SkipReason::Disabled)
+    let reachability_hub = paracord_core::reachability::hub().clone();
+    let skip_reason = if !config.network.auto_port_forward {
+        Some(portmap::SkipReason::Disabled)
     } else if bind_is_loopback {
-        PortMapStart::Skipped(portmap::SkipReason::LoopbackBind)
+        Some(portmap::SkipReason::LoopbackBind)
     } else {
-        PortMapStart::Running(tokio::spawn(async move {
-            portmap::establish(
-                &portmap::default_routers(),
+        None
+    };
+    let reachability_handle = match skip_reason {
+        Some(_) => {
+            reachability_hub.update(|r| r.port = server_public_port);
+            None
+        }
+        None => Some(reachability::spawn(
+            reachability_hub.clone(),
+            reachability::Settings::new(
                 portmap_request,
                 portmap_lease,
-                portmap::DISCOVERY_BUDGET,
-            )
-            .await
-        }))
+                std::time::Duration::from_secs(config.network.reachability_retry_seconds.max(5)),
+            ),
+            reachability::Environment {
+                lan_ip: {
+                    let bind_address = config.server.bind_address.clone();
+                    Box::new(move || reachability::bind_lan_ip(&bind_address))
+                },
+                firewall: reachability::platform_firewall(config.host.enabled),
+            },
+            portmap::default_routers(),
+        )),
     };
-    let port_mapping_attempted = matches!(portmap_start, PortMapStart::Running(_));
     // What the admin page shows and changes. The change is written to the
     // config file and applies at the next start.
     paracord_core::router_access::init(paracord_core::router_access::RouterAccess {
@@ -454,18 +415,8 @@ async fn main() -> Result<()> {
         config_path: Some(std::path::PathBuf::from(&args.config)),
     });
 
-    // The public address of this network. LiveKit needs it for ICE candidates;
-    // the port mapper needs it because a NAT-PMP gateway never reports one, and
-    // without it the banner cannot say where friends should connect.
-    let mut detected_external_ip: Option<String> = None;
     let livekit_is_local =
         config.livekit.url.contains("localhost") || config.livekit.url.contains("127.0.0.1");
-    if livekit_is_local || port_mapping_attempted {
-        if let Some(ip) = detect_public_ip_via_http().await {
-            tracing::info!("Detected external IP via HTTP: {}", ip);
-            detected_external_ip = Some(ip);
-        }
-    }
 
     // Detect the local LAN IP for LiveKit ICE candidate filtering.
     // This ensures LiveKit only advertises the real LAN IP (which maps to
@@ -500,7 +451,7 @@ async fn main() -> Result<()> {
             &config.livekit.api_secret,
             livekit_port,
             server_public_port,
-            detected_external_ip.as_deref(),
+            None,
             detected_local_ip.as_deref(),
             config.voice.native_media,
             config.livekit.turn_udp_port,
@@ -831,6 +782,13 @@ async fn main() -> Result<()> {
 
         // Provision the native QUIC endpoint. On success `state.native_media` is
         // populated and the ALPN accept loop spawned; on failure we capture a
+    // Admins hear about every change to reachability (and, once reported,
+    // stored-data encryption and backups) as INSTANCE_STATUS_UPDATE.
+    paracord_core::reachability::spawn_status_broadcaster(
+        paracord_core::reachability::hub().clone(),
+        state.event_bus.clone(),
+    );
+
         // concrete, operator-actionable reason and decide below whether to
         // hard-fail (no fallback) or degrade to LiveKit.
         // The certificate is valid for under 14 days, which is what browsers
@@ -1074,7 +1032,7 @@ async fn main() -> Result<()> {
         Some(
             tls::ensure_certs(
                 &config.tls,
-                detected_external_ip.as_deref(),
+                router_reported_ip.as_deref(),
                 detected_local_ip.as_deref(),
             )
             .await
@@ -1082,6 +1040,19 @@ async fn main() -> Result<()> {
         )
     } else {
         None
+    // The router's answer, which is the only source of this network's public
+    // address, and so of the certificate's public-address name.
+    if let Some(handle) = reachability_handle.as_ref() {
+        handle.first_attempt().await;
+    }
+    let router_reported_ip = {
+        let reach = reachability_hub.current();
+        match reach.state {
+            paracord_contracts::host::ReachabilityState::Open
+            | paracord_contracts::host::ReachabilityState::Direct => reach.external_ip,
+            _ => None,
+        }
+    };
     };
 
     let tls_status = if let Some(ref _cfg) = tls_rustls_config {
@@ -1155,46 +1126,14 @@ async fn main() -> Result<()> {
         bind_port,
     );
 
-    // Collect the router attempt started at the top of startup. Everything since
-    // then — migrations, workers, TLS — ran alongside it, so on a cooperative
-    // network this is already done and on a silent one it has already spent its
-    // own bounded budget rather than adding to boot time.
-    let port_mapping = match portmap_start {
-        PortMapStart::Skipped(reason) => portmap::Attempt {
-            outcome: portmap::Outcome::Skipped(reason),
-            router: None,
-        },
-        PortMapStart::Running(handle) => match handle.await {
-            Ok(attempt) => attempt,
-            Err(err) => portmap::Attempt {
-                outcome: portmap::Outcome::NotAvailable {
-                    external_ip: None,
-                    reason: format!("the port-mapping attempt did not finish ({err})"),
-                },
-                router: None,
-            },
-        },
+    // The first verdict was collected before TLS setup; log it once, with its
+    // reason, in the banner's words. The state machine keeps running: it renews
+    // the mapping, retries a closed door and announces every change.
+    let port_mapping_outcome = match skip_reason {
+        Some(reason) => portmap::Outcome::Skipped(reason),
+        None => reachability::outcome_for(&reachability_hub.current()),
     };
-    let port_mapping_outcome = port_mapping.outcome.with_fallback_ip(
-        detected_external_ip
-            .as_deref()
-            .and_then(|ip| ip.parse::<std::net::IpAddr>().ok()),
-    );
     port_mapping_outcome.log(portmap_request);
-    if let Some(router) = port_mapping.router.as_ref() {
-        portmap::spawn_renewal(
-            Arc::clone(router),
-            portmap_request,
-            portmap_lease,
-            shutdown_notify.clone(),
-        );
-    }
-    // Moved into the shutdown path below, so the mappings this process asked for
-    // are taken back down when it leaves.
-    let port_mapping_release = port_mapping
-        .router
-        .clone()
-        .map(|router| (router, portmap_request));
 
     let tls_active = tls_rustls_config.is_some();
     let self_made_certificate = certificate_is_self_made(&config.tls, tls_active);
@@ -1215,14 +1154,14 @@ async fn main() -> Result<()> {
     );
 
     // What an invite link should point at. The app asks for this when the owner
-    // is on `localhost`, where their own address bar is no use to a friend.
-    paracord_core::share_address::set_share_address(share_address_for(
-        &port_mapping_outcome,
-        config.server.public_url.as_deref(),
-        &share_url,
-        if tls_active { "https" } else { "http" },
-        server_public_port,
-    ));
+    // is on `localhost`, where their own address bar is no use to a friend. It
+    // is recomputed from the reachability state on every read.
+    paracord_core::share_address::set_share_inputs(paracord_core::share_address::ShareInputs {
+        public_url: config.server.public_url.clone(),
+        local_url: share_url.clone(),
+        scheme: if tls_active { "https" } else { "http" }.to_string(),
+        port: server_public_port,
+    });
 
     // The link the owner clicks, with the one-time code already in it. Built here
     // because it needs the address the banner is about to print.
@@ -1342,8 +1281,8 @@ async fn main() -> Result<()> {
         // Close the doors this process asked the router to open. Bounded inside
         // `release`, so a router that stopped answering cannot hold a restart
         // hostage — an entry left behind expires with its lease either way.
-        if let Some((router, request)) = port_mapping_release {
-            portmap::release(router, request).await;
+        if let Some(handle) = reachability_handle {
+            handle.release().await;
         }
 
         // From here axum waits for whatever is still open; start the clock.
@@ -1410,7 +1349,12 @@ async fn main() -> Result<()> {
         }
     } else {
         // HTTP only
+        // Every connection that finishes its TLS handshake is shown to the
+        // reachability state, which is how "a friend connected from outside"
+        // becomes a fact rather than a hope.
+        let observed_hub = paracord_core::reachability::hub().clone();
         let listener = listener.expect("the plain-HTTP listener is bound when TLS is off");
+            .map(|tls| reachability::ObservingAcceptor::new(tls, observed_hub))
         let server = axum::serve(
             listener,
             app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
@@ -3645,6 +3589,15 @@ fn format_host_port(host: &str, port: u16) -> String {
 /// Two different settings hide behind them: the TCP port a browser reaches the
 /// app on, and `[voice] port`, the UDP port that carries voice and video. The
 /// generated config puts both at 8443, which is why one number read correctly
+        portmap::Outcome::Direct { ip } => vec![
+            "This computer has its own public address, so friends".to_string(),
+            "anywhere can join at:".to_string(),
+            format!(
+                "     {scheme}://{}",
+                format_host_port(&ip.to_string(), web_port)
+            ),
+            format!("if your firewall allows {ports}."),
+        ],
 /// for so long; the moment either moves, naming only the first sends someone to
 /// open a port that carries no calls.
 fn forwarded_ports_phrase(web_port: u16, voice_port: u16) -> String {
@@ -3652,58 +3605,6 @@ fn forwarded_ports_phrase(web_port: u16, voice_port: u16) -> String {
         format!("port {web_port} (TCP and UDP)")
     } else {
         format!("port {web_port} (TCP) and port {voice_port} (UDP)")
-    }
-}
-
-/// What the app should put in an invite link, and how far that link carries.
-///
-/// An operator's configured `public_url` is the last word. Otherwise a mapped
-/// router with a known public address reaches the internet; anything else that
-/// is not a loopback bind reaches the local network at the address the banner
-/// already prints.
-fn share_address_for(
-    outcome: &portmap::Outcome,
-    public_url: Option<&str>,
-    share_url: &str,
-    scheme: &str,
-    public_port: u16,
-) -> paracord_core::share_address::ShareAddress {
-    use paracord_core::share_address::{ShareAddress, ShareReach};
-    if let Some(url) = public_url.map(str::trim).filter(|url| !url.is_empty()) {
-        return ShareAddress {
-            url: Some(url.to_string()),
-            reach: ShareReach::Internet,
-        };
-    }
-    let is_loopback = |url: &str| {
-        url.contains("://localhost") || url.contains("://127.") || url.contains("://[::1]")
-    };
-    match outcome {
-        portmap::Outcome::Skipped(portmap::SkipReason::LoopbackBind) => ShareAddress {
-            url: None,
-            reach: ShareReach::ThisComputer,
-        },
-        portmap::Outcome::Mapped {
-            external_ip: Some(ip),
-            ..
-        } => {
-            let host = match ip {
-                std::net::IpAddr::V6(v6) => format!("[{v6}]"),
-                std::net::IpAddr::V4(v4) => v4.to_string(),
-            };
-            ShareAddress {
-                url: Some(format!("{scheme}://{host}:{public_port}")),
-                reach: ShareReach::Internet,
-            }
-        }
-        _ if is_loopback(share_url) => ShareAddress {
-            url: None,
-            reach: ShareReach::ThisComputer,
-        },
-        _ => ShareAddress {
-            url: Some(share_url.to_string()),
-            reach: ShareReach::LocalNetwork,
-        },
     }
 }
 
@@ -3744,8 +3645,8 @@ fn invite_lines(
             external_ip: None, ..
         } => vec![
             "Your router is letting people in from outside, but it".to_string(),
-            "did not say what this network's address is. Look it up".to_string(),
-            "at https://ifconfig.me and give friends that address".to_string(),
+            "did not say what this network's address is. Its status".to_string(),
+            "page shows it; give friends that address".to_string(),
             format!("with port {web_port}. There is nothing else to change"),
             "on your router.".to_string(),
         ],
@@ -4941,8 +4842,8 @@ mod tests {
         build_at_rest_profile, build_claim_link, certificate_is_self_made, claim_link_base,
         claim_link_file_path, claim_token_file_path, derive_share_url, describe_http_bind_error,
         encode_fragment_value, ensure_federation_signing_key_file, invite_lines,
-        livekit_credentials_look_insecure, normalize_https_host, parse_detected_public_ip,
-        remove_claim_files, share_address_for, write_owner_only_line,
+        livekit_credentials_look_insecure, normalize_https_host,
+        remove_claim_files, write_owner_only_line,
     };
     use crate::portmap;
     use std::sync::{Mutex, OnceLock};
@@ -5095,45 +4996,6 @@ mod tests {
     }
 
     // ── What the banner tells a first-time owner ────────────────────────────
-
-    #[test]
-    fn an_invite_points_where_friends_can_actually_reach_the_server() {
-        use paracord_core::share_address::ShareReach;
-        let lan = "https://192.168.1.20:8443";
-        let mapped = portmap::Outcome::Mapped {
-            external_ip: Some("203.0.113.7".parse().unwrap()),
-            method: "UPnP",
-        };
-        let address = share_address_for(&mapped, None, lan, "https", 8443);
-        assert_eq!(address.url.as_deref(), Some("https://203.0.113.7:8443"));
-        assert_eq!(address.reach, ShareReach::Internet);
-
-        // A configured public URL is the last word, whatever the router said.
-        let address = share_address_for(
-            &mapped,
-            Some("https://chat.example.com"),
-            lan,
-            "https",
-            8443,
-        );
-        assert_eq!(address.url.as_deref(), Some("https://chat.example.com"));
-
-        let closed = portmap::Outcome::NotAvailable {
-            external_ip: Some("203.0.113.7".parse().unwrap()),
-            reason: "no router answered".into(),
-        };
-        let address = share_address_for(&closed, None, lan, "https", 8443);
-        assert_eq!(address.url.as_deref(), Some(lan));
-        assert_eq!(address.reach, ShareReach::LocalNetwork);
-
-        // Never hand out a link to localhost.
-        let loopback = portmap::Outcome::Skipped(portmap::SkipReason::LoopbackBind);
-        let address = share_address_for(&loopback, None, "https://localhost:8443", "https", 8443);
-        assert_eq!(address.url, None);
-        assert_eq!(address.reach, ShareReach::ThisComputer);
-        let address = share_address_for(&closed, None, "https://localhost:8443", "https", 8443);
-        assert_eq!(address.url, None);
-    }
 
     fn invite_text(outcome: &portmap::Outcome, lan_ip: Option<&str>) -> String {
         invite_lines(
@@ -5434,6 +5296,8 @@ mod tests {
             derive_share_url(
                 &None,
                 "127.0.0.1:8090",
+    /// The owner's rule: no third-party service is ever asked what this
+    /// network's address is. The router is the only source.
                 Some("192.168.1.5"),
                 false,
                 8443,
@@ -5486,17 +5350,33 @@ mod tests {
     }
 
     #[test]
-    fn parses_detected_public_ip_only_when_valid() {
-        assert_eq!(
-            parse_detected_public_ip(" 203.0.113.42\n"),
-            Some("203.0.113.42".to_string())
-        );
-        assert_eq!(
-            parse_detected_public_ip(" 2001:db8::1\n"),
-            Some("2001:db8::1".to_string())
-        );
-        assert_eq!(parse_detected_public_ip("not an ip"), None);
-        assert_eq!(parse_detected_public_ip(""), None);
+    fn no_third_party_address_lookup_remains_in_the_server() {
+        let needles = [
+            ["ip", "ify"].concat(),
+            ["ifconfig", ".me"].concat(),
+            ["icanhaz", "ip"].concat(),
+            ["checkip.", "amazonaws"].concat(),
+            ["detect_public_ip", "_via_http"].concat(),
+        ];
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut stack = vec![src];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    for needle in &needles {
+                        assert!(
+                            !text.contains(needle.as_str()),
+                            "{} still mentions {needle}",
+                            path.display()
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]

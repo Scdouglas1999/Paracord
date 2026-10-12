@@ -98,6 +98,10 @@ pub const EVENT_INVITE_DELETE: &str = "INVITE_DELETE";
 pub const EVENT_RELATIONSHIP_ADD: &str = "RELATIONSHIP_ADD";
 pub const EVENT_RELATIONSHIP_REMOVE: &str = "RELATIONSHIP_REMOVE";
 
+// Instance status (reachability, stored-data encryption, backups). Sent to
+// server admins only.
+pub const EVENT_INSTANCE_STATUS_UPDATE: &str = "INSTANCE_STATUS_UPDATE";
+
 // Media events
 pub const EVENT_MEDIA_SESSION_DESC: &str = "MEDIA_SESSION_DESC";
 pub const EVENT_MEDIA_KEY_DELIVER: &str = "MEDIA_KEY_DELIVER";

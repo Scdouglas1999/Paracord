@@ -18,8 +18,10 @@
 //! | Seam | Owner | Until it lands |
 //! |---|---|---|
 //! | [`seams::storage`] | S4 (storage key) | what the running config proves: files are encrypted when a file cryptor is loaded; SQLite encryption, key source and protection are reported unknown/false |
-//! | [`seams::reachability`] | S5 (reachability) | `off` on the bound port, nothing else claimed |
-//! | [`seams::request_reachability_retry`], [`seams::write_escrow`] | S5, S4 | answer 501 `not_built` (a retry or an escrow that did nothing would be a silent no-op) |
+//! | [`seams::write_escrow`] | S4 | answers 501 `not_built` (an escrow that did nothing would be a silent no-op) |
+//!
+//! Reachability (`seams::reachability`, `seams::request_reachability_retry`) is
+//! S5's and is wired to `paracord_core::reachability::hub()`.
 //!
 //! `rg not_built` finds every one that is left.
 
@@ -116,25 +118,31 @@ pub mod seams {
         }
     }
 
-    /// SEAM(S5): the router/reachability state machine's current value.
+    /// The reachability state machine's current value (S5,
+    /// `paracord_core::reachability`). `off` on the bound port when nothing is
+    /// asking a router (forwarding disabled, a loopback bind, or a server
+    /// that never started the state machine).
     pub fn reachability(state: &AppState) -> Reachability {
-        Reachability {
-            state: ReachabilityState::Off,
-            method: None,
-            external_ip: None,
-            gateway_ip: None,
-            lan_ip: None,
-            port: bound_port(&state.config.bind_address),
-            lease_expires_at: None,
-            next_retry_at: None,
-            last_error: None,
-            confirmed_at: None,
+        let mut current = paracord_core::reachability::hub().current();
+        if current.port == 0 {
+            current.port = bound_port(&state.config.bind_address);
         }
+        current
     }
 
-    /// SEAM(S5): ask the reachability task to try again now.
+    /// Run a router attempt now. There is no one to ask when forwarding is off:
+    /// a retry that did nothing would be a silent no-op, so say so.
     pub async fn request_reachability_retry(_state: &AppState) -> Result<(), StatusError> {
-        Err(StatusError::NotBuilt("Asking the router again"))
+        let hub = paracord_core::reachability::hub();
+        if hub.current().state == ReachabilityState::Off {
+            return Err(StatusError::Api(ApiError::Conflict(
+                "Paracord isn't asking your router to let friends in, so there is nothing to \
+                 try again."
+                    .to_string(),
+            )));
+        }
+        hub.request_retry();
+        Ok(())
     }
 
     /// SEAM(S4): wrap the storage key under `wrapping_key` (AES-256-GCM, AAD
