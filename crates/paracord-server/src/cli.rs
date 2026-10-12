@@ -11,6 +11,11 @@ pub struct Args {
     #[arg(long)]
     pub web_dir: Option<String>,
 
+    /// Also write the log to this file (same lines as stdout, secrets removed),
+    /// rotated daily with seven days kept. The desktop host always passes it.
+    #[arg(long, global = true)]
+    pub log_file: Option<std::path::PathBuf>,
+
     /// Optional maintenance subcommand. When omitted, the chat server runs.
     #[command(subcommand)]
     pub command: Option<Command>,
@@ -44,9 +49,33 @@ pub enum Command {
 #[derive(ClapArgs, Debug)]
 pub struct InitArgs {
     /// Path to write (or check) the configuration file. Defaults to the
-    /// top-level `--config` value when omitted.
+    /// top-level `--config` value when omitted. Ignored with `--profile`, which
+    /// writes `<root>/config/paracord.toml`.
     #[arg(short, long)]
     pub config: Option<String>,
+
+    /// Write a ready-made configuration for a particular way of running
+    /// instead of the generic one.
+    #[arg(long, value_enum)]
+    pub profile: Option<InitProfile>,
+
+    /// `--profile desktop-host`: the host root directory (absolute paths are
+    /// written under it).
+    #[arg(long)]
+    pub root: Option<std::path::PathBuf>,
+
+    /// `--profile desktop-host`: the port for HTTPS and voice.
+    #[arg(long)]
+    pub port: Option<u16>,
+}
+
+/// Named configurations for `init --profile`.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InitProfile {
+    /// "Paracord on this computer": the desktop app's background server
+    /// (docs/setup-spec.md §2.7).
+    #[value(name = "desktop-host")]
+    DesktopHost,
 }
 
 #[derive(ClapArgs, Debug)]

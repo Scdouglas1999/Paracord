@@ -9,6 +9,22 @@ license-file.workspace = true
 name = "paracord-server"
 path = "src/main.rs"
 
+# The desktop app's background server (docs/setup-spec.md §2.1): the same
+# program, built as a Windows GUI-subsystem binary so Task Scheduler does not
+# open a console window. Its source file includes `main.rs`, so there is one
+# program and one set of modules. `test = false`: main.rs's tests already run
+# under paracord-server.
+[[bin]]
+name = "paracord-host"
+path = "src/bin/paracord-host.rs"
+test = false
+
+[lints.clippy]
+# Were `#![allow]`s at the top of main.rs; main.rs is also included by
+# src/bin/paracord-host.rs, where an inner attribute is not allowed.
+collapsible_if = "allow"
+derivable_impls = "allow"
+
 [dependencies]
 paracord-api = { workspace = true }
 paracord-ws = { workspace = true }

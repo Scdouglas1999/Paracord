@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use paracord_contracts::host::{KeySource, Protection};
 use paracord_media::S3Config;
 use rand::Rng;
@@ -1302,6 +1302,31 @@ timeout_seconds = {ai_timeout_seconds}
 }
 
 // ── Config Loading ───────────────────────────────────────────────────────────
+
+/// Write `config` as a new config file (0600 from the first byte, like the
+/// zero-config first run). Refuses to overwrite: `create_new`. Used by
+/// `init --profile desktop-host`.
+pub fn write_new_config(path: &str, config: &Config) -> Result<()> {
+    use std::io::Write;
+    let template = generate_config_template(config);
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(path)
+        .with_context(|| format!("cannot create the config file {path}"))?;
+    file.write_all(template.as_bytes())?;
+    #[cfg(not(unix))]
+    {
+        drop(file);
+        let _ = harden_secret_file_permissions(path);
+    }
+    Ok(())
+}
 
 impl Config {
     /// Load configuration from `path`, generating a default config file if none

@@ -1,5 +1,3 @@
-#![allow(clippy::collapsible_if, clippy::derivable_impls)]
-
 use anyhow::{Context, Result};
 use axum::response::IntoResponse;
 use clap::Parser;
@@ -8,7 +6,6 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing_subscriber::EnvFilter;
 
 mod bots;
 mod cli;
@@ -16,7 +13,9 @@ mod config;
 #[cfg(feature = "embed-ui")]
 mod embedded_ui;
 mod file_transfer;
+mod host_mode;
 mod livekit_proc;
+mod logging;
 mod portmap;
 mod restore;
 mod tls;
@@ -249,17 +248,11 @@ async fn main() -> Result<()> {
     let default_log_filter =
         "paracord=info,paracord_api=info,paracord_server=info,paracord_core=info,tower_http=info,axum=warn,hyper=warn";
 
-    tracing_subscriber::fmt()
-        .compact()
-        .with_target(false)
-        .with_ansi(use_ansi)
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new(default_log_filter)),
-        )
-        .init();
-
     let args = cli::Args::parse();
+
+    // Stdout, plus `--log-file` (daily rotation, seven kept, secrets removed;
+    // docs/setup-spec.md §2.8).
+    logging::init(args.log_file.as_deref(), use_ansi, default_log_filter)?;
 
     // Maintenance subcommands run to completion and exit without starting the
     // server or touching the runtime config.
@@ -267,6 +260,14 @@ async fn main() -> Result<()> {
         return match command {
             cli::Command::MigrateToPostgres(migrate_args) => {
                 run_migrate_to_postgres(migrate_args).await
+            }
+            cli::Command::Init(init_args) if init_args.profile.is_some() => {
+                host_mode::run_init(init_args)
+            }
+            cli::Command::Init(init_args)
+                if init_args.root.is_some() || init_args.port.is_some() =>
+            {
+                anyhow::bail!("--root and --port belong to --profile desktop-host")
             }
             cli::Command::Init(init_args) => run_init(init_args, &args.config),
             cli::Command::RestoreBackup(restore_args) => {
@@ -276,6 +277,8 @@ async fn main() -> Result<()> {
     }
 
     let config = config::Config::load(&args.config)?;
+    // "Paracord on this computer": a fresh control token before anything listens.
+    host_mode::prepare_start(&config)?;
     if let Some(limit) = config.integrations.feeds_per_server {
         paracord_core::feeds::configure(limit);
     }
@@ -1035,19 +1038,35 @@ async fn main() -> Result<()> {
         }
     };
 
-    let listener = tokio::net::TcpListener::bind(&config.server.bind_address)
-        .await
-        .map_err(|err| {
-            anyhow::anyhow!(describe_http_bind_error(&err, &config.server.bind_address))
-        })?;
-    // Counted from here on, so the drain deadline can say what it gave up on.
-    // The no-op `tap_io` is not decoration: `SocketAddr: Connected<..>` — what
-    // `into_make_service_with_connect_info` needs, and what every handler that
-    // reads a client IP depends on — is implemented for `TcpListener` and for
-    // any tapped listener, and the orphan rule forbids implementing it here for
-    // a listener of our own. Going through `TapIo` is how a custom listener
-    // keeps connect info.
-    let listener = axum::serve::ListenerExt::tap_io(CountingListener(listener), |_io| {});
+    // The plain-HTTP listener is the only listener without TLS. With TLS on it
+    // only redirects to HTTPS (and answers ACME HTTP-01), so `[server]
+    // redirect_listener = false` removes it: the desktop-host profile serves
+    // HTTPS on `bind_address`'s own port, which a plain listener would hold.
+    let plain_http_listener = !config.tls.enabled || config.server.redirect_listener;
+    let listener = if plain_http_listener {
+        let listener = tokio::net::TcpListener::bind(&config.server.bind_address)
+            .await
+            .map_err(|err| {
+                anyhow::anyhow!(describe_http_bind_error(&err, &config.server.bind_address))
+            })?;
+        // Counted from here on, so the drain deadline can say what it gave up
+        // on. The no-op `tap_io` is not decoration: `SocketAddr: Connected<..>`
+        // — what `into_make_service_with_connect_info` needs, and what every
+        // handler that reads a client IP depends on — is implemented for
+        // `TcpListener` and for any tapped listener, and the orphan rule forbids
+        // implementing it here for a listener of our own. Going through `TapIo`
+        // is how a custom listener keeps connect info.
+        Some(axum::serve::ListenerExt::tap_io(
+            CountingListener(listener),
+            |_io| {},
+        ))
+    } else {
+        tracing::info!(
+            "redirect_listener = false: no plain-HTTP listener; HTTPS only on {}",
+            config.server.bind_address
+        );
+        None
+    };
 
     // ── TLS / HTTPS setup ───────────────────────────────────────────────────
     let tls_enabled = config.tls.enabled;
@@ -1179,6 +1198,13 @@ async fn main() -> Result<()> {
 
     let tls_active = tls_rustls_config.is_some();
     let self_made_certificate = certificate_is_self_made(&config.tls, tls_active);
+    if tls_active {
+        // Admin/host status reports the live certificate's fingerprint.
+        paracord_api::routes::host_status::set_tls_identity(
+            &config.tls.cert_path,
+            self_made_certificate,
+        );
+    }
     let invite = invite_lines(
         &port_mapping_outcome,
         &share_url,
@@ -1353,11 +1379,24 @@ async fn main() -> Result<()> {
             }
         });
 
-        let http_server = axum::serve(
-            listener,
-            http_redirect_app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-        )
-        .with_graceful_shutdown(shutdown_signal_http);
+        let http_server = async move {
+            match listener {
+                Some(listener) => {
+                    axum::serve(
+                        listener,
+                        http_redirect_app
+                            .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+                    )
+                    .with_graceful_shutdown(shutdown_signal_http)
+                    .await
+                }
+                // No redirect listener: only the shutdown work is left to run.
+                None => {
+                    shutdown_signal_http.await;
+                    Ok(())
+                }
+            }
+        };
 
         let https_server = axum_server::bind_rustls(tls_addr, rustls_config)
             .serve(app_https.into_make_service_with_connect_info::<std::net::SocketAddr>());
@@ -1371,6 +1410,7 @@ async fn main() -> Result<()> {
         }
     } else {
         // HTTP only
+        let listener = listener.expect("the plain-HTTP listener is bound when TLS is off");
         let server = axum::serve(
             listener,
             app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
@@ -4027,23 +4067,26 @@ fn run_init(init_args: &cli::InitArgs, default_config: &str) -> Result<()> {
     Ok(())
 }
 
+/// Scheduled backups. The loop always runs: whether a tick makes a backup is
+/// read each time (`PATCH /admin/backups` stores the choice in `server_settings`
+/// and it overrides `[backup] auto_backup_enabled`, docs/setup-spec.md §8.5),
+/// so switching it on or off needs no restart.
 fn spawn_auto_backup(
     backup_config: config::BackupConfig,
     state: paracord_core::AppState,
     shutdown: Arc<tokio::sync::Notify>,
 ) {
-    if !backup_config.auto_backup_enabled {
-        tracing::info!("Auto-backup disabled");
-        return;
-    }
-
     let interval_secs = backup_config.auto_backup_interval_seconds.max(3600);
     let include_media = backup_config.include_media;
-    let backup_dir = backup_config.backup_dir.clone();
     let max_backups = backup_config.max_backups;
 
     tracing::info!(
-        "Auto-backup enabled (interval={}s, max_backups={}, include_media={})",
+        "Auto-backup {} (interval={}s, max_backups={}, include_media={}); Admin -> Settings can change it while the server runs",
+        if backup_config.auto_backup_enabled {
+            "enabled"
+        } else {
+            "disabled"
+        },
         interval_secs,
         max_backups,
         include_media,
@@ -4058,37 +4101,18 @@ fn spawn_auto_backup(
             tokio::select! {
                 _ = shutdown.notified() => break,
                 _ = interval.tick() => {
-                    match paracord_core::backup::create_backup_from_pool(
-                        &state.db,
-                        &state.config.database_url,
-                        &backup_dir,
-                        &state.config.storage_path,
-                        &state.config.media_storage_path,
+                    if !paracord_api::routes::host_status::auto_backup_enabled(&state).await {
+                        continue;
+                    }
+                    match paracord_api::routes::host_status::run_backup(
+                        &state,
                         include_media,
-                        matches!(state.storage_backend.as_ref(), paracord_media::Storage::Local(_)),
-                        state.config.file_cryptor.as_ref(),
-                        state.config.totp_cryptor.as_ref(),
+                        max_backups,
                     )
                     .await
                     {
-                        Ok(filename) => {
-                            tracing::info!("Auto-backup created: {}", filename);
-                            // Prune old backups
-                            if let Ok(backups) =
-                                paracord_core::backup::list_backups(&backup_dir).await
-                            {
-                                if backups.len() > max_backups as usize {
-                                    for old in backups.into_iter().skip(max_backups as usize) {
-                                        let path = std::path::Path::new(&backup_dir).join(&old.name);
-                                        let _ = tokio::fs::remove_file(path).await;
-                                        tracing::info!("Pruned old backup: {}", old.name);
-                                    }
-                                }
-                            }
-                        }
-                        Err(err) => {
-                            tracing::error!("Auto-backup failed: {}", err);
-                        }
+                        Ok(filename) => tracing::info!("Auto-backup created: {}", filename),
+                        Err(err) => tracing::error!("Auto-backup failed: {}", err),
                     }
                 }
             }

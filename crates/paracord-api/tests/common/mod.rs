@@ -55,6 +55,8 @@ pub struct TestAppOptions {
     /// URL's host as an alias for the server's own identity, so tests that
     /// exercise that equivalence set it.
     pub public_url: Option<String>,
+    /// `[host]` as the running server sees it (the desktop-host profile).
+    pub host: Option<paracord_core::HostRuntimeConfig>,
 }
 
 impl Default for TestAppOptions {
@@ -80,6 +82,7 @@ impl Default for TestAppOptions {
             ai_timeout_seconds: 20,
             instance_setup_complete: true,
             public_url: None,
+            host: None,
         }
     }
 }
@@ -444,7 +447,7 @@ pub async fn build_test_app(options: TestAppOptions) -> anyhow::Result<TestApp> 
             started_at: chrono::Utc::now(),
             link_previews_enabled: true,
             max_backups: 10,
-            host: paracord_core::HostRuntimeConfig::default(),
+            host: options.host.clone().unwrap_or_default(),
         },
         runtime: Arc::new(RwLock::new(RuntimeSettings::default())),
         voice: Arc::new(VoiceManager::new(livekit)),

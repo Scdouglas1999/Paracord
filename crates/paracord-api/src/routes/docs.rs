@@ -123,6 +123,7 @@ fn route_uses_bearer_auth(method: &str, path: &str) -> bool {
         || path.starts_with("/api/v1/webhooks/{webhook_id}/{token}")
         || path.starts_with("/api/v1/interactions/{")
         || path.starts_with("/api/v1/discovery/")
+        || path.starts_with("/api/v1/host/")
         || path == "/api/docs"
         || path == "/api/docs/openapi.json"
         || (method == "get" && path == "/api/v1/invites/{code}")
@@ -422,6 +423,58 @@ fn apply_wire_contracts(spec: &mut Value) {
             "200",
             Some("OwnershipTransferResponse"),
             Some("TransferOwnershipRequest"),
+        ),
+        // Hosting controls (docs/setup-spec.md §9.1). `/host/*` answers only a
+        // loopback peer with `Authorization: Host <token>`.
+        (
+            "/api/v1/host/status",
+            "get",
+            "200",
+            Some("HostStatus"),
+            None,
+        ),
+        ("/api/v1/host/reachability/retry", "post", "202", None, None),
+        (
+            "/api/v1/host/backup-now",
+            "post",
+            "200",
+            Some("BackupNowResponse"),
+            None,
+        ),
+        (
+            "/api/v1/host/storage-key/escrow",
+            "post",
+            "204",
+            None,
+            Some("StorageKeyEscrowRequest"),
+        ),
+        (
+            "/api/v1/admin/host-status",
+            "get",
+            "200",
+            Some("HostStatus"),
+            None,
+        ),
+        (
+            "/api/v1/admin/reachability/retry",
+            "post",
+            "202",
+            None,
+            None,
+        ),
+        (
+            "/api/v1/admin/storage-key/escrow",
+            "post",
+            "204",
+            None,
+            Some("StorageKeyEscrowRequest"),
+        ),
+        (
+            "/api/v1/admin/backups",
+            "patch",
+            "204",
+            None,
+            Some("UpdateBackupsRequest"),
         ),
     ] {
         let operation = spec["paths"][path]

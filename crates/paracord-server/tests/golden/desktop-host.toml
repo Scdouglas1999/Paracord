@@ -1,0 +1,65 @@
+# What `paracord-host init --profile desktop-host --root <ROOT> --port 8443`
+# must write (docs/setup-spec.md §2.7), key source `env` because the test has no
+# keychain. Every key here must be present in the generated file with exactly
+# this value; the file may carry more. <ROOT> stands for the host root.
+# Instance-specific values (server_name, instance_id, jwt_secret) are checked by
+# the test separately.
+
+[server]
+bind_address = "0.0.0.0:8443"
+redirect_listener = false
+
+[tls]
+enabled = true
+auto_generate = true
+port = 8443
+cert_path = "<ROOT>/data/certs/cert.pem"
+key_path = "<ROOT>/data/certs/key.pem"
+
+[voice]
+port = 8443
+
+[database]
+url = "sqlite://<ROOT>/data/paracord.db?mode=rwc"
+
+[storage]
+path = "<ROOT>/data/uploads"
+
+[media]
+storage_path = "<ROOT>/data/files"
+
+[auth]
+registration_mode = "invite_only"
+require_email = false
+
+[setup]
+require_claim = true
+
+[at_rest]
+enabled = true
+encrypt_sqlite = true
+encrypt_files = true
+key_source = "env"
+keychain_service = "Paracord"
+
+[network]
+auto_port_forward = true
+reachability_retry_seconds = 60
+
+[backup]
+auto_backup_enabled = true
+auto_backup_interval_seconds = 86400
+max_backups = 14
+include_media = true
+backup_dir = "<ROOT>/data/backups"
+
+[host]
+enabled = true
+control_token_file = "<ROOT>/config/host-control.token"
+escrow_file = "<ROOT>/storage-key.escrow"
+
+[link_previews]
+enabled = true
+
+[federation]
+enabled = false
