@@ -41,7 +41,7 @@ import { cn } from '../../lib/utils';
 import { asThemeId, DEFAULT_THEME, type ThemeId } from '../../lib/themes';
 import { confirm } from '../../stores/confirmStore';
 import { toast } from '../../stores/toastStore';
-import { AppMark } from '../brand/AppMark';
+import { CordMark } from '../brand/CordMark';
 import { ErrorBanner } from '../ui/Feedback';
 import { Button } from '../ui/Button';
 import { Input, Textarea, Select } from '../ui/Input';
@@ -2278,7 +2278,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 <section>
                   <div className="flex items-end justify-between gap-4 border-b border-border-subtle pb-4">
                     <div className="flex items-end gap-3">
-                      <AppMark size={56} />
+                      <CordMark size={56} label="Paracord" />
                       <div className="font-display text-title text-text-primary">{APP_NAME}</div>
                     </div>
                     <div className="text-[12.5px] tabular-nums text-text-muted">Version {APP_VERSION}</div>

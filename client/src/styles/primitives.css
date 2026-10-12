@@ -501,20 +501,6 @@
   }
 }
 
-/* The boot/fallback mark breathing — a real loading moment, not a spinner.
-   The reduced-motion rule in utilities.css stills it to a static mark. */
-@keyframes pc-mark-breathe {
-  0%,
-  100% {
-    opacity: 0.55;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 1;
-    transform: scale(1.035);
-  }
-}
-
 .pc-fade-in {
   animation: pc-fade var(--duration-normal) var(--ease-out) backwards;
 }
@@ -643,10 +629,6 @@
 
 .pc-banner-out {
   animation: pc-banner-out var(--duration-exit) var(--ease-in) forwards;
-}
-
-.pc-mark-breathe {
-  animation: pc-mark-breathe var(--duration-breathe) var(--ease-in-out) infinite;
 }
 
 /* An indeterminate progress sweep — a third of a track crossing, looping. */

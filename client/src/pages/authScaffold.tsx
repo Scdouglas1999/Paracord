@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
 import { AlertCircle, CheckCircle2 } from 'lucide-react';
-import { AppMark } from '../components/brand/AppMark';
+import { CordMark, type CordMotion } from '../components/brand/CordMark';
 import { PEOPLE_HUE } from '../lib/identityHue';
 import { cn } from '../lib/utils';
 
@@ -13,9 +13,6 @@ import { cn } from '../lib/utils';
  * secondary actions. No card, no plate, no illustration filler; the only light is
  * the window's own tint.
  */
-
-/** The app mark, re-exported for the entry surfaces that import it from here. */
-export { AppMark };
 
 /** The column's width (§6.14). A surface that needs more room says so with its own `max-w`. */
 const COLUMN = 'max-w-[400px]';
@@ -151,12 +148,15 @@ export function AuthHeading({
   title,
   subtitle,
   mark = true,
+  markMotion = 'none',
   align = 'left',
   dense,
 }: {
   title: string;
   subtitle?: ReactNode;
   mark?: boolean;
+  /** The mark's motion: `working` while the surface waits on something long (checking an instance). */
+  markMotion?: CordMotion;
   align?: 'left' | 'center';
   /**
    * Drop the subcopy when the window is short — see {@link AuthStep}'s `dense`.
@@ -166,7 +166,7 @@ export function AuthHeading({
 }) {
   return (
     <div className={cn(align === 'center' && 'flex flex-col items-center text-center')}>
-      {mark && <AppMark size={40} className="mb-4 short-window:mb-3" />}
+      {mark && <CordMark size={40} motion={markMotion} label="Paracord" className="mb-4 short-window:mb-3" />}
       <h1 className="ix-auth__title">{title}</h1>
       {subtitle && <p className={cn('ix-auth__sub mt-2', dense && 'short-window:hidden')}>{subtitle}</p>}
     </div>

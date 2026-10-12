@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect } from 'react';
+import { useEffect, useLayoutEffect, useSyncExternalStore } from 'react';
 
 /**
  * The hand-off from the loading screen in `index.html` (`#pc-boot`) to the app.
@@ -14,8 +14,10 @@ import { useEffect, useLayoutEffect } from 'react';
  *   {@link BrandSplash} ("Restoring session...") or the lazy-route fallback.
  *   Those draw the loading screen's final frame in the same place, so the
  *   loading screen plays to the end and then fades out over its own final
- *   frame; the only change on screen is the status line appearing. It also
- *   goes the moment the last of them unmounts.
+ *   frame; the only change on screen is the status line appearing. Their mark
+ *   holds still until then ({@link useBootSplashGone}) and only starts its
+ *   loading loop, which begins whole, once the loading screen is going. It
+ *   also goes the moment the last of them unmounts.
  *
  * Once gone it is removed from the document, so nothing keeps animating.
  */
@@ -25,6 +27,7 @@ const LEAVE_MS = 180; // .pc-boot's opacity transition in index.html
 let holds = 0;
 let committed = false;
 let state: 'showing' | 'waiting' | 'gone' = 'showing';
+const goneListeners = new Set<() => void>();
 
 function bootNode(): HTMLElement | null {
   return document.getElementById('pc-boot');
@@ -33,6 +36,7 @@ function bootNode(): HTMLElement | null {
 function takeDown() {
   if (state === 'gone') return;
   state = 'gone';
+  for (const listener of [...goneListeners]) listener();
   const node = bootNode();
   if (!node) return;
   node.classList.add('is-leaving');
@@ -49,7 +53,7 @@ function evaluate() {
   state = 'waiting';
   const node = bootNode();
   if (!node) {
-    state = 'gone';
+    takeDown();
     return;
   }
   // Every animation in the loading screen is finite, and the one that is not
@@ -95,6 +99,22 @@ export function useBootSplashHold() {
       scheduleEvaluate();
     };
   }, []);
+}
+
+function subscribeGone(listener: () => void) {
+  goneListeners.add(listener);
+  return () => goneListeners.delete(listener);
+}
+
+const isGone = () => state === 'gone';
+
+/**
+ * Whether the loading screen has started to leave (or there never was one).
+ * A splash's mark waits for this before it starts moving, so the hand-off
+ * shows one still picture.
+ */
+export function useBootSplashGone(): boolean {
+  return useSyncExternalStore(subscribeGone, isGone, () => true);
 }
 
 /** Test seam: forget everything, as if the page had just loaded. */

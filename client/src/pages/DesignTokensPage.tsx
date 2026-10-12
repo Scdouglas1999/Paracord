@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { AppMark } from '../components/brand/AppMark';
+import { CordMark } from '../components/brand/CordMark';
 import {
   Bell,
   Hash,
@@ -1031,20 +1031,41 @@ export default function DesignTokensPage() {
         <Section
           id="mark"
           title="Mark"
-          blurb="A hurricane lantern on a braided teal paracord handle. In the app it is the bare drawing, set by its height; at 32 px and below it switches to the simplified drawing with a bolder cord. The Slate tile is only for the operating system's icon. Source: client/brand/mark.html."
+          blurb="A single paracord looped into a P, the bowl's end threaded under the stem, drawn as real paracord: a braided sheath, darker edges and fused ends. It is set by its square box: the full braid from 64 px, a coarser braid from 24 px, and the flat cord below that. It draws itself on, loops while loading, and runs a highlight along the cord while working. The warm-dark tile is only for the operating system's icon. Source: client/brand/mark.html."
         >
           <Row>
-            {[16, 24, 32, 40, 48, 64].map((size) => (
-              <figure key={size} className="flex w-16 flex-col items-center gap-2">
-                <div className="flex h-16 items-end">
-                  <AppMark size={size} />
+            {[16, 20, 24, 34, 48, 64, 96].map((size) => (
+              <figure key={size} className="flex w-24 flex-col items-center gap-2">
+                <div className="flex h-24 items-end">
+                  <CordMark size={size} />
                 </div>
                 <figcaption className="pc-mono text-meta text-text-faint">{size}</figcaption>
               </figure>
             ))}
             <figure className="ml-6 flex flex-col items-center gap-2">
-              <img src="/pwa-192x192.png" width={96} height={96} alt="The app icon on its Slate tile" />
+              <img src="/pwa-192x192.png" width={96} height={96} alt="The app icon on its tile" />
               <figcaption className="pc-mono text-meta text-text-faint">app icon</figcaption>
+            </figure>
+          </Row>
+          <Row>
+            {(['draw', 'loading', 'working'] as const).map((motion) => (
+              <figure key={motion} className="flex w-28 flex-col items-center gap-2">
+                <CordMark size={72} motion={motion} />
+                <figcaption className="pc-mono text-meta text-text-faint">{motion}</figcaption>
+              </figure>
+            ))}
+            {(['loading', 'working'] as const).map((motion) => (
+              <figure key={`small-${motion}`} className="flex w-28 flex-col items-center gap-2">
+                <CordMark size={44} motion={motion} />
+                <figcaption className="pc-mono text-meta text-text-faint">{motion} 44</figcaption>
+              </figure>
+            ))}
+            <figure className="flex w-28 flex-col items-center gap-2">
+              <span className="flex items-center gap-2 text-text-secondary">
+                <CordMark size={18} motion="loading" tone="mono" />
+                Loading
+              </span>
+              <figcaption className="pc-mono text-meta text-text-faint">in a button</figcaption>
             </figure>
           </Row>
         </Section>

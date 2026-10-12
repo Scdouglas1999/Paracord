@@ -68,9 +68,15 @@ describe('loading screen hand-off', () => {
     );
     await flush();
     expect(node).not.toHaveClass('is-leaving');
+    // The splash's mark holds the whole mark, as the loading screen ends on it.
+    const mark = () => document.querySelector('[data-testid="brand-splash"] svg.pc-cord');
+    expect(mark()).toHaveAttribute('data-paused', 'true');
     finish();
     await flush();
     expect(node).toHaveClass('is-leaving');
+    // Then it takes up its loading loop, which starts from the whole mark.
+    expect(mark()).toHaveClass('pc-cord--loading');
+    expect(mark()).not.toHaveAttribute('data-paused');
   });
 
   it('leaves the moment the last splash goes, even mid-sequence', async () => {

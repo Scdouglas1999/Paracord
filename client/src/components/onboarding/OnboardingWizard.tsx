@@ -4,7 +4,7 @@ import {
   getVersionedStorageItem,
   setVersionedStorageItem,
 } from '../../lib/versionedStorage';
-import { AppMark } from '../brand/AppMark';
+import { CordMark } from '../brand/CordMark';
 import { Button } from '../ui/Button';
 import { Divider } from '../ui/Divider';
 import { AUTH_FORM, AuthCanvas, AuthCard, AuthScroll } from '../../pages/authScaffold';
@@ -181,7 +181,7 @@ export function OnboardingWizard({ onComplete, onTryDemo }: OnboardingWizardProp
                 <Icon size={24} />
               </div>
             ) : (
-              <AppMark size={40} className="mb-4 short-window:hidden" />
+              <CordMark size={40} label="Paracord" className="mb-4 short-window:hidden" />
             )}
             <h1 className="ix-auth__title">{current.title}</h1>
             {/* The step's one-line gloss is what a short window gives up: the

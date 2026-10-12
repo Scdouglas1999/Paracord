@@ -1,4 +1,5 @@
-import { useBootSplashHold } from '../../lib/bootSplash';
+import { useBootSplashGone, useBootSplashHold } from '../../lib/bootSplash';
+import { CordMark } from './CordMark';
 
 /**
  * The full-window "still loading" screen: restoring a session, reaching the
@@ -9,21 +10,21 @@ import { useBootSplashHold } from '../../lib/bootSplash';
  * because they have to paint before any bundle loads. So when the app is still
  * loading at the end of that sequence, the loading screen fades out over an
  * identical picture and the only thing that changes is this status line
- * appearing (lib/bootSplash.ts). Static: `is-static` switches every animation
- * off, so nothing moves while it waits.
+ * appearing (lib/bootSplash.ts). `is-static` switches the loading screen's own
+ * animations off; the mark then takes up its loading loop, which starts from
+ * the whole mark, once the loading screen has started to leave.
  */
 export function BrandSplash({ label }: { label: string }) {
   useBootSplashHold();
+  const bootGone = useBootSplashGone();
   return (
     <div className="pc-boot is-static" data-testid="brand-splash">
       <div className="pc-boot__stage">
         <div className="pc-boot__glow" />
-        <div className="pc-boot__art" aria-hidden="true">
-          <img className="pc-boot__dim" src="/brand/splash-lantern-dim.webp" alt="" />
-          <img className="pc-boot__lit" src="/brand/splash-lantern.webp" alt="" />
-          <img className="pc-boot__cord" src="/brand/splash-cord.webp" alt="" />
+        <div className="pc-boot__art">
+          <CordMark size={160} motion="loading" paused={!bootGone} label="Paracord" />
         </div>
-        <img className="pc-boot__word" src="/brand/wordmark.webp" alt="Paracord" />
+        <img className="pc-boot__word" src="/brand/wordmark.webp" alt="" aria-hidden="true" />
         <p className="pc-boot__status" role="status" aria-live="polite">
           {label}
         </p>

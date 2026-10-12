@@ -1,6 +1,6 @@
 import { useState, useEffect, lazy, Suspense } from 'react';
 import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router';
-import { AppMark } from './components/brand/AppMark';
+import { CordMark } from './components/brand/CordMark';
 import { BrandSplash } from './components/brand/BrandSplash';
 import { LoginPage } from './pages/LoginPage';
 import { RegisterPage } from './pages/RegisterPage';
@@ -268,14 +268,12 @@ export function AuthRoute({ children }: { children: React.ReactNode }) {
 
 /**
  * In-shell fallback while a lazily-loaded route surface streams in. Sits inside
- * the already-painted frame, so it stays quiet: just the mark, gently fading.
+ * the already-painted frame, so it stays quiet: just the mark, drawing in and out.
  */
 function LazyFallback() {
   return (
     <div className="flex h-full w-full items-center justify-center">
-      <div className="pc-mark-breathe">
-        <AppMark size={32} />
-      </div>
+      <CordMark size={40} motion="loading" label="Loading" />
     </div>
   );
 }
@@ -342,7 +340,7 @@ function DeviceKeySignIn() {
   return (
     <div className="flex min-h-screen w-full flex-col items-center justify-center gap-5 bg-bg-base px-6">
       <div className="flex w-full max-w-md flex-col items-start gap-4">
-        <AppMark size={40} />
+        <CordMark size={40} label="Paracord" />
         <div className="flex flex-col gap-1.5">
           <h1 className="font-display text-heading text-text-primary">
             This device could not sign in with its key
@@ -445,7 +443,7 @@ function GuardStalled({ to }: { to: CryptoAuthRedirect | '/app' }) {
   return (
     <div className="flex min-h-screen w-full flex-col items-center justify-center gap-5 bg-bg-base px-6">
       <div className="flex w-full max-w-md flex-col items-start gap-4">
-        <AppMark size={40} />
+        <CordMark size={40} label="Paracord" />
         <div className="flex flex-col gap-1.5">
           <h1 className="font-display text-heading text-text-primary">Paracord could not open {destination}</h1>
           <p className="text-label leading-relaxed text-text-secondary">
