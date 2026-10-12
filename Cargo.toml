@@ -16,6 +16,8 @@ members = [
     "crates/paracord-relay",
     "crates/paracord-codec",
     "crates/paracord-media-dev",
+    # The desktop app's host service manager
+    "crates/paracord-hostctl",
     "client/src-tauri",
 ]
 

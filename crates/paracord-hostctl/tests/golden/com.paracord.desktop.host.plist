@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.paracord.desktop.host</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/sam/Library/Application Support/com.paracord.desktop/host/bin/paracord-host</string>
+		<string>-c</string>
+		<string>/Users/sam/Library/Application Support/com.paracord.desktop/host/config/paracord.toml</string>
+		<string>--log-file</string>
+		<string>/Users/sam/Library/Application Support/com.paracord.desktop/host/logs/server.log</string>
+	</array>
+	<key>WorkingDirectory</key>
+	<string>/Users/sam/Library/Application Support/com.paracord.desktop/host</string>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>StandardOutPath</key>
+	<string>/Users/sam/Library/Application Support/com.paracord.desktop/host/logs/launchd.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/sam/Library/Application Support/com.paracord.desktop/host/logs/launchd.log</string>
+</dict>
+</plist>

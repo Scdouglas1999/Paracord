@@ -1,0 +1,15 @@
+[Unit]
+Description=Paracord on this computer
+After=default.target
+
+[Service]
+Type=exec
+WorkingDirectory=/home/sam/.local/share/com.paracord.desktop/host
+ExecStart=/home/sam/.local/share/com.paracord.desktop/host/bin/paracord-host -c /home/sam/.local/share/com.paracord.desktop/host/config/paracord.toml --log-file /home/sam/.local/share/com.paracord.desktop/host/logs/server.log
+Restart=on-failure
+RestartSec=5
+RestartPreventExitStatus=78
+Nice=5
+
+[Install]
+WantedBy=default.target

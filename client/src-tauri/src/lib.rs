@@ -2457,6 +2457,10 @@ pub fn run() {
         host::host_remove,
         host::host_logs_tail,
         host::host_restore,
+        host::host_info,
+        host::host_on_launch,
+        host::host_rollback_update,
+        host::host_allow_firewall,
         // First-run setup: server identity (docs/setup-spec.md §7)
         trust_cmds::trust_server,
         trust_cmds::accept_changed_identity,
