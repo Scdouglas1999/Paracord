@@ -6,7 +6,7 @@ use axum::{
 use chrono::Utc;
 use paracord_contracts::invite::{
     AcceptInviteRequest, CreateInviteRequest, GuildInvite, InviteAcceptGuild, InviteAcceptResponse,
-    InviteGuildPreview, InviteInstance, InviteJoinGate, InvitePreview,
+    InviteFace, InviteGuildPreview, InviteInstance, InviteJoinGate, InvitePreview,
 };
 use paracord_core::AppState;
 use paracord_federation::client::{FederationInviteRequest, FederationJoinRequest};
@@ -289,6 +289,23 @@ fn join_gate_preview(bot_settings: &Value) -> Option<InviteJoinGate> {
     })
 }
 
+/// The hues an identity defaults to: `PALETTE_HUES` in `client/src/lib/identityHue.ts`
+/// (docs/index-spec.md §2.2). A person keeps one hue in the app and on the invite card.
+const FACE_PALETTE_HUES: [i16; 11] = [350, 8, 22, 36, 150, 162, 176, 190, 200, 214, 226];
+
+/// `paletteHue(id)`: the last nine decimal digits of the snowflake, mod 11.
+fn face_hue(user_id: i64) -> i16 {
+    let tail = user_id.unsigned_abs() % 1_000_000_000;
+    FACE_PALETTE_HUES[(tail % FACE_PALETTE_HUES.len() as u64) as usize]
+}
+
+/// The first user-perceived character of a name (an emoji with its modifiers
+/// stays whole), or `None` for a blank name.
+fn first_grapheme(name: &str) -> Option<String> {
+    use unicode_segmentation::UnicodeSegmentation;
+    name.trim().graphemes(true).next().map(str::to_string)
+}
+
 pub async fn get_invite(
     State(state): State<AppState>,
     Path(code): Path<String>,
@@ -331,21 +348,37 @@ pub async fn get_invite(
         .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
         .and_then(|settings| join_gate_preview(&settings));
 
-    // First-run contract fields (setup spec §6.1). S0 fills what is already
-    // known; S9 adds the faces query and owns this handler. `credential_version`
-    // stays 1 until the one-password routes exist (S2 sets 2).
-    let online_count = space_id
+    // Preview extras (setup spec §6.1). `online` is the guild's members that
+    // are connected right now: it gives the online count and the faces' order.
+    let online: Vec<i64> = space_id
         .map(|sid| {
             state
                 .member_index
                 .members_of(sid)
                 .into_iter()
                 .filter(|user_id| state.online_users.contains(user_id))
-                .count()
+                .collect()
         })
-        .unwrap_or(0);
-    let online_count = u32::try_from(online_count)
+        .unwrap_or_default();
+    let online_count = u32::try_from(online.len())
         .map_err(|_| ApiError::Internal(anyhow::anyhow!("Invalid online count")))?;
+    // Up to three non-bot members, online first, then newest. Only the first
+    // grapheme of a display name and a palette hue leave the server: no names,
+    // ids or images.
+    let faces = match space_id {
+        Some(sid) => paracord_db::invites::list_invite_face_members(&state.db, sid, &online, 3)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+            .into_iter()
+            .filter_map(|member| {
+                Some(InviteFace {
+                    initial: first_grapheme(&member.display_name)?,
+                    hue: face_hue(member.user_id),
+                })
+            })
+            .collect(),
+        None => Vec::new(),
+    };
     let expires_at = invite
         .max_age
         .filter(|age| *age > 0)
@@ -360,7 +393,7 @@ pub async fn get_invite(
                 .instance_name
                 .unwrap_or_else(|| runtime.server_name.clone()),
             version: env!("CARGO_PKG_VERSION").to_string(),
-            credential_version: 1,
+            credential_version: 2,
             registration_mode: runtime.registration_mode.into(),
             require_email: state.config.require_email,
         }
@@ -377,7 +410,7 @@ pub async fn get_invite(
             hue: g.hue.and_then(|hue| i16::try_from(hue).ok()),
             online_count,
         }),
-        faces: Vec::new(),
+        faces,
         expires_at,
         instance,
     }))

@@ -1561,11 +1561,31 @@ const RATE_LIMITER_MAX_BUCKETS: u64 = 100_000;
 /// Idle lifetime of a bucket: buckets untouched for this long are evicted.
 const RATE_LIMITER_IDLE_SECONDS: u64 = 600;
 
+/// `GET /api/v1/invites/{code}` is public, so the code is guessable by anyone
+/// who can send requests: 30 previews a minute per source (setup-spec §6.2).
+const INVITE_PREVIEW_PER_MINUTE: u32 = 30;
+/// Twenty misses (404s) inside ten minutes lock that source out of the same
+/// route for ten minutes.
+const INVITE_MISS_LIMIT: u32 = 20;
+const INVITE_MISS_WINDOW_SECONDS: i64 = 600;
+const INVITE_MISS_LOCKOUT_SECONDS: i64 = 600;
+const INVITE_PREVIEW_MATCHED_PATH: &str = "/api/v1/invites/{code}";
+
+/// One source's misses on the invite preview route.
+struct InviteMissState {
+    window_start: i64,
+    count: u32,
+    locked_until: i64,
+}
+
 pub struct HttpRateLimiter {
     // moka::sync cache: bounded (LRU-style) and self-expiring, mirroring the
     // permission cache in paracord-core. Values are shared behind an Arc<Mutex>
     // so a bucket can be mutated in place after it is fetched from the cache.
     buckets: moka::sync::Cache<String, Arc<Mutex<RateBucket>>>,
+    // Misses on the invite preview route, per source. Idle for longer than the
+    // lockout and the entry is gone with nothing left to enforce.
+    invite_misses: moka::sync::Cache<String, Arc<Mutex<InviteMissState>>>,
 }
 
 impl HttpRateLimiter {
@@ -1575,6 +1595,51 @@ impl HttpRateLimiter {
                 .max_capacity(RATE_LIMITER_MAX_BUCKETS)
                 .time_to_idle(Duration::from_secs(RATE_LIMITER_IDLE_SECONDS))
                 .build(),
+            invite_misses: moka::sync::Cache::builder()
+                .max_capacity(RATE_LIMITER_MAX_BUCKETS)
+                .time_to_idle(Duration::from_secs(
+                    (INVITE_MISS_WINDOW_SECONDS + INVITE_MISS_LOCKOUT_SECONDS) as u64,
+                ))
+                .build(),
+        }
+    }
+
+    /// Seconds left of this source's invite lockout, or `None` when it is not locked out.
+    fn invite_lockout_remaining(&self, key: &str, now: i64) -> Option<i64> {
+        let state = self.invite_misses.get(key)?;
+        let guard = match state.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        (guard.locked_until > now).then(|| guard.locked_until - now)
+    }
+
+    /// Record one 404 from the invite preview route. The twentieth inside the
+    /// window starts the lockout.
+    fn record_invite_miss(&self, key: &str, now: i64) {
+        let state = self.invite_misses.get_with(key.to_string(), || {
+            Arc::new(Mutex::new(InviteMissState {
+                window_start: now,
+                count: 0,
+                locked_until: 0,
+            }))
+        });
+        let mut guard = match state.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if guard.locked_until > now {
+            return;
+        }
+        if now.saturating_sub(guard.window_start) >= INVITE_MISS_WINDOW_SECONDS {
+            guard.window_start = now;
+            guard.count = 0;
+        }
+        guard.count = guard.count.saturating_add(1);
+        if guard.count >= INVITE_MISS_LIMIT {
+            guard.locked_until = now + INVITE_MISS_LOCKOUT_SECONDS;
+            guard.window_start = now;
+            guard.count = 0;
         }
     }
 
@@ -1610,6 +1675,7 @@ impl HttpRateLimiter {
     /// reclaimed promptly rather than lazily on the next access.
     fn run_maintenance(&self) {
         self.buckets.run_pending_tasks();
+        self.invite_misses.run_pending_tasks();
     }
 }
 
@@ -1968,6 +2034,27 @@ async fn rate_limit_middleware(req: Request, next: Next) -> Response {
                 RATE_LIMITED_COUNT.fetch_add(1, Ordering::Relaxed);
                 return crate::error::ApiError::RateLimited(retry_after).into_response();
             }
+        }
+
+        // Invite preview: 30/min per source, and a lockout after repeated misses.
+        if method == Method::GET && path == INVITE_PREVIEW_MATCHED_PATH {
+            let now = chrono::Utc::now().timestamp();
+            if let Some(retry_after) = limiter.invite_lockout_remaining(&key, now) {
+                RATE_LIMITED_COUNT.fetch_add(1, Ordering::Relaxed);
+                return crate::error::ApiError::RateLimited(retry_after).into_response();
+            }
+            let invite_key = format!("http:invite:{key}");
+            if let Some(retry_after) =
+                limiter.check_rate_limit(&invite_key, 60, INVITE_PREVIEW_PER_MINUTE)
+            {
+                RATE_LIMITED_COUNT.fetch_add(1, Ordering::Relaxed);
+                return crate::error::ApiError::RateLimited(retry_after).into_response();
+            }
+            let response = next.run(req).await;
+            if response.status() == StatusCode::NOT_FOUND {
+                limiter.record_invite_miss(&key, chrono::Utc::now().timestamp());
+            }
+            return response;
         }
     }
 
@@ -2347,6 +2434,57 @@ mod embeddable_resource_tests {
             assert!(
                 !is_ticket_authenticated_resource(&method, path),
                 "{method} {path} must stay same-origin only",
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod invite_miss_tests {
+    use super::{HttpRateLimiter, INVITE_MISS_LIMIT, INVITE_MISS_LOCKOUT_SECONDS};
+
+    #[test]
+    fn the_twentieth_miss_locks_a_source_for_ten_minutes_and_then_lets_it_back() {
+        let limiter = HttpRateLimiter::new();
+        let t0 = 1_000_000;
+        for n in 0..INVITE_MISS_LIMIT - 1 {
+            limiter.record_invite_miss("a", t0 + i64::from(n));
+            assert_eq!(
+                limiter.invite_lockout_remaining("a", t0 + i64::from(n)),
+                None
+            );
+        }
+        let last = t0 + i64::from(INVITE_MISS_LIMIT);
+        limiter.record_invite_miss("a", last);
+        assert_eq!(
+            limiter.invite_lockout_remaining("a", last),
+            Some(INVITE_MISS_LOCKOUT_SECONDS)
+        );
+        // Another source is not affected.
+        assert_eq!(limiter.invite_lockout_remaining("b", last), None);
+        // Misses during the lockout do not extend it.
+        limiter.record_invite_miss("a", last + 100);
+        assert_eq!(
+            limiter.invite_lockout_remaining("a", last + 100),
+            Some(INVITE_MISS_LOCKOUT_SECONDS - 100)
+        );
+        assert_eq!(
+            limiter.invite_lockout_remaining("a", last + INVITE_MISS_LOCKOUT_SECONDS),
+            None
+        );
+    }
+
+    #[test]
+    fn misses_spread_over_more_than_ten_minutes_never_lock() {
+        let limiter = HttpRateLimiter::new();
+        // One miss every 40 seconds is 15 per ten minutes; it never reaches 20.
+        for n in 0..200 {
+            let now = 5_000_000 + n * 40;
+            limiter.record_invite_miss("slow", now);
+            assert_eq!(
+                limiter.invite_lockout_remaining("slow", now),
+                None,
+                "miss {n}"
             );
         }
     }

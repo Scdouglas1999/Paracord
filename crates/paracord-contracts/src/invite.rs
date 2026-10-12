@@ -128,19 +128,19 @@ pub struct InviteAcceptResponse {
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct CreateInviteRequest {
-    /// 0 means unlimited uses; at most 100 otherwise.
+    /// 0 means unlimited uses; at most 100 otherwise. Defaults to 25.
     #[serde(default = "default_max_uses")]
     pub max_uses: i32,
-    /// Seconds until expiry; 0 means never, at most 604800 (7 days).
+    /// Seconds until expiry; 0 means never, at most 604800 (7 days). Defaults to 604800.
     #[serde(default = "default_max_age")]
     pub max_age: i32,
 }
 
 fn default_max_uses() -> i32 {
-    0
+    25
 }
 fn default_max_age() -> i32 {
-    86400
+    604800
 }
 
 /// `POST /invites/{code}` accepts an optional JSON body.

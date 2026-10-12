@@ -515,3 +515,89 @@ mod tests {
         assert_eq!(all_invites[0].code, "active_unlimited");
     }
 }
+
+/// A member shown as a face on an invite card. Carries the display name only
+/// so the caller can cut it down to a first grapheme; it must never be sent on
+/// the wire as it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InviteFaceMember {
+    pub user_id: i64,
+    pub display_name: String,
+}
+
+/// `users.flags` bit for bot accounts (see `users.rs`).
+const FACE_USER_FLAG_BOT: i32 = 1 << 1;
+/// Cap on the online ids bound into one faces query.
+const FACE_ONLINE_BATCH: usize = 500;
+
+/// Up to `limit` non-bot members of a guild for the invite card (setup-spec
+/// §6.1): the members in `online_ids` first (most recently joined first), then
+/// the most recently joined of everyone else. Bots are never shown.
+pub async fn list_invite_face_members(
+    pool: &DbPool,
+    guild_id: i64,
+    online_ids: &[i64],
+    limit: usize,
+) -> Result<Vec<InviteFaceMember>, DbError> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    const NAME: &str = "COALESCE(NULLIF(m.nick, ''), NULLIF(u.display_name, ''), u.username)";
+    let limit_i64 = i64::try_from(limit).unwrap_or(3);
+    let mut faces: Vec<InviteFaceMember> = Vec::with_capacity(limit);
+
+    let online = &online_ids[..online_ids.len().min(FACE_ONLINE_BATCH)];
+    if !online.is_empty() {
+        let placeholders = crate::messages::build_placeholders(4, online.len());
+        let sql = format!(
+            "SELECT m.user_id, {NAME} AS name
+             FROM members m JOIN users u ON u.id = m.user_id
+             WHERE m.guild_id = $1 AND (u.flags & $2) = 0 AND m.user_id IN ({placeholders})
+             ORDER BY m.joined_at DESC, m.user_id DESC
+             LIMIT $3"
+        );
+        let mut query = sqlx::query_as::<_, (i64, String)>(&sql)
+            .bind(guild_id)
+            .bind(FACE_USER_FLAG_BOT)
+            .bind(limit_i64);
+        for id in online {
+            query = query.bind(*id);
+        }
+        for (user_id, display_name) in query.fetch_all(pool).await? {
+            faces.push(InviteFaceMember {
+                user_id,
+                display_name,
+            });
+        }
+    }
+
+    if faces.len() < limit {
+        // Recent members, over-fetched by what is already picked so the online
+        // ones can be skipped here without a second round of binds.
+        let sql = format!(
+            "SELECT m.user_id, {NAME} AS name
+             FROM members m JOIN users u ON u.id = m.user_id
+             WHERE m.guild_id = $1 AND (u.flags & $2) = 0
+             ORDER BY m.joined_at DESC, m.user_id DESC
+             LIMIT $3"
+        );
+        let rows = sqlx::query_as::<_, (i64, String)>(&sql)
+            .bind(guild_id)
+            .bind(FACE_USER_FLAG_BOT)
+            .bind(limit_i64 + faces.len() as i64)
+            .fetch_all(pool)
+            .await?;
+        for (user_id, display_name) in rows {
+            if faces.len() >= limit {
+                break;
+            }
+            if faces.iter().all(|face| face.user_id != user_id) {
+                faces.push(InviteFaceMember {
+                    user_id,
+                    display_name,
+                });
+            }
+        }
+    }
+    Ok(faces)
+}

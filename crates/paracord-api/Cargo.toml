@@ -12,6 +12,7 @@ paracord-models = { workspace = true }
 paracord-media = { workspace = true }
 paracord-db = { workspace = true }
 paracord-util = { workspace = true }
+unicode-segmentation = "1.12"
 paracord-federation = { workspace = true }
 paracord-relay = { workspace = true }
 axum = { workspace = true }
