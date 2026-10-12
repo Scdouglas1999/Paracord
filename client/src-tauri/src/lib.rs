@@ -1393,6 +1393,112 @@ async fn probe_server(server_url: String) -> Result<serde_json::Value, String> {
     probe_answer(body, presented)
 }
 
+/// An invite code as the invite parser accepts it (`lib/inviteLinks.ts`).
+fn is_invite_code(code: &str) -> bool {
+    !code.is_empty()
+        && code.len() <= 64
+        && code
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// The public invite preview (`GET /api/v1/invites/{code}`, docs/setup-spec.md
+/// §6.1) for the first run's invite card, and the certificate the server
+/// presented on that same connection (§7.3).
+///
+/// The card has to show the server before the person has trusted it, which
+/// `native_fetch` refuses by design; this is the one other request a first
+/// contact may make, under the same rule as `probe_server` (HTTPS, off this
+/// machine) and through the same verifier, so a pinned host that presents
+/// another certificate fails with [`PIN_MISMATCH_MESSAGE`]. Only the invite
+/// route is reachable: the code is checked, and the path is built here.
+///
+/// Answers `{ status, body, fingerprint, ca_verified }`: a 404 is an invite
+/// that no longer works, not an error.
+#[tauri::command]
+async fn preview_invite(server_url: String, code: String) -> Result<serde_json::Value, String> {
+    if !is_invite_code(&code) {
+        return Err("That is not an invite code.".to_string());
+    }
+    let health = health_url_for_server(&server_url)?;
+    if let Err(refusal) = ensure_native_fetch_target_is_trusted(&health) {
+        if !is_first_contact_target(&health) {
+            return Err(refusal);
+        }
+    }
+    let url = format!("{}/api/v1/invites/{code}", server_url.trim_end_matches('/'));
+    let observer = IdentityObserver::default();
+    let client = tls_client_builder(Some(observer.clone()))?
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {e}"))?;
+    let response = client.get(&url).send().await.map_err(map_reqwest_error)?;
+    let status = response.status().as_u16();
+    let bytes = read_limited_response(response, MAX_NATIVE_JSON_RESPONSE_BYTES).await?;
+    let body =
+        serde_json::from_slice::<serde_json::Value>(&bytes).unwrap_or(serde_json::Value::Null);
+    let presented = *observer
+        .lock()
+        .map_err(|_| "certificate observer poisoned".to_string())?;
+    Ok(invite_preview_answer(status, body, presented))
+}
+
+fn invite_preview_answer(
+    status: u16,
+    body: serde_json::Value,
+    presented: Option<PresentedIdentity>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "status": status,
+        "body": body,
+        "fingerprint": presented.map(|seen| encode_fingerprint_hex(&seen.fingerprint)),
+        "ca_verified": presented.is_some_and(|seen| seen.ca_verified),
+    })
+}
+
+#[cfg(test)]
+mod invite_preview_tests {
+    use super::{invite_preview_answer, is_invite_code, PresentedIdentity};
+
+    #[test]
+    fn only_invite_codes_reach_the_invite_route() {
+        for good in ["Rf8kQ2", "abc_DEF-123", "x"] {
+            assert!(is_invite_code(good), "{good}");
+        }
+        let long = "a".repeat(65);
+        for bad in [
+            "",
+            "../users/@me",
+            "a/b",
+            "a?b=1",
+            "a b",
+            "a%2F",
+            long.as_str(),
+        ] {
+            assert!(!is_invite_code(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn the_answer_carries_the_status_and_the_certificate() {
+        let seen = PresentedIdentity {
+            fingerprint: [0xab; 32],
+            ca_verified: false,
+        };
+        let answer = invite_preview_answer(
+            404,
+            serde_json::json!({"code": "invite_not_found"}),
+            Some(seen),
+        );
+        assert_eq!(answer["status"], 404);
+        assert_eq!(answer["body"]["code"], "invite_not_found");
+        assert_eq!(answer["fingerprint"], "ab".repeat(32));
+        assert_eq!(answer["ca_verified"], false);
+        let plain = invite_preview_answer(200, serde_json::Value::Null, None);
+        assert!(plain["fingerprint"].is_null());
+    }
+}
+
 /// An HTTPS address off this machine: what an invite names on first contact.
 fn is_first_contact_target(url: &str) -> bool {
     url::Url::parse(url).is_ok_and(|parsed| {
@@ -2384,6 +2490,7 @@ pub fn run() {
         now_playing::now_playing_stop,
         update_trusted_server_hosts,
         probe_server,
+        preview_invite,
         native_fetch,
         native_upload_file,
         native_multipart,

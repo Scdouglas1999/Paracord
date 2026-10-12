@@ -38,6 +38,8 @@ export interface HostInfo {
   /** An update that didn't come up: show the banner (spec 2.8). */
   update_failure: UpdateRecord | null;
   held_version: string | null;
+  /** The hosted server's instance id: the info of the owner's escrow key (spec §4.7). */
+  instance_id?: string | null;
 }
 
 export type UpdateOutcome =

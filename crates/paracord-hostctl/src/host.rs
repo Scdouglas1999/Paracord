@@ -113,6 +113,10 @@ pub struct HostInfo {
     pub update_failure: Option<UpdateRecord>,
     /// A version whose update was undone; not retried automatically.
     pub held_version: Option<String>,
+    /// The hosted server's instance id, once `init` reported it: the info of
+    /// the owner's escrow key (spec §4.7), which the page derives.
+    #[serde(default)]
+    pub instance_id: Option<String>,
 }
 
 /// What `host_on_launch` did about the bundled binary (spec §2.8).
@@ -811,6 +815,7 @@ impl Host {
             storage_key_problem,
             update_failure: state.update.clone().filter(|u| u.failure.is_some()),
             held_version: state.held_version.clone(),
+            instance_id: state.instance_id.clone(),
         })
     }
 
