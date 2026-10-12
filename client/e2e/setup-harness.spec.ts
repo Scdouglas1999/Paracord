@@ -83,10 +83,14 @@ test.describe('desktop scene', () => {
     ['firewall_blocked', 'warn', 'Windows Firewall is blocking friends.'],
   ];
   for (const [reach, state, detail] of REACH) {
-    test(`setup progress plays rows 1, 2, 4, 5 and the reach row is ${reach}`, async ({ page }) => {
+    test(`setup progress plays rows 1, 2, then 4, 5 and the reach row is ${reach}`, async ({ page }) => {
       await installSetupScene(page, { reach, progressDelayMs: 5 });
       await blank(page);
       await tauri(page);
+      // S7's contract: rows 1-2, then (after the page's row 3 and escrow) rows 4-5.
+      expect((await invoke(page, 'host_setup_start', { port: THIS_COMPUTER.port })).ok).toBe(true);
+      await expect.poll(async () => (await events(page, 'host://progress')).some((e) => (e as ProgressEvent).row === 2 && (e as ProgressEvent).state === 'ok')).toBe(true);
+      expect((await invoke(page, 'host_write_escrow', { wrappingKey: 'x' })).ok).toBe(true);
       expect((await invoke(page, 'host_setup_start', { port: THIS_COMPUTER.port })).ok).toBe(true);
       await expect.poll(async () => (await events(page, 'host://progress')).some((e) => (e as ProgressEvent).row === 5 && (e as ProgressEvent).state === 'ok')).toBe(true);
       const got = (await events(page, 'host://progress')) as ProgressEvent[];
