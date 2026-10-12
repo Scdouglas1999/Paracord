@@ -593,3 +593,9 @@
 :root[data-motion='reduced'] .ix-sb__chev {
   transition: opacity 65ms linear !important;
 }
+
+/* The connecting state's mark (ServerUnavailable): the cord being pulled through. */
+.ix-sb__mark {
+  display: block;
+  margin: 16px 8px 0;
+}

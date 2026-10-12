@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router';
-import { Loader2, RefreshCw, Server, Sparkles, X } from 'lucide-react';
+import { RefreshCw, Server, Sparkles, X } from 'lucide-react';
 import { useServerListStore, resolveDefaultServerTarget } from '../stores/serverListStore';
 import { gateway } from '../gateway/manager';
 import { setStoredServerUrl, normalizeConnectInput } from '../lib/config/apiBaseUrl';
@@ -14,6 +14,7 @@ import { Divider } from '../components/ui/Divider';
 import { syncTrustedHosts } from '../lib/trustedHosts';
 import { isTauri } from '../lib/tauriEnv';
 import { AUTH_FORM, AuthCanvas, AuthCard, AuthHeading, AuthScroll, Field } from './authScaffold';
+import { CordSpinner } from '../components/brand/CordMark';
 
 const PUBLIC_DEMO_SERVER_URL = (
   import.meta.env.VITE_PUBLIC_DEMO_SERVER_URL || 'https://demo.paracord.chat'
@@ -502,7 +503,7 @@ export function ServerConnectPage() {
                 className="pc-well flex items-center gap-2 px-4 py-2.5 text-[14px] text-[var(--ix-ink-2)]"
                 aria-live="polite"
               >
-                <Loader2 size={15} className="shrink-0 animate-spin text-[var(--ix-ink-2)]" />
+                <CordSpinner className="shrink-0" />
                 <span>{status}</span>
               </div>
             )}

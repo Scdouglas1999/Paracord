@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Clock, Loader2 } from 'lucide-react';
+import { Clock } from 'lucide-react';
 import { extractApiError } from '../../../api/client';
 import type { ReminderItem } from '../../../api/reminders';
 import { useCurrentAccountScope } from '../../../hooks/useCurrentUser';
@@ -12,6 +12,7 @@ import { RemindMeMenu } from '../../message/RemindMeMenu';
 import { GlassButton } from '../../glass/primitives';
 import { SheetAlert, SheetKicker, SheetStatus } from '../../glass/sheets/SheetParts';
 import { cn } from '../../../lib/utils';
+import { CordSpinner } from '../../brand/CordMark';
 
 function sentenceCase(text: string): string {
   return text.charAt(0).toUpperCase() + text.slice(1);
@@ -162,7 +163,7 @@ export function RemindersPane({
   if (loading && items.length === 0) {
     return (
       <SheetStatus>
-        <Loader2 size={16} className="animate-spin" aria-hidden /> Loading reminders…
+        <CordSpinner /> Loading reminders…
       </SheetStatus>
     );
   }

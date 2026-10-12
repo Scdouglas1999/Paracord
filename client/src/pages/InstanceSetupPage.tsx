@@ -464,7 +464,7 @@ export function InstanceSetupPage() {
       <AuthCanvas>
         <AuthCard>
           <div className={AUTH_FORM}>
-            <AuthHeading title="Checking this instance…" />
+            <AuthHeading title="Checking this instance…" markMotion="working" />
           </div>
         </AuthCard>
       </AuthCanvas>

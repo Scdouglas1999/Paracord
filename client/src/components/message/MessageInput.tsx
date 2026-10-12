@@ -10,7 +10,6 @@ import { Fragment, useState, useRef, useEffect, useLayoutEffect, useMemo, useCal
 // §5.3: one reduced-motion switch for the whole app — lib/motion is the only
 // JavaScript motion engine; the composer's enter/exit surfaces are CSS.
 import { emitMotion, fadeIn, ms, pressComposer, readSendOrigin, releaseSend, useLingering, useReducedMotion } from '../../lib/motion';
-import { Loader2 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { Input, Select } from '../ui/Input';
 import { IxMenu, type IxMenuEntry } from '../ix/menus';
@@ -66,6 +65,7 @@ import { formatFileSize, toDatetimeLocalValue } from '../../lib/formatters';
 import { toast } from '../../stores/toastStore';
 import { extractApiError } from '../../api/client';
 import { displayName } from '../../lib/displayName';
+import { CordSpinner } from '../brand/CordMark';
 
 /**
  * The server's refusal for an action this person lacks the permission for
@@ -1602,7 +1602,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
     <div className="ix-composer__stack">
       {showCommandThinking && (
         <div role="status" aria-live="polite" className="ix-composer__note">
-          <Loader2 size={14} className="shrink-0 animate-spin" />
+          <CordSpinner className="shrink-0" />
           <span>Waiting for command response…</span>
         </div>
       )}
@@ -1960,7 +1960,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
               title={sendLabel}
             >
               {showsSpinner ? (
-                <Loader2 size={17} className="animate-spin" aria-hidden />
+                <CordSpinner size={18} />
               ) : showScheduleComposer ? (
                 <ClockGlyph />
               ) : (

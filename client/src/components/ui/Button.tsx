@@ -1,7 +1,7 @@
 import * as React from "react";
 import { cva, type VariantProps } from "class-variance-authority";
-import { Loader2 } from "lucide-react";
 import { cn } from "../../lib/utils";
+import { CordSpinner } from "../brand/CordMark";
 
 /**
  * Button (docs/index-spec.md §3.1, §6.12), on the Index controls:
@@ -101,7 +101,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
                 disabled={disabled || loading}
                 {...props}
             >
-                {loading && <Loader2 className="h-4 w-4 animate-spin" aria-hidden />}
+                {loading && <CordSpinner />}
                 {children}
             </button>
         );

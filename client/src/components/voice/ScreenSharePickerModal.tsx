@@ -11,6 +11,7 @@ import { PEOPLE_PLACE, useOptionalIxShell, usePlaceHue } from '../ix/shell';
 import { logVoiceDiagnostic } from '../../lib/desktopDiagnostics';
 import { isSafeImageDataUrl, safeClientResourceUrl } from '../../lib/security';
 import { cn } from '../../lib/utils';
+import { CordMark } from '../brand/CordMark';
 
 interface ScreenSharePickerModalProps {
   sources: ScreenShareSource[];
@@ -236,8 +237,8 @@ export function ScreenSharePickerModal({
           )}
 
           {loading ? (
-            <div className="flex min-h-48 items-center justify-center gap-3 text-[14px] text-[var(--ix-ink-2)]">
-              <div className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+            <div className="flex min-h-48 flex-col items-center justify-center gap-3 text-[14px] text-[var(--ix-ink-2)]">
+              <CordMark size={40} motion="loading" />
               Looking for screens and windows…
             </div>
           ) : sources.length === 0 ? (

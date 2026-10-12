@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
-import { FileAudio, FileVideo, Link2, Loader2, Upload } from 'lucide-react';
+import { FileAudio, FileVideo, Link2, Upload } from 'lucide-react';
 
 import { channelApi } from '../../../api/channels';
 import { fileApi } from '../../../api/files';
@@ -13,6 +13,7 @@ import { cn } from '../../../lib/utils';
 import { toast } from '../../../stores/toastStore';
 import { useTogetherStore } from '../../../stores/togetherStore';
 import { Button, Popover, Switch, Tabs, TextField } from '../../ui';
+import { CordSpinner } from '../../brand/CordMark';
 
 const MEDIA_ACCEPT = 'video/mp4,video/webm,audio/mpeg,audio/ogg,audio/mp4,audio/x-m4a,audio/flac,audio/wav,audio/x-wav,.mp4,.webm,.mp3,.ogg,.m4a,.flac,.wav';
 const RECENT_LIMIT = 8;
@@ -308,7 +309,7 @@ export function TogetherSheet({
                 {recentError && <p className="px-2 py-1.5 text-meta text-accent-danger">{recentError}</p>}
                 {!recent && !recentError && (
                   <p className="flex items-center gap-2 px-2 py-1.5 text-meta text-text-muted">
-                    <Loader2 size={13} className="animate-spin" aria-hidden /> Looking for videos and music…
+                    <CordSpinner /> Looking for videos and music…
                   </p>
                 )}
                 {recent?.length === 0 && (
@@ -366,7 +367,7 @@ export function TogetherSheet({
           <div className="flex items-center justify-end gap-2">
             {busy && (
               <span className={cn('mr-auto flex min-w-0 items-center gap-1.5 truncate text-meta text-text-muted')}>
-                <Loader2 size={13} className="shrink-0 animate-spin" aria-hidden />
+                <CordSpinner className="shrink-0" />
                 <span className="truncate">{busy}</span>
               </span>
             )}

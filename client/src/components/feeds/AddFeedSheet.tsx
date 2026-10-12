@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, Check, Loader2 } from 'lucide-react';
+import { ArrowLeft, Check } from 'lucide-react';
 import {
   feedsApi,
   FEED_KINDS,
@@ -26,6 +26,7 @@ import {
 import { FieldLabel } from '../guild/SettingsPrimitives';
 import { FEED_KIND_META, FeedSourceIcon } from './feedKinds';
 import { inputProblem } from './feedStatus';
+import { CordSpinner } from '../brand/CordMark';
 
 type Step = 'pick' | 'form' | 'done';
 
@@ -437,7 +438,7 @@ function PreviewLine({
   if (preview.state === 'checking') {
     return (
       <p className="flex items-center gap-2 text-meta text-text-muted" aria-live="polite">
-        <Loader2 size={14} className="animate-spin" aria-hidden />
+        <CordSpinner />
         Checking…
       </p>
     );

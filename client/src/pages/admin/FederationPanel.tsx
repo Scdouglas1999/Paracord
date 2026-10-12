@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Loader2, Plus, RotateCcw, Trash2, Search, ShieldCheck, ShieldAlert, Globe2 } from 'lucide-react';
+import { Plus, RotateCcw, Trash2, Search, ShieldCheck, ShieldAlert, Globe2 } from 'lucide-react';
 import {
   adminApi,
   type FederatedServer,
@@ -22,6 +22,7 @@ import {
 } from '../../components/ui';
 import { Select, Textarea } from '../../components/ui/Input';
 import { confirm } from '../../stores/confirmStore';
+import { CordSpinner } from '../../components/brand/CordMark';
 
 /** A federation endpoint refusing because the deployment has federation off. */
 function isFederationDisabled(err: unknown): boolean {
@@ -461,7 +462,7 @@ export function FederationPanel() {
               className="gap-2"
             >
               {refreshing ? (
-                <Loader2 size={16} className="animate-spin" />
+                <CordSpinner />
               ) : (
                 <RotateCcw size={16} />
               )}
@@ -550,7 +551,7 @@ export function FederationPanel() {
                     className="gap-1.5"
                   >
                     {inspectingName === server.server_name ? (
-                      <Loader2 size={14} className="animate-spin" />
+                      <CordSpinner />
                     ) : (
                       <Search size={14} />
                     )}
@@ -564,7 +565,7 @@ export function FederationPanel() {
                     className="gap-1.5"
                   >
                     {deletingName === server.server_name ? (
-                      <Loader2 size={14} className="animate-spin" />
+                      <CordSpinner />
                     ) : (
                       <Trash2 size={14} />
                     )}
@@ -607,7 +608,7 @@ export function FederationPanel() {
               className="gap-2"
             >
               {modRefreshing ? (
-                <Loader2 size={14} className="animate-spin" />
+                <CordSpinner />
               ) : (
                 <RotateCcw size={14} />
               )}
@@ -811,7 +812,7 @@ export function FederationPanel() {
                     className="gap-1.5"
                   >
                     {deletingSubId === String(sub.id) ? (
-                      <Loader2 size={14} className="animate-spin" />
+                      <CordSpinner />
                     ) : (
                       <Trash2 size={14} />
                     )}

@@ -2,6 +2,7 @@ import { gateway } from '../../../gateway/manager';
 import { useGuildServerState } from '../../../hooks/useGuildServerState';
 import { serverDisplayName } from '../session/ServerSignInDialog';
 import { useServerSignInDialog } from '../session/serverSignInDialogStore';
+import { CordMark } from '../../brand/CordMark';
 
 /**
  * The sidebar for a server you cannot see yet (docs/index-spec.md §4.1 states of the list).
@@ -53,6 +54,7 @@ export function ServerUnavailable({ guildId }: { guildId: string }) {
   // Connecting, or not asked yet (the stores are still waking up).
   return (
     <div className="ix-sb" data-testid="ix-server-unavailable" data-state="connecting">
+      <CordMark size={40} motion="working" className="ix-sb__mark" />
       <p className="ix-sb__note" role="status">
         Connecting to {name}&hellip;
       </p>

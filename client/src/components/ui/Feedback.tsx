@@ -1,6 +1,7 @@
-import { AlertCircle, Loader2 } from 'lucide-react';
+import { AlertCircle } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { cn } from '../../lib/utils';
+import { CordMark, CordSpinner } from '../brand/CordMark';
 
 interface ErrorBannerProps {
   message: string;
@@ -59,10 +60,14 @@ interface LoadingSpinnerProps {
   className?: string;
 }
 
-const spinnerSizeClass: Record<NonNullable<LoadingSpinnerProps['size']>, string> = {
-  sm: 'h-4 w-4',
-  md: 'h-6 w-6',
-  lg: 'h-8 w-8',
+/**
+ * The mark's size for each loader. `sm` is a one-line status row: the flat mark
+ * in the text's color beside the label. `md` and `lg` are section and page
+ * loaders: the ember mark drawing in and out above the label.
+ */
+const spinnerMarkSize: Record<'md' | 'lg', number> = {
+  md: 40,
+  lg: 56,
 };
 
 export function LoadingSpinner({
@@ -70,13 +75,25 @@ export function LoadingSpinner({
   size = 'md',
   className,
 }: LoadingSpinnerProps) {
+  if (size === 'sm') {
+    return (
+      <div
+        className={cn('flex items-center justify-center gap-2 text-[var(--ix-ink-3)]', className)}
+        aria-live="polite"
+        aria-busy="true"
+      >
+        <CordSpinner className="text-[var(--ix-ink-2)]" />
+        {label && <span className="text-[14px]">{label}</span>}
+      </div>
+    );
+  }
   return (
     <div
-      className={cn('flex items-center justify-center gap-2 text-[var(--ix-ink-3)]', className)}
+      className={cn('flex flex-col items-center justify-center gap-3 text-[var(--ix-ink-3)]', className)}
       aria-live="polite"
       aria-busy="true"
     >
-      <Loader2 className={cn('animate-spin text-[var(--ix-ink-2)]', spinnerSizeClass[size])} />
+      <CordMark size={spinnerMarkSize[size]} motion="loading" />
       {label && <span className="text-[14px]">{label}</span>}
     </div>
   );

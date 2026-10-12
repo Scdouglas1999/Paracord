@@ -1307,20 +1307,9 @@ a.ix-score:hover {
   color: var(--ix-ink);
 }
 
-/* A request in flight: a small ring that turns, for as long as it is. */
+/* A request in flight: the mark drawing in and out (CordSpinner), for as long as it is. */
 .ix-bot-btn__busy {
   flex: none;
-  animation: ix-cards-spin 900ms linear infinite;
-}
-
-@keyframes ix-cards-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-:root[data-motion='reduced'] .ix-bot-btn__busy {
-  animation: none;
 }
 
 .ix-bot-select {

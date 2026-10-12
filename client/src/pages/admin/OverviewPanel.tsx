@@ -3,7 +3,6 @@ import {
   AlertTriangle,
   CheckCircle2,
   Info,
-  Loader2,
   RefreshCw,
   ShieldAlert,
 } from 'lucide-react';
@@ -12,6 +11,7 @@ import { extractApiError } from '../../api/client';
 import { toast } from '../../stores/toastStore';
 import { Skeleton } from '../../components/ui/Skeleton';
 import { Button, Divider, SettingsSectionHeader, Well } from '../../components/ui';
+import { CordSpinner } from '../../components/brand/CordMark';
 
 function formatBytes(bytes: number | null | undefined): string {
   if (bytes == null) return 'not measured';
@@ -80,7 +80,7 @@ export function OverviewPanel() {
         action={
           <Button variant="ghost" onClick={() => void load(true)} disabled={refreshing}>
             {refreshing ? (
-              <Loader2 size={14} className="animate-spin" />
+              <CordSpinner />
             ) : (
               <RefreshCw size={14} />
             )}

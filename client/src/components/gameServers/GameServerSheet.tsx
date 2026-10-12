@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, Loader2 } from 'lucide-react';
+import { ArrowLeft } from 'lucide-react';
 import {
   GAME_SERVER_KINDS,
   gameServerErrorMessage,
@@ -24,6 +24,7 @@ import {
 import { FieldLabel } from '../guild/SettingsPrimitives';
 import { GAME_KIND_META, addressProblem, joinAddress, splitAddress } from './gameServerModel';
 import { GameKindIcon, PlayerPile } from './GameServerParts';
+import { CordSpinner } from '../brand/CordMark';
 
 type Step = 'pick' | 'form';
 
@@ -359,7 +360,7 @@ function PreviewLine({ preview, localProblem }: { preview: PreviewState; localPr
   if (preview.state === 'checking') {
     return (
       <p className="flex items-center gap-2 text-meta text-text-muted" aria-live="polite">
-        <Loader2 size={14} className="animate-spin" aria-hidden />
+        <CordSpinner />
         Checking…
       </p>
     );

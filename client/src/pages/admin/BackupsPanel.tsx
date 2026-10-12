@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Download, Loader2, Plus, BookOpen, Trash2, AlertTriangle, Archive } from 'lucide-react';
+import { Download, Plus, BookOpen, Trash2, AlertTriangle, Archive } from 'lucide-react';
 import { adminApi } from '../../api/admin';
 import { extractApiError } from '../../api/client';
 import { toast } from '../../stores/toastStore';
@@ -14,6 +14,7 @@ import {
   Well,
 } from '../../components/ui';
 import { confirm } from '../../stores/confirmStore';
+import { CordSpinner } from '../../components/brand/CordMark';
 
 type BackupRow = {
   name: string;
@@ -247,7 +248,7 @@ export function BackupsPanel() {
                         disabled={preparingName === b.name}
                       >
                         {preparingName === b.name ? (
-                          <Loader2 size={16} className="animate-spin" />
+                          <CordSpinner />
                         ) : (
                           <BookOpen size={16} />
                         )}
@@ -258,7 +259,7 @@ export function BackupsPanel() {
                         disabled={downloadingName === b.name}
                       >
                         {downloadingName === b.name ? (
-                          <Loader2 size={16} className="animate-spin" />
+                          <CordSpinner />
                         ) : (
                           <Download size={16} />
                         )}
@@ -270,7 +271,7 @@ export function BackupsPanel() {
                         className="hover:bg-[var(--ix-danger-fill)] hover:text-[var(--ix-danger-ink)]"
                       >
                         {deletingName === b.name ? (
-                          <Loader2 size={16} className="animate-spin" />
+                          <CordSpinner />
                         ) : (
                           <Trash2 size={16} />
                         )}

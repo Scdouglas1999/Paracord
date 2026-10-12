@@ -4,7 +4,7 @@ import { useServerListStore } from '../../stores/serverListStore';
 import { LOCAL_SERVER_ID } from '../../lib/serverScope';
 import { useCurrentChannelStore } from '../../hooks/useChannels';
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { ExternalLink, Hash, Loader2, Shield, Volume2 } from 'lucide-react';
+import { ExternalLink, Hash, Shield, Volume2 } from 'lucide-react';
 import { ComponentType, ButtonStyle, type Component } from '../../types/components';
 import { InteractionType } from '../../types/interactions';
 import type { Interaction } from '../../types/interactions';
@@ -21,6 +21,7 @@ import { Avatar } from '../ix/identity/Avatar';
 import { displayName } from '../../lib/displayName';
 import { useDownloadTicket } from '../../hooks/useDownloadTicket';
 import { CustomEmojiImage } from '../ui/ResourceImage';
+import { CordSpinner } from '../brand/CordMark';
 
 interface MessageComponentsProps {
   components: Component[];
@@ -197,7 +198,7 @@ function ComponentButton({
       aria-busy={busy || undefined}
       title={component.label || component.custom_id || undefined}
     >
-      {busy && <Loader2 size={14} aria-hidden className="ix-bot-btn__busy" />}
+      {busy && <CordSpinner className="ix-bot-btn__busy" />}
       {emojiRender}
       {component.label && <span>{component.label}</span>}
       {isLink && <ExternalLink size={13} aria-hidden />}

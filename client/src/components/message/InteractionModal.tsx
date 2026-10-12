@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Loader2 } from 'lucide-react';
+import { CordSpinner } from '../brand/CordMark';
 import { Modal, ModalTitle } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import { Input, Textarea } from '../ui/Input';
@@ -137,7 +137,7 @@ export function InteractionModal() {
         <Button type="button" onClick={() => void submit()} disabled={submitting}>
           {submitting ? (
             <span className="inline-flex items-center gap-1.5">
-              <Loader2 size={14} className="animate-spin" /> Submitting…
+              <CordSpinner /> Submitting…
             </span>
           ) : (
             'Submit'

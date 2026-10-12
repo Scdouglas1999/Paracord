@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Check, Plus, ShieldAlert, Trash2, FlaskConical, Loader2 } from 'lucide-react';
+import { Check, Plus, ShieldAlert, Trash2, FlaskConical } from 'lucide-react';
 
 import {
   ACTION_LABELS,
@@ -33,6 +33,7 @@ import {
 } from '../ui';
 import { Skeleton } from '../ui/Skeleton';
 import { FieldLabel, GroupLabel, SectionHeader, Switch, ToggleRow } from './SettingsPrimitives';
+import { CordSpinner } from '../brand/CordMark';
 
 interface AutomodSectionProps {
   guildId: string;
@@ -273,7 +274,7 @@ export function AutomodSection({ guildId, channels, roles }: AutomodSectionProps
                   disabled={busyId === preset.key}
                 >
                   {busyId === preset.key ? (
-                    <Loader2 size={14} className="animate-spin" />
+                    <CordSpinner />
                   ) : (
                     <Plus size={14} />
                   )}
@@ -479,7 +480,7 @@ function RuleEditor({ guildId, channels, roles, onCancel, onCreated }: RuleEdito
           />
           <Button variant="ghost" onClick={() => void runTest()} disabled={testing || !sample}>
             {testing ? (
-              <Loader2 size={14} className="animate-spin" />
+              <CordSpinner />
             ) : (
               <FlaskConical size={14} />
             )}
@@ -593,7 +594,7 @@ function RuleEditor({ guildId, channels, roles, onCancel, onCreated }: RuleEdito
           Cancel
         </Button>
         <Button onClick={() => void save()} disabled={saving}>
-          {saving && <Loader2 size={14} className="animate-spin" />}
+          {saving && <CordSpinner />}
           Create rule
         </Button>
       </div>
