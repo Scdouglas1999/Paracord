@@ -13,7 +13,10 @@ export type AddServerTab = 'create' | 'join' | 'discover';
 interface AddServerState {
   open: boolean;
   tab: AddServerTab;
-  openSheet: (tab?: AddServerTab) => void;
+  /** An invite link to put in the Join tab's field (a deep link or the clipboard); the field takes it and clears it. */
+  joinDraft: string | null;
+  openSheet: (tab?: AddServerTab, joinDraft?: string) => void;
+  clearJoinDraft: () => void;
   closeSheet: () => void;
   toggleSheet: () => void;
   setTab: (tab: AddServerTab) => void;
@@ -22,7 +25,9 @@ interface AddServerState {
 export const useAddServerStore = create<AddServerState>()((set) => ({
   open: false,
   tab: 'create',
-  openSheet: (tab = 'create') => set({ open: true, tab }),
+  joinDraft: null,
+  openSheet: (tab = 'create', joinDraft) => set({ open: true, tab, joinDraft: joinDraft ?? null }),
+  clearJoinDraft: () => set({ joinDraft: null }),
   closeSheet: () => set({ open: false }),
   toggleSheet: () => set((state) => (state.open ? { open: false } : { open: true, tab: 'create' })),
   setTab: (tab) => set({ tab }),
@@ -30,9 +35,9 @@ export const useAddServerStore = create<AddServerState>()((set) => ({
 
 registerSessionReset('ix-add-server', () => useAddServerStore.setState({ open: false, tab: 'create' }));
 
-/** Open the Add a server sheet, on Create unless `tab` says otherwise. */
-export function openAddServer(tab?: AddServerTab): void {
-  useAddServerStore.getState().openSheet(tab);
+/** Open the Add a server sheet, on Create unless `tab` says otherwise; `joinDraft` fills the Join field. */
+export function openAddServer(tab?: AddServerTab, joinDraft?: string): void {
+  useAddServerStore.getState().openSheet(tab, joinDraft);
 }
 
 export function closeAddServer(): void {

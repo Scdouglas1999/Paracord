@@ -19,6 +19,9 @@ tauri-plugin-updater = "2"
 # second-process argv, which the single-instance handler forwards).
 tauri-plugin-deep-link = "2"
 tauri-plugin-dialog = "2"
+# Reads the clipboard for an invite link (lib/clipboardInvite.ts) and clears it
+# after a recovery phrase copy (lib/clipboard.ts). Desktop only.
+tauri-plugin-clipboard-manager = "2"
 tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

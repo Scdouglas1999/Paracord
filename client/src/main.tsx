@@ -17,6 +17,7 @@ import { getStoredServerUrl } from './lib/config/apiBaseUrl';
 import { sameServerUrl } from './lib/serverScope';
 import { useServerListStore } from './stores/serverListStore';
 import { toast } from './stores/toastStore';
+import { installDeepLinks } from './lib/deepLinks';
 
 // In Tauri, assets are embedded in the exe. The PWA service worker caches stale
 // assets in WebView2 storage that override the exe's embedded files, preventing
@@ -128,6 +129,9 @@ window.addEventListener('unhandledrejection', (event) => {
     void logVoiceDiagnostic('[app] unhandled promise rejection', { message });
   }
 });
+
+// paracord:// links: listener, then the queue the shell kept while this loaded.
+void installDeepLinks();
 
 logVoiceDiagnostic('[desktop] frontend main.tsx boot');
 void getDesktopDiagnosticsLogPath().then((path) => {

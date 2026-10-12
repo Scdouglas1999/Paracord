@@ -1998,9 +1998,10 @@ async fn stop_native_sse_stream(
     Ok(())
 }
 
-/// Event name carrying a `paracord://` deep link to the webview. The connect
-/// flow listens for this (via `@tauri-apps/api/event`) to route invite tokens
-/// (`paracord://invite/<token>`) and server hosts (`paracord://server/<host>`).
+/// Event name carrying a `paracord://` deep link to the webview once it has
+/// drained the queue. `client/src/lib/deepLinks.ts` listens for it (via
+/// `@tauri-apps/api/event`) and routes invites (`paracord://invite/<token>`)
+/// and server hosts (`paracord://server/<host>`).
 const DEEP_LINK_EVENT: &str = "deep-link";
 
 /// Pick out the `paracord://` entries from a process argument list. Used to
@@ -2014,10 +2015,98 @@ where
         .collect()
 }
 
-/// Focus the main window and forward each deep link to the webview so the
-/// connect flow can act on it. A plain second launch has no link args, but it
-/// must still bring the existing window forward; otherwise desktop launchers
-/// appear to do nothing while the single-instance plugin exits the new process.
+/// Links received before the webview has asked for them, and whether it has.
+///
+/// Every source (cold start, a second launch's argv, macOS `open-url`) lands
+/// here. Until the webview calls `take_pending_deep_links` the links wait in
+/// `urls` and no event is sent (nothing is listening yet, and an event would
+/// be lost). Once it has taken them, `taken` is set under the same lock and
+/// later links are emitted instead, so a link is delivered exactly once and
+/// none falls between the drain and the listener.
+#[derive(Default)]
+struct DeepLinkQueue {
+    urls: Vec<String>,
+    taken: bool,
+}
+
+static PENDING_DEEP_LINKS: std::sync::Mutex<DeepLinkQueue> = std::sync::Mutex::new(DeepLinkQueue {
+    urls: Vec::new(),
+    taken: false,
+});
+
+/// A flood of links must not grow the queue without bound before the UI is up.
+const PENDING_DEEP_LINK_LIMIT: usize = 16;
+
+/// Where one incoming link goes: `true` means emit it now.
+fn route_deep_link(queue: &mut DeepLinkQueue, url: &str) -> bool {
+    if queue.taken {
+        return true;
+    }
+    if queue.urls.len() < PENDING_DEEP_LINK_LIMIT {
+        queue.urls.push(url.to_string());
+    } else {
+        eprintln!("dropping a deep link: {PENDING_DEEP_LINK_LIMIT} are already waiting");
+    }
+    false
+}
+
+/// Hand the webview every link that arrived before it was listening, and from
+/// now on emit links as they arrive.
+fn take_deep_links(queue: &mut DeepLinkQueue) -> Vec<String> {
+    queue.taken = true;
+    std::mem::take(&mut queue.urls)
+}
+
+/// The links that were waiting for the webview (cold start, or a second launch
+/// before the UI mounted). The caller installs its `deep-link` listener first,
+/// then calls this once; later links arrive as events.
+#[tauri::command]
+fn take_pending_deep_links() -> Vec<String> {
+    let mut queue = PENDING_DEEP_LINKS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    take_deep_links(&mut queue)
+}
+
+#[cfg(test)]
+mod deep_link_queue_tests {
+    use super::*;
+
+    #[test]
+    fn cold_start_links_wait_for_the_webview_and_are_taken_once() {
+        let mut queue = DeepLinkQueue::default();
+        assert!(!route_deep_link(&mut queue, "paracord://invite/aaa"));
+        assert!(!route_deep_link(&mut queue, "paracord://invite/bbb"));
+        assert_eq!(
+            take_deep_links(&mut queue),
+            vec!["paracord://invite/aaa", "paracord://invite/bbb"]
+        );
+        assert!(take_deep_links(&mut queue).is_empty());
+    }
+
+    #[test]
+    fn links_after_the_drain_are_emitted_not_queued() {
+        let mut queue = DeepLinkQueue::default();
+        assert!(take_deep_links(&mut queue).is_empty());
+        assert!(route_deep_link(&mut queue, "paracord://invite/ccc"));
+        assert!(queue.urls.is_empty());
+    }
+
+    #[test]
+    fn the_queue_is_bounded() {
+        let mut queue = DeepLinkQueue::default();
+        for i in 0..(PENDING_DEEP_LINK_LIMIT + 5) {
+            route_deep_link(&mut queue, &format!("paracord://invite/{i}"));
+        }
+        assert_eq!(take_deep_links(&mut queue).len(), PENDING_DEEP_LINK_LIMIT);
+    }
+}
+
+/// Focus the main window and deliver each deep link to the webview (queued
+/// until it asks, emitted after). A plain second launch has no link args, but
+/// it must still bring the existing window forward; otherwise desktop
+/// launchers appear to do nothing while the single-instance plugin exits the
+/// new process.
 fn forward_deep_link_urls(app: &tauri::AppHandle, urls: &[String]) {
     use tauri::{Emitter, Manager};
     if let Some(window) = app.get_webview_window("main") {
@@ -2032,8 +2121,16 @@ fn forward_deep_link_urls(app: &tauri::AppHandle, urls: &[String]) {
         {
             eprintln!("failed to log deep link: {err}");
         }
-        if let Err(err) = app.emit(DEEP_LINK_EVENT, url.clone()) {
-            eprintln!("failed to forward deep link to webview: {err}");
+        let emit_now = {
+            let mut queue = PENDING_DEEP_LINKS
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            route_deep_link(&mut queue, url)
+        };
+        if emit_now {
+            if let Err(err) = app.emit(DEEP_LINK_EVENT, url.clone()) {
+                eprintln!("failed to forward deep link to webview: {err}");
+            }
         }
     }
 }
@@ -2184,6 +2281,7 @@ pub fn run() {
         .manage(NativeSseState::default())
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -2267,6 +2365,7 @@ pub fn run() {
         });
 
     let builder = builder.invoke_handler(tauri::generate_handler![
+        take_pending_deep_links,
         commands::greet,
         commands::get_app_version,
         commands::get_update_target,

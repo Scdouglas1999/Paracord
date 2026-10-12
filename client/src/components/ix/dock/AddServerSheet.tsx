@@ -319,6 +319,12 @@ function PictureField({ icon }: { icon: ReturnType<typeof useServerIcon> }) {
 function JoinPanel({ onDone }: { onDone: (path: string) => void }) {
   const ids = useId();
   const [invite, setInvite] = useState('');
+  const joinDraft = useAddServerStore((state) => state.joinDraft);
+  useEffect(() => {
+    if (joinDraft === null) return;
+    setInvite(joinDraft);
+    useAddServerStore.getState().clearJoinDraft();
+  }, [joinDraft]);
   const actions = useAddServerActions(onDone);
   const ready = invite.trim().length > 0 && !actions.loading;
 
