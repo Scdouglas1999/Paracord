@@ -5,6 +5,7 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { registerOnePassword, signInOnePassword } from '../scripts/lib/credential-node.mjs';
 
 // A saved server must come back by itself, or say why it cannot, against real servers.
 //
@@ -135,13 +136,9 @@ interface Account {
 /** An account with one server on `server`, signed in the way a native client is (no Origin: the refresh token comes in the body). */
 async function account(server: Instance, guildName: string): Promise<Account> {
   const username = `rec${server.name}${Date.now()}`.slice(0, 30);
-  const registered = await json<{ token: string }>(
-    await fetch(`${server.url}/api/v1/auth/register`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: `${username}@example.test`, username, password: PASSWORD }),
-    }),
-  );
+  // A one-password account (docs/setup-spec.md §3.3), made the way the client
+  // makes one; the server only ever receives the derived auth key.
+  const registered = await registerOnePassword(server.url, { username, email: `${username}@example.test`, password: PASSWORD });
   const guild = await json<{ id: string }>(
     await fetch(`${server.url}/api/v1/guilds`, {
       method: 'POST',
@@ -149,13 +146,7 @@ async function account(server: Instance, guildName: string): Promise<Account> {
       body: JSON.stringify({ name: guildName }),
     }),
   );
-  const session = await json<{ token: string; refresh_token: string }>(
-    await fetch(`${server.url}/api/v1/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identifier: username, password: PASSWORD }),
-    }),
-  );
+  const session = (await signInOnePassword(server.url, username, PASSWORD)) as { token: string; refresh_token: string };
   return { username, token: session.token, refreshToken: session.refresh_token, guildId: guild.id };
 }
 

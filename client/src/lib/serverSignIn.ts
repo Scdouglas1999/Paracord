@@ -1,6 +1,10 @@
 import axios, { type AxiosInstance } from 'axios';
 
-import { extractApiError } from '../api/client';
+import { extractApiError, isMissingRoute } from '../api/client';
+import type { CredentialParams } from '../api/generated/CredentialParams';
+import { deriveCredentialKeysFromWire } from './credential/derive';
+import { CredentialError, DOWNGRADE_MESSAGE } from './credential/errors';
+import { checkCredentialParams, findCredentialPin } from './credential/keystoreV2';
 import { connectionManager } from './connectionManager';
 import { getTauriAdapter } from './tauriAxiosAdapter';
 import { useServerListStore } from '../stores/serverListStore';
@@ -61,7 +65,29 @@ export function serverSignInError(error: unknown, serverName: string): string {
 }
 
 export async function signInToServer(serverId: string, identifier: string, password: string): Promise<ServerSignInStep> {
-  const { data } = await clientFor(serverId).post<LoginBody>('/auth/login', { identifier: identifier.trim(), password });
+  const client = clientFor(serverId);
+  const typed = identifier.trim();
+  // One password (docs/setup-spec.md §3.3, §3.13): on a server that has it the
+  // typed password only goes into the KDF and the server gets the auth key.
+  // An older server (no params route) keeps the password sign-in; a server
+  // that says "two passwords" for an account this device pinned as one
+  // password gets nothing.
+  let params: CredentialParams | null = null;
+  try {
+    params = (await client.post<CredentialParams>('/auth/credential/params', { identifier: typed })).data;
+  } catch (error) {
+    if (!isMissingRoute(error)) throw error;
+  }
+  const server = useServerListStore.getState().getServer(serverId);
+  const pin = server ? findCredentialPin(server.url, { identifier: typed }) : null;
+  if (params) checkCredentialParams(params, pin);
+  else if (pin) throw new CredentialError('downgrade', DOWNGRADE_MESSAGE);
+  if (params?.version === 2) {
+    const { authKey } = await deriveCredentialKeysFromWire(password, params.salt, params.kdf);
+    const { data } = await client.post<LoginBody>('/auth/credential/login', { identifier: typed, auth_key: authKey });
+    return finish(serverId, data);
+  }
+  const { data } = await client.post<LoginBody>('/auth/login', { identifier: typed, password });
   return finish(serverId, data);
 }
 

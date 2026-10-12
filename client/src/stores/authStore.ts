@@ -25,6 +25,8 @@ import { useSavedMessageStore } from './savedMessageStore';
 import { useReminderStore } from './reminderStore';
 import { clearUnlockedPrivateKey } from '../lib/accountSession';
 import { resetSessionStores } from './sessionReset';
+import { useAccountStore } from './accountStore';
+import type { LoginResponse } from '../types';
 
 function isUnauthorizedError(err: unknown): boolean {
   return (err as { response?: { status?: number } } | null)?.response?.status === 401;
@@ -57,6 +59,8 @@ interface AuthState {
     inviteCode?: string,
   ) => Promise<void>;
   initializeSession: () => Promise<void>;
+  /** Install a session a sign-in route just issued (one-password sign-in, sign-up, key sign-in). */
+  adoptSession: (data: LoginResponse) => void;
   setToken: (token: string | null) => void;
   logout: () => Promise<void>;
   fetchUser: () => Promise<void>;
@@ -219,6 +223,16 @@ export const useAuthStore = create<AuthState>()((set) => ({
     }
   },
 
+  adoptSession: (data) => {
+    if (!data?.token || !data.user) throw new Error('The server did not return a session.');
+    resetRefreshCoordination();
+    setAccessToken(data.token);
+    setRefreshToken(data.refresh_token ?? null);
+    clearSessionEndedNotice();
+    set({ token: data.token, user: data.user, error: null, isLoading: false });
+    startDownloadTicketLifecycle();
+  },
+
   setToken: (token) => {
     setAccessToken(token);
     set({ token });
@@ -230,6 +244,11 @@ export const useAuthStore = create<AuthState>()((set) => ({
     } catch {
       // Best effort: local session should always clear.
     }
+    // A one-password identity is a cached copy of the server's backup: signing
+    // out removes it and its keychain entry, so the next person at this
+    // computer is asked for a password and the gateway cannot sign straight
+    // back in with a remembered key. The per-account pins stay (§3.13).
+    await useAccountStore.getState().forgetDeviceIdentity().catch(() => undefined);
     await clearAuthState(set);
   },
 

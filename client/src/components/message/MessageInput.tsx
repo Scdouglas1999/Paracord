@@ -1610,7 +1610,6 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
         <div role="status" className="ix-composer__note">
           <span>
             {composerAction.reason}
-            {!groupDmRefusal && encrypted && encryption === 'setup' && <Link className="ix-composer__link" to={`/setup?${new URLSearchParams({ migrate: '1', server: scope.serverId, user: scope.userId, returnTo: window.location.pathname + window.location.search })}`}>Set up encryption</Link>}
             {!groupDmRefusal && encrypted && encryption === 'unlock' && <Link className="ix-composer__link" to={`/unlock?${new URLSearchParams({ returnTo: window.location.pathname + window.location.search })}`}>Unlock encryption</Link>}
             {/* A second device — a fresh browser, a new laptop — signs in and
                 lands here holding no identity, or a different one. Without this

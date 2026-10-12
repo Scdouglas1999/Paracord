@@ -87,6 +87,18 @@ import { ThemeSelector } from '../customization/ThemeSelector';
 import { NOW_PLAYING_SETTING_KEY } from '../../lib/nowPlaying';
 import { isActivityDetectionOn } from '../../lib/features/privacyDefaults';
 import { PrivacySection } from './PrivacySection';
+import {
+  applyAskForPassword,
+  changeOnePassword,
+  credentialErrorMessage,
+  detectCredentialMode,
+  newPasswordProblem,
+  pinForAccount,
+  revealRecoveryPhrase,
+} from '../../lib/oneCredential';
+import { canRememberUnlock } from '../../lib/rememberedUnlock';
+import { useServerLacks } from '../../lib/serverFeatures';
+import { LOCAL_SERVER_ID } from '../../lib/serverScope';
 import { useNowPlayingSupport } from '../../hooks/useNowPlayingSupport';
 import { useNowPlayingStore } from '../../stores/nowPlayingStore';
 
@@ -159,7 +171,17 @@ export function UserSettings({ onClose }: UserSettingsProps) {
   const updateSettings = useAuthStore(s => s.updateSettings);
   const updateUser = useAuthStore(s => s.updateUser);
   const accountPublicKey = useAccountStore((s) => s.publicKey);
-  const accountUnlocked = useAccountStore((s) => s.isUnlocked);
+  const identityVersion = useAccountStore((s) => s.identityVersion);
+  const rememberProblem = useAccountStore((s) => s.rememberProblem);
+  // One password (docs/setup-spec.md §3): this account's credential, as this
+  // device knows it (the pin, §3.13), and whether the home server is older.
+  const homeIsOlder = useServerLacks(LOCAL_SERVER_ID, 'oneCredential');
+  const onePasswordAccount = identityVersion === 2 || pinForAccount(user?.id) !== null;
+  const [passwordMfaCode, setPasswordMfaCode] = useState('');
+  const [phrasePassword, setPhrasePassword] = useState('');
+  const [revealedPhrase, setRevealedPhrase] = useState<string | null>(null);
+  const [phraseError, setPhraseError] = useState<string | null>(null);
+  const [revealingPhrase, setRevealingPhrase] = useState(false);
   const setThemeUI = useUIStore((s) => s.setTheme);
   const lowBandwidthMode = useUIStore((s) => s.lowBandwidthMode);
   const setLowBandwidthModeUI = useUIStore((s) => s.setLowBandwidthMode);
@@ -306,6 +328,11 @@ export function UserSettings({ onClose }: UserSettingsProps) {
   useEffect(() => {
     void fetchSettings();
   }, [fetchSettings]);
+
+  // Which sign-in the home server runs, so Account can say when it is older.
+  useEffect(() => {
+    void detectCredentialMode().catch(() => undefined);
+  }, []);
 
   const { id: profile_id, display_name: profile_display_name, bio: profile_bio, pronouns: profile_pronouns, linked_accounts: profile_linked_accounts, email: profile_email, avatar_hash: profile_avatar_hash, avatar: profile_avatar, accent_color: profile_accent } = user ?? {};
   useEffect(() => {
@@ -664,7 +691,44 @@ export function UserSettings({ onClose }: UserSettingsProps) {
     }
   };
 
+  /** §3.7: the one password changes; the identity and its messages stay. */
+  const submitOnePasswordChange = async () => {
+    const current = passwordCurrentPassword;
+    const nextPassword = accountNewPassword;
+    if (!current || !nextPassword) {
+      setErrorStatus('Current password and new password are required.');
+      return;
+    }
+    if (nextPassword !== accountConfirmPassword) {
+      setErrorStatus('New password confirmation does not match.');
+      return;
+    }
+    const problem = await newPasswordProblem(nextPassword, { username: user?.username, displayName: user?.display_name ?? undefined });
+    if (problem) {
+      setErrorStatus(problem);
+      return;
+    }
+    setAccountActionLoading(true);
+    try {
+      await changeOnePassword({ currentPassword: current, newPassword: nextPassword, mfaCode: passwordMfaCode || undefined });
+      setPasswordCurrentPassword('');
+      setAccountNewPassword('');
+      setAccountConfirmPassword('');
+      setPasswordMfaCode('');
+      setSuccessStatus('Password changed. Your other devices sign in again with the new one.');
+      await loadSessions();
+    } catch (err) {
+      setErrorStatus(`Failed to change password: ${credentialErrorMessage(err, "That isn't your current password.")}`);
+    } finally {
+      setAccountActionLoading(false);
+    }
+  };
+
   const submitPasswordChange = async () => {
+    if (onePasswordAccount) {
+      await submitOnePasswordChange();
+      return;
+    }
     const current = passwordCurrentPassword.trim();
     const nextPassword = accountNewPassword.trim();
     const confirmPw = accountConfirmPassword.trim();
@@ -888,6 +952,39 @@ export function UserSettings({ onClose }: UserSettingsProps) {
       setErrorStatus(`Failed to update device crypto security: ${extractApiError(err)}`);
     } finally {
       setSaving(false);
+    }
+  };
+
+  /**
+   * "Ask for my password when Paracord opens" for a one-password device
+   * (§3.5): on deletes the remembered key from the keychain, off remembers it
+   * (desktop). Saved as the account's `crypto_auth_enabled`.
+   */
+  const handleAskForPassword = async (ask: boolean) => {
+    setSaving(true);
+    try {
+      await updateSettings({ crypto_auth_enabled: ask });
+      await applyAskForPassword(ask);
+      setSuccessStatus(ask
+        ? 'Paracord will ask for your password when it opens.'
+        : 'Paracord will open without asking on this computer.');
+    } catch (err) {
+      setErrorStatus(`Failed to update the setting: ${extractApiError(err)}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleRevealPhrase = async () => {
+    setRevealingPhrase(true);
+    setPhraseError(null);
+    try {
+      setRevealedPhrase(await revealRecoveryPhrase(phrasePassword));
+      setPhrasePassword('');
+    } catch (err) {
+      setPhraseError(credentialErrorMessage(err, "That password doesn't open your keys."));
+    } finally {
+      setRevealingPhrase(false);
     }
   };
 
@@ -1205,11 +1302,21 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 <section className="mt-9 border-t border-border-subtle pt-8">
                   <h3 className="ix-label text-text-muted">Security &amp; sign-in</h3>
 
+                  {homeIsOlder && (
+                    <p className="mt-4 pc-well px-4 py-3 text-meta text-text-secondary" data-testid="older-server-line">
+                      This server runs an older Paracord, so it still uses two passwords.
+                    </p>
+                  )}
+
                   <div className="mt-5">
                     <div className="text-label text-text-primary">Email address</div>
                     <p className="mt-0.5 text-meta text-text-secondary">
-                      Current: <span className="font-code text-text-secondary">{maskedEmail}</span>. Changing it signs out your other sessions.
+                      Current: <span className="font-code text-text-secondary">{maskedEmail}</span>.{' '}
+                      {onePasswordAccount
+                        ? "Changing the email isn't available for one-password accounts yet. It needs a server update."
+                        : 'Changing it signs out your other sessions.'}
                     </p>
+                    {!onePasswordAccount && <>
                     <div className="mt-3 grid max-w-xl gap-3 sm:grid-cols-2">
                       <label className="block">
                         <span className="text-meta text-text-secondary">New email</span>
@@ -1242,12 +1349,15 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                         Update email
                       </Button>
                     </div>
+                    </>}
                   </div>
 
                   <div className="mt-7">
                     <div className="text-label text-text-primary">Password</div>
                     <p className="mt-0.5 text-meta text-text-secondary">
-                      Pick something you don't use elsewhere. Other sessions are signed out on change.
+                      {onePasswordAccount
+                        ? 'Your one password signs you in and locks your private messages. Changing it keeps your messages; other devices sign in again.'
+                        : "Pick something you don't use elsewhere. Other sessions are signed out on change."}
                     </p>
                     <div className="mt-3 grid max-w-xl gap-3 sm:grid-cols-3">
                       <label className="block">
@@ -1281,6 +1391,17 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                         />
                       </label>
                     </div>
+                    {onePasswordAccount && mfaEnabled && (
+                      <label className="mt-3 block max-w-xs">
+                        <span className="text-meta text-text-secondary">Two-factor code</span>
+                        <Input
+                          className="mt-1.5 font-code"
+                          value={passwordMfaCode}
+                          onChange={(e) => setPasswordMfaCode(e.target.value)}
+                          autoComplete="one-time-code"
+                        />
+                      </label>
+                    )}
                     <div className="mt-3">
                       <Button
                         variant="secondary"
@@ -1501,19 +1622,11 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                   </div>
                 </section>
 
-                {/* Device security */}
-                <section className="mt-9 border-t border-border-subtle pt-8">
-                  <h3 className="ix-label text-text-muted">Device security</h3>
-                  <div className="mt-2 divide-y divide-border-subtle">
-                    <ToggleRow
-                      title="Device crypto security"
-                      description="Use local key unlock and challenge-response sign-in on this device."
-                      on={cryptoAuthEnabled}
-                      onToggle={() => handleCryptoSecurityToggle(!cryptoAuthEnabled)}
-                      disabled={!localCryptoAccountReady || saving}
-                    />
-                  </div>
-                  {!localCryptoAccountReady ? (
+                {/* Encryption on this device, for accounts on an older server (§3.12).
+                    "Ask for my password" lives in Settings › Privacy. */}
+                {!onePasswordAccount && !localCryptoAccountReady && (
+                  <section className="mt-9 border-t border-border-subtle pt-8">
+                    <h3 className="ix-label text-text-muted">Encryption on this device</h3>
                     <div className="mt-3 flex flex-wrap items-center justify-between gap-3 pc-well px-4 py-3">
                       <p className="min-w-0 text-meta text-text-secondary">
                         You haven't set up a local crypto identity for this account yet.
@@ -1522,14 +1635,8 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                         Set up local identity
                       </Button>
                     </div>
-                  ) : (
-                    <p className="mt-3 text-meta text-text-secondary">
-                      {cryptoAuthEnabled
-                        ? `Enabled. ${accountUnlocked ? 'Your identity is currently unlocked.' : 'Your identity is currently locked.'}`
-                        : 'Disabled. This account signs in with username and password only.'}
-                    </p>
-                  )}
-                </section>
+                  </section>
+                )}
 
                 {/* Danger zone */}
                 <section className="mt-10">
@@ -1960,14 +2067,23 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                   description="Control what Paracord shares and fetches on your behalf."
                 />
                 <PrivacySection
-                  askForPassword={{
-                    on: cryptoAuthEnabled,
-                    disabled: !localCryptoAccountReady || saving,
-                    onChange: (next) => void handleCryptoSecurityToggle(next),
-                    note: localCryptoAccountReady
-                      ? undefined
-                      : "You haven't set up a local crypto identity for this account yet.",
-                  }}
+                  askForPassword={onePasswordAccount
+                    ? {
+                      on: cryptoAuthEnabled || !canRememberUnlock(),
+                      disabled: !canRememberUnlock() || saving,
+                      onChange: (next) => void handleAskForPassword(next),
+                      note: !canRememberUnlock()
+                        ? 'In a browser, Paracord always asks for your password when a tab opens.'
+                        : rememberProblem ?? undefined,
+                    }
+                    : {
+                      on: cryptoAuthEnabled,
+                      disabled: !localCryptoAccountReady || saving,
+                      onChange: (next) => void handleCryptoSecurityToggle(next),
+                      note: localCryptoAccountReady
+                        ? undefined
+                        : "You haven't set up a local crypto identity for this account yet.",
+                    }}
                 />
                 <section className="mt-9 border-t border-border-subtle pt-8">
                   <h3 className="ix-label text-text-muted">Now playing</h3>
@@ -2146,6 +2262,45 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                     </p>
                   )}
                 </section>
+
+                {onePasswordAccount && (
+                  <section className="mt-9 border-t border-border-subtle pt-8" data-testid="show-recovery-phrase">
+                    <h3 className="ix-label text-text-muted">Recovery phrase</h3>
+                    <p className="mt-2 max-w-xl text-body text-text-secondary">
+                      The 24 words that get your account back if you forget your password. Enter your password to see them.
+                    </p>
+                    {revealedPhrase ? (
+                      <>
+                        <ol className="mt-3 grid max-w-xl grid-cols-2 gap-1.5 pc-well p-3 sm:grid-cols-4" aria-label="Recovery phrase">
+                          {revealedPhrase.split(' ').map((word, index) => (
+                            <li key={index} className="flex items-center gap-2 font-code text-body text-text-primary">
+                              <span className="text-meta tabular-nums text-text-muted">{String(index + 1).padStart(2, '0')}</span>
+                              {word}
+                            </li>
+                          ))}
+                        </ol>
+                        <Button className="mt-3" variant="secondary" onClick={() => setRevealedPhrase(null)}>Hide words</Button>
+                      </>
+                    ) : (
+                      <div className="mt-3 flex max-w-xl flex-wrap items-end gap-3">
+                        <label className="block min-w-[14rem] flex-1">
+                          <span className="text-meta text-text-secondary">Password</span>
+                          <Input
+                            className="mt-1.5"
+                            type="password"
+                            value={phrasePassword}
+                            onChange={(e) => setPhrasePassword(e.target.value)}
+                            autoComplete="current-password"
+                          />
+                        </label>
+                        <Button variant="secondary" loading={revealingPhrase} disabled={!phrasePassword} onClick={() => void handleRevealPhrase()}>
+                          Show recovery phrase
+                        </Button>
+                      </div>
+                    )}
+                    {phraseError && <p role="alert" className="mt-2 text-meta text-[var(--ix-danger-ink)]">{phraseError}</p>}
+                  </section>
+                )}
 
                 <section className="mt-9 border-t border-border-subtle pt-8">
                   <h3 className="ix-label text-text-muted">Export identity</h3>

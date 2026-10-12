@@ -13,6 +13,31 @@ import { setAccessToken, setRefreshToken } from '../lib/authToken';
 import { takeSessionEndedNotice } from '../lib/sessionEnded';
 import { MIN_PASSWORD_LENGTH } from '../lib/constants';
 import { ErrorBanner } from '../components/ui/Feedback';
+import { useServerFeatureStore } from '../lib/serverFeatures';
+import { LOCAL_SERVER_ID } from '../lib/serverScope';
+import { findCredentialPin } from '../lib/credential/keystoreV2';
+import { DOWNGRADE_MESSAGE } from '../lib/credential/errors';
+import {
+  completeLegacyMfa,
+  completeMfaSignIn,
+  confirmRecoverySaved,
+  credentialErrorMessage,
+  currentRecoveryPhrase,
+  homeOrigin,
+  legacySignIn,
+  newPasswordProblem,
+  signInWithPassword,
+  START_OVER_WARNING,
+  startOver,
+  type CredentialMode,
+  type PendingMfaSignIn,
+  type SignInOutcome,
+} from '../lib/oneCredential';
+import { RecoveryPhraseCard } from './RecoveryPhraseCard';
+import { useAccountStore } from '../stores/accountStore';
+
+/** Hold the signed-in redirect while this page finishes a flow (see `AuthRoute`). */
+const holdRedirect = (active: boolean) => useAccountStore.getState().setAccountFlowActive?.(active);
 import { Button } from '../components/ui/Button';
 import {
   AUTH_FORM,
@@ -68,7 +93,25 @@ export function destinationAfterLogin(
   return '/app';
 }
 
-type LoginView = 'login' | 'forgot-password' | 'reset-password' | 'verify-email' | 'mfa-challenge';
+/** Whether this device has pinned `identifier` on this server as a one-password account (§3.13). */
+function knownOnePasswordAccount(identifier: string): boolean {
+  try {
+    return findCredentialPin(homeOrigin(), { identifier }) !== null;
+  } catch {
+    return false;
+  }
+}
+
+type LoginView =
+  | 'login'
+  | 'forgot-password'
+  | 'reset-password'
+  | 'verify-email'
+  | 'mfa-challenge'
+  /** §3.11: a v1 account, asked for its old sign-in password on a screen that says so. */
+  | 'legacy-account'
+  /** §1.8 again: the account's recovery phrase was never confirmed. */
+  | 'phrase';
 
 export function LoginPage() {
   const [view, setView] = useState<LoginView>('login');
@@ -94,6 +137,14 @@ export function LoginPage() {
   // MFA challenge state
   const [mfaTicket, setMfaTicket] = useState('');
   const [mfaCode, setMfaCode] = useState('');
+  // One password (docs/setup-spec.md §3): which sign-in this server runs, read
+  // from `/auth/options` before anyone types, never guessed from a failure.
+  const [credentialMode, setCredentialMode] = useState<CredentialMode | 'unreachable' | null>(null);
+  const [pendingMfa, setPendingMfa] = useState<PendingMfaSignIn | null>(null);
+  const [legacyMfa, setLegacyMfa] = useState(false);
+  const [legacyPassword, setLegacyPassword] = useState('');
+  const [phrase, setPhrase] = useState('');
+  const [resetIdentifierForStartOver, setResetIdentifierForStartOver] = useState('');
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const serverUrl = getStoredServerUrl() || getCurrentOriginServerUrl();
@@ -108,6 +159,7 @@ export function LoginPage() {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      holdRedirect(false);
     };
   }, []);
 
@@ -152,9 +204,15 @@ export function LoginPage() {
         if (canceled) return;
         setAllowUsernameLogin(data.allow_username_login);
         setRequireEmail(data.require_email);
+        const oneCredential = data.credential_version === 2;
+        if (oneCredential) useServerFeatureStore.getState().forget(LOCAL_SERVER_ID);
+        else useServerFeatureStore.getState().markMissing(LOCAL_SERVER_ID, 'oneCredential');
+        setCredentialMode(oneCredential ? 'one-password' : 'legacy');
       })
       .catch(() => {
-        // Keep conservative defaults when options are unavailable.
+        // Keep conservative defaults when options are unavailable; the
+        // sign-in mode stays unknown and submitting says the server is away.
+        if (!canceled) setCredentialMode('unreachable');
       });
     return () => {
       canceled = true;
@@ -203,6 +261,20 @@ export function LoginPage() {
     if (now < cooldownUntil) {
       const waitSeconds = Math.ceil((cooldownUntil - now) / 1000);
       setError(`Too many attempts. Try again in ${waitSeconds}s.`);
+      return;
+    }
+    if (credentialMode === 'one-password') {
+      await submitOnePassword();
+      return;
+    }
+    if (credentialMode === 'unreachable') {
+      setError(`Could not reach ${serverUrl ?? 'the instance'}. It may be restarting, or this machine cannot see it.`);
+      return;
+    }
+    // An account this device knows uses one password never sends its password
+    // to the old route, whatever this server now claims (§3.13).
+    if (knownOnePasswordAccount(identifier)) {
+      setError(DOWNGRADE_MESSAGE);
       return;
     }
     setLoading(true);
@@ -262,9 +334,111 @@ export function LoginPage() {
     }
   };
 
+  const noteFailure = () => {
+    const nextFailures = failedAttempts + 1;
+    setFailedAttempts(nextFailures);
+    if (nextFailures >= 3) {
+      const backoffSeconds = Math.min(30, 2 ** Math.min(5, nextFailures - 3));
+      setCooldownUntil(Date.now() + backoffSeconds * 1000);
+    }
+  };
+
+  /** What a one-password sign-in (or MFA step) led to. */
+  const settleOutcome = async (outcome: SignInOutcome) => {
+    setPassword('');
+    if (outcome.kind === 'legacy') {
+      setError('');
+      setLegacyPassword('');
+      setView('legacy-account');
+      return;
+    }
+    if (outcome.kind === 'mfa') {
+      setPendingMfa(outcome.pending);
+      setMfaCode('');
+      setView('mfa-challenge');
+      return;
+    }
+    setFailedAttempts(0);
+    setCooldownUntil(0);
+    setPendingMfa(null);
+    if (!outcome.recoveryConfirmed) {
+      const words = currentRecoveryPhrase();
+      if (words) {
+        setPhrase(words);
+        setView('phrase');
+        return;
+      }
+    }
+    holdRedirect(false);
+    await completeLoginFlow();
+  };
+
+  const submitOnePassword = async () => {
+    setLoading(true);
+    holdRedirect(true);
+    try {
+      await settleOutcome(await signInWithPassword(identifier, password));
+    } catch (err) {
+      holdRedirect(false);
+      const hasResponse = Boolean((err as { response?: unknown } | null)?.response);
+      if (hasResponse) noteFailure();
+      setError(credentialErrorMessage(err, 'That username or password is wrong.'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleLegacyAccountSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+    try {
+      const outcome = await legacySignIn(identifier, legacyPassword);
+      setLegacyPassword('');
+      if (outcome.kind === 'mfa') {
+        setMfaTicket(outcome.ticket);
+        setLegacyMfa(true);
+        setMfaCode('');
+        setView('mfa-challenge');
+        return;
+      }
+      navigate('/setup', { replace: true });
+    } catch (err) {
+      setError(credentialErrorMessage(err, "That isn't your current sign-in password."));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleMfaSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    if (pendingMfa) {
+      setLoading(true);
+      holdRedirect(true);
+      try {
+        await settleOutcome(await completeMfaSignIn(pendingMfa, mfaCode));
+      } catch (err) {
+        holdRedirect(false);
+        setError(credentialErrorMessage(err, 'Invalid MFA code. Please try again.'));
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+    if (legacyMfa) {
+      setLoading(true);
+      try {
+        await completeLegacyMfa(mfaTicket, mfaCode);
+        setLegacyMfa(false);
+        navigate('/setup', { replace: true });
+      } catch {
+        setError('Invalid MFA code. Please try again.');
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
     setLoading(true);
     try {
       const response = await authApi.mfaLogin(mfaTicket, mfaCode);
@@ -311,6 +485,10 @@ export function LoginPage() {
       setError('Passwords do not match.');
       return;
     }
+    if (credentialMode === 'one-password') {
+      await submitStartOver();
+      return;
+    }
     setLoading(true);
     try {
       await authApi.resetPassword(resetToken, resetNewPassword);
@@ -326,6 +504,41 @@ export function LoginPage() {
       }, 3000);
     } catch {
       setError('Failed to reset password. The token may be invalid or expired.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /** "Start over" (§3.9): the reset token with a brand-new identity. */
+  const submitStartOver = async () => {
+    const identifierForReset = resetIdentifierForStartOver.trim() || resetIdentifier.trim();
+    if (!identifierForReset) {
+      setError('Enter the username or email of the account you are resetting.');
+      return;
+    }
+    const problem = await newPasswordProblem(resetNewPassword, { username: identifierForReset });
+    if (problem) {
+      setError(problem);
+      return;
+    }
+    setLoading(true);
+    holdRedirect(true);
+    try {
+      const outcome = await startOver({ token: resetToken, identifier: identifierForReset, newPassword: resetNewPassword });
+      setResetToken('');
+      setResetNewPassword('');
+      setResetConfirmPassword('');
+      if (outcome.kind === 'legacy-reset') {
+        holdRedirect(false);
+        setSuccessMsg('Password updated successfully. You can now log in with your new password.');
+        setView('login');
+        return;
+      }
+      setIdentifier(identifierForReset);
+      await settleOutcome(outcome);
+    } catch (err) {
+      holdRedirect(false);
+      setError(credentialErrorMessage(err, 'Failed to reset password. The token may be invalid or expired.'));
     } finally {
       setLoading(false);
     }
@@ -358,12 +571,69 @@ export function LoginPage() {
   const backToLogin = (
     <button
       type="button"
-      onClick={() => { setError(''); setSuccessMsg(''); setMfaCode(''); setMfaTicket(''); setView('login'); }}
+      onClick={() => { setError(''); setSuccessMsg(''); setMfaCode(''); setMfaTicket(''); setPendingMfa(null); setLegacyMfa(false); setView('login'); }}
       className="ix-auth__link"
     >
       Back to sign in
     </button>
   );
+
+  if (view === 'phrase' && phrase) {
+    return (
+      <RecoveryPhraseCard
+        phrase={phrase}
+        onConfirm={async () => {
+          await confirmRecoverySaved();
+          setPhrase('');
+          holdRedirect(false);
+          await completeLoginFlow();
+        }}
+      />
+    );
+  }
+
+  // §3.11: deliberately not the normal form. It names the OLD password, so a
+  // person never types their one password here by habit.
+  if (view === 'legacy-account') {
+    return (
+      <AuthCanvas>
+        <AuthCard>
+          <form onSubmit={handleLegacyAccountSubmit} className={AUTH_FORM}>
+            <AuthHeading
+              title="This account still uses two passwords"
+              subtitle="Enter your current sign-in password. Next, Paracord moves the account to one password."
+            />
+
+            {error && <ErrorBanner multiline message={error} />}
+
+            <AuthScroll>
+              <p className="text-[14px] text-[var(--ix-ink-2)]">
+                Signing in as <span className="font-semibold text-[var(--ix-ink)]">{identifier}</span>
+              </p>
+              <Field label="Current sign-in password" required>
+                <input
+                  type="password"
+                  value={legacyPassword}
+                  onChange={(e) => setLegacyPassword(e.target.value)}
+                  required
+                  className="input-field"
+                  placeholder="The password you signed in with before"
+                  autoComplete="current-password"
+                  autoFocus
+                />
+              </Field>
+            </AuthScroll>
+
+            <Button size="lg" type="submit" loading={loading} disabled={loading || !legacyPassword} className="w-full">
+              Continue
+            </Button>
+
+            {backToLogin}
+          </form>
+        </AuthCard>
+      </AuthCanvas>
+    );
+  }
 
   // MFA challenge view
   if (view === 'mfa-challenge') {
@@ -460,14 +730,38 @@ export function LoginPage() {
         <AuthCard>
           <form onSubmit={handleResetPassword} className={AUTH_FORM}>
             <AuthHeading
-              title="Set new password"
+              title={credentialMode === 'one-password' ? 'Start over' : 'Set new password'}
               subtitle="Paste the reset token from your administrator, then choose a new password."
             />
 
             {error && <ErrorBanner multiline message={error} />}
             {successMsg && <SuccessNote>{successMsg}</SuccessNote>}
+            {credentialMode === 'one-password' && (
+              <div role="note" className="pc-well flex items-start gap-2.5 px-4 py-3 text-[14px] text-[var(--ix-ink-2)]">
+                <Info size={16} className="mt-px shrink-0 text-[var(--ix-ink-3)]" />
+                <span className="leading-relaxed">
+                  {START_OVER_WARNING}{' '}
+                  <button type="button" onClick={() => navigate('/recover')} className="ix-auth__link">
+                    Use your recovery phrase
+                  </button>
+                </span>
+              </div>
+            )}
 
             <AuthScroll>
+              {credentialMode === 'one-password' && (
+                <Field label="Username or email" required>
+                  <input
+                    type="text"
+                    value={resetIdentifierForStartOver || resetIdentifier}
+                    onChange={(e) => setResetIdentifierForStartOver(e.target.value)}
+                    required
+                    className="input-field"
+                    placeholder="you@example.com or username"
+                    autoComplete="username"
+                  />
+                </Field>
+              )}
               <Field label="Reset token" required>
                 <input
                   type="text"
@@ -610,13 +904,30 @@ export function LoginPage() {
             </AuthScroll>
 
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[13.5px] text-[var(--ix-ink-3)]">
-              <button
-                type="button"
-                onClick={() => { setError(''); setView('forgot-password'); }}
-                className="ix-auth__link"
-              >
-                Forgot your password?
-              </button>
+              {credentialMode === 'one-password' ? (
+                <span>
+                  Forgot your password?{' '}
+                  <button type="button" onClick={() => navigate('/recover')} className="ix-auth__link">
+                    Use your recovery phrase
+                  </button>
+                  {' · '}
+                  <button
+                    type="button"
+                    onClick={() => { setError(''); setView('forgot-password'); }}
+                    className="ix-auth__link"
+                  >
+                    reset by email
+                  </button>
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => { setError(''); setView('forgot-password'); }}
+                  className="ix-auth__link"
+                >
+                  Forgot your password?
+                </button>
+              )}
               <span className="text-[var(--ix-ink-3)]" aria-hidden="true">
                 &middot;
               </span>
@@ -634,15 +945,17 @@ export function LoginPage() {
                 install reaches exactly this screen and nothing else. Its own
                 row: it is a different kind of way in from the two above, and a
                 wrapped middot reads as a typo. */}
-            <div className="text-[13.5px] text-[var(--ix-ink-3)]">
-              <button
-                type="button"
-                onClick={() => navigate('/recover')}
-                className="ix-auth__link"
-              >
-                Recover from phrase
-              </button>
-            </div>
+            {credentialMode !== 'one-password' && (
+              <div className="text-[13.5px] text-[var(--ix-ink-3)]">
+                <button
+                  type="button"
+                  onClick={() => navigate('/recover')}
+                  className="ix-auth__link"
+                >
+                  Recover from phrase
+                </button>
+              </div>
+            )}
 
             <Button size="lg"
               type="submit"

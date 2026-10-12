@@ -64,6 +64,8 @@ vi.mock('../lib/account', () => ({
 }));
 
 vi.mock('../lib/config/apiBaseUrl', () => ({
+  resolveApiBaseUrl: () => 'https://home.test/api/v1',
+  resolveServerRootUrl: (path: string) => `https://home.test${path}`,
   getStoredServerUrl: mockApiBaseUrl.getStoredServerUrl,
   getCurrentOriginServerUrl: mockApiBaseUrl.getCurrentOriginServerUrl,
   setStoredServerUrl: mockApiBaseUrl.setStoredServerUrl,

@@ -56,6 +56,8 @@ import { useAuthStore } from './stores/authStore';
 import { hasAccount } from './lib/account';
 import { getStoredServerUrl, resolveApiBaseUrl, resolveServerRootUrl } from './lib/config/apiBaseUrl';
 import { isTauri } from './lib/tauriEnv';
+import { applyAskForPassword, moveDeferred, signedInAccountIsLegacy } from './lib/oneCredential';
+import { canRememberUnlock } from './lib/rememberedUnlock';
 
 /**
  * Checks whether we need a server URL configured before proceeding.
@@ -141,6 +143,16 @@ export function resolveCryptoAuthRedirect(params: {
  */
 export function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isUnlocked = useAccountStore((s) => s.isUnlocked);
+  // A one-password identity (docs/setup-spec.md §3.5) is always required to
+  // open the app: the desktop restores it from the keychain unless "Ask for my
+  // password when Paracord opens" is on, and a browser tab always asks.
+  const identityVersion = useAccountStore((s) => s.identityVersion);
+  const restoreState = useAccountStore((s) => s.restoreState);
+  const setUnlockReturnTo = useAccountStore((s) => s.setUnlockReturnTo);
+  const onePasswordDevice = identityVersion === 2;
+  const location = useLocation();
+  const user = useAuthStore((s) => s.user);
+  const [legacyAccount, setLegacyAccount] = useState<boolean | null>(null);
   const servers = useServerListStore((s) => s.servers);
   const tokensHydrated = useServerListStore((s) => s.tokensHydrated);
   const token = useAuthStore((s) => s.token);
@@ -168,9 +180,42 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
    * would lock the account out with no way back in; that case stays on the
    * password path, which is where it already was.
    */
-  const cryptoAuthEnabled = hasFetchedSettings
+  const cryptoAuthEnabled = onePasswordDevice || (hasFetchedSettings
     ? settings?.crypto_auth_enabled === true
-    : hasSession && hasAccount();
+    : hasSession && hasAccount());
+
+  useEffect(() => {
+    if (onePasswordDevice && !isUnlocked && restoreState === 'idle') {
+      void useAccountStore.getState().restoreRemembered();
+    }
+  }, [onePasswordDevice, isUnlocked, restoreState]);
+
+  // "Ask for my password" turned on (here or on another device): drop the
+  // remembered key the moment the setting is known.
+  const askForPassword = settings?.crypto_auth_enabled === true;
+  useEffect(() => {
+    if (onePasswordDevice && hasFetchedSettings && askForPassword) void applyAskForPassword(true);
+  }, [onePasswordDevice, hasFetchedSettings, askForPassword]);
+
+  // A v1 account signed in before this version (§3.11): offer the move once a
+  // session, asked of the server once (it alone knows the account's version).
+  const userId = user?.id ?? null;
+  useEffect(() => {
+    if (!hasSession || onePasswordDevice || !userId || moveDeferred()) return;
+    let canceled = false;
+    signedInAccountIsLegacy()
+      .then((legacy) => { if (!canceled) setLegacyAccount(legacy); })
+      .catch(() => { if (!canceled) setLegacyAccount(false); });
+    return () => { canceled = true; };
+  }, [hasSession, onePasswordDevice, userId]);
+
+  const pathWithSearch = location.pathname + location.search;
+  const sendToUnlock = cryptoAuthEnabled && !isUnlocked && hasAccount();
+  useEffect(() => {
+    if (sendToUnlock && (location.pathname === '/app' || location.pathname.startsWith('/app/'))) {
+      setUnlockReturnTo?.(pathWithSearch);
+    }
+  }, [sendToUnlock, pathWithSearch, location.pathname, setUnlockReturnTo]);
 
   useEffect(() => {
     if (hasSession && !hasFetchedSettings) {
@@ -201,6 +246,15 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
   // an unreachable instance holding the app on a splash screen forever.
   if (hasSession && !hasFetchedSettings && !settingsUnavailable) {
     return <BrandSplash label="Loading account settings..." />;
+  }
+
+  // Desktop: the keychain restore runs before anyone is asked for a password.
+  if (onePasswordDevice && !isUnlocked && canRememberUnlock() && restoreState !== 'done') {
+    return <BrandSplash label="Opening your account..." />;
+  }
+
+  if (legacyAccount && hasSession && !moveDeferred()) {
+    return <GuardRedirect to="/setup" />;
   }
 
   // Optional crypto-auth mode (server-controlled, default false).
@@ -245,6 +299,10 @@ export function AuthRoute({ children }: { children: React.ReactNode }) {
   const sessionBootstrapComplete = useAuthStore((s) => s.sessionBootstrapComplete);
   const token = useAuthStore((s) => s.token);
   const hasServerSession = tokensHydrated && hasHydratedServerSession(servers);
+  // The page is finishing a sign-in or sign-up (fetching the keys, showing
+  // the recovery phrase): the new session must not pull it away to /app.
+  const accountFlowActive = useAccountStore((s) => s.accountFlowActive);
+  if (accountFlowActive) return <>{children}</>;
 
   if (!sessionBootstrapComplete || (servers.length > 0 && !tokensHydrated)) {
     return <BrandSplash label="Restoring session..." />;

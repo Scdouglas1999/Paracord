@@ -204,20 +204,19 @@ describe('MessageInput', () => {
     vi.mocked(channelApi.getFeatureSettings).mockImplementation(() => new Promise(() => {}));
   });
 
-  it('offers account-bound encryption setup while retaining the composed draft', async () => {
+  // The composer's "Set up encryption" link is retired (docs/setup-spec.md
+  // §1.14): one password makes the identity at sign-up, and /setup is only the
+  // v1 move. The reason stays and the draft is kept.
+  it('says encryption is not set up, keeps the draft, and links nowhere', async () => {
     mockEncryption.encrypted = true; mockEncryption.encryption = 'setup';
     mockActionOverrides.send = { supported: true, allowed: false, reason: 'Set up encryption before sending in this conversation.' };
     render(<MemoryRouter><MessageInput channelId="ch1" channelName="Alice" /></MemoryRouter>);
     const input = screen.getByRole('textbox');
     await userEvent.type(input, 'Keep this private draft');
     // The composer holds a blocker back for 400ms so a readiness dip that
-    // resolves itself cannot shove the composer mid-send; a real one, like this,
-    // is still there when the wait is over.
-    const link = await screen.findByRole('link', { name: 'Set up encryption' });
-    const destination = new URL(link.getAttribute('href')!, 'http://localhost');
-    expect(destination.pathname).toBe('/setup');
-    expect(destination.searchParams.get('server')).toBe(mockOwner.serverId);
-    expect(destination.searchParams.get('user')).toBe(mockOwner.userId);
+    // resolves itself cannot shove the composer mid-send.
+    expect(await screen.findByText('Set up encryption before sending in this conversation.')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Set up encryption' })).not.toBeInTheDocument();
     expect(input).toHaveValue('Keep this private draft');
     expect(mockSendMessage).not.toHaveBeenCalled();
   });
@@ -236,14 +235,13 @@ describe('MessageInput', () => {
     expect(screen.queryByRole('button', { name: 'Check again' })).not.toBeInTheDocument();
   });
 
-  it('keeps the encryption route out when a ready group is blocked on the viewer’s own setup', async () => {
-    // The group's roster is complete, so the blocker is this person's identity,
-    // not somebody else's — and /setup is exactly the page that resolves it.
+  it('keeps a ready group blocked on the viewer’s own setup repeatable, with no setup link', async () => {
+    // The group's roster is complete, so the blocker is this person's identity.
     mockEncryption.encrypted = true; mockEncryption.encryption = 'setup';
     mockActionOverrides.send = { supported: true, allowed: false, reason: 'Set up encryption before sending in this conversation.' };
     render(<MemoryRouter><MessageInput channelId="gd2" channelName="All set" /></MemoryRouter>);
-    expect(await screen.findByRole('link', { name: 'Set up encryption' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Check again' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Check again' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Set up encryption' })).not.toBeInTheDocument();
   });
 
   it('lets a fully enrolled group compose', async () => {

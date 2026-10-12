@@ -18,6 +18,21 @@ import {
   readPendingInvite,
 } from '../lib/instanceAccess';
 import type { RegistrationMode } from '../api/auth';
+import { useServerFeatureStore } from '../lib/serverFeatures';
+import { LOCAL_SERVER_ID } from '../lib/serverScope';
+import {
+  confirmRecoverySaved,
+  credentialErrorMessage,
+  newPasswordProblem,
+  signUpWithPassword,
+  type CredentialMode,
+} from '../lib/oneCredential';
+import { toast } from '../stores/toastStore';
+import { RecoveryPhraseCard } from './RecoveryPhraseCard';
+import { useAccountStore } from '../stores/accountStore';
+
+/** Hold the signed-in redirect while the account is made and its phrase shown (see `AuthRoute`). */
+const holdRedirect = (active: boolean) => useAccountStore.getState().setAccountFlowActive?.(active);
 import {
   AUTH_FORM,
   AuthCanvas,
@@ -57,7 +72,7 @@ const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 export function registerStepError(
   stepId: RegisterStepId,
   draft: RegisterDraft,
-  options: { requireEmail: boolean },
+  options: { requireEmail: boolean; onePassword?: boolean },
 ): { field: RegisterField; message: string } | null {
   const trimmedEmail = draft.email.trim();
   if (stepId === 'identity') {
@@ -72,7 +87,9 @@ export function registerStepError(
     }
     return null;
   }
-  const passwordError = registrationPasswordError(draft.password);
+  // A one-password server cannot see the password, so its rules (length, the
+  // common-password list) are checked on submit, asynchronously (§1.6, §3.4).
+  const passwordError = options.onePassword ? null : registrationPasswordError(draft.password);
   if (passwordError) return { field: 'password', message: passwordError };
   if (draft.password !== draft.confirmPassword) {
     return { field: 'confirmPassword', message: 'Passwords do not match.' };
@@ -131,6 +148,10 @@ export function RegisterPage() {
   // decides on submit either way, and a refusal says why.
   const [registrationEnabled, setRegistrationEnabled] = useState(true);
   const [registrationMode, setRegistrationMode] = useState<RegistrationMode>('open');
+  // One password (docs/setup-spec.md §3.3) on servers that say so; older
+  // servers keep the two-password registration unchanged (§3.12).
+  const [credentialMode, setCredentialMode] = useState<CredentialMode | null>(null);
+  const [phrase, setPhrase] = useState('');
   // Read once: the invite page leaves it here for exactly this page.
   const [pendingInvite] = useState(readPendingInvite);
   const navigate = useNavigate();
@@ -146,6 +167,8 @@ export function RegisterPage() {
     setFieldError((previous) => (previous?.field === field ? null : previous));
   }, []);
 
+  useEffect(() => () => holdRedirect(false), []);
+
   useEffect(() => {
     let canceled = false;
     authApi
@@ -155,6 +178,10 @@ export function RegisterPage() {
         setRequireEmail(data.require_email);
         setRegistrationEnabled(data.registration_enabled ?? true);
         setRegistrationMode(data.registration_mode ?? 'open');
+        const oneCredential = data.credential_version === 2;
+        if (oneCredential) useServerFeatureStore.getState().forget(LOCAL_SERVER_ID);
+        else useServerFeatureStore.getState().markMissing(LOCAL_SERVER_ID, 'oneCredential');
+        setCredentialMode(oneCredential ? 'one-password' : 'legacy');
       })
       .catch(() => {
         // Keep conservative defaults when options are unavailable.
@@ -188,7 +215,7 @@ export function RegisterPage() {
 
   const createAccount = async () => {
     for (const [index, candidate] of REGISTER_STEPS.entries()) {
-      const failure = registerStepError(candidate, draft, { requireEmail });
+      const failure = registerStepError(candidate, draft, { requireEmail, onePassword: credentialMode === 'one-password' });
       if (failure) {
         setStepIndex(index);
         setFieldError(failure);
@@ -197,6 +224,10 @@ export function RegisterPage() {
     }
 
     setError('');
+    if (credentialMode === 'one-password') {
+      await createOnePasswordAccount();
+      return;
+    }
     setLoading(true);
     try {
       // The invite rides along: on an invite-only server it is what lets this
@@ -228,12 +259,54 @@ export function RegisterPage() {
     }
   };
 
+  const forgetPendingInvite = () => {
+    if (!pendingInvite) return;
+    try {
+      sessionStorage.removeItem(PENDING_INVITE_KEY);
+    } catch {
+      /* storage unavailable: fall through to the app */
+    }
+  };
+
+  /** §3.3 sign-up: the password never leaves this device; the phrase screen follows. */
+  const createOnePasswordAccount = async () => {
+    const problem = await newPasswordProblem(draft.password, {
+      username: draft.username.trim(),
+      displayName: draft.displayName.trim(),
+    });
+    if (problem) {
+      setStepIndex(REGISTER_STEPS.indexOf('password'));
+      setFieldError({ field: 'password', message: problem });
+      return;
+    }
+    setLoading(true);
+    holdRedirect(true);
+    try {
+      const result = await signUpWithPassword({
+        username: draft.username.trim(),
+        password: draft.password,
+        displayName: draft.displayName.trim() || undefined,
+        email: draft.email.trim() || undefined,
+        inviteCode: pendingInvite ?? undefined,
+      });
+      if (result.privacyDefaultsError) toast.error(result.privacyDefaultsError);
+      edit('password', '');
+      edit('confirmPassword', '');
+      setPhrase(result.phrase);
+    } catch (err: unknown) {
+      holdRedirect(false);
+      setError(credentialErrorMessage(err, 'Registration failed. Please try again.'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   /** Enter in any field does what the visible button does. */
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (loading) return;
 
-    const failure = registerStepError(stepId, draft, { requireEmail });
+    const failure = registerStepError(stepId, draft, { requireEmail, onePassword: credentialMode === 'one-password' });
     if (failure) {
       setFieldError(failure);
       return;
@@ -281,6 +354,21 @@ export function RegisterPage() {
           </div>
         </AuthCard>
       </AuthCanvas>
+    );
+  }
+
+  if (phrase) {
+    return (
+      <RecoveryPhraseCard
+        phrase={phrase}
+        onConfirm={async () => {
+          await confirmRecoverySaved();
+          setPhrase('');
+          holdRedirect(false);
+          forgetPendingInvite();
+          navigate(destinationAfterLogin(pendingInvite, true) ?? '/app');
+        }}
+      />
     );
   }
 
@@ -422,7 +510,9 @@ export function RegisterPage() {
                   id={passwordHintId}
                   className="pc-auth-span text-[13px] leading-relaxed text-[var(--ix-ink-3)]"
                 >
-                  {PASSWORD_REQUIREMENTS_HINT}
+                  {credentialMode === 'one-password'
+                    ? 'At least 10 characters. Three or four unrelated words make a strong one.'
+                    : PASSWORD_REQUIREMENTS_HINT}
                 </p>
               </AuthScroll>
             </AuthStep>

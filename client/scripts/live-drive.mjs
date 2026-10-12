@@ -15,14 +15,24 @@
 // Lives beside the client so it resolves Playwright out of the client's own
 // devDependencies, the same driver the E2E suite uses.
 import { chromium } from '@playwright/test';
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { randomBytes } from 'node:crypto';
+import { argon2id } from '@noble/hashes/argon2.js';
+import { registerOnePassword, selfCheck, signInOnePassword } from './lib/credential-node.mjs';
 
 const PORT = process.env.PARACORD_LIVE_PORT ?? '18420';
 const BASE = `http://127.0.0.1:${PORT}`;
 const SHOTS = process.env.PARACORD_LIVE_SHOTS ?? '/tmp/paracord-live';
-const PASSWORD = 'Live-Drive-Password-123!';
-const ENCRYPTION_PASSWORD = 'live drive encryption password';
+// One password (docs/setup-spec.md §3): it signs in and unlocks the identity.
+const PASSWORD = 'live drive one password 123';
+const CHANGED_PASSWORD = 'live drive changed password 456';
+const LEGACY_PASSWORD = 'Live-Drive-Legacy-Password-123!';
+// The live-env data directory, for seeding a v1 account on a release build
+// (which refuses the legacy sign-up route). Defaults to live-env's own default.
+const DATA_DIR = process.env.PARACORD_LIVE_DATA
+  ?? join(dirname(fileURLToPath(import.meta.url)), '..', '..', '.live-env');
 const ONLY = process.env.PARACORD_LIVE_ONLY;
 const stamp = Date.now().toString(36);
 
@@ -78,18 +88,58 @@ async function until(fn, message, timeoutMs = 20000, intervalMs = 300) {
 // Accounts and the REST client a browser would use
 // ---------------------------------------------------------------------------
 
+/**
+ * A one-password account, made the way the client makes one: the credential
+ * and wrapped identity are derived here (credential-node.mjs, checked against
+ * the shared vectors) and only the auth key reaches the server.
+ */
 async function register(name) {
+  const username = `${name}${stamp}`.slice(0, 32);
+  const email = `${name}-${stamp}@example.test`;
+  const made = await registerOnePassword(BASE, { username, email, password: PASSWORD });
+  return { label: name, ...made, password: PASSWORD };
+}
+
+/** The PHC string the server's Argon2id (argon2 crate defaults) writes for a legacy password. */
+function legacyPasswordHash(password) {
+  const salt = randomBytes(16);
+  const hash = argon2id(new TextEncoder().encode(password), salt, { t: 2, m: 19456, p: 1, dkLen: 32 });
+  const b64 = (bytes) => Buffer.from(bytes).toString('base64').replace(/=+$/, '');
+  return `$argon2id$v=19$m=19456,t=2,p=1$${b64(salt)}$${b64(hash)}`;
+}
+
+/**
+ * A v1 (two-password) account with no identity anywhere, as an account made
+ * before one password looks. A debug server with
+ * PARACORD_TEST_ALLOW_LEGACY_SIGNUP=1 takes the legacy sign-up route; a
+ * release build refuses it (410), so the account is made as a one-password
+ * account and put back into its v1 shape in the instance's SQLite database.
+ */
+async function registerLegacy(name) {
   const username = `${name}${stamp}`.slice(0, 32);
   const email = `${name}-${stamp}@example.test`;
   const response = await fetch(`${BASE}/api/v1/auth/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, username, password: PASSWORD }),
+    body: JSON.stringify({ email, username, password: LEGACY_PASSWORD }),
   });
-  const text = await response.text();
-  if (!response.ok) throw new Error(`register ${name}: ${response.status} ${text}`);
-  const body = JSON.parse(text);
-  return { label: name, username, email, id: body.user.id, token: body.token };
+  if (response.ok) return { label: name, username, email, id: (await response.json()).user.id, seeded: 'legacy route' };
+  if (response.status !== 410) throw new Error(`legacy register: ${response.status} ${await response.text()}`);
+  const dbPath = join(DATA_DIR, 'paracord.db');
+  if (!existsSync(dbPath)) {
+    throw new Error(`the server refuses legacy sign-up and there is no database at ${dbPath} to seed one (set PARACORD_LIVE_DATA to live-env's --data)`);
+  }
+  const made = await registerOnePassword(BASE, { username, email, password: PASSWORD });
+  const { DatabaseSync } = await import('node:sqlite');
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.prepare(`UPDATE users SET credential_version = 1, password_hash = ?, credential_salt = NULL,
+      credential_kdf = NULL, credential_epoch = 0, public_key = NULL WHERE id = ?`).run(legacyPasswordHash(LEGACY_PASSWORD), made.id);
+    db.prepare('DELETE FROM account_key_backups WHERE user_id = ?').run(made.id);
+  } finally {
+    db.close();
+  }
+  return { label: name, username, email, id: made.id, seeded: 'database' };
 }
 
 /**
@@ -243,70 +293,89 @@ async function signIn(browser, account) {
   await page.goto('/');
   await page.getByRole('heading', { name: 'Welcome back' }).waitFor({ timeout: 45000 });
   await page.locator('input[autocomplete="username"]').first().fill(account.email);
-  await page.locator('input[type="password"]').first().fill(PASSWORD);
+  await page.locator('input[type="password"]').first().fill(account.password ?? PASSWORD);
   await page.getByRole('button', { name: 'Log in', exact: true }).click();
-  await page.waitForURL(/\/app(\/|$)/, { timeout: 45000 });
-  await dismissOverlays(page);
   const person = { ...account, context, page, errors, logs };
   person.call = api(person);
+  await savePhraseIfAsked(person);
+  await page.waitForURL(/\/app(\/|$)/, { timeout: 45000 });
+  await dismissOverlays(page);
   return person;
 }
 
 /**
- * Give this account an encryption identity through the real /setup flow.
- *
- * Direct and group messages are end-to-end encrypted, so an account with no
- * published identity key can neither send nor be sent to. Seeding a key
- * directly would skip the part of the product most likely to be wrong.
+ * The phrase screen (§1.8) comes up after a sign-in while the account's phrase
+ * is unconfirmed. The words on it are read back and must be the account's own
+ * phrase: the identity came out of the server's backup intact.
  */
-async function enrollEncryption(person) {
+async function savePhraseIfAsked(person, timeoutMs = 45000) {
   const { page } = person;
-  const returnTo = '/app/friends';
-  await page.goto(`/setup?migrate=1&server=__local__&user=${encodeURIComponent(person.id)}&returnTo=${encodeURIComponent(returnTo)}`);
-
-  const password = page.locator('input[type="password"]');
-  await password.first().waitFor({ timeout: 30000 });
-  const count = await password.count();
-  await password.nth(0).fill(ENCRYPTION_PASSWORD);
-  if (count > 1) await password.nth(1).fill(ENCRYPTION_PASSWORD);
-  if (count > 2) await password.nth(2).fill(PASSWORD); // current sign-in password
-
-  await page.getByRole('button', { name: /secure account|continue|save|set up/i }).first().click();
-
-  const savedBox = page.locator('input[type="checkbox"]').first();
-  await savedBox.waitFor({ timeout: 45000 });
-  await savedBox.check();
+  const heading = page.getByRole('heading', { name: 'Save your recovery phrase' });
+  const which = await Promise.race([
+    heading.waitFor({ timeout: timeoutMs }).then(() => 'phrase'),
+    page.waitForURL(/\/app(\/|$)/, { timeout: timeoutMs }).then(() => 'app'),
+  ]);
+  if (which !== 'phrase') return null;
+  const words = (await page.locator('[data-testid="recovery-phrase"] li span:last-child').allTextContents()).join(' ');
+  if (person.phrase && words !== person.phrase) {
+    throw new Error(`${person.label}'s phrase on screen is not the account's identity`);
+  }
+  await page.getByRole('button', { name: 'Show words' }).click().catch(() => {});
+  await page.locator('input[type="checkbox"]').first().check();
   await page.getByRole('button', { name: 'Continue', exact: true }).click();
-  await page.waitForURL(/\/app(\/|$)/, { timeout: 45000 });
-  await dismissOverlays(page, 800, 8000);
-
-  const published = await until(async () => {
-    const { body } = await person.call('GET', '/users/@me');
-    return body?.public_key ? body.public_key : null;
-  }, `${person.label}'s identity key never reached the instance`, 30000);
-  return published.slice(0, 16);
+  return words;
 }
 
 /**
- * Unlock once so this account publishes its prekeys.
- *
- * Enrolling publishes the identity key; the one-time and signed prekeys a 1:1
- * conversation needs are published when the account vault first opens, which
- * happens on unlock. Until every peer has done this once, `peers_ready` is
- * false on the instance and the composer correctly refuses — a peer who has
- * never unlocked has nothing anyone can seal a first message to.
+ * A full page load locks the identity (a browser never keeps the key,
+ * §3.5), so the app asks for the one password and comes back to where it was.
  */
-async function publishPrekeys(person) {
+async function passUnlock(person) {
   const { page } = person;
-  await page.goto('/app/friends');
-  await dismissOverlays(page, 700, 6000);
-  await page.goto(`/unlock?returnTo=${encodeURIComponent('/app/friends')}`);
-  const password = page.locator('input[type="password"]').first();
-  await password.waitFor({ timeout: 30000 });
-  await password.fill(ENCRYPTION_PASSWORD);
+  await page.waitForLoadState('domcontentloaded').catch(() => {});
+  const field = page.locator('input[type="password"]').first();
+  // Asked, or settled in the app (no splash on screen for a moment).
+  let settled = 0;
+  let asked = false;
+  for (const deadline = Date.now() + 20000; Date.now() < deadline;) {
+    const path = new URL(page.url()).pathname;
+    if (path.startsWith('/unlock')) { asked = true; break; }
+    const splash = await page.locator('[data-testid="brand-splash"]').isVisible().catch(() => false);
+    settled = !splash && path.startsWith('/app') ? settled + 1 : 0;
+    if (settled >= 4) break;
+    await page.waitForTimeout(250);
+  }
+  if (!asked) return false;
+  await field.waitFor({ state: 'visible', timeout: 30000 });
+  await field.fill(person.password ?? PASSWORD);
   await page.getByRole('button', { name: 'Unlock', exact: true }).click();
+  await savePhraseIfAsked(person, 30000).catch(() => null);
   await page.waitForURL(url => !url.pathname.startsWith('/unlock'), { timeout: 30000 });
-  await dismissOverlays(page, 700, 6000);
+  return true;
+}
+
+/** Navigate as a person would: a full load, then the password if the app asks. */
+async function go(person, path) {
+  await person.page.goto(path);
+  await passUnlock(person);
+}
+
+/**
+ * The identity this browser unlocked is the account's: the v2 keystore the
+ * sign-in wrote holds the public key the server has for the account.
+ */
+async function identityOnDevice(person) {
+  const stored = await person.page.evaluate(() => localStorage.getItem('paracord:encrypted-identity:v2'));
+  if (!stored) throw new Error(`${person.label}'s browser holds no one-password keystore`);
+  const keystore = JSON.parse(stored);
+  const { body } = await person.call('GET', '/users/@me');
+  assert(keystore.publicKey === body?.public_key, `${person.label}'s device key ${keystore.publicKey?.slice(0, 12)} is not the account's ${body?.public_key?.slice(0, 12)}`);
+  assert(keystore.publicKey === person.publicKey, `${person.label}'s identity changed between sign-up and sign-in`);
+  return keystore.publicKey.slice(0, 16);
+}
+
+/** Prekeys are published once the identity is unlocked in the app (the account vault opens). */
+async function publishedPrekeys(person) {
   return until(async () => {
     const { body } = await person.call('GET', '/users/@me/keys/count');
     return body?.signed_prekey_uploaded && body.one_time_prekeys_remaining > 0 ? body : null;
@@ -326,6 +395,7 @@ async function publishPrekeys(person) {
 async function settle(person, quietMs = 6000, timeoutMs = 90000) {
   const { page } = person;
   await page.reload();
+  await passUnlock(person);
   await dismissOverlays(page, 700, 6000);
   const deadline = Date.now() + timeoutMs;
   let lastFailure = person.logs.filter(line => line.startsWith('HTTP 4')).length;
@@ -351,7 +421,7 @@ async function settle(person, quietMs = 6000, timeoutMs = 90000) {
  */
 async function openEncrypted(person, channelId) {
   const { page } = person;
-  await page.goto(`/app/dms/${channelId}`);
+  await go(person, `/app/dms/${channelId}`);
   await dismissOverlays(page, 700, 6000);
   await composer(page).waitFor({ state: 'visible', timeout: 30000 });
   await takeAnyUnlockOffer(person);
@@ -379,7 +449,7 @@ async function takeAnyUnlockOffer(person, attempts = 4) {
     await link.click().catch(() => {});
     const password = page.locator('input[type="password"]').first();
     if (!await password.waitFor({ state: 'visible', timeout: 15000 }).then(() => true).catch(() => false)) continue;
-    await password.fill(ENCRYPTION_PASSWORD);
+    await password.fill(person.password ?? PASSWORD);
     await page.getByRole('button', { name: 'Unlock', exact: true }).click().catch(() => {});
     await page.waitForURL(url => !url.pathname.startsWith('/unlock'), { timeout: 30000 }).catch(() => {});
     await dismissOverlays(page, 600, 5000);
@@ -392,6 +462,7 @@ async function takeAnyUnlockOffer(person, attempts = 4) {
 
 async function main() {
   log(`\nParacord live drive → ${BASE}\n`);
+  selfCheck();
 
   const healthy = await fetch(`${BASE}/api/v1/health`).then(r => r.ok).catch(() => false);
   if (!healthy) { log('Instance not answering. Start it: node scripts/live-env.mjs'); process.exit(1); }
@@ -412,7 +483,7 @@ async function main() {
       log(`  ${name} in the app`);
     }
     cast = Object.values(people);
-    await scenarios(people);
+    await scenarios(people, browser);
   } finally {
     for (const person of Object.values(people)) await person.context?.close().catch(() => {});
     await browser.close().catch(() => {});
@@ -431,25 +502,26 @@ async function main() {
 // What the three of them actually do
 // ---------------------------------------------------------------------------
 
-async function scenarios(people) {
+async function scenarios(people, browser) {
   const { ada, grace, linus } = people;
   const state = {};
 
-  log('\nEncryption identities');
-  await step('ada enrolls an encryption identity', async () => `key ${await enrollEncryption(ada)}…`);
-  await step('grace enrolls an encryption identity', async () => `key ${await enrollEncryption(grace)}…`);
-  await step('linus enrolls an encryption identity', async () => `key ${await enrollEncryption(linus)}…`);
-  await step('unlocking publishes each account’s prekeys', async () => {
+  log('\nOne password');
+  for (const person of [ada, grace, linus]) {
+    await step(`${person.label} signs in with one password and holds the account’s identity`, async () =>
+      `key ${await identityOnDevice(person)}…, no separate setup`);
+  }
+  await step('each account’s prekeys are published once it is unlocked', async () => {
     const counts = [];
     for (const person of [ada, grace, linus]) {
-      const keys = await publishPrekeys(person);
+      const keys = await publishedPrekeys(person);
       counts.push(`${person.label}:${keys.one_time_prekeys_remaining}`);
     }
     return counts.join(' ');
   });
-  await step('every session settles on its post-enrollment credential', async () => {
+  await step('every session settles after a reload asks for the password', async () => {
     for (const person of [ada, grace, linus]) await settle(person);
-    return 'no stale-credential failures left in flight';
+    return 'unlocked again with the one password, no failures in flight';
   });
 
 
@@ -475,7 +547,7 @@ async function scenarios(people) {
     const channels = await ada.call('GET', `/guilds/${state.guildId}/channels`);
     state.channelId = channels.body.find(c => (c.channel_type ?? c.type) === 0)?.id;
     assert(state.channelId, `no text channel in the new guild: ${channels.raw}`);
-    await ada.page.goto(`/app/guilds/${state.guildId}/channels/${state.channelId}`);
+    await go(ada, `/app/guilds/${state.guildId}/channels/${state.channelId}`);
     await dismissOverlays(ada.page, 700, 6000);
     await waitUntilSendable(ada);
     await shot(ada, '01-server');
@@ -489,7 +561,7 @@ async function scenarios(people) {
     for (const person of [grace, linus]) {
       const joined = await person.call('POST', `/invites/${code}`, {});
       assert(joined.status < 300, `${person.label} joining: ${joined.status} ${joined.raw}`);
-      await person.page.goto(`/app/guilds/${state.guildId}/channels/${state.channelId}`);
+      await go(person, `/app/guilds/${state.guildId}/channels/${state.channelId}`);
       await dismissOverlays(person.page, 700, 6000);
       await waitUntilSendable(person);
     }
@@ -649,7 +721,7 @@ async function scenarios(people) {
     // Both of them are still looking at the group conversation. An assertion
     // about what grace sees in the channel has to put her in the channel.
     for (const person of [ada, grace]) {
-      await person.page.goto(`/app/guilds/${state.guildId}/channels/${state.channelId}`);
+      await go(person, `/app/guilds/${state.guildId}/channels/${state.channelId}`);
       await dismissOverlays(person.page, 700, 6000);
       await waitUntilSendable(person);
     }
@@ -702,6 +774,88 @@ async function scenarios(people) {
     assert(!guildText.includes('answering mu') || !guildText.includes('linus'),
       'a group message was posted to the guild channel');
     return 'each message in its own conversation';
+  });
+
+  log('\nOne password: change, a second device, a v1 account');
+  await step('password change keeps DMs readable', async () => {
+    const { page } = grace;
+    await go(grace, '/app?settings=account');
+    await page.getByLabel('Current', { exact: true }).waitFor({ timeout: 30000 });
+    await page.getByLabel('Current', { exact: true }).fill(PASSWORD);
+    await page.getByLabel('New', { exact: true }).fill(CHANGED_PASSWORD);
+    await page.getByLabel('Confirm', { exact: true }).fill(CHANGED_PASSWORD);
+    await page.getByRole('button', { name: 'Update password' }).click();
+    await page.getByText('Password changed.', { exact: false }).waitFor({ timeout: 45000 });
+    await shot(grace, '07-password-changed');
+    grace.password = CHANGED_PASSWORD;
+
+    const old = await signInOnePassword(BASE, grace.username, PASSWORD).then(() => 'accepted', error => error.message);
+    assert(/401/.test(old), `the old password should be refused, got: ${old}`);
+
+    // A full load locks the identity; the new password opens the same one and
+    // the conversation from before still reads.
+    await openEncrypted(grace, state.dmId);
+    await grace.page.getByText(`private to grace ${stamp}`, { exact: false }).first().waitFor({ timeout: 45000 });
+    await shot(grace, '08-dm-after-change');
+    const { body } = await grace.call('GET', '/users/@me');
+    assert(body.public_key === grace.publicKey, 'the identity changed with the password');
+    return 'old password refused, new one unlocks, the earlier DM decrypts';
+  });
+
+  await step('sign in on a second browser context gets the identity from the backup', async () => {
+    const second = await signIn(browser, { ...grace, label: 'grace-2', password: CHANGED_PASSWORD });
+    try {
+      const key = await identityOnDevice(second);
+      await shot(second, '09-second-device');
+      return `same key ${key}… on a fresh browser, from the password alone`;
+    } finally {
+      await second.context.close().catch(() => {});
+    }
+  });
+
+  await step('v1 account moves to one password', async () => {
+    const vera = await registerLegacy('vera');
+    const context = await browser.newContext({ baseURL: BASE, viewport: { width: 1440, height: 900 } });
+    const page = await context.newPage();
+    const person = { ...vera, context, page, errors: [], logs: [], password: PASSWORD };
+    person.call = api(person);
+    try {
+      await page.goto('/');
+      await page.getByRole('heading', { name: 'Welcome back' }).waitFor({ timeout: 45000 });
+      await page.locator('input[autocomplete="username"]').first().fill(vera.username);
+      await page.locator('input[type="password"]').first().fill('whatever is typed here is not sent');
+      await page.getByRole('button', { name: 'Log in', exact: true }).click();
+      await page.getByRole('heading', { name: 'This account still uses two passwords' }).waitFor({ timeout: 45000 });
+      await shot(person, '10-legacy-screen');
+      await page.getByLabel('Current sign-in password').fill(LEGACY_PASSWORD);
+      await page.getByRole('button', { name: 'Continue', exact: true }).click();
+      await page.getByRole('heading', { name: 'Paracord now uses one password' }).waitFor({ timeout: 45000 });
+      await page.getByLabel('New password').fill(LEGACY_PASSWORD);
+      await page.getByLabel('Confirm password').fill(LEGACY_PASSWORD);
+      await page.getByRole('button', { name: 'Move to one password' }).click();
+      await page.getByText("Pick a password you haven't used", { exact: false }).waitFor({ timeout: 15000 });
+      await page.getByLabel('New password').fill(PASSWORD);
+      await page.getByLabel('Confirm password').fill(PASSWORD);
+      await shot(person, '11-move-screen');
+      await page.getByRole('button', { name: 'Move to one password' }).click();
+      await savePhraseIfAsked(person);
+      await page.waitForURL(/\/app(\/|$)/, { timeout: 45000 });
+      const params = await fetch(`${BASE}/api/v1/auth/credential/params`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ identifier: vera.username }),
+      }).then(r => r.json());
+      assert(params.version === 2 && params.epoch === 1, `the account did not move: ${JSON.stringify(params)}`);
+      const { body } = await person.call('GET', '/users/@me');
+      assert(/^[0-9a-f]{64}$/.test(body?.public_key ?? ''), 'the moved account has no identity');
+      await signInOnePassword(BASE, vera.username, PASSWORD);
+      const legacy = await fetch(`${BASE}/api/v1/auth/login`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ identifier: vera.username, password: LEGACY_PASSWORD }),
+      });
+      assert(legacy.status === 409 || legacy.status === 401, `the old sign-in still works: ${legacy.status}`);
+      await shot(person, '12-moved');
+      return `seeded via ${vera.seeded}; now one password, key ${body.public_key.slice(0, 16)}…, old route ${legacy.status}`;
+    } finally {
+      await context.close().catch(() => {});
+    }
   });
 
   log('\nPage health');

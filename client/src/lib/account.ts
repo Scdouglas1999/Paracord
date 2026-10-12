@@ -6,6 +6,9 @@ import { BIP39_WORD_ALIASES, wordlist } from './bip39-wordlist';
 import { IDENTITY_KEYSTORE_STORAGE_KEY, readIdentityKeystore, writeIdentityKeystore, updateIdentityKeystore, deleteIdentityKeystore } from './crypto/identityKeystore';
 import { toArrayBuffer, toBase64, fromBase64 } from './crypto/util';
 
+/** Kept here (not imported from `credential/keystoreV2`) so this module stays free of the credential library. */
+const IDENTITY_KEYSTORE_V2_STORAGE_KEY = 'paracord:encrypted-identity:v2';
+
 export interface AccountKeystore {
   version: 1;
   publicKey: string;
@@ -153,8 +156,10 @@ export async function signChallenge(
   return bytesToHex(signature);
 }
 
+/** This device holds an identity: the one-password keystore (v2) or the legacy one. */
 export function hasAccount(): boolean {
   return (
+    localStorage.getItem(IDENTITY_KEYSTORE_V2_STORAGE_KEY) !== null ||
     localStorage.getItem(IDENTITY_KEYSTORE_STORAGE_KEY) !== null ||
     localStorage.getItem(ACCOUNT_EXISTS_KEY) === '1' ||
     localStorage.getItem(ACCOUNT_STORAGE_KEY) !== null

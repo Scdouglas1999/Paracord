@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { Check, Copy, KeyRound, ShieldAlert } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
@@ -22,8 +22,52 @@ import {
   AuthSteps,
   Field,
 } from './authScaffold';
+import { BrandSplash } from '../components/brand/BrandSplash';
+import { Textarea } from '../components/ui/Input';
+import {
+  clearLegacyPassword,
+  confirmRecoverySaved,
+  credentialErrorMessage,
+  deferMove,
+  legacyDeviceIdentity,
+  moveToOnePassword,
+  newPasswordProblem,
+  SAME_AS_LEGACY_MESSAGE,
+  takeLegacyPassword,
+  useCredentialMode,
+} from '../lib/oneCredential';
+import { RecoveryPhraseCard } from './RecoveryPhraseCard';
 
+/**
+ * `/setup` (docs/setup-spec.md §1.14, §3.11). On a one-password server it is
+ * only the v1 → one-password move. The legacy device-identity setup stays for
+ * older servers (§3.12) and for the `migrate=1` links they still use.
+ */
 export function AccountSetupPage() {
+  const [params] = useSearchParams();
+  const legacyLink = params.get('migrate') === '1';
+  const mode = useCredentialMode(!legacyLink);
+  if (legacyLink) return <LegacyAccountSetupPage />;
+  if (mode === null) return <BrandSplash label="Just a moment..." />;
+  if (mode === 'one-password') return <MoveToOnePasswordPage />;
+  if (mode === 'unreachable') {
+    return (
+      <AuthCanvas>
+        <AuthCard>
+          <div className={`${AUTH_FORM} items-start`}>
+            <AuthHeading title="Paracord couldn't reach the server" subtitle="Check the connection, then open this page again." />
+            <Link to="/app" className="pc-focusable rounded-[6px] text-[14px] font-semibold text-[var(--ix-ink)] underline underline-offset-4">
+              Return to Paracord
+            </Link>
+          </div>
+        </AuthCard>
+      </AuthCanvas>
+    );
+  }
+  return <LegacyAccountSetupPage />;
+}
+
+function LegacyAccountSetupPage() {
   const [params] = useSearchParams();
   const serverId = params.get('server') ?? LOCAL_SERVER_ID;
   const homeUser = useAuthStore(s => s.user);
@@ -435,6 +479,183 @@ function OwnedAccountSetupPage() {
               {' — you can set this up later in Settings.'}
             </p>
           )}
+        </form>
+      </AuthCard>
+    </AuthCanvas>
+  );
+}
+
+type MoveCase = 'device' | 'phrase' | 'new';
+
+/**
+ * "Paracord now uses one password" (§3.11). The account signed in with its
+ * legacy password a moment ago (or did so before this version). Until the
+ * move commits nothing changes, so leaving here keeps a working v1 account.
+ */
+function MoveToOnePasswordPage() {
+  const navigate = useNavigate();
+  const user = useAuthStore((s) => s.user);
+  const accountKey = user?.public_key?.toLowerCase() ?? null;
+  const [deviceKey, setDeviceKey] = useState<string | null | undefined>(undefined);
+  const [knownLegacyPassword] = useState(() => takeLegacyPassword());
+  const [legacyPassword, setLegacyPassword] = useState('');
+  const [encryptionPassword, setEncryptionPassword] = useState('');
+  const [reuseEncryptionPassword, setReuseEncryptionPassword] = useState(true);
+  const [phraseInput, setPhraseInput] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [phrase, setPhrase] = useState('');
+
+  useEffect(() => {
+    let canceled = false;
+    void legacyDeviceIdentity().then((key) => { if (!canceled) setDeviceKey(key); });
+    return () => { canceled = true; };
+  }, []);
+
+  if (!user || deviceKey === undefined) return <BrandSplash label="Just a moment..." />;
+
+  const moveCase: MoveCase = deviceKey && (!accountKey || accountKey === deviceKey)
+    ? 'device'
+    : accountKey ? 'phrase' : 'new';
+  const choosingNew = moveCase !== 'device' || !reuseEncryptionPassword;
+
+  const later = () => {
+    deferMove();
+    clearLegacyPassword();
+    navigate('/app', { replace: true });
+  };
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    const currentSignIn = knownLegacyPassword ?? legacyPassword;
+    if (!currentSignIn) {
+      setError('Enter your current sign-in password.');
+      return;
+    }
+    const chosen = choosingNew ? newPassword : encryptionPassword;
+    if (choosingNew && newPassword !== confirmPassword) {
+      setError('Passwords do not match.');
+      return;
+    }
+    if (chosen === currentSignIn) {
+      setError(SAME_AS_LEGACY_MESSAGE);
+      return;
+    }
+    const problem = await newPasswordProblem(chosen, { username: user.username, displayName: user.display_name ?? undefined });
+    if (problem) {
+      setError(choosingNew ? problem : `Your encryption password can't be your only password: ${problem}`);
+      return;
+    }
+    setLoading(true);
+    try {
+      const result = await moveToOnePassword({
+        legacyPassword: currentSignIn,
+        newPassword: chosen,
+        source: moveCase === 'device'
+          ? { kind: 'device', encryptionPassword: encryptionPassword || undefined }
+          : moveCase === 'phrase' ? { kind: 'phrase', phrase: phraseInput.trim() } : { kind: 'new' },
+      });
+      setNewPassword(''); setConfirmPassword(''); setEncryptionPassword(''); setLegacyPassword(''); setPhraseInput('');
+      if (result.phrase) {
+        setPhrase(result.phrase);
+        return;
+      }
+      navigate('/app', { replace: true });
+    } catch (err) {
+      setError(credentialErrorMessage(err, "That isn't your current sign-in password."));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (phrase) {
+    return (
+      <RecoveryPhraseCard
+        phrase={phrase}
+        onConfirm={async () => {
+          await confirmRecoverySaved();
+          setPhrase('');
+          navigate('/app', { replace: true });
+        }}
+      />
+    );
+  }
+
+  return (
+    <AuthCanvas>
+      <AuthCard className="short-window:max-w-2xl">
+        <form onSubmit={submit} className={AUTH_FORM} data-testid="one-password-move">
+          <AuthHeading
+            dense
+            title="Paracord now uses one password"
+            subtitle="Your sign-in password and your encryption password become one. It signs you in and locks your private messages, and your device turns it into separate keys, so the server can never read what it locks."
+          />
+
+          {error && <ErrorBanner multiline message={error} />}
+
+          <AuthScroll paired>
+            {!knownLegacyPassword && (
+              <Field label="Current sign-in password" required hint="The password you signed in with until now.">
+                <Input type="password" value={legacyPassword} onChange={(e) => setLegacyPassword(e.target.value)} required autoComplete="current-password" />
+              </Field>
+            )}
+
+            {moveCase === 'device' && (
+              <>
+                <Field label="Encryption password" required hint="The password that unlocks your keys on this device.">
+                  <Input type="password" value={encryptionPassword} onChange={(e) => setEncryptionPassword(e.target.value)} required autoComplete="current-password" />
+                </Field>
+                <fieldset className="pc-auth-span flex flex-col gap-2">
+                  <legend className="sr-only">Your one password</legend>
+                  <label className="flex items-start gap-2.5 text-[14px] text-[var(--ix-ink-2)]">
+                    <input type="radio" name="one-password" checked={reuseEncryptionPassword} onChange={() => setReuseEncryptionPassword(true)} className="mt-1" />
+                    <span>Use my encryption password as my only password</span>
+                  </label>
+                  <label className="flex items-start gap-2.5 text-[14px] text-[var(--ix-ink-2)]">
+                    <input type="radio" name="one-password" checked={!reuseEncryptionPassword} onChange={() => setReuseEncryptionPassword(false)} className="mt-1" />
+                    <span>Choose a new password</span>
+                  </label>
+                </fieldset>
+              </>
+            )}
+
+            {moveCase === 'phrase' && (
+              <Field
+                label="Recovery phrase"
+                required
+                className="pc-auth-span"
+                hint={`This account's keys are on another device (key ending ${accountKey?.slice(-8)}). Enter their 24 words, or finish on that device.`}
+              >
+                <Textarea value={phraseInput} onChange={(e) => setPhraseInput(e.target.value)} rows={3} className="pc-mono resize-none" required />
+              </Field>
+            )}
+
+            {choosingNew && (
+              <>
+                <Field label="New password" required hint="At least 10 characters. Pick one you haven't used to sign in here before.">
+                  <Input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} required autoComplete="new-password" />
+                </Field>
+                <Field label="Confirm password" required>
+                  <Input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} required autoComplete="new-password" />
+                </Field>
+              </>
+            )}
+          </AuthScroll>
+
+          <Button type="submit" size="lg" loading={loading} disabled={loading} className="w-full">
+            <KeyRound size={16} aria-hidden />
+            Move to one password
+          </Button>
+
+          <p className="text-[13.5px] text-[var(--ix-ink-3)]">
+            <button type="button" onClick={later} className="pc-focusable ix-auth__link rounded-[6px]">
+              {moveCase === 'phrase' ? 'Finish on the device that has your keys' : 'Not now'}
+            </button>
+            {' — your account keeps working with two passwords until you move it.'}
+          </p>
         </form>
       </AuthCard>
     </AuthCanvas>

@@ -16,6 +16,16 @@ import {
   Field,
   useFocusRejectedField,
 } from './authScaffold';
+import {
+  completeRecoverMfa,
+  credentialErrorMessage,
+  newPasswordProblem,
+  recoverWithPhrase,
+  setPasswordAfterRecovery,
+  useCredentialMode,
+  type RecoveredSession,
+  type RecoverOutcome,
+} from '../lib/oneCredential';
 
 /** Where a rejection belongs on the recovery form. */
 export type RecoverField = 'phrase' | 'username' | 'password' | 'confirmPassword';
@@ -78,6 +88,14 @@ export function AccountRecoverPage() {
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
   const recover = useAccountStore((s) => s.recover);
+  // One password (docs/setup-spec.md §3.8): sign in with the phrase's key,
+  // then choose a new password for every device. Older servers keep the
+  // device-only recovery below (§3.12).
+  const credentialMode = useCredentialMode();
+  const onePassword = credentialMode === 'one-password';
+  const [pendingMfa, setPendingMfa] = useState<Extract<RecoverOutcome, { kind: 'mfa' }> | null>(null);
+  const [recovered, setRecovered] = useState<RecoveredSession | null>(null);
+  const [mfaCode, setMfaCode] = useState('');
   const formRef = useRef<HTMLFormElement>(null);
   useFocusRejectedField(formRef, fieldError);
 
@@ -102,6 +120,10 @@ export function AccountRecoverPage() {
       }
     }
 
+    if (onePassword) {
+      await runOnePasswordRecovery();
+      return;
+    }
     setLoading(true);
     try {
       await recover(draft.phrase.trim(), draft.username.trim(), draft.password);
@@ -110,6 +132,41 @@ export function AccountRecoverPage() {
       setError(
         err instanceof Error ? err.message : 'Recovery failed. Check your phrase and try again.',
       );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const runOnePasswordRecovery = async () => {
+    const problem = await newPasswordProblem(draft.password, { username: draft.username.trim() });
+    if (problem) {
+      setFieldError({ field: 'password', message: problem });
+      return;
+    }
+    setError('');
+    setLoading(true);
+    try {
+      let session = recovered;
+      if (!session) {
+        if (pendingMfa) {
+          session = await completeRecoverMfa(pendingMfa, mfaCode);
+          setPendingMfa(null);
+        } else {
+          const outcome = await recoverWithPhrase(draft.phrase.trim(), draft.username.trim());
+          if (outcome.kind === 'mfa') {
+            setPendingMfa(outcome);
+            setError('Enter the code from your authenticator app to continue.');
+            return;
+          }
+          session = outcome.recovered;
+        }
+        setRecovered(session);
+      }
+      await setPasswordAfterRecovery(session, draft.password, mfaCode || undefined);
+      setRecovered(null);
+      navigate('/app');
+    } catch (err) {
+      setError(credentialErrorMessage(err, 'Recovery failed. Check your phrase and try again.'));
     } finally {
       setLoading(false);
     }
@@ -156,7 +213,9 @@ export function AccountRecoverPage() {
               dense
               progress={progress}
               title="Enter your recovery phrase"
-              description="The phrase restores your identity — the key everyone you talk to verifies. It does not carry your messages: this device sets up fresh encryption keys, so conversations from before stay as “Encrypted message” here unless you import the account’s encrypted backup from Settings › Identity portability."
+              description={onePassword
+                ? 'The 24 words you saved when you made your account. They prove the account is yours, then you choose a new password.'
+                : 'The phrase restores your identity — the key everyone you talk to verifies. It does not carry your messages: this device sets up fresh encryption keys, so conversations from before stay as “Encrypted message” here unless you import the account’s encrypted backup from Settings › Identity portability.'}
             >
               <AuthScroll paired>
                 <Field
@@ -200,7 +259,9 @@ export function AccountRecoverPage() {
               dense
               progress={progress}
               title="Protect the restored key"
-              description="This password encrypts the recovered identity on this device. It can be a new one — nothing on the old device has to know it."
+              description={onePassword
+                ? 'Your new password replaces the old one on every device. Other devices sign in again with it.'
+                : 'This password encrypts the recovered identity on this device. It can be a new one — nothing on the old device has to know it.'}
             >
               <AuthScroll paired>
                 <Field
@@ -221,6 +282,19 @@ export function AccountRecoverPage() {
                     aria-invalid={Boolean(errorFor('password')) || undefined}
                   />
                 </Field>
+
+                {pendingMfa && (
+                  <Field label="Two-factor code" required hint="Enter the code from your authenticator app.">
+                    <Input
+                      type="text"
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      value={mfaCode}
+                      onChange={(e) => setMfaCode(e.target.value)}
+                      className="pc-mono"
+                    />
+                  </Field>
+                )}
 
                 <Field label="Confirm password" required error={errorFor('confirmPassword')}>
                   <Input

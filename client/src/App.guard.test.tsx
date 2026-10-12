@@ -19,7 +19,7 @@ const serverListState = {
   tokensHydrated: true,
 };
 
-const accountState = { isUnlocked: false };
+const accountState = { isUnlocked: false, identityVersion: null as 1 | 2 | null, restoreState: 'done' as 'idle' | 'pending' | 'done' };
 let deviceHasIdentity = false;
 
 vi.mock('./stores/authStore', () => ({
@@ -81,6 +81,7 @@ describe('ProtectedRoute guard', () => {
     authState.hasFetchedSettings = true;
     authState.settingsUnavailable = false;
     accountState.isUnlocked = false;
+    accountState.identityVersion = null;
     deviceHasIdentity = false;
     // A server in the list makes serverStatus resolve to 'ready' synchronously.
     serverListState.servers = [{ id: 's1' }];
@@ -108,6 +109,27 @@ describe('ProtectedRoute guard', () => {
 
     expect(screen.getByText('Set up a local identity')).toBeInTheDocument();
     expect(document.body.textContent?.trim()).not.toBe('');
+  });
+
+  // docs/setup-spec.md §3.5: a one-password identity is always required, with
+  // "Ask for my password" off too (a browser tab always asks).
+  it('asks for the one password on a signed-in session whatever the setting says', () => {
+    authState.token = 'tok';
+    authState.settings = { crypto_auth_enabled: false };
+    accountState.identityVersion = 2;
+    deviceHasIdentity = true;
+    renderApp();
+    expect(screen.getByText('Unlock screen')).toBeInTheDocument();
+  });
+
+  it('lets an unlocked one-password device in', () => {
+    authState.token = 'tok';
+    authState.settings = { crypto_auth_enabled: false };
+    accountState.identityVersion = 2;
+    accountState.isUnlocked = true;
+    deviceHasIdentity = true;
+    renderApp();
+    expect(screen.getByText('App shell')).toBeInTheDocument();
   });
 
   it('offers the unlock screen when the device holds a locked identity', () => {

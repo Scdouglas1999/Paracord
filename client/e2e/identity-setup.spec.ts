@@ -142,3 +142,42 @@ test('the setup form retries rejected server credentials after reload using the 
   await page.getByRole('checkbox').check(); await page.getByRole('button', { name: 'Continue' }).click();
   await expect(page.getByText('Returned to the conversation')).toBeVisible();
 });
+
+// One password (docs/setup-spec.md §3.5): the device keeps the same blob as the
+// server's key backup. Only the wrapped key is stored; the password and the
+// real KDF worker open it after a reload, and nothing else does.
+test('a one-password keystore survives reload holding only the wrapped identity', async ({ page }) => {
+  await blank(page);
+  const saved = await page.evaluate(async () => {
+    const vectorsPath = '/src/lib/credential/vectors.json';
+    const vectors = (await import(vectorsPath)).default;
+    const path = '/src/lib/credential/keystoreV2.ts';
+    const { keystoreFromBackup, writeKeystoreV2 } = await import(path);
+    const register = vectors.register;
+    const source = vectors.derivation.find((entry: { auth_key: string }) => entry.auth_key === register.credential.auth_key);
+    const keystore = keystoreFromBackup(
+      { homeOrigin: register.origin, userId: '42', username: 'sam' },
+      { version: 2, kdf: register.credential.kdf, salt: register.credential.salt, epoch: 1 },
+      { public_key: register.identity.public_key, wrapped_key: register.identity.wrapped_key, wrap_alg: 'aes256gcm-v2', epoch: 1, recovery_confirmed: true },
+    );
+    await writeKeystoreV2(keystore);
+    const privateHex = vectors.wrap.find((entry: { public_key: string }) => entry.public_key === register.identity.public_key)?.private_key_hex ?? '';
+    return { password: source.password as string, publicKey: register.identity.public_key as string, privateHex };
+  });
+  expect(saved.password).toBeTruthy();
+
+  await blank(page);
+  const restored = await page.evaluate(async ({ password, privateHex }) => {
+    const stored = localStorage.getItem('paracord:encrypted-identity:v2') ?? '';
+    const path = '/src/lib/credential/keystoreV2.ts';
+    const { readKeystoreV2, unlockKeystoreV2 } = await import(path);
+    const keystore = await readKeystoreV2();
+    let rejected = '';
+    try { await unlockKeystoreV2(keystore, 'not the password at all'); } catch (error) { rejected = (error as { code?: string }).code ?? String(error); }
+    const key: Uint8Array = await unlockKeystoreV2(keystore, password);
+    const hex = Array.from(key, (byte) => byte.toString(16).padStart(2, '0')).join('');
+    key.fill(0);
+    return { rejected, matches: !privateHex || hex === privateHex, storedHasKey: privateHex !== '' && stored.includes(privateHex), storedHasPassword: stored.includes(password), publicKey: keystore.publicKey };
+  }, saved);
+  expect(restored).toEqual({ rejected: 'unwrap_failed', matches: true, storedHasKey: false, storedHasPassword: false, publicKey: saved.publicKey });
+});

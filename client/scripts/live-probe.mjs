@@ -7,30 +7,51 @@
 // on an assertion.
 
 import { chromium } from '@playwright/test';
+import { registerOnePassword, signInOnePassword } from './lib/credential-node.mjs';
 
 const BASE = `http://127.0.0.1:${process.env.PARACORD_LIVE_PORT ?? '18420'}`;
-const PASSWORD = 'Live-Drive-Password-123!';
-const ENCRYPTION_PASSWORD = 'live drive encryption password';
+// One password (docs/setup-spec.md §3): signs in and unlocks the identity.
+const PASSWORD = 'live drive one password 123';
 const stamp = Date.now().toString(36);
 
+/** A one-password account made by API, the way the client makes one. */
 async function register(name) {
   const username = `${name}${stamp}`.slice(0, 32);
   const email = `${name}-${stamp}@example.test`;
-  const r = await fetch(`${BASE}/api/v1/auth/register`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, username, password: PASSWORD }),
-  });
-  const body = await r.json();
-  if (!r.ok) throw new Error(JSON.stringify(body));
-  return { label: name, username, email, id: body.user.id, token: body.token };
+  return { label: name, ...await registerOnePassword(BASE, { username, email, password: PASSWORD }) };
 }
 
 async function login(account) {
-  const r = await fetch(`${BASE}/api/v1/auth/login`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: account.email, password: PASSWORD }),
+  account.token = (await signInOnePassword(BASE, account.email, PASSWORD)).token;
+}
+
+/** Sign in through the page; the unconfirmed phrase screen comes first. */
+async function signInPage(page, account) {
+  await page.goto('/');
+  await page.getByRole('heading', { name: 'Welcome back' }).waitFor({ timeout: 45000 });
+  await page.locator('input[autocomplete="username"]').first().fill(account.email);
+  await page.locator('input[type="password"]').first().fill(PASSWORD);
+  await page.getByRole('button', { name: 'Log in', exact: true }).click();
+  const phrase = page.getByRole('heading', { name: 'Save your recovery phrase' });
+  if (await phrase.waitFor({ timeout: 30000 }).then(() => true).catch(() => false)) {
+    await page.locator('input[type="checkbox"]').first().check();
+    await page.getByRole('button', { name: 'Continue', exact: true }).click();
+  }
+  await page.waitForURL(/\/app(\/|$)/, { timeout: 45000 });
+}
+
+/** A full page load locks the identity; enter the one password when asked. */
+async function unlockIfAsked(page) {
+  await page.waitForTimeout(1500);
+  if (!new URL(page.url()).pathname.startsWith('/unlock')) return;
+  const field = page.locator('input[type="password"]').first();
+  await field.waitFor({ state: 'visible', timeout: 30000 });
+  await field.fill(PASSWORD);
+  await page.getByRole('button', { name: 'Unlock', exact: true }).click();
+  await page.waitForURL(u => !u.pathname.startsWith('/unlock'), { timeout: 30000 }).catch(async (error) => {
+    await page.screenshot({ path: '/tmp/paracord-live/probe-unlock-stuck.png' });
+    throw error;
   });
-  account.token = (await r.json()).token;
 }
 
 const call = (a) => async (method, path, body) => {
@@ -64,29 +85,8 @@ const main = async () => {
   page.on('console', m => { if (m.type() === 'error') errors.push(`console: ${m.text()}`); });
   page.on('requestfailed', r => errors.push(`requestfailed: ${r.method()} ${r.url()}`));
 
-  // Sign in
-  await page.goto('/');
-  await page.getByRole('heading', { name: 'Welcome back' }).waitFor({ timeout: 45000 });
-  await page.locator('input[autocomplete="username"]').first().fill(ada.email);
-  await page.locator('input[type="password"]').first().fill(PASSWORD);
-  await page.getByRole('button', { name: 'Log in', exact: true }).click();
-  await page.waitForURL(/\/app(\/|$)/, { timeout: 45000 });
-  await dismiss(page);
-
-  // Enroll
-  await page.goto(`/setup?migrate=1&server=__local__&user=${ada.id}&returnTo=${encodeURIComponent('/app/friends')}`);
-  const pw = page.locator('input[type="password"]');
-  await pw.first().waitFor({ timeout: 30000 });
-  const n = await pw.count();
-  await pw.nth(0).fill(ENCRYPTION_PASSWORD);
-  if (n > 1) await pw.nth(1).fill(ENCRYPTION_PASSWORD);
-  if (n > 2) await pw.nth(2).fill(PASSWORD);
-  await page.getByRole('button', { name: /secure account|continue|save|set up/i }).first().click();
-  const box = page.locator('input[type="checkbox"]').first();
-  await box.waitFor({ timeout: 45000 });
-  await box.check();
-  await page.getByRole('button', { name: 'Continue', exact: true }).click();
-  await page.waitForURL(/\/app(\/|$)/, { timeout: 45000 });
+  // Sign in: one password, no separate encryption setup.
+  await signInPage(page, ada);
   await dismiss(page);
   await login(ada);
 
@@ -99,26 +99,7 @@ const main = async () => {
   const bobErrors = [];
   bobPage.on('pageerror', e => bobErrors.push(`pageerror: ${e.message}`));
   bobPage.on('console', m => { const t = m.text(); if (m.type() === 'error' || /\[probe\]|e2ee|encrypt|decrypt|group|sender.key/i.test(t)) bobErrors.push(`${m.type()}: ${t}`); });
-  await bobPage.goto('/');
-  await bobPage.getByRole('heading', { name: 'Welcome back' }).waitFor({ timeout: 45000 });
-  await bobPage.locator('input[autocomplete="username"]').first().fill(bob.email);
-  await bobPage.locator('input[type="password"]').first().fill(PASSWORD);
-  await bobPage.getByRole('button', { name: 'Log in', exact: true }).click();
-  await bobPage.waitForURL(/\/app(\/|$)/, { timeout: 45000 });
-  await dismiss(bobPage);
-  await bobPage.goto(`/setup?migrate=1&server=__local__&user=${bob.id}&returnTo=${encodeURIComponent('/app/friends')}`);
-  const bpw = bobPage.locator('input[type="password"]');
-  await bpw.first().waitFor({ timeout: 30000 });
-  const bn = await bpw.count();
-  await bpw.nth(0).fill(ENCRYPTION_PASSWORD);
-  if (bn > 1) await bpw.nth(1).fill(ENCRYPTION_PASSWORD);
-  if (bn > 2) await bpw.nth(2).fill(PASSWORD);
-  await bobPage.getByRole('button', { name: /secure account|continue|save|set up/i }).first().click();
-  const bbox = bobPage.locator('input[type="checkbox"]').first();
-  await bbox.waitFor({ timeout: 45000 });
-  await bbox.check();
-  await bobPage.getByRole('button', { name: 'Continue', exact: true }).click();
-  await bobPage.waitForURL(/\/app(\/|$)/, { timeout: 45000 });
+  await signInPage(bobPage, bob);
   await dismiss(bobPage);
   await login(bob);
   console.log('bob  public_key:', (await call(bob)('GET', '/users/@me')).body?.public_key?.slice(0, 20));
@@ -129,15 +110,9 @@ const main = async () => {
   // Prekeys are published when the account vault opens, which happens on
   // unlock — so let bob sit in the app with his identity unlocked for a moment.
   await bobPage.goto('/app/friends');
+  await unlockIfAsked(bobPage);
   await dismiss(bobPage);
-  const bobUnlock = bobPage.getByRole('link', { name: 'Unlock encryption' });
-  if (await bobUnlock.isVisible().catch(() => false)) await bobUnlock.click();
-  const bobPw = bobPage.locator('input[type="password"]').first();
-  if (await bobPw.isVisible().catch(() => false)) {
-    await bobPw.fill(ENCRYPTION_PASSWORD);
-    await bobPage.getByRole('button', { name: 'Unlock', exact: true }).click();
-    await bobPage.waitForTimeout(3000);
-  }
+  await bobPage.waitForTimeout(3000);
   const bobKeys = await call(bob)('GET', '/users/@me/keys/count');
   console.log('bob  prekeys:', bobKeys.status, bobKeys.raw.slice(0, 160));
 
@@ -148,6 +123,7 @@ const main = async () => {
   const channelId = target.body.id;
 
   await page.goto(`/app/dms/${channelId}`);
+  await unlockIfAsked(page);
   await dismiss(page);
   await page.waitForTimeout(3000);
 
@@ -157,7 +133,7 @@ const main = async () => {
     await unlock.click();
     const p2 = page.locator('input[type="password"]').first();
     await p2.waitFor({ timeout: 30000 });
-    await p2.fill(ENCRYPTION_PASSWORD);
+    await p2.fill(PASSWORD);
     await page.getByRole('button', { name: 'Unlock', exact: true }).click();
     await page.waitForURL(u => !u.pathname.startsWith('/unlock'), { timeout: 30000 });
     await page.waitForTimeout(3000);
@@ -200,6 +176,7 @@ const main = async () => {
     // The whole point: can the OTHER member read it?
     console.log('\n--- what the recipient sees ---');
     await bobPage.goto(`/app/dms/${channelId}`);
+    await unlockIfAsked(bobPage);
     await dismiss(bobPage);
     // The runtime passes through 'enrolling' before it settles on 'locked', so
     // the Unlock link is not on screen the instant the page is. Checking once,
@@ -213,7 +190,7 @@ const main = async () => {
       await bobUnlock2.click();
       const p3 = bobPage.locator('input[type="password"]').first();
       await p3.waitFor({ timeout: 30000 });
-      await p3.fill(ENCRYPTION_PASSWORD);
+      await p3.fill(PASSWORD);
       await bobPage.getByRole('button', { name: 'Unlock', exact: true }).click();
       await bobPage.waitForURL(u => !u.pathname.startsWith('/unlock'), { timeout: 30000 });
     }

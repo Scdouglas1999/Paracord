@@ -38,13 +38,17 @@ vi.mock('../lib/crypto/attachAccountIdentity', () => ({ attachAccountIdentity: v
 vi.mock('../lib/operationContext', () => ({ captureScopedOperation: vi.fn() }));
 vi.mock('../api/client', () => ({ extractApiError: (error: Error) => error.message }));
 
+// An older server (no `credential_version` in its options): `/setup` and
+// `/recover` keep the device-identity flows these tests cover (§3.12).
 vi.mock('../api/auth', () => ({
   authApi: {
     attachPublicKey: vi.fn(),
+    options: vi.fn(async () => ({ data: { allow_username_login: true, require_email: false } })),
   },
 }));
 
 vi.mock('../lib/config/apiBaseUrl', () => ({
+  resolveApiBaseUrl: () => 'https://home.test/api/v1',
   getCurrentOriginServerUrl: vi.fn(() => null),
   getStoredServerUrl: vi.fn(() => null),
   setStoredServerUrl: vi.fn(),
@@ -89,7 +93,7 @@ describe('Account recovery setup flows', () => {
 
     renderSetupPage();
 
-    await user.type(screen.getByLabelText(/Username/), 'alice');
+    await user.type(await screen.findByLabelText(/Username/), 'alice');
     await user.type(screen.getByLabelText(/Display name/), 'Alice');
     await user.type(screen.getByLabelText(/^Password/), 'StrongPass123!');
     await user.type(screen.getByLabelText(/Confirm password/), 'StrongPass123!');
@@ -121,7 +125,7 @@ describe('Account recovery setup flows', () => {
 
     renderSetupPage();
 
-    await user.type(screen.getByLabelText(/Username/), '  alice  ');
+    await user.type(await screen.findByLabelText(/Username/), '  alice  ');
     await user.type(screen.getByLabelText(/Display name/), '  Alice Example  ');
     await user.type(screen.getByLabelText(/^Password/), 'StrongPass123!');
     await user.type(screen.getByLabelText(/Confirm password/), 'StrongPass123!');
@@ -161,7 +165,7 @@ describe('Account recovery setup flows', () => {
     renderRecoverPage();
 
     await user.type(screen.getByLabelText(/Recovery phrase/), recoveryPhrase);
-    await user.type(screen.getByLabelText(/Username/), '  alice  ');
+    await user.type(await screen.findByLabelText(/Username/), '  alice  ');
     await user.click(screen.getByRole('button', { name: 'Continue' }));
 
     await user.type(await screen.findByLabelText(/^New password/), 'StrongPass123!');
