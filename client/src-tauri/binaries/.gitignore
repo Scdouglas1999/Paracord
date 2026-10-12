@@ -1,0 +1,4 @@
+# Staged by `npm run host:stage` (client/scripts/stage-host-sidecar.mjs) and by
+# the release workflow: one paracord-host per target triple. Never committed.
+*
+!.gitignore

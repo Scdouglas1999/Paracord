@@ -29,6 +29,7 @@
   "bundle": {
     "active": true,
     "createUpdaterArtifacts": false,
+    "externalBin": ["binaries/paracord-host"],
     "targets": ["nsis", "msi"],
     "icon": [
       "icons/32x32.png",

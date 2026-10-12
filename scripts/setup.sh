@@ -84,6 +84,12 @@ echo "  Client dependencies installed and production assets built"
 echo
 
 echo "Step 6: Rust workspace check"
+# The desktop crate bundles the host server as a sidecar and refuses to compile
+# without one. A fresh checkout only wants to type-check, so stage the marked
+# stand-in; `cd client && npm run host:stage` builds a real one.
+if ! ls "$PROJECT_ROOT"/client/src-tauri/binaries/paracord-host-* >/dev/null 2>&1; then
+    node "$PROJECT_ROOT/client/scripts/stage-host-sidecar.mjs" --placeholder
+fi
 (cd "$PROJECT_ROOT" && cargo check --workspace)
 echo "  Rust workspace checked successfully"
 echo

@@ -38,6 +38,12 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 ; Main application binary from Tauri build
 Source: "..\target\release\paracord-desktop.exe"; DestDir: "{app}"; DestName: "Paracord.exe"; Flags: ignoreversion
 
+; The server the app runs on this computer (docs/setup-spec.md §2.1). It sits
+; beside Paracord.exe, where the app looks for it. Staged by
+; `npm run host:stage -- --release --target x86_64-pc-windows-msvc`; the compiler
+; stops here, loudly, if that step was skipped.
+Source: "..\client\src-tauri\binaries\paracord-host-x86_64-pc-windows-msvc.exe"; DestDir: "{app}"; DestName: "paracord-host.exe"; Flags: ignoreversion
+
 ; WebView2 bootstrapper (for systems without Edge/WebView2)
 Source: "MicrosoftEdgeWebview2Setup.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall dontcopy; Check: NeedsWebView2
 

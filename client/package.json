@@ -22,6 +22,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "host:stage": "node scripts/stage-host-sidecar.mjs",
     "contracts:export": "cargo run --locked -j 2 --manifest-path ../Cargo.toml -p paracord-contracts --bin export-contracts -- ../contracts/api-contracts.json",
     "contracts:generate": "npm run contracts:export && node scripts/generate-api-contracts.mjs",
     "contracts:check": "node scripts/generate-api-contracts.mjs --check"

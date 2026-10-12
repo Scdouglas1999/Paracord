@@ -117,6 +117,12 @@ jobs:
             .github/workflows/release.yml \
             .github/workflows/security-audit.yml \
             .github/workflows/security-dast-fuzz.yml
+      # The desktop crate lists the host server as a sidecar (`bundle.externalBin`)
+      # and its build script insists the file exists. Compile-only jobs stage a
+      # marked stand-in; build.rs refuses it in a release build, so it can never
+      # be bundled (docs/setup-spec.md §2.1).
+      - name: Stand-in host sidecar for the desktop crate
+        run: node client/scripts/stage-host-sidecar.mjs --placeholder
       - name: Cargo check (no-default-features)
         run: cargo check --workspace --no-default-features
       - name: Build client for embedded assets
@@ -203,6 +209,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: storage-${{ matrix.target }}
+      # SQLCipher builds OpenSSL from source (openssl-src), which needs a real
+      # perl. Name Strawberry Perl rather than whichever perl is first on PATH:
+      # Git for Windows ships an msys perl that cannot read Windows paths.
+      - name: Use Strawberry Perl for the OpenSSL build
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $perl = 'C:\Strawberry\perl\bin\perl.exe'
+          if (-not (Test-Path $perl)) { throw "Strawberry Perl not found at $perl" }
+          "OPENSSL_SRC_PERL=$perl" >> $env:GITHUB_ENV
       - name: SQLCipher opens only with its key
         run: cargo test --locked -p paracord-db --target ${{ matrix.target }} --test sqlcipher_open
       # The server embeds the web client at compile time; the keychain test
@@ -217,6 +233,126 @@ jobs:
         env:
           PARACORD_TEST_REAL_KEYCHAIN: "1"
         run: cargo test --locked -p paracord-server --target ${{ matrix.target }} --bin paracord-server -- at_rest_boot::tests --nocapture
+
+  # The desktop app runs the server as a per-user background service. This runs
+  # the service-manager code against the real thing on each OS, on GitHub's
+  # runners and nowhere else: it registers a uniquely named systemd user unit,
+  # LaunchAgent or Scheduled Task and removes it again (also on failure).
+  # PARACORD_HOSTCTL_LIVE=1 is what lets the test touch the machine.
+  hostctl-smoke-linux:
+    name: Host service smoke (Linux, systemd --user)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.91"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: hostctl-linux
+      # A runner has no login session, so no systemd user manager. Lingering
+      # starts one for this user without a login; the test needs its bus.
+      - name: Start a systemd user manager
+        shell: bash
+        run: |
+          set -euo pipefail
+          uid="$(id -u)"
+          sudo loginctl enable-linger "$USER"
+          sudo systemctl start "user@${uid}.service"
+          runtime="/run/user/${uid}"
+          for _ in $(seq 1 30); do
+            [ -S "${runtime}/bus" ] && break
+            sleep 1
+          done
+          [ -S "${runtime}/bus" ] || { echo "no user bus at ${runtime}/bus" >&2; exit 1; }
+          echo "XDG_RUNTIME_DIR=${runtime}" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=${runtime}/bus" >> "$GITHUB_ENV"
+          XDG_RUNTIME_DIR="${runtime}" systemctl --user --no-pager status | head -5
+      - name: Service lifecycle on systemd
+        env:
+          PARACORD_HOSTCTL_LIVE: "1"
+        run: cargo test --locked -p paracord-hostctl --test live_service -- --nocapture --test-threads=1
+
+  hostctl-smoke-macos:
+    # The first place paracord-hostctl compiles for macOS (ring needs the Apple
+    # toolchain, which only a Mac has). The runner's login session provides the
+    # gui/<uid> launchd domain the LaunchAgent is bootstrapped into.
+    name: Host service smoke (macOS, LaunchAgent)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.91"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: hostctl-macos
+      - name: Launchd domain
+        run: |
+          id -u
+          launchctl print "gui/$(id -u)" | head -5
+      - name: Service lifecycle on launchd
+        env:
+          PARACORD_HOSTCTL_LIVE: "1"
+        run: cargo test --locked -p paracord-hostctl --test live_service -- --nocapture --test-threads=1
+      # The real paracord-host through setup rows 1 and 2 needs the login
+      # keychain unlocked. GitHub's macOS image keeps it open for the runner
+      # user, but that is not a promise, and the first run is how it is learned:
+      # this step is allowed to fail visibly (the lifecycle step above is not).
+      - name: Placeholder web client for the embedded UI
+        run: mkdir -p client/dist && echo '<!doctype html><title>placeholder</title>' > client/dist/index.html
+      - name: Build paracord-host
+        run: cargo build --locked --bin paracord-host
+      - name: Set up the host with the real binary
+        continue-on-error: true
+        env:
+          PARACORD_HOSTCTL_LIVE: "1"
+          PARACORD_HOSTCTL_LIVE_HOST_BINARY: ${{ github.workspace }}/target/debug/paracord-host
+        run: cargo test --locked -p paracord-hostctl --test live_service host_setup_rows_1_and_2_with_the_real_binary -- --nocapture --test-threads=1
+
+  hostctl-smoke-windows:
+    name: Host service smoke (Windows, Scheduled Task)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.91"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: hostctl-windows
+      - name: Use Strawberry Perl for the OpenSSL build
+        shell: pwsh
+        run: |
+          $perl = 'C:\Strawberry\perl\bin\perl.exe'
+          if (-not (Test-Path $perl)) { throw "Strawberry Perl not found at $perl" }
+          "OPENSSL_SRC_PERL=$perl" >> $env:GITHUB_ENV
+      - name: Service lifecycle on Task Scheduler
+        shell: pwsh
+        env:
+          PARACORD_HOSTCTL_LIVE: "1"
+        run: |
+          cargo test --locked -p paracord-hostctl --test live_service -- --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { throw "live_service failed" }
+      - name: Placeholder web client for the embedded UI
+        shell: bash
+        run: mkdir -p client/dist && echo '<!doctype html><title>placeholder</title>' > client/dist/index.html
+      - name: Build paracord-host
+        shell: pwsh
+        run: |
+          cargo build --locked --bin paracord-host
+          if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
+      # Credential Manager needs no unlocking, so the real binary runs through
+      # setup rows 1 and 2 here (storage key into the credential store, SQLCipher
+      # database, a service that answers on its control channel).
+      - name: Set up the host with the real binary
+        shell: pwsh
+        env:
+          PARACORD_HOSTCTL_LIVE: "1"
+          PARACORD_HOSTCTL_LIVE_HOST_BINARY: ${{ github.workspace }}\target\debug\paracord-host.exe
+        run: |
+          cargo test --locked -p paracord-hostctl --test live_service host_setup_rows_1_and_2_with_the_real_binary -- --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { throw "the real-binary run failed" }
 
   rust:
     name: Rust Check
@@ -267,6 +403,12 @@ jobs:
         run: npm ci && npm run build
       - name: Verify Rust API schema export
         run: cargo run --locked -p paracord-contracts --bin export-contracts -- --check contracts/api-contracts.json
+      # The desktop crate lists the host server as a sidecar (`bundle.externalBin`)
+      # and its build script insists the file exists. Compile-only jobs stage a
+      # marked stand-in; build.rs refuses it in a release build, so it can never
+      # be bundled (docs/setup-spec.md §2.1).
+      - name: Stand-in host sidecar for the desktop crate
+        run: node client/scripts/stage-host-sidecar.mjs --placeholder
       - name: Check
         run: cargo check --workspace
       - name: Test
@@ -479,6 +621,22 @@ jobs:
       - name: Client type check
         working-directory: client
         run: npm run typecheck
+      # SQLCipher builds OpenSSL from source (openssl-src), which needs a real
+      # perl. Name Strawberry Perl rather than whichever perl is first on PATH:
+      # Git for Windows ships an msys perl that cannot read Windows paths.
+      - name: Use Strawberry Perl for the OpenSSL build
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $perl = 'C:\Strawberry\perl\bin\perl.exe'
+          if (-not (Test-Path $perl)) { throw "Strawberry Perl not found at $perl" }
+          "OPENSSL_SRC_PERL=$perl" >> $env:GITHUB_ENV
+      # The desktop crate lists the host server as a sidecar (`bundle.externalBin`)
+      # and its build script insists the file exists. Compile-only jobs stage a
+      # marked stand-in; build.rs refuses it in a release build, so it can never
+      # be bundled (docs/setup-spec.md §2.1).
+      - name: Stand-in host sidecar for the desktop crate
+        run: node client/scripts/stage-host-sidecar.mjs --placeholder
       - name: Rust check (no default features)
         run: cargo check --workspace --no-default-features
 
@@ -605,6 +763,12 @@ jobs:
       - name: Build client for embedded assets
         working-directory: client
         run: npm run build
+      # The desktop crate lists the host server as a sidecar (`bundle.externalBin`)
+      # and its build script insists the file exists. Compile-only jobs stage a
+      # marked stand-in; build.rs refuses it in a release build, so it can never
+      # be bundled (docs/setup-spec.md §2.1).
+      - name: Stand-in host sidecar for the desktop crate
+        run: node client/scripts/stage-host-sidecar.mjs --placeholder
       - name: Rust coverage (lcov + floor)
         # --fail-under-lines is a ratchet floor (a regression backstop, NOT a target):
         # raise it over time as coverage improves; never lower it to make a red build

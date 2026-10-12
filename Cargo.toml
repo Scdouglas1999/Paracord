@@ -185,6 +185,15 @@ opt-level = 3
 [profile.dev.package.paracord-desktop]
 opt-level = 2
 
+# The server the desktop app bundles as a sidecar (docs/setup-spec.md §2.1) is
+# built with `--profile host` by client/scripts/stage-host-sidecar.mjs: release
+# optimization, stripped and thin-LTO so the installer grows as little as
+# possible. Nothing else uses it.
+[profile.host]
+inherits = "release"
+strip = "symbols"
+lto = "thin"
+
 [patch.crates-io]
 scap = { path = "third_party/scap" }
 # Vendored with bindgen bumped 0.68.1 -> 0.72: the pinned 0.68.1 silently emits

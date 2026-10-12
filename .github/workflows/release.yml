@@ -385,6 +385,18 @@ jobs:
         run: |
           node -e "const fs=require('fs'); const p='client/src-tauri/tauri.conf.json'; const j=JSON.parse(fs.readFileSync(p,'utf8')); j.bundle.createUpdaterArtifacts=true; fs.writeFileSync(p, JSON.stringify(j,null,2)+'\n');"
 
+      # The desktop app runs the server on the owner's computer, so the bundle
+      # carries it: paracord-host, built for this target (profile `host`:
+      # optimized, stripped), staged where `bundle.externalBin` expects it
+      # (docs/setup-spec.md §2.1). A missing sidecar stops `tauri build`.
+      - name: Build embedded web client
+        working-directory: client
+        run: npm run build
+
+      - name: Build and stage the host server sidecar
+        working-directory: client
+        run: npm run host:stage -- --release --target ${{ matrix.target }}
+
       # Unsigned by design unless an Apple Developer ID is configured: an
       # unsigned .app still installs, with a one-time right-click → Open (the
       # README says so). Shipping nothing at all is the worse failure, so the
@@ -413,6 +425,14 @@ jobs:
             if [ -z "${!name:-}" ]; then unset "$name"; fi
           done
           npx tauri build --target ${{ matrix.target }} --bundles app,dmg
+
+      - name: Verify the host server is inside the app (macOS)
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="target/${{ matrix.target }}/release/bundle/macos/Paracord.app/Contents/MacOS"
+          ls -l "$app"
+          test -x "$app/paracord-host" || { echo "paracord-host is not inside Paracord.app" >&2; exit 1; }
 
       # The bundler names the updater archive after the product alone
       # (Paracord.app.tar.gz), so the Apple Silicon and Intel archives arrive
@@ -515,12 +535,39 @@ jobs:
         run: |
           node -e "const fs=require('fs'); const p='client/src-tauri/tauri.conf.json'; const j=JSON.parse(fs.readFileSync(p,'utf8')); j.bundle.createUpdaterArtifacts=true; fs.writeFileSync(p, JSON.stringify(j,null,2)+'\n');"
 
+      # The desktop app runs the server on the owner's computer, so the bundle
+      # carries it: paracord-host, built for this target (profile `host`:
+      # optimized, stripped), staged where `bundle.externalBin` and the Inno
+      # script expect it (docs/setup-spec.md §2.1). SQLCipher builds OpenSSL from
+      # source, which needs a real perl: name Strawberry Perl, not whichever perl
+      # is first on PATH (Git's has no Windows paths).
+      - name: Build embedded web client
+        working-directory: client
+        run: npm run build
+
+      - name: Build and stage the host server sidecar
+        working-directory: client
+        env:
+          OPENSSL_SRC_PERL: C:\Strawberry\perl\bin\perl.exe
+        run: |
+          if (-not (Test-Path $env:OPENSSL_SRC_PERL)) { throw "Strawberry Perl not found at $env:OPENSSL_SRC_PERL" }
+          npm run host:stage -- --release --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { throw "host:stage failed" }
+
       - name: Build Tauri bundles (Windows)
         working-directory: client
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npx tauri build
+
+      - name: Verify the host server is in the installers
+        shell: pwsh
+        run: |
+          $nsis = Get-ChildItem target/release/bundle/nsis/*.exe | Select-Object -First 1
+          if (-not $nsis) { throw "no NSIS installer was built" }
+          if (-not (Test-Path target/release/paracord-host.exe)) { throw "tauri build did not place paracord-host.exe beside the app" }
+          Get-Item target/release/paracord-host.exe, target/release/paracord-desktop.exe | Select-Object Name, Length
 
       - name: Download WebView2 bootstrapper
         shell: pwsh
@@ -626,12 +673,32 @@ jobs:
         run: |
           node -e "const fs=require('fs'); const p='client/src-tauri/tauri.conf.json'; const j=JSON.parse(fs.readFileSync(p,'utf8')); j.bundle.createUpdaterArtifacts=true; fs.writeFileSync(p, JSON.stringify(j,null,2)+'\n');"
 
+      # The desktop app runs the server on the owner's computer, so the bundle
+      # carries it: paracord-host, built for this target (profile `host`:
+      # optimized, stripped), staged where `bundle.externalBin` expects it
+      # (docs/setup-spec.md §2.1). A missing sidecar stops `tauri build`.
+      - name: Build embedded web client
+        working-directory: client
+        run: npm run build
+
+      - name: Build and stage the host server sidecar
+        working-directory: client
+        run: npm run host:stage -- --release --target x86_64-unknown-linux-gnu
+
       - name: Build Tauri bundles (AppImage + deb)
         working-directory: client
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npx tauri build --bundles appimage,deb,rpm
+
+      - name: Verify the host server is inside the deb
+        run: |
+          set -euo pipefail
+          debs=(target/release/bundle/deb/*.deb)
+          dpkg-deb -c "${debs[0]}" | grep -E ' (\./)?usr/bin/paracord-host$' \
+            || { echo "paracord-host is not inside ${debs[0]}" >&2; exit 1; }
+          ls -l "${debs[0]}"
 
       # linuxdeploy bundles the runner's libwayland, which is older than the one
       # a current Mesa is built against; loaded first, it keeps the host's
