@@ -8,6 +8,12 @@
 # restarts. It only makes sure the data directories exist (named volumes inherit
 # them from the image, but bind-mounted hosts may start empty) and then hands off
 # to the server, which owns first-run config creation.
+#
+# Stored-data encryption is off in a container: the Dockerfile sets
+# PARACORD_AT_REST_ENABLED=false, because the only place a container could keep
+# a generated storage key is /data, next to the data it protects. To turn it on,
+# give the container PARACORD_AT_REST_ENABLED=true and PARACORD_AT_REST_KEY
+# (docs/docker-setup.md, "Encrypting stored data"). This script never touches it.
 set -eu
 
 # Ensure the persistent data layout exists before the server starts. Safe to run

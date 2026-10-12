@@ -32,6 +32,14 @@ itself, starts it, and **opens the link that finishes setup in your browser**
 - On Windows it asks for administrator permission itself. Say yes and Paracord
   is installed for the whole computer, starts with it, and the firewall is
   opened so friends can connect. Say no and it installs just for you.
+- It asks one question: may Paracord ask your router to let friends outside your
+  home network connect? Press Enter for yes (the default). If the router refuses,
+  the app tells you and [Friends outside your network](port-forwarding.md) shows
+  what to change.
+- It encrypts what the server stores on its own disk, with a key it makes and
+  keeps on this computer. At the end it reminds you to save a recovery copy of
+  that key under your recovery phrase once you have made your account; see
+  [How encryption works](encryption.md#stored-data-on-the-server).
 - On Linux, run it with `sudo` for a whole-computer install with a system
   service; without it, it installs just for you and starts when you log in.
 - Running the same command again later **updates** Paracord. Your accounts,
@@ -39,6 +47,25 @@ itself, starts it, and **opens the link that finishes setup in your browser**
 - `PARACORD_NO_BROWSER=1` prints the setup link without opening a browser.
   Offline and pinned installs (`PARACORD_VERSION`, `PARACORD_LOCAL_ARCHIVE`) are
   described in the header of `scripts/install.sh`.
+
+### Option A2 — host from the desktop app
+
+If you use the [desktop app](../../releases/latest), you do not need a terminal at
+all. On the first screen choose **Host**: the app runs a Paracord server on your
+computer as a background service for your account (a systemd user service on
+Linux, a per-user scheduled task on Windows, a launch agent on macOS), makes your
+account, encrypts what the server stores, asks your router to let friends in, and
+ends on an invite link.
+
+- It starts when you sign in to the computer, not at boot, and keeps running when
+  you close the app. **Settings, Paracord on this computer** shows whether it is
+  running and has Stop and Start, the switch for starting at sign-in, and
+  **Remove from this computer**.
+- The key for the stored data is in your system keychain. Your recovery phrase also
+  restores the server onto a new computer
+  ([backup and recovery](backup-recovery.md#restoring-an-encrypted-server-without-its-key)).
+- A computer that cannot run user services (some Linux setups) is told so, with a
+  pointer to the installer above.
 
 ### Option B — download a release
 
@@ -66,6 +93,12 @@ cargo build --release --bin paracord-server
 
 # The binary is at target/release/paracord-server
 ```
+
+Building the desktop app, or checking the whole workspace (`cargo check --workspace`,
+`clippy`, `test`), also needs the server the app runs for "Host on this computer". Stage it
+once with `cd client && npm run host:stage -- --placeholder` for a compile-only check, or
+`npm run host:stage -- --release` before `npx tauri build` for a real package. Building
+only `paracord-server` does not need it.
 
 ## 2. Run it
 
@@ -174,9 +207,9 @@ plainly who it will work for:
   connect**; otherwise [Friends outside your network](port-forwarding.md) walks
   through the one router setting and shows how to check it worked.
 
-The server only asks the router to let people in when that setting is on
-(`auto_port_forward` under `[network]`). New installs leave it off unless you
-said yes when the installer asked.
+The server asks the router to let people in when that setting is on
+(`auto_port_forward` under `[network]`). New installs have it on unless you said no
+when the installer asked.
 
 A friend who opens the link in a browser presses **Create an account to join**
 and lands in your server. On an invite-only server that is the only way in: the

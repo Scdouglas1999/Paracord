@@ -12,8 +12,15 @@ in the conversation can decrypt them. The server stores and passes along data it
 read.
 
 **Messages in a server's channels are not encrypted end to end.** Whoever runs the
-instance can read them, and so can anyone with access to its database, backups or disk.
-The same goes for files posted in channels.
+instance can read them. The same goes for files posted in channels. A server made with
+the installer or the desktop app also encrypts everything it stores on its own disk, so a
+copied backup or a lifted disk is not enough to read it; see
+[Stored data on the server](#stored-data-on-the-server) for what that covers and what it
+doesn't.
+
+**One password signs you in and unlocks your encryption.** The server never receives it,
+and never receives anything that would let it decrypt your identity key. See
+[One password](#one-password).
 
 **The server still sees a lot around your messages.** It knows who talks to whom, when,
 how big each message and file is, who is in each group, and when you are online. It sees
@@ -166,62 +173,122 @@ browser's built-in Web Crypto:
 | Ed25519 | identity keys, signed prekeys, group message signatures | `@noble/curves` 2.0.1 |
 | Ed25519 | creating the account key, signing the login challenge | `@noble/ed25519` 3.0.0 |
 | SHA-256, HMAC-SHA-256, HKDF-SHA-256 | key derivation, fingerprints, transcripts | `@noble/hashes` 2.0.1 |
-| scrypt | turning your encryption password into a key | `@noble/hashes` 2.0.1 |
+| scrypt | turning your password into the auth key and the wrap key | `@noble/hashes` 2.0.1 |
 | AES-256-GCM | messages, envelopes, attachments, local storage | Web Crypto (`crypto.subtle`) |
 | HKDF-SHA-256 | deriving the local storage key | Web Crypto |
 | AES-128-GCM | voice and video frames | Web Crypto in the browser; the Rust `aes-gcm` crate in the desktop app |
+| Argon2id | the server's stored hash of your auth key | the Rust `argon2` crate |
+| SQLCipher, AES-256-GCM | the server's database and files on its own disk (the [server section](#stored-data-on-the-server)) | SQLCipher with a statically built OpenSSL; the Rust `aes-gcm` crate |
 
 Paracord does not use `@noble/ciphers`. All AES-GCM in the client goes through Web Crypto.
 
-## How keys are kept on your device
+## One password
 
-There are three layers.
+You type one password. Your device turns it into two independent keys. One goes to the
+server to prove it is you, and the other never leaves your device.
 
-1. **Your identity key, protected by your encryption password.** During setup
-   (**Secure your account**, or **Set up a local identity**), the app creates your identity
-   key and asks for a
-   **New encryption password** (at least 10 characters; it can be different from your
-   sign-in password). The key is encrypted with AES-256-GCM, using a key made from your
-   password with scrypt (N = 2^17, r = 8, p = 1). The encrypted key is saved in the app's
-   local storage. When you open the app you type this password on the **Welcome back**
-   screen to unlock it. Source: `client/src/lib/account.ts`,
-   `client/src/lib/crypto/identityKeystore.ts`.
+```
+pw       = UTF-8(NFKC(password))
+salt     = 32 random bytes, stored on the server (public)
+master   = scrypt(pw, SHA-256("paracord/credential/v2/salt" || salt), N = 2^17, r = 8, p = 1)
+auth_key = HKDF-SHA-256(master, info = "paracord/credential/v2/auth")   sent to the server
+wrap_key = HKDF-SHA-256(master, info = "paracord/credential/v2/wrap")   never sent
+```
+
+- The **auth key** is what you sign in with. The server stores only an Argon2id hash of it.
+- The **wrap key** encrypts your identity private key with AES-256-GCM. The encrypted
+  identity is stored on the server as a backup and on your device. This is what lets a new
+  device sign in with your username and password and get the same identity back.
+- The server cannot compute the wrap key from the auth key: they are separate outputs of
+  the key derivation, and neither one reveals the other.
+- Your device refuses weaker key-derivation settings than the ones above. A server that
+  starts asking for weaker ones for an account that already uses one password is refused,
+  and nothing is sent to it.
+- Source: `client/src/lib/credential/` (`derive.ts`, `wrap.ts`, `kdf.worker.ts`),
+  `crates/paracord-core/src/credential.rs`, `crates/paracord-api/src/routes/credential.rs`.
+
+### Changing the password
+
+A new password re-wraps the same identity. Your contacts still see the same key and your
+sessions on other devices end. Other devices notice the change (the credential has a
+counter) the next time they unlock and ask for the new password.
+
+### What the server learns
+
+| The server stores or sees | It cannot |
+|---|---|
+| Username, display name, email if you gave one | Read your password |
+| The salt and the key-derivation settings (public) | Compute the wrap key |
+| The auth key, every time you sign in, kept as an Argon2id hash | Decrypt your identity private key |
+| Your identity **public** key and prekeys | Read your recovery phrase |
+| Your identity private key **encrypted** under the wrap key | |
+| When and from where you sign in | |
+
+**A server operator can try to guess your password offline.** Whoever has the server's
+database holds the auth key hash and the encrypted identity. Each guess costs one scrypt
+run (128 MiB of memory) and one Argon2id run, which makes guessing slow, not impossible. So
+the end-to-end encryption of your DMs is as strong as your password, against someone who runs
+or copies the server. Paracord requires at least 10 characters, rejects the most common
+passwords, and suggests a passphrase of several words. This is true of any identity backup
+that a password unlocks. A long, unusual passphrase is the real defense.
+
+**A server you have never signed in to can lie about how you sign in.** On a brand-new
+device, a dishonest server could claim your account still uses the older two-password
+sign-in and show that screen. Typing your password there gives it away. The older screen
+says so in its wording, and appears only for accounts that really have not moved yet.
+
+### Where your device keeps things
+
+1. **Your identity key, wrapped by the password.** The same encrypted copy the server
+   holds is saved in the app's local storage. Unlocking decrypts it on your device, with no
+   network needed. Source: `client/src/lib/crypto/identityKeystore.ts`.
 2. **Everything else in an encrypted local vault.** Prekeys, ratchet sessions, group
    sender keys, pinned contact keys, drafts, queued messages and your decrypted history live
    in an IndexedDB database. Each record is encrypted with AES-256-GCM, under a key made
    from your identity private key with HKDF-SHA-256. The vault can only be opened while
    your identity is unlocked. Source: `client/src/lib/crypto/accountVault.ts`.
-3. **Drafts before you set up encryption** go into a separate store, under a random key
+3. **Drafts before you set up your account** go into a separate store, under a random key
    that the app cannot export. This keeps them from sitting in plain text on disk. It does
    not protect them from other code running as you. Source:
    `client/src/lib/crypto/deviceAccountVault.ts`.
 
-In the desktop app, the operating system's keychain (Windows Credential Manager, macOS
-Keychain, or Secret Service on Linux) holds your sign-in tokens. It does not hold the
-encryption keys above, apart from keys saved by older versions, which the app reads once
-and moves into the vault.
+In the desktop app, after you unlock, the operating system's keychain (Windows Credential
+Manager, macOS Keychain, or Secret Service on Linux) also holds your identity key, so a
+relaunch opens without asking. **Settings, Privacy, "Ask for my password when Paracord
+opens"** turns that off and deletes the keychain copy. If the keychain is not available the
+app does not remember you and asks for the password. A browser never remembers the key; a new tab
+asks for the password.
 
 ### Recovery phrase and new devices
 
-- After setup the app shows a **Recovery phrase** of 24 words. The phrase is your identity
+- After sign-up the app shows a **recovery phrase** of 24 words. The phrase is your identity
   private key itself, written as words, with a checksum. Anyone who has it can take over
-  your account.
-- On a new device, **Recover your account** asks for the phrase and a new password. That
-  brings back your identity, so your contacts still see the same key.
-- It does **not** bring back your messages or session keys. Encrypted conversations from
-  before show as "Encrypted message" on the new device.
-- The new device then publishes fresh prekeys under the same identity. You approve this
+  your account, and it works even if you forget the password.
+- **Forgot your password?** Choose **Use your recovery phrase**. The phrase signs you in with
+  your key, and you pick a new password. Your identity, your contacts' view of you and your
+  stored keys carry on.
+- **Start over** (a reset link by email, on servers that send email) cannot bring the old
+  identity back, because the server cannot decrypt it. It makes a new identity. Your old
+  private messages cannot be opened with it.
+- The phrase does **not** bring back your messages or session keys. Encrypted conversations
+  from before show as "Encrypted message" on the new device.
+- A new device then publishes fresh prekeys under the same identity. You approve this
   with **Publish new keys for this device**. Any other device signed in to the same account
   stops getting new encrypted conversations until it is set up again. In practice, one
   device per account handles encrypted messages at a time.
+- On a server you set up on your own computer, the same phrase also restores the server's
+  stored-data key; see [Recovering the storage key](#recovering-the-storage-key).
 
 ## What the server can and cannot see
+
+(For a DM or group DM. The server can read channel messages; see
+[Server channels are not end-to-end encrypted](#server-channels-are-not-end-to-end-encrypted).)
 
 The server **cannot** see:
 
 - the text of DMs and group DMs,
 - the contents, real names or real types of files attached to them,
-- your identity private key, prekey private keys, session keys or sender keys.
+- your password, your identity private key, prekey private keys, session keys or sender keys.
 
 The server **can** see:
 
@@ -243,11 +310,101 @@ The server **can** see:
 
 ## Server channels are not end-to-end encrypted
 
-Messages and files in a server's channels are sent to the instance as normal data. The
-instance stores the text as it is. It may encrypt uploaded files on disk, but it holds that
-key itself. Anyone who runs the instance, or can reach its database or backups, can read
-channel messages. Use a DM or group DM for anything you want to keep from the people who run
-the instance.
+Messages and files in a server's channels are sent to the instance as normal data, and the
+instance can read them. It encrypts them again on its own disk (see the next section), but
+it holds that key itself. Anyone who runs the instance can read channel messages. Use a DM
+or group DM for anything you want to keep from the people who run the instance.
+
+## Stored data on the server
+
+A server made with the installer, or by the desktop app on someone's computer, encrypts
+what it writes to disk: the database (SQLite, with SQLCipher) and every uploaded or cached
+file (AES-256-GCM). This is separate from end-to-end encryption. The server holds the key
+and uses it all the time, so it protects against someone who gets the **disk or a copy of a
+backup**, not against someone who controls the running server.
+
+It does not cover PostgreSQL databases (you can still encrypt the files), and it is off in
+Docker unless you turn it on ([Docker setup](docker-setup.md#encrypting-stored-data)).
+
+### Where the key is kept
+
+The server makes a random 256-bit key on its first run and stores it in one place. The
+place depends on how the server was installed, and the admin screen says how well the key is
+protected:
+
+| Key kept in | Used by | What the admin screen says |
+|---|---|---|
+| The system keychain of the account the server runs as | The desktop app's "Paracord on this computer"; a macOS install for one user | Encrypted on this computer's disk. The key lives in your system keychain. |
+| A systemd credential, sealed to the computer's TPM when it has one | `install.sh` as root on systemd 250 or newer | Encrypted on disk. The key is sealed to this machine's security chip. (Without a TPM: the key is protected by this machine's own credentials.) |
+| A key file, readable only by the server's account, next to the config | `install.sh` for one user, a macOS system install, `install.ps1`, a plain first run without a keychain | Encrypted on disk, with the key stored on the same disk. This protects backups copied elsewhere, not a stolen disk. |
+| An environment variable | Docker, and configs that used it before | Same as the key file |
+| nothing | Docker by default; a server installed before this existed | Not encrypted |
+
+The "same disk" rows deserve plain words: if someone takes the whole disk, they take
+the key file with it. The encryption still helps against a backup or a copy of the data
+folder that leaves without the key file, which is the common way data leaks.
+
+If the key cannot be read at start (the keychain is locked, a file is missing, a wrong key),
+the server stops and says which one. It never starts unencrypted on its own.
+
+### What it does not do
+
+- It does not hide anything from the server while it runs; the server decrypts to serve you.
+- A deleted unencrypted file may still be recoverable. When a server is converted, the
+  unencrypted database is deleted after the encrypted one is checked, but a solid-state
+  disk can keep the old blocks for a while. If that matters, also wipe the free space or
+  use full-disk encryption.
+- A conversion keeps a backup taken just before it, and that backup is **not** encrypted.
+  The command says where it is. Delete it once a new backup exists.
+- TOTP and webhook secrets stored before the conversion were stored in readable form; they
+  now sit inside the encrypted database.
+
+### Encrypting an existing server
+
+Servers installed before this existed keep storing unencrypted until you convert them. The
+installer asks on an upgrade (`install.sh --encrypt-storage`, `install.ps1 -EncryptStorage`
+skip the question). To do it by hand:
+
+```bash
+# stop Paracord first; the command refuses while the server answers on its port
+paracord-server -c /opt/paracord/config/paracord.toml encrypt-storage --key-source file
+# --key-source keychain | systemd-creds | file | env;  --key-file <path> for file and systemd-creds
+```
+
+It takes a backup, makes the key and stores it, copies the database into an encrypted one
+and compares every table's row count, encrypts the files in place, and only then updates
+the config and deletes the old database. If it is interrupted, run it again; it resumes. It
+prints the next step: saving a recovery copy of the key.
+
+### Recovering the storage key
+
+The key lives on the computer. If that computer's keychain, key file or disk is lost, an
+encrypted backup cannot be opened. So the server's owner can save a **recovery copy**: the
+key, wrapped with a value derived from the owner's identity key and stored in the server's
+`storage-key.escrow` file and inside every backup made afterward. The recovery phrase is the
+identity key, so the phrase alone can unwrap it:
+
+```
+escrow_key = HKDF-SHA-256(owner identity private key,
+                          salt = "paracord/host-storage-escrow/v1", info = instance id)
+```
+
+- The desktop app saves it automatically while it sets up a server on your computer.
+- A server installed with the installer has an owner-only call for it
+  (`POST /api/v1/admin/storage-key/escrow`), which can be made once. The page that creates
+  the first owner does not make it yet, so until it does, keep your own copy of the key file
+  somewhere that is not that disk.
+- To restore on another computer, the desktop app's **Restore from a backup instead** asks
+  for the recovery phrase and does the rest. By hand,
+  `paracord-server restore-backup --archive <file> --output-dir <dir> --escrow-key-stdin`
+  reads `escrow_key` (base64url, one line) from standard input, unwraps the storage key
+  from the archive and stores it where the config says before restoring. See
+  [Backup and offline recovery](backup-recovery.md#restoring-an-encrypted-server-without-its-key).
+- A backup made before a recovery copy exists carries none. Only the server's own key can
+  open it.
+
+Nothing about this gives anyone else access: the wrapping key is not stored on the server,
+and the file cannot be read without the owner's identity key.
 
 ## Voice and video
 

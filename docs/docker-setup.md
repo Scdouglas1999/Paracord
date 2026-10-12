@@ -82,7 +82,8 @@ All configuration can be overridden via environment variables in `docker-compose
 | `PARACORD_VOICE_NATIVE_MEDIA` | `true` | Native QUIC/WebTransport voice (the default media path); no LiveKit required |
 | `PARACORD_REGISTRATION_ENABLED` | `true` | Allow new user registrations |
 | `PARACORD_REGISTRATION_MODE` | `invite_only` in a new config | Who can create an account: `invite_only` (needs an invite link) or `open` (anyone) |
-| `PARACORD_AUTO_PORT_FORWARD` | `false` in a new config | Ask the home router (UPnP / NAT-PMP) to let people outside the network in |
+| `PARACORD_AUTO_PORT_FORWARD` | `true` in a new config | Ask the home router (UPnP / NAT-PMP) to let people outside the network in. A container on Docker's default network usually cannot reach the router, so forward the port on the router yourself ([port forwarding](port-forwarding.md)) |
+| `PARACORD_AT_REST_ENABLED` | `false` in the image | Encrypt stored data. Off in Docker unless you turn it on; see [Encrypting stored data](#encrypting-stored-data) |
 | `PARACORD_STORAGE_PATH` | `/data/uploads` | File upload storage path |
 | `PARACORD_MEDIA_STORAGE_PATH` | `/data/files` | Media file storage path |
 | `PARACORD_BACKUP_DIR` | `/data/backups` | Backup storage directory |
@@ -219,6 +220,48 @@ server {
     }
 }
 ```
+
+## Encrypting stored data
+
+The image sets `PARACORD_AT_REST_ENABLED=false`, so a container stores its
+database and uploads unencrypted, as it always has. Outside Docker, Paracord
+makes a storage key on the first run and encrypts from the start. A container
+does not, on purpose: the only place a container could keep that key is inside
+`/data`, next to the files it protects, which would look like protection
+without being any.
+
+To encrypt, make the key yourself and give it to the container from outside
+`/data`:
+
+```bash
+export PARACORD_AT_REST_KEY="$(openssl rand -hex 32)"   # 64 hex characters
+# keep a copy somewhere that is not this disk: without it the data is unreadable
+```
+
+```yaml
+services:
+  paracord:
+    environment:
+      PARACORD_AT_REST_ENABLED: "true"
+      PARACORD_AT_REST_KEY: "${PARACORD_AT_REST_KEY}"   # or a Docker secret
+```
+
+Set both on the very first start. For a container that already holds
+unencrypted data, stop it and convert the volume once with the same two
+variables set:
+
+```bash
+docker compose stop paracord
+docker compose run --rm --no-deps --entrypoint /app/paracord-server paracord \
+  --config /data/paracord.toml encrypt-storage --key-source env
+```
+
+It takes a backup first, checks the result, and then deletes the unencrypted
+database; see [Encrypting an existing server](encryption.md#encrypting-an-existing-server).
+Every start after that needs the key variable. If it is wrong or missing the
+server exits with status 78 and says so, instead of starting unencrypted. What
+this does and does not protect is in
+[Stored data on the server](encryption.md#stored-data-on-the-server).
 
 ## Data Backup
 

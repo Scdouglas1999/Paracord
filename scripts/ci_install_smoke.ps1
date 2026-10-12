@@ -20,11 +20,18 @@
          (-HomeNetworkOnly), under Windows PowerShell 5.1: the scheduled task is
          registered and running as SYSTEM, the firewall rules exist, the server
          answers /health over HTTPS, the owner setup link is printed, and the
-         config says auto_port_forward = false.
+         config says auto_port_forward = false. The stored data is encrypted
+         with a key file that SYSTEM can read (the server starts on it) and the
+         database on disk is not plain SQLite.
       4. Re-running it upgrades in place: the config is kept byte for byte, the
          previous binary is backed up, and the server answers again.
       5. -AllowInternet under PowerShell 7 with -NoService: the config says
-         auto_port_forward = true and nothing is started.
+         auto_port_forward = true and nothing is started; with no flag (this
+         runner sets CI) the answer is the default, yes.
+      5b. An install from before stored-data encryption (made here with
+         PARACORD_AT_REST_ENABLED=false and a plaintext database): without a
+         flag the installer only names the command; with -EncryptStorage it
+         converts the database and records the key file.
       6. Cleanup: the installer has no uninstaller, so this removes the task,
          the process, the firewall rules and the install directories it made,
          and checks they are gone.
@@ -71,6 +78,17 @@ function Get-TomlValue([string]$path, [string]$section, [string]$key) {
         }
     }
     return ''
+}
+
+# The first 15 bytes of a file as text, read without excluding a running server
+# that has the file open.
+function Get-FileHead([string]$path) {
+    $stream = [System.IO.File]::Open($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+    try {
+        $buffer = New-Object byte[] 15
+        $read = $stream.Read($buffer, 0, 15)
+        return [System.Text.Encoding]::ASCII.GetString($buffer, 0, $read)
+    } finally { $stream.Dispose() }
 }
 
 # Run the installer in a child shell and capture everything it prints.
@@ -247,6 +265,22 @@ try {
     Check ($rules.Count -ge 2) "firewall rules created ($($rules.Count))"
     Assert-LogContains $log '/setup-server#claim=' 'the one-time owner setup link is printed'
     Assert-LogContains $log 'Only people on your home network can join' 'the ending says home network only'
+    Check ((Get-TomlValue $sysCfg 'at_rest' 'enabled') -eq 'true') 'stored-data encryption is on'
+    Check ((Get-TomlValue $sysCfg 'at_rest' 'key_source') -eq 'file') 'the key is a file'
+    $keyFile = Get-TomlValue $sysCfg 'at_rest' 'key_file'
+    Check ($keyFile -ne '' -and (Test-Path $keyFile)) 'the key file exists'
+    if ($keyFile -ne '' -and (Test-Path $keyFile)) {
+        $acl = (& icacls $keyFile 2>&1) -join "`n"
+        Check ($acl -match 'NT AUTHORITY\\SYSTEM') 'SYSTEM can read the key file'
+    }
+    Assert-LogContains $log 'Stored messages and files are encrypted' 'the ending says the stored data is encrypted'
+    Assert-LogContains $log 'recovery copy' 'the ending reminds about the recovery copy of the key'
+    $dbFile = Join-Path $SystemInstall 'data\paracord.db'
+    Check (Test-Path $dbFile) 'the server made its database'
+    if (Test-Path $dbFile) {
+        $head = Get-FileHead $dbFile
+        Check ($head -ne 'SQLite format 3') 'the database on disk is not plain SQLite'
+    }
     $configBefore = [System.IO.File]::ReadAllBytes($sysCfg)
 
     # ---------------------------------------------------------------------
@@ -275,6 +309,48 @@ try {
     Assert-LogContains $log 'Paracord asks your router' 'the ending says the router is asked'
     $code = Invoke-Installer 'pwsh' (Join-Path $Work 'both.log') @('-LocalArchive', $zip, '-InstallDir', $inst, '-AllowInternet', '-HomeNetworkOnly', '-NoService', '-NoBrowser')
     Check ($code -ne 0) '-AllowInternet with -HomeNetworkOnly is refused'
+    $inst = Join-Path $Work 'inst-default'
+    $Installs.Add($inst)
+    $log = Join-Path $Work 'default.log'
+    $code = Invoke-Installer 'pwsh' $log @('-LocalArchive', $zip, '-InstallDir', $inst, '-NoService', '-NoBrowser')
+    Check ($code -eq 0) 'an install with no router flag finishes'
+    Check ((Get-TomlValue (Join-Path $inst 'config\paracord.toml') 'network' 'auto_port_forward') -eq 'true') 'no flag: the router is asked (the default)'
+
+    # ---------------------------------------------------------------------
+    Write-Host '== 5b. An install from before stored-data encryption'
+    # The system install's server holds the ports; encrypt-storage refuses while
+    # anything answers, so stop it first.
+    Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    Get-Process -Name 'paracord-server' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 3
+    $old = Join-Path $Work 'inst-old'
+    $Installs.Add($old)
+    New-Item -ItemType Directory -Path (Join-Path $old 'config') -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $old 'data') -Force | Out-Null
+    Copy-Item $ServerExe (Join-Path $old 'paracord-server.exe')
+    $oldCfg = Join-Path $old 'config\paracord.toml'
+    $env:PARACORD_AT_REST_ENABLED = 'false'
+    try { & (Join-Path $old 'paracord-server.exe') -c $oldCfg init *> (Join-Path $Work 'old-init.log') }
+    finally { Remove-Item Env:\PARACORD_AT_REST_ENABLED -ErrorAction SilentlyContinue }
+    $oldToml = Get-Content -Raw $oldCfg
+    $oldToml = $oldToml -replace '\./data/', (($old -replace '\\', '/') + '/data/')
+    [System.IO.File]::WriteAllText($oldCfg, $oldToml, (New-Object System.Text.UTF8Encoding $false))
+    $oldDb = Join-Path $old 'data\paracord.db'
+    & python -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute('create table t(x)'); c.execute('insert into t values (1)'); c.commit()" $oldDb
+    Check ((Get-TomlValue $oldCfg 'at_rest' 'enabled') -ne 'true') 'the old install is not encrypted'
+    $log = Join-Path $Work 'old-up1.log'
+    $code = Invoke-Installer 'pwsh' $log @('-LocalArchive', $zip, '-InstallDir', $old, '-NoService', '-NoBrowser')
+    Check ($code -eq 0) 'the upgrade without a flag finishes'
+    Assert-LogContains $log '-EncryptStorage' 'it names the flag that encrypts'
+    Check ((Get-TomlValue $oldCfg 'at_rest' 'enabled') -ne 'true') 'and changed nothing'
+    $log = Join-Path $Work 'old-up2.log'
+    $code = Invoke-Installer 'pwsh' $log @('-LocalArchive', $zip, '-InstallDir', $old, '-EncryptStorage', '-NoService', '-NoBrowser')
+    Check ($code -eq 0) 'the upgrade with -EncryptStorage finishes'
+    Assert-LogContains $log 'now encrypted' 'it says the data is encrypted'
+    Check ((Get-TomlValue $oldCfg 'at_rest' 'enabled') -eq 'true') 'the config records stored-data encryption'
+    Check ((Get-TomlValue $oldCfg 'at_rest' 'key_source') -eq 'file') 'with a key file'
+    $head = Get-FileHead $oldDb
+    Check ($head -ne 'SQLite format 3') 'the database on disk is no longer plain SQLite'
 }
 catch {
     Fail "smoke aborted: $($_.Exception.Message)"

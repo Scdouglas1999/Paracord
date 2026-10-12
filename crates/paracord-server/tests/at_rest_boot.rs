@@ -68,6 +68,49 @@ async fn at_rest_first_run_without_a_keychain_stores_the_key_in_a_private_file()
     );
 }
 
+/// Installers choose the source (docs/setup-spec.md §4.2): `init --key-source
+/// file --key-file <path>` puts the key exactly there, 0600, and records it.
+#[cfg(unix)]
+#[test]
+fn init_key_source_puts_the_key_where_the_installer_says() {
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = Scratch::new();
+    let key_file = scratch.path().join("elsewhere/storage.key");
+    std::fs::create_dir_all(key_file.parent().unwrap()).unwrap();
+    let output = scratch
+        .server()
+        .args(["init", "--key-source", "file", "--key-file"])
+        .arg(&key_file)
+        .output()
+        .expect("init");
+    assert_success(&output, "init --key-source file");
+    let config = scratch.config_toml();
+    assert_eq!(config["at_rest"]["enabled"].as_bool(), Some(true));
+    assert_eq!(config["at_rest"]["key_source"].as_str(), Some("file"));
+    assert_eq!(config["at_rest"]["protection"].as_str(), Some("same_disk"));
+    assert_eq!(
+        std::path::PathBuf::from(config["at_rest"]["key_file"].as_str().unwrap())
+            .canonicalize()
+            .unwrap(),
+        key_file.canonicalize().unwrap()
+    );
+    assert_eq!(
+        std::fs::metadata(&key_file).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert!(!scratch.path().join("config/at-rest.key").exists());
+
+    // The config exists now: the flag refuses instead of being ignored.
+    let again = scratch
+        .server()
+        .args(["init", "--key-source", "file"])
+        .output()
+        .expect("init again");
+    assert!(!again.status.success());
+    let said = String::from_utf8_lossy(&again.stderr);
+    assert!(said.contains("encrypt-storage"), "{said}");
+}
+
 #[test]
 fn at_rest_first_run_leaves_encryption_to_an_explicit_environment_choice() {
     let scratch = Scratch::new();

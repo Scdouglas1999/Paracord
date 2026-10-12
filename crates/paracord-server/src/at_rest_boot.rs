@@ -14,7 +14,7 @@
 //! * Status (§4.5): `sqlite_encrypted` is observed on the live pool.
 
 use crate::config::{self, AtRestConfig, Config};
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use paracord_contracts::host::{KeySource, Protection};
 use paracord_util::at_rest::{format_master_key, generate_master_key, parse_master_key};
 use std::path::{Path, PathBuf};
@@ -571,8 +571,12 @@ pub fn apply_record(config: &mut Config, record: &KeyRecord) {
             at_rest.keychain_service = service.clone();
             at_rest.keychain_account = Some(account.clone());
         }
-        KeyPlacement::File { path } => at_rest.key_file = Some(path_text(path)),
-        KeyPlacement::SystemdCreds { .. } => {}
+        // A systemd credential is read from $CREDENTIALS_DIRECTORY at boot, but
+        // its file is still recorded: the unit loads it, and `restore-backup`
+        // and `encrypt-storage` write it again from this path.
+        KeyPlacement::File { path } | KeyPlacement::SystemdCreds { path } => {
+            at_rest.key_file = Some(path_text(path))
+        }
         KeyPlacement::Env { name } => at_rest.key_env = name.clone(),
     }
     config.host.instance_id = Some(record.instance_id.clone());
@@ -605,8 +609,9 @@ pub fn apply_record_to_text(text: &str, record: &KeyRecord) -> String {
             set("at_rest", "keychain_service", string(service));
             set("at_rest", "keychain_account", string(account));
         }
-        KeyPlacement::File { path } => set("at_rest", "key_file", string(&path_text(path))),
-        KeyPlacement::SystemdCreds { .. } => {}
+        KeyPlacement::File { path } | KeyPlacement::SystemdCreds { path } => {
+            set("at_rest", "key_file", string(&path_text(path)))
+        }
         KeyPlacement::Env { name } => set("at_rest", "key_env", string(name)),
     }
     set("host", "instance_id", string(&record.instance_id));
@@ -785,26 +790,67 @@ fn sqlite_url_file(url: &str) -> Option<PathBuf> {
 /// On failure the generated config file is removed, so the next start
 /// generates again instead of silently running without encryption.
 pub fn provision_new_config(config: &mut Config, config_path: &str) -> Result<()> {
+    provision_new_config_with(config, config_path, None)
+}
+
+/// A key source asked for on the command line (`init --key-source`).
+#[derive(Debug, Clone)]
+pub struct RequestedSource {
+    pub source: KeySource,
+    pub key_file: Option<PathBuf>,
+}
+
+/// [`provision_new_config`], with the operator's explicit choice of source.
+/// An explicit choice that cannot be honored is an error, never a skip.
+pub fn provision_new_config_with(
+    config: &mut Config,
+    config_path: &str,
+    requested: Option<RequestedSource>,
+) -> Result<()> {
+    if requested.is_some() {
+        if !config.first_run {
+            bail!(
+                "--key-source only applies to a new config, and {config_path} already exists (use `paracord-server encrypt-storage` for an existing server)"
+            );
+        }
+        if let Some(name) = OPERATOR_CHOICE_ENV
+            .iter()
+            .find(|name| std::env::var_os(name).is_some())
+        {
+            bail!("--key-source conflicts with {name}, which is set in the environment");
+        }
+        if !matches!(config.database.engine, config::DatabaseEngine::Sqlite) {
+            bail!("--key-source is for SQLite servers; use `paracord-server encrypt-storage` for PostgreSQL");
+        }
+    }
     if !config.first_run || config.at_rest.enabled {
         return Ok(());
     }
-    if let Some(name) = OPERATOR_CHOICE_ENV
-        .iter()
-        .find(|name| std::env::var_os(name).is_some())
-    {
-        tracing::info!(
-            "Stored-data encryption: {name} is set, so this first run leaves [at_rest] to the environment"
-        );
-        return Ok(());
-    }
-    if !matches!(config.database.engine, config::DatabaseEngine::Sqlite) {
-        tracing::warn!(
-            "Stored-data encryption is not turned on automatically for PostgreSQL. Files and secrets can be encrypted with `paracord-server encrypt-storage`."
-        );
-        return Ok(());
+    if requested.is_none() {
+        if let Some(name) = OPERATOR_CHOICE_ENV
+            .iter()
+            .find(|name| std::env::var_os(name).is_some())
+        {
+            tracing::info!(
+                "Stored-data encryption: {name} is set, so this first run leaves [at_rest] to the environment"
+            );
+            return Ok(());
+        }
+        if !matches!(config.database.engine, config::DatabaseEngine::Sqlite) {
+            tracing::warn!(
+                "Stored-data encryption is not turned on automatically for PostgreSQL. Files and secrets can be encrypted with `paracord-server encrypt-storage`."
+            );
+            return Ok(());
+        }
     }
     if let Some(db) = sqlite_url_file(&config.database.url) {
         if std::fs::metadata(&db).is_ok_and(|m| m.len() > 0) {
+            if requested.is_some() {
+                bail!(
+                    "{} already exists, so a new storage key would lock it out; use `paracord-server encrypt-storage`",
+                    db.display()
+                );
+            }
             tracing::warn!(
                 "Stored-data encryption is off: {} already exists. Run `paracord-server encrypt-storage` to encrypt it.",
                 db.display()
@@ -814,7 +860,7 @@ pub fn provision_new_config(config: &mut Config, config_path: &str) -> Result<()
     }
 
     let path = Path::new(config_path);
-    let result = generate_for_new_config(config, path);
+    let result = generate_for_new_config(config, path, requested.as_ref());
     if let Err(error) = &result {
         let _ = std::fs::remove_file(path);
         tracing::error!(
@@ -824,7 +870,11 @@ pub fn provision_new_config(config: &mut Config, config_path: &str) -> Result<()
     result
 }
 
-fn generate_for_new_config(config: &mut Config, config_path: &Path) -> Result<()> {
+fn generate_for_new_config(
+    config: &mut Config,
+    config_path: &Path,
+    requested: Option<&RequestedSource>,
+) -> Result<()> {
     let dir = config_dir(config_path)?;
     let instance_id = config
         .host
@@ -832,21 +882,51 @@ fn generate_for_new_config(config: &mut Config, config_path: &Path) -> Result<()
         .clone()
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let service = config.at_rest.keychain_service.clone();
-    let placement = match keychain::probe(&service) {
-        Ok(()) => KeyPlacement::Keychain {
-            service,
-            account: format!("host-storage-key:{instance_id}"),
-        },
-        Err(reason) => {
-            tracing::info!(
-                "The system keychain is not usable here ({reason}); the storage key goes in a file next to the config"
-            );
-            KeyPlacement::File {
-                path: dir.join("at-rest.key"),
+    let placement = match requested {
+        Some(RequestedSource { source, key_file }) => {
+            if key_file.is_some() && !matches!(source, KeySource::File | KeySource::SystemdCreds) {
+                bail!("--key-file belongs to --key-source file or systemd-creds");
+            }
+            match source {
+                KeySource::Keychain => KeyPlacement::Keychain {
+                    service,
+                    account: format!("host-storage-key:{instance_id}"),
+                },
+                KeySource::File => KeyPlacement::File {
+                    path: match key_file {
+                        Some(path) => std::path::absolute(path)?,
+                        None => dir.join("at-rest.key"),
+                    },
+                },
+                KeySource::SystemdCreds => KeyPlacement::SystemdCreds {
+                    path: std::path::absolute(key_file.as_ref().context(
+                        "--key-source systemd-creds needs --key-file <where to write the encrypted credential>",
+                    )?)?,
+                },
+                KeySource::Env => KeyPlacement::Env {
+                    name: config.at_rest.key_env.trim().to_string(),
+                },
             }
         }
+        None => match keychain::probe(&service) {
+            Ok(()) => KeyPlacement::Keychain {
+                service,
+                account: format!("host-storage-key:{instance_id}"),
+            },
+            Err(reason) => {
+                tracing::info!(
+                    "The system keychain is not usable here ({reason}); the storage key goes in a file next to the config"
+                );
+                KeyPlacement::File {
+                    path: dir.join("at-rest.key"),
+                }
+            }
+        },
     };
-    let key = generate_master_key();
+    let key = match &placement {
+        KeyPlacement::Env { name } => key_from_env(name)?,
+        _ => generate_master_key(),
+    };
     let protection = store_key(&placement, &key)?;
     let record = KeyRecord {
         placement,
@@ -1108,6 +1188,35 @@ mod tests {
         apply_record(&mut config, &record);
         assert!(config.at_rest.enabled);
         assert_eq!(config.at_rest.key_source, KeySource::File);
+    }
+
+    #[test]
+    fn a_systemd_credential_records_where_its_file_is() {
+        let mut config = Config::default();
+        let template = crate::config::generate_config_template(&config);
+        let record = KeyRecord {
+            placement: KeyPlacement::SystemdCreds {
+                path: PathBuf::from("/opt/paracord/config/at-rest-key.cred"),
+            },
+            protection: Protection::Tpm,
+            encrypt_sqlite: true,
+            encrypt_files: true,
+            instance_id: "7c1f0b6e-4a8e-4f8e-9a51-2d6c1f0b6e4a".into(),
+            escrow_file: PathBuf::from("/opt/paracord/config/storage-key.escrow"),
+        };
+        let parsed: Config = toml::from_str(&apply_record_to_text(&template, &record)).unwrap();
+        assert_eq!(parsed.at_rest.key_source, KeySource::SystemdCreds);
+        assert_eq!(
+            parsed.at_rest.key_file.as_deref(),
+            Some("/opt/paracord/config/at-rest-key.cred")
+        );
+        assert_eq!(parsed.at_rest.protection, Some(Protection::Tpm));
+        apply_record(&mut config, &record);
+        assert_eq!(
+            config.at_rest.key_file.as_deref(),
+            Some("/opt/paracord/config/at-rest-key.cred")
+        );
+        assert!(placement_from_config(&config.at_rest).is_ok());
     }
 
     #[test]

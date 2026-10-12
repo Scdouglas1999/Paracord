@@ -483,8 +483,21 @@ Build a release server with the current web client inside it, then the desktop a
 cd client && npm install && npm run build && cd ..
 cargo build --release --bin paracord-server
 
-cd client && npx tauri build
+# the desktop app bundles the server it runs for "Host on this computer"
+# (paracord-host); build and stage it for this machine first
+cd client && npm run host:stage -- --release && npx tauri build
 ```
+
+The desktop crate (`client/src-tauri`) is a member of the Cargo workspace and expects that
+staged `paracord-host` file, so **any** `cargo check`, `clippy` or `test` with `--workspace`
+fails in its build script until one exists. For a compile-only check, stage a stand-in:
+
+```bash
+cd client && npm run host:stage -- --placeholder
+```
+
+A placeholder is refused by a release build, so `tauri build` can never bundle it. Plain
+`cargo build --release --bin paracord-server` and `cargo test -p <crate>` do not need either.
 
 The `vpx` feature in `paracord-codec` is on by default and turning it off to get past a
 build error is the wrong move: the build succeeds and video and screen sharing then fail at

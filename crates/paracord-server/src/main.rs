@@ -3846,7 +3846,13 @@ fn run_init(init_args: &cli::InitArgs, default_config: &str) -> Result<()> {
     // and loads an existing file unchanged — it never overwrites. Reusing it
     // keeps `init` and the zero-config startup path byte-for-byte identical.
     let mut config = config::Config::load(path)?;
-    at_rest_boot::provision_new_config(&mut config, path)?;
+    let requested = init_args
+        .key_source
+        .map(|source| at_rest_boot::RequestedSource {
+            source: source.into(),
+            key_file: init_args.key_file.clone(),
+        });
+    at_rest_boot::provision_new_config_with(&mut config, path, requested)?;
 
     if !config.first_run {
         println!();

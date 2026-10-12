@@ -114,6 +114,16 @@ pub struct InitArgs {
     /// `--profile desktop-host`: the port for HTTPS and voice.
     #[arg(long)]
     pub port: Option<u16>,
+
+    /// Where the new config's storage key goes, instead of the automatic
+    /// choice (keychain when it works, otherwise a key file). For installers:
+    /// they know whether a systemd credential or a key file is right.
+    #[arg(long, value_enum)]
+    pub key_source: Option<KeySourceArg>,
+
+    /// With `--key-source file` or `systemd-creds`: the file to create.
+    #[arg(long, requires = "key_source")]
+    pub key_file: Option<std::path::PathBuf>,
 }
 
 /// Named configurations for `init --profile`.

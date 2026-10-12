@@ -139,9 +139,12 @@ jobs:
       - name: Install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       # End-to-end: lint both installers, package a fake release archive,
-      # exercise the local/HTTP/checksum/upgrade paths, and — ubuntu-latest
-      # has passwordless sudo and a live systemd — the root path too (a stub
-      # paracord binary stands in so no real ports are bound). The script
+      # exercise the local/HTTP/checksum/upgrade paths and the stored-data
+      # encryption choices (key file, the offer on upgrade), and — ubuntu-latest
+      # has passwordless sudo and a live systemd 250+ — the root path too, with
+      # the storage key as a systemd credential the unit loads (a stub paracord
+      # binary stands in so no real ports are bound; the real server's key
+      # sources are tested by `cargo test -p paracord-server`). The script
       # self-skips anything the environment cannot support.
       - name: Installer end-to-end smoke
         run: bash scripts/ci_install_smoke.sh
@@ -163,13 +166,24 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path client/dist | Out-Null
           Set-Content -Path client/dist/index.html -Value '<!doctype html><title>placeholder</title>'
+      # SQLCipher builds OpenSSL from source (openssl-src), which needs a real
+      # perl. Name Strawberry Perl rather than whichever perl is first on PATH:
+      # Git for Windows ships an msys perl that cannot read Windows paths.
+      - name: Use Strawberry Perl for the OpenSSL build
+        shell: pwsh
+        run: |
+          $perl = 'C:\Strawberry\perl\bin\perl.exe'
+          if (-not (Test-Path $perl)) { throw "Strawberry Perl not found at $perl" }
+          "OPENSSL_SRC_PERL=$perl" >> $env:GITHUB_ENV
       - name: Build server binary
         run: cargo build --release --bin paracord-server
       # Packages that binary the way the release does and runs the real
       # install.ps1 against it under Windows PowerShell 5.1 and PowerShell 7:
       # checksum refusal (local .sha256 and downloaded SHA256SUMS.txt), the
       # one-liner shape, a whole-computer install whose scheduled task serves
-      # /health, an in-place upgrade, both router answers, then cleanup.
+      # /health on an encrypted database (the key file SYSTEM can read), an
+      # in-place upgrade, both router answers and the default, the offer to
+      # encrypt an install from before stored-data encryption, then cleanup.
       - name: install.ps1 end-to-end smoke
         shell: pwsh
         run: pwsh -NoProfile -File scripts/ci_install_smoke.ps1

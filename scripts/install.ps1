@@ -27,11 +27,18 @@
         powershell -ExecutionPolicy Bypass -File install.ps1
 
     On a fresh install it asks one question: may Paracord ask your router to let
-    friends outside your home network connect (UPnP)? The default is no, and the
-    answer is written into the config ([network] auto_port_forward). It only
-    asks when there is someone to ask; otherwise -AllowInternet,
-    -HomeNetworkOnly or PARACORD_ALLOW_INTERNET decide, and without them the
-    answer is no. An upgrade keeps the existing answer.
+    friends outside your home network connect (UPnP, NAT-PMP)? The default is
+    yes, and the answer is written into the config ([network]
+    auto_port_forward). It only asks when there is someone to ask; otherwise
+    -AllowInternet, -HomeNetworkOnly or PARACORD_ALLOW_INTERNET decide, and
+    without them the answer is yes. An upgrade keeps the existing answer.
+
+    A fresh install also encrypts the server's stored messages and files from
+    the first start. The key is made by `paracord-server init` and kept in a
+    file in the config folder that only the installing user and the server
+    (SYSTEM, for a whole-computer install) can read. An upgrade of an install
+    that predates this offers to encrypt what is already stored
+    (`paracord-server encrypt-storage`) and asks first.
 
 .PARAMETER Version
     Release version to install ("2.0.0" or "v2.0.0"). Defaults to the latest
@@ -73,6 +80,15 @@
     Answer the router question no without asking: only people on your home
     network can connect. Env fallback: PARACORD_ALLOW_INTERNET=0.
 
+.PARAMETER EncryptStorage
+    Upgrading an install whose stored data is not encrypted: encrypt it now
+    without asking (the server is stopped for a minute and a backup is taken
+    first). Env fallback: PARACORD_ENCRYPT_STORAGE=1.
+
+.PARAMETER NoEncryptStorage
+    Upgrading: do not offer to encrypt the stored data.
+    Env fallback: PARACORD_ENCRYPT_STORAGE=0.
+
 .PARAMETER Relaunched
     Internal. Set on the copy this script starts for itself after the Windows
     permission box is accepted, so it can say the window is safe to close.
@@ -89,6 +105,8 @@ param(
     [switch]$NoElevate,
     [switch]$AllowInternet,
     [switch]$HomeNetworkOnly,
+    [switch]$EncryptStorage,
+    [switch]$NoEncryptStorage,
     [switch]$Relaunched
 )
 
@@ -116,11 +134,19 @@ if ($env:PARACORD_NO_ELEVATE -eq '1') { $NoElevate = [switch]$true }
 if ($AllowInternet -and $HomeNetworkOnly) {
     throw 'paracord-install: error: pass -AllowInternet or -HomeNetworkOnly, not both.'
 }
+if ($EncryptStorage -and $NoEncryptStorage) {
+    throw 'paracord-install: error: pass -EncryptStorage or -NoEncryptStorage, not both.'
+}
+if (-not $EncryptStorage -and -not $NoEncryptStorage) {
+    if ($env:PARACORD_ENCRYPT_STORAGE -eq '1') { $EncryptStorage = [switch]$true }
+    elseif ($env:PARACORD_ENCRYPT_STORAGE -eq '0') { $NoEncryptStorage = [switch]$true }
+}
 
 $TaskName = 'Paracord Server'
 $ApiUrl   = "https://api.github.com/repos/$GitHubRepo/releases/latest"
 $DocsUrl  = "https://github.com/$GitHubRepo/blob/main/docs/port-forwarding.md"
 $DomainDocsUrl = "https://github.com/$GitHubRepo/blob/main/docs/deployment.md#a-domain-name-and-automatic-certificates"
+$EncryptionDocsUrl = "https://github.com/$GitHubRepo/blob/main/docs/encryption.md"
 $SelfUrl  = $env:PARACORD_SCRIPT_URL
 if (-not $SelfUrl) { $SelfUrl = "https://raw.githubusercontent.com/$GitHubRepo/main/scripts/install.ps1" }
 
@@ -215,8 +241,20 @@ function Set-TomlBool([string]$path, [string]$section, [string]$key, [bool]$valu
     }
 }
 
+# True when there is a person at a keyboard to ask.
+function Test-CanAsk {
+    # Read-Host throws in a -NonInteractive session; that is nobody to ask.
+    foreach ($arg in [Environment]::GetCommandLineArgs()) {
+        if ($arg -ieq '-NonInteractive') { return $false }
+    }
+    $canAsk = [Environment]::UserInteractive
+    try { if ([Console]::IsInputRedirected) { $canAsk = $false } } catch { $canAsk = $false }
+    return $canAsk
+}
+
 # The one question a fresh install asks. Deterministic without someone to ask:
-# a switch or PARACORD_ALLOW_INTERNET decides, and otherwise the answer is no.
+# a switch or PARACORD_ALLOW_INTERNET decides, and otherwise the answer is yes.
+# Someone who is asked and presses Enter also gets yes.
 function Get-InternetAccessChoice {
     if ($AllowInternet) { return $true }
     if ($HomeNetworkOnly) { return $false }
@@ -228,13 +266,11 @@ function Get-InternetAccessChoice {
             default { Fail "PARACORD_ALLOW_INTERNET is '$fromEnv'; use 1 (yes) or 0 (no)" }
         }
     }
-    if ($env:CI) { return $false }
-    $canAsk = [Environment]::UserInteractive
-    try { if ([Console]::IsInputRedirected) { $canAsk = $false } } catch { $canAsk = $false }
-    if (-not $canAsk) { return $false }
+    if ($env:CI) { return $true }
+    if (-not (Test-CanAsk)) { return $true }
     Write-Host ''
-    $answer = Read-Host 'Let friends outside your home network connect? Paracord can ask your router to open a port for it (UPnP). [y/N]'
-    return ($answer -match '^(y|yes)$')
+    $answer = Read-Host 'Let friends outside your home network connect? Paracord can ask your router to open a port for it (UPnP). [Y/n]'
+    return (-not ($answer -match '^(n|no)$'))
 }
 
 # -- Platform check -----------------------------------------------------------
@@ -291,6 +327,8 @@ if ($canElevate) {
         if ($NoBrowser)      { $psArgs += '-NoBrowser' }
         if ($AllowInternet)  { $psArgs += '-AllowInternet' }
         if ($HomeNetworkOnly) { $psArgs += '-HomeNetworkOnly' }
+        if ($EncryptStorage)   { $psArgs += '-EncryptStorage' }
+        if ($NoEncryptStorage) { $psArgs += '-NoEncryptStorage' }
         if ($env:PARACORD_ALLOW_INTERNET -and -not $AllowInternet -and -not $HomeNetworkOnly) {
             if ($env:PARACORD_ALLOW_INTERNET -match '^(1|yes|y|true)$') { $psArgs += '-AllowInternet' }
             elseif ($env:PARACORD_ALLOW_INTERNET -match '^(0|no|n|false)$') { $psArgs += '-HomeNetworkOnly' }
@@ -335,6 +373,49 @@ $firewallNote  = ''
 $claimLink     = ''
 $claimSource   = ''
 $browserOpened = $false
+$keyFile       = Join-Path $ConfigDir 'at-rest.key'
+$encryptedNow  = $false
+$encryptHint   = $false
+
+# Runs the installed server with these arguments in the install directory and
+# returns its exit code; the output is kept in $TmpDir and shown by the caller
+# when it failed.
+function Invoke-ParacordServer([string[]]$ServerArgs, [string]$LogName) {
+    $log = Join-Path $TmpDir "$LogName.log"
+    $err = Join-Path $TmpDir "$LogName.err.log"
+    $quoted = @('-c', ('"' + $ConfigPath + '"')) + ($ServerArgs | ForEach-Object {
+        if ($_ -match '\s') { '"' + $_ + '"' } else { $_ }
+    })
+    $proc = Start-Process -FilePath $ExePath -ArgumentList $quoted `
+        -WorkingDirectory $InstallDir -NoNewWindow -Wait -PassThru `
+        -RedirectStandardOutput $log -RedirectStandardError $err
+    $code = 1
+    if ($proc) { $code = $proc.ExitCode }
+    if ($code -ne 0) {
+        Show-TextFile $log
+        Show-TextFile $err
+    }
+    return $code
+}
+
+# This release's binary knows how to put a storage key somewhere. An older one
+# (a pinned -Version) does not; it installs unencrypted and says so.
+function Test-ServerCanEncrypt {
+    $help = (& $ExePath init --help 2>&1) -join "`n"
+    return ($help -match '--key-source')
+}
+
+# The server runs as SYSTEM in a whole-computer install, and `init` makes the
+# key file readable by the installing user only. Give SYSTEM read access and
+# check it, as is done for the config.
+function Grant-KeyFileToSystem {
+    if (-not (Test-Path $keyFile)) { return }
+    & icacls $keyFile /grant 'NT AUTHORITY\SYSTEM:(R)' | Out-Null
+    $acl = (& icacls $keyFile 2>&1) -join "`n"
+    if ($acl -notmatch 'NT AUTHORITY\\SYSTEM') {
+        Fail ("could not grant SYSTEM access to $keyFile - the scheduled task runs as SYSTEM and cannot read its storage key without it. Current ACL:`n" + $acl)
+    }
+}
 
 try {
     Write-Host "Paracord server installer"
@@ -470,6 +551,49 @@ try {
         Write-Host "Note: this build ships no optional LiveKit companion - voice and video do not need it."
     }
 
+    # -- An upgrade of an install whose stored data is not encrypted ---------
+    #
+    # Offer to encrypt it: stop the server, take a backup, convert the database
+    # and files and check them; the old file is deleted only after the check.
+    if ($isUpgrade -and (Test-Path $ConfigPath) -and -not $NoEncryptStorage `
+            -and ((Get-TomlValue $ConfigPath 'at_rest' 'enabled') -ne 'true') `
+            -and ((Get-TomlValue $ConfigPath 'database' 'url') -notmatch '^postgres')) {
+        $encryptHint = $true
+        if (-not (Test-ServerCanEncrypt)) {
+            Write-Warning 'paracord-install: this Paracord release cannot encrypt stored data. Install a newer release to get it.'
+            $encryptHint = $false
+        } else {
+            $wantEncrypt = $false
+            if ($EncryptStorage) {
+                $wantEncrypt = $true
+            } elseif ((Test-CanAsk) -and -not $env:CI) {
+                Write-Host ''
+                Write-Host "This server's stored messages and files are not encrypted on disk."
+                Write-Host 'Paracord can encrypt them now. It stops the server for a minute, makes a backup first,'
+                Write-Host 'and checks the result before removing the old file.'
+                $answer = Read-Host 'Encrypt now? [Y/n]'
+                $wantEncrypt = -not ($answer -match '^(n|no)$')
+            }
+            if ($wantEncrypt) {
+                Write-Step 'Encrypting stored data'
+                $running = Get-Process -Name 'paracord-server' -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Path -eq $ExePath }
+                if ($running) {
+                    $running | Stop-Process -Force
+                    Start-Sleep -Seconds 2
+                    Write-Host 'Paracord stopped while its data is converted.'
+                }
+                $code = Invoke-ParacordServer @('encrypt-storage', '--key-source', 'file', '--key-file', $keyFile) 'encrypt'
+                if ($code -ne 0) {
+                    Fail "encrypting the stored data failed (exit code $code). Nothing was lost: a backup was taken first. Fix the problem above and run this installer again; it resumes where it stopped. Paracord is stopped until then."
+                }
+                $encryptedNow = $true
+                $encryptHint = $false
+                Write-Host 'Stored messages and files are now encrypted.'
+            }
+        }
+    }
+
     # -- Config generation ---------------------------------------------------
     if (Test-Path $ConfigPath) {
         Write-Host "Existing config preserved at $ConfigPath"
@@ -483,23 +607,27 @@ try {
         # installer prints one short set of instructions at the end, and two
         # competing sets of next steps is how a simple install starts to look
         # complicated. It is shown in full if `init` fails.
-        $initLog = Join-Path $TmpDir 'init.log'
-        $initErr = Join-Path $TmpDir 'init.err.log'
-        $initProc = Start-Process -FilePath $ExePath `
-            -ArgumentList @('-c', ('"' + $ConfigPath + '"'), 'init') `
-            -WorkingDirectory $InstallDir -NoNewWindow -Wait -PassThru `
-            -RedirectStandardOutput $initLog -RedirectStandardError $initErr
-        $initCode = 1
-        if ($initProc) { $initCode = $initProc.ExitCode }
+        # The key file goes in the config folder, readable by the installing
+        # user (and SYSTEM, below); an older binary that cannot do this installs
+        # unencrypted and says so.
+        $initArgs = @('init')
+        if (Test-ServerCanEncrypt) {
+            $initArgs += @('--key-source', 'file', '--key-file', $keyFile)
+        } else {
+            Write-Warning 'paracord-install: this Paracord release cannot encrypt stored data, so nothing here will be encrypted. Install a newer release to get it.'
+        }
+        $initCode = Invoke-ParacordServer $initArgs 'init'
         if ($initCode -ne 0) {
-            Show-TextFile $initLog
-            Show-TextFile $initErr
             Fail "paracord-server init exited with code $initCode"
         }
         if (-not (Test-Path $ConfigPath)) {
-            Show-TextFile $initLog
-            Show-TextFile $initErr
             Fail "paracord-server init did not create $ConfigPath"
+        }
+        if ($initArgs.Count -gt 1) {
+            if ((Get-TomlValue $ConfigPath 'at_rest' 'enabled') -ne 'true') {
+                Fail "paracord-server init did not turn stored-data encryption on in $ConfigPath"
+            }
+            $encryptedNow = $true
         }
 
         # Pin the generated ./data/... paths to the install directory so the
@@ -640,6 +768,7 @@ try {
         # difference between a server that starts and one that exits 1 with
         # nothing in any log. Grant the file directly, with no inheritance
         # flags, and verify it rather than trusting the exit code.
+        Grant-KeyFileToSystem
         & icacls $ConfigPath /grant 'NT AUTHORITY\SYSTEM:(M)' | Out-Null
         # `-match` against an array filters it rather than answering true/false,
         # so the lines that do not mention SYSTEM would make this fire on a
@@ -744,6 +873,20 @@ try {
     }
 
     # -- Ending --------------------------------------------------------------
+    function Write-StorageNotes {
+        if ($encryptedNow -and ((Get-TomlValue $ConfigPath 'at_rest' 'enabled') -eq 'true')) {
+            Write-Host ''
+            Write-Host "Stored messages and files are encrypted on this computer's disk."
+            Write-Host 'The key is stored on the same disk, so this protects backups copied elsewhere, not a stolen disk.'
+            Write-Host 'That key exists only on this computer. After you create the owner account, save a'
+            Write-Host 'recovery copy of it under your recovery phrase; without one, a backup of this server'
+            Write-Host "cannot be restored on another computer. How: $EncryptionDocsUrl#recovering-the-storage-key"
+        } elseif ($encryptHint) {
+            Write-Host ''
+            Write-Host 'Stored messages and files on this server are not encrypted yet. To encrypt them, run'
+            Write-Host "this installer again with -EncryptStorage (see $EncryptionDocsUrl)."
+        }
+    }
     Write-Host ''
     if ($isUpgrade) {
         $tail = '.'
@@ -757,6 +900,7 @@ try {
         if (-not $serverStarted) {
             Write-Host ("Start it again with:  cd `"$InstallDir`"; .\paracord-server.exe -c `"$ConfigPath`"")
         }
+        Write-StorageNotes
     } else {
         if ($serverStarted) {
             Write-Host 'Paracord is installed and running.'
@@ -791,12 +935,13 @@ try {
         Write-Host '2. Then invite friends: open your server in the app and press Invite.'
         Write-Host ''
         if ($routerAsked) {
-            Write-Host 'Friends outside your home network: Paracord asks your router to let them in.'
-            Write-Host "If someone can't connect, see $DocsUrl"
+            Write-Host 'Friends outside your home network: Paracord asks your router to let them in. The'
+            Write-Host "app says whether the router agreed. If it didn't, or someone can't connect, see $DocsUrl"
         } else {
             Write-Host 'Only people on your home network can join for now. To let friends elsewhere in,'
             Write-Host "turn on `"Let friends outside your home network connect`" in the app's Admin settings."
         }
+        Write-StorageNotes
         Write-Host ''
         Write-Host 'To update later, run this same command again. Your data is kept.'
     }
@@ -815,6 +960,11 @@ try {
     }
     if ($firewallNote) { Write-Dim "  Firewall:  $firewallNote" }
     Write-Dim "  Address:   $shareUrl"
+    if ((Get-TomlValue $ConfigPath 'at_rest' 'enabled') -eq 'true') {
+        Write-Dim ('  Storage:   encrypted; key in ' + (Get-TomlValue $ConfigPath 'at_rest' 'key_file'))
+    } else {
+        Write-Dim '  Storage:   not encrypted'
+    }
     if ($routerAsked) {
         Write-Dim '  Router:    asked to forward the ports ([network] auto_port_forward = true)'
     } else {

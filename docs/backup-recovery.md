@@ -19,9 +19,13 @@ Keep the following together in protected backup storage:
 - The original `paracord.toml` and its deployment environment. The config holds
   authentication settings and the JWT secret; environment overrides may hold
   other secrets and change the effective database or storage settings.
-- The original at-rest master key from the environment variable named by
-  `[at_rest].key_env`, if encryption is enabled. Keep the original encryption
-  settings. The CLI does not generate replacement encryption keys.
+- The original at-rest master key, if encryption is enabled. Where it lives depends
+  on `[at_rest] key_source`: the key file named by `key_file`, the keychain entry
+  `keychain_account`, a systemd credential, or the environment variable named by
+  `key_env`. Keep the original encryption settings. The CLI does not generate
+  replacement encryption keys. If the server's owner saved a recovery copy of the
+  key, every backup carries it and the owner's recovery phrase can stand in for
+  these; see [Restoring an encrypted server without its key](#restoring-an-encrypted-server-without-its-key).
 - The TLS certificate and private key when Paracord terminates TLS, and the
   federation signing key when federation is enabled. These are separate files,
   not certificate/key bytes embedded in `paracord.toml`.
@@ -69,6 +73,42 @@ applies migrations, and verifies media before producing activation files.
 Encrypted SQLite requires a SQLCipher-capable server build; a missing cipher or
 wrong key fails preparation. Plaintext SQLite is not silently accepted when
 the supplied configuration requires encrypted SQLite.
+
+## Restoring an encrypted server without its key
+
+A server that encrypts its stored data keeps the key on the computer it runs on (a key
+file, the keychain, or a systemd credential; see
+[Stored data on the server](encryption.md#stored-data-on-the-server)). If that computer
+is gone, the archive alone cannot be opened.
+
+When the owner has saved a **recovery copy** of the key
+([Recovering the storage key](encryption.md#recovering-the-storage-key)), every backup
+made after that carries it, wrapped so that only a value derived from the owner's
+recovery phrase opens it. That value (the escrow key) is the base64url text of 32 bytes.
+
+- **In the desktop app,** on the first screen choose **Host**, then **Restore from a
+  backup instead**, pick the archive and enter the recovery phrase. The app derives the
+  escrow key, restores the key and the data, and starts the server. The phrase never
+  leaves the computer.
+- **By hand,** write a config that has `[at_rest] enabled = true` and the key source you
+  want on the new computer (`key_source = "file"` with a `key_file` path that does not
+  exist yet is the simplest), then give the escrow key on standard input:
+
+  ```bash
+  printf '%s\n' "$ESCROW_KEY" | paracord-server -c /srv/paracord/paracord.toml restore-backup \
+    --archive /srv/backups/paracord-backup.tar.gz \
+    --output-dir /srv/paracord-recovery-20261012 \
+    --escrow-key-stdin
+  ```
+
+  The command unwraps the storage key from the archive, stores it in the configured
+  source, and then restores as described below. It refuses a wrong escrow key, an archive
+  with no recovery copy ("made before the owner saved one"), and a source that already
+  holds a *different* key (it never replaces one). Putting the key on standard input keeps
+  it out of the process list and the shell history.
+
+An archive from before the owner saved a recovery copy has none, and cannot be restored
+without the original key.
 
 ## Prepare PostgreSQL recovery
 

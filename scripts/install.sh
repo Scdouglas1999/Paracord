@@ -24,9 +24,16 @@
 #   - runs `paracord-server init` to generate config/paracord.toml (fresh JWT
 #     secret, self-signed TLS defaults) and prints the URL to open
 #   - on a fresh install, asks one question: may Paracord ask your router to
-#     let friends outside your home network connect (UPnP)? The default is no,
-#     and the answer is written into the config ([network] auto_port_forward).
-#     An upgrade keeps the existing answer.
+#     let friends outside your home network connect (UPnP, NAT-PMP)? The
+#     default is yes, and the answer is written into the config ([network]
+#     auto_port_forward). An upgrade keeps the existing answer.
+#   - encrypts the server's stored messages and files from the first start. The
+#     key is made here and kept where it is best protected: a systemd
+#     credential (sealed to the TPM when there is one) for a root install on
+#     systemd 250 or newer, the login keychain for a per-user macOS install,
+#     otherwise a key file (0600) next to the config. An upgrade of an install
+#     that predates this offers to encrypt what is already stored
+#     (`paracord-server encrypt-storage`) and asks first.
 #   - waits for the running server to mint the one-time owner setup token, turns
 #     it into a ready-to-open link (<local-url>/setup-server#claim=<TOKEN> — a
 #     fragment, so the token never reaches a server log or proxy log), opens it
@@ -48,14 +55,22 @@
 #   PARACORD_ALLOW_INTERNET=1   answer the router question "yes" without
 #                               asking (0 answers "no"); the same as the
 #                               --allow-internet / --home-network-only flags
+#   PARACORD_ENCRYPT_STORAGE=1  on an upgrade, encrypt the stored data without
+#                               asking (0 never offers); the same as the
+#                               --encrypt-storage / --no-encrypt-storage flags
 #
 # Flags (after `sh -s --` when piping):
 #   --allow-internet            let friends outside your home network connect
 #   --home-network-only         only people on your home network can connect
+#   --encrypt-storage           upgrade: encrypt the data already stored
+#   --no-encrypt-storage        upgrade: do not offer to
 #
 # The router question is only asked when there is a terminal to ask on. Piped
 # with no terminal, under CI, or with a flag or PARACORD_ALLOW_INTERNET, it is
-# decided without asking, and without a flag or variable the answer is no.
+# decided without asking, and without a flag or variable the answer is yes.
+# The encryption offer on an upgrade is only made on a terminal (it stops the
+# server for a minute and changes the files); unattended, it prints the one
+# command that does it.
 #
 # POSIX sh — works under dash, bash, ash. `set -eu` everywhere; any failure
 # aborts before the install directory is left half-written.
@@ -78,6 +93,14 @@ IS_UPGRADE=0
 # The router question: "" until decided, then 1 (ask the router) or 0.
 ALLOW_INTERNET=""
 ALLOW_INTERNET_FLAG=""
+# Stored-data encryption: where the key goes ("" = this server's binary cannot
+# encrypt), the file behind it, and what happened on this run.
+KEY_SOURCE=""
+KEY_FILE=""
+ENCRYPT_FLAG=""
+ENCRYPTED_NOW=0
+ENCRYPT_HINT=0
+ENCRYPTION_DOCS_URL="https://github.com/${GITHUB_REPO}/blob/main/docs/encryption.md"
 SERVER_STARTED=0
 # Set only when this run handed the server to a service manager that started it.
 SERVICE_MANAGED=0
@@ -119,14 +142,19 @@ usage() {
 Paracord server installer
 
 Usage:
-  sh install.sh [--allow-internet | --home-network-only] [--help]
+  sh install.sh [--allow-internet | --home-network-only]
+                [--encrypt-storage | --no-encrypt-storage] [--help]
 
   --allow-internet      let friends outside your home network connect: Paracord
-                        asks your router to open a port for it (UPnP)
-  --home-network-only   only people on your home network can connect (the default)
+                        asks your router to open a port for it (the default)
+  --home-network-only   only people on your home network can connect
+  --encrypt-storage     upgrading an install whose stored data is not encrypted:
+                        encrypt it now, without asking (stops the server briefly)
+  --no-encrypt-storage  upgrading: do not offer to encrypt the stored data
 
-On a fresh install with a terminal, the installer asks. Without a terminal (piped
-with no TTY, CI) and without a flag, the answer is home network only.
+On a fresh install with a terminal, the installer asks about the router; without
+a terminal or a flag the answer is yes. A fresh install always encrypts its
+stored data. An upgrade of an unencrypted install offers to, on a terminal.
 
 Common invocations:
   curl -fsSL https://raw.githubusercontent.com/Scdouglas1999/Paracord/main/scripts/install.sh | sh
@@ -138,7 +166,7 @@ Common invocations:
 Environment overrides: PARACORD_VERSION, PARACORD_RELEASE_BASE_URL,
 PARACORD_LOCAL_ARCHIVE, PARACORD_INSTALL_DIR, PARACORD_LINK_DIR,
 PARACORD_NO_SYSTEMD=1, PARACORD_NO_BROWSER=1, PARACORD_GITHUB_REPO,
-PARACORD_ALLOW_INTERNET=1|0.
+PARACORD_ALLOW_INTERNET=1|0, PARACORD_ENCRYPT_STORAGE=1|0.
 EOF
 }
 
@@ -147,6 +175,8 @@ for arg in "$@"; do
         --help|-h) usage; exit 0 ;;
         --allow-internet) ALLOW_INTERNET_FLAG=1 ;;
         --home-network-only) ALLOW_INTERNET_FLAG=0 ;;
+        --encrypt-storage) ENCRYPT_FLAG=1 ;;
+        --no-encrypt-storage) ENCRYPT_FLAG=0 ;;
         *) printf '%s: error: unknown option %s (see --help)\n' "$PROG" "$arg" >&2; exit 2 ;;
     esac
 done
@@ -493,8 +523,8 @@ set_config_bool() {
 
 # The one question a fresh install asks: may Paracord ask the router to let
 # friends outside the home network connect? Deterministic without a terminal:
-# a flag or PARACORD_ALLOW_INTERNET decides, and otherwise the answer is no.
-# Only a run with a terminal to ask on actually asks.
+# a flag or PARACORD_ALLOW_INTERNET decides, and otherwise the answer is yes.
+# Only a run with a terminal to ask on actually asks; Enter means yes.
 decide_internet_access() {
     if [ -n "$ALLOW_INTERNET_FLAG" ]; then
         ALLOW_INTERNET="$ALLOW_INTERNET_FLAG"
@@ -509,7 +539,7 @@ decide_internet_access() {
         return 0
     fi
     if [ -n "${CI:-}" ]; then
-        ALLOW_INTERNET=0
+        ALLOW_INTERNET=1
         return 0
     fi
     # `curl ... | sh` has the script on stdin, so the question goes to the
@@ -517,17 +547,17 @@ decide_internet_access() {
     # another program) means nobody to ask.
     # In a subshell: a failed redirection on a builtin ends a POSIX shell.
     if ! ( : </dev/tty ) 2>/dev/null; then
-        ALLOW_INTERNET=0
+        ALLOW_INTERNET=1
         return 0
     fi
     printf '\n%s\n%s ' \
         "Let friends outside your home network connect? Paracord can ask your router to" \
-        "open a port for it (UPnP). [y/N]" > /dev/tty
+        "open a port for it (UPnP). [Y/n]" > /dev/tty
     answer=""
     read -r answer < /dev/tty || answer=""
     case "$answer" in
-        y|Y|yes|YES|Yes) ALLOW_INTERNET=1 ;;
-        *) ALLOW_INTERNET=0 ;;
+        n|N|no|NO|No) ALLOW_INTERNET=0 ;;
+        *) ALLOW_INTERNET=1 ;;
     esac
     return 0
 }
@@ -535,11 +565,173 @@ decide_internet_access() {
 apply_internet_access() {
     if [ "$ALLOW_INTERNET" = "1" ]; then
         set_config_bool network auto_port_forward true
-        say "Friends outside your home network can connect: Paracord will ask your router to open a port."
+        say "Paracord will ask your router to let friends outside your home network connect."
     else
         set_config_bool network auto_port_forward false
         say "Only people on your home network can connect. You can change this later in the app's Admin settings."
     fi
+}
+
+# ── Stored-data encryption ───────────────────────────────────────────────────
+
+# shquote <text> — the text as one single-quoted word for `su -c`.
+shquote() {
+    printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+# run_server <as_root|as_service> <args...> — the server binary with those
+# arguments and this config, from the install directory. A root install runs it
+# as the service user (so every file it makes belongs to that user), except
+# where the step needs root itself: `systemd-creds encrypt` reads the machine's
+# root-only host key.
+run_server() {
+    rs_who="$1"; shift
+    if [ "$(id -u)" = "0" ] && [ "$rs_who" = "as_service" ] && id "$RUN_USER" >/dev/null 2>&1; then
+        if need_cmd runuser; then
+            (cd "$INSTALL_DIR" && runuser -u "$RUN_USER" -- ./paracord-server -c "$CONFIG_PATH" "$@")
+        else
+            rs_cmd="cd $(shquote "$INSTALL_DIR") && ./paracord-server -c $(shquote "$CONFIG_PATH")"
+            for rs_arg in "$@"; do rs_cmd="$rs_cmd $(shquote "$rs_arg")"; done
+            su -s /bin/sh "$RUN_USER" -c "$rs_cmd"
+        fi
+    else
+        (cd "$INSTALL_DIR" && ./paracord-server -c "$CONFIG_PATH" "$@")
+    fi
+}
+
+# The first systemd with `systemd-creds` and LoadCredentialEncrypted= is 250.
+systemd_is_250_or_newer() {
+    sd_version="$(systemctl --version 2>/dev/null | awk 'NR == 1 { print $2 }')"
+    case "$sd_version" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    [ "$sd_version" -ge 250 ]
+}
+
+# This release's binary knows how to put a storage key somewhere. An older one
+# (a pinned PARACORD_VERSION) does not; it installs unencrypted and says so.
+binary_can_encrypt() {
+    "$INSTALL_DIR/paracord-server" init --help 2>/dev/null | grep -q -- '--key-source'
+}
+
+# Where this install's storage key goes (docs/setup-spec.md §4.2). One answer
+# per kind of install, never a runtime fallback:
+#   Linux, root, systemd 250+   systemd-creds (sealed to the TPM when present)
+#   Linux, anything else        file, 0600, next to the config
+#   macOS, per user             the login keychain
+#   macOS, as a LaunchDaemon    file (a daemon cannot unlock a login keychain)
+choose_key_source() {
+    KEY_SOURCE=""
+    KEY_FILE=""
+    if ! binary_can_encrypt; then
+        warn "this Paracord release cannot encrypt stored data, so nothing here will be encrypted. Install a newer release to get it."
+        return 1
+    fi
+    if [ "$OS_FAMILY" = "macos" ]; then
+        if [ "$(id -u)" = "0" ]; then
+            KEY_SOURCE="file"
+            KEY_FILE="$INSTALL_DIR/config/at-rest.key"
+        else
+            KEY_SOURCE="keychain"
+        fi
+    elif [ "$(id -u)" = "0" ] && systemd_available && need_cmd systemd-creds && systemd_is_250_or_newer; then
+        KEY_SOURCE="systemd-creds"
+        KEY_FILE="$INSTALL_DIR/config/at-rest-key.cred"
+    else
+        KEY_SOURCE="file"
+        KEY_FILE="$INSTALL_DIR/config/at-rest.key"
+    fi
+    return 0
+}
+
+# Run `paracord-server <args>` for a step that stores the key (init,
+# encrypt-storage): as root only for the systemd credential.
+run_key_step() {
+    if [ "$KEY_SOURCE" = "systemd-creds" ]; then rk_who="as_root"; else rk_who="as_service"; fi
+    if [ -n "$KEY_FILE" ]; then
+        run_server "$rk_who" "$@" --key-source "$KEY_SOURCE" --key-file "$KEY_FILE"
+    else
+        run_server "$rk_who" "$@" --key-source "$KEY_SOURCE"
+    fi
+}
+
+# After a step that stored a key as root: the install belongs to the service
+# user again, except the credential, which only systemd (root) reads.
+settle_key_ownership() {
+    [ "$(id -u)" = "0" ] || return 0
+    fix_ownership
+    if [ "$KEY_SOURCE" = "systemd-creds" ] && [ -f "$KEY_FILE" ]; then
+        chown root:root "$KEY_FILE"
+        chmod 0600 "$KEY_FILE"
+    fi
+}
+
+# Stop the service that runs this server so `encrypt-storage` can have the
+# database to itself. Returns 0 when something was stopped.
+stop_service_for_migration() {
+    if [ "$OS_FAMILY" = "macos" ]; then
+        if [ "$(id -u)" = "0" ]; then
+            launchctl bootout system "/Library/LaunchDaemons/${LAUNCHD_LABEL}.plist" >/dev/null 2>&1
+        else
+            launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/${LAUNCHD_LABEL}.plist" >/dev/null 2>&1
+        fi
+        return $?
+    fi
+    if [ "$(id -u)" = "0" ]; then
+        systemd_available && systemctl is-active --quiet "$SERVICE_NAME" && systemctl stop "$SERVICE_NAME"
+    else
+        user_systemd_available && systemctl --user is-active --quiet "$SERVICE_NAME" && systemctl --user stop "$SERVICE_NAME"
+    fi
+}
+
+# An upgrade of an install whose stored data is not encrypted: offer to
+# encrypt it. It stops the server, takes a backup, converts the database and
+# files and checks them; the old file is deleted only after the check passes.
+maybe_encrypt_existing() {
+    [ "$IS_UPGRADE" = "1" ] && [ -f "$CONFIG_PATH" ] || return 0
+    [ "$(config_value at_rest enabled)" = "true" ] && return 0
+    [ "$ENCRYPT_FLAG" = "0" ] && return 0
+    [ "${PARACORD_ENCRYPT_STORAGE:-}" = "0" ] && [ -z "$ENCRYPT_FLAG" ] && return 0
+    case "$(config_value database url)" in
+        postgres*)
+            say "This server's stored files can be encrypted with: paracord-server encrypt-storage (see $ENCRYPTION_DOCS_URL)"
+            return 0 ;;
+    esac
+    ENCRYPT_HINT=1
+    choose_key_source || return 0
+
+    want=""
+    if [ "$ENCRYPT_FLAG" = "1" ] || [ "${PARACORD_ENCRYPT_STORAGE:-}" = "1" ]; then
+        want="y"
+    elif ( : </dev/tty ) 2>/dev/null && [ -z "${CI:-}" ]; then
+        printf '\n%s\n%s\n%s ' \
+            "This server's stored messages and files are not encrypted on disk." \
+            "Paracord can encrypt them now. It stops the server for a minute, makes a backup first," \
+            "and checks the result before removing the old file. Encrypt now? [Y/n]" > /dev/tty
+        read -r want < /dev/tty || want=""
+        case "$want" in n|N|no|NO|No) want="n" ;; *) want="y" ;; esac
+    fi
+    if [ "$want" != "y" ]; then
+        return 0
+    fi
+
+    step "Encrypting stored data"
+    if stop_service_for_migration; then
+        say "Paracord stopped while its data is converted."
+    fi
+    enc_log="$TMP_DIR/encrypt.log"
+    enc_rc=0
+    run_key_step encrypt-storage >"$enc_log" 2>&1 || enc_rc=$?
+    settle_key_ownership
+    if [ "$enc_rc" != "0" ]; then
+        cat "$enc_log" >&2
+        die "encrypting the stored data failed (exit $enc_rc). Nothing was lost: a backup was taken first. Fix the problem above and run this installer again; it resumes where it stopped. Paracord is stopped until then."
+    fi
+    ENCRYPTED_NOW=1
+    ENCRYPT_HINT=0
+    say "Stored messages and files are now encrypted."
+    # The command also tells where the unencrypted pre-change backup is.
+    grep -i "backup taken before" "$enc_log" || true
 }
 
 run_init() {
@@ -557,19 +749,11 @@ run_init() {
     # competing sets of "next steps" is how a simple install starts to look
     # complicated. The output is kept and shown in full if `init` fails.
     init_log="$TMP_DIR/init.log"
-    init_cmd="\"$INSTALL_DIR/paracord-server\" -c \"$CONFIG_PATH\" init"
     init_rc=0
-    if [ "$(id -u)" = "0" ] && id "$RUN_USER" >/dev/null 2>&1; then
-        if need_cmd runuser; then
-            (cd "$INSTALL_DIR" && runuser -u "$RUN_USER" -- ./paracord-server -c "$CONFIG_PATH" init) \
-                >"$init_log" 2>&1 || init_rc=$?
-        else
-            (cd "$INSTALL_DIR" && su -s /bin/sh "$RUN_USER" -c "$init_cmd") \
-                >"$init_log" 2>&1 || init_rc=$?
-        fi
+    if choose_key_source; then
+        run_key_step init >"$init_log" 2>&1 || init_rc=$?
     else
-        (cd "$INSTALL_DIR" && ./paracord-server -c "$CONFIG_PATH" init) \
-            >"$init_log" 2>&1 || init_rc=$?
+        run_server as_service init >"$init_log" 2>&1 || init_rc=$?
     fi
     if [ "$init_rc" != "0" ]; then
         cat "$init_log" >&2
@@ -579,8 +763,16 @@ run_init() {
     say "Settings written to $CONFIG_PATH"
     absolutize_data_paths
     apply_internet_access
+    if [ -n "$KEY_SOURCE" ]; then
+        [ "$(config_value at_rest enabled)" = "true" ] \
+            || die "paracord-server init did not turn stored-data encryption on in $CONFIG_PATH"
+        ENCRYPTED_NOW=1
+    fi
     # sed -i above recreated the config as root; hand it back to the service user.
-    [ "$(id -u)" = "0" ] && chown "$RUN_USER:$RUN_USER" "$CONFIG_PATH"
+    if [ "$(id -u)" = "0" ]; then
+        chown "$RUN_USER:$RUN_USER" "$CONFIG_PATH"
+        settle_key_ownership
+    fi
     return 0
 }
 
@@ -708,6 +900,14 @@ user_systemd_available() {
 
 write_system_unit() {
     unit="/etc/systemd/system/${SERVICE_NAME}.service"
+    # A server whose storage key is a systemd credential has it handed over at
+    # start, decrypted by systemd (sealed to the TPM when the installer used it).
+    credential_line="# Storage key: not a systemd credential (see [at_rest] in the config)."
+    if [ "$(config_value at_rest key_source)" = "systemd-creds" ]; then
+        credential_file="$(config_value at_rest key_file)"
+        [ -f "$credential_file" ] || die "the storage key credential $credential_file is missing; the server cannot start without it"
+        credential_line="LoadCredentialEncrypted=paracord-at-rest-key:$credential_file"
+    fi
     cat > "$unit" <<EOF
 [Unit]
 Description=Paracord Server
@@ -721,6 +921,7 @@ User=$RUN_USER
 Group=$RUN_USER
 WorkingDirectory=$INSTALL_DIR
 ExecStart=$INSTALL_DIR/paracord-server -c $CONFIG_PATH
+$credential_line
 Restart=always
 RestartSec=5
 LimitNOFILE=65535
@@ -1090,6 +1291,42 @@ resolve_version_label() {
     esac
 }
 
+# What the config says about the stored data, in the words of the admin screen
+# (docs/setup-spec.md §4.6), and where its key is.
+storage_protection_copy() {
+    case "$(config_value at_rest protection)" in
+        login) say "The key lives in your system keychain." ;;
+        tpm) say "The key is sealed to this computer's security chip." ;;
+        machine) say "The key is protected by this computer's own credentials." ;;
+        same_disk) say "The key is on the same disk: this protects copied backups, not a stolen disk." ;;
+    esac
+}
+
+storage_key_location() {
+    case "$(config_value at_rest key_source)" in
+        keychain) printf '%s' "the system keychain" ;;
+        systemd-creds) printf 'a systemd credential, %s' "$(config_value at_rest key_file)" ;;
+        file) config_value at_rest key_file ;;
+        env) printf '%s' "an environment variable" ;;
+    esac
+}
+
+# The storage notes for the closing text: what was done on this run and the
+# escrow reminder, or the one command that encrypts an older install.
+print_storage_notes() {
+    if [ "$ENCRYPTED_NOW" = "1" ] && [ "$(config_value at_rest enabled)" = "true" ]; then
+        say ""
+        say "Stored messages and files are encrypted on this computer's disk. Its key exists only"
+        say "here: after you create the owner account, save a recovery copy of it under your recovery"
+        say "phrase, or a backup of this server can't be restored elsewhere. How:"
+        say "  $ENCRYPTION_DOCS_URL#recovering-the-storage-key"
+    elif [ "$ENCRYPT_HINT" = "1" ]; then
+        say ""
+        say "Stored messages and files on this server are not encrypted yet. To encrypt them, run"
+        say "this installer again with --encrypt-storage (see $ENCRYPTION_DOCS_URL)."
+    fi
+}
+
 print_details() {
     dim_start
     say ""
@@ -1113,6 +1350,12 @@ print_details() {
         say "  Ports:     $WEB_PORT TCP (app), $VOICE_PORT UDP (voice and video)"
     fi
     say "  Address:   $SHARE_URL"
+    if [ "$(config_value at_rest enabled)" = "true" ]; then
+        say "  Storage:   encrypted; key in $(storage_key_location)"
+        storage_protection_copy | sed 's/^/             /'
+    else
+        say "  Storage:   not encrypted"
+    fi
     if [ "$(config_value network auto_port_forward)" = "true" ]; then
         say "  Router:    asked to forward the ports ([network] auto_port_forward = true)"
     else
@@ -1147,6 +1390,7 @@ print_summary() {
             say "This server still has no owner. Finish setting it up:"
             say "     $CLAIM_LINK"
         fi
+        print_storage_notes
         print_details
         return 0
     fi
@@ -1185,8 +1429,8 @@ print_summary() {
     say "2. Then invite friends: open your server in the app and press Invite."
     say ""
     if [ "$(config_value network auto_port_forward)" = "true" ]; then
-        say "Friends outside your home network: Paracord asks your router to let them in."
-        say "If someone can't connect, see $DOCS_URL"
+        say "Friends outside your home network: Paracord asks your router to let them in. The"
+        say "app says whether the router agreed. If it didn't, or someone can't connect, see $DOCS_URL"
     else
         say "Only people on your home network can join for now. To let friends elsewhere in,"
         say "turn on \"Let friends outside your home network connect\" in the app's Admin settings."
@@ -1196,6 +1440,7 @@ print_summary() {
         say "One thing this computer would not let the installer do: keep the server running"
         say "while you are logged out. To allow it, run: loginctl enable-linger $LINGER_HINT"
     fi
+    print_storage_notes
     say ""
     say "To update later, run this same command again. Your data is kept."
     print_details
@@ -1229,6 +1474,7 @@ main() {
     # chown before `init` so the config it writes (as the paracord user) lands
     # in directories it can actually write into.
     fix_ownership
+    maybe_encrypt_existing
     run_init
     link_binary
     setup_service

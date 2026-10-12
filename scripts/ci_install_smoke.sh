@@ -25,14 +25,26 @@
 #      web server, asserting checksum verification runs and succeeds.
 #   8. Negative test: a wrong checksum aborts before touching the install dir.
 #   9. Bare-binary PARACORD_LOCAL_ARCHIVE (a plain executable, not a tarball).
-#  10. The router question: a run with no terminal answers no; --allow-internet,
-#      --home-network-only and PARACORD_ALLOW_INTERNET decide it up front; a
-#      run with a terminal asks and takes the answer (driven through `script`);
-#      whatever it decided is what the config says; an upgrade never changes it.
-#  11. When passwordless sudo + systemd are available (and PARACORD_SMOKE_SKIP_ROOT
+#  10. The router question: a run with no terminal answers yes (the default);
+#      --allow-internet, --home-network-only and PARACORD_ALLOW_INTERNET decide
+#      it up front; a run with a terminal asks and takes the answer (driven
+#      through `script`; Enter is yes); whatever it decided is what the config
+#      says; an upgrade never changes it.
+#  11. Stored-data encryption: a fresh install gets a 0600 key file and an
+#      [at_rest] section and says so, with the recovery-copy reminder; an
+#      upgrade of an unencrypted install only prints the command unless asked
+#      (--encrypt-storage converts it, --no-encrypt-storage stays quiet, a
+#      failure stops with a message); a release that cannot encrypt installs
+#      unencrypted and says so.
+#  12. When passwordless sudo + systemd are available (and PARACORD_SMOKE_SKIP_ROOT
 #      is not 1): the root path creates
 #      the `paracord` user and a working system unit (using the stub binary so
-#      no real ports are bound), then cleans up everything it created.
+#      no real ports are bound), seals the storage key as a systemd credential
+#      (stub) and loads it in the unit, then cleans up everything it created.
+#
+# The stub binary stands in for paracord-server wherever no real binary is
+# built. The real server's behavior (init --key-source, encrypt-storage, the
+# key sources) is covered by `cargo test -p paracord-server at_rest`.
 #
 # Usage: bash scripts/ci_install_smoke.sh
 set -euo pipefail
@@ -50,7 +62,7 @@ note() { printf '  ....  %s\n' "$1"; }
 assert_file()       { if [ -f "$1" ]; then pass "$2"; else fail "$2 (missing file: $1)"; fi; }
 assert_executable() { if [ -x "$1" ]; then pass "$2"; else fail "$2 (not executable: $1)"; fi; }
 assert_symlink()    { if [ -L "$1" ]; then pass "$2"; else fail "$2 (missing symlink: $1)"; fi; }
-assert_contains()   { if grep -q "$2" "$1"; then pass "$3"; else fail "$3 ($1 lacks '$2')"; fi; }
+assert_contains()   { if grep -q -e "$2" "$1"; then pass "$3"; else fail "$3 ($1 lacks '$2')"; fi; }
 assert_not_exists() { if [ ! -e "$1" ]; then pass "$2"; else fail "$2 (unexpected: $1)"; fi; }
 
 WORK="$(mktemp -d)"
@@ -135,26 +147,42 @@ echo "== Step 3: build fake release archive"
 PKG="$WORK/pkg/paracord-server"
 mkdir -p "$PKG"
 
-REAL_BIN="target/release/paracord-server"
-if [ -x "$REAL_BIN" ] && head -c 4 "$REAL_BIN" | grep -q ELF; then
-    cp "$REAL_BIN" "$PKG/paracord-server"
-    note "using real binary: $REAL_BIN"
-else
-    note "no target/release/paracord-server — packaging a stub binary"
-    cat > "$PKG/paracord-server" <<'STUB'
+# The stub: what the installer needs from paracord-server, without binding a
+# port. `init` writes a config with the same ./data/ layout the real generator
+# does; `init --key-source` and `encrypt-storage` store a key (a file; for the
+# systemd-creds source, a placeholder credential) and record it in [at_rest];
+# `init --help` advertises --key-source the way a release that can encrypt does.
+write_stub() {
+    # write_stub <path> <capable:1|0>
+    cat > "$1" <<'STUB'
 #!/bin/sh
-# Test stub: emulates `paracord-server -c <path> init` — writes a config file
-# with the same ./data/ relative layout the real generator produces.
-cfg="config/paracord.toml"; do_init=0
+cfg="config/paracord.toml"; mode=""; ks=""; kf=""; help=0
 while [ $# -gt 0 ]; do
     case "$1" in
         -c|--config) shift; cfg="${1:-}";;
-        init) do_init=1;;
+        init|encrypt-storage) mode="$1";;
+        --help) help=1;;
+        --key-source) shift; ks="${1:-}";;
+        --key-file) shift; kf="${1:-}";;
     esac
     shift || break
 done
-if [ "$do_init" = "1" ]; then
-    if [ -f "$cfg" ]; then echo "  Config already exists at: $cfg"; exit 0; fi
+if [ "$help" = "1" ]; then
+    echo "Usage: paracord-server init [--key-source <SOURCE>] [--key-file <FILE>]"
+    exit 0
+fi
+record_key() {
+    [ -n "$ks" ] || return 0
+    [ -n "$kf" ] || kf="$(dirname "$cfg")/at-rest.key"
+    case "$ks" in
+        file) (umask 077; printf 'hex:%s\n' "$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')" > "$kf"); prot=same_disk ;;
+        systemd-creds) (umask 077; echo "stub-credential" > "$kf"); prot=machine ;;
+        *) echo "stub: unsupported key source $ks" >&2; exit 2 ;;
+    esac
+    printf '\n[at_rest]\nenabled = true\nkey_source = "%s"\nkey_file = "%s"\nprotection = "%s"\n' "$ks" "$kf" "$prot" >> "$cfg"
+}
+if [ "$mode" = "init" ]; then
+    if [ -f "$cfg" ]; then echo "  Config already exists at: $cfg"; [ -z "$ks" ] || exit 1; exit 0; fi
     mkdir -p "$(dirname "$cfg")"
     secret="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
     cat > "$cfg" <<EOF
@@ -168,7 +196,7 @@ jwt_secret = "$secret"
 path = "./data/uploads"
 [network]
 # Ask your router (UPnP / NAT-PMP) to let friends outside your home network in.
-auto_port_forward = false
+auto_port_forward = true
 port_forward_lease_seconds = 3600
 [tls]
 enabled = true
@@ -179,14 +207,37 @@ key_path = "./data/certs/key.pem"
 backup_dir = "./data/backups"
 EOF
     chmod 0600 "$cfg"
+    record_key
     echo "  Generated a new Paracord config at: $cfg"
     echo "  Open / share:  https://127.0.0.1:8443"
     exit 0
 fi
-echo "stub paracord-server: no real service" >&2
+if [ "$mode" = "encrypt-storage" ]; then
+    [ "${PARACORD_STUB_ENCRYPT_FAIL:-0}" = "1" ] && { echo "stub: something answers on the port" >&2; exit 1; }
+    [ -f "$cfg" ] || { echo "stub: no config" >&2; exit 1; }
+    grep -q '^\[at_rest\]' "$cfg" && { echo "stub: already encrypted" >&2; exit 1; }
+    record_key
+    echo "Stored data is now encrypted."
+    echo "  The backup taken before this change is not encrypted: ./data/backups/stub.tar.gz. Delete it once a new backup exists."
+    exit 0
+fi
+# "server run" - exit immediately; only used to prove service wiring.
 exit 0
 STUB
-    chmod +x "$PKG/paracord-server"
+    if [ "$2" = "0" ]; then
+        # A release from before stored-data encryption: no --key-source anywhere.
+        sed -i 's/ \[--key-source <SOURCE>\] \[--key-file <FILE>\]//' "$1"
+    fi
+    chmod +x "$1"
+}
+
+REAL_BIN="target/release/paracord-server"
+if [ -x "$REAL_BIN" ] && head -c 4 "$REAL_BIN" | grep -q ELF; then
+    cp "$REAL_BIN" "$PKG/paracord-server"
+    note "using real binary: $REAL_BIN"
+else
+    note "no target/release/paracord-server - packaging a stub binary"
+    write_stub "$PKG/paracord-server" 1
 fi
 
 # Companion files matching the real release tarball layout.
@@ -199,30 +250,15 @@ ASSET="paracord-server-linux-x64-${FAKE_VERSION}.tar.gz"
 tar -czf "$WORK/$ASSET" -C "$WORK/pkg" paracord-server
 if [ -f "$WORK/$ASSET" ]; then pass "built $ASSET"; else fail "failed to build fake tarball"; fi
 
-# A second, stub-only package for the root/systemd test (never binds ports).
+# A second, stub-only package for the root/systemd test (never binds ports),
+# and a third from "before stored-data encryption".
 STUB_PKG="$WORK/stubpkg/paracord-server"
 mkdir -p "$STUB_PKG"
-cat > "$STUB_PKG/paracord-server" <<'STUB'
-#!/bin/sh
-cfg="config/paracord.toml"; do_init=0
-while [ $# -gt 0 ]; do
-    case "$1" in
-        -c|--config) shift; cfg="${1:-}";;
-        init) do_init=1;;
-    esac
-    shift || break
-done
-if [ "$do_init" = "1" ]; then
-    if [ -f "$cfg" ]; then echo "exists"; exit 0; fi
-    mkdir -p "$(dirname "$cfg")"
-    printf '[server]\nbind_address = "0.0.0.0:8090"\n[database]\nurl = "sqlite://./data/paracord.db?mode=rwc"\n[auth]\njwt_secret = "%s"\n' \
-        "$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')" > "$cfg"
-    echo "  Generated a new Paracord config at: $cfg"; exit 0
-fi
-# "server run" — exit immediately; only used to prove systemd wiring.
-exit 0
-STUB
-chmod +x "$STUB_PKG/paracord-server"
+write_stub "$STUB_PKG/paracord-server" 1
+OLD_PKG="$WORK/oldpkg/paracord-server"
+mkdir -p "$OLD_PKG"
+write_stub "$OLD_PKG/paracord-server" 0
+tar -czf "$WORK/paracord-server-linux-x64-1.0.0-old.tar.gz" -C "$WORK/oldpkg" paracord-server
 STUB_ASSET="paracord-server-linux-x64-8.8.8-stub.tar.gz"
 tar -czf "$WORK/$STUB_ASSET" -C "$WORK/stubpkg" paracord-server
 
@@ -251,10 +287,21 @@ assert_contains "$WORK/install1.log" "open your server in the app and press Invi
 assert_contains "$WORK/install1.log" "To update later, run this same command again" "ending says how to update"
 assert_contains "$WORK/install1.log" "Address:" "Details block prints the address"
 assert_contains "$WORK/install1.log" "$INST/config/paracord.toml" "Details block prints the settings path"
-# No terminal and no flag: the router is left alone, and the config says so.
-assert_contains "$INST/config/paracord.toml" "^auto_port_forward = false$" "no-terminal install leaves the router alone"
-assert_contains "$WORK/install1.log" "Only people on your home network can join for now" "ending says it is home network only"
-assert_contains "$WORK/install1.log" "Let friends outside your home network connect" "ending names the setting that changes it"
+# No terminal and no flag: the router is asked (the default), and the config says so.
+assert_contains "$INST/config/paracord.toml" "^auto_port_forward = true$" "no-terminal install asks the router (the default)"
+assert_contains "$WORK/install1.log" "Paracord asks your router to let them in" "ending says the router is asked"
+# A fresh install encrypts what it stores: a private key file and an [at_rest]
+# section, and the ending says so and what to do about the key.
+assert_contains "$INST/config/paracord.toml" "^\[at_rest\]$" "fresh install records stored-data encryption"
+assert_contains "$INST/config/paracord.toml" "^enabled = true$" "...turned on"
+assert_contains "$INST/config/paracord.toml" "^key_source = \"file\"$" "...with a key file (not root, no keychain)"
+assert_file "$INST/config/at-rest.key" "the storage key file exists"
+key_mode="$(stat -c %a "$INST/config/at-rest.key" 2>/dev/null || stat -f %Lp "$INST/config/at-rest.key")"
+if [ "$key_mode" = "600" ]; then pass "the storage key file is owner-only"; else fail "the storage key file mode is $key_mode, expected 600"; fi
+assert_contains "$WORK/install1.log" "Stored messages and files are encrypted" "ending says the stored data is encrypted"
+assert_contains "$WORK/install1.log" "recovery copy" "ending reminds about the recovery copy of the key"
+assert_contains "$WORK/install1.log" "docs/encryption.md#recovering-the-storage-key" "...and says where to read how"
+assert_contains "$WORK/install1.log" "Storage:   encrypted; key in $INST/config/at-rest.key" "Details says where the key is"
 cfg_mode="$(stat -c %a "$INST/config/paracord.toml" 2>/dev/null || stat -f %Lp "$INST/config/paracord.toml")"
 if [ "$cfg_mode" = "600" ]; then
     pass "config keeps its owner-only mode after the router answer is written"
@@ -368,6 +415,22 @@ if [ "$ENDING_LINES" -le 15 ]; then
     pass "closing block is short ($ENDING_LINES lines)"
 else
     fail "closing block is $ENDING_LINES lines; it should be at most 15"
+fi
+# The very first install also carries the storage paragraph; it must stay short
+# and plain too.
+awk '/^Paracord (is installed|was updated)/ { on = 1 } on && /^Details$/ { exit } on { print }' \
+    "$WORK/install1.log" > "$WORK/ending_fresh.txt"
+FRESH_LINES="$(wc -l < "$WORK/ending_fresh.txt")"
+if [ "$FRESH_LINES" -le 20 ]; then
+    pass "a fresh install's closing block is short ($FRESH_LINES lines)"
+else
+    fail "a fresh install's closing block is $FRESH_LINES lines; it should be at most 20"
+fi
+FRESH_JARGON="$(grep -Eio 'claim token|instance|self-signed|QUIC|TCP|UDP|systemd|systemctl|operator|space|SQLCipher|AES' "$WORK/ending_fresh.txt" | sort -u | tr '\n' ' ' || true)"
+if [ -z "$FRESH_JARGON" ]; then
+    pass "a fresh install's closing block is free of jargon"
+else
+    fail "a fresh install's closing block uses jargon: $FRESH_JARGON"
 fi
 # The better path comes first: a domain and real certificates, then clicking
 # through the warning for someone only trying it out.
@@ -514,9 +577,10 @@ else
     assert_contains "$WORK/router_bad_flag.log" "unknown option --open-everything" "an unknown option is refused by name"
 fi
 
-# CI=true with no flag: decided without asking, and the answer is no.
+# No terminal and no flag (also under CI): decided without asking, and the
+# answer is the default, yes.
 if CI=true router_install "$WORK/r_ci" "$WORK/router_ci.log"; then
-    assert_contains "$WORK/r_ci/config/paracord.toml" "^auto_port_forward = false$" "a CI run with no flag answers no"
+    assert_contains "$WORK/r_ci/config/paracord.toml" "^auto_port_forward = true$" "a CI run with no flag answers yes"
 else
     cat "$WORK/router_ci.log"; fail "CI install exited non-zero"
 fi
@@ -535,7 +599,7 @@ else
 fi
 
 # With a terminal the installer asks. `script` gives it one; what is typed is
-# the answer, and pressing Enter is no.
+# the answer, and pressing Enter is yes.
 if command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>&1; then
     for answer in y n ""; do
         tdir="$WORK/r_tty_${answer:-enter}"
@@ -546,8 +610,8 @@ if command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>
             PARACORD_NO_SYSTEMD=1 \
             PARACORD_NO_BROWSER=1 \
             script -qec "sh scripts/install.sh" /dev/null > "$WORK/router_tty_${answer:-enter}.log" 2>&1 || true
-        expected=false
-        [ "$answer" = "y" ] && expected=true
+        expected=true
+        [ "$answer" = "n" ] && expected=false
         if grep -q "Let friends outside your home network connect? Paracord can ask your router" "$WORK/router_tty_${answer:-enter}.log"; then
             pass "with a terminal the installer asks the router question (answer '${answer:-Enter}')"
         else
@@ -572,7 +636,106 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-echo "== Step 11: root + systemd path (only when safely testable)"
+echo "== Step 11: stored-data encryption on upgrade, and a release that cannot"
+
+# enc_install <dir> <log> <archive> [installer args...] - no terminal.
+enc_install() {
+    edir="$1"; elog="$2"; earchive="$3"; shift 3
+    PARACORD_LOCAL_ARCHIVE="$earchive" \
+    PARACORD_INSTALL_DIR="$edir" \
+    PARACORD_LINK_DIR=none \
+    PARACORD_NO_SYSTEMD=1 \
+    PARACORD_NO_BROWSER=1 \
+        sh scripts/install.sh "$@" < /dev/null > "$elog" 2>&1
+}
+
+# An install from before stored-data encryption: the older release, then the
+# current one over it. (The older release's init knows no --key-source.)
+OLD_ASSET="$WORK/paracord-server-linux-x64-1.0.0-old.tar.gz"
+OLD_INST="$WORK/enc_old"
+if enc_install "$OLD_INST" "$WORK/enc_old1.log" "$OLD_ASSET"; then
+    assert_contains "$WORK/enc_old1.log" "cannot encrypt stored data" "a release that cannot encrypt installs unencrypted and says so"
+    if grep -q '^\[at_rest\]' "$OLD_INST/config/paracord.toml"; then
+        fail "an old release's install should have no [at_rest] section"
+    else
+        pass "an old release's install is left unencrypted"
+    fi
+    assert_contains "$WORK/enc_old1.log" "Storage:   not encrypted" "Details says the data is not encrypted"
+else
+    cat "$WORK/enc_old1.log"; fail "install of a release that cannot encrypt exited non-zero"
+fi
+mkdir -p "$OLD_INST/data" && echo "pretend database" > "$OLD_INST/data/paracord.db"
+
+# The current release over it, with nobody to ask: only the command is printed.
+cp "$OLD_INST/config/paracord.toml" "$WORK/enc_old.before"
+if enc_install "$OLD_INST" "$WORK/enc_up1.log" "$WORK/$ASSET"; then
+    assert_contains "$WORK/enc_up1.log" "not encrypted yet" "an unattended upgrade says the data is not encrypted"
+    assert_contains "$WORK/enc_up1.log" "--encrypt-storage" "...and names the flag that does it"
+    if cmp -s "$WORK/enc_old.before" "$OLD_INST/config/paracord.toml"; then
+        pass "an unattended upgrade does not change the config"
+    else
+        fail "an unattended upgrade changed the config"
+    fi
+else
+    cat "$WORK/enc_up1.log"; fail "unattended upgrade exited non-zero"
+fi
+
+# --no-encrypt-storage: not even a hint.
+if enc_install "$OLD_INST" "$WORK/enc_up2.log" "$WORK/$ASSET" --no-encrypt-storage; then
+    if grep -q "not encrypted yet" "$WORK/enc_up2.log"; then
+        fail "--no-encrypt-storage still nagged"
+    else
+        pass "--no-encrypt-storage does not offer"
+    fi
+else
+    cat "$WORK/enc_up2.log"; fail "--no-encrypt-storage upgrade exited non-zero"
+fi
+
+# A failure stops loudly, says nothing was lost, and leaves the config alone.
+if PARACORD_STUB_ENCRYPT_FAIL=1 enc_install "$OLD_INST" "$WORK/enc_up3.log" "$WORK/$ASSET" --encrypt-storage; then
+    fail "a failed encrypt-storage should fail the installer"
+else
+    assert_contains "$WORK/enc_up3.log" "encrypting the stored data failed" "a failed conversion is reported"
+    assert_contains "$WORK/enc_up3.log" "a backup was taken first" "...and says nothing was lost"
+fi
+if cmp -s "$WORK/enc_old.before" "$OLD_INST/config/paracord.toml"; then
+    pass "a failed conversion leaves the config as it was"
+else
+    fail "a failed conversion changed the config"
+fi
+
+# --encrypt-storage converts it.
+if enc_install "$OLD_INST" "$WORK/enc_up4.log" "$WORK/$ASSET" --encrypt-storage; then
+    assert_contains "$OLD_INST/config/paracord.toml" "^enabled = true$" "--encrypt-storage turns encryption on in the config"
+    assert_file "$OLD_INST/config/at-rest.key" "...and makes the key file"
+    assert_contains "$WORK/enc_up4.log" "Stored messages and files are now encrypted" "the installer says it is done"
+    assert_contains "$WORK/enc_up4.log" "backup taken before this change is not encrypted" "...and where the unencrypted backup is"
+    assert_contains "$WORK/enc_up4.log" "recovery copy" "...and the recovery-copy reminder"
+else
+    cat "$WORK/enc_up4.log"; fail "--encrypt-storage upgrade exited non-zero"
+fi
+# Already encrypted: a later upgrade neither converts nor nags.
+if enc_install "$OLD_INST" "$WORK/enc_up5.log" "$WORK/$ASSET" --encrypt-storage; then
+    if grep -q "now encrypted\|not encrypted yet" "$WORK/enc_up5.log"; then
+        fail "an already-encrypted install was offered a conversion"
+    else
+        pass "an already-encrypted install is left alone"
+    fi
+else
+    cat "$WORK/enc_up5.log"; fail "upgrade of an encrypted install exited non-zero"
+fi
+
+# PARACORD_ENCRYPT_STORAGE=0 behaves like --no-encrypt-storage.
+OLD2="$WORK/enc_old2"
+enc_install "$OLD2" "$WORK/enc_o2a.log" "$OLD_ASSET" >/dev/null || true
+if PARACORD_ENCRYPT_STORAGE=0 enc_install "$OLD2" "$WORK/enc_o2b.log" "$WORK/$ASSET"; then
+    if grep -q "not encrypted yet" "$WORK/enc_o2b.log"; then fail "PARACORD_ENCRYPT_STORAGE=0 still nagged"; else pass "PARACORD_ENCRYPT_STORAGE=0 does not offer"; fi
+else
+    cat "$WORK/enc_o2b.log"; fail "PARACORD_ENCRYPT_STORAGE=0 upgrade exited non-zero"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+echo "== Step 12: root + systemd path (only when safely testable)"
 
 ROOT_OK=0
 ROOT_NOTED=0   # set when a specific skip reason was already printed
@@ -613,6 +776,24 @@ if [ "$ROOT_OK" = "1" ]; then
         assert_contains /etc/systemd/system/paracord.service "User=paracord" "unit runs as paracord user"
         assert_contains /etc/systemd/system/paracord.service "NoNewPrivileges=true" "unit hardened (NoNewPrivileges)"
         if systemctl is-enabled paracord.service >/dev/null 2>&1; then pass "service enabled"; else fail "service enabled"; fi
+        # systemd 250+: the storage key is a credential, sealed by systemd and
+        # loaded by the unit; only root can read it. (The config is owned by the
+        # service user, mode 600, so it is read with the same privileges the
+        # installer had.)
+        root_has() { if $SUDO grep -q -e "$2" "$1"; then pass "$3"; else fail "$3 ($1 lacks '$2')"; fi; }
+        if systemctl --version 2>/dev/null | awk 'NR == 1 { exit ($2 >= 250 ? 0 : 1) }' && command -v systemd-creds >/dev/null 2>&1; then
+            root_has "$RINST/config/paracord.toml" "^key_source = \"systemd-creds\"$" "root install on systemd 250+ keeps the key as a systemd credential"
+            assert_contains /etc/systemd/system/paracord.service "^LoadCredentialEncrypted=paracord-at-rest-key:$RINST/config/at-rest-key.cred$" "unit loads the credential"
+            cred_owner="$(stat -c %U "$RINST/config/at-rest-key.cred" 2>/dev/null || stat -f %Su "$RINST/config/at-rest-key.cred")"
+            cred_mode="$(stat -c %a "$RINST/config/at-rest-key.cred" 2>/dev/null || stat -f %Lp "$RINST/config/at-rest-key.cred")"
+            if [ "$cred_owner" = "root" ] && [ "$cred_mode" = "600" ]; then
+                pass "the credential belongs to root, mode 600"
+            else
+                fail "the credential is $cred_owner/$cred_mode, expected root/600"
+            fi
+        else
+            root_has "$RINST/config/paracord.toml" "^key_source = \"file\"$" "root install without systemd 250+ keeps the key in a file"
+        fi
         owner="$(stat -c %U "$RINST/paracord-server" 2>/dev/null || stat -f %Su "$RINST/paracord-server")"
         if [ "$owner" = "paracord" ]; then
             pass "install dir owned by paracord"

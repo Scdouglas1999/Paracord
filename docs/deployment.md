@@ -26,8 +26,8 @@ curl -fsSL https://raw.githubusercontent.com/Scdouglas1999/Paracord/main/scripts
 It installs the latest release to `/opt/paracord`, creates a `paracord` system
 user, writes a hardened `paracord.service` systemd unit (`Restart=always`,
 `ProtectSystem=strict` with the install dir writable, no ambient privileges),
-generates `config/paracord.toml` via `paracord-server init`, and starts the
-service. Re-running it is the upgrade path: `config/` and `data/` are preserved
+generates `config/paracord.toml` via `paracord-server init` (with a storage
+key, see below), and starts the service. Re-running it is the upgrade path: `config/` and `data/` are preserved
 and the previous binary lands in `backups/`. All paths inside the generated
 config are pinned to the install directory, so nothing depends on the process
 working directory.
@@ -43,11 +43,40 @@ Both installers finish by opening the one-time setup link in a browser
 (`PARACORD_NO_BROWSER=1` only prints it). On a fresh install they ask one
 question first: may Paracord ask the router to let friends outside the home
 network connect? The answer is written to `[network] auto_port_forward` and
-defaults to no. Without a terminal to ask on (CI, a pipe with no TTY) the answer
-is no unless `--allow-internet` (`-AllowInternet` on Windows) or
-`PARACORD_ALLOW_INTERNET=1` says otherwise; see
+defaults to yes. Without a terminal to ask on (CI, a pipe with no TTY) the answer
+is yes unless `--home-network-only` (`-HomeNetworkOnly` on Windows) or
+`PARACORD_ALLOW_INTERNET=0` says otherwise; see
 [port-forwarding.md](port-forwarding.md). On a server you expose deliberately
-behind a reverse proxy or a cloud firewall, leave it off.
+behind a reverse proxy or a cloud firewall, answer no.
+
+### Stored-data encryption
+
+A fresh install encrypts the database and uploaded files on its own disk from the
+first start, and the installer chooses where the key lives:
+
+| Install | Key kept in | How well protected |
+|---|---|---|
+| `install.sh` as root, systemd 250 or newer | a systemd credential (`config/at-rest-key.cred`), loaded with `LoadCredentialEncrypted=` | sealed to the TPM when the computer has one, otherwise to the machine's own credentials |
+| `install.sh` as root without that systemd, or for one user on Linux | a key file in `config/`, mode 0600, owned by the server's account | same disk as the data: protects a copied backup, not a stolen disk |
+| `install.sh` for one user on macOS | the login keychain | unlocked when you sign in |
+| `install.sh` as root on macOS (a LaunchDaemon cannot unlock a login keychain) | a key file as above | same disk |
+| `install.ps1` | a key file in `config\`, readable by the installing user and, for a whole-computer install, SYSTEM | same disk |
+| Docker | none: off by default | see [Docker setup](docker-setup.md#encrypting-stored-data) |
+
+[How encryption works](encryption.md#stored-data-on-the-server) says what this does
+and does not protect. The key exists only on that computer, so:
+
+- Run the installer again on an **older** install and it offers to encrypt what is
+  already stored (`--encrypt-storage` / `-EncryptStorage` does it without asking,
+  `--no-encrypt-storage` / `-NoEncryptStorage` never offers). It stops the server
+  briefly, takes a backup first and checks the result before deleting the old
+  database. Without a terminal it only prints that command.
+- Keep a way back to the key. Once the owner account exists, save a recovery copy
+  of it under the owner's recovery phrase
+  ([Recovering the storage key](encryption.md#recovering-the-storage-key)); without
+  one, a backup of this server cannot be restored on another computer.
+- A release older than this one cannot encrypt. The installer says so and installs
+  unencrypted; install a newer release to get it.
 
 New servers are invite-only: `[auth] registration_mode = "invite_only"`. Only
 someone holding a live invite to one of the server's servers can create an
@@ -250,8 +279,10 @@ Back up both the database and the media, and validate restores on a staging node
 - **Database:** SQLite file snapshot, or `pg_dump`/`pg_restore` on PostgreSQL. The
   admin settings panel and API can trigger backups on either backend.
 - **Media, config & keys:** Retain `data/uploads`, `data/files`, the original
-  `paracord.toml` and deployment environment, the at-rest master key, and separate
-  TLS/federation key files. The config contains the JWT secret, not TLS key bytes.
+  `paracord.toml` and deployment environment, the at-rest master key (a key file,
+  keychain entry or systemd credential, depending on the install; or the owner's
+  recovery copy, see [backup and recovery](backup-recovery.md#restoring-an-encrypted-server-without-its-key)),
+  and separate TLS/federation key files. The config contains the JWT secret, not TLS key bytes.
 
 Use `paracord-server restore-backup` to prepare and verify a new SQLite directory
 or isolated PostgreSQL database, then stop every old instance before activating

@@ -72,6 +72,12 @@ ENV PARACORD_BACKUP_DIR=/data/backups
 ENV PARACORD_TLS_ENABLED=false
 # Native QUIC/WebTransport media is the default voice path (no LiveKit needed).
 ENV PARACORD_VOICE_NATIVE_MEDIA=true
+# Stored-data encryption stays off in a container unless the operator turns it
+# on (docs/setup-spec.md section 4.2). Without this line a fresh container's
+# first run would generate a storage key and write it to /data/at-rest.key,
+# next to the data it protects. To encrypt, set PARACORD_AT_REST_ENABLED=true
+# and supply the key yourself (docs/docker-setup.md, "Encrypting stored data").
+ENV PARACORD_AT_REST_ENABLED=false
 
 # TCP HTTP(S) API/gateway and UDP native media (raw QUIC + browser WebTransport).
 EXPOSE 8090
