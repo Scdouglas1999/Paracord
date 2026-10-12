@@ -54,6 +54,16 @@ pub enum ApiError {
     /// expected answer it is instead of a server fault.
     #[error("service unavailable: {0}")]
     NotConfigured(String),
+    /// A refusal with its own status and a lowercase machine code that
+    /// clients branch on (`credential_upgraded`, `credential_legacy`,
+    /// `client_update_required`, docs/setup-spec.md §3.10). The message is
+    /// shown verbatim, so older clients that only print it still say what to do.
+    #[error("{message}")]
+    Refused {
+        status: StatusCode,
+        code: &'static str,
+        message: String,
+    },
     #[error("internal server error")]
     Internal(#[from] anyhow::Error),
 }
@@ -78,6 +88,7 @@ impl ApiError {
             ApiError::RateLimited(_) => "RATE_LIMITED",
             ApiError::ServiceUnavailable(_) => "SERVICE_UNAVAILABLE",
             ApiError::NotConfigured(_) => "SERVICE_UNAVAILABLE",
+            ApiError::Refused { code, .. } => code,
             ApiError::Internal(_) => "INTERNAL_ERROR",
         }
     }
@@ -100,6 +111,7 @@ impl ApiError {
             ApiError::RateLimited(_) => StatusCode::TOO_MANY_REQUESTS,
             ApiError::ServiceUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             ApiError::NotConfigured(_) => StatusCode::SERVICE_UNAVAILABLE,
+            ApiError::Refused { status, .. } => *status,
             ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }

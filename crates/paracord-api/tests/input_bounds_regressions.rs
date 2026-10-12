@@ -21,6 +21,7 @@ struct Space {
 }
 
 async fn owned_space(app: &common::TestApp) -> anyhow::Result<Space> {
+    common::allow_legacy_signup();
     let (status, account) = dispatch_json(
         &app.app,
         build_json_request(

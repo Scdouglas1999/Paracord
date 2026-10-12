@@ -738,6 +738,7 @@ async fn event_listing_is_paginated() -> anyhow::Result<()> {
 /// to do two writes for every open public space on the instance.
 #[tokio::test]
 async fn registration_auto_join_is_capped() -> anyhow::Result<()> {
+    common::allow_legacy_signup();
     let test_app = build_test_app(TestAppOptions::default()).await?;
     let owner_id = paracord_util::snowflake::generate(1);
     paracord_db::users::create_user(

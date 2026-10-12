@@ -112,6 +112,7 @@ fn route_uses_bearer_auth(method: &str, path: &str) -> bool {
     matches!(
         path,
         "/api/v1/auth/attach-public-key"
+            | "/api/v1/auth/credential/upgrade"
             | "/api/v1/auth/logout"
             | "/api/v1/auth/sessions"
             | "/api/v1/auth/sessions/{session_id}"
@@ -424,6 +425,58 @@ fn apply_wire_contracts(spec: &mut Value) {
             Some("OwnershipTransferResponse"),
             Some("TransferOwnershipRequest"),
         ),
+        // One password (docs/setup-spec.md §3, §9.1). Register, login and the
+        // credential claim answer the untyped `AuthResponse`/`ClaimResponse`,
+        // so only their request bodies are contracted (below).
+        (
+            "/api/v1/auth/credential/params",
+            "post",
+            "200",
+            Some("CredentialParams"),
+            Some("CredentialParamsRequest"),
+        ),
+        (
+            "/api/v1/auth/credential/upgrade",
+            "post",
+            "200",
+            Some("CredentialEpochResponse"),
+            Some("CredentialUpgradeRequest"),
+        ),
+        (
+            "/api/v1/users/@me/credential",
+            "put",
+            "200",
+            Some("CredentialEpochResponse"),
+            Some("ChangeCredentialRequest"),
+        ),
+        (
+            "/api/v1/users/@me/credential/reset",
+            "post",
+            "200",
+            Some("CredentialEpochResponse"),
+            Some("ResetCredentialRequest"),
+        ),
+        (
+            "/api/v1/users/@me/key-backup",
+            "get",
+            "200",
+            Some("KeyBackup"),
+            None,
+        ),
+        (
+            "/api/v1/users/@me/key-backup/recovery-confirmed",
+            "post",
+            "204",
+            None,
+            None,
+        ),
+        (
+            "/api/v1/setup/password-requirements",
+            "get",
+            "200",
+            Some("PasswordRequirements"),
+            None,
+        ),
         // Hosting controls (docs/setup-spec.md §9.1). `/host/*` answers only a
         // loopback peer with `Authorization: Host <token>`.
         (
@@ -512,6 +565,34 @@ fn apply_wire_contracts(spec: &mut Value) {
                 "content": { "text/plain": { "schema": { "type": "string" } } },
             });
         }
+    }
+    // One-password routes whose response is the untyped session answer: the
+    // request body is contracted, the response stays route inventory.
+    for (path, method, request) in [
+        (
+            "/api/v1/auth/credential/register",
+            "post",
+            "CredentialRegister",
+        ),
+        (
+            "/api/v1/auth/credential/login",
+            "post",
+            "CredentialLoginRequest",
+        ),
+        (
+            "/api/v1/setup/credential-claim",
+            "post",
+            "CredentialClaimRequest",
+        ),
+    ] {
+        let operation = spec["paths"][path]
+            .get_mut(method)
+            .unwrap_or_else(|| panic!("Contracted route missing: {method} {path}"));
+        operation["x-contract-coverage"] = json!("request");
+        operation["requestBody"] = json!({
+            "required": true,
+            "content": { "application/json": { "schema": { "$ref": format!("#/components/schemas/{request}") } } },
+        });
     }
     // `POST /invites/{code}` accepts an optional JSON body.
     let accept = &mut spec["paths"]["/api/v1/invites/{code}"]["post"];

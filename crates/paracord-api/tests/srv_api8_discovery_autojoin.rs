@@ -14,6 +14,7 @@ use serde_json::json;
 /// their own column, leaving `allowed_roles` unambiguous.
 #[tokio::test]
 async fn public_guild_with_discovery_tags_still_auto_joins_new_users() -> anyhow::Result<()> {
+    common::allow_legacy_signup();
     let test_app = build_test_app(TestAppOptions::default()).await?;
 
     let owner_token = create_authenticated_user_token(

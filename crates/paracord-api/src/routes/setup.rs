@@ -19,7 +19,7 @@ use axum::{
 };
 use paracord_core::AppState;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::json;
 use std::net::SocketAddr;
 
 use crate::error::ApiError;
@@ -79,19 +79,21 @@ pub async fn setup_status(
 
 /// `GET /api/v1/setup/password-requirements` — public.
 ///
-/// The claim page renders the password rules before submit, exactly as the
-/// registration page does. It is served from the same server-side constants so
-/// the advertised rules cannot drift from the ones actually enforced.
-pub async fn password_requirements() -> Json<Value> {
-    Json(json!({
-        "min_length": paracord_util::validation::PASSWORD_MIN_LENGTH,
-        "max_length": paracord_util::validation::PASSWORD_MAX_LENGTH,
-        "requires_uppercase": true,
-        "requires_lowercase": true,
-        "requires_digit": true,
-        "requires_symbol": true,
-        "length_unit": "utf8_bytes",
-    }))
+/// With one password the server never sees the password, so the rules are the
+/// client's to enforce (docs/setup-spec.md §3.4): a length range and no
+/// composition rules (the client's strength meter and common-password block do
+/// that job).
+pub async fn password_requirements() -> Json<paracord_contracts::credential::PasswordRequirements> {
+    Json(paracord_contracts::credential::PasswordRequirements {
+        min_length: paracord_util::validation::PASSWORD_MIN_LENGTH as u32,
+        max_length: paracord_util::validation::PASSWORD_MAX_LENGTH as u32,
+        requires_uppercase: false,
+        requires_lowercase: false,
+        requires_digit: false,
+        requires_symbol: false,
+        length_unit: "utf8_bytes".into(),
+        enforced_by: paracord_contracts::credential::PasswordRulesEnforcedBy::Client,
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -131,6 +133,11 @@ pub async fn claim_instance(
     headers: HeaderMap,
     Json(body): Json<ClaimRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    // The owner is created with one password through
+    // `POST /setup/credential-claim` (docs/setup-spec.md §3.10).
+    if !crate::routes::auth::legacy_signup_allowed() {
+        return Err(crate::routes::auth::client_update_required());
+    }
     let peer_ip = addr.ip().to_string();
     let normalized_email = normalize_email_for_auth(&body.email);
     let account_hint = if normalized_email.is_empty() {
@@ -391,7 +398,7 @@ pub async fn claim_instance(
 /// rewrites it to the canonical `synthesized_local_email` form immediately
 /// afterwards. Both forms live in the same reserved `.invalid` namespace and
 /// neither can collide with a real address.
-fn resolve_claim_email(normalized_email: &str) -> String {
+pub(crate) fn resolve_claim_email(normalized_email: &str) -> String {
     if normalized_email.is_empty() {
         format!("setup-{}@paracord.invalid", uuid::Uuid::new_v4().simple())
     } else {

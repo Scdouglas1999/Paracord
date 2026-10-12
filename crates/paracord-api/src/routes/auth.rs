@@ -221,6 +221,73 @@ fn verify_pubkey_challenge_proof(
     }
 }
 
+/// Verify a one-password identity proof (docs/setup-spec.md §3.3, §3.8): a
+/// signature by `public_key` over `"<purpose>:<nonce>:<timestamp>:<origin>"`
+/// for a nonce `/auth/challenge` issued. The nonce is spent whatever the
+/// outcome, and the purpose keeps a proof from ever standing in for a key
+/// sign-in (whose message has no purpose) or for a proof of another purpose.
+pub(crate) fn verify_credential_proof(
+    state: &AppState,
+    headers: &HeaderMap,
+    peer_ip: Option<&str>,
+    purpose: &str,
+    public_key: &str,
+    proof: &paracord_contracts::credential::IdentityProof,
+) -> Result<(), ApiError> {
+    let issued_at = match challenge_store().remove(&proof.nonce) {
+        Some(issued_at) => issued_at,
+        None => return Err(ApiError::Unauthorized),
+    };
+    let now = Utc::now().timestamp();
+    if now - issued_at > CHALLENGE_MAX_AGE_SECONDS
+        || proof.timestamp.abs_diff(issued_at) > CHALLENGE_SKEW_SECONDS as u64
+    {
+        return Err(ApiError::Unauthorized);
+    }
+    let server_origin = resolve_server_origin(state.config.public_url.as_deref(), headers, peer_ip);
+    if paracord_core::credential::verify_proof_signature(
+        purpose,
+        public_key,
+        &proof.nonce,
+        proof.timestamp,
+        &server_origin,
+        &proof.signature,
+    ) {
+        Ok(())
+    } else {
+        Err(ApiError::Unauthorized)
+    }
+}
+
+/// Whether the pre-one-password sign-up routes (`POST /auth/register`,
+/// `POST /setup/claim`) may still create accounts. Never in a release build;
+/// in a debug build only with `PARACORD_TEST_ALLOW_LEGACY_SIGNUP=1`, so tests
+/// and the live drive can seed a legacy (v1) account to move over.
+pub(crate) fn legacy_signup_allowed() -> bool {
+    cfg!(debug_assertions)
+        && std::env::var("PARACORD_TEST_ALLOW_LEGACY_SIGNUP").is_ok_and(|value| value.trim() == "1")
+}
+
+/// 410 `client_update_required`: this server creates only one-password
+/// accounts (docs/setup-spec.md §3.10).
+pub(crate) fn client_update_required() -> ApiError {
+    ApiError::Refused {
+        status: StatusCode::GONE,
+        code: "client_update_required",
+        message: "Update Paracord to create an account on this server.".into(),
+    }
+}
+
+/// 409 `credential_upgraded`: the account uses one password, and a legacy
+/// password route will not touch it (docs/setup-spec.md §3.10, §3.13).
+pub(crate) fn credential_upgraded() -> ApiError {
+    ApiError::Refused {
+        status: StatusCode::CONFLICT,
+        code: "credential_upgraded",
+        message: "This account uses one-password sign-in. Update Paracord to sign in.".into(),
+    }
+}
+
 async fn handle_refresh_token_reuse(
     state: &AppState,
     session_id: &str,
@@ -755,7 +822,7 @@ fn parse_login_request(headers: &HeaderMap, body: &[u8]) -> Option<LoginRequest>
     serde_json::from_slice::<LoginRequest>(body).ok()
 }
 
-fn parse_username_with_discriminator(identifier: &str) -> Option<(&str, i16)> {
+pub(crate) fn parse_username_with_discriminator(identifier: &str) -> Option<(&str, i16)> {
     let (username, discriminator) = identifier.rsplit_once('#')?;
     let username = username.trim();
     if username.is_empty() {
@@ -853,7 +920,7 @@ fn default_server_scheme_from_env() -> &'static str {
     "http"
 }
 
-fn resolve_server_origin(
+pub(crate) fn resolve_server_origin(
     configured_public_url: Option<&str>,
     headers: &HeaderMap,
     peer_ip: Option<&str>,
@@ -1139,7 +1206,7 @@ fn random_token_hex(bytes: usize) -> String {
     out
 }
 
-fn sha256_hex(value: &str) -> String {
+pub(crate) fn sha256_hex(value: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(value.as_bytes());
     let digest = hasher.finalize();
@@ -1258,7 +1325,7 @@ fn request_metadata(
     (device_id, user_agent, ip_address)
 }
 
-type AuthSessionResponse = (String, String, String, String, String, String);
+pub(crate) type AuthSessionResponse = (String, String, String, String, String, String);
 
 struct PreparedAuthSession {
     response: AuthSessionResponse,
@@ -1366,16 +1433,16 @@ pub(crate) async fn issue_auth_session(
 /// primary-login path shares the account lock used by credential changes and
 /// MFA enrollment, preventing a completed revocation from being followed by a
 /// session authorized against an earlier password, key, or MFA configuration.
-struct PrimaryLoginSnapshot<'a> {
-    user_id: i64,
-    email: &'a str,
-    public_key: Option<&'a str>,
-    primary_credential: &'a str,
-    public_key_login: bool,
-    require_verified_email: bool,
+pub(crate) struct PrimaryLoginSnapshot<'a> {
+    pub(crate) user_id: i64,
+    pub(crate) email: &'a str,
+    pub(crate) public_key: Option<&'a str>,
+    pub(crate) primary_credential: &'a str,
+    pub(crate) public_key_login: bool,
+    pub(crate) require_verified_email: bool,
 }
 
-async fn issue_credential_auth_session(
+pub(crate) async fn issue_credential_auth_session(
     state: &AppState,
     snapshot: PrimaryLoginSnapshot<'_>,
     headers: &HeaderMap,
@@ -1415,7 +1482,7 @@ async fn issue_credential_auth_session(
 
 /// What a login path must do once the primary credential has checked out but
 /// before a session is minted.
-enum LoginGate {
+pub(crate) enum LoginGate {
     /// Every gate passed; issue the session.
     Proceed,
     /// The account carries a second factor. Hand back this single-use ticket
@@ -1434,7 +1501,7 @@ enum LoginGate {
 /// The MFA read fails **closed**. `Err` is not "no second factor": it is a
 /// pool-acquire timeout, a dropped backend connection, or an undecodable row,
 /// and none of those may hand out a session on the primary credential alone.
-async fn apply_login_gates(
+pub(crate) async fn apply_login_gates(
     state: &AppState,
     user_id: i64,
     email_verified: bool,
@@ -1475,7 +1542,7 @@ async fn apply_login_gates(
 /// The response every login path returns while a second factor is outstanding:
 /// no token, a single-use ticket, and cleared session cookies so a stale
 /// pre-existing session cannot pass for the completed login.
-fn mfa_required_response(
+pub(crate) fn mfa_required_response(
     state: &AppState,
     ticket: &str,
 ) -> Result<
@@ -1727,7 +1794,7 @@ pub(crate) fn user_json(user: &paracord_db::users::UserRow) -> Value {
     })
 }
 
-fn user_auth_json(user: &paracord_db::users::UserAuthRow) -> Value {
+pub(crate) fn user_auth_json(user: &paracord_db::users::UserAuthRow) -> Value {
     json!({
         "id": user.id.to_string(),
         "username": user.username,
@@ -1830,6 +1897,12 @@ pub struct AuthSessionView {
 
 #[derive(Serialize)]
 pub struct AuthOptionsResponse {
+    /// 2: accounts here are created and signed in with one password
+    /// (`/auth/credential/*`, docs/setup-spec.md §3, §9.1).
+    pub credential_version: u8,
+    /// The shortest one password a client may accept (the client enforces
+    /// it; the server never sees the password).
+    pub min_password_length: u32,
     pub allow_username_login: bool,
     pub require_email: bool,
     /// False when the admin has turned account creation off entirely.
@@ -1846,6 +1919,8 @@ pub async fn auth_options(State(state): State<AppState>) -> Json<AuthOptionsResp
     );
     let runtime = state.runtime.read().await;
     Json(AuthOptionsResponse {
+        credential_version: 2,
+        min_password_length: paracord_util::validation::PASSWORD_MIN_LENGTH as u32,
         allow_username_login,
         require_email: state.config.require_email,
         registration_enabled: runtime.registration_enabled,
@@ -1936,7 +2011,11 @@ pub(crate) async fn reserve_signup_slot(
 }
 
 /// Give the slot back when the account insert after it failed.
-async fn release_signup_slot(state: &AppState, invite: Option<&SignupInvite>, user_id: i64) {
+pub(crate) async fn release_signup_slot(
+    state: &AppState,
+    invite: Option<&SignupInvite>,
+    user_id: i64,
+) {
     if invite.is_none() {
         return;
     }
@@ -1947,7 +2026,7 @@ async fn release_signup_slot(state: &AppState, invite: Option<&SignupInvite>, us
 
 /// Whether a refused invite should count against the auth guard: guessing
 /// invite codes is abuse, arriving without one is not.
-fn invite_refusal_counts_against_guard(invite_code: Option<&str>) -> bool {
+pub(crate) fn invite_refusal_counts_against_guard(invite_code: Option<&str>) -> bool {
     invite_code.is_some_and(|code| !code.trim().is_empty())
 }
 
@@ -2024,6 +2103,30 @@ pub(crate) fn new_account_input_error(
     password: &str,
     display_name: Option<&str>,
 ) -> Option<NewAccountRejection> {
+    if let Some(rejection) =
+        new_account_identity_error(state, username, normalized_email, display_name)
+    {
+        return Some(rejection);
+    }
+    if paracord_util::validation::validate_password(password).is_err() {
+        return Some(NewAccountRejection {
+            message: "Password must be between 10 and 128 characters".into(),
+            counts_against_guard: false,
+        });
+    }
+    None
+}
+
+/// The account rules that do not involve a password: everything
+/// [`new_account_input_error`] checks before it. One-password sign-up and the
+/// credential claim use this, since the server never sees that password
+/// (docs/setup-spec.md §3.4).
+pub(crate) fn new_account_identity_error(
+    state: &AppState,
+    username: &str,
+    normalized_email: &str,
+    display_name: Option<&str>,
+) -> Option<NewAccountRejection> {
     if paracord_util::validation::is_valid_new_username(username).is_err() {
         return guarded("Username must be between 2 and 32 valid characters");
     }
@@ -2052,12 +2155,6 @@ pub(crate) fn new_account_input_error(
     if normalized_email.is_empty() && !allow_username_login {
         return guarded("Server requires email login or username login support");
     }
-    if paracord_util::validation::validate_password(password).is_err() {
-        return Some(NewAccountRejection {
-            message: "Password must be between 10 and 128 characters".into(),
-            counts_against_guard: false,
-        });
-    }
     None
 }
 
@@ -2067,6 +2164,12 @@ pub async fn register(
     headers: HeaderMap,
     Json(body): Json<RegisterRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    // This server creates only one-password accounts
+    // (`POST /auth/credential/register`, docs/setup-spec.md §3.10). Refused
+    // before anything else so an old client learns it must update.
+    if !legacy_signup_allowed() {
+        return Err(client_update_required());
+    }
     let peer_ip = addr.ip().to_string();
     let normalized_email = normalize_email_for_auth(&body.email);
     let account_hint = if normalized_email.is_empty() {
@@ -2408,6 +2511,29 @@ pub async fn login(
         .await;
         return Err(ApiError::Unauthorized);
     };
+    // Only a legacy (v1) password is checked here (docs/setup-spec.md §3.10,
+    // §3.13). A one-password account is refused with the update text, never
+    // verified: its hash is over the derived auth key, and this route must not
+    // become a way to present one. A key-only account has no password at all.
+    let credential_version = paracord_db::credentials::get(&state.db, user.id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .map(|row| row.version)
+        .unwrap_or(paracord_db::credentials::VERSION_KEY_ONLY);
+    if credential_version != paracord_db::credentials::VERSION_LEGACY {
+        equalize_login_timing(&body.password);
+        auth_guard_record_failure(
+            &state,
+            &headers,
+            Some(peer_ip.as_str()),
+            Some(&normalized_identifier),
+        )
+        .await;
+        if credential_version == paracord_db::credentials::VERSION_ONE_PASSWORD {
+            return Err(credential_upgraded());
+        }
+        return Err(ApiError::Unauthorized);
+    }
     if user.password_hash.trim().is_empty() {
         // Same as above: an account with no usable password must not respond
         // faster than one that runs a full Argon2 verify.
@@ -3121,21 +3247,22 @@ pub async fn reset_password(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
-    Json(body): Json<ResetPasswordRequest>,
+    Json(raw_body): Json<Value>,
 ) -> Result<impl IntoResponse, ApiError> {
     let peer_ip = addr.ip().to_string();
     auth_guard_enforce(&state, &headers, Some(peer_ip.as_str()), None).await?;
 
-    if body.token.is_empty() {
+    let token = raw_body
+        .get("token")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    if token.is_empty() {
         auth_guard_record_failure(&state, &headers, Some(peer_ip.as_str()), None).await;
         return Err(ApiError::BadRequest("Token is required".into()));
     }
 
-    paracord_util::validation::validate_password(&body.new_password).map_err(|_| {
-        ApiError::BadRequest("Password must be between 10 and 128 characters".into())
-    })?;
-
-    let token_hash = sha256_hex(&body.token);
+    let token_hash = sha256_hex(&token);
     let now = Utc::now();
 
     let token_row = paracord_db::password_reset::get_valid_reset_token(&state.db, &token_hash, now)
@@ -3148,6 +3275,47 @@ pub async fn reset_password(
             "Invalid or expired reset token".into(),
         ));
     };
+
+    // The account's credential decides the shape (docs/setup-spec.md §3.9,
+    // §3.10): a one-password account starts over with a new credential and a
+    // brand-new identity and never takes a typed password; a legacy account
+    // resets its password as before and never takes a credential.
+    let credential_version = paracord_db::credentials::get(&state.db, token_row.user_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .map(|row| row.version)
+        .unwrap_or(paracord_db::credentials::VERSION_KEY_ONLY);
+    if credential_version == paracord_db::credentials::VERSION_ONE_PASSWORD {
+        if raw_body.get("new_password").is_some() {
+            return Err(credential_upgraded());
+        }
+        let body: paracord_contracts::credential::CredentialEmailResetRequest =
+            serde_json::from_value(raw_body).map_err(|_| {
+                ApiError::BadRequest(
+                    "This account needs a new credential and identity to start over".into(),
+                )
+            })?;
+        return super::credential::start_over_by_email(
+            &state,
+            &headers,
+            &peer_ip,
+            token_row.user_id,
+            &token_hash,
+            body,
+        )
+        .await;
+    }
+    if credential_version == paracord_db::credentials::VERSION_KEY_ONLY {
+        return Err(super::credential::credential_key_only());
+    }
+    if raw_body.get("credential").is_some() {
+        return Err(super::credential::credential_legacy());
+    }
+    let body: ResetPasswordRequest = serde_json::from_value(raw_body)
+        .map_err(|_| ApiError::BadRequest("new_password is required".into()))?;
+    paracord_util::validation::validate_password(&body.new_password).map_err(|_| {
+        ApiError::BadRequest("Password must be between 10 and 128 characters".into())
+    })?;
 
     let new_hash = paracord_core::auth::hash_password(&body.new_password)
         .map_err(|e| ApiError::Internal(e.into()))?;
@@ -3377,7 +3545,7 @@ fn matching_totp_step(totp: &totp_rs::TOTP, code: &str, now_secs: u64) -> Option
 /// Verify a code and atomically consume its step in the shared database. Bind
 /// consumption to the stored secret so replacing a pending setup cannot cause
 /// a code verified against the old secret to authorize the new one.
-async fn verify_totp_code(
+pub(crate) async fn verify_totp_code(
     state: &AppState,
     config: &paracord_db::mfa::MfaConfigRow,
     code: &str,
@@ -3414,7 +3582,7 @@ fn generate_backup_codes() -> Vec<String> {
         .collect()
 }
 
-fn normalize_backup_code(code: &str) -> String {
+pub(crate) fn normalize_backup_code(code: &str) -> String {
     code.trim()
         .to_ascii_uppercase()
         .replace('-', "")

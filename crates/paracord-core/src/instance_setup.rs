@@ -127,11 +127,77 @@ pub async fn claim_instance(
     space_name: &str,
     space_icon: Option<&str>,
 ) -> Result<ClaimOutcome, CoreError> {
+    claim(
+        pool,
+        username,
+        email,
+        password_hash,
+        None,
+        instance_name,
+        space_name,
+        space_icon,
+        None,
+    )
+    .await
+}
+
+/// The one-password claim (`POST /setup/credential-claim`, docs/setup-spec.md
+/// §2.7, §2.11, §3.3): the owner gets a one-password credential, the identity
+/// and its key backup, and the first server is built from `template` with the
+/// chosen `hue`.
+///
+/// `credential` and `identity` must already have passed
+/// [`crate::credential::check_credential`] / [`crate::credential::check_identity`]
+/// and the identity proof must already be verified. Any failure rolls the whole
+/// claim back, as [`claim_instance`] does.
+#[allow(clippy::too_many_arguments)]
+pub async fn claim_instance_one_password(
+    pool: &DbPool,
+    username: &str,
+    email: &str,
+    credential: &crate::credential::CheckedCredential,
+    identity: &crate::credential::CheckedIdentity,
+    instance_name: &str,
+    space_name: &str,
+    space_icon: Option<&str>,
+    hue: u16,
+    template: paracord_contracts::credential::InitialServerTemplate,
+) -> Result<ClaimOutcome, CoreError> {
+    let password_hash = credential.hash()?;
+    claim(
+        pool,
+        username,
+        email,
+        &password_hash,
+        Some((credential, identity)),
+        instance_name,
+        space_name,
+        space_icon,
+        Some((hue, template)),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn claim(
+    pool: &DbPool,
+    username: &str,
+    email: &str,
+    password_hash: &str,
+    one_password: Option<(
+        &crate::credential::CheckedCredential,
+        &crate::credential::CheckedIdentity,
+    )>,
+    instance_name: &str,
+    space_name: &str,
+    space_icon: Option<&str>,
+    template: Option<(u16, paracord_contracts::credential::InitialServerTemplate)>,
+) -> Result<ClaimOutcome, CoreError> {
     let instance_name = validate_instance_name(instance_name)?;
     let space_name = validate_space_name(space_name)?;
 
     let owner_id = paracord_util::snowflake::generate(1);
-    let owner = paracord_db::users::create_user_as_first_admin(
+    let mut owner = paracord_db::users::create_user_as_first_admin(
         pool,
         owner_id,
         username,
@@ -153,17 +219,44 @@ pub async fn claim_instance(
         ));
     }
 
-    let space_id = paracord_util::snowflake::generate(1);
-    let space =
-        match crate::guild::create_guild_full(pool, space_id, &space_name, owner.id, space_icon)
-            .await
-        {
-            Ok(space) => space,
+    // The account row was inserted as a legacy password (an Argon2 hash); the
+    // one-password credential, identity and backup move it to version 2 in one
+    // transaction before anything else is built on it.
+    if let Some((credential, identity)) = one_password {
+        match store_owner_credential(pool, owner.id, password_hash, credential, identity).await {
+            Ok(()) => owner.public_key = Some(identity.public_key.clone()),
             Err(err) => {
                 rollback_owner(pool, owner.id).await;
                 return Err(err);
             }
-        };
+        }
+    }
+
+    let space_id = paracord_util::snowflake::generate(1);
+    let created = match template {
+        None => {
+            crate::guild::create_guild_full(pool, space_id, &space_name, owner.id, space_icon).await
+        }
+        Some((hue, template)) => {
+            crate::guild::create_guild_from_template(
+                pool,
+                space_id,
+                &space_name,
+                owner.id,
+                space_icon,
+                hue,
+                template,
+            )
+            .await
+        }
+    };
+    let space = match created {
+        Ok(space) => space,
+        Err(err) => {
+            rollback_owner(pool, owner.id).await;
+            return Err(err);
+        }
+    };
 
     let completed = instance_setup::complete_claim(pool, owner.id, &instance_name, Utc::now())
         .await
@@ -186,6 +279,40 @@ pub async fn claim_instance(
             rollback_owner(pool, owner.id).await;
             Err(err)
         }
+    }
+}
+
+async fn store_owner_credential(
+    pool: &DbPool,
+    owner_id: i64,
+    password_hash: &str,
+    credential: &crate::credential::CheckedCredential,
+    identity: &crate::credential::CheckedIdentity,
+) -> Result<(), CoreError> {
+    use crate::credential::FirstCredential;
+    let mut tx = pool.begin().await.map_err(paracord_db::DbError::from)?;
+    let stored = crate::credential::store_first_credential(
+        &mut tx,
+        owner_id,
+        paracord_db::credentials::VERSION_LEGACY,
+        Some(password_hash),
+        credential,
+        password_hash,
+        identity,
+        Utc::now(),
+    )
+    .await?;
+    match stored {
+        FirstCredential::Stored { .. } => {
+            tx.commit().await.map_err(paracord_db::DbError::from)?;
+            Ok(())
+        }
+        FirstCredential::PublicKeyTaken => Err(CoreError::BadRequest(
+            "Unable to complete registration".into(),
+        )),
+        FirstCredential::NotCurrent | FirstCredential::IdentityMismatch => Err(
+            CoreError::Internal("the new owner account changed during the claim".into()),
+        ),
     }
 }
 

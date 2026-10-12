@@ -58,3 +58,8 @@ paracord-transport = { workspace = true }
 # Test-only: the relay's datagram API is expressed in `Bytes`, so a test that
 # registers a live connection against the shared RelayForwarder needs it.
 bytes = { workspace = true }
+# Test-only: the one-password vector checks recompute HKDF and unwrap the
+# AES-256-GCM identity exactly as the client does (docs/setup-spec.md §3.14).
+hkdf = { workspace = true }
+aes-gcm = { workspace = true }
+unicode-normalization = { workspace = true }

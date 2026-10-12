@@ -76,6 +76,7 @@ async fn user_count(app: &TestApp) -> anyhow::Result<i64> {
 
 #[tokio::test]
 async fn fresh_instance_reports_setup_required_and_refuses_registration() -> anyhow::Result<()> {
+    common::allow_legacy_signup();
     let app = pending_app().await?;
 
     let status = setup_status(&app).await?;
@@ -114,6 +115,7 @@ async fn fresh_instance_reports_setup_required_and_refuses_registration() -> any
 
 #[tokio::test]
 async fn wrong_token_is_rejected_and_eventually_rate_limited() -> anyhow::Result<()> {
+    common::allow_legacy_signup();
     let app = pending_app().await?;
 
     // The guard locks at five failures; the first four must answer 401 so a
@@ -182,6 +184,7 @@ async fn wrong_token_is_rejected_and_eventually_rate_limited() -> anyhow::Result
 
 #[tokio::test]
 async fn pending_instance_without_a_token_refuses_to_be_claimed() -> anyhow::Result<()> {
+    common::allow_legacy_signup();
     // No `provision_token`: a server whose startup never minted a token must
     // say so rather than accept an arbitrary string.
     let app = build_test_app(TestAppOptions {
@@ -216,6 +219,7 @@ async fn pending_instance_without_a_token_refuses_to_be_claimed() -> anyhow::Res
 
 #[tokio::test]
 async fn correct_token_creates_the_owner_and_the_first_space() -> anyhow::Result<()> {
+    common::allow_legacy_signup();
     let app = pending_app().await?;
 
     let (code, body) = dispatch_json(
@@ -288,6 +292,7 @@ async fn correct_token_creates_the_owner_and_the_first_space() -> anyhow::Result
 
 #[tokio::test]
 async fn a_second_claim_is_refused_and_ordinary_members_are_not_owners() -> anyhow::Result<()> {
+    common::allow_legacy_signup();
     let app = pending_app().await?;
     let (code, _) = dispatch_json(
         &app.app,
@@ -347,6 +352,7 @@ async fn a_second_claim_is_refused_and_ordinary_members_are_not_owners() -> anyh
 
 #[tokio::test]
 async fn claim_reuses_the_registration_password_rules() -> anyhow::Result<()> {
+    common::allow_legacy_signup();
     let app = pending_app().await?;
 
     // Long enough for the advertised minimum, but missing the character classes
@@ -367,7 +373,9 @@ async fn claim_reuses_the_registration_password_rules() -> anyhow::Result<()> {
     assert_eq!(user_count(&app).await?, 0);
     assert!(paracord_db::instance_setup::is_pending(&app.db).await?);
 
-    // The page's published rules come from the server, unauthenticated.
+    // The published rules come from the server, unauthenticated. With one
+    // password (docs/setup-spec.md §3.4) the server never sees the password,
+    // so they are the client's to enforce: a length range, no composition.
     let (code, body) = dispatch_json(
         &app.app,
         build_json_request(
@@ -381,9 +389,10 @@ async fn claim_reuses_the_registration_password_rules() -> anyhow::Result<()> {
     assert_eq!(code, StatusCode::OK);
     assert_eq!(body["min_length"], json!(10));
     assert_eq!(body["max_length"], json!(128));
-    assert_eq!(body["requires_symbol"], json!(true));
-    assert_eq!(body["requires_uppercase"], json!(true));
-    assert_eq!(body["requires_digit"], json!(true));
+    assert_eq!(body["requires_symbol"], json!(false));
+    assert_eq!(body["requires_uppercase"], json!(false));
+    assert_eq!(body["requires_digit"], json!(false));
+    assert_eq!(body["enforced_by"], json!("client"));
 
     // ...and the token still works afterwards: a rejected attempt must not burn
     // the operator's one bootstrap credential.
@@ -403,6 +412,7 @@ async fn claim_reuses_the_registration_password_rules() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn a_failure_after_the_owner_exists_leaves_no_account_behind() -> anyhow::Result<()> {
+    common::allow_legacy_signup();
     let app = pending_app().await?;
 
     // The space icon is validated inside space creation — after the owner row
@@ -467,6 +477,7 @@ async fn a_failure_after_the_owner_exists_leaves_no_account_behind() -> anyhow::
 
 #[tokio::test]
 async fn the_migration_seals_a_populated_database_as_complete() -> anyhow::Result<()> {
+    common::allow_legacy_signup();
     let app = build_test_app(TestAppOptions {
         instance_setup_complete: false,
         ..Default::default()
@@ -527,6 +538,7 @@ async fn the_migration_seals_a_populated_database_as_complete() -> anyhow::Resul
 
 #[tokio::test]
 async fn deleting_the_owner_does_not_reopen_setup() -> anyhow::Result<()> {
+    common::allow_legacy_signup();
     let app = pending_app().await?;
     let (code, body) = dispatch_json(
         &app.app,

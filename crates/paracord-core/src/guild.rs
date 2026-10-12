@@ -133,6 +133,96 @@ async fn seed_new_guild(pool: &DbPool, guild_id: i64, owner_id: i64) -> Result<(
     Ok(())
 }
 
+/// The text channels of the `friends` template, with their topics, in order
+/// (docs/setup-spec.md §1.9, §2.7: exactly what the first-run preview shows).
+pub const FRIENDS_TEXT_CHANNELS: [(&str, &str); 3] = [
+    ("general", "Say hi to everyone"),
+    ("clips", "Share highlights and screenshots"),
+    ("plans", "What's happening this week"),
+];
+/// The voice channels of the `friends` template, in order.
+pub const FRIENDS_VOICE_CHANNELS: [&str; 2] = [DEFAULT_VOICE_CHANNEL_NAME, "Gaming"];
+
+/// Create the first server a claim makes: owner membership, the default role,
+/// the template's channels and the server's color.
+///
+/// All-or-nothing in the same compensating way as [`create_guild_full`]: any
+/// failure after the guild row deletes the guild again (children cascade).
+pub async fn create_guild_from_template(
+    pool: &DbPool,
+    guild_id: i64,
+    name: &str,
+    owner_id: i64,
+    icon_hash: Option<&str>,
+    hue: u16,
+    template: paracord_contracts::credential::InitialServerTemplate,
+) -> Result<paracord_db::guilds::GuildRow, CoreError> {
+    use paracord_contracts::credential::InitialServerTemplate;
+    ensure_within_len(icon_hash, MAX_ICON_LEN, "icon")?;
+    if hue > paracord_db::guilds::MAX_HUE {
+        return Err(CoreError::BadRequest(
+            "hue must be between 0 and 359".into(),
+        ));
+    }
+    let guild =
+        paracord_db::guilds::create_guild(pool, guild_id, name, owner_id, icon_hash).await?;
+    let seeded = async {
+        match template {
+            InitialServerTemplate::Friends => seed_friends_guild(pool, guild_id, owner_id).await?,
+        }
+        Ok::<_, CoreError>(
+            paracord_db::guilds::set_space_hue(pool, guild_id.into(), Some(hue)).await?,
+        )
+    }
+    .await;
+    match seeded {
+        Ok(guild) => Ok(guild),
+        Err(err) => {
+            if let Err(cleanup_err) = paracord_db::guilds::delete_guild(pool, guild.id).await {
+                tracing::error!(
+                    guild_id,
+                    error = %cleanup_err,
+                    "failed to roll back a partially created template guild; it is left unusable"
+                );
+            }
+            Err(err)
+        }
+    }
+}
+
+async fn seed_friends_guild(pool: &DbPool, guild_id: i64, owner_id: i64) -> Result<(), CoreError> {
+    paracord_db::members::add_member(pool, owner_id, guild_id).await?;
+    let default_perms = Permissions::default().bits();
+    paracord_db::roles::create_role(pool, guild_id, guild_id, "Member", default_perms).await?;
+    paracord_db::roles::add_member_role(pool, owner_id, guild_id, guild_id).await?;
+    let mut position = 0;
+    for (name, topic) in FRIENDS_TEXT_CHANNELS {
+        let id = paracord_util::snowflake::generate(1);
+        paracord_db::channels::create_channel(pool, id, guild_id, name, 0, position, None, None)
+            .await?;
+        paracord_db::channels::update_channel(
+            pool,
+            id,
+            None,
+            Some(topic),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await?;
+        position += 1;
+    }
+    for name in FRIENDS_VOICE_CHANNELS {
+        let id = paracord_util::snowflake::generate(1);
+        paracord_db::channels::create_channel(pool, id, guild_id, name, 2, position, None, None)
+            .await?;
+        position += 1;
+    }
+    Ok(())
+}
+
 /// Delete a guild, only allowed by the owner.
 pub async fn delete_guild(pool: &DbPool, guild_id: i64, user_id: i64) -> Result<(), CoreError> {
     let guild = paracord_db::guilds::get_guild(pool, guild_id)

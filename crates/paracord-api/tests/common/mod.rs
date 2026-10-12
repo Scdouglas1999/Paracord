@@ -595,3 +595,15 @@ pub async fn create_authenticated_user_token(
     )?;
     Ok(token)
 }
+
+/// Let the pre-one-password sign-up routes (`POST /auth/register`,
+/// `POST /setup/claim`) create accounts in this test process. They answer 410
+/// `client_update_required` otherwise (docs/setup-spec.md §3.10); debug builds
+/// honor `PARACORD_TEST_ALLOW_LEGACY_SIGNUP=1` so the legacy behavior those
+/// routes still have (and v1 accounts to move over) stay testable. The
+/// variable is process-wide, so a test binary that checks the refusal must not
+/// call this.
+pub fn allow_legacy_signup() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| std::env::set_var("PARACORD_TEST_ALLOW_LEGACY_SIGNUP", "1"));
+}

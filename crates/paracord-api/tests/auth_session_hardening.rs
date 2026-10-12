@@ -102,6 +102,7 @@ async fn create_password_user(
 /// advance past its first tier.
 #[tokio::test]
 async fn throwaway_account_success_does_not_reset_ip_auth_guard() -> anyhow::Result<()> {
+    common::allow_legacy_signup();
     let harness = Harness::new(true).await?;
     let victim_password = "V1ctimPassw0rd!";
     create_password_user(
@@ -224,6 +225,7 @@ async fn database_failure_surfaces_as_5xx_not_401() -> anyhow::Result<()> {
 /// which distinguishes taken names from free ones.
 #[tokio::test]
 async fn duplicate_username_registration_is_generic_400() -> anyhow::Result<()> {
+    common::allow_legacy_signup();
     let harness = Harness::new(true).await?;
 
     let (status, _, body) = harness

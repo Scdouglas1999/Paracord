@@ -123,6 +123,7 @@ async fn register(
     username: &str,
     invite_code: Option<&str>,
 ) -> anyhow::Result<(StatusCode, Value)> {
+    common::allow_legacy_signup();
     let mut body = json!({
         "email": format!("{username}@example.com"),
         "username": username,
@@ -463,6 +464,7 @@ fn claim_body(mode: Option<&str>) -> Value {
 
 #[tokio::test]
 async fn the_owner_claim_works_in_invite_only_mode() -> anyhow::Result<()> {
+    common::allow_legacy_signup();
     let app = pending_app().await?;
 
     let (status, setup) = send(
@@ -509,6 +511,7 @@ async fn the_owner_claim_works_in_invite_only_mode() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn the_owners_choice_at_setup_is_saved() -> anyhow::Result<()> {
+    common::allow_legacy_signup();
     let app = pending_app().await?;
     let (status, body) = send(
         &app,
