@@ -489,14 +489,14 @@
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
         "max_age": {
-          "default": 86400,
-          "description": "Seconds until expiry; 0 means never, at most 604800 (7 days).",
+          "default": 604800,
+          "description": "Seconds until expiry; 0 means never, at most 604800 (7 days). Defaults to 604800.",
           "format": "int32",
           "type": "integer"
         },
         "max_uses": {
-          "default": 0,
-          "description": "0 means unlimited uses; at most 100 otherwise.",
+          "default": 25,
+          "description": "0 means unlimited uses; at most 100 otherwise. Defaults to 25.",
           "format": "int32",
           "type": "integer"
         }
@@ -4365,6 +4365,14 @@
           "additionalProperties": true,
           "type": "object"
         },
+        "link_previews": {
+          "description": "Link previews on for this person (spec §8.3).",
+          "type": "boolean"
+        },
+        "link_previews_available": {
+          "description": "The server fetches previews at all (`[link_previews] enabled`). When\nfalse the switch is disabled with \"Turned off on this server.\"",
+          "type": "boolean"
+        },
         "locale": {
           "type": "string"
         },
@@ -4394,6 +4402,8 @@
         "status",
         "custom_status",
         "crypto_auth_enabled",
+        "link_previews",
+        "link_previews_available",
         "notifications",
         "keybinds"
       ],

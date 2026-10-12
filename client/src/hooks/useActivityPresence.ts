@@ -14,6 +14,7 @@ import {
   setAutoIdle,
 } from '../lib/presenceActivities';
 import { useAuthStore } from '../stores/authStore';
+import { isActivityDetectionOn } from '../lib/features/privacyDefaults';
 import type { Activity } from '../types';
 
 const POLL_INTERVAL_MS = 5000;
@@ -124,7 +125,8 @@ export function useActivityPresence(options?: { idleTimeoutMs?: number }) {
 
         const settings = useAuthStore.getState().settings;
         const notifications = (settings?.notifications ?? {}) as Record<string, unknown>;
-        const detectionEnabled = notifications['activityDetectionEnabled'] !== false;
+        // Off unless explicitly turned on (setup spec §8.4).
+        const detectionEnabled = isActivityDetectionOn(notifications);
         const status = currentPresenceStatus();
 
         const nativeCaptureAllowed = detectionEnabled && status !== 'offline';

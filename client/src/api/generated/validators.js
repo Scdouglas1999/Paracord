@@ -12206,7 +12206,7 @@ function validate111(data, { instancePath = "", parentData, parentDataProperty, 
 }
 validate111.evaluated = { "props": { "mode": true, "session_id": true }, "dynamicProps": false, "dynamicItems": false };
 var isUserSettingsResponse = validate112;
-var schema163 = { "$id": "urn:paracord:contract:UserSettingsResponse", "$schema": "https://json-schema.org/draft/2020-12/schema", "description": "`GET`/`PATCH /users/@me/settings`. The server stores `theme`, `locale`, and\n`status` as opaque strings (bounded by length only), and `notifications` and\n`keybinds` as free-form JSON objects; they are echoed verbatim.", "properties": { "crypto_auth_enabled": { "type": "boolean" }, "custom_css": { "type": ["string", "null"] }, "custom_status": { "type": ["string", "null"] }, "keybinds": { "additionalProperties": true, "type": "object" }, "locale": { "type": "string" }, "message_display_compact": { "type": "boolean" }, "notifications": { "additionalProperties": true, "type": "object" }, "status": { "type": "string" }, "theme": { "type": "string" }, "user_id": { "type": "string" } }, "required": ["user_id", "theme", "locale", "message_display_compact", "custom_css", "status", "custom_status", "crypto_auth_enabled", "notifications", "keybinds"], "title": "UserSettingsResponse", "type": "object" };
+var schema163 = { "$id": "urn:paracord:contract:UserSettingsResponse", "$schema": "https://json-schema.org/draft/2020-12/schema", "description": "`GET`/`PATCH /users/@me/settings`. The server stores `theme`, `locale`, and\n`status` as opaque strings (bounded by length only), and `notifications` and\n`keybinds` as free-form JSON objects; they are echoed verbatim.", "properties": { "crypto_auth_enabled": { "type": "boolean" }, "custom_css": { "type": ["string", "null"] }, "custom_status": { "type": ["string", "null"] }, "keybinds": { "additionalProperties": true, "type": "object" }, "link_previews": { "description": "Link previews on for this person (spec \xA78.3).", "type": "boolean" }, "link_previews_available": { "description": 'The server fetches previews at all (`[link_previews] enabled`). When\nfalse the switch is disabled with "Turned off on this server."', "type": "boolean" }, "locale": { "type": "string" }, "message_display_compact": { "type": "boolean" }, "notifications": { "additionalProperties": true, "type": "object" }, "status": { "type": "string" }, "theme": { "type": "string" }, "user_id": { "type": "string" } }, "required": ["user_id", "theme", "locale", "message_display_compact", "custom_css", "status", "custom_status", "crypto_auth_enabled", "link_previews", "link_previews_available", "notifications", "keybinds"], "title": "UserSettingsResponse", "type": "object" };
 function validate112(data, { instancePath = "", parentData, parentDataProperty, rootData = data, dynamicAnchors = {} } = {}) {
   ;
   let vErrors = null;
@@ -12221,7 +12221,7 @@ function validate112(data, { instancePath = "", parentData, parentDataProperty, 
   if (errors === 0) {
     if (data && typeof data == "object" && !Array.isArray(data)) {
       let missing0;
-      if (data.user_id === void 0 && (missing0 = "user_id") || data.theme === void 0 && (missing0 = "theme") || data.locale === void 0 && (missing0 = "locale") || data.message_display_compact === void 0 && (missing0 = "message_display_compact") || data.custom_css === void 0 && (missing0 = "custom_css") || data.status === void 0 && (missing0 = "status") || data.custom_status === void 0 && (missing0 = "custom_status") || data.crypto_auth_enabled === void 0 && (missing0 = "crypto_auth_enabled") || data.notifications === void 0 && (missing0 = "notifications") || data.keybinds === void 0 && (missing0 = "keybinds")) {
+      if (data.user_id === void 0 && (missing0 = "user_id") || data.theme === void 0 && (missing0 = "theme") || data.locale === void 0 && (missing0 = "locale") || data.message_display_compact === void 0 && (missing0 = "message_display_compact") || data.custom_css === void 0 && (missing0 = "custom_css") || data.status === void 0 && (missing0 = "status") || data.custom_status === void 0 && (missing0 = "custom_status") || data.crypto_auth_enabled === void 0 && (missing0 = "crypto_auth_enabled") || data.link_previews === void 0 && (missing0 = "link_previews") || data.link_previews_available === void 0 && (missing0 = "link_previews_available") || data.notifications === void 0 && (missing0 = "notifications") || data.keybinds === void 0 && (missing0 = "keybinds")) {
         validate112.errors = [{ instancePath, schemaPath: "#/required", keyword: "required", params: { missingProperty: missing0 }, message: "must have required property '" + missing0 + "'" }];
         return false;
       } else {
@@ -12275,10 +12275,10 @@ function validate112(data, { instancePath = "", parentData, parentDataProperty, 
                 var valid0 = true;
               }
               if (valid0) {
-                if (data.locale !== void 0) {
+                if (data.link_previews !== void 0) {
                   const _errs10 = errors;
-                  if (typeof data.locale !== "string") {
-                    validate112.errors = [{ instancePath: instancePath + "/locale", schemaPath: "#/properties/locale/type", keyword: "type", params: { type: "string" }, message: "must be string" }];
+                  if (typeof data.link_previews !== "boolean") {
+                    validate112.errors = [{ instancePath: instancePath + "/link_previews", schemaPath: "#/properties/link_previews/type", keyword: "type", params: { type: "boolean" }, message: "must be boolean" }];
                     return false;
                   }
                   var valid0 = _errs10 === errors;
@@ -12286,10 +12286,10 @@ function validate112(data, { instancePath = "", parentData, parentDataProperty, 
                   var valid0 = true;
                 }
                 if (valid0) {
-                  if (data.message_display_compact !== void 0) {
+                  if (data.link_previews_available !== void 0) {
                     const _errs12 = errors;
-                    if (typeof data.message_display_compact !== "boolean") {
-                      validate112.errors = [{ instancePath: instancePath + "/message_display_compact", schemaPath: "#/properties/message_display_compact/type", keyword: "type", params: { type: "boolean" }, message: "must be boolean" }];
+                    if (typeof data.link_previews_available !== "boolean") {
+                      validate112.errors = [{ instancePath: instancePath + "/link_previews_available", schemaPath: "#/properties/link_previews_available/type", keyword: "type", params: { type: "boolean" }, message: "must be boolean" }];
                       return false;
                     }
                     var valid0 = _errs12 === errors;
@@ -12297,52 +12297,76 @@ function validate112(data, { instancePath = "", parentData, parentDataProperty, 
                     var valid0 = true;
                   }
                   if (valid0) {
-                    if (data.notifications !== void 0) {
-                      let data6 = data.notifications;
+                    if (data.locale !== void 0) {
                       const _errs14 = errors;
-                      if (errors === _errs14) {
-                        if (data6 && typeof data6 == "object" && !Array.isArray(data6)) {
-                        } else {
-                          validate112.errors = [{ instancePath: instancePath + "/notifications", schemaPath: "#/properties/notifications/type", keyword: "type", params: { type: "object" }, message: "must be object" }];
-                          return false;
-                        }
+                      if (typeof data.locale !== "string") {
+                        validate112.errors = [{ instancePath: instancePath + "/locale", schemaPath: "#/properties/locale/type", keyword: "type", params: { type: "string" }, message: "must be string" }];
+                        return false;
                       }
                       var valid0 = _errs14 === errors;
                     } else {
                       var valid0 = true;
                     }
                     if (valid0) {
-                      if (data.status !== void 0) {
-                        const _errs17 = errors;
-                        if (typeof data.status !== "string") {
-                          validate112.errors = [{ instancePath: instancePath + "/status", schemaPath: "#/properties/status/type", keyword: "type", params: { type: "string" }, message: "must be string" }];
+                      if (data.message_display_compact !== void 0) {
+                        const _errs16 = errors;
+                        if (typeof data.message_display_compact !== "boolean") {
+                          validate112.errors = [{ instancePath: instancePath + "/message_display_compact", schemaPath: "#/properties/message_display_compact/type", keyword: "type", params: { type: "boolean" }, message: "must be boolean" }];
                           return false;
                         }
-                        var valid0 = _errs17 === errors;
+                        var valid0 = _errs16 === errors;
                       } else {
                         var valid0 = true;
                       }
                       if (valid0) {
-                        if (data.theme !== void 0) {
-                          const _errs19 = errors;
-                          if (typeof data.theme !== "string") {
-                            validate112.errors = [{ instancePath: instancePath + "/theme", schemaPath: "#/properties/theme/type", keyword: "type", params: { type: "string" }, message: "must be string" }];
-                            return false;
+                        if (data.notifications !== void 0) {
+                          let data8 = data.notifications;
+                          const _errs18 = errors;
+                          if (errors === _errs18) {
+                            if (data8 && typeof data8 == "object" && !Array.isArray(data8)) {
+                            } else {
+                              validate112.errors = [{ instancePath: instancePath + "/notifications", schemaPath: "#/properties/notifications/type", keyword: "type", params: { type: "object" }, message: "must be object" }];
+                              return false;
+                            }
                           }
-                          var valid0 = _errs19 === errors;
+                          var valid0 = _errs18 === errors;
                         } else {
                           var valid0 = true;
                         }
                         if (valid0) {
-                          if (data.user_id !== void 0) {
+                          if (data.status !== void 0) {
                             const _errs21 = errors;
-                            if (typeof data.user_id !== "string") {
-                              validate112.errors = [{ instancePath: instancePath + "/user_id", schemaPath: "#/properties/user_id/type", keyword: "type", params: { type: "string" }, message: "must be string" }];
+                            if (typeof data.status !== "string") {
+                              validate112.errors = [{ instancePath: instancePath + "/status", schemaPath: "#/properties/status/type", keyword: "type", params: { type: "string" }, message: "must be string" }];
                               return false;
                             }
                             var valid0 = _errs21 === errors;
                           } else {
                             var valid0 = true;
+                          }
+                          if (valid0) {
+                            if (data.theme !== void 0) {
+                              const _errs23 = errors;
+                              if (typeof data.theme !== "string") {
+                                validate112.errors = [{ instancePath: instancePath + "/theme", schemaPath: "#/properties/theme/type", keyword: "type", params: { type: "string" }, message: "must be string" }];
+                                return false;
+                              }
+                              var valid0 = _errs23 === errors;
+                            } else {
+                              var valid0 = true;
+                            }
+                            if (valid0) {
+                              if (data.user_id !== void 0) {
+                                const _errs25 = errors;
+                                if (typeof data.user_id !== "string") {
+                                  validate112.errors = [{ instancePath: instancePath + "/user_id", schemaPath: "#/properties/user_id/type", keyword: "type", params: { type: "string" }, message: "must be string" }];
+                                  return false;
+                                }
+                                var valid0 = _errs25 === errors;
+                              } else {
+                                var valid0 = true;
+                              }
+                            }
                           }
                         }
                       }
@@ -12362,7 +12386,7 @@ function validate112(data, { instancePath = "", parentData, parentDataProperty, 
   validate112.errors = vErrors;
   return errors === 0;
 }
-validate112.evaluated = { "props": { "crypto_auth_enabled": true, "custom_css": true, "custom_status": true, "keybinds": true, "locale": true, "message_display_compact": true, "notifications": true, "status": true, "theme": true, "user_id": true }, "dynamicProps": false, "dynamicItems": false };
+validate112.evaluated = { "props": { "crypto_auth_enabled": true, "custom_css": true, "custom_status": true, "keybinds": true, "link_previews": true, "link_previews_available": true, "locale": true, "message_display_compact": true, "notifications": true, "status": true, "theme": true, "user_id": true }, "dynamicProps": false, "dynamicItems": false };
 var isVoiceModeResponse = validate113;
 var schema165 = { "description": "How a member takes part in a voice channel. `listen` hears the voices and\nnever sends; everyone in the channel sees the member as listening in.", "enum": ["joined", "listen"], "type": "string" };
 function validate113(data, { instancePath = "", parentData, parentDataProperty, rootData = data, dynamicAnchors = {} } = {}) {

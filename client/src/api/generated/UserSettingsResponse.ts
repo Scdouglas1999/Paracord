@@ -13,6 +13,15 @@ export interface UserSettingsResponse {
   keybinds: {
     [k: string]: unknown | undefined;
   };
+  /**
+   * Link previews on for this person (spec §8.3).
+   */
+  link_previews: boolean;
+  /**
+   * The server fetches previews at all (`[link_previews] enabled`). When
+   * false the switch is disabled with "Turned off on this server."
+   */
+  link_previews_available: boolean;
   locale: string;
   message_display_compact: boolean;
   notifications: {

@@ -35,6 +35,10 @@ export interface UserSettings {
   status: string;
   custom_status?: string | null;
   crypto_auth_enabled: boolean;
+  /** Link previews on for this person. Absent on servers older than the privacy defaults. */
+  link_previews?: boolean;
+  /** The server fetches previews at all (`[link_previews] enabled`). */
+  link_previews_available?: boolean;
   notifications?: Record<string, unknown>;
   keybinds?: Record<string, unknown>;
 }

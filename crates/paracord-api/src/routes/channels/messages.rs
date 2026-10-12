@@ -1043,7 +1043,14 @@ pub async fn send_message(
         }
 
         // OpenGraph link preview fetching (non-blocking background task)
-        if !body.content.is_empty() {
+        // Gated by `[link_previews] enabled` and the author's own setting
+        // (setup spec §8.3). A failed settings read is an error, not a
+        // silent "yes, fetch".
+        if !body.content.is_empty()
+            && crate::opengraph::previews_allowed(&state, auth.user_id)
+                .await
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        {
             crate::opengraph::spawn_opengraph_task(
                 state.clone(),
                 msg.id,

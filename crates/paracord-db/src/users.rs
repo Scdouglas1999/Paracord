@@ -165,6 +165,9 @@ pub struct UserSettingsRow {
     pub locale: String,
     pub message_display: String,
     pub crypto_auth_enabled: bool,
+    /// Whether links this person posts are unfurled and whether they see
+    /// previews (setup spec §8.3). Defaults to on.
+    pub link_previews: bool,
     pub presence_status: String,
     pub custom_status: Option<String>,
     pub notifications: serde_json::Value,
@@ -234,6 +237,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for UserSettingsRow {
             locale: row.try_get("locale")?,
             message_display: row.try_get("message_display")?,
             crypto_auth_enabled: bool_from_any_row(row, "crypto_auth_enabled")?,
+            link_previews: bool_from_any_row(row, "link_previews")?,
             presence_status: row
                 .try_get("presence_status")
                 .unwrap_or_else(|_| "online".to_string()),
@@ -558,13 +562,45 @@ pub async fn get_user_settings_typed(
     user_id: UserId,
 ) -> Result<Option<UserSettingsRow>, DbError> {
     let row = sqlx::query_as::<_, UserSettingsRow>(
-        "SELECT user_id, theme, custom_css, locale, message_display, CASE WHEN crypto_auth_enabled THEN 1 ELSE 0 END AS crypto_auth_enabled, presence_status, custom_status, notifications, keybinds, updated_at
+        "SELECT user_id, theme, custom_css, locale, message_display, CASE WHEN crypto_auth_enabled THEN 1 ELSE 0 END AS crypto_auth_enabled, CAST(link_previews AS INTEGER) AS link_previews, presence_status, custom_status, notifications, keybinds, updated_at
          FROM user_settings WHERE user_id = $1",
     )
     .bind(user_id)
     .fetch_optional(pool)
     .await?;
     Ok(row)
+}
+
+/// Whether `user_id` has link previews on (spec §8.3). A person with no
+/// settings row has never changed it, so previews are on.
+pub async fn link_previews_enabled(pool: &DbPool, user_id: UserId) -> Result<bool, DbError> {
+    let row: Option<(i64,)> = sqlx::query_as(
+        "SELECT CAST(link_previews AS INTEGER) FROM user_settings WHERE user_id = $1",
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(v,)| v != 0).unwrap_or(true))
+}
+
+/// Set `user_settings.link_previews`, creating the settings row with its
+/// defaults when the person has none yet. The flag is bound as a `bool`
+/// (PostgreSQL rejects a bigint bound into a BOOLEAN column).
+pub async fn set_link_previews(
+    pool: &DbPool,
+    user_id: UserId,
+    enabled: bool,
+) -> Result<(), DbError> {
+    sqlx::query(
+        "INSERT INTO user_settings (user_id, link_previews, updated_at) VALUES ($1, $2, $3)
+         ON CONFLICT (user_id) DO UPDATE SET link_previews = $2, updated_at = $3",
+    )
+    .bind(user_id)
+    .bind(enabled)
+    .bind(datetime_to_db_text(Utc::now()))
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 /// Raw i64 shim kept for API compat.
@@ -838,7 +874,7 @@ pub async fn upsert_user_settings_typed(
             notifications = COALESCE($9, user_settings.notifications),
             keybinds = COALESCE($10, user_settings.keybinds),
             updated_at = $12
-         RETURNING user_id, theme, custom_css, locale, message_display, CASE WHEN crypto_auth_enabled THEN 1 ELSE 0 END AS crypto_auth_enabled, presence_status, custom_status, notifications, keybinds, updated_at",
+         RETURNING user_id, theme, custom_css, locale, message_display, CASE WHEN crypto_auth_enabled THEN 1 ELSE 0 END AS crypto_auth_enabled, CAST(link_previews AS INTEGER) AS link_previews, presence_status, custom_status, notifications, keybinds, updated_at",
     )
     .bind(user_id)
     .bind(theme)

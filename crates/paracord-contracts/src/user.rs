@@ -125,6 +125,11 @@ pub struct UserSettingsResponse {
     pub status: String,
     pub custom_status: Option<String>,
     pub crypto_auth_enabled: bool,
+    /// Link previews on for this person (spec §8.3).
+    pub link_previews: bool,
+    /// The server fetches previews at all (`[link_previews] enabled`). When
+    /// false the switch is disabled with "Turned off on this server."
+    pub link_previews_available: bool,
     pub notifications: BTreeMap<String, Value>,
     pub keybinds: BTreeMap<String, Value>,
 }

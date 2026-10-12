@@ -384,6 +384,20 @@ fn html_decode(s: &str) -> String {
         .replace("&apos;", "'")
 }
 
+/// Whether links in a message by `author_id` may be fetched at all (setup spec
+/// §8.3): the server has `[link_previews] enabled` and the author has previews
+/// on. Callers check this *before* spawning, so nothing is fetched (and no
+/// outbound request leaves the server) for an author who turned them off.
+pub async fn previews_allowed(
+    state: &AppState,
+    author_id: i64,
+) -> Result<bool, paracord_db::DbError> {
+    if !state.config.link_previews_enabled {
+        return Ok(false);
+    }
+    paracord_db::users::link_previews_enabled(&state.db, author_id.into()).await
+}
+
 /// Spawn a background task that fetches OpenGraph data for URLs in a message
 /// and dispatches a `MESSAGE_UPDATE` event when complete.
 pub fn spawn_opengraph_task(

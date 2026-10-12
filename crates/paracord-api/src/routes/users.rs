@@ -325,6 +325,7 @@ fn settings_response(
     s: &paracord_db::users::UserSettingsRow,
     status: &str,
     custom_status: Option<String>,
+    link_previews_available: bool,
 ) -> Result<UserSettingsResponse, ApiError> {
     Ok(UserSettingsResponse {
         user_id: s.user_id.to_string(),
@@ -335,6 +336,8 @@ fn settings_response(
         status: status.to_string(),
         custom_status,
         crypto_auth_enabled: s.crypto_auth_enabled,
+        link_previews: s.link_previews,
+        link_previews_available,
         notifications: settings_object(&s.notifications, "notifications")?,
         keybinds: settings_object(&s.keybinds, "keybinds")?,
     })
@@ -756,7 +759,12 @@ pub async fn get_settings(
                 .and_then(|v| v.as_str())
                 .map(|v| v.to_string())
         });
-        Ok(Json(settings_response(&s, status, custom_status)?))
+        Ok(Json(settings_response(
+            &s,
+            status,
+            custom_status,
+            state.config.link_previews_enabled,
+        )?))
     } else {
         Ok(Json(UserSettingsResponse {
             user_id: auth.user_id.to_string(),
@@ -767,6 +775,8 @@ pub async fn get_settings(
             status: "online".to_string(),
             custom_status: None,
             crypto_auth_enabled: false,
+            link_previews: true,
+            link_previews_available: state.config.link_previews_enabled,
             notifications: BTreeMap::new(),
             keybinds: BTreeMap::new(),
         }))
@@ -882,6 +892,20 @@ pub async fn update_settings(
     )
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    // `link_previews` has its own statement so the long positional upsert
+    // above (shared with the identity import) stays as it is. The row exists
+    // by now, so the read after it carries the new value.
+    let settings = if let Some(enabled) = body.link_previews {
+        paracord_db::users::set_link_previews(&state.db, auth.user_id.into(), enabled)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+        paracord_db::users::get_user_settings(&state.db, auth.user_id)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+            .ok_or(ApiError::NotFound)?
+    } else {
+        settings
+    };
     let upsert_ms = upsert_started.elapsed().as_millis() as u64;
 
     if let Some(enabled) = body.crypto_auth_enabled {
@@ -930,6 +954,7 @@ pub async fn update_settings(
         &settings,
         &settings.presence_status,
         settings.custom_status.clone(),
+        state.config.link_previews_enabled,
     )?))
 }
 
@@ -1257,6 +1282,17 @@ pub async fn change_password(
     Json(body): Json<ChangePasswordRequest>,
 ) -> Result<StatusCode, ApiError> {
     let peer_ip = addr.ip().to_string();
+    // A one-password account changes its password through
+    // `PUT /users/@me/credential`, never here (docs/setup-spec.md §3.7, §3.10).
+    let credential = paracord_db::credentials::get(&state.db, auth.user_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    if credential
+        .as_ref()
+        .is_some_and(|row| row.version == paracord_db::credentials::VERSION_ONE_PASSWORD)
+    {
+        return Err(super::auth::credential_upgraded());
+    }
     if body.current_password == body.new_password {
         return Err(ApiError::BadRequest(
             "new_password must differ from current_password".into(),

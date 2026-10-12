@@ -85,6 +85,8 @@ import { VoiceConnectionCheckButton } from '../voice/VoiceConnectionCheckButton'
 import { getSystemAudioGrant, revokeSystemAudioGrant, type SystemAudioGrant } from '../../lib/media/systemAudioGrant';
 import { ThemeSelector } from '../customization/ThemeSelector';
 import { NOW_PLAYING_SETTING_KEY } from '../../lib/nowPlaying';
+import { isActivityDetectionOn } from '../../lib/features/privacyDefaults';
+import { PrivacySection } from './PrivacySection';
 import { useNowPlayingSupport } from '../../hooks/useNowPlayingSupport';
 import { useNowPlayingStore } from '../../stores/nowPlayingStore';
 
@@ -115,7 +117,7 @@ const NAV_GROUPS: { label?: string; items: NavItem[] }[] = [
       { id: 'appearance', label: 'Appearance', icon: Palette },
       { id: 'voice', label: 'Voice & video', icon: Mic },
       { id: 'notifications', label: 'Notifications', icon: Bell },
-      { id: 'activity', label: 'Activity privacy', icon: Eye },
+      { id: 'activity', label: 'Privacy', icon: Eye },
       { id: 'keybinds', label: 'Keybinds', icon: Keyboard },
     ],
   },
@@ -181,6 +183,17 @@ export function UserSettings({ onClose }: UserSettingsProps) {
   const [statusText, setStatusText] = useState<string | null>(null);
   const [statusKind, setStatusKind] = useState<'success' | 'error' | null>(null);
   const cryptoAuthEnabled = settings?.crypto_auth_enabled === true;
+  // The Privacy section saves "Show what I'm playing" on its own, the moment it
+  // is flipped. Keep this page's draft in step so a later Save does not write
+  // the old answer back over it.
+  const storedActivitySharing = isActivityDetectionOn(settings?.notifications);
+  useEffect(() => {
+    setNotifications((prev) =>
+      prev['activityDetectionEnabled'] === storedActivitySharing
+        ? prev
+        : { ...prev, activityDetectionEnabled: storedActivitySharing },
+    );
+  }, [storedActivitySharing]);
   const {
     audioInputDevices,
     audioOutputDevices,
@@ -346,7 +359,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
       setKnownActivityApps(known);
       setNotifications({
         ...(settings.notifications as Record<string, unknown>),
-        activityDetectionEnabled: notif?.['activityDetectionEnabled'] !== false,
+        activityDetectionEnabled: isActivityDetectionOn(notif),
         activityDetectionKnownApps: known,
         activityDetectionDisabledApps: Array.from(new Set(disabledApps)).sort((a, b) =>
           a.localeCompare(b, undefined, { sensitivity: 'base' })
@@ -484,8 +497,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
     [keybinds]
   );
 
-  const activityDetectionEnabled = mergedNotifications['activityDetectionEnabled'] !== false;
-  // "Share what I'm listening to": off unless turned on. What is shown as
+    // "Share what I'm listening to": off unless turned on. What is shown as
   // shared comes from the saved setting, not the unsaved toggle.
   const nowPlayingSharing = mergedNotifications[NOW_PLAYING_SETTING_KEY] === true;
   const nowPlayingSaved =
@@ -824,14 +836,6 @@ export function UserSettings({ onClose }: UserSettingsProps) {
     } finally {
       setSaving(false);
     }
-  };
-
-  const setActivityDetectionEnabled = (enabled: boolean) => {
-    setNotifications((prev) => ({
-      ...prev,
-      activityDetectionEnabled: enabled,
-      activityDetectionKnownApps: visibleKnownActivityApps,
-    }));
   };
 
   const toggleActivityApp = (appId: string) => {
@@ -1952,17 +1956,22 @@ export function UserSettings({ onClose }: UserSettingsProps) {
             {activeSection === 'activity' && (
               <div>
                 <SettingsHeader
-                  title="Activity privacy"
-                  description="Control what Paracord shares about the apps and games you use."
+                  title="Privacy"
+                  description="Control what Paracord shares and fetches on your behalf."
                 />
-                <section>
+                <PrivacySection
+                  askForPassword={{
+                    on: cryptoAuthEnabled,
+                    disabled: !localCryptoAccountReady || saving,
+                    onChange: (next) => void handleCryptoSecurityToggle(next),
+                    note: localCryptoAccountReady
+                      ? undefined
+                      : "You haven't set up a local crypto identity for this account yet.",
+                  }}
+                />
+                <section className="mt-9 border-t border-border-subtle pt-8">
+                  <h3 className="ix-label text-text-muted">Now playing</h3>
                   <div className="divide-y divide-border-subtle">
-                    <ToggleRow
-                      title="Display current activity"
-                      description="Show the game or app you're using in your presence."
-                      on={Boolean(activityDetectionEnabled)}
-                      onToggle={() => setActivityDetectionEnabled(!activityDetectionEnabled)}
-                    />
                     <ToggleRow
                       title="Share what I'm listening to"
                       description="The desktop app reads your system's media controls (the same info your OS media widget shows) and shares only the title, artist and app name, and only while this is on."

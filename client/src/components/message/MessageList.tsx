@@ -47,6 +47,7 @@ import { ResourceImage } from '../ui/ResourceImage';
 import { isAllowedImageMimeType, safeClientResourceUrl } from '../../lib/security';
 import { mentionsEveryone } from '../../lib/mentions';
 import { MessageEmbedCard, extractUrls } from './MessageEmbed';
+import { visibleEmbeds } from '../../lib/features/privacyDefaults';
 import { FeedPostCard, isFeedEmbed } from '../feeds/FeedPostCard';
 import { FeedSourceIcon, GAME_SERVER_POST_KIND } from '../feeds/feedKinds';
 import {
@@ -696,6 +697,7 @@ function OwnedMessageList({
   // ticket that is minted after the first paint; re-render when it lands.
   const downloadTicket = useDownloadTicket();
   const lowBandwidthMode = useUIStore((s) => s.lowBandwidthMode);
+  const linkPreviewsOn = useAuthStore((s) => s.settings?.link_previews !== false);
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { messages, isLoading, hasMore, loadMore, error } = useMessages(channelId);
@@ -3177,8 +3179,13 @@ function OwnedMessageList({
 
           {/* Link embeds: a card bubble under the text bubble (§4.11). */}
           {!feedEmbed && (() => {
-            const embeds = msg.embeds || [];
-            const contentUrls = embeds.length === 0 ? extractUrls(msg.content) : [];
+            // A reader with link previews off sees none (setup spec §8.3): the
+            // server's unfurled cards (type `link`) and the bare-URL cards
+            // made here from the text both stay hidden. Embeds a webhook or
+            // feed posted on purpose are not previews and still show.
+            const embeds = visibleEmbeds(msg.embeds, linkPreviewsOn);
+            const contentUrls =
+              linkPreviewsOn && embeds.length === 0 ? extractUrls(msg.content) : [];
             const allEmbeds = embeds.length > 0
               ? embeds
               : contentUrls.slice(0, 3).map((url) => ({ url }));
