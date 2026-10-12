@@ -9,7 +9,7 @@
  *   PARACORD_E2E_SETUP_WP=s13 npx playwright test -c e2e/setup-review.config.ts
  */
 import { expect, test, type Page } from '@playwright/test';
-import { CLOCK, FINGERPRINT, KANTO, inviteUrl, installSetupScene, showWords, type SetupScene, type SetupSceneOptions } from './fixtures/setup';
+import { CLOCK, FINGERPRINT, KANTO, RESTORE_VECTOR, inviteUrl, installSetupScene, showWords, type SetupScene, type SetupSceneOptions } from './fixtures/setup';
 
 const NOW_S = Math.floor(Date.parse(CLOCK.start) / 1000);
 const HOME = 'https://127.0.0.1:8443';
@@ -415,9 +415,16 @@ test.describe('claim mode (a headless install, web)', () => {
             reachability: { state: 'open', method: 'upnp', external_ip: '73.162.4.19', gateway_ip: '192.168.1.1', lan_ip: '192.168.1.28', port: 8443, lease_expires_at: null, next_retry_at: null, last_error: null, confirmed_at: null },
             backups: { enabled: true, interval_seconds: 86400, keep: 14, last_backup_at: null, last_error: null },
             tls: { fingerprint_sha256: FINGERPRINT.kanto, self_signed: true },
+            instance_id: RESTORE_VECTOR.instanceId,
           }),
         ),
       );
+      // The claim page escrows the storage key under the new owner's phrase (spec §2.11, §4.7; S13b).
+      const escrows: unknown[] = [];
+      await page.route(`${origin}/api/v1/admin/storage-key/escrow`, (route) => {
+        escrows.push(route.request().postDataJSON());
+        return route.fulfill({ status: 204, body: '' });
+      });
       await page.goto(`/setup-server#claim=${TOKEN}`);
       await expect(page.getByRole('heading', { name: 'What should we call your server?' })).toBeVisible();
       await fillName(page);
@@ -426,9 +433,173 @@ test.describe('claim mode (a headless install, web)', () => {
       await page.getByRole('button', { name: 'Continue' }).click();
       await expect(page.getByTestId('fr-setup-continue')).toBeEnabled({ timeout: 20_000 });
       await shoot(scene, `claim-mode-setup-at-rest-${atRest}`);
+      if (atRest === 'on') {
+        expect(escrows).toHaveLength(1);
+        expect((escrows[0] as { wrapping_key: string }).wrapping_key).toMatch(/^[A-Za-z0-9_-]{43}$/);
+        await expect(page.getByTestId('fr-setup-rows').locator('[data-row="2"]')).toHaveAttribute('data-state', 'ok');
+      } else {
+        // Nothing to escrow on a server that stores data unencrypted.
+        expect(escrows).toHaveLength(0);
+      }
       if (atRest === 'on') await shoot(scene, 'claim-mode-setup-web');
     });
   }
+});
+
+test.describe('restore from a backup (S13b, spec §1.4, §4.8)', () => {
+  async function toRestore(page: Page, options: SetupSceneOptions = {}): Promise<SetupScene> {
+    const scene = await toHostName(page, options);
+    await expect(page.getByTestId('fr-restore-link')).toBeVisible();
+    await page.getByTestId('fr-restore-link').click();
+    await expect(page.getByRole('heading', { name: 'Restore from a backup' })).toBeVisible();
+    await expect(page.locator('[data-step="backup"]')).toHaveAttribute('data-state', 'on');
+    return scene;
+  }
+
+  test('the link, the backup, a phrase that is not the owner\'s, then the right one', async ({ page }) => {
+    const scene = await toHostName(page, { backup: 'other-owner' });
+    await fillName(page);
+    await shoot(scene, 'host-name-restore-link');
+    await page.getByTestId('fr-restore-link').click();
+    await expect(page.getByRole('heading', { name: 'Restore from a backup' })).toBeVisible();
+    await expect(page.getByTestId('fr-restore-continue')).toBeDisabled();
+    await shoot(scene, 'restore-backup-empty');
+
+    await page.getByTestId('fr-pick-backup').click();
+    await expect(page.getByTestId('fr-backup-file')).toContainText('paracord_backup_20261003_040000.tar.gz');
+    await page.getByTestId('fr-restore-phrase').fill(RESTORE_VECTOR.phrase);
+    await page.getByTestId('fr-restore-continue').click();
+    await expect(page.getByRole('alert')).toHaveText("That recovery phrase doesn't unlock this backup. It needs the phrase of the account that set up the server.");
+    await shoot(scene, 'restore-wrong-phrase');
+    // Nothing ran: the phrase was checked against the backup's owner on this computer.
+    expect(scene.host!.calls('host_restore')).toHaveLength(0);
+
+    scene.host!.backup = 'escrowed';
+    await page.getByRole('button', { name: 'Choose another' }).click();
+    await expect(page.getByRole('alert')).toHaveCount(0);
+    await expect(page.getByTestId('fr-restore-continue')).toBeEnabled();
+    await shoot(scene, 'restore-backup-chosen');
+    // Back goes to Host › Name.
+    await page.getByRole('button', { name: 'Back' }).click();
+    await expect(page.getByRole('heading', { name: 'What should we call your server?' })).toBeVisible();
+  });
+
+  test('a backup made before the escrow, and a file that is not a backup', async ({ page }) => {
+    const scene = await toRestore(page, { backup: 'no-escrow' });
+    await page.getByTestId('fr-pick-backup').click();
+    await expect(page.getByTestId('fr-backup-error')).toHaveText(
+      'This backup was made before your recovery phrase protected its storage key, so no phrase can unlock it. Choose a newer backup.',
+    );
+    await expect(page.getByTestId('fr-restore-continue')).toBeDisabled();
+    await shoot(scene, 'restore-no-escrow');
+    scene.host!.backup = 'not-a-backup';
+    await page.getByRole('button', { name: 'Choose another' }).click();
+    await expect(page.getByTestId('fr-backup-error')).toHaveText("notes.txt isn't a Paracord backup.");
+    await expect(page.getByTestId('fr-pick-backup')).toBeVisible();
+  });
+
+  test('the restore runs, escrows again under the same phrase and asks to sign in', async ({ page }) => {
+    const scene = await toRestore(page, { progress: 'manual' });
+    // This computer's restored server, as the sign-in step probes it afterwards.
+    scene.host!.directory.rekey('127.0.0.1', { fingerprint: FINGERPRINT.kanto, caVerified: false });
+    await page.getByTestId('fr-pick-backup').click();
+    await page.getByTestId('fr-restore-phrase').fill(RESTORE_VECTOR.phrase);
+    await page.getByTestId('fr-restore-continue').click();
+    await expect(page.getByRole('heading', { name: 'Restoring your server' })).toBeVisible();
+    const rows = page.getByTestId('fr-setup-rows');
+    await expect(rows.locator('[data-row="0"]')).toHaveAttribute('data-state', 'ok', { timeout: 10_000 });
+    await expect(rows.locator('[data-row="0"]')).toContainText('Restored from the backup of October 3, 2026.');
+    // host_restore got the archive and the escrow key of the archive's instance, never the phrase.
+    const restore = scene.host!.calls('host_restore')[0].args as { archivePath: string; wrappingKey: string };
+    expect(restore).toEqual({ archivePath: '/home/sam/Backups/paracord_backup_20261003_040000.tar.gz', wrappingKey: RESTORE_VECTOR.wrappingKey });
+    // Rows 1 and 2 through the host store: step until row 2 runs.
+    await expect.poll(async () => scene.host!.calls('host_setup_start').length, { timeout: 10_000 }).toBe(1);
+    for (let i = 0; i < 12; i += 1) {
+      await scene.host!.step();
+      if ((await rows.locator('[data-row="2"]').getAttribute('data-state')) === 'run') break;
+    }
+    await expect(rows.locator('[data-row="1"]')).toHaveAttribute('data-state', 'ok');
+    await expect(rows.locator('[data-row="2"]')).toHaveAttribute('data-state', 'run');
+    await expect(rows.locator('[data-row="3"]')).toContainText('Protecting its key with your recovery phrase');
+    await shoot(scene, 'restore-setup-running');
+    await scene.host!.finish();
+    // Row 3: the escrow again, for the restored instance, then rows 4 and 5.
+    await expect.poll(async () => scene.host!.calls('host_setup_start').length, { timeout: 10_000 }).toBe(2);
+    expect(scene.host!.calls('host_write_escrow')[0].args).toEqual({ wrappingKey: RESTORE_VECTOR.wrappingKey });
+    await scene.host!.finish();
+    await expect(page.getByTestId('fr-setup-continue')).toBeEnabled({ timeout: 10_000 });
+    await expect(page.getByTestId('fr-see-protected')).toHaveCount(0);
+    await shoot(scene, 'restore-setup-done');
+    await page.getByTestId('fr-setup-continue').click();
+    await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+    await expect(page.getByText('Your server is back. Sign in with your username and password.')).toBeVisible();
+    await expect(page.getByTestId('fr-sign-in-server')).toHaveValue(/127\.0\.0\.1:8443/);
+    await expect(page.getByTestId('fr-trust-row')).toBeVisible();
+    await shoot(scene, 'restore-sign-in');
+    scene.expectNothingUnhandled = () => undefined;
+  });
+
+  test('a computer that already has a server\'s data is refused, with no Try again', async ({ page }) => {
+    const scene = await toRestore(page, { restore: 'database-exists' });
+    await page.getByTestId('fr-pick-backup').click();
+    await page.getByTestId('fr-restore-phrase').fill(RESTORE_VECTOR.phrase);
+    await page.getByTestId('fr-restore-continue').click();
+    const row = page.getByTestId('fr-setup-rows').locator('[data-row="0"]');
+    await expect(row).toHaveAttribute('data-state', 'fail', { timeout: 10_000 });
+    await expect(row).toContainText("This computer already has a Paracord server's data, and Paracord never restores over it.");
+    await expect(row.getByRole('button')).toHaveCount(0);
+    await expect(page.getByTestId('fr-setup-continue')).toBeDisabled();
+    await shoot(scene, 'restore-database-exists');
+  });
+});
+
+test.describe('the launch banner (S13b, spec §2.8)', () => {
+  test('a failed update: details, then the restore from before it', async ({ page }) => {
+    const scene = await toHostName(page, { launch: 'update-failed', progressDelayMs: 30 });
+    scriptClaim(scene);
+    await accountRoutes(page, HOME);
+    // The app behind the strip: the server the claim made, with its first channel.
+    await page.route(`${HOME}/api/v1/users/@me/guilds`, (route) =>
+      route.fulfill(json([{ id: GUILD, name: 'Friday Night Crew', icon_hash: null, owner_id: '520000000000000001', hue: 18, member_count: 1, created_at: CLOCK.start, default_channel_id: GENERAL }])),
+    );
+    const banner = page.getByTestId('ix-banner-launch');
+    await expect(banner).toHaveAttribute('data-state', 'host-update-failed');
+    await fillName(page);
+    await page.getByRole('button', { name: 'Continue' }).click();
+    await fillAccount(page);
+    await page.getByRole('button', { name: 'Continue' }).click();
+    await expect(page.getByTestId('fr-setup-continue')).toBeEnabled({ timeout: 20_000 });
+    await page.getByTestId('fr-setup-continue').click();
+    await page.getByTestId('fr-phrase-saved').check();
+    await page.getByTestId('fr-phrase-continue').click();
+    await page.getByTestId('fr-open-server').click();
+    await expect(page.getByTestId('first-run')).toHaveCount(0, { timeout: 20_000 });
+    await expect(banner).toBeVisible();
+    await expect(banner).toContainText("Paracord on this computer didn't start after the update.");
+    // Let the "is live" toast go first.
+    await expect(page.getByText('Friday Night Crew is live')).toHaveCount(0, { timeout: 15_000 });
+    await page.waitForTimeout(400);
+    await scene.shoot('update-failed-banner');
+
+    await page.getByTestId('ix-banner-launch-details').click();
+    await expect(page.getByTestId('ix-host-log')).toContainText('did not answer /health');
+    await page.waitForTimeout(500);
+    await scene.shoot('update-failed-details');
+    await page.getByRole('button', { name: 'Close' }).click();
+
+    let release: () => void = () => undefined;
+    scene.host!.rollbackHold = new Promise<void>((resolve) => (release = resolve));
+    await banner.getByRole('button', { name: 'Restore the backup from before the update' }).click();
+    await expect(banner).toHaveAttribute('data-state', 'host-rollback');
+    await expect(banner).toContainText('Restoring the backup from before the update…');
+    release();
+    await expect(banner).toHaveAttribute('data-state', 'host-rolled-back');
+    await expect(banner).toContainText("Paracord on this computer is running 3.3.0 again, with the backup from before the update. 3.4.0 won't be installed again until a newer version comes out.");
+    expect(scene.host!.calls('host_rollback_update')).toHaveLength(1);
+    await page.waitForTimeout(400);
+    await scene.shoot('update-rolled-back-banner');
+    scene.expectNothingUnhandled = () => undefined;
+  });
 });
 
 test.describe('other windows (spec §1.1)', () => {

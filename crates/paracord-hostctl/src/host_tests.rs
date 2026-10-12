@@ -178,6 +178,7 @@ fn encrypted_status() -> HostStatus {
             fingerprint_sha256: "ab".repeat(32),
             self_signed: true,
         },
+        instance_id: Some("7c1f0b6e-4a8e-4f8e-9a51-2d6c1f0b6e4a".into()),
     }
 }
 
@@ -268,8 +269,9 @@ for a in "$@"; do
 {init}
   fi
   if [ "$a" = "restore-backup" ]; then
-    cfg=""; out=""
-    while [ $# -gt 0 ]; do case "$1" in -c) cfg="$2"; shift;; --output-dir) out="$2"; shift;; esac; shift; done
+    cfg=""; out=""; arc=""
+    while [ $# -gt 0 ]; do case "$1" in -c) cfg="$2"; shift;; --output-dir) out="$2"; shift;; --archive) arc="$2"; shift;; esac; shift; done
+    case "$arc" in *broken*) echo "Error: archive digest mismatch" >&2; exit 1;; esac
     mkdir -p "$out"; cp "$cfg" "$out/paracord.toml"; exit 0
   fi
 done
@@ -798,9 +800,12 @@ fn restore_on_a_fresh_computer_installs_inits_and_activates_the_generation() {
     let state = rig.state();
     assert!(state.enabled);
     assert!(state.config_path.as_ref().unwrap().is_file());
-    for step in ["install", "init", "claim", "escrow"] {
+    for step in ["install", "init", "claim"] {
         assert!(state.has_step(step), "{step}");
     }
+    // A new instance: the page escrows the key again under the owner's phrase
+    // before rows 4 and 5 (the first backup then carries it).
+    assert!(!state.has_step("escrow"));
     // The service isn't installed yet: setup (rows 1, 2, 4, 5) does that.
     assert!(!rig.world.lock().unwrap().installed);
     // The key init generated was taken back before the restore stored the
@@ -837,6 +842,32 @@ fn a_failed_fresh_restore_leaves_nothing_half_made() {
     assert!(rig.world.lock().unwrap().keychain_deleted.is_empty());
     // Refused up front: the existing database is untouched.
     assert!(layout.data_dir().join("paracord.db").is_file());
+    let state = rig.state();
+    assert!(!state.enabled);
+    assert!(state.setup.completed_steps.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_fresh_restore_that_stops_takes_back_the_key_it_may_have_stored() {
+    let rig = rig_with("3.4.0", false, healthy_world());
+    let layout = rig.host.layout().clone();
+    let err = rig
+        .host
+        .restore(Path::new("/backups/broken.tar.gz"), "ZXNjcm93")
+        .unwrap_err();
+    assert!(err.to_string().contains("archive digest mismatch"), "{err}");
+    // Once before the restore (the key init made), once after it stopped (the
+    // archive's key restore-backup may have stored): nothing is left behind.
+    let account = (
+        "Paracord".to_string(),
+        "host-storage-key:11111111-2222-4333-8444-555555555555".to_string(),
+    );
+    assert_eq!(
+        rig.world.lock().unwrap().keychain_deleted,
+        [account.clone(), account]
+    );
+    assert!(!layout.root().exists());
     let state = rig.state();
     assert!(!state.enabled);
     assert!(state.setup.completed_steps.is_empty());

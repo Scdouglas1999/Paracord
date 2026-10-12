@@ -878,9 +878,15 @@ try {
             Write-Host ''
             Write-Host "Stored messages and files are encrypted on this computer's disk."
             Write-Host 'The key is stored on the same disk, so this protects backups copied elsewhere, not a stolen disk.'
-            Write-Host 'That key exists only on this computer. After you create the owner account, save a'
-            Write-Host 'recovery copy of it under your recovery phrase; without one, a backup of this server'
-            Write-Host "cannot be restored on another computer. How: $EncryptionDocsUrl#recovering-the-storage-key"
+            if ($isUpgrade) {
+                Write-Host 'That key exists only on this computer. Save a recovery copy of it under the owner''s'
+                Write-Host 'recovery phrase; without one, a backup of this server cannot be restored on another'
+                Write-Host "computer. How: $EncryptionDocsUrl#recovering-the-storage-key"
+            } else {
+                Write-Host 'That key exists only on this computer. The setup page saves a recovery copy of it'
+                Write-Host 'under your recovery phrase when you create the owner account; check that its storage'
+                Write-Host "row says encrypted. More: $EncryptionDocsUrl#recovering-the-storage-key"
+            }
         } elseif ($encryptHint) {
             Write-Host ''
             Write-Host 'Stored messages and files on this server are not encrypted yet. To encrypt them, run'

@@ -175,12 +175,14 @@ allow_discovery = false
 # On Windows, optionally auto-create local firewall allow rules for Paracord binaries.
 windows_firewall_auto_allow = false
 # Ask your router (UPnP / NAT-PMP) to let friends outside your home network reach
-# this server. false = only people on your home network can connect. Turn it on
+# this server. false = only people on your home network can connect. Change it
 # here or in Admin -> Settings (restart the server afterwards). If you set up port
-# forwarding by hand or use a domain, leave it off (see docs/port-forwarding.md).
-# A config without this line reads as false; one that says true keeps it.
+# forwarding by hand or use a domain, turn it off (see docs/port-forwarding.md).
+# A new config says true, as here. A config without this line (one made before
+# this setting existed) reads as false, so an upgrade never starts asking a
+# router nobody chose to ask; a config that says either keeps it.
 # Env override: PARACORD_AUTO_PORT_FORWARD
-auto_port_forward = false
+auto_port_forward = true
 # How long each router entry lasts, in seconds. It is refreshed automatically
 # while the server runs. Env override: PARACORD_PORT_FORWARD_LEASE_SECONDS
 port_forward_lease_seconds = 3600

@@ -51,7 +51,22 @@ pub async fn run(args: &RestoreBackupArgs, config_path: &str) -> Result<()> {
     }
     // Read and validate external identity material before any database restore.
     // Never call startup helpers that generate missing TLS/federation keys.
-    let tls = if recovered.tls.enabled {
+    // "Paracord on this computer" restored onto a new computer (docs/setup-spec.md
+    // §4.8): `init --profile desktop-host` wrote the config, and that server makes
+    // its own certificate the first time it starts, so there is none yet. It is a
+    // new computer, so a new certificate is the honest identity (friends' apps see
+    // the change and ask). Only the desktop host's own profile takes this path;
+    // any other config must bring its original certificate, as below.
+    let fresh_desktop_host = recovered.tls.enabled
+        && recovered.host.enabled
+        && recovered.tls.auto_generate
+        && !recovered.tls.acme.enabled
+        && !Path::new(&recovered.tls.cert_path).exists()
+        && !Path::new(&recovered.tls.key_path).exists();
+    if fresh_desktop_host {
+        tracing::info!("This computer's server has no TLS certificate yet; it makes its own when it starts, as a new identity.");
+    }
+    let tls = if recovered.tls.enabled && !fresh_desktop_host {
         let certificate = std::fs::read(&recovered.tls.cert_path)
             .context("original TLS certificate is missing")?;
         let private_key = std::fs::read(&recovered.tls.key_path)

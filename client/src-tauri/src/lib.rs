@@ -2564,6 +2564,7 @@ pub fn run() {
         host::host_remove,
         host::host_logs_tail,
         host::host_restore,
+        host::host_pick_backup,
         host::host_info,
         host::host_on_launch,
         host::host_rollback_update,

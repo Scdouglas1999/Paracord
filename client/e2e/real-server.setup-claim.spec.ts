@@ -7,6 +7,11 @@
  *
  *   PARACORD_E2E_REAL=1 PARACORD_E2E_SERVER_BIN=… npx playwright test e2e/real-server.setup-claim.spec.ts
  */
+import { createDecipheriv, createHash, createPrivateKey, createPublicKey, hkdfSync } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { expect, test } from '@playwright/test';
 
 import { CLAIM_TOKEN, haveServer, launchFirstRunServer, serverBin, type FirstRunServer } from './fixtures/firstRunServer';
@@ -17,7 +22,8 @@ test.describe('claim mode on a real server', () => {
 
   let server: FirstRunServer;
   test.beforeAll(async () => {
-    server = await launchFirstRunServer();
+    // Encrypted, as the installers leave a new server (S14): the claim page escrows its key (S13b).
+    server = await launchFirstRunServer(undefined, { atRest: true });
   });
   test.afterAll(async () => {
     await server?.stop();
@@ -52,14 +58,35 @@ test.describe('claim mode on a real server', () => {
     await expect(page.getByTestId('fr-setup-continue')).toBeEnabled({ timeout: 60_000 });
     const rows = page.getByTestId('fr-setup-rows');
     await expect(rows.locator('[data-row="3"]')).toHaveAttribute('data-state', 'ok');
-    // This server has no stored-data key: said plainly, not as a failure.
-    await expect(rows.locator('[data-row="2"]')).toHaveAttribute('data-state', 'warn');
-    await expect(rows.locator('[data-row="2"]')).toContainText("not encrypted on this server's disk");
+    // Encrypted with a key file beside the data, and the key escrowed under the new owner's phrase.
+    await expect(rows.locator('[data-row="2"]')).toHaveAttribute('data-state', 'ok');
+    await expect(rows.locator('[data-row="2"]')).toContainText('Encrypted on disk, with the key stored on the same disk.');
+    expect(server.escrowFile && existsSync(server.escrowFile)).toBe(true);
+    const escrow = JSON.parse(readFileSync(server.escrowFile!, 'utf8')) as { version: number; instance_id: string; owner_public_key: string };
+    expect(escrow.version).toBe(1);
+    expect(escrow.owner_public_key).toMatch(/^[0-9a-f]{64}$/);
+
     await page.getByTestId('fr-setup-continue').click();
 
     await expect(page.getByRole('heading', { name: 'Save your recovery phrase' })).toBeVisible();
     await page.getByTestId('fr-show-words').click();
     await expect(page.locator('.fr-words li')).toHaveCount(24);
+    // The escrow on disk is this phrase's: its owner key is the phrase's public key, and the key
+    // derived from the phrase (spec §4.7) opens it to the server's own storage key.
+    const words = await page.locator('.fr-words li').allInnerTexts();
+    const privateKey = phraseToKey(words);
+    const pkcs8 = Buffer.concat([Buffer.from('302e020100300506032b657004220420', 'hex'), privateKey]);
+    const publicKey = createPublicKey(createPrivateKey({ key: pkcs8, format: 'der', type: 'pkcs8' })).export({ format: 'der', type: 'spki' }).subarray(-32);
+    const sealed = JSON.parse(readFileSync(server.escrowFile!, 'utf8')) as { instance_id: string; owner_public_key: string; iv: string; ciphertext: string };
+    expect(sealed.owner_public_key).toBe(publicKey.toString('hex'));
+    const escrowKey = Buffer.from(hkdfSync('sha256', privateKey, 'paracord/host-storage-escrow/v1', sealed.instance_id, 32));
+    const box = Buffer.from(sealed.ciphertext, 'base64url');
+    const decipher = createDecipheriv('aes-256-gcm', escrowKey, Buffer.from(sealed.iv, 'base64url'));
+    decipher.setAAD(Buffer.from(`paracord/host-storage-escrow/v1|${sealed.instance_id}`));
+    decipher.setAuthTag(box.subarray(-16));
+    const storageKey = Buffer.concat([decipher.update(box.subarray(0, -16)), decipher.final()]);
+    const keyFile = readFileSync(join(server.escrowFile!, '..', 'at-rest.key'), 'utf8').trim().replace(/^hex:/, '');
+    expect(storageKey.toString('hex')).toBe(keyFile);
     await page.getByTestId('fr-phrase-saved').check();
     await page.getByTestId('fr-phrase-continue').click();
 
@@ -80,3 +107,18 @@ test.describe('claim mode on a real server', () => {
     await context.close();
   });
 });
+
+/** The recovery phrase → the identity private key (24 BIP39 words; the client's lib/credential/phrase.ts). */
+function phraseToKey(words: string[]): Buffer {
+  const list = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'crates', 'paracord-server', 'data', 'bip39-english.txt'), 'utf8').trim().split('\n');
+  let bits = '';
+  for (const word of words) {
+    const index = list.indexOf(word.trim() === 'artifact' ? 'artefact' : word.trim());
+    if (index < 0) throw new Error(`not a phrase word: ${word}`);
+    bits += index.toString(2).padStart(11, '0');
+  }
+  const bytes = Buffer.from(Array.from({ length: 33 }, (_, i) => parseInt(bits.slice(i * 8, i * 8 + 8), 2)));
+  const key = bytes.subarray(0, 32);
+  expect(createHash('sha256').update(key).digest()[0]).toBe(bytes[32]);
+  return key;
+}

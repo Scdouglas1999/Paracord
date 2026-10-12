@@ -16,6 +16,8 @@ export interface PrivacySectionProps {
     disabled?: boolean;
     onChange: (next: boolean) => void;
     note?: string;
+    /** A choice of this computer only (one-password accounts): says so under the row. */
+    perDevice?: boolean;
   };
   /** Host rows for the "What's protected" sheet, when this account runs the server. */
   host?: ProtectedHostRows;
@@ -79,6 +81,11 @@ export function PrivacySection({ askForPassword, host }: PrivacySectionProps) {
           onChange={askForPassword.onChange}
           disabled={askForPassword.disabled}
         >
+          {askForPassword.perDevice && (
+            <p className="mt-1.5 text-meta text-text-secondary" data-testid="privacy-ask-per-device">
+              Only on this computer.
+            </p>
+          )}
           {askForPassword.note && (
             <p className="mt-1.5 text-meta text-text-secondary">{askForPassword.note}</p>
           )}

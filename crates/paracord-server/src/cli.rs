@@ -54,6 +54,25 @@ pub enum Command {
     /// encrypts files in place, then turns [at_rest] on in the config. An
     /// interrupted run picks up where it stopped when run again.
     EncryptStorage(EncryptStorageArgs),
+
+    /// Turn the owner's recovery phrase (read from standard input, one line)
+    /// into the escrow key `restore-backup --escrow-key-stdin` takes, and
+    /// print it (docs/setup-spec.md §4.7, §4.8). With --archive the phrase is
+    /// checked against the backup's escrow first. Pipe it straight into
+    /// restore-backup rather than saving it anywhere.
+    EscrowKey(EscrowKeyArgs),
+}
+
+#[derive(ClapArgs, Debug)]
+pub struct EscrowKeyArgs {
+    /// The backup you will restore: its escrow gives the instance id and the
+    /// owner's public key the phrase must match.
+    #[arg(long)]
+    pub archive: Option<std::path::PathBuf>,
+    /// The instance id (`[host] instance_id`) to derive for, instead of the
+    /// archive's. With --archive, the phrase is still checked against it.
+    #[arg(long)]
+    pub instance_id: Option<String>,
 }
 
 /// Where `encrypt-storage` keeps the new key.

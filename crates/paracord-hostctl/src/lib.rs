@@ -14,6 +14,7 @@
 //! Tauri commands in `client/src-tauri/src/host.rs` and the live integration
 //! test (`tests/live_service.rs`, run only with `PARACORD_HOSTCTL_LIVE=1`).
 
+pub mod backup_file;
 pub mod config;
 pub mod control;
 pub mod firewall;

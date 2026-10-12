@@ -6146,6 +6146,7 @@ function validate69(data, { instancePath = "", parentData, parentDataProperty, r
 }
 validate69.evaluated = { "props": { "code": true, "detail": true, "row": true, "state": true, "step": true }, "dynamicProps": false, "dynamicItems": false };
 var isHostStatus = validate70;
+var schema101 = { "$defs": { "BackupStatus": { "description": "Automatic backups.", "properties": { "enabled": { "type": "boolean" }, "interval_seconds": { "format": "uint64", "minimum": 0, "type": "integer" }, "keep": { "description": "How many backups are kept.", "format": "uint32", "minimum": 0, "type": "integer" }, "last_backup_at": { "type": ["string", "null"] }, "last_error": { "type": ["string", "null"] } }, "required": ["enabled", "interval_seconds", "keep", "last_backup_at", "last_error"], "type": "object" }, "KeySource": { "description": "Where the at-rest storage key lives (`[at_rest] key_source`, spec \xA74.2).\nSpelled the same in the config file and on the wire.", "oneOf": [{ "const": "keychain", "description": "The OS credential store of the user the server runs as.", "type": "string" }, { "const": "systemd-creds", "description": "A `systemd-creds` credential loaded by the unit.", "type": "string" }, { "const": "file", "description": "A 0600 key file.", "type": "string" }, { "const": "env", "description": "An environment variable (`[at_rest] key_env`).", "type": "string" }] }, "Protection": { "description": "What protects the storage key, which decides the copy (spec \xA74.6).", "oneOf": [{ "const": "login", "description": "Unlocked by the user's sign-in (login keychain).", "type": "string" }, { "const": "tpm", "description": "Sealed to the machine's TPM.", "type": "string" }, { "const": "machine", "description": "Protected by the machine's own credentials.", "type": "string" }, { "const": "same_disk", "description": "Stored on the same disk as the data.", "type": "string" }] }, "Reachability": { "description": "The current reachability, as the server holds it.", "properties": { "confirmed_at": { "description": "When a connection from outside this network was observed.", "type": ["string", "null"] }, "external_ip": { "description": "Only ever what the router reported.", "type": ["string", "null"] }, "gateway_ip": { "type": ["string", "null"] }, "lan_ip": { "type": ["string", "null"] }, "last_error": { "type": ["string", "null"] }, "lease_expires_at": { "type": ["string", "null"] }, "method": { "description": '`"upnp"`, `"nat-pmp"` or `"pcp"`.', "type": ["string", "null"] }, "next_retry_at": { "type": ["string", "null"] }, "port": { "format": "uint16", "maximum": 65535, "minimum": 0, "type": "integer" }, "state": { "$ref": "#/$defs/ReachabilityState" } }, "required": ["state", "method", "external_ip", "gateway_ip", "lan_ip", "port", "lease_expires_at", "next_retry_at", "last_error", "confirmed_at"], "type": "object" }, "ReachabilityState": { "description": "What the router said, or what this computer knows, about whether people\noutside the home network can reach this server (spec \xA75.2).", "oneOf": [{ "const": "off", "description": "Automatic forwarding is off, or the server binds loopback.", "type": "string" }, { "const": "asking", "description": "An attempt is in flight.", "type": "string" }, { "const": "open", "description": "The router accepted both mappings and reported a public IPv4.", "type": "string" }, { "const": "shared_address", "description": "The router's own external address is private (carrier-grade NAT or\nanother router in front).", "type": "string" }, { "const": "refused", "description": "A gateway answered and refused.", "type": "string" }, { "const": "no_answer", "description": "No UPnP IGD, NAT-PMP or PCP gateway answered in time.", "type": "string" }, { "const": "direct", "description": "The bind interface has a public IPv4 itself.", "type": "string" }, { "const": "firewall_blocked", "description": "Windows only: the firewall rule is missing.", "type": "string" }] }, "StorageStatus": { "description": "Stored-data encryption as the running server observes it (spec \xA74.5).", "properties": { "enabled": { "type": "boolean" }, "escrowed": { "description": "The storage key is escrowed under the owner's recovery phrase (\xA74.7).", "type": "boolean" }, "files_encrypted": { "type": "boolean" }, "key_source": { "anyOf": [{ "$ref": "#/$defs/KeySource" }, { "type": "null" }] }, "protection": { "anyOf": [{ "$ref": "#/$defs/Protection" }, { "type": "null" }] }, "sqlite_encrypted": { "description": "From `PRAGMA cipher_version` on the live pool, not from config.", "type": "boolean" } }, "required": ["enabled", "sqlite_encrypted", "files_encrypted", "key_source", "protection", "escrowed"], "type": "object" }, "TlsStatus": { "description": "This server's TLS identity. Trust words are computed from the fingerprint by\nthe client (spec \xA77.1).", "properties": { "fingerprint_sha256": { "description": "hex SHA-256 of the leaf certificate's DER.", "type": "string" }, "self_signed": { "type": "boolean" } }, "required": ["fingerprint_sha256", "self_signed"], "type": "object" } }, "$id": "urn:paracord:contract:HostStatus", "$schema": "https://json-schema.org/draft/2020-12/schema", "description": "`GET /api/v1/host/status` (loopback + host token) and\n`GET /api/v1/admin/host-status` (admins).", "properties": { "backups": { "$ref": "#/$defs/BackupStatus" }, "instance_id": { "description": "`[host] instance_id`: the HKDF info of the owner's escrow key (spec\n\xA74.7), so a headless owner's first-run page can escrow the storage key\nafter the claim (\xA72.11). Absent on a server that has none (and on\nservers older than this field).", "type": ["string", "null"] }, "reachability": { "$ref": "#/$defs/Reachability" }, "setup_required": { "description": "True until the first owner claims the instance.", "type": "boolean" }, "started_at": { "type": "string" }, "storage": { "$ref": "#/$defs/StorageStatus" }, "tls": { "$ref": "#/$defs/TlsStatus" }, "version": { "type": "string" } }, "required": ["version", "started_at", "setup_required", "storage", "reachability", "backups", "tls"], "title": "HostStatus", "type": "object" };
 var schema102 = { "description": "Automatic backups.", "properties": { "enabled": { "type": "boolean" }, "interval_seconds": { "format": "uint64", "minimum": 0, "type": "integer" }, "keep": { "description": "How many backups are kept.", "format": "uint32", "minimum": 0, "type": "integer" }, "last_backup_at": { "type": ["string", "null"] }, "last_error": { "type": ["string", "null"] } }, "required": ["enabled", "interval_seconds", "keep", "last_backup_at", "last_error"], "type": "object" };
 var schema103 = { "description": "The current reachability, as the server holds it.", "properties": { "confirmed_at": { "description": "When a connection from outside this network was observed.", "type": ["string", "null"] }, "external_ip": { "description": "Only ever what the router reported.", "type": ["string", "null"] }, "gateway_ip": { "type": ["string", "null"] }, "lan_ip": { "type": ["string", "null"] }, "last_error": { "type": ["string", "null"] }, "lease_expires_at": { "type": ["string", "null"] }, "method": { "description": '`"upnp"`, `"nat-pmp"` or `"pcp"`.', "type": ["string", "null"] }, "next_retry_at": { "type": ["string", "null"] }, "port": { "format": "uint16", "maximum": 65535, "minimum": 0, "type": "integer" }, "state": { "$ref": "#/$defs/ReachabilityState" } }, "required": ["state", "method", "external_ip", "gateway_ip", "lan_ip", "port", "lease_expires_at", "next_retry_at", "last_error", "confirmed_at"], "type": "object" };
 function validate71(data, { instancePath = "", parentData, parentDataProperty, rootData = data, dynamicAnchors = {} } = {}) {
@@ -7109,32 +7110,33 @@ function validate70(data, { instancePath = "", parentData, parentDataProperty, r
           var valid0 = true;
         }
         if (valid0) {
-          if (data.reachability !== void 0) {
+          if (data.instance_id !== void 0) {
+            let data6 = data.instance_id;
             const _errs14 = errors;
-            if (!validate71(data.reachability, { instancePath: instancePath + "/reachability", parentData: data, parentDataProperty: "reachability", rootData, dynamicAnchors })) {
-              vErrors = vErrors === null ? validate71.errors : vErrors.concat(validate71.errors);
-              errors = vErrors.length;
+            if (typeof data6 !== "string" && data6 !== null) {
+              validate70.errors = [{ instancePath: instancePath + "/instance_id", schemaPath: "#/properties/instance_id/type", keyword: "type", params: { type: schema101.properties.instance_id.type }, message: "must be string,null" }];
+              return false;
             }
             var valid0 = _errs14 === errors;
           } else {
             var valid0 = true;
           }
           if (valid0) {
-            if (data.setup_required !== void 0) {
-              const _errs15 = errors;
-              if (typeof data.setup_required !== "boolean") {
-                validate70.errors = [{ instancePath: instancePath + "/setup_required", schemaPath: "#/properties/setup_required/type", keyword: "type", params: { type: "boolean" }, message: "must be boolean" }];
-                return false;
+            if (data.reachability !== void 0) {
+              const _errs16 = errors;
+              if (!validate71(data.reachability, { instancePath: instancePath + "/reachability", parentData: data, parentDataProperty: "reachability", rootData, dynamicAnchors })) {
+                vErrors = vErrors === null ? validate71.errors : vErrors.concat(validate71.errors);
+                errors = vErrors.length;
               }
-              var valid0 = _errs15 === errors;
+              var valid0 = _errs16 === errors;
             } else {
               var valid0 = true;
             }
             if (valid0) {
-              if (data.started_at !== void 0) {
+              if (data.setup_required !== void 0) {
                 const _errs17 = errors;
-                if (typeof data.started_at !== "string") {
-                  validate70.errors = [{ instancePath: instancePath + "/started_at", schemaPath: "#/properties/started_at/type", keyword: "type", params: { type: "string" }, message: "must be string" }];
+                if (typeof data.setup_required !== "boolean") {
+                  validate70.errors = [{ instancePath: instancePath + "/setup_required", schemaPath: "#/properties/setup_required/type", keyword: "type", params: { type: "boolean" }, message: "must be boolean" }];
                   return false;
                 }
                 var valid0 = _errs17 === errors;
@@ -7142,70 +7144,82 @@ function validate70(data, { instancePath = "", parentData, parentDataProperty, r
                 var valid0 = true;
               }
               if (valid0) {
-                if (data.storage !== void 0) {
+                if (data.started_at !== void 0) {
                   const _errs19 = errors;
-                  if (!validate73(data.storage, { instancePath: instancePath + "/storage", parentData: data, parentDataProperty: "storage", rootData, dynamicAnchors })) {
-                    vErrors = vErrors === null ? validate73.errors : vErrors.concat(validate73.errors);
-                    errors = vErrors.length;
+                  if (typeof data.started_at !== "string") {
+                    validate70.errors = [{ instancePath: instancePath + "/started_at", schemaPath: "#/properties/started_at/type", keyword: "type", params: { type: "string" }, message: "must be string" }];
+                    return false;
                   }
                   var valid0 = _errs19 === errors;
                 } else {
                   var valid0 = true;
                 }
                 if (valid0) {
-                  if (data.tls !== void 0) {
-                    let data10 = data.tls;
-                    const _errs20 = errors;
+                  if (data.storage !== void 0) {
                     const _errs21 = errors;
-                    if (errors === _errs21) {
-                      if (data10 && typeof data10 == "object" && !Array.isArray(data10)) {
-                        let missing2;
-                        if (data10.fingerprint_sha256 === void 0 && (missing2 = "fingerprint_sha256") || data10.self_signed === void 0 && (missing2 = "self_signed")) {
-                          validate70.errors = [{ instancePath: instancePath + "/tls", schemaPath: "#/$defs/TlsStatus/required", keyword: "required", params: { missingProperty: missing2 }, message: "must have required property '" + missing2 + "'" }];
-                          return false;
-                        } else {
-                          if (data10.fingerprint_sha256 !== void 0) {
-                            const _errs23 = errors;
-                            if (typeof data10.fingerprint_sha256 !== "string") {
-                              validate70.errors = [{ instancePath: instancePath + "/tls/fingerprint_sha256", schemaPath: "#/$defs/TlsStatus/properties/fingerprint_sha256/type", keyword: "type", params: { type: "string" }, message: "must be string" }];
-                              return false;
-                            }
-                            var valid4 = _errs23 === errors;
+                    if (!validate73(data.storage, { instancePath: instancePath + "/storage", parentData: data, parentDataProperty: "storage", rootData, dynamicAnchors })) {
+                      vErrors = vErrors === null ? validate73.errors : vErrors.concat(validate73.errors);
+                      errors = vErrors.length;
+                    }
+                    var valid0 = _errs21 === errors;
+                  } else {
+                    var valid0 = true;
+                  }
+                  if (valid0) {
+                    if (data.tls !== void 0) {
+                      let data11 = data.tls;
+                      const _errs22 = errors;
+                      const _errs23 = errors;
+                      if (errors === _errs23) {
+                        if (data11 && typeof data11 == "object" && !Array.isArray(data11)) {
+                          let missing2;
+                          if (data11.fingerprint_sha256 === void 0 && (missing2 = "fingerprint_sha256") || data11.self_signed === void 0 && (missing2 = "self_signed")) {
+                            validate70.errors = [{ instancePath: instancePath + "/tls", schemaPath: "#/$defs/TlsStatus/required", keyword: "required", params: { missingProperty: missing2 }, message: "must have required property '" + missing2 + "'" }];
+                            return false;
                           } else {
-                            var valid4 = true;
-                          }
-                          if (valid4) {
-                            if (data10.self_signed !== void 0) {
+                            if (data11.fingerprint_sha256 !== void 0) {
                               const _errs25 = errors;
-                              if (typeof data10.self_signed !== "boolean") {
-                                validate70.errors = [{ instancePath: instancePath + "/tls/self_signed", schemaPath: "#/$defs/TlsStatus/properties/self_signed/type", keyword: "type", params: { type: "boolean" }, message: "must be boolean" }];
+                              if (typeof data11.fingerprint_sha256 !== "string") {
+                                validate70.errors = [{ instancePath: instancePath + "/tls/fingerprint_sha256", schemaPath: "#/$defs/TlsStatus/properties/fingerprint_sha256/type", keyword: "type", params: { type: "string" }, message: "must be string" }];
                                 return false;
                               }
                               var valid4 = _errs25 === errors;
                             } else {
                               var valid4 = true;
                             }
+                            if (valid4) {
+                              if (data11.self_signed !== void 0) {
+                                const _errs27 = errors;
+                                if (typeof data11.self_signed !== "boolean") {
+                                  validate70.errors = [{ instancePath: instancePath + "/tls/self_signed", schemaPath: "#/$defs/TlsStatus/properties/self_signed/type", keyword: "type", params: { type: "boolean" }, message: "must be boolean" }];
+                                  return false;
+                                }
+                                var valid4 = _errs27 === errors;
+                              } else {
+                                var valid4 = true;
+                              }
+                            }
                           }
+                        } else {
+                          validate70.errors = [{ instancePath: instancePath + "/tls", schemaPath: "#/$defs/TlsStatus/type", keyword: "type", params: { type: "object" }, message: "must be object" }];
+                          return false;
                         }
-                      } else {
-                        validate70.errors = [{ instancePath: instancePath + "/tls", schemaPath: "#/$defs/TlsStatus/type", keyword: "type", params: { type: "object" }, message: "must be object" }];
-                        return false;
                       }
-                    }
-                    var valid0 = _errs20 === errors;
-                  } else {
-                    var valid0 = true;
-                  }
-                  if (valid0) {
-                    if (data.version !== void 0) {
-                      const _errs27 = errors;
-                      if (typeof data.version !== "string") {
-                        validate70.errors = [{ instancePath: instancePath + "/version", schemaPath: "#/properties/version/type", keyword: "type", params: { type: "string" }, message: "must be string" }];
-                        return false;
-                      }
-                      var valid0 = _errs27 === errors;
+                      var valid0 = _errs22 === errors;
                     } else {
                       var valid0 = true;
+                    }
+                    if (valid0) {
+                      if (data.version !== void 0) {
+                        const _errs29 = errors;
+                        if (typeof data.version !== "string") {
+                          validate70.errors = [{ instancePath: instancePath + "/version", schemaPath: "#/properties/version/type", keyword: "type", params: { type: "string" }, message: "must be string" }];
+                          return false;
+                        }
+                        var valid0 = _errs29 === errors;
+                      } else {
+                        var valid0 = true;
+                      }
                     }
                   }
                 }
@@ -7222,7 +7236,7 @@ function validate70(data, { instancePath = "", parentData, parentDataProperty, r
   validate70.errors = vErrors;
   return errors === 0;
 }
-validate70.evaluated = { "props": { "backups": true, "reachability": true, "setup_required": true, "started_at": true, "storage": true, "tls": true, "version": true }, "dynamicProps": false, "dynamicItems": false };
+validate70.evaluated = { "props": { "backups": true, "instance_id": true, "reachability": true, "setup_required": true, "started_at": true, "storage": true, "tls": true, "version": true }, "dynamicProps": false, "dynamicItems": false };
 var isInstanceStatusUpdate = validate75;
 var schema110 = { "description": "Automatic backups.", "properties": { "enabled": { "type": "boolean" }, "interval_seconds": { "format": "uint64", "minimum": 0, "type": "integer" }, "keep": { "description": "How many backups are kept.", "format": "uint32", "minimum": 0, "type": "integer" }, "last_backup_at": { "type": ["string", "null"] }, "last_error": { "type": ["string", "null"] } }, "required": ["enabled", "interval_seconds", "keep", "last_backup_at", "last_error"], "type": "object" };
 var schema111 = { "description": "The current reachability, as the server holds it.", "properties": { "confirmed_at": { "description": "When a connection from outside this network was observed.", "type": ["string", "null"] }, "external_ip": { "description": "Only ever what the router reported.", "type": ["string", "null"] }, "gateway_ip": { "type": ["string", "null"] }, "lan_ip": { "type": ["string", "null"] }, "last_error": { "type": ["string", "null"] }, "lease_expires_at": { "type": ["string", "null"] }, "method": { "description": '`"upnp"`, `"nat-pmp"` or `"pcp"`.', "type": ["string", "null"] }, "next_retry_at": { "type": ["string", "null"] }, "port": { "format": "uint16", "maximum": 65535, "minimum": 0, "type": "integer" }, "state": { "$ref": "#/$defs/ReachabilityState" } }, "required": ["state", "method", "external_ip", "gateway_ip", "lan_ip", "port", "lease_expires_at", "next_retry_at", "last_error", "confirmed_at"], "type": "object" };

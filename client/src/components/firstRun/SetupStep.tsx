@@ -46,12 +46,13 @@ export function SetupStep({
   onProtected,
 }: {
   state: ScreenState;
-  path: 'host' | 'join';
+  path: 'host' | 'join' | 'restore';
   rows: SetupRow[];
   status: 'idle' | 'running' | 'done' | 'failed';
   onChip: (row: SetupRow, chip: RowChip) => void;
   onContinue: () => void;
-  onProtected: () => void;
+  /** "See what's protected" (not on a restore: there is no session yet to read the server as its owner). */
+  onProtected?: () => void;
 }) {
   const running = status === 'running';
   const done = status === 'done';
@@ -60,7 +61,7 @@ export function SetupStep({
     <Screen
       step="setup"
       state={state}
-      title={path === 'host' ? 'Setting up your server' : 'Getting you in'}
+      title={path === 'host' ? 'Setting up your server' : path === 'restore' ? 'Restoring your server' : 'Getting you in'}
       sub="This takes a few seconds. There's nothing you need to do."
       mark={
         <div className="fr-setmark">
@@ -95,7 +96,7 @@ export function SetupStep({
           </li>
         ))}
       </ol>
-      {done && (
+      {done && onProtected && (
         <button type="button" className="fr-privlink" onClick={onProtected} data-testid="fr-see-protected">
           <FrGlyph name="shield" size={16} />
           See what&rsquo;s protected

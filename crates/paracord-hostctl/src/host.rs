@@ -913,9 +913,15 @@ impl Host {
 
     /// Restore `archive` into a new generation under `<root>/restores/` and
     /// make its config the active one. Fresh computer: install and init
-    /// first (rows 1, 2, 4, 5 then run through [`Host::setup`]; the claim and
-    /// escrow came with the archive). Existing host: stopped, restored,
-    /// started again.
+    /// first; the owner came with the archive, and the page escrows the key
+    /// again for the new instance before rows 4 and 5 (rows then run through
+    /// [`Host::setup`]). Existing host: stopped, restored, started again.
+    /// `host_pick_backup`: what the restore screen shows about a backup file
+    /// before anything runs (its escrow decides whether a phrase can open it).
+    pub fn inspect_backup(&self, archive: &Path) -> Result<crate::backup_file::BackupFile> {
+        crate::backup_file::inspect(archive)
+    }
+
     pub fn restore(&self, archive: &Path, wrapping_key: &str) -> Result<()> {
         let mut state = self.load_state()?;
         if !self.config_path(&state).exists() {
@@ -974,13 +980,25 @@ impl Host {
                 })?;
             }
             self.restore_generation(&mut state, archive, Some(wrapping_key))?;
+            // The owner came with the archive. The escrow did not: the
+            // restored server is a new instance (init gave it a new id) with
+            // no `storage-key.escrow` yet, so the page escrows the key again
+            // under the same phrase between rows 2 and 4, as row 3 does on a
+            // new host. Until then rows 4 and 5 wait, so the first backup
+            // after a restore carries the escrow again.
             state.record_step(steps::CLAIM);
-            state.record_step(steps::ESCROW);
             Ok(state)
         })();
         match attempt {
             Ok(done) => self.save(&done),
             Err(e) => {
+                // The restore may have stored the archive's key before it stopped: take it
+                // back with the half-made root (the archive still carries its escrow).
+                if let Ok(config) = HostConfig::load(&self.parts.layout.default_config()) {
+                    if let Some((service, account)) = &config.keychain {
+                        let _ = (self.parts.keychain_delete)(service, account);
+                    }
+                }
                 let _ = std::fs::remove_dir_all(self.parts.layout.root());
                 state.enabled = false;
                 state.port = None;

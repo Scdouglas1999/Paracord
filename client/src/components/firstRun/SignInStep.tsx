@@ -64,6 +64,7 @@ export function SignInStep({
   onSubmit,
   onBack,
   onForgot,
+  sub,
 }: {
   state: ScreenState;
   /** On a server's own web page the server is the page (§6.6). */
@@ -76,6 +77,8 @@ export function SignInStep({
   onSubmit: (submit: SignInSubmit) => void;
   onBack: () => void;
   onForgot: (server: ProbedServer | null) => void;
+  /** The line under the title (after a restore it says the server is back). */
+  sub?: string;
 }) {
   const [serverText, setServerText] = useState(initialServer);
   const [server, setServer] = useState<ProbedServer | null>(null);
@@ -192,7 +195,7 @@ export function SignInStep({
       step="sign-in"
       state={state}
       title="Sign in"
-      sub="Use the server address or an invite link from your server."
+      sub={sub ?? 'Use the server address or an invite link from your server.'}
       onSubmit={submit}
       footer={
         <>

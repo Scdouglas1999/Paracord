@@ -163,6 +163,38 @@ pub async fn host_restore(
     .await
 }
 
+/// "Restore from a backup instead" (spec §1.4, §4.8): the system file picker,
+/// then what the restore screen needs about the file (its date, whether it is
+/// encrypted, the escrow's instance id and owner key). `None` when the person
+/// closed the picker. Nothing is restored here.
+#[tauri::command]
+pub async fn host_pick_backup(
+    app: AppHandle,
+) -> Result<Option<paracord_hostctl::backup_file::BackupFile>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let picker = app.clone();
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        picker
+            .dialog()
+            .file()
+            .set_title("Choose a Paracord backup")
+            .add_filter("Paracord backup", &["gz"])
+            .blocking_pick_file()
+    })
+    .await
+    .map_err(|e| format!("The file picker stopped unexpectedly ({e})."))?;
+    let Some(picked) = picked else {
+        return Ok(None);
+    };
+    let path = picked
+        .into_path()
+        .map_err(|e| format!("Paracord can't open that file from here ({e})."))?;
+    run(app, false, move |host, _| {
+        host.inspect_backup(&path).map(Some)
+    })
+    .await
+}
+
 /// `host.json` plus the live service state, for Settings › Paracord on this
 /// computer (spec §2.9).
 #[tauri::command]

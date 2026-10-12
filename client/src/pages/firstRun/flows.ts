@@ -17,6 +17,8 @@ import { escrowWrappingKey } from './escrow';
 import { hostOf } from './inviteCheck';
 import { acceptInvite, firstTextChannel } from './landing';
 import { CLAIM_STORAGE_OFF_WARN, hostRows, joinRows, RowSequencer, storageCopy } from './rows';
+import { privateKeyFromPhrase } from '../../lib/credential/phrase';
+import { backupDate, backupProblem, keyForBackup, phraseWords, RESTORE_COPY, RESTORE_ROW, restoreFailure, restoreRow } from './restore';
 
 /**
  * What the first run's steps do (docs/setup-spec.md §1.4–§1.8, §2.6, §2.11,
@@ -28,6 +30,8 @@ import { CLAIM_STORAGE_OFF_WARN, hostRows, joinRows, RowSequencer, storageCopy }
 const store = () => useFirstRunStore.getState();
 
 export function errorMessage(error: unknown): string {
+  // The desktop shell's commands reject with their sentence as a plain string.
+  if (typeof error === 'string' && error) return error;
   if (error instanceof OlderServerError) return 'This server runs an older version of Paracord. Ask the person who runs it to update, then try again.';
   const fromApi = extractApiError(error);
   if (fromApi && fromApi !== 'unauthorized') return fromApi;
@@ -263,6 +267,15 @@ export async function retrySetup(): Promise<void> {
   const s = store();
   if (s.mode === 'claim') return runClaimSetup();
   if (s.path === 'join') return runJoinSetup();
+  if (s.path === 'restore') {
+    // The restore itself failed (nothing was kept): run it again. A later row: resume the host rows.
+    if (s.rows.find((r) => r.row === RESTORE_ROW)?.state !== 'ok') return runRestoreSetup();
+    setupRun += 1;
+    s.setSetupStatus('running');
+    const phase = await useHostStore.getState().retry();
+    finishRestore(phase);
+    return;
+  }
   setupRun += 1;
   s.setSetupStatus('running');
   const phase = await useHostStore.getState().retry();
@@ -341,7 +354,14 @@ export async function runClaimSetup(): Promise<void> {
   }
   if (run !== setupRun) return;
   const encrypted = status.storage.sqlite_encrypted && status.storage.files_encrypted;
-  seq.set(2, encrypted ? { state: 'ok', detail: storageCopy(status.storage.protection, true) } : { state: 'warn', detail: CLAIM_STORAGE_OFF_WARN, code: 'storage_off' });
+  if (!encrypted) {
+    seq.set(2, { state: 'warn', detail: CLAIM_STORAGE_OFF_WARN, code: 'storage_off' });
+  } else {
+    // The same escrow as the desktop's row 3 (§4.7): the owner's phrase can restore the storage key.
+    const escrow = await escrowAfterClaim(status);
+    if (run !== setupRun) return;
+    seq.set(2, escrow ? { state: 'warn', detail: escrow, code: 'escrow_failed' } : { state: 'ok', detail: storageCopy(status.storage.protection, true) });
+  }
   if (status.reachability.state === 'off') {
     // The row is not shown when the server is not asking its router (§5.4).
     seq.drop(4);
@@ -354,6 +374,39 @@ export async function runClaimSetup(): Promise<void> {
       ? { state: 'ok', detail: `Kept on the server for ${status.backups.keep} days.` }
       : { state: 'warn', detail: 'Daily backups are off on this server.', code: 'backups_off' },
   );
+}
+
+/**
+ * Claim mode's escrow (§2.11, §4.7): `POST /admin/storage-key/escrow` with the
+ * key derived from the new owner's phrase and the server's instance id.
+ * Returns null when the key is escrowed (now or already), else the storage
+ * row's warning. The account exists either way, so this never fails setup.
+ */
+async function escrowAfterClaim(status: HostStatus): Promise<string | null> {
+  if (status.storage.escrowed) return null;
+  const kept = ' Keep a copy of the storage key somewhere safe; see docs/encryption.md.';
+  const instanceId = status.instance_id;
+  if (!instanceId) {
+    return `Encrypted on disk. This server has no instance id, so your recovery phrase can't restore its storage key.${kept}`;
+  }
+  const words = store().phrase;
+  if (!words) return `Encrypted on disk, but Paracord no longer has your recovery phrase to protect its key with.${kept}`;
+  try {
+    const key = privateKeyFromPhrase(words.join(' '));
+    let wrappingKey: string;
+    try {
+      wrappingKey = escrowWrappingKey(key, instanceId);
+    } finally {
+      key.fill(0);
+    }
+    await getServerApi(LOCAL_SERVER_ID).post('/admin/storage-key/escrow', { wrapping_key: wrappingKey });
+    return null;
+  } catch (error) {
+    const statusCode = (error as { response?: { status?: number } } | null)?.response?.status;
+    // 409 "already escrowed": a page reloaded after the escrow. It is this owner's, written once.
+    if (statusCode === 409 && /already escrowed/i.test(extractApiError(error) ?? '')) return null;
+    return `Encrypted on disk, but your recovery phrase couldn't be set up to restore its key (${errorMessage(error)}).${kept}`;
+  }
 }
 
 /* ---- Join setup (§1.7 join rows, §6.6) ---------------------------------------- */
@@ -422,6 +475,127 @@ export async function runJoinSetup(): Promise<void> {
     seq.set(3, { state: 'fail', detail: errorMessage(error) });
   }
 }
+
+/* ---- Restore from a backup (§1.4, §4.8) ---------------------------------------------- */
+
+/** Restore › Backup: the system file picker, and whether the file can be restored with a phrase. */
+export async function pickBackup(): Promise<void> {
+  const s = store();
+  if (s.restore.picking) return;
+  s.setRestore({ picking: true });
+  try {
+    const file = await useHostStore.getState().pickBackup();
+    if (!file) return; // The picker was closed: keep what was there.
+    store().setRestore({ file });
+    const problem = backupProblem(file);
+    if (problem) store().setRestoreError('file', problem);
+  } catch (error) {
+    store().setRestore({ file: null });
+    store().setRestoreError('file', errorMessage(error));
+  } finally {
+    store().setRestore({ picking: false });
+  }
+}
+
+/** Restore › Backup › Restore: the phrase must be the backup owner's (checked here, before anything runs). */
+export async function checkRestorePhrase(): Promise<boolean> {
+  const { file, phrase } = store().restore;
+  if (!file) {
+    store().setRestoreError('file', 'Choose the backup to restore.');
+    return false;
+  }
+  const problem = backupProblem(file);
+  if (problem) {
+    store().setRestoreError('file', problem);
+    return false;
+  }
+  try {
+    const key = await keyForBackup(phrase, file);
+    key.fill(0);
+    return true;
+  } catch (error) {
+    store().setRestoreError('phrase', errorMessage(error));
+    return false;
+  }
+}
+
+/** The escrow key for `instanceId` from the phrase in memory (zeroed straight after). */
+function restoreWrappingKey(instanceId: string): string {
+  const key = privateKeyFromPhrase(phraseWords(store().restore.phrase).join(' '));
+  try {
+    return escrowWrappingKey(key, instanceId);
+  } finally {
+    key.fill(0);
+  }
+}
+
+function finishRestore(phase: string): void {
+  const s = store();
+  if (phase === 'done') {
+    // The restored server has its escrow again: the phrase is not needed any more.
+    s.setRestore({ phrase: '' });
+    s.setSetupStatus('done');
+  } else {
+    s.setSetupStatus('failed');
+  }
+}
+
+/**
+ * Restore › Setup (§4.8): the restore (install, init, the generated key taken
+ * back, `restore-backup --escrow-key-stdin`), then the host rows. The owner
+ * came with the backup, so there is no claim; the restored server is a new
+ * instance, so row 3 escrows the storage key again under the same phrase
+ * before rows 4 and 5 (the first backup after a restore carries it again).
+ */
+export async function runRestoreSetup(): Promise<void> {
+  const run = ++setupRun;
+  const s = store();
+  const file = s.restore.file;
+  if (!file?.escrow) throw new Error('Choose the backup to restore.');
+  s.setRows([restoreRow('run')]);
+  s.setSetupStatus('running');
+  const since = Date.now();
+  try {
+    const key = await keyForBackup(s.restore.phrase, file);
+    let archiveKey: string;
+    try {
+      archiveKey = escrowWrappingKey(key, file.escrow.instance_id);
+    } finally {
+      key.fill(0);
+    }
+    await useHostStore.getState().restore(file.path, archiveKey);
+  } catch (error) {
+    if (run !== setupRun) return;
+    const failure = restoreFailure(errorMessage(error));
+    s.setRows([restoreRow('fail', failure.detail, failure.retry ? ['retry-row'] : undefined)]);
+    s.setSetupStatus('failed');
+    return;
+  }
+  const wait = 300 - (Date.now() - since);
+  if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+  if (run !== setupRun) return;
+  store().setRows([restoreRow('ok', `Restored from the backup of ${backupDate(file)}.`)]);
+
+  const info = await useHostStore.getState().loadInfo();
+  const port = info?.port ?? s.preflight.result?.port;
+  if (!port || !info?.home_url) {
+    store().setSetupStatus('failed');
+    throw new Error("Paracord on this computer didn't say where it runs after the restore.");
+  }
+  setStoredServerUrl(info.home_url);
+  const phase = await useHostStore.getState().runSetup({
+    port,
+    account: async () => {
+      const instanceId = (await useHostStore.getState().loadInfo())?.instance_id;
+      if (!instanceId) throw new Error("Paracord on this computer didn't say which server it is, so your recovery phrase can't protect its storage key.");
+      await useHostStore.getState().writeEscrow(restoreWrappingKey(instanceId));
+    },
+  });
+  if (run !== setupRun) return;
+  finishRestore(phase);
+}
+
+export { RESTORE_COPY };
 
 /* ---- Join › Invite: trusting the server the card showed (§7.3) ------------------- */
 

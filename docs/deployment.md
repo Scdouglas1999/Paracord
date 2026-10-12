@@ -242,6 +242,27 @@ signed-in user visits drive their Paracord server with their session, so a
 credentialed cross-origin request needs the operator to say the word. A browser user
 refused this way is told which host refused them and which setting fixes it.
 
+### Invite link guessing limits
+
+The invite preview (`GET /api/v1/invites/{code}`) is public, so a code could be
+guessed by anyone who can send requests. Each source address (an IPv6 /64 counts
+as one) gets 30 previews a minute, and 20 misses (codes that don't exist)
+inside ten minutes lock that source out of the preview for ten minutes.
+
+The miss counter lives in the server's memory, per process:
+
+- **A restart resets it.** A lockout in progress ends early; nothing else is
+  lost. Every server Paracord's installers and the desktop app set up is one
+  process, so for them this is the whole story.
+- **Replicas behind one address each count on their own.** If you run several
+  `paracord-server` processes behind a load balancer, a source spread across
+  them gets up to 20 misses per replica before any one locks it out. Pin
+  clients to one replica (sticky sessions by source address), or rate-limit
+  `/api/v1/invites/` at the load balancer as well.
+- **Behind a reverse proxy, every request looks like it comes from the proxy**
+  unless you set `PARACORD_TRUST_PROXY=true` and `PARACORD_TRUSTED_PROXY_IPS`
+  as in section 1, so one guesser could lock everyone out of invite previews.
+
 ## 4. PostgreSQL (optional)
 
 SQLite is the zero-config default and is fine for small communities. For sustained

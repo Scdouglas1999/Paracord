@@ -14,6 +14,7 @@ mod config;
 #[cfg(feature = "embed-ui")]
 mod embedded_ui;
 mod encrypt_storage;
+mod escrow_key;
 mod file_transfer;
 mod host_mode;
 mod livekit_proc;
@@ -225,6 +226,7 @@ async fn main() -> Result<()> {
             cli::Command::EncryptStorage(encrypt_args) => {
                 encrypt_storage::run(encrypt_args, &args.config).await
             }
+            cli::Command::EscrowKey(escrow_args) => escrow_key::run(escrow_args),
         };
     }
 

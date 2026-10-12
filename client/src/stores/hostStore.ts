@@ -27,6 +27,7 @@ import {
   type HostRowId,
 } from '../lib/host/rows';
 import type { HostInfo, HostLaunch } from '../lib/host/types';
+import type { BackupFile } from './firstRunStore';
 
 /** Spec 1.7: each row is shown in `run` for at least this long. */
 export const MIN_RUN_MS = 300;
@@ -79,6 +80,14 @@ interface HostStoreState {
   remove: (deleteData: boolean) => Promise<boolean>;
   logsTail: (lines?: number) => Promise<string>;
   rollbackUpdate: () => Promise<boolean>;
+  /** The system file picker for a backup (null: closed). Rejects with the reason the file can't be used. */
+  pickBackup: () => Promise<BackupFile | null>;
+  /**
+   * Restore a backup on this computer (spec §4.8): install, init, the
+   * restore with the escrow key on stdin. Resets the rows; rows 1-5 then run
+   * through `runSetup`. Rejects with the reason.
+   */
+  restore: (archivePath: string, wrappingKey: string) => Promise<void>;
   reset: () => void;
 }
 
@@ -313,6 +322,14 @@ export const useHostStore = create<HostStoreState>()((set, get) => {
     },
 
     logsTail: (lines = 200) => commands.hostLogsTail(lines),
+
+    pickBackup: () => commands.hostPickBackup(),
+
+    async restore(archivePath, wrappingKey) {
+      lastArgs = null;
+      set({ rows: initialHostRows(), phase: 'idle', setupError: null });
+      await commands.hostRestore(archivePath, wrappingKey);
+    },
 
     reset() {
       lastArgs = null;

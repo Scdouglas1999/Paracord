@@ -1317,8 +1317,13 @@ print_storage_notes() {
     if [ "$ENCRYPTED_NOW" = "1" ] && [ "$(config_value at_rest enabled)" = "true" ]; then
         say ""
         say "Stored messages and files are encrypted on this computer's disk. Its key exists only"
-        say "here: after you create the owner account, save a recovery copy of it under your recovery"
-        say "phrase, or a backup of this server can't be restored elsewhere. How:"
+        if [ "$IS_UPGRADE" = "1" ]; then
+            say "here: save a recovery copy of it under the owner's recovery phrase, or a backup of this"
+            say "server can't be restored elsewhere. How:"
+        else
+            say "here. The setup page saves a recovery copy of it under your recovery phrase when you"
+            say "create the owner account; check that its storage row says encrypted. More:"
+        fi
         say "  $ENCRYPTION_DOCS_URL#recovering-the-storage-key"
     elif [ "$ENCRYPT_HINT" = "1" ]; then
         say ""

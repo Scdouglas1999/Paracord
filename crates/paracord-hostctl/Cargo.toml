@@ -22,6 +22,9 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 # The pinned verifier for the host's own certificate (same major and provider
 # as reqwest's rustls, so use_preconfigured_tls accepts the config).
 rustls = { workspace = true, features = ["std", "tls12", "logging"] }
+# Reading a picked backup's manifest for the restore screen (spec §4.8).
+flate2 = "1"
+tar = "0.4"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

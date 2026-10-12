@@ -16,7 +16,8 @@ import { getVersionedStorageItem, setVersionedStorageItem } from '../lib/version
  * recovery phrase is held in memory only (§1.8).
  */
 
-export type FirstRunPath = 'host' | 'join';
+/** `restore`: Host › Name › "Restore from a backup instead" (§1.4, §4.8), desktop only. */
+export type FirstRunPath = 'host' | 'join' | 'restore';
 /**
  * Where the first run is running:
  * - `desktop`: the desktop app with no servers (launch, welcome, both paths);
@@ -28,13 +29,15 @@ export type FirstRunMode = 'desktop' | 'claim' | 'web';
 
 export type HostStep = 'name' | 'account' | 'setup' | 'phrase' | 'invite';
 export type JoinStep = 'invite' | 'account' | 'setup' | 'phrase';
-export type FlowStep = HostStep | JoinStep;
+export type RestoreStep = 'backup' | 'setup';
+export type FlowStep = HostStep | JoinStep | RestoreStep;
 
 export const HOST_STEPS: readonly HostStep[] = ['name', 'account', 'setup', 'phrase', 'invite'];
 export const JOIN_STEPS: readonly JoinStep[] = ['invite', 'account', 'setup', 'phrase'];
+export const RESTORE_STEPS: readonly RestoreStep[] = ['backup', 'setup'];
 
 export function stepsOf(path: FirstRunPath): readonly FlowStep[] {
-  return path === 'host' ? HOST_STEPS : JOIN_STEPS;
+  return path === 'host' ? HOST_STEPS : path === 'restore' ? RESTORE_STEPS : JOIN_STEPS;
 }
 
 export function isStepOf(path: FirstRunPath, step: string | undefined): step is FlowStep {
@@ -119,6 +122,28 @@ export type AccountField = 'displayName' | 'username' | 'email' | 'password' | '
 
 export type SheetId = 'protected' | 'router' | 'shared' | 'identity' | 'details' | null;
 
+/** A backup file the person picked for "Restore from a backup instead" (`host_pick_backup`). */
+export interface BackupFile {
+  path: string;
+  file_name: string;
+  size_bytes: number;
+  created_at: string;
+  server_version: string;
+  encrypted: boolean;
+  /** The archive's escrow: whose phrase unlocks it, and the instance its key is bound to (§4.7). */
+  escrow: { instance_id: string; owner_public_key: string } | null;
+}
+
+export type RestoreField = 'file' | 'phrase';
+
+/** Restore › Backup. The phrase is held in memory only, until the restored server has its escrow again. */
+export interface RestoreFields {
+  file: BackupFile | null;
+  picking: boolean;
+  phrase: string;
+  errors: Partial<Record<RestoreField, string>>;
+}
+
 /** What the finished account and server are, for the Invite step and the landing. */
 export interface FirstRunResult {
   serverUrl: string;
@@ -161,6 +186,9 @@ interface FirstRunState {
   rows: SetupRow[];
   setupStatus: 'idle' | 'running' | 'done' | 'failed';
 
+  /** Restore from a backup (§4.8). */
+  restore: RestoreFields;
+
   /** Recovery phrase (memory only). */
   phrase: string[] | null;
   phraseRevealed: boolean;
@@ -188,6 +216,8 @@ interface FirstRunState {
   setRows: (rows: SetupRow[]) => void;
   updateRow: (row: number, patch: Partial<SetupRow>) => void;
   setSetupStatus: (status: FirstRunState['setupStatus']) => void;
+  setRestore: (patch: Partial<RestoreFields>) => void;
+  setRestoreError: (field: RestoreField, message: string | null) => void;
   setPhrase: (words: string[] | null) => void;
   revealPhrase: () => void;
   setPhraseSaved: (saved: boolean) => void;
@@ -200,6 +230,7 @@ interface FirstRunState {
 
 const EMPTY_INVITE: InviteCheck = { state: 'empty', link: null, preview: null, identity: null, host: null };
 const EMPTY_ACCOUNT: AccountFields = { displayName: '', username: '', usernameEdited: false, email: '', password: '' };
+const EMPTY_RESTORE: RestoreFields = { file: null, picking: false, phrase: '', errors: {} };
 
 const initial = {
   mode: 'desktop' as FirstRunMode,
@@ -217,6 +248,7 @@ const initial = {
   errors: {},
   rows: [] as SetupRow[],
   setupStatus: 'idle' as const,
+  restore: EMPTY_RESTORE,
   phrase: null,
   phraseRevealed: false,
   phraseSaved: false,
@@ -266,6 +298,29 @@ export const useFirstRunStore = create<FirstRunState>()((set) => ({
   setRows: (rows) => set({ rows }),
   updateRow: (row, patch) => set((state) => ({ rows: state.rows.map((r) => (r.row === row ? { ...r, ...patch } : r)) })),
   setSetupStatus: (setupStatus) => set({ setupStatus }),
+  setRestore: (patch) =>
+    set((state) => {
+      const restore = { ...state.restore, ...patch };
+      // A field the person changed is no longer the field that was refused.
+      if (!('errors' in patch)) {
+        const errors = { ...state.restore.errors };
+        // Another backup is another owner to check the phrase against.
+        if ('file' in patch) {
+          delete errors.file;
+          delete errors.phrase;
+        }
+        if ('phrase' in patch) delete errors.phrase;
+        restore.errors = errors;
+      }
+      return { restore };
+    }),
+  setRestoreError: (field, message) =>
+    set((state) => {
+      const errors = { ...state.restore.errors };
+      if (message) errors[field] = message;
+      else delete errors[field];
+      return { restore: { ...state.restore, errors } };
+    }),
   setPhrase: (phrase) => set({ phrase, phraseRevealed: false, phraseSaved: false }),
   revealPhrase: () => set({ phraseRevealed: true }),
   setPhraseSaved: (phraseSaved) => set({ phraseSaved }),

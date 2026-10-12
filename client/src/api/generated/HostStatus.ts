@@ -23,6 +23,13 @@ export type Protection = 'login' | 'tpm' | 'machine' | 'same_disk';
  */
 export interface HostStatus {
   backups: BackupStatus;
+  /**
+   * `[host] instance_id`: the HKDF info of the owner's escrow key (spec
+   * §4.7), so a headless owner's first-run page can escrow the storage key
+   * after the claim (§2.11). Absent on a server that has none (and on
+   * servers older than this field).
+   */
+  instance_id?: string | null;
   reachability: Reachability;
   /**
    * True until the first owner claims the instance.

@@ -1,0 +1,14 @@
+/* "Show details" for Paracord on this computer (docs/setup-spec.md §2.8): the log tail in a dialog. */
+.ix-host-log {
+  margin: 0;
+  max-height: min(50vh, 420px);
+  overflow: auto;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--ix-fill);
+  box-shadow: inset 0 0 0 1px var(--ix-line);
+  color: var(--ix-ink-2);
+  font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

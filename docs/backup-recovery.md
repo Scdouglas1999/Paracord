@@ -86,26 +86,41 @@ When the owner has saved a **recovery copy** of the key
 made after that carries it, wrapped so that only a value derived from the owner's
 recovery phrase opens it. That value (the escrow key) is the base64url text of 32 bytes.
 
-- **In the desktop app,** on the first screen choose **Host**, then **Restore from a
-  backup instead**, pick the archive and enter the recovery phrase. The app derives the
-  escrow key, restores the key and the data, and starts the server. The phrase never
-  leaves the computer.
+- **In the desktop app,** on the first screen choose **Host a server**, then **Restore
+  from a backup instead**, pick the archive and enter the recovery phrase. The app checks
+  the phrase against the archive's owner before anything runs, then installs Paracord on
+  this computer, restores the key and the data, starts the server, saves a new recovery
+  copy under the same phrase, and asks you to sign in. The phrase never leaves the
+  computer. It refuses an archive with no recovery copy, a phrase that is not the
+  owner's, and a computer that already has a Paracord server's data.
 - **By hand,** write a config that has `[at_rest] enabled = true` and the key source you
   want on the new computer (`key_source = "file"` with a `key_file` path that does not
-  exist yet is the simplest), then give the escrow key on standard input:
+  exist yet is the simplest). Then turn the phrase into the escrow key and give that to
+  the restore on standard input:
 
   ```bash
-  printf '%s\n' "$ESCROW_KEY" | paracord-server -c /srv/paracord/paracord.toml restore-backup \
-    --archive /srv/backups/paracord-backup.tar.gz \
-    --output-dir /srv/paracord-recovery-20261012 \
-    --escrow-key-stdin
+  paracord-server escrow-key --archive /srv/backups/paracord-backup.tar.gz \
+    | paracord-server -c /srv/paracord/paracord.toml restore-backup \
+        --archive /srv/backups/paracord-backup.tar.gz \
+        --output-dir /srv/paracord-recovery-20261012 \
+        --escrow-key-stdin
   ```
 
-  The command unwraps the storage key from the archive, stores it in the configured
-  source, and then restores as described below. It refuses a wrong escrow key, an archive
-  with no recovery copy ("made before the owner saved one"), and a source that already
-  holds a *different* key (it never replaces one). Putting the key on standard input keeps
-  it out of the process list and the shell history.
+  `escrow-key` waits for the 24 words on one line (type or paste them and press Enter;
+  numbering like `1.` is ignored, and the terminal shows what you type, so do this where
+  nobody is watching). It checks them against the owner's public key in the archive's
+  recovery copy, so a wrong phrase is named before anything is restored, and prints only
+  the escrow key. `restore-backup` unwraps the storage key from the archive, stores it in
+  the configured source, and then restores as described below. It refuses a wrong escrow
+  key, an archive with no recovery copy ("made before the owner saved one"), and a source
+  that already holds a *different* key (it never replaces one). Neither the phrase nor the
+  key ever appears on a command line, in the process list or in the shell history.
+
+  A server restored by hand has no recovery copy of its own until the owner saves one
+  again. Sign in as the owner and call `POST /api/v1/admin/storage-key/escrow` with
+  `{"wrapping_key": "<key>"}`, where the key comes from
+  `paracord-server escrow-key --instance-id <[host] instance_id of the new config>`
+  (same phrase on standard input). Backups made after that carry it again.
 
 An archive from before the owner saved a recovery copy has none, and cannot be restored
 without the original key.

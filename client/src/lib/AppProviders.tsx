@@ -17,6 +17,7 @@ import { BannerStack } from '../components/BannerStack';
 import { RestartBanner } from '../components/RestartBanner';
 import { ConnectionStatusBar } from '../components/ConnectionStatusBar';
 import { ServerSessionBanner } from '../components/ix/session/ServerSessionBanner';
+import { HostLaunchBanner } from '../components/host/HostLaunchBanner';
 import { ServerSignInDialog } from '../components/ix/session/ServerSignInDialog';
 import { UpdateNotification } from '../components/UpdateNotification';
 import { ToastContainer } from '../components/ui/Toast';
@@ -146,6 +147,7 @@ function AppInitializer({ children }: { children: ReactNode }) {
       <BannerStack>
         <ConnectionStatusBar />
         <ServerSessionBanner />
+        <HostLaunchBanner />
         <RestartBanner />
         <UpdateNotification />
       </BannerStack>

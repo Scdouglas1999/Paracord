@@ -9,6 +9,7 @@ import type { HostProgress } from '../../api/generated/HostProgress';
 import type { HostStatus } from '../../api/generated/HostStatus';
 import type { NewOwnerClaim } from '../../api/generated/NewOwnerClaim';
 import { isTauri } from '../tauriEnv';
+import type { BackupFile } from '../../stores/firstRunStore';
 import type { HostInfo, HostLaunch } from './types';
 
 export const HOST_PROGRESS_EVENT = 'host://progress';
@@ -84,6 +85,15 @@ export async function hostLogsTail(lines: number): Promise<string> {
 export async function hostRestore(archivePath: string, wrappingKey: string): Promise<void> {
   const { invoke } = await core();
   await invoke('host_restore', { archivePath, wrappingKey });
+}
+
+/**
+ * "Restore from a backup instead": the system file picker, then what the
+ * restore screen needs about the file. `null` when the picker was closed.
+ */
+export async function hostPickBackup(): Promise<BackupFile | null> {
+  const { invoke } = await core();
+  return invoke<BackupFile | null>('host_pick_backup');
 }
 
 export async function hostInfo(): Promise<HostInfo> {

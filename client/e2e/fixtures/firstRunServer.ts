@@ -8,10 +8,10 @@
  * embedded UI the server serves.
  */
 import { spawn, type ChildProcess } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { createSocket } from 'node:dgram';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -61,12 +61,26 @@ async function freeUdpPort(): Promise<number> {
 
 export interface FirstRunServer {
   base: string;
+  /** With `atRest`: where the server writes the owner's escrow (`[host] escrow_file`). */
+  escrowFile: string | null;
   output: () => string;
   stop: () => Promise<void>;
 }
 
+export interface FirstRunServerOptions {
+  /**
+   * Stored-data encryption on, as an installer leaves it (S14): a `file` key
+   * source (0600, in the data dir), and `[host] instance_id` / `escrow_file`
+   * so the first owner's page can escrow the key (spec §2.11, §4.7).
+   */
+  atRest?: boolean;
+}
+
 /** Launch an unclaimed server; `stop()` ends it and deletes its data. */
-export async function launchFirstRunServer(preferredPort = Number(process.env.PARACORD_E2E_PORT ?? 18290)): Promise<FirstRunServer> {
+export async function launchFirstRunServer(
+  preferredPort = Number(process.env.PARACORD_E2E_PORT ?? 18290),
+  options: FirstRunServerOptions = {},
+): Promise<FirstRunServer> {
   const dataDir = await mkdtemp(join(tmpdir(), 'paracord-s13-'));
   const configPath = join(dataDir, 'paracord.toml');
   const httpPort = await freeTcpPort(preferredPort);
@@ -74,6 +88,29 @@ export async function launchFirstRunServer(preferredPort = Number(process.env.PA
   const base = `http://127.0.0.1:${httpPort}`;
   const toml = (v: string) => JSON.stringify(v);
   for (const dir of ['uploads', 'files', 'backups']) await mkdir(join(dataDir, dir), { recursive: true });
+  const keyFile = join(dataDir, 'at-rest.key');
+  const escrowFile = options.atRest ? join(dataDir, 'storage-key.escrow') : null;
+  if (options.atRest) {
+    await writeFile(keyFile, `hex:${randomBytes(32).toString('hex')}\n`, { mode: 0o600 });
+    await chmod(keyFile, 0o600);
+  }
+  const atRest = options.atRest
+    ? [
+        '[at_rest]',
+        'enabled = true',
+        'encrypt_sqlite = true',
+        'encrypt_files = true',
+        'key_source = "file"',
+        `key_file = ${JSON.stringify(keyFile)}`,
+        'protection = "same_disk"',
+        '',
+        '[host]',
+        'enabled = false',
+        `instance_id = ${JSON.stringify(randomUUID())}`,
+        `escrow_file = ${JSON.stringify(escrowFile)}`,
+        '',
+      ]
+    : [];
   await writeFile(
     configPath,
     [
@@ -112,6 +149,7 @@ export async function launchFirstRunServer(preferredPort = Number(process.env.PA
       `backup_dir = ${toml(join(dataDir, 'backups'))}`,
       'auto_backup_enabled = false',
       '',
+      ...atRest,
     ].join('\n'),
   );
 
@@ -144,6 +182,7 @@ export async function launchFirstRunServer(preferredPort = Number(process.env.PA
 
   return {
     base,
+    escrowFile,
     output: () => output,
     stop: async () => {
       if (!exited) {

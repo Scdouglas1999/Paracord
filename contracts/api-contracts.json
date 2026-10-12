@@ -2526,6 +2526,13 @@
         "backups": {
           "$ref": "#/$defs/BackupStatus"
         },
+        "instance_id": {
+          "description": "`[host] instance_id`: the HKDF info of the owner's escrow key (spec\n§4.7), so a headless owner's first-run page can escrow the storage key\nafter the claim (§2.11). Absent on a server that has none (and on\nservers older than this field).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "reachability": {
           "$ref": "#/$defs/Reachability"
         },

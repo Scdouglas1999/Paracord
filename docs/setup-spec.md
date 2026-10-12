@@ -993,7 +993,9 @@ the claim (`POST /admin/storage-key/escrow`, owner only, same body).
 
 - `paracord-host restore-backup <archive> --escrow-key-stdin` (extends the
   existing `restore-backup` subcommand): unwraps the key from the archive's
-  escrow, stores it in the configured source, restores. The desktop UI path:
+  escrow, stores it in the configured source, restores. `paracord-server
+  escrow-key --archive <archive>` reads the phrase on stdin, checks it against
+  the escrow's owner key and prints `escrow_key` for a hand restore (S13b). The desktop UI path:
   Host › Name › "Restore from a backup instead" → pick the archive → enter the
   recovery phrase → the app derives `escrow_key` and runs preflight, `init`
   (restore mode) and the restore, then Setup rows 1, 2, 4, 5 (no claim).
@@ -1370,7 +1372,8 @@ pub struct StorageStatus { pub enabled: bool, pub sqlite_encrypted: bool, pub fi
 pub struct BackupStatus { pub enabled: bool, pub interval_seconds: u64, pub keep: u32, pub last_backup_at: Option<String>, pub last_error: Option<String> }
 pub struct TlsStatus { pub fingerprint_sha256: String, pub self_signed: bool }
 pub struct HostStatus { pub version: String, pub started_at: String, pub setup_required: bool,
-    pub storage: StorageStatus, pub reachability: Reachability, pub backups: BackupStatus, pub tls: TlsStatus }
+    pub storage: StorageStatus, pub reachability: Reachability, pub backups: BackupStatus, pub tls: TlsStatus,
+    pub instance_id: Option<String> /* [host] instance_id: the escrow key's HKDF info (§4.7, §2.11); S13b */ }
 ```
 
 Timestamps are RFC 3339 strings in the contract; TEXT in the database.

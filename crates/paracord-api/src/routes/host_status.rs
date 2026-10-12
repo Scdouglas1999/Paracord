@@ -420,6 +420,7 @@ pub async fn collect(state: &AppState) -> Result<HostStatus, ApiError> {
         reachability: seams::reachability(state),
         backups: backup_status(state).await,
         tls: tls_status().await?,
+        instance_id: paracord_core::storage_key::current().instance_id,
     })
 }
 

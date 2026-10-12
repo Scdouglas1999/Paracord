@@ -47,6 +47,7 @@ export function NameStep({
   onBack,
   onUseExisting,
   onRetryPreflight,
+  onRestore,
 }: {
   state: ScreenState;
   /** The desktop host path checks this computer; claim mode does not. */
@@ -55,6 +56,8 @@ export function NameStep({
   onBack?: () => void;
   onUseExisting: (url: string) => void;
   onRetryPreflight: () => void;
+  /** "Restore from a backup instead" (§1.4, §4.8): desktop only. */
+  onRestore?: () => void;
 }) {
   const name = useFirstRunStore((s) => s.serverName);
   const hue = useFirstRunStore((s) => s.hue);
@@ -67,6 +70,8 @@ export function NameStep({
   const blocked = Boolean(refusal) || failed;
   const ready = !checkHost || (preflight.status === 'done' && preflight.result?.ok === true);
   const canContinue = ready && !blocked && name.trim().length >= 2;
+  // Shown only when this computer has no host data yet (§1.4).
+  const canRestore = Boolean(onRestore) && checkHost && preflight.status === 'done' && preflight.result?.ok === true && preflight.result.reason !== 'already_hosting';
 
   return (
     <Screen
@@ -134,6 +139,11 @@ export function NameStep({
               ))}
             </div>
           </div>
+          {canRestore && (
+            <button type="button" className="fr-secondary-link" onClick={onRestore} data-testid="fr-restore-link">
+              Restore from a backup instead
+            </button>
+          )}
         </>
       )}
     </Screen>

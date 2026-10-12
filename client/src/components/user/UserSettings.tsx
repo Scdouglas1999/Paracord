@@ -2074,6 +2074,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                       on: askOnThisDevice || !canRememberUnlock(),
                       disabled: !canRememberUnlock() || saving,
                       onChange: (next) => void handleAskForPassword(next),
+                      perDevice: true,
                       note: !canRememberUnlock()
                         ? 'In a browser, Paracord always asks for your password when a tab opens.'
                         : rememberProblem ?? undefined,

@@ -38,6 +38,7 @@ import { IdentityChangedSheet } from '../../components/firstRun/IdentityChangedS
 import { InviteStep, serverLabel } from '../../components/firstRun/InviteStep';
 import { Launch } from '../../components/firstRun/Launch';
 import { NameStep } from '../../components/firstRun/NameStep';
+import { RestoreStep } from '../../components/firstRun/RestoreStep';
 import { PhraseStep } from '../../components/firstRun/PhraseStep';
 import { ProtectedSheet, type ProtectedHostRows } from '../../components/firstRun/ProtectedSheet';
 import type { ScreenState } from '../../components/firstRun/Screen';
@@ -52,14 +53,17 @@ import '../../components/firstRun/firstRun.css';
 import { takeSetupCodeFromLocation } from './claimToken';
 import {
   BackToAccount,
+  checkRestorePhrase,
   confirmPhrase,
   errorMessage,
   onBackToAccount,
+  pickBackup,
   retryReach,
   retrySetup,
   runClaimSetup,
   runHostSetup,
   runJoinSetup,
+  runRestoreSetup,
   setClaimToken,
   startPreflight,
   stopSetup,
@@ -70,6 +74,7 @@ import type { HostRow } from '../../lib/host/rows';
 import { checkInvite } from './inviteCheck';
 import { acceptInvite, homeInvites, landingPath } from './landing';
 import { storageCopy } from './rows';
+import { RESTORE_COPY, RESTORE_ROW } from './restore';
 
 /**
  * The first run (docs/setup-spec.md §1): the launch, the split welcome, the
@@ -170,7 +175,8 @@ export function FirstRunPage({ mode }: FirstRunPageProps) {
   /* ---- Where this route is ------------------------------------------------- */
 
   const base = mode === 'claim' ? '/setup-server' : mode === 'web' ? `/invite/${params.code ?? ''}` : '/welcome';
-  const routePath: FirstRunPath | null = mode === 'claim' ? 'host' : mode === 'web' ? 'join' : params.path === 'host' || params.path === 'join' ? params.path : null;
+  const routePath: FirstRunPath | null =
+    mode === 'claim' ? 'host' : mode === 'web' ? 'join' : params.path === 'host' || params.path === 'join' || (params.path === 'restore' && isTauri()) ? params.path : null;
   const signInRoute = location.pathname.endsWith('/sign-in');
   const stepParam = signInRoute ? undefined : params.step;
   const pathOf = (path: FirstRunPath, step: string) => (mode === 'desktop' ? `/welcome/${path}/${step}` : `${base}/${step}`);
@@ -371,6 +377,12 @@ export function FirstRunPage({ mode }: FirstRunPageProps) {
     const i = stepsOf(path).indexOf(step);
     if (step === 'setup') return; // no Back on Setup (§1.7)
     if (i === 0) {
+      if (path === 'restore') {
+        // Restore began on Host › Name (§1.4): Back goes there.
+        useFirstRunStore.getState().choosePath('host');
+        navigate(pathOf('host', 'name'));
+        return;
+      }
       if (mode === 'desktop') {
         useFirstRunStore.getState().setPhase('welcome');
         navigate('/welcome');
@@ -406,7 +418,7 @@ export function FirstRunPage({ mode }: FirstRunPageProps) {
     if (step !== 'setup' || phase !== 'flow') return;
     const s = useFirstRunStore.getState();
     if (s.setupStatus !== 'idle') return;
-    const run = mode === 'claim' ? runClaimSetup : path === 'join' ? runJoinSetup : runHostSetup;
+    const run = mode === 'claim' ? runClaimSetup : path === 'join' ? runJoinSetup : path === 'restore' ? runRestoreSetup : runHostSetup;
     void run().catch((error: unknown) => {
       if (!(error instanceof BackToAccount)) toast.error(errorMessage(error));
     });
@@ -429,11 +441,13 @@ export function FirstRunPage({ mode }: FirstRunPageProps) {
   /* ---- Sheets ---------------------------------------------------------------- */
 
   // The desktop host's rows come from the host store (S7); the join and claim rows from the page's own sequencer.
-  const hostDesktop = mode === 'desktop' && path === 'host';
+  const restoring = mode === 'desktop' && path === 'restore';
+  // Rows 1-5 come from the host store on the desktop, for a new host and after a restore.
+  const hostDesktop = mode === 'desktop' && (path === 'host' || restoring);
   const hostRows = useHostStore((s) => s.rows);
-  const setupRows: SetupRow[] = hostDesktop ? hostRows.map(fromHostRow) : st.rows;
+  const setupRows: SetupRow[] = restoring ? [...st.rows, ...hostRows.map(fromHostRow).map(restoredHostRow)] : hostDesktop ? hostRows.map(fromHostRow) : st.rows;
   const hostPhase = useHostStore((s) => s.phase);
-  const setupStatus = hostDesktop ? (hostPhase === 'done' ? 'done' : hostPhase === 'failed' ? 'failed' : hostPhase === 'idle' ? st.setupStatus : 'running') : st.setupStatus;
+  const setupStatus = restoring ? st.setupStatus : hostDesktop ? (hostPhase === 'done' ? 'done' : hostPhase === 'failed' ? 'failed' : hostPhase === 'idle' ? st.setupStatus : 'running') : st.setupStatus;
 
   const [status, setStatus] = useState<HostStatus | null>(null);
   const [details, setDetails] = useState('');
@@ -472,7 +486,7 @@ export function FirstRunPage({ mode }: FirstRunPageProps) {
           void retrySetup();
           break;
         case 'show-details':
-          setDetails(hostDesktop ? await useHostStore.getState().logsTail(200).catch((e: unknown) => errorMessage(e)) : (row.detail ?? ''));
+          setDetails(hostDesktop && row.row !== RESTORE_ROW ? await useHostStore.getState().logsTail(200).catch((e: unknown) => errorMessage(e)) : (row.detail ?? ''));
           s.openSheet('details');
           break;
       }
@@ -551,6 +565,30 @@ export function FirstRunPage({ mode }: FirstRunPageProps) {
       setPhraseBusy(false);
     }
   }, [path, signInRoute, goStep, finish]);
+
+  /* ---- Restore from a backup (§1.4, §4.8) ------------------------------------- */
+
+  const [restoreBusy, setRestoreBusy] = useState(false);
+  const onRestoreContinue = useCallback(async () => {
+    setRestoreBusy(true);
+    try {
+      if (await checkRestorePhrase()) {
+        useFirstRunStore.getState().setSetupStatus('idle');
+        goStep('setup');
+      }
+    } finally {
+      setRestoreBusy(false);
+    }
+  }, [goStep]);
+
+  // After a restore the owner signs in to the restored server (it has no new account to make).
+  const [restoredServer, setRestoredServer] = useState<string | null>(null);
+  const afterRestore = useCallback(() => {
+    const url = useHostStore.getState().info?.home_url ?? null;
+    setRestoredServer(url);
+    navigate(signInPath, { state: { server: url } });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navigate]);
 
   /* ---- Host › Invite ----------------------------------------------------------- */
 
@@ -708,6 +746,7 @@ export function FirstRunPage({ mode }: FirstRunPageProps) {
           onSubmit={(submit) => void onSignInSubmit(submit)}
           onBack={signInView === 'form' ? back : () => setSignInView('form')}
           onForgot={(server) => void onForgot(server)}
+          sub={restoredServer && initialServer === restoredServer ? RESTORE_COPY.signInSub : undefined}
         />
       );
     }
@@ -723,8 +762,18 @@ export function FirstRunPage({ mode }: FirstRunPageProps) {
             onBack={mode === 'desktop' ? back : undefined}
             onUseExisting={(url) => navigate(signInPath, { state: { server: url } })}
             onRetryPreflight={() => void startPreflight()}
+            onRestore={
+              mode === 'desktop'
+                ? () => {
+                    useFirstRunStore.getState().choosePath('restore');
+                    navigate(pathOf('restore', 'backup'));
+                  }
+                : undefined
+            }
           />
         );
+      case 'backup':
+        return <RestoreStep key={entry.key} state={state} busy={restoreBusy} onPick={() => void pickBackup()} onContinue={() => void onRestoreContinue()} onBack={back} />;
       case 'invite':
         if (entryPath === 'host') {
           return (
@@ -776,7 +825,7 @@ export function FirstRunPage({ mode }: FirstRunPageProps) {
           <AccountStep
             key={entry.key}
             state={state}
-            path={entryPath}
+            path={entryPath === 'join' ? 'join' : 'host'}
             ownerOf={serverName}
             joining={joinName}
             onContinue={() => {
@@ -797,11 +846,15 @@ export function FirstRunPage({ mode }: FirstRunPageProps) {
             rows={setupRows}
             status={setupStatus}
             onChip={(row, chip) => void onChip(row, chip)}
-            onContinue={() => goStep('phrase')}
-            onProtected={() => {
-              void readStatus();
-              useFirstRunStore.getState().openSheet('protected');
-            }}
+            onContinue={() => (entryPath === 'restore' ? afterRestore() : goStep('phrase'))}
+            onProtected={
+              entryPath === 'restore'
+                ? undefined
+                : () => {
+                    void readStatus();
+                    useFirstRunStore.getState().openSheet('protected');
+                  }
+            }
           />
         );
       case 'phrase':
@@ -913,10 +966,11 @@ function usePreviewModel(path: FirstRunPath | null, signIn: boolean, probed: Pro
   const invite = useFirstRunStore((s) => s.invite);
   const result = useFirstRunStore((s) => s.result);
   return useMemo<PreviewModel>(() => {
-    if (path === 'host' && !signIn) {
+    if ((path === 'host' || path === 'restore') && !signIn) {
       // Claim mode has no row 1: the server is already running (§2.11).
       const status = mode === 'claim' ? 'online' : row1 === 'ok' || row1 === 'warn' ? 'online' : row1 === 'run' ? 'starting' : setupStatus === 'done' ? 'online' : 'off';
-      return { kind: 'host', name, hue, status, me };
+      // A restore's name and color come with the backup: the preview shows the unnamed server.
+      return { kind: 'host', name: path === 'restore' ? '' : name, hue, status, me };
     }
     const guild = invite.state === 'card' ? invite.preview?.guild : null;
     if (guild) return { kind: 'join', server: { name: guild.name, hue: guild.hue ?? JOIN_HUE, online: guild.online_count ?? 0, members: guild.member_count }, me };
@@ -1003,6 +1057,13 @@ function useHostInvite(active: boolean): { view: HostInviteView; busy: boolean; 
 }
 
 export default FirstRunPage;
+
+/** After a restore, row 3 escrows the storage key again under the same phrase (the owner came with the backup). */
+function restoredHostRow(row: SetupRow): SetupRow {
+  if (row.row !== 3) return row;
+  const done = row.state === 'ok';
+  return { ...row, title: RESTORE_COPY.escrowTitle, pending: RESTORE_COPY.escrowPending, detail: done ? RESTORE_COPY.escrowPending : row.detail };
+}
 
 /** A host store row (S7, `lib/host/rows.ts`) as the Setup step draws it. */
 function fromHostRow(row: HostRow): SetupRow {

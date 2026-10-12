@@ -61,7 +61,8 @@ import { describeMoment, installMotionRecorder, markMoment, runningNow, type Mot
  *
  * Run:
  *   cd client
- *   npm run test:motion            (playwright.config.ts, ports 4173/4175)
+ *   npm run test:motion            (playwright.config.ts, ports 4173/4175;
+ *                                   PARACORD_E2E_APP_PORT=<p> for p / p + 2)
  *   PARACORD_E2E_INDEX_SPEC=motion-gate PARACORD_E2E_INDEX_PORT=4663 \
  *   PARACORD_E2E_INDEX_RT_PORT=4665 PARACORD_E2E_INDEX_WP=ix18 \
  *   npx playwright test -c e2e/index-review.config.ts

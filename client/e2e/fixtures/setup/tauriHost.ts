@@ -29,6 +29,53 @@ export interface TauriHostOptions {
   clipboard?: string | null;
   /** A deep link waiting at launch (`take_pending_deep_links`). */
   pendingDeepLinks?: string[];
+  /** What `host_pick_backup` answers (S13b restore). Default `escrowed`. */
+  backup?: BackupScenario;
+  /** What `host_restore` does. Default `ok`. */
+  restore?: RestoreScenario;
+  /** What `host_on_launch` reports (spec 2.8). Default `none`. */
+  launch?: LaunchScenario;
+}
+
+/**
+ * The backup the file picker returns: `escrowed` carries the escrow of the
+ * shared vector (vectors.json `escrow[0]`, owner = `phrase[0]`), `other-owner`
+ * the same escrow for another owner's key, `no-escrow` none, `not-a-backup`
+ * the shell's refusal, `cancel` the picker closed.
+ */
+export type BackupScenario = 'escrowed' | 'other-owner' | 'no-escrow' | 'not-a-backup' | 'cancel';
+export type RestoreScenario = 'ok' | 'database-exists';
+export type LaunchScenario = 'none' | 'update-failed';
+
+/** The shared vectors (client/src/lib/credential/vectors.json): the phrase that owns the scripted backup. */
+export const RESTORE_VECTOR = {
+  phrase: 'spot flush pizza wide dolphin bar surface again imitate learn sibling blue fee present remain zero frog chuckle budget high citizen sound cushion omit',
+  publicKey: 'ad1556f6b39cd51a513052c0be97b86e668adb99fadb813e0c02ebddf7037fd4',
+  instanceId: '7c1f0b6e-4a8e-4f8e-9a51-2d6c1f0b6e4a',
+  /** b64url escrow key of `phrase` for `instanceId`. */
+  wrappingKey: 'A5duufTfSAhw6-4tTUla0i3MI52HGT1fuTgu828jiM8',
+} as const;
+
+function backupAnswer(scenario: BackupScenario): unknown {
+  const file = {
+    path: '/home/sam/Backups/paracord_backup_20261003_040000.tar.gz',
+    file_name: 'paracord_backup_20261003_040000.tar.gz',
+    size_bytes: 4_300_000,
+    created_at: '2026-10-03T16:00:00Z',
+    server_version: '3.4.0',
+    encrypted: true,
+    escrow: { instance_id: RESTORE_VECTOR.instanceId, owner_public_key: RESTORE_VECTOR.publicKey },
+  };
+  switch (scenario) {
+    case 'other-owner':
+      return { ...file, escrow: { instance_id: RESTORE_VECTOR.instanceId, owner_public_key: '5f'.repeat(32) } };
+    case 'no-escrow':
+      return { ...file, escrow: null };
+    case 'cancel':
+      return null;
+    default:
+      return file;
+  }
 }
 
 export interface RecordedCall {
@@ -59,6 +106,11 @@ export class TauriHost {
   claim: ((request: unknown) => unknown) | null = null;
   /** `host.json.setup.completed_steps`. */
   readonly completed = new Set<string>();
+  backup: BackupScenario;
+  restore: RestoreScenario;
+  launch: LaunchScenario;
+  /** `host_rollback_update` waits for this when set (a spec shoots "restoring…"). */
+  rollbackHold: Promise<void> | null = null;
 
   /** `HostStatus` (contract shape) for the scripted reach. */
   status(): Record<string, unknown> {
@@ -97,6 +149,9 @@ export class TauriHost {
     this.delay = options.progressDelayMs ?? 120;
     this.clipboard = options.clipboard ?? null;
     this.pendingDeepLinks = options.pendingDeepLinks ?? [];
+    this.backup = options.backup ?? 'escrowed';
+    this.restore = options.restore ?? 'ok';
+    this.launch = options.launch ?? 'none';
   }
 
   /** Every call of one command, in order. */
@@ -173,7 +228,27 @@ export class TauriHost {
           instance_id: '7c1f0b6e-4a8e-4f8e-9a51-2d6c1f0b6e4a',
         });
       case 'host_on_launch':
+        if (this.launch === 'update-failed') {
+          const failure = { from_version: '3.3.0', to_version: '3.4.0', backup_name: 'paracord_backup_20261012_203000.tar.gz', failure: 'the server did not answer /health within 60 s' };
+          return ok({
+            info: { enabled: true, port: THIS_COMPUTER.port, autostart: true, installed_version: '3.4.0', completed_steps: [], service: { state: 'failed', enabled: true, exit_code: 1 }, service_error: null, home_url: `https://127.0.0.1:${THIS_COMPUTER.port}`, storage_key_problem: null, update_failure: failure, held_version: null },
+            update: { kind: 'failed', from: '3.3.0', to: '3.4.0', detail: failure.failure },
+            start_error: null,
+          });
+        }
         return ok({ info: { enabled: false, port: null, autostart: false, installed_version: null, completed_steps: [], service: null, service_error: null, home_url: null, storage_key_problem: null, update_failure: null, held_version: null }, update: { kind: 'none' }, start_error: null });
+      case 'host_rollback_update':
+        if (this.rollbackHold) await this.rollbackHold;
+        return ok();
+      case 'host_pick_backup':
+        if (this.backup === 'not-a-backup') return fail('notes.txt isn\'t a Paracord backup.');
+        return ok(backupAnswer(this.backup));
+      case 'host_restore':
+        // S7: install, init, the generated key taken back, restore-backup --escrow-key-stdin; the owner came with it, the escrow is written again by the page.
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        if (this.restore === 'database-exists') return fail('This computer already has a server database; restoring over it is refused.');
+        for (const step of ['install', 'init', 'claim']) this.completed.add(step);
+        return ok();
       case 'host_write_escrow':
         this.completed.add('escrow');
         return ok();

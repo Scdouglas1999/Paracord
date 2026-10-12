@@ -30,6 +30,12 @@ const REAL_SERVER = process.env.PARACORD_E2E_REAL === '1';
 // which is the opposite of what a fast CI smoke should do. `npm run test:motion`.
 const MOTION_GATE = !REAL_SERVER && process.env.PARACORD_E2E_MOTION === '1';
 const REAL_SERVER_PORT = process.env.PARACORD_E2E_PORT ?? '18150';
+// The mocked runs' app (Vite) port, and its realtime stub on the next-but-one
+// port (the convention every e2e config here keeps). Default 4173 / 4175;
+// `PARACORD_E2E_APP_PORT=5003 npm run test:motion` runs the motion gate on
+// 5003 / 5005 so it can run beside another checkout's suite.
+const APP_PORT = Number(process.env.PARACORD_E2E_APP_PORT ?? '4173');
+const RT_PORT = APP_PORT + 2;
 
 export default defineConfig({
   testDir: './e2e',
@@ -42,7 +48,7 @@ export default defineConfig({
   workers: process.env.CI ? 1 : undefined,
   reporter: process.env.CI ? [['github'], ['html', { open: 'never' }]] : [['list']],
   use: {
-    baseURL: REAL_SERVER ? `http://127.0.0.1:${REAL_SERVER_PORT}` : 'http://127.0.0.1:4173',
+    baseURL: REAL_SERVER ? `http://127.0.0.1:${REAL_SERVER_PORT}` : `http://127.0.0.1:${APP_PORT}`,
     trace: 'on-first-retry',
   },
   projects: REAL_SERVER
@@ -131,17 +137,18 @@ export default defineConfig({
         // its message runtime permanently between authenticated handshakes.
         {
           command: 'node ./e2e/realtime-stub.mjs',
-          url: 'http://127.0.0.1:4175/health',
+          url: `http://127.0.0.1:${RT_PORT}/health`,
           reuseExistingServer: false,
+          env: { PARACORD_E2E_RT_PORT: String(RT_PORT) },
           gracefulShutdown: { signal: 'SIGTERM', timeout: 5_000 },
           stdout: 'ignore',
           stderr: 'pipe',
         },
         {
-          command: 'npm run dev -- --host 127.0.0.1 --port 4173 --strictPort',
-          url: 'http://127.0.0.1:4173',
+          command: `npm run dev -- --host 127.0.0.1 --port ${APP_PORT} --strictPort`,
+          url: `http://127.0.0.1:${APP_PORT}`,
           reuseExistingServer: !process.env.CI,
-          env: { VITE_DEV_PROXY_TARGET: 'http://127.0.0.1:4175', VITE_DEV_HMR: 'false' },
+          env: { VITE_DEV_PROXY_TARGET: `http://127.0.0.1:${RT_PORT}`, VITE_DEV_HMR: 'false' },
           stdout: 'ignore',
           stderr: 'pipe',
         },

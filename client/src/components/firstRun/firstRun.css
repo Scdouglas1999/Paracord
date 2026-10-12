@@ -1664,6 +1664,84 @@
   }
 }
 
+/* ---- Restore › Backup (§1.4, §4.8; derived: the card and field language) ---- */
+.fr-pick {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  min-height: 72px;
+  padding: 14px 16px;
+  border: 0;
+  border-radius: 16px;
+  background: var(--ix-fill);
+  box-shadow: inset 0 0 0 1px var(--ix-line);
+  color: var(--ix-ink);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 200ms var(--ix-ease);
+}
+.fr-pick:hover:not(:disabled) {
+  background: var(--ix-fill-btn);
+}
+.fr-pick:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.fr-pick > svg,
+.fr-backup > svg {
+  flex-shrink: 0;
+  color: hsl(var(--fr-hue) 70% 78%);
+}
+.fr-pick b,
+.fr-backup b {
+  display: block;
+  font-size: 15px;
+  font-weight: 600;
+}
+.fr-pick small,
+.fr-backup small {
+  display: block;
+  margin-top: 3px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--ix-ink-3);
+}
+.fr-backup {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: var(--ix-fill-card);
+  box-shadow: inset 0 0 0 1px var(--ix-line);
+  animation: fr-card-in 400ms var(--ix-spring) both;
+}
+.fr-backup > div {
+  min-width: 0;
+}
+.fr-backup b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fr-backup .fr-chip {
+  margin-left: auto;
+}
+.fr-backup[data-invalid] {
+  box-shadow: inset 0 0 0 1.5px var(--ix-danger-ink);
+}
+.fr-inp--area {
+  height: auto;
+  min-height: 112px;
+  padding: 13px 15px;
+  line-height: 1.55;
+  resize: none;
+  font-family: inherit;
+}
+
 /* Reduced motion (§0.6): every move is a short crossfade; the launch never plays. */
 :root[data-motion='reduced'] .fr-scr,
 :root[data-motion='reduced'] .fr-scr[data-state='past'],
@@ -1677,6 +1755,7 @@
   transition-duration: 65ms;
 }
 :root[data-motion='reduced'] .fr-srv,
+:root[data-motion='reduced'] .fr-backup,
 :root[data-motion='reduced'] .fr-task__st > svg,
 :root[data-motion='reduced'] .fr-privlink {
   animation: none;

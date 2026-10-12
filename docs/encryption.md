@@ -390,15 +390,20 @@ escrow_key = HKDF-SHA-256(owner identity private key,
 ```
 
 - The desktop app saves it automatically while it sets up a server on your computer.
-- A server installed with the installer has an owner-only call for it
-  (`POST /api/v1/admin/storage-key/escrow`), which can be made once. The page that creates
-  the first owner does not make it yet, so until it does, keep your own copy of the key file
-  somewhere that is not that disk.
+- A server installed with the installer saves it when its first owner is created: the
+  page the installer opens (`/setup-server`) makes the owner-only call
+  (`POST /api/v1/admin/storage-key/escrow`, accepted once) right after it shows the
+  recovery phrase, with the server's instance id from `GET /api/v1/admin/host-status`.
+  The setup screen says so on its "Encrypting everything it stores" row; if it could not
+  (a server encrypted by hand without `[host] instance_id`, for example), the row says why,
+  and you should keep your own copy of the key somewhere that is not that disk.
 - To restore on another computer, the desktop app's **Restore from a backup instead** asks
-  for the recovery phrase and does the rest. By hand,
+  for the recovery phrase and does the rest, and saves a new recovery copy for the restored
+  server. By hand, `paracord-server escrow-key --archive <file>` reads the phrase from
+  standard input and prints `escrow_key` (base64url, one line), and
   `paracord-server restore-backup --archive <file> --output-dir <dir> --escrow-key-stdin`
-  reads `escrow_key` (base64url, one line) from standard input, unwraps the storage key
-  from the archive and stores it where the config says before restoring. See
+  reads that from standard input, unwraps the storage key from the archive and stores it
+  where the config says before restoring; pipe one into the other. See
   [Backup and offline recovery](backup-recovery.md#restoring-an-encrypted-server-without-its-key).
 - A backup made before a recovery copy exists carries none. Only the server's own key can
   open it.

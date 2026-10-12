@@ -157,6 +157,12 @@ pub struct HostStatus {
     pub reachability: Reachability,
     pub backups: BackupStatus,
     pub tls: TlsStatus,
+    /// `[host] instance_id`: the HKDF info of the owner's escrow key (spec
+    /// §4.7), so a headless owner's first-run page can escrow the storage key
+    /// after the claim (§2.11). Absent on a server that has none (and on
+    /// servers older than this field).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance_id: Option<String>,
 }
 
 /// Gateway `INSTANCE_STATUS_UPDATE`, sent to admins whenever any of these

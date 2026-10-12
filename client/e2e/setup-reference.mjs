@@ -728,6 +728,151 @@ for (const [name, atRest] of [['claim-mode-setup-web', null], ['claim-mode-setup
   await shoot(page, name, 'derived', 'spec 2.11: no launch, welcome or row 1; the storage row follows the key source');
 }
 
+// ---- restore from a backup (S13b; not in the prototype): Host › Name's frame and components ----
+const RESTORE_PHRASE = 'spot flush pizza wide dolphin bar surface again imitate learn sibling blue fee present remain zero frog chuckle budget high citizen sound cushion omit';
+const CLOCK_ICO = '<svg class="ico" viewBox="0 0 24 24" style="flex-shrink:0;color:hsl(var(--hue) 70% 78%)"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>';
+const DOWN_ICO = '<svg class="ico" viewBox="0 0 24 24" style="flex-shrink:0;color:hsl(var(--hue) 70% 78%)"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>';
+const RESTORE_CARD = (invalid) =>
+  `<div class="srv show" style="display:flex;align-items:center;gap:14px;padding:14px 16px;border-radius:16px;margin-top:0;${invalid ? 'box-shadow:inset 0 0 0 1.5px #ff9b8a' : ''}">${CLOCK_ICO}<div style="min-width:0"><b style="display:block;font-size:15px;font-weight:600;letter-spacing:0">paracord_backup_20261003_040000.tar.gz</b><small style="display:block;margin-top:3px;font-size:13px;color:var(--ink3)">Made Oct 3, 2026 · 4.1 MB · Paracord 3.4.0</small></div><button class="chip ghost" style="margin-left:auto">Choose another</button></div>`;
+const RESTORE_PICK = `<button class="onepw" style="margin-top:0;width:100%;min-height:72px;align-items:center;text-align:left;border:0;cursor:pointer;color:var(--ink);background:rgba(255,255,255,.06);border-radius:16px;padding:14px 16px;gap:14px">${DOWN_ICO}<span><b style="display:block;font-size:15px">Choose a backup file</b><small style="display:block;margin-top:3px;font-size:13px;color:var(--ink3)">Paracord's backups end in .tar.gz. They're in the backups folder of the computer that ran the server.</small></span></button>`;
+async function restoreBackup({ chosen, phrase, fileError, phraseError }) {
+  const page = await open();
+  await go.step(page, 'host', 'h-name');
+  // The preview of a restore: the server's name comes with the backup, so it reads "Your server".
+  await go.type(page, '#fName', '');
+  await derive.failStyle(page);
+  const err = (text) => `<div class="fielderr" style="margin-top:0">${text}</div>`;
+  const body =
+    `<div class="fl"><label>Backup</label>${chosen ? RESTORE_CARD(Boolean(fileError)) : RESTORE_PICK}${fileError ? err(fileError) : ''}</div>` +
+    `<div class="fl"><label>Recovery phrase</label><textarea class="inp" rows="4" placeholder="24 words, in order" style="height:auto;min-height:112px;padding:13px 15px;line-height:1.55;resize:none;font-family:inherit"${phraseError ? ' aria-invalid="true"' : ''}>${phrase ? RESTORE_PHRASE : ''}</textarea>${
+      phraseError ? err(phraseError) : '<div class="help">The 24 words you saved when you set up the server.</div>'
+    }</div>`;
+  await page.evaluate(
+    ({ body, ready, invalid }) => {
+      const scr = $('.scr.on');
+      scr.querySelector('h2').textContent = 'Restore from a backup';
+      scr.querySelector('.sub').textContent = 'Paracord puts your server back on this computer from a backup file. Your recovery phrase unlocks it.';
+      scr.querySelectorAll('.fl').forEach((e) => e.remove());
+      scr.querySelector('.foot').insertAdjacentHTML('beforebegin', body);
+      if (invalid) scr.querySelector('textarea').style.boxShadow = 'inset 0 0 0 1.5px #ff9b8a';
+      $('#nName').firstChild.textContent = 'Restore';
+      $('#nName').disabled = !ready;
+      $('#prog').innerHTML = '<i class="done"></i><i></i>';
+    },
+    { body, ready: chosen && phrase && !fileError, invalid: Boolean(phraseError) },
+  );
+  return page;
+}
+const RESTORE_STATES = [
+  ['restore-backup-empty', { chosen: false, phrase: false }, 'spec 1.4 / 4.8: Restore › Backup, nothing chosen yet'],
+  ['restore-backup-chosen', { chosen: true, phrase: true }, 'spec 4.8: the backup and the phrase, Restore enabled'],
+  ['restore-wrong-phrase', { chosen: true, phrase: true, phraseError: "That recovery phrase doesn't unlock this backup. It needs the phrase of the account that set up the server." }, 'spec 4.8: the phrase is checked against the backup\'s owner before anything runs'],
+  ['restore-no-escrow', { chosen: true, phrase: false, fileError: 'This backup was made before your recovery phrase protected its storage key, so no phrase can unlock it. Choose a newer backup.' }, 'spec 4.7: a backup without the key escrow'],
+];
+for (const [name, options, why] of RESTORE_STATES) {
+  if (!wanted(name)) continue;
+  const page = await restoreBackup(options);
+  await settle(page);
+  await shoot(page, name, 'derived', why);
+}
+if (wanted('host-name-restore-link')) {
+  const page = await open();
+  await go.step(page, 'host', 'h-name');
+  await go.type(page, '#fName', 'Friday Night Crew');
+  await page.evaluate(() => {
+    $('#hues').closest('.fl').insertAdjacentHTML(
+      'afterend',
+      '<button style="margin:18px 0 0 -8px;align-self:flex-start;border:0;background:none;color:var(--ink3);font-size:13.5px;font-weight:600;padding:6px 8px;border-radius:9px;cursor:pointer;display:block">Restore from a backup instead</button>',
+    );
+  });
+  await settle(page);
+  await shoot(page, 'host-name-restore-link', 'derived', 'spec 1.4: the secondary link under the swatches (no host data on this computer)');
+}
+async function restoreSetup({ ok, running = null, fail = false }) {
+  const page = await open();
+  await go.step(page, 'host', 'setup');
+  await go.type(page, '#fName', '');
+  await go.rows(page, { ok: Math.max(0, ok - 1), running: running === null || running === 0 ? null : running - 1 });
+  await derive.failStyle(page);
+  await page.evaluate(
+    ({ ok, running, fail }) => {
+      const list = $('#tasks');
+      const first = list.querySelector('.task');
+      const restore = first.cloneNode(true);
+      restore.dataset.k = 'r';
+      restore.className = fail ? 'task fail' : ok >= 1 ? 'task ok' : running === 0 ? 'task run' : 'task';
+      restore.querySelector('b').textContent = 'Restoring from your backup';
+      restore.querySelector('small').textContent = fail
+        ? "This computer already has a Paracord server's data, and Paracord never restores over it."
+        : ok >= 1
+          ? 'Restored from the backup of October 3, 2026.'
+          : 'Unlocking its storage key with your recovery phrase and checking everything in it.';
+      if (fail) restore.querySelector('.st').innerHTML = '×';
+      list.insertBefore(restore, first);
+      if (fail) {
+        list.querySelectorAll('.task:not([data-k="r"])').forEach((t) => (t.className = 'task'));
+        $('#setMark').innerHTML = cordMark(56);
+        $('#pStat').textContent = 'Not running yet';
+        $('#pDot').classList.remove('on');
+      }
+      const escrow = list.querySelector('.task[data-k="2"]');
+      escrow.querySelector('b').textContent = 'Protecting its key with your recovery phrase';
+      escrow.querySelector('small').textContent = 'So the same phrase can restore it again.';
+      $('#setupTitle').textContent = 'Restoring your server';
+      $('#privOpen').classList.remove('show');
+      $('#prog').innerHTML = '<i class="done"></i><i class="done"></i>';
+    },
+    { ok, running, fail },
+  );
+  return page;
+}
+for (const [name, rows, why] of [
+  ['restore-setup-running', { ok: 2, running: 2 }, 'spec 4.8: the restore done, rows 1 and 2 running; row 3 re-escrows under the same phrase'],
+  ['restore-setup-done', { ok: 6 }, 'spec 4.8: every row done; no "See what\'s protected" (no session yet)'],
+  ['restore-database-exists', { ok: 0, fail: true }, 'spec 4.8: a database already on this computer: refused up front, no Try again'],
+]) {
+  if (!wanted(name)) continue;
+  const page = await restoreSetup(rows);
+  await settle(page);
+  await shoot(page, name, 'derived', why);
+}
+
+// ---- the launch banner over the app (S13b; spec 2.8, index-spec 6.8 strip): the done app with a strip on main ----
+async function bannerOverApp(html) {
+  const page = await open();
+  await go.step(page, 'host', 'h-invite');
+  await go.type(page, '#fName', 'Friday Night Crew');
+  await go.rows(page, { ok: HOST_ROWS });
+  await page.evaluate(() => finish());
+  await page.waitForTimeout(1500);
+  await page.evaluate((html) => {
+    $('#toast').style.display = 'none';
+    const main = document.querySelector('.main');
+    main.insertAdjacentHTML('afterbegin', html);
+  }, html);
+  return page;
+}
+const STRIP = (text, actions, danger) =>
+  `<div style="display:flex;align-items:center;justify-content:center;gap:12px;min-height:36px;padding:0 16px;margin:-1px -1px 0;background:#1c1d21;box-shadow:0 1px 0 var(--line);font-size:13px;font-weight:600;line-height:1.3"><span style="color:${danger ? '#ff9b8a' : 'var(--ink)'}">${text}${actions}</span><span style="width:24px;height:24px;display:grid;place-items:center;color:var(--ink2)">×</span></div>`;
+const LINK = (label) => ` <button style="border:0;background:none;color:var(--ink);font:inherit;text-decoration:underline;text-underline-offset:3px;padding:4px 8px">${label}</button>`;
+for (const [name, html, why] of [
+  [
+    'update-failed-banner',
+    STRIP("Paracord on this computer didn't start after the update.", LINK('Show details') + LINK('Restore the backup from before the update'), true),
+    'spec 2.8: the banner with Show details and the restore (index-spec 6.8 strip, danger ink)',
+  ],
+  [
+    'update-rolled-back-banner',
+    STRIP("Paracord on this computer is running 3.3.0 again, with the backup from before the update. 3.4.0 won't be installed again until a newer version comes out.", '', false),
+    'spec 2.8: after the restore; the new version is held',
+  ],
+]) {
+  if (!wanted(name)) continue;
+  const page = await bannerOverApp(html);
+  await settle(page);
+  await shoot(page, name, 'derived', why);
+}
+
 // A subset run keeps the entries of the states it did not render.
 const kept = [];
 if (only.size > 0) {
