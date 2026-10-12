@@ -1,267 +1,284 @@
-<!doctype html><html><head><link rel="stylesheet" href="../node_modules/@fontsource/gabarito/700.css"></head><body style="margin:0;background:transparent">
-<canvas id="c" width="2048" height="2048"></canvas>
+<!doctype html>
+<!--
+  Paracord's mark, "Thread": a single paracord looped into a P. A straight stem,
+  a round bowl, and the bowl's end threaded under the stem and out the other
+  side as a short tail. Drawn as real paracord: a braided sheath (staggered
+  chevron cells in two lanes), darker edges, and fused ends (a smooth cap a
+  little darker than the cord, with a thin ring where the braid stops).
+
+  This file is the source of truth. It draws every variant as SVG, procedurally,
+  and render.mjs turns those into every icon, the in-app art, the loading
+  screen's art and the animation data. Open it in a browser to see the variants.
+
+  window.PCMark exposes:
+    GEO                       the shared geometry (see `geometry()` below)
+    art(level, part)          an SVG document of the bare mark
+                              level: full | mid | flat | mono
+                              part:  whole | under (the bowl's second half and the
+                                     tail alone, for the drawing animation)
+    tile(level, {square})     the mark on the app-icon tile, 1024 units
+    free(level, fill)         the bare mark, transparent, filling `fill` of the box
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<title>Paracord mark</title>
+<style>
+  body { margin: 0; background: #141518; color: #e8e8ea; font: 13px/1.4 system-ui, sans-serif; }
+  .row { display: flex; flex-wrap: wrap; gap: 20px; padding: 20px; align-items: flex-end; }
+  figure { margin: 0; display: grid; gap: 6px; justify-items: center; }
+  figure.light { background: #f1ede6; color: #17181b; padding: 8px; border-radius: 8px; }
+</style>
+</head>
+<body>
+<div class="row" id="preview"></div>
 <script>
-document.fonts.load("700 17px Gabarito").then(() => draw());
-function draw() {
-// Paracord mark v2: a hurricane lantern carried on a braided paracord handle.
-// Drawn in a 1024 design space at 2x.
-const P = new URLSearchParams(location.hash.slice(1));
-const BG = P.get('bg') !== '0';
-const SHOW_L = P.get('lantern') !== '0', SHOW_C = P.get('cord') !== '0';
-// small=1: the favicon / tray / tiny-avatar variant. The same silhouette, drawn
-// larger in the tile, with a bolder cord and thicker guard wires, and none of the
-// detail that turns to noise below ~48 px: engraving, rivets, vent slots, fiber
-// lines, the wall rings and the grain.
-const SMALL = P.get('small') === '1';
-// lit=0: the lantern before it is lit, for the first beat of the loading screen.
-const LIT = P.get('lit') !== '0';
-const CW = SMALL ? 1.5 : 1; // cord width multiplier
-// ground=0: no floor shadow, no floor light and no lamp light washed over the
-// surroundings: only the lantern and cord, for a mark that is trimmed to its
-// drawing and set on the app's own surfaces.
-const GROUND = P.get('ground') !== '0';
-const EY = 446, EX = [512 - 142, 512 + 142];
-const c = document.getElementById('c'), g = c.getContext('2d');
-g.scale(2, 2);
-const S = 1024, cx = 512;
-let seed = 11; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+(function () {
+  // ------------------------------------------------------------------ palette
+  const COLORS = {
+    // Ember: the approved colorway.
+    ember: { base: '#ffb877', cellA: '#ec9550', cellB: '#f09d59', edge: '#d78340', melt: '#d98a4c', ring: '#bd6f31' },
+    // Tray and other single-color uses: flat, one light color.
+    mono: { base: '#e8e8ea', cellA: '#e8e8ea', cellB: '#e8e8ea', edge: '#e8e8ea', melt: '#e8e8ea', ring: '#e8e8ea' },
+  };
+  const TILE = { from: '#2b2420', to: '#131214', ground: '#1f1b19' };
+  // Cord width by level. The centerline is the same for every level; the flat
+  // drawing (16-20 px) uses a thicker cord so it holds up at tab and tray size.
+  const WIDTH = { full: 14, mid: 14, flat: 16, mono: 16 };
+  const LEVEL_STYLE = { full: 'full', mid: 'mid', flat: 'flat', mono: 'flat' };
 
-const CORD = { base: [34, 164, 140], alt: [22, 128, 110], light: [120, 232, 205], dark: [10, 78, 66], edge: '#062c26', tracer: [255, 196, 96] };
-const rgb = (a, m = 1) => `rgb(${a.map((v) => Math.max(0, Math.min(255, Math.round(v * m)))).join(',')})`;
-
-function rr(x, y, w, h, r) { g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath(); }
-const lin = (x0, y0, x1, y1, stops) => { const gr = g.createLinearGradient(x0, y0, x1, y1); stops.forEach(([o, col]) => gr.addColorStop(o, col)); return gr; };
-const rad = (x0, y0, r0, x1, y1, r1, stops) => { const gr = g.createRadialGradient(x0, y0, r0, x1, y1, r1); stops.forEach(([o, col]) => gr.addColorStop(o, col)); return gr; };
-// Gunmetal across a cylinder of half-width hw centred on x.
-const metalH = (x, hw, warm = 0) => lin(x - hw, 0, x + hw, 0, [[0, '#1a1f24'], [0.18, '#3b444d'], [0.34, '#8a96a2'], [0.42, '#5b6671'], [0.72, '#2c333a'], [0.9, warm ? '#6a4a26' : '#323a42'], [1, '#161a1e']]);
-
-// ---------------------------------------------------------------- background
-if (BG) {
-  rr(0, 0, S, S, 228); g.save(); g.clip();
-  g.fillStyle = lin(0, 0, 0, S, [[0, '#1d242b'], [0.55, '#12171c'], [1, '#0a0d10']]); g.fillRect(0, 0, S, S);
-  g.fillStyle = rad(512, 590, 10, 512, 600, 560, [[0, 'rgba(255,196,110,.34)'], [0.35, 'rgba(255,170,80,.12)'], [0.7, 'rgba(255,160,70,.03)'], [1, 'rgba(255,160,70,0)']]); g.fillRect(0, 0, S, S);
-  // faint rings of light, like a lamp on a wall
-  if (!SMALL) for (const [r, a] of [[210, 0.05], [300, 0.035], [400, 0.02]]) { g.beginPath(); g.arc(512, 600, r, 0, Math.PI * 2); g.strokeStyle = `rgba(255,200,130,${a})`; g.lineWidth = 1.2; g.stroke(); }
-  g.restore();
-}
-
-// The small variant zooms the drawing so the lantern fills more of the tile.
-if (SMALL) { g.save(); g.translate(512, 494); g.scale(1.2, 1.2); g.translate(-512, -494); }
-if (SHOW_L) {
-// ------------------------------------------------------------------- ground
-if (GROUND) {
-g.save(); g.translate(512, 872); g.scale(1, 0.16);
-g.fillStyle = rad(0, 0, 0, 0, 0, 260, [[0, 'rgba(0,0,0,.55)'], [0.6, 'rgba(0,0,0,.18)'], [1, 'rgba(0,0,0,0)']]); g.beginPath(); g.arc(0, 0, 260, 0, Math.PI * 2); g.fill();
-g.restore();
-g.save(); g.translate(512, 866); g.scale(1, 0.2);
-g.fillStyle = rad(0, 0, 0, 0, 0, 330, [[0, 'rgba(255,190,100,.22)'], [1, 'rgba(255,190,100,0)']]); g.beginPath(); g.arc(0, 0, 330, 0, Math.PI * 2); g.fill();
-g.restore();
-}
-
-// -------------------------------------------------------------------- globe
-const GT = 470, GB = 740;             // globe top/bottom
-const hwAt = (y) => { const t = (y - GT) / (GB - GT); return 86 + Math.sin(Math.PI * Math.pow(t, 0.9)) * 38 - t * 4; };
-function globePath() {
-  g.beginPath(); g.moveTo(cx - hwAt(GT), GT);
-  for (let y = GT; y <= GB; y += 4) g.lineTo(cx + hwAt(y), y);
-  for (let y = GB; y >= GT; y -= 4) g.lineTo(cx - hwAt(y), y);
-  g.closePath();
-}
-// back guard wires, seen through the glass
-function wires(front) {
-  const offs = front ? [-0.64, 0, 0.64] : [-0.32, 0.32];
-  for (const o of offs) {
-    g.beginPath();
-    for (let y = GT - 6; y <= GB + 6; y += 3) { const x = cx + o * (hwAt(Math.min(GB, Math.max(GT, y))) + 10); y === GT - 6 ? g.moveTo(x, y) : g.lineTo(x, y); }
-    g.lineCap = 'round';
-    if (front) { g.strokeStyle = '#11151a'; g.lineWidth = SMALL ? 17 : 11; g.stroke(); g.strokeStyle = lin(cx + o * 130 - 6, 0, cx + o * 130 + 6, 0, [[0, '#2a3138'], [0.45, '#9aa6b1'], [1, '#2a3138']]); g.lineWidth = SMALL ? 12 : 7; g.stroke(); }
-    else { g.strokeStyle = 'rgba(70,40,10,.55)'; g.lineWidth = 6; g.stroke(); }
+  // ----------------------------------------------------------------- geometry
+  const lens = (pl) => { const L = [0]; for (let i = 1; i < pl.length; i++) L.push(L[i - 1] + Math.hypot(pl[i][0] - pl[i - 1][0], pl[i][1] - pl[i - 1][1])); return L; };
+  function at(pl, L, s) { // point and unit tangent at arc length s
+    s = Math.max(0, Math.min(L[L.length - 1], s)); let i = 1; while (i < L.length - 1 && L[i] < s) i++;
+    const f = (s - L[i - 1]) / ((L[i] - L[i - 1]) || 1), a = pl[i - 1], b = pl[i];
+    const dx = b[0] - a[0], dy = b[1] - a[1], m = Math.hypot(dx, dy) || 1;
+    return { p: [a[0] + dx * f, a[1] + dy * f], t: [dx / m, dy / m] };
   }
-}
-wires(false);
-globePath();
-g.fillStyle = rad(cx, 622, 4, cx, 610, 175, [[0, '#fffdf6'], [0.1, '#fff0c6'], [0.32, '#ffd27c'], [0.62, '#f5a23f'], [0.88, '#b8621a'], [1, '#7a3a0c']]);
-g.fill();
-// flame
-g.save(); g.translate(cx, 648);
-g.fillStyle = rad(0, 20, 2, 0, -10, 90, [[0, 'rgba(255,255,255,.9)'], [0.4, 'rgba(255,240,200,.55)'], [1, 'rgba(255,220,150,0)']]); g.beginPath(); g.arc(0, -10, 90, 0, Math.PI * 2); g.fill();
-const flame = (s, col) => { g.fillStyle = col; g.beginPath(); g.moveTo(0, -78 * s); g.bezierCurveTo(26 * s, -34 * s, 32 * s, 12 * s, 0, 30 * s); g.bezierCurveTo(-32 * s, 12 * s, -26 * s, -34 * s, 0, -78 * s); g.fill(); };
-g.save(); g.rotate(0.05); flame(1.06, 'rgba(255,150,50,.35)'); g.restore(); flame(1, 'rgba(255,170,60,.85)'); flame(0.78, '#ffd36e'); flame(0.55, '#fff4cf'); flame(0.32, '#ffffff');
-g.fillStyle = rad(0, 26, 1, 0, 26, 14, [[0, 'rgba(120,170,255,.9)'], [1, 'rgba(120,170,255,0)']]); g.beginPath(); g.ellipse(0, 26, 14, 8, 0, 0, Math.PI * 2); g.fill();
-g.fillStyle = '#2a1a0c'; rr(-3, 30, 6, 12, 2); g.fill();
-g.restore();
-// burner under the flame
-g.fillStyle = metalH(cx, 34); rr(cx - 34, 684, 68, 14, 5); g.fill();
-g.fillStyle = metalH(cx, 44); rr(cx - 44, 698, 88, 30, 8); g.fill();
-for (let i = -3; i <= 3; i++) { g.fillStyle = 'rgba(0,0,0,.35)'; rr(cx + i * 11 - 2, 704, 4, 18, 2); g.fill(); }
-// glass highlights
-g.save(); globePath(); g.clip();
-g.fillStyle = lin(cx - 130, 0, cx + 130, 0, [[0, 'rgba(255,255,255,0)'], [0.12, 'rgba(255,255,255,.34)'], [0.2, 'rgba(255,255,255,.06)'], [0.24, 'rgba(255,255,255,.22)'], [0.27, 'rgba(255,255,255,0)'], [0.8, 'rgba(255,255,255,0)'], [0.88, 'rgba(255,255,255,.12)'], [0.92, 'rgba(255,255,255,0)']]);
-g.fillRect(cx - 130, GT, 260, GB - GT);
-g.fillStyle = lin(0, GT, 0, GB, [[0, 'rgba(90,40,5,.45)'], [0.12, 'rgba(90,40,5,0)'], [0.86, 'rgba(90,40,5,0)'], [1, 'rgba(90,40,5,.5)']]); g.fillRect(cx - 130, GT, 260, GB - GT);
-g.restore();
-globePath(); g.strokeStyle = 'rgba(255,230,180,.45)'; g.lineWidth = 1.5; g.stroke();
-// glass thickness at the rims, a catchlight down the left edge, the cord reflected on the right
-for (const [y, w] of [[GT + 6, hwAt(GT + 6)], [GB - 6, hwAt(GB - 6)]]) { g.beginPath(); g.ellipse(cx, y, w - 2, 7, 0, 0, Math.PI * 2); g.strokeStyle = 'rgba(255,245,215,.35)'; g.lineWidth = 2; g.stroke(); }
-g.save(); globePath(); g.clip();
-g.beginPath(); for (let y = GT + 20; y <= GB - 30; y += 4) { const x = cx - hwAt(y) + 12; y === GT + 20 ? g.moveTo(x, y) : g.lineTo(x, y); } g.strokeStyle = 'rgba(255,255,255,.55)'; g.lineWidth = 2.5; g.lineCap = 'round'; g.stroke();
-g.beginPath(); for (let y = GT + 30; y <= GB - 60; y += 4) { const x = cx + hwAt(y) - 16; y === GT + 30 ? g.moveTo(x, y) : g.lineTo(x, y); } g.strokeStyle = 'rgba(40,190,160,.28)'; g.lineWidth = 9; g.stroke();
-g.restore();
-wires(true);
-// middle band
-g.save(); g.beginPath(); g.ellipse(cx, 604, hwAt(604) + 12, 12, 0, 0, Math.PI); g.strokeStyle = '#11151a'; g.lineWidth = 11; g.stroke();
-g.strokeStyle = lin(cx - 140, 0, cx + 140, 0, [[0, '#2a3138'], [0.3, '#9aa6b1'], [0.6, '#56606a'], [1, '#2a3138']]); g.lineWidth = 7; g.stroke(); g.restore();
-
-// ----------------------------------------------------------------- top works
-// glass collar
-g.fillStyle = metalH(cx, 100, 1); rr(cx - 100, 452, 200, 22, 7); g.fill();
-g.fillStyle = 'rgba(255,190,110,.45)'; rr(cx - 96, 468, 192, 4, 2); g.fill(); // warm light catching the lip
-// dome
-g.beginPath(); g.moveTo(cx - 126, 458); g.bezierCurveTo(cx - 116, 392, cx - 58, 372, cx, 370); g.bezierCurveTo(cx + 58, 372, cx + 116, 392, cx + 126, 458); g.closePath();
-g.fillStyle = lin(cx - 126, 0, cx + 126, 0, [[0, '#171b20'], [0.22, '#46505a'], [0.36, '#a3afba'], [0.46, '#606b76'], [0.78, '#2a3037'], [1, '#14181c']]); g.fill();
-g.fillStyle = lin(0, 420, 0, 458, [[0, 'rgba(255,170,80,0)'], [1, 'rgba(255,170,80,.28)']]); g.fill();
-g.beginPath(); g.moveTo(cx - 112, 420); g.bezierCurveTo(cx - 96, 388, cx - 50, 374, cx, 373); g.strokeStyle = 'rgba(230,238,245,.35)'; g.lineWidth = 2; g.stroke();
-// vent slots on the dome
-if (!SMALL) for (let i = -5; i <= 5; i++) {
-  const x = cx + i * 18, y = 418 + Math.abs(i) * Math.abs(i) * 0.7;
-  g.save(); g.translate(x, y); g.rotate(i * 0.07);
-  rr(-3.5, -9, 7, 18, 3.5); g.fillStyle = '#0c0f12'; g.fill();
-  rr(-3.5, 5, 7, 4, 2); g.fillStyle = 'rgba(255,180,90,.55)'; g.fill();
-  g.restore();
-}
-// rim band with rivets
-g.fillStyle = metalH(cx, 132); rr(cx - 132, 450, 264, 14, 7); g.fill();
-if (!SMALL) for (let i = -6; i <= 6; i++) { const x = cx + i * 20; g.fillStyle = rad(x - 1, 455.5, 0.5, x, 457, 3.4, [[0, '#dfe6ec'], [1, '#3a434b']]); g.beginPath(); g.arc(x, 457, 3, 0, Math.PI * 2); g.fill(); }
-// chimney
-g.fillStyle = metalH(cx, 30); rr(cx - 30, 336, 60, 40, 6); g.fill();
-for (const y of [346, 358]) { g.fillStyle = 'rgba(0,0,0,.35)'; g.fillRect(cx - 30, y, 60, 2); g.fillStyle = 'rgba(255,255,255,.12)'; g.fillRect(cx - 30, y + 2, 60, 1); }
-g.fillStyle = metalH(cx, 44); rr(cx - 44, 326, 88, 14, 7); g.fill();
-g.fillStyle = metalH(cx, 36); rr(cx - 36, 318, 72, 10, 5); g.fill();
-// side eyelets
-for (const x of EX) {
-  g.fillStyle = metalH(x > cx ? x - 14 : x + 14, 12); rr(x > cx ? x - 22 : x + 6, EY - 5, 16, 14, 4); g.fill();
-  g.beginPath(); g.arc(x, EY, 13, 0, Math.PI * 2); g.lineWidth = 7; g.strokeStyle = '#0f1216'; g.stroke();
-  g.beginPath(); g.arc(x, EY, 13, 0, Math.PI * 2); g.lineWidth = 4.5; g.strokeStyle = lin(x - 13, EY - 13, x + 13, EY + 13, [[0, '#c9d2da'], [0.5, '#56606b'], [1, '#262c33']]); g.stroke();
-}
-
-// -------------------------------------------------------------------- base
-g.fillStyle = metalH(cx, 104, 1); rr(cx - 104, 734, 208, 20, 8); g.fill();
-g.fillStyle = 'rgba(255,190,110,.4)'; rr(cx - 100, 736, 200, 3, 1.5); g.fill();
-// tank
-g.beginPath(); g.moveTo(cx - 118, 754); g.bezierCurveTo(cx - 162, 760, cx - 166, 838, cx - 140, 846); g.lineTo(cx + 140, 846); g.bezierCurveTo(cx + 166, 838, cx + 162, 760, cx + 118, 754); g.closePath();
-g.fillStyle = lin(cx - 166, 0, cx + 166, 0, [[0, '#14181c'], [0.2, '#3c454e'], [0.34, '#b3bec8'], [0.44, '#66717c'], [0.76, '#2b3238'], [0.94, '#5a3e22'], [1, '#14181c']]); g.fill();
-g.fillStyle = lin(0, 754, 0, 846, [[0, 'rgba(255,170,80,.22)'], [0.3, 'rgba(255,170,80,0)'], [1, 'rgba(0,0,0,.35)']]); g.fill();
-for (const y of [772, 824]) {
-  g.beginPath(); g.moveTo(cx - 150, y); g.quadraticCurveTo(cx, y + 6, cx + 150, y); g.strokeStyle = 'rgba(0,0,0,.45)'; g.lineWidth = 2.5; g.stroke();
-  g.beginPath(); g.moveTo(cx - 150, y + 2.5); g.quadraticCurveTo(cx, y + 8.5, cx + 150, y + 2.5); g.strokeStyle = 'rgba(255,255,255,.14)'; g.lineWidth = 1; g.stroke();
-}
-// wick adjuster knob
-g.fillStyle = metalH(cx + 176, 10); rr(cx + 150, 782, 26, 12, 4); g.fill();
-g.save(); g.translate(cx + 184, 788);
-g.fillStyle = rad(-4, -4, 1, 0, 0, 17, [[0, '#e6c07a'], [0.5, '#a57b32'], [1, '#4a3212']]); g.beginPath(); g.arc(0, 0, 16, 0, Math.PI * 2); g.fill();
-for (let i = 0; i < 16; i++) { const a = (i / 16) * Math.PI * 2; g.beginPath(); g.moveTo(Math.cos(a) * 11, Math.sin(a) * 11); g.lineTo(Math.cos(a) * 16, Math.sin(a) * 16); g.strokeStyle = 'rgba(40,24,6,.55)'; g.lineWidth = 1.4; g.stroke(); }
-g.fillStyle = rad(-2, -2, 1, 0, 0, 7, [[0, '#f5dca8'], [1, '#8a6528']]); g.beginPath(); g.arc(0, 0, 6, 0, Math.PI * 2); g.fill();
-g.restore();
-// engraved name
-if (!SMALL) { g.save(); g.font = '700 17px "Gabarito", "Helvetica Neue", Arial, sans-serif'; g.letterSpacing = '6px'; g.textAlign = 'center'; g.textBaseline = 'middle';
-g.fillStyle = 'rgba(255,255,255,.16)'; g.fillText('PARACORD', cx + 3, 801);
-g.fillStyle = 'rgba(0,0,0,.55)'; g.fillText('PARACORD', cx + 3, 799.5);
-g.restore(); }
-// feet
-g.fillStyle = metalH(cx, 150); rr(cx - 150, 844, 300, 16, 8); g.fill();
-g.fillStyle = 'rgba(255,255,255,.18)'; rr(cx - 140, 845, 280, 2, 1); g.fill();
-
-}
-// -------------------------------------------------------------------- cord
-function sample(fn, n) { const pts = []; for (let i = 0; i <= n; i++) pts.push(fn(i / n)); return pts; }
-function walk(p) {
-  const out = [];
-  let acc = 0; out.push({ x: p[0][0], y: p[0][1], d: 0, a: Math.atan2(p[1][1] - p[0][1], p[1][0] - p[0][0]) });
-  for (let i = 1; i < p.length; i++) { const dx = p[i][0] - p[i - 1][0], dy = p[i][1] - p[i - 1][1]; acc += Math.hypot(dx, dy); out.push({ x: p[i][0], y: p[i][1], d: acc, a: Math.atan2(dy, dx) }); }
-  return out;
-}
-function at(W, d) { for (let i = 1; i < W.length; i++) if (W[i].d >= d) { const k = (d - W[i - 1].d) / (W[i].d - W[i - 1].d || 1); return { x: W[i - 1].x + (W[i].x - W[i - 1].x) * k, y: W[i - 1].y + (W[i].y - W[i - 1].y) * k, a: W[i].a }; } const q = W[W.length - 1]; return q; }
-function offsetPath(W, off) { g.beginPath(); W.forEach((p, i) => { const x = p.x + Math.cos(p.a + Math.PI / 2) * off, y = p.y + Math.sin(p.a + Math.PI / 2) * off; i ? g.lineTo(x, y) : g.moveTo(x, y); }); }
-function braid(pts, w, { phase = 0, shadow = true } = {}) {
-  const W = walk(pts), L = W[W.length - 1].d;
-  g.lineCap = 'round'; g.lineJoin = 'round';
-  if (shadow) { g.save(); g.filter = 'blur(5px)'; g.translate(3, 7); offsetPath(W, 0); g.strokeStyle = 'rgba(0,0,0,.45)'; g.lineWidth = w + 4; g.stroke(); g.restore(); }
-  offsetPath(W, 0); g.strokeStyle = CORD.edge; g.lineWidth = w + 3; g.stroke();
-  offsetPath(W, 0); g.strokeStyle = rgb(CORD.dark); g.lineWidth = w; g.stroke();
-  const step = w * 0.27;
-  for (let d = step * 0.4, k = 0; d < L - step * 0.2; d += step, k++) {
-    const p = at(W, d);
-    for (const side of [-1, 1]) {
-      const row = k + phase;
-      // Two-tone herringbone, and one amber tracer strand spiralling along one side.
-      const tracer = side < 0 && row % 5 === 0;
-      const col = tracer ? CORD.tracer : side < 0 ? CORD.base : CORD.alt;
-      const lift = 0.92 + rnd() * 0.16;
-      const nx = Math.cos(p.a + Math.PI / 2), ny = Math.sin(p.a + Math.PI / 2);
-      g.save(); g.translate(p.x + nx * side * w * 0.21, p.y + ny * side * w * 0.21); g.rotate(p.a + side * 0.92);
-      const len = w * 0.62, th = w * 0.33;
-      g.fillStyle = lin(0, -th / 2, 0, th / 2, [[0, rgb(tracer ? [255, 232, 180] : CORD.light, lift)], [0.42, rgb(col, lift)], [0.9, rgb(tracer ? [150, 90, 30] : CORD.dark, lift)], [1, CORD.edge]]);
-      g.beginPath(); g.ellipse(0, 0, len / 2, th / 2, 0, 0, Math.PI * 2); g.fill();
-      g.strokeStyle = 'rgba(4,34,28,.55)'; g.lineWidth = 0.8; g.stroke();
-      // fiber lines on each pick
-      g.strokeStyle = 'rgba(255,255,255,.10)'; g.lineWidth = 0.6;
-      if (!SMALL) for (const f of [-0.22, 0.02, 0.24]) { g.beginPath(); g.moveTo(-len * 0.34, th * f); g.lineTo(len * 0.34, th * f); g.stroke(); }
-      g.restore();
+  // A cord loop: a circle whose two ends leave on tangents and cross at X.
+  function loop({ cx = 56, cy = 42, R = 24, phi = 130, cross = 80, l1 = 15, l2 = 24 }) {
+    const r = Math.PI / 180, d = R / Math.sin(cross / 2 * r), al = Math.acos(R / d) / r;
+    const X = [cx + d * Math.cos(phi * r), cy + d * Math.sin(phi * r)];
+    const T = (a) => [cx + R * Math.cos(a * r), cy + R * Math.sin(a * r)];
+    const a1 = phi + al, a2 = phi - al + 360, T1 = T(a1), T2 = T(a2);
+    const u = (A, B) => { const dx = B[0] - A[0], dy = B[1] - A[1], m = Math.hypot(dx, dy); return [dx / m, dy / m]; };
+    const uA = u(T1, X), uB = u(T2, X);
+    const E1 = [X[0] + uA[0] * l1, X[1] + uA[1] * l1], E2 = [X[0] + uB[0] * l2, X[1] + uB[1] * l2];
+    const line = (A, B, n) => Array.from({ length: n }, (_, k) => [A[0] + (B[0] - A[0]) * k / n, A[1] + (B[1] - A[1]) * k / n]);
+    const arc = []; const n = Math.ceil((a2 - a1) / 2); for (let k = 0; k <= n; k++) arc.push(T(a1 + (a2 - a1) * k / n));
+    return [...line(E1, X, 20), ...line(X, T1, 30), ...arc, ...line(T2, X, 30).slice(1), ...line(X, E2, 20), E2];
+  }
+  // The approved proportions: loopMark({phi:130,cross:80,l1:15,l2:24,R:24}).
+  const PL = loop({ phi: 130, cross: 80, l1: 15, l2: 24, R: 24 });
+  const LL = lens(PL), TOT = LL[LL.length - 1];
+  // Where the cord crosses itself: sa on the stem (over), sb on the tail (under).
+  const CROSS = (() => {
+    for (let i = 1; i < PL.length; i++) for (let j = i + 2; j < PL.length; j++) {
+      const a = PL[i - 1], b = PL[i], q = PL[j - 1], r = PL[j];
+      const rx = b[0] - a[0], ry = b[1] - a[1], sx = r[0] - q[0], sy = r[1] - q[1], den = rx * sy - ry * sx;
+      if (Math.abs(den) < 1e-9) continue;
+      const t = ((q[0] - a[0]) * sy - (q[1] - a[1]) * sx) / den, u = ((q[0] - a[0]) * ry - (q[1] - a[1]) * rx) / den;
+      if (t < 0 || t > 1 || u < 0 || u > 1) continue;
+      const sa = LL[i - 1] + (LL[i] - LL[i - 1]) * t, sb = LL[j - 1] + (LL[j] - LL[j - 1]) * u;
+      if (Math.abs(sa - sb) < 42) continue;
+      return { sa, sb };
     }
+    throw new Error('the mark has no crossing');
+  })();
+  // The two halves the drawing animation reveals separately: the stem and the
+  // bowl's first half (over), then the bowl's second half and the tail (under).
+  const S_MID = (CROSS.sa + CROSS.sb) / 2;
+  // The stretch of stem whose surroundings are cut away from the under strand,
+  // leaving the transparent gap on both sides of the stem.
+  const HALO_HI = CROSS.sa + 1.75 * 16;
+  const GAP = (w) => w * 0.3;
+
+  const D = (pl) => pl.length ? 'M' + pl.map((p) => p[0].toFixed(2) + ' ' + p[1].toFixed(2)).join('L') : '';
+  function sample(s0, s1, o, step = 0.6) {
+    const n = Math.max(2, Math.ceil(Math.abs(s1 - s0) / step)), out = [];
+    for (let k = 0; k <= n; k++) { const s = s0 + (s1 - s0) * k / n, { p, t } = at(PL, LL, s); out.push([p[0] - t[1] * o, p[1] + t[0] * o]); }
+    return out;
   }
-  // roundness: a darker underside and a soft top sheen
-  g.save(); g.globalCompositeOperation = 'multiply'; offsetPath(W, w * 0.3); g.strokeStyle = 'rgba(0,40,32,.45)'; g.lineWidth = w * 0.42; g.stroke(); g.restore();
-  g.save(); g.globalCompositeOperation = 'screen'; offsetPath(W, -w * 0.24); g.strokeStyle = 'rgba(190,255,236,.16)'; g.lineWidth = w * 0.22; g.stroke(); g.restore();
-  // warm light from the lantern on the cord's inner face
-  g.save(); g.globalCompositeOperation = 'screen'; offsetPath(W, w * 0.22); g.strokeStyle = 'rgba(255,170,80,.10)'; g.lineWidth = w * 0.3; g.stroke(); g.restore();
-}
-
-if (SHOW_C) {
-// tail: from the right hitch, down the outside of the globe, ending in a metal tip
-const tailPts = sample((t) => [EX[1] + 20 + Math.sin(t * 2.4) * 7, EY + 20 + t * 222], 70);
-braid(tailPts, 30 * CW, { phase: 2 });
-{ const [tx, ty] = tailPts[tailPts.length - 1];
-  g.fillStyle = metalH(tx, 13); rr(tx - 13, ty - 6, 26, 36, 9); g.fill();
-  for (let i = 0; i < 4; i++) { g.fillStyle = 'rgba(0,0,0,.4)'; g.fillRect(tx - 13, ty + 2 + i * 6, 26, 1.6); g.fillStyle = 'rgba(255,255,255,.18)'; g.fillRect(tx - 13, ty + 3.6 + i * 6, 26, 0.8); }
-  g.fillStyle = rad(tx - 3, ty + 28, 1, tx, ty + 28, 12, [[0, '#dfe6ec'], [1, 'rgba(60,70,80,0)']]); g.beginPath(); g.ellipse(tx, ty + 29, 11, 4, 0, 0, Math.PI * 2); g.fill(); }
-
-// the handle
-const arch = sample((t) => { const a = Math.PI + t * Math.PI; return [cx + Math.cos(a) * 150, EY - 6 + Math.sin(a) * 322]; }, 200);
-braid(arch, 40 * CW);
-
-// hitches: the cord passes through each eyelet and wraps it twice (a lark's head)
-for (const x of EX) {
-  const dir = x > cx ? 1 : -1;
-  for (let i = 0; i < 2; i++) {
-    const xo = x + (i - 0.5) * 18 * dir;
-    braid(sample((t) => [xo + Math.sin(t * Math.PI) * 13 * dir, EY - 24 + t * 50], 24), 24 * CW, { phase: i * 2 + 1, shadow: i === 0 });
+  function sampleF(fn, n) {
+    const out = [];
+    for (let k = 0; k <= n; k++) { const [s, o] = fn(k / n); const { p, t } = at(PL, LL, s); out.push([p[0] - t[1] * o, p[1] + t[0] * o]); }
+    return out;
   }
-}
+  // A centerline stretch for masks and strokes: the cord's own vertices
+  // between s0 and s1, with the straight runs collapsed to their ends, so its
+  // length matches the drawing's exactly.
+  function centerline(s0, s1) {
+    const pts = [at(PL, LL, s0).p];
+    for (let i = 0; i < PL.length; i++) if (LL[i] > s0 + 1e-6 && LL[i] < s1 - 1e-6) pts.push(PL[i]);
+    pts.push(at(PL, LL, s1).p);
+    const out = [pts[0]];
+    for (let i = 1; i < pts.length - 1; i++) {
+      const a = out[out.length - 1], b = pts[i], c = pts[i + 1];
+      const cross = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+      if (Math.hypot(b[0] - a[0], b[1] - a[1]) < 1e-6 || Math.abs(cross) < 1e-6) continue;
+      out.push(b);
+    }
+    out.push(pts[pts.length - 1]);
+    return D(out);
+  }
 
-}
-// ------------------------------------------------------------- final light
-if (SHOW_L && GROUND) {
-g.save(); g.globalCompositeOperation = 'screen';
-g.fillStyle = rad(cx, 610, 20, cx, 610, 300, [[0, 'rgba(255,200,120,.20)'], [1, 'rgba(255,200,120,0)']]); g.fillRect(0, 0, S, S);
-g.restore();
-}
-if (SMALL) g.restore();
-if (!LIT) {
-  // Unlit: the whole drawing dimmed and desaturated, as the film's first beat.
-  const copy = document.createElement('canvas'); copy.width = copy.height = 2048;
-  copy.getContext('2d').drawImage(c, 0, 0);
-  g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, 2048, 2048);
-  g.filter = 'brightness(.24) saturate(.3)'; g.drawImage(copy, 0, 0); g.filter = 'none';
-  g.setTransform(2, 0, 0, 2, 0, 0);
-}
-if (BG && !SMALL) {
-  // grain
-  const img = g.getImageData(0, 0, 2048, 2048), d = img.data;
-  for (let i = 0; i < d.length; i += 4) { if (d[i + 3] === 0) continue; const n = (rnd() - 0.5) * 9; d[i] += n; d[i + 1] += n; d[i + 2] += n; }
-  g.putImageData(img, 0, 0);
-  // hairline edge
-  g.save(); rr(1, 1, S - 2, S - 2, 227); g.strokeStyle = lin(0, 0, 0, S, [[0, 'rgba(255,255,255,.14)'], [0.4, 'rgba(255,255,255,.03)'], [1, 'rgba(255,255,255,.02)']]); g.lineWidth = 2; g.stroke(); g.restore();
-}
-window.DONE = true;
-}
-</script></body></html>
+  // The square box every variant shares: the centerline's bounds plus half the
+  // thickest cord, and a 2% margin.
+  const VB = (() => {
+    let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+    PL.forEach(([x, y]) => { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); });
+    const h = WIDTH.flat / 2; x0 -= h; y0 -= h; x1 += h; y1 += h;
+    const side = Math.max(x1 - x0, y1 - y0) * 1.04, cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+    return [cx - side / 2, cy - side / 2, side, side].map((v) => +v.toFixed(3));
+  })();
+
+  // ------------------------------------------------------------------ drawing
+  // One "stack": everything that makes the cord look like cord, between s0 and
+  // s1. Lifted from the approved renderer (cord2.js), unchanged in look.
+  function stack(level, col, s0, s1, capStart, capEnd, ext = 0) {
+    const w = WIDTH[level], style = LEVEL_STYLE[level];
+    s0 = Math.max(0, s0); s1 = Math.min(TOT, s1); if (s1 - s0 < 0.05) return '';
+    const t0 = Math.max(0, s0 - ext), t1 = Math.min(TOT, s1 + ext);
+    let g = `<path d="${D(sample(s0, s1, 0))}" fill="none" stroke="${col.base}" stroke-width="${w}" stroke-linecap="butt"/>`;
+    [[capStart, s0], [capEnd, s1]].forEach(([on, s]) => { if (!on) return; const { p } = at(PL, LL, s); g += `<circle cx="${p[0].toFixed(2)}" cy="${p[1].toFixed(2)}" r="${w / 2}" fill="${col.base}"/>`; });
+    if (style === 'full' || style === 'mid') {
+      const h = w / 2 * 0.9, gIn = w * 0.05, a = w * (style === 'mid' ? 0.9 : 0.6), len = a * 0.6, skew = w * 0.42;
+      for (const lane of [1, -1]) {
+        const ph = lane === 1 ? 0 : a / 2;
+        const k0 = Math.floor((t0 - skew - len - ph) / a) - 1, k1 = Math.ceil((t1 - ph) / a) + 1;
+        const lo = Math.max(t0, w * 0.5), hi = Math.min(t1, TOT - w * 0.5);
+        const S = (v) => Math.max(lo, Math.min(hi, v));
+        for (let k = k0; k <= k1; k++) {
+          const s = k * a + ph;
+          if (s + len + skew < lo || s > hi) continue;
+          const pts = [
+            ...sampleF((f) => [S(s + skew * f), lane * (gIn + (h - gIn) * f)], 6),
+            ...sampleF((f) => [S(s + skew + len * f), lane * h], 4),
+            ...sampleF((f) => [S(s + skew + len - skew * f), lane * (h - (h - gIn) * f)], 6),
+            ...sampleF((f) => [S(s + len - len * f), lane * gIn], 4)];
+          g += `<path d="${D(pts)}Z" fill="${lane === 1 ? col.cellA : col.cellB}"/>`;
+        }
+      }
+      const e = w * 0.11;
+      for (const lane of [1, -1]) g += `<path d="${D(sample(t0, t1, lane * (w / 2 - e / 2)))}" fill="none" stroke="${col.edge}" stroke-width="${e.toFixed(2)}" stroke-linecap="butt"/>`;
+    }
+    // Fused ends: the melted cap and the ring where the braid stops.
+    if (level !== 'mono') {
+      const m = w * 0.5;
+      [[0, m, true], [TOT - m, TOT, false]].forEach(([a0, a1, isStart]) => {
+        const lo = Math.max(s0, a0), hi = Math.min(s1, a1); if (hi - lo < 0.02) return;
+        g += `<path d="${D(sample(lo, hi, 0, 0.3))}" fill="none" stroke="${col.melt}" stroke-width="${w}" stroke-linecap="butt"/>`;
+        const endS = isStart ? 0 : TOT;
+        if (endS >= s0 - 1e-6 && endS <= s1 + 1e-6) { const { p } = at(PL, LL, endS); g += `<circle cx="${p[0].toFixed(2)}" cy="${p[1].toFixed(2)}" r="${w / 2}" fill="${col.melt}"/>`; }
+        const ringS = isStart ? a1 : a0;
+        if (ringS >= s0 && ringS <= s1) {
+          const { p, t } = at(PL, LL, ringS), n = [-t[1], t[0]], hh = w / 2 * 0.98;
+          g += `<path d="M${(p[0] + n[0] * hh).toFixed(2)} ${(p[1] + n[1] * hh).toFixed(2)}L${(p[0] - n[0] * hh).toFixed(2)} ${(p[1] - n[1] * hh).toFixed(2)}" stroke="${col.ring}" stroke-width="${(w * 0.1).toFixed(2)}"/>`;
+        }
+      });
+    }
+    return g;
+  }
+
+  let uid = 0;
+  /**
+   * The bare mark's drawing, as SVG markup in the shared box (VB). `whole` is
+   * the finished mark: the cord, its gap cut away around the stem where the
+   * tail passes under (a real hole, so it works on any ground), and the stem
+   * drawn over it. `under` is the bowl's second half and the tail alone, with
+   * no gap: the drawing animation reveals it under the stem, and cuts the gap
+   * itself while the stem is there.
+   */
+  function markup(level, part = 'whole', colors = COLORS[level === 'mono' ? 'mono' : 'ember']) {
+    const w = WIDTH[level];
+    if (part === 'under') return stack(level, colors, S_MID, TOT, false, true);
+    const id = `pcg${uid++}`;
+    const [x, y, s] = VB;
+    const halo = `<mask id="${id}" maskUnits="userSpaceOnUse" x="${x}" y="${y}" width="${s}" height="${s}">`
+      + `<rect x="${x}" y="${y}" width="${s}" height="${s}" fill="#fff"/>`
+      + `<path d="${centerline(0, HALO_HI)}" fill="none" stroke="#000" stroke-width="${w + 2 * GAP(w)}" stroke-linecap="round"/></mask>`;
+    return `<defs>${halo}</defs><g mask="url(#${id})">${stack(level, colors, 0, TOT, true, true)}</g>`
+      + stack(level, colors, 0, HALO_HI + 1.5 * w, true, false, 1.4 * w);
+  }
+
+  const svgDoc = (inner, viewBox, size) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${viewBox.join(' ')}"${size ? ` width="${size}" height="${size}"` : ''}>${inner}</svg>`;
+
+  function art(level, part = 'whole', size) {
+    return svgDoc(markup(level, part), VB, size);
+  }
+
+  // CSS linear-gradient(160deg, from, to) on a square of side S, as SVG.
+  function tileGradient(id, S) {
+    const a = 160 * Math.PI / 180, dx = Math.sin(a), dy = -Math.cos(a), half = (Math.abs(dx) + Math.abs(dy)) * S / 2;
+    const c = S / 2;
+    return `<linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="${(c - dx * half).toFixed(2)}" y1="${(c - dy * half).toFixed(2)}" x2="${(c + dx * half).toFixed(2)}" y2="${(c + dy * half).toFixed(2)}">`
+      + `<stop offset="0" stop-color="${TILE.from}"/><stop offset="1" stop-color="${TILE.to}"/></linearGradient>`;
+  }
+
+  // How much of the tile the mark's box fills, by level: the simpler drawings
+  // sit larger so they stay legible at dock and tab size.
+  const TILE_FILL = { full: 0.7, mid: 0.74, flat: 0.82, mono: 0.82 };
+  /**
+   * The app icon: the mark on the rounded Ember tile (a 22.5% corner, the
+   * tile's own warm-dark gradient and a faint inner edge). `square` drops the
+   * rounding and the edge, for platforms that cut their own shape (Apple
+   * touch, maskable, iOS), and `fill` overrides how much of it the mark fills.
+   */
+  function tile(level, { square = false, fill, size = 1024 } = {}) {
+    const S = 1024, f = fill ?? TILE_FILL[level], m = S * f, o = (S - m) / 2, r = square ? 0 : S * 0.225;
+    const id = `pct${uid++}`;
+    let inner = `<defs>${tileGradient(id, S)}</defs><rect width="${S}" height="${S}" rx="${r}" fill="url(#${id})"/>`;
+    if (!square) inner += `<rect x="5" y="5" width="${S - 10}" height="${S - 10}" rx="${r - 5}" fill="none" stroke="#fff" stroke-opacity="0.07" stroke-width="10"/>`;
+    inner += `<svg x="${o}" y="${o}" width="${m}" height="${m}" viewBox="${VB.join(' ')}">${markup(level)}</svg>`;
+    return svgDoc(inner, [0, 0, S, S], size);
+  }
+
+  /** The bare mark, transparent, its box filling `fill` of a 1024 square. */
+  function free(level, fill = 1, size = 1024) {
+    const S = 1024, m = S * fill, o = (S - m) / 2;
+    return svgDoc(`<svg x="${o}" y="${o}" width="${m}" height="${m}" viewBox="${VB.join(' ')}">${markup(level)}</svg>`, [0, 0, S, S], size);
+  }
+
+  /**
+   * Everything the animation needs, in the box's units. The drawing runs along
+   * the centerline from the stem's foot (s = 0) to the tail's end (s = tot):
+   * `over` is the stretch from 0 to sMid (stem and the bowl's first half),
+   * `under` the rest, and `halo` the stretch of stem whose surroundings are cut
+   * from the under strand.
+   */
+  const GEO = {
+    viewBox: VB,
+    tot: +TOT.toFixed(3),
+    sMid: +S_MID.toFixed(3),
+    haloHi: +HALO_HI.toFixed(3),
+    cross: { over: +CROSS.sa.toFixed(3), under: +CROSS.sb.toFixed(3) },
+    width: WIDTH,
+    gap: Object.fromEntries(Object.entries(WIDTH).map(([k, w]) => [k, +GAP(w).toFixed(3)])),
+    paths: { over: centerline(0, S_MID), under: centerline(S_MID, TOT), halo: centerline(0, HALO_HI) },
+    colors: COLORS,
+    tile: TILE,
+  };
+
+  window.PCMark = { GEO, art, tile, free, markup };
+})();
+
+// Preview when the file is opened directly.
+(function () {
+  const el = document.getElementById('preview');
+  const fig = (svg, label, light) => `<figure class="${light ? 'light' : ''}">${svg}<figcaption>${label}</figcaption></figure>`;
+  const sized = (svg, px) => svg.replace('<svg ', `<svg width="${px}" height="${px}" `);
+  el.innerHTML = [
+    fig(sized(PCMark.art('full'), 420), 'full'),
+    fig(sized(PCMark.tile('full'), 160), 'icon'),
+    fig(sized(PCMark.tile('mid'), 34), 'dock 34'),
+    fig(sized(PCMark.art('mid'), 48), 'mid 48'),
+    fig(sized(PCMark.art('mid'), 48), 'mid 48', true),
+    fig(sized(PCMark.art('flat'), 16), 'flat 16'),
+    fig(sized(PCMark.art('mono'), 18), 'mono 18'),
+    fig(sized(PCMark.art('full', 'under'), 160), 'under'),
+  ].join('');
+  window.DONE = true;
+})();
+</script>
+</body>
+</html>

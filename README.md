@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/images/brand/paracord.webp" alt="The Paracord mark: a lantern on a braided cord handle lights up above the name Paracord" width="520"/>
+  <img src="docs/images/brand/paracord.webp" alt="The Paracord mark: a single paracord draws itself into a P, threads under its own stem, and the name Paracord appears beneath it" width="520"/>
 </p>
 
 <p align="center">
