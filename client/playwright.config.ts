@@ -49,7 +49,7 @@ export default defineConfig({
     ? [
         {
           name: 'real-server',
-          testMatch: /real-server(?:\.smoke|\.voice-check|\.voice-join|\.realtime-hold|\.session-recovery|-restore|-setup)\.spec\.ts$/,
+          testMatch: /real-server(?:\.smoke|\.voice-check|\.voice-join|\.realtime-hold|\.session-recovery|-restore|\.setup-claim|\.setup-join)\.spec\.ts$/,
           use: { ...devices['Desktop Chrome'] },
         },
       ]
