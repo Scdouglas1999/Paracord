@@ -2,7 +2,7 @@ import { getPublicKeyAsync, signAsync, utils } from '@noble/ed25519';
 import { scryptAsync } from '@noble/hashes/scrypt.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex, utf8ToBytes, randomBytes } from '@noble/hashes/utils.js';
-import { wordlist } from './bip39-wordlist';
+import { BIP39_WORD_ALIASES, wordlist } from './bip39-wordlist';
 import { IDENTITY_KEYSTORE_STORAGE_KEY, readIdentityKeystore, writeIdentityKeystore, updateIdentityKeystore, deleteIdentityKeystore } from './crypto/identityKeystore';
 import { toArrayBuffer, toBase64, fromBase64 } from './crypto/util';
 
@@ -260,7 +260,7 @@ export async function recoverFromPhrase(
   // Convert words back to 11-bit indices
   const indices: number[] = [];
   for (const word of words) {
-    const idx = wordlist.indexOf(word);
+    const idx = wordlist.indexOf(BIP39_WORD_ALIASES[word] ?? word);
     if (idx === -1) {
       throw new Error(`Unknown word in recovery phrase: "${word}"`);
     }
