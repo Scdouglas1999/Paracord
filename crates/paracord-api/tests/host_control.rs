@@ -2,10 +2,8 @@
 //! (docs/setup-spec.md §2.5, §8.5, §9.1): the loopback + token guard, the
 //! status shape, backups, the backup toggle and the escrow pre-checks.
 //!
-//! The escrow write itself belongs to S4 and answers 501 `not_built` until it
-//! lands (`routes/host_status.rs`, `seams`); the row asserting that is the one
-//! that package replaces. The reachability retry is S5's, wired to
-//! `paracord_core::reachability`.
+//! The escrow write is S4's (`paracord_core::storage_key`), the reachability
+//! retry S5's (`paracord_core::reachability`).
 
 mod common;
 
@@ -437,9 +435,10 @@ async fn escrow_checks_its_input_before_anything_else() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// SEAM(S4): replaced by the real behavior when that package lands.
+/// An escrow names the owner's identity key, so a server nobody has claimed
+/// has nothing to escrow under, and says so instead of writing anything.
 #[tokio::test]
-async fn the_escrow_write_says_so_until_its_package_lands() -> anyhow::Result<()> {
+async fn the_escrow_needs_an_owner() -> anyhow::Result<()> {
     let host = host().await?;
     let (status, payload) = call(
         &host,
@@ -451,8 +450,7 @@ async fn the_escrow_write_says_so_until_its_package_lands() -> anyhow::Result<()
         ),
     )
     .await?;
-    assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{payload}");
-    assert_eq!(payload["code"], "not_built");
+    assert_eq!(status, StatusCode::CONFLICT, "{payload}");
     assert!(!host.escrow_file.exists(), "nothing half-written");
     Ok(())
 }
@@ -606,12 +604,46 @@ async fn only_the_owner_may_escrow_the_storage_key() -> anyhow::Result<()> {
     .await?;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{payload}");
 
-    std::fs::write(&escrow_file, "{}")?;
+    // The owner's escrow, under the S1 vector identity: the storage key comes
+    // back with the escrow key derived from that identity, and only once.
+    const INSTANCE: &str = "11111111-2222-4333-8444-555555555555";
+    let identity_private = paracord_util::hex::hex_decode(
+        "d2cb3a96fd540c24f68825716fdb1e8c2549542d67fd5d25107635c2959f8d9c",
+    )
+    .unwrap();
+    let identity_public = "ad1556f6b39cd51a513052c0be97b86e668adb99fadb813e0c02ebddf7037fd4";
+    paracord_db::users::update_user_public_key(&app.db, tokens[0].1, identity_public).await?;
+    let master_key = paracord_util::at_rest::generate_master_key();
+    paracord_core::storage_key::init(paracord_core::storage_key::StorageKeyRuntime {
+        enabled: true,
+        sqlite_encrypted: true,
+        files_encrypted: true,
+        instance_id: Some(INSTANCE.into()),
+        escrow_file: Some(escrow_file.clone()),
+        master_key: Some(master_key),
+        ..Default::default()
+    });
+    let escrow_key = paracord_util::at_rest::derive_escrow_key(&identity_private, INSTANCE);
+    let body = json!({ "wrapping_key": b64url(&escrow_key) });
+    let (status, payload) = dispatch_json(
+        &app.app,
+        build_json_request(Method::POST, path, Some(body.clone()), Some(&tokens[0].0))?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{payload}");
+    let escrow = paracord_core::storage_key::read_escrow_file(&escrow_file)?;
+    assert_eq!(escrow.instance_id, INSTANCE);
+    assert_eq!(escrow.owner_public_key, identity_public);
+    assert_eq!(
+        paracord_core::storage_key::unwrap_escrow(&escrow, &escrow_key).unwrap(),
+        master_key
+    );
+
     let (status, payload) = dispatch_json(
         &app.app,
         build_json_request(Method::POST, path, Some(body), Some(&tokens[0].0))?,
     )
     .await?;
-    assert_eq!(status, StatusCode::CONFLICT, "{payload}");
+    assert_eq!(status, StatusCode::CONFLICT, "write-once: {payload}");
     Ok(())
 }

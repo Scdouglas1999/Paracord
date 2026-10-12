@@ -1,7 +1,7 @@
 use clap::{Args as ClapArgs, Parser, Subcommand};
 
 #[derive(Parser, Debug)]
-#[command(name = "paracord-server", about = "Paracord chat server")]
+#[command(name = "paracord-server", about = "Paracord chat server", version)]
 pub struct Args {
     /// Path to configuration file
     #[arg(short, long, default_value = "config/paracord.toml")]
@@ -44,6 +44,53 @@ pub enum Command {
     /// URL to open/share and the first-run "Next steps" block, and exits 0. If
     /// the config already exists it is reported as ready and never overwritten.
     Init(InitArgs),
+
+    /// Encrypt an existing server's stored data: the SQLite database with
+    /// SQLCipher and every attachment file (docs/setup-spec.md §4.8).
+    ///
+    /// Stop the server first (this refuses while its port answers). Takes a
+    /// backup, generates a storage key and stores it in --key-source, copies
+    /// the database into an encrypted one and compares every table's rows,
+    /// encrypts files in place, then turns [at_rest] on in the config. An
+    /// interrupted run picks up where it stopped when run again.
+    EncryptStorage(EncryptStorageArgs),
+}
+
+/// Where `encrypt-storage` keeps the new key.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KeySourceArg {
+    /// The system keychain of the user the server runs as.
+    Keychain,
+    /// A systemd credential (`systemd-creds encrypt`), written to --key-file.
+    #[value(name = "systemd-creds")]
+    SystemdCreds,
+    /// A key file readable only by the server's user (--key-file).
+    File,
+    /// The key already in [at_rest] key_env (you make it, e.g. `openssl rand -hex 32`).
+    Env,
+}
+
+impl From<KeySourceArg> for paracord_contracts::host::KeySource {
+    fn from(value: KeySourceArg) -> Self {
+        use paracord_contracts::host::KeySource;
+        match value {
+            KeySourceArg::Keychain => KeySource::Keychain,
+            KeySourceArg::SystemdCreds => KeySource::SystemdCreds,
+            KeySourceArg::File => KeySource::File,
+            KeySourceArg::Env => KeySource::Env,
+        }
+    }
+}
+
+#[derive(ClapArgs, Debug)]
+pub struct EncryptStorageArgs {
+    /// Where the new storage key goes.
+    #[arg(long, value_enum)]
+    pub key_source: KeySourceArg,
+    /// `file`: the key file to create (default: at-rest.key beside the config).
+    /// `systemd-creds`: the encrypted credential to create.
+    #[arg(long)]
+    pub key_file: Option<std::path::PathBuf>,
 }
 
 #[derive(ClapArgs, Debug)]
@@ -117,4 +164,9 @@ pub struct RestoreBackupArgs {
     /// Maximum unpacked archive bytes and maximum external media export bytes.
     #[arg(long, default_value_t = 68_719_476_736)]
     pub max_unpacked_bytes: u64,
+    /// Read the owner's escrow key (b64url, one line) from standard input,
+    /// unwrap the storage key from the archive's escrow and store it in the
+    /// config's key source before restoring (docs/setup-spec.md §4.7, §4.8).
+    #[arg(long)]
+    pub escrow_key_stdin: bool,
 }

@@ -3455,7 +3455,7 @@ fn encrypt_totp_secret(state: &AppState, plaintext_base32: &str) -> Result<Strin
     let Some(cryptor) = state.config.totp_cryptor.as_ref() else {
         if state.config.public_url.is_some() {
             return Err(ApiError::ServiceUnavailable(
-                "MFA requires at-rest encryption when public_url is configured; enable [at_rest] with a valid key".into(),
+                "Two-factor sign-in needs this server's stored data to be encrypted. Run `paracord-server encrypt-storage` (see docs/encryption.md).".into(),
             ));
         }
         return Ok(plaintext_base32.to_string());

@@ -7,19 +7,21 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+mod at_rest_boot;
 mod bots;
 mod cli;
 mod config;
 #[cfg(feature = "embed-ui")]
 mod embedded_ui;
+mod encrypt_storage;
 mod file_transfer;
 mod host_mode;
 mod livekit_proc;
 mod logging;
 mod portmap;
+mod reachability;
 mod restore;
 mod tls;
-mod reachability;
 mod web_ui;
 
 /// Bounded grace period granted to background workers to drain their current
@@ -220,10 +222,17 @@ async fn main() -> Result<()> {
             cli::Command::RestoreBackup(restore_args) => {
                 restore::run(restore_args, &args.config).await
             }
+            cli::Command::EncryptStorage(encrypt_args) => {
+                encrypt_storage::run(encrypt_args, &args.config).await
+            }
         };
     }
 
-    let config = config::Config::load(&args.config)?;
+    let mut config = config::Config::load(&args.config)?;
+    // A config this start generated gets its storage key now, before anything
+    // can write unencrypted data (docs/setup-spec.md §4.3).
+    at_rest_boot::provision_new_config(&mut config, &args.config)?;
+    let config = config;
     // "Paracord on this computer": a fresh control token before anything listens.
     host_mode::prepare_start(&config)?;
     if let Some(limit) = config.integrations.feeds_per_server {
@@ -238,7 +247,9 @@ async fn main() -> Result<()> {
             "tls.acme.enabled is true while tls.enabled is false; ACME automation will be inactive"
         );
     }
-    let at_rest_profile = build_at_rest_profile(&config)?;
+    // Exits 78 with one line when the configured key source cannot produce
+    // the key, or the key does not open the database (§4.2, §4.4).
+    let at_rest_profile = at_rest_boot::boot(&config).await?;
     if config::is_production_deployment(&config) && at_rest_profile.totp_cryptor.is_none() {
         tracing::warn!(
             "public_url is configured but at-rest TOTP encryption is unavailable; MFA setup will be rejected until [at_rest] is enabled with a valid key"
@@ -506,6 +517,7 @@ async fn main() -> Result<()> {
     paracord_db::run_migrations_for_engine(&db, db_engine)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to run {} migrations: {}", db_engine.as_str(), e))?;
+    at_rest_boot::publish_status(&db, &config, &at_rest_profile).await?;
 
     // Servers from before uploaded banners kept theirs inside the hub settings
     // as a data URL. Turn each into a real banner before anything reads them.
@@ -770,6 +782,13 @@ async fn main() -> Result<()> {
     // client connected now reaches that client instead of nobody.
     state.member_index.attach_event_bus(state.event_bus.clone());
 
+    // Admins hear about every change to reachability (and, once reported,
+    // stored-data encryption and backups) as INSTANCE_STATUS_UPDATE.
+    paracord_core::reachability::spawn_status_broadcaster(
+        paracord_core::reachability::hub().clone(),
+        state.event_bus.clone(),
+    );
+
     // ── Native QUIC media server ─────────────────────────────────────────────
     // Uses a single UDP port (defaults to 8443, same as TLS) with ALPN-based
     // routing: `h3` → WebTransport (browsers), anything else → raw QUIC
@@ -782,13 +801,6 @@ async fn main() -> Result<()> {
 
         // Provision the native QUIC endpoint. On success `state.native_media` is
         // populated and the ALPN accept loop spawned; on failure we capture a
-    // Admins hear about every change to reachability (and, once reported,
-    // stored-data encryption and backups) as INSTANCE_STATUS_UPDATE.
-    paracord_core::reachability::spawn_status_broadcaster(
-        paracord_core::reachability::hub().clone(),
-        state.event_bus.clone(),
-    );
-
         // concrete, operator-actionable reason and decide below whether to
         // hard-fail (no fallback) or degrade to LiveKit.
         // The certificate is valid for under 14 days, which is what browsers
@@ -1028,18 +1040,6 @@ async fn main() -> Result<()> {
 
     // ── TLS / HTTPS setup ───────────────────────────────────────────────────
     let tls_enabled = config.tls.enabled;
-    let tls_rustls_config = if tls_enabled {
-        Some(
-            tls::ensure_certs(
-                &config.tls,
-                router_reported_ip.as_deref(),
-                detected_local_ip.as_deref(),
-            )
-            .await
-            .context("TLS is enabled but certificate setup failed; refusing to serve credentials over plaintext HTTP")?,
-        )
-    } else {
-        None
     // The router's answer, which is the only source of this network's public
     // address, and so of the certificate's public-address name.
     if let Some(handle) = reachability_handle.as_ref() {
@@ -1053,6 +1053,18 @@ async fn main() -> Result<()> {
             _ => None,
         }
     };
+    let tls_rustls_config = if tls_enabled {
+        Some(
+            tls::ensure_certs(
+                &config.tls,
+                router_reported_ip.as_deref(),
+                detected_local_ip.as_deref(),
+            )
+            .await
+            .context("TLS is enabled but certificate setup failed; refusing to serve credentials over plaintext HTTP")?,
+        )
+    } else {
+        None
     };
 
     let tls_status = if let Some(ref _cfg) = tls_rustls_config {
@@ -1337,7 +1349,12 @@ async fn main() -> Result<()> {
             }
         };
 
+        // Every connection that finishes its TLS handshake is shown to the
+        // reachability state, which is how "a friend connected from outside"
+        // becomes a fact rather than a hope.
+        let observed_hub = paracord_core::reachability::hub().clone();
         let https_server = axum_server::bind_rustls(tls_addr, rustls_config)
+            .map(|tls| reachability::ObservingAcceptor::new(tls, observed_hub))
             .serve(app_https.into_make_service_with_connect_info::<std::net::SocketAddr>());
 
         tokio::select! {
@@ -1349,12 +1366,7 @@ async fn main() -> Result<()> {
         }
     } else {
         // HTTP only
-        // Every connection that finishes its TLS handshake is shown to the
-        // reachability state, which is how "a friend connected from outside"
-        // becomes a fact rather than a hope.
-        let observed_hub = paracord_core::reachability::hub().clone();
         let listener = listener.expect("the plain-HTTP listener is bound when TLS is off");
-            .map(|tls| reachability::ObservingAcceptor::new(tls, observed_hub))
         let server = axum::serve(
             listener,
             app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
@@ -1847,73 +1859,9 @@ fn livekit_credentials_look_insecure(api_key: &str, api_secret: &str) -> bool {
     key.len() < 12 || secret.len() < 32
 }
 
-fn build_at_rest_profile(config: &config::Config) -> Result<AtRestRuntimeProfile> {
-    if !config.at_rest.enabled {
-        return Ok(AtRestRuntimeProfile::default());
-    }
-    let sqlite_db = matches!(config.database.engine, config::DatabaseEngine::Sqlite);
-    let encrypt_sqlite = config.at_rest.encrypt_sqlite && sqlite_db;
-    if config.at_rest.encrypt_sqlite && !sqlite_db {
-        tracing::warn!(
-            "at_rest.encrypt_sqlite is enabled but database.engine={} - ignoring SQLite DB encryption setting",
-            match config.database.engine {
-                config::DatabaseEngine::Sqlite => "sqlite",
-                config::DatabaseEngine::Postgres => "postgres",
-            }
-        );
-    }
-
-    let key_env_name = config.at_rest.key_env.trim();
-    if key_env_name.is_empty() {
-        anyhow::bail!("at_rest.key_env must not be empty when at-rest encryption is enabled");
-    }
-    let raw_master_key = std::env::var(key_env_name).with_context(|| {
-        format!(
-            "at-rest encryption is enabled but env var '{}' is not set",
-            key_env_name
-        )
-    })?;
-
-    let master_key = paracord_util::at_rest::parse_master_key(&raw_master_key)
-        .map_err(|err| anyhow::anyhow!("invalid at-rest key in {}: {}", key_env_name, err))?;
-
-    let sqlite_key_hex = if encrypt_sqlite {
-        Some(paracord_util::at_rest::derive_sqlite_key_hex(&master_key))
-    } else {
-        None
-    };
-    let file_cryptor = if config.at_rest.encrypt_files {
-        Some(paracord_util::at_rest::FileCryptor::from_master_key(
-            &master_key,
-            config.at_rest.allow_plaintext_file_reads,
-        ))
-    } else {
-        None
-    };
-
-    // Always create TOTP cryptor when at-rest encryption master key is available,
-    // with plaintext read fallback to handle pre-encryption secrets transparently.
-    let totp_cryptor = Some(
-        paracord_util::at_rest::FileCryptor::from_master_key_with_context(
-            &master_key,
-            b"totp",
-            true, // allow plaintext reads for migration of unencrypted secrets
-        ),
-    );
-
-    tracing::info!(
-        "At-rest encryption enabled (sqlite={}, files={}, totp=true, allow_plaintext_file_reads={})",
-        encrypt_sqlite,
-        config.at_rest.encrypt_files,
-        config.at_rest.allow_plaintext_file_reads
-    );
-
-    Ok(AtRestRuntimeProfile {
-        sqlite_key_hex,
-        file_cryptor,
-        totp_cryptor,
-    })
-}
+// Stored-data encryption lives in `at_rest_boot` (docs/setup-spec.md §4);
+// `restore` and the tests reach it from here.
+use at_rest_boot::build_at_rest_profile;
 
 /// ALPN protocols the unified media port advertises: `h3` for browser
 /// WebTransport, `paracord-media` for raw QUIC desktop and federation peers.
@@ -3589,15 +3537,6 @@ fn format_host_port(host: &str, port: u16) -> String {
 /// Two different settings hide behind them: the TCP port a browser reaches the
 /// app on, and `[voice] port`, the UDP port that carries voice and video. The
 /// generated config puts both at 8443, which is why one number read correctly
-        portmap::Outcome::Direct { ip } => vec![
-            "This computer has its own public address, so friends".to_string(),
-            "anywhere can join at:".to_string(),
-            format!(
-                "     {scheme}://{}",
-                format_host_port(&ip.to_string(), web_port)
-            ),
-            format!("if your firewall allows {ports}."),
-        ],
 /// for so long; the moment either moves, naming only the first sends someone to
 /// open a port that carries no calls.
 fn forwarded_ports_phrase(web_port: u16, voice_port: u16) -> String {
@@ -3649,6 +3588,15 @@ fn invite_lines(
             "page shows it; give friends that address".to_string(),
             format!("with port {web_port}. There is nothing else to change"),
             "on your router.".to_string(),
+        ],
+        portmap::Outcome::Direct { ip } => vec![
+            "This computer has its own public address, so friends".to_string(),
+            "anywhere can join at:".to_string(),
+            format!(
+                "     {scheme}://{}",
+                format_host_port(&ip.to_string(), web_port)
+            ),
+            format!("if your firewall allows {ports}."),
         ],
         portmap::Outcome::Skipped(portmap::SkipReason::LoopbackBind) => vec![
             "Nobody else can reach this server yet: it is only".to_string(),
@@ -3897,7 +3845,8 @@ fn run_init(init_args: &cli::InitArgs, default_config: &str) -> Result<()> {
     // Config::load generates the default file when absent (setting first_run)
     // and loads an existing file unchanged — it never overwrites. Reusing it
     // keeps `init` and the zero-config startup path byte-for-byte identical.
-    let config = config::Config::load(path)?;
+    let mut config = config::Config::load(path)?;
+    at_rest_boot::provision_new_config(&mut config, path)?;
 
     if !config.first_run {
         println!();
@@ -4842,8 +4791,8 @@ mod tests {
         build_at_rest_profile, build_claim_link, certificate_is_self_made, claim_link_base,
         claim_link_file_path, claim_token_file_path, derive_share_url, describe_http_bind_error,
         encode_fragment_value, ensure_federation_signing_key_file, invite_lines,
-        livekit_credentials_look_insecure, normalize_https_host,
-        remove_claim_files, write_owner_only_line,
+        livekit_credentials_look_insecure, normalize_https_host, remove_claim_files,
+        write_owner_only_line,
     };
     use crate::portmap;
     use std::sync::{Mutex, OnceLock};
@@ -5296,8 +5245,6 @@ mod tests {
             derive_share_url(
                 &None,
                 "127.0.0.1:8090",
-    /// The owner's rule: no third-party service is ever asked what this
-    /// network's address is. The router is the only source.
                 Some("192.168.1.5"),
                 false,
                 8443,
@@ -5349,6 +5296,8 @@ mod tests {
         assert!(profile.sqlite_key_hex.is_none());
     }
 
+    /// The owner's rule: no third-party service is ever asked what this
+    /// network's address is. The router is the only source.
     #[test]
     fn no_third_party_address_lookup_remains_in_the_server() {
         let needles = [

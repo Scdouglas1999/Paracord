@@ -79,6 +79,7 @@ async function start(server: Instance): Promise<void> {
     PARACORD_DATABASE_URL: `sqlite://${join(server.dataDir, 'paracord.db')}?mode=rwc`,
     PARACORD_JWT_SECRET: server.secret,
     PARACORD_TLS_ENABLED: 'false',
+    PARACORD_AT_REST_ENABLED: 'false',
     PARACORD_STORAGE_PATH: join(server.dataDir, 'uploads'),
     PARACORD_MEDIA_STORAGE_PATH: join(server.dataDir, 'files'),
     PARACORD_BACKUP_DIR: join(server.dataDir, 'backups'),

@@ -126,6 +126,7 @@ def run_smoke(args: argparse.Namespace) -> None:
                 "PARACORD_DATABASE_URL": f"sqlite://{(data / 'paracord.db').as_posix()}?mode=rwc",
                 "PARACORD_JWT_SECRET": "poll-emoji-smoke-secret-0123456789abcdef",
                 "PARACORD_TLS_ENABLED": "false",
+                "PARACORD_AT_REST_ENABLED": "false",
                 "PARACORD_STORAGE_PATH": str(data / "uploads"),
                 "PARACORD_MEDIA_STORAGE_PATH": str(data / "files"),
                 "PARACORD_BACKUP_DIR": str(data / "backups"),

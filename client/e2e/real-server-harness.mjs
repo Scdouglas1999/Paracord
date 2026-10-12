@@ -54,6 +54,7 @@ const env = {
   PARACORD_DATABASE_URL: `sqlite://${dbPath}?mode=rwc`,
   PARACORD_JWT_SECRET: 'real-server-e2e-jwt-secret-0123456789abcdef',
   PARACORD_TLS_ENABLED: 'false',
+  PARACORD_AT_REST_ENABLED: 'false',
   PARACORD_STORAGE_PATH: join(dataDir, 'uploads'),
   PARACORD_MEDIA_STORAGE_PATH: join(dataDir, 'files'),
   PARACORD_BACKUP_DIR: join(dataDir, 'backups'),

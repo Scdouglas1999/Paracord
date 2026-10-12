@@ -437,6 +437,122 @@ pub async fn run_migrations_for_engine(
 /// `VACUUM INTO` also produces a coherent file while the database is being
 /// written to, which a filesystem copy of a WAL database does not: the copy
 /// misses whatever is still sitting in `-wal`.
+/// The SQLCipher version of the SQLite library behind `pool`
+/// (`PRAGMA cipher_version`), `None` on a plain SQLite build or PostgreSQL.
+/// Every Paracord build compiles SQLCipher in (setup spec §4.1).
+pub async fn sqlcipher_version(pool: &DbPool) -> Result<Option<String>, sqlx::Error> {
+    if active_database_engine() != DatabaseEngine::Sqlite {
+        return Ok(None);
+    }
+    let version: Option<String> = sqlx::query_scalar("PRAGMA cipher_version;")
+        .fetch_optional(pool)
+        .await?;
+    Ok(version
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty()))
+}
+
+/// Whether a SQLite database opens with a key (or with none).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SqliteKeyCheck {
+    /// The schema could be read (a new, empty database also opens).
+    Opens,
+    /// SQLite answered `file is not a database`: the key is wrong, a key is
+    /// set on a plaintext database, or no key is set on an encrypted one.
+    Rejected,
+}
+
+/// Open one connection to a SQLite database outside any pool and try to read
+/// its schema with `key_hex` (setup spec §4.4). A pool retries a failed
+/// connection until its acquire timeout and then reports only the timeout, so
+/// the server asks here first and can say exactly what is wrong.
+pub async fn check_sqlite_key(
+    database_url: &str,
+    key_hex: Option<&str>,
+) -> Result<SqliteKeyCheck, sqlx::Error> {
+    use sqlx::Connection;
+    if detect_database_engine(database_url)? != DatabaseEngine::Sqlite {
+        return Err(sqlx::Error::Configuration(
+            "check_sqlite_key is only available for SQLite databases".into(),
+        ));
+    }
+    if let Some(key) = key_hex {
+        if key.len() != 64 || !key.chars().all(|ch| ch.is_ascii_hexdigit()) {
+            return Err(sqlx::Error::Protocol(
+                "invalid sqlite key format (expected 64 hex chars)".to_string(),
+            ));
+        }
+    }
+    sqlx::any::install_default_drivers();
+    let mut conn =
+        sqlx::AnyConnection::connect(&normalize_sqlite_url_for_any(database_url)).await?;
+    if let Some(key) = key_hex {
+        sqlx::query(&format!("PRAGMA key = \"x'{key}'\";"))
+            .execute(&mut conn)
+            .await?;
+    }
+    let result = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM sqlite_master")
+        .fetch_one(&mut conn)
+        .await;
+    let _ = conn.close().await;
+    match result {
+        Ok(_) => Ok(SqliteKeyCheck::Opens),
+        Err(sqlx::Error::Database(e)) if e.code().as_deref() == Some("26") => {
+            Ok(SqliteKeyCheck::Rejected)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// The file behind the `main` schema of a SQLite pool, as SQLite itself
+/// resolved the URL (`PRAGMA database_list`). `None` for an in-memory
+/// database.
+pub async fn sqlite_main_file(pool: &DbPool) -> Result<Option<std::path::PathBuf>, sqlx::Error> {
+    use sqlx::Row;
+    let rows = sqlx::query("PRAGMA database_list;").fetch_all(pool).await?;
+    for row in rows {
+        let name: String = row.try_get(1)?;
+        if name == "main" {
+            let file: Option<String> = row.try_get(2)?;
+            return Ok(file
+                .filter(|f| !f.trim().is_empty())
+                .map(std::path::PathBuf::from));
+        }
+    }
+    Ok(None)
+}
+
+/// True when the SQLite database behind `pool` is stored encrypted: SQLCipher
+/// answers on the live pool and the file does not begin with the plaintext
+/// SQLite header (setup spec §4.5: observed, never read from config).
+pub async fn sqlite_storage_encrypted(pool: &DbPool) -> Result<bool, sqlx::Error> {
+    if sqlcipher_version(pool).await?.is_none() {
+        return Ok(false);
+    }
+    let Some(path) = sqlite_main_file(pool).await? else {
+        return Ok(false);
+    };
+    Ok(!sqlite_file_has_plaintext_header(&path).map_err(sqlx::Error::Io)?)
+}
+
+/// Whether a SQLite file starts with `SQLite format 3\0` (a plaintext
+/// database). A SQLCipher file starts with its random salt instead.
+pub fn sqlite_file_has_plaintext_header(path: &std::path::Path) -> std::io::Result<bool> {
+    use std::io::Read;
+    let mut header = [0_u8; 16];
+    let mut file = std::fs::File::open(path)?;
+    let mut read = 0;
+    while read < header.len() {
+        let n = file.read(&mut header[read..])?;
+        if n == 0 {
+            // An empty file is a database SQLite has not written yet.
+            return Ok(read == 0);
+        }
+        read += n;
+    }
+    Ok(&header == b"SQLite format 3\0")
+}
+
 pub async fn vacuum_sqlite_into(
     database_url: &str,
     sqlite_key_hex: Option<String>,

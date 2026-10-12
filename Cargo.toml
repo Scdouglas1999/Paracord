@@ -38,6 +38,12 @@ tower-http = { version = "0.6", features = ["cors", "trace", "compression-gzip",
 
 # Database
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "postgres", "any", "chrono", "json", "derive", "migrate"] }
+# SQLCipher for every SQLite database (setup spec §4.1). sqlx's own
+# libsqlite3-sys dependency unifies with this feature, so the one SQLite
+# compiled into every binary is SQLCipher with a statically built OpenSSL
+# (CommonCrypto is not used even on macOS: one crypto provider everywhere).
+# A SQLCipher build opens a plaintext database normally when no key is set.
+libsqlite3-sys = { version = "0.30", features = ["bundled-sqlcipher-vendored-openssl"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

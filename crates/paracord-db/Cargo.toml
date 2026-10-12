@@ -9,6 +9,8 @@ license-file.workspace = true
 paracord-models = { workspace = true }
 paracord-util = { workspace = true }
 sqlx = { workspace = true, features = ["migrate", "macros"] }
+# Not used directly: turns sqlx's SQLite into SQLCipher (workspace note).
+libsqlite3-sys = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }

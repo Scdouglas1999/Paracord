@@ -919,7 +919,7 @@ fn toml_basic_string(value: &str) -> String {
 }
 
 /// Generate a commented config file template with the given values filled in.
-fn generate_config_template(config: &Config) -> String {
+pub(crate) fn generate_config_template(config: &Config) -> String {
     format!(
         r#"# Paracord Server Configuration
 # Generated automatically on first run. Edit as needed.

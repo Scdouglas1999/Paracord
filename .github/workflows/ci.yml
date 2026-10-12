@@ -168,6 +168,56 @@ jobs:
         shell: pwsh
         run: pwsh -NoProfile -File scripts/ci_install_smoke.ps1
 
+  storage-encryption-targets:
+    # Every build carries SQLCipher (with a statically built OpenSSL) and keeps
+    # the server's storage key in the OS keychain (docs/setup-spec.md §4.1,
+    # §4.2). Linux is covered by the Rust job; this proves the other release
+    # targets compile SQLCipher, open an encrypted database, and round-trip a
+    # key through the real Keychain / Credential Manager (a uniquely named
+    # entry, deleted again). macOS x86_64 is cross-built on the arm64 runner,
+    # as the release does, and runs under Rosetta.
+    name: Storage encryption (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS arm64
+            os: macos-14
+            target: aarch64-apple-darwin
+            keychain: true
+          - name: macOS x86_64
+            os: macos-14
+            target: x86_64-apple-darwin
+            keychain: false
+          - name: Windows x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            keychain: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.91"
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: storage-${{ matrix.target }}
+      - name: SQLCipher opens only with its key
+        run: cargo test --locked -p paracord-db --target ${{ matrix.target }} --test sqlcipher_open
+      # The server embeds the web client at compile time; the keychain test
+      # needs the crate to build, not the UI.
+      - name: Placeholder web client for the embedded UI
+        if: matrix.keychain
+        shell: bash
+        run: mkdir -p client/dist && echo '<!doctype html><title>placeholder</title>' > client/dist/index.html
+      - name: Storage key through the real OS keychain
+        if: matrix.keychain
+        shell: bash
+        env:
+          PARACORD_TEST_REAL_KEYCHAIN: "1"
+        run: cargo test --locked -p paracord-server --target ${{ matrix.target }} --bin paracord-server -- at_rest_boot::tests --nocapture
+
   rust:
     name: Rust Check
     runs-on: ubuntu-latest

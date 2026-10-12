@@ -255,6 +255,104 @@ pub fn parse_master_key(raw: &str) -> Result<[u8; 32], AtRestKeyError> {
     Err(AtRestKeyError::InvalidEncoding)
 }
 
+/// A fresh 32-byte storage master key from the operating system's CSPRNG
+/// (setup spec §4.3).
+pub fn generate_master_key() -> [u8; 32] {
+    let mut key = [0_u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut key);
+    key
+}
+
+/// The one spelling a stored master key is written in: `hex:<64 lowercase hex>`,
+/// which [`parse_master_key`] reads back.
+pub fn format_master_key(master_key: &[u8; 32]) -> String {
+    format!("hex:{}", crate::hex::hex_encode(master_key))
+}
+
+/// HKDF salt of the escrow key (setup spec §4.7).
+pub const ESCROW_KDF_SALT: &[u8] = b"paracord/host-storage-escrow/v1";
+/// AAD prefix of the escrowed storage key; the instance id follows.
+pub const ESCROW_AAD_PREFIX: &str = "paracord/host-storage-escrow/v1|";
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum EscrowError {
+    #[error("the escrow key must be 32 bytes")]
+    InvalidWrappingKey,
+    #[error("the escrow is malformed")]
+    Malformed,
+    #[error("the recovery phrase does not unlock this server's storage key")]
+    WrongKey,
+}
+
+/// `escrow_key = HKDF-SHA256(ikm = owner identity private key, salt =
+/// "paracord/host-storage-escrow/v1", info = instance_id, L = 32)`.
+///
+/// The app derives it from the recovery phrase; the server only ever receives
+/// the result, never the identity key. Here for tests and the restore CLI.
+pub fn derive_escrow_key(identity_private_key: &[u8], instance_id: &str) -> [u8; 32] {
+    let mut out = [0_u8; 32];
+    Hkdf::<Sha256>::new(Some(ESCROW_KDF_SALT), identity_private_key)
+        .expand(instance_id.as_bytes(), &mut out)
+        .expect("HKDF output length is always valid for 32-byte keys");
+    out
+}
+
+fn escrow_aad(instance_id: &str) -> Vec<u8> {
+    format!("{ESCROW_AAD_PREFIX}{instance_id}").into_bytes()
+}
+
+/// Wrap the storage master key under `wrapping_key` (AES-256-GCM, random
+/// 12-byte IV, AAD bound to the instance). Returns `(iv, ciphertext || tag)`.
+pub fn seal_escrow(
+    master_key: &[u8; 32],
+    wrapping_key: &[u8],
+    instance_id: &str,
+) -> Result<([u8; NONCE_LEN], Vec<u8>), EscrowError> {
+    let cipher =
+        Aes256Gcm::new_from_slice(wrapping_key).map_err(|_| EscrowError::InvalidWrappingKey)?;
+    let mut iv = [0_u8; NONCE_LEN];
+    rand::rngs::OsRng.fill_bytes(&mut iv);
+    let aad = escrow_aad(instance_id);
+    let ciphertext = cipher
+        .encrypt(
+            Nonce::from_slice(&iv),
+            Payload {
+                msg: master_key,
+                aad: &aad,
+            },
+        )
+        .map_err(|_| EscrowError::Malformed)?;
+    Ok((iv, ciphertext))
+}
+
+/// Unwrap a storage master key sealed by [`seal_escrow`].
+pub fn open_escrow(
+    iv: &[u8],
+    ciphertext: &[u8],
+    wrapping_key: &[u8],
+    instance_id: &str,
+) -> Result<[u8; 32], EscrowError> {
+    let cipher =
+        Aes256Gcm::new_from_slice(wrapping_key).map_err(|_| EscrowError::InvalidWrappingKey)?;
+    if iv.len() != NONCE_LEN {
+        return Err(EscrowError::Malformed);
+    }
+    let aad = escrow_aad(instance_id);
+    let plaintext = cipher
+        .decrypt(
+            Nonce::from_slice(iv),
+            Payload {
+                msg: ciphertext,
+                aad: &aad,
+            },
+        )
+        .map_err(|_| EscrowError::WrongKey)?;
+    plaintext
+        .as_slice()
+        .try_into()
+        .map_err(|_| EscrowError::Malformed)
+}
+
 pub fn derive_sqlite_key_hex(master_key: &[u8; 32]) -> String {
     let key = derive_subkey(master_key, b"sqlite");
     crate::hex::hex_encode(&key)
@@ -501,6 +599,62 @@ mod tests {
         let decrypted = cryptor.decrypt_with_aad(&v2, b"attachment:1");
         std::env::remove_var(REFUSE_LEGACY_V1_ENV);
         assert_eq!(decrypted.expect("v2 decrypt"), b"fresh bytes");
+    }
+
+    #[test]
+    fn generated_master_keys_are_random_and_round_trip_through_their_spelling() {
+        let a = super::generate_master_key();
+        let b = super::generate_master_key();
+        assert_ne!(a, b);
+        let spelled = super::format_master_key(&a);
+        assert!(spelled.starts_with("hex:") && spelled.len() == 68);
+        assert_eq!(parse_master_key(&spelled).unwrap(), a);
+    }
+
+    /// The identity private key of the S1 credential vectors
+    /// (`client/src/lib/credential/vectors.json`, `wrap[0]`), and the escrow key
+    /// node:crypto derives from it (`hkdfSync('sha256', priv,
+    /// 'paracord/host-storage-escrow/v1', instance_id, 32)`).
+    const VECTOR_IDENTITY_PRIVATE_KEY: &str =
+        "d2cb3a96fd540c24f68825716fdb1e8c2549542d67fd5d25107635c2959f8d9c";
+    const VECTOR_INSTANCE_ID: &str = "7c1f0b6e-4a8e-4f8e-9a51-2d6c1f0b6e4a";
+    const VECTOR_ESCROW_KEY: &str =
+        "03976eb9f4df480870ebee2d4d495ad22dcc239d87193d5fb9382ef36f2388cf";
+
+    fn unhex(raw: &str) -> Vec<u8> {
+        (0..raw.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&raw[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn escrow_key_matches_the_vector_and_unwraps_only_for_its_instance() {
+        let identity = unhex(VECTOR_IDENTITY_PRIVATE_KEY);
+        let escrow_key = super::derive_escrow_key(&identity, VECTOR_INSTANCE_ID);
+        assert_eq!(crate::hex::hex_encode(&escrow_key), VECTOR_ESCROW_KEY);
+
+        let master = super::generate_master_key();
+        let (iv, ciphertext) =
+            super::seal_escrow(&master, &escrow_key, VECTOR_INSTANCE_ID).unwrap();
+        assert_eq!(ciphertext.len(), 48);
+        assert_eq!(
+            super::open_escrow(&iv, &ciphertext, &escrow_key, VECTOR_INSTANCE_ID).unwrap(),
+            master
+        );
+        assert_eq!(
+            super::open_escrow(&iv, &ciphertext, &escrow_key, "another-instance"),
+            Err(super::EscrowError::WrongKey)
+        );
+        let other = super::derive_escrow_key(&[7_u8; 32], VECTOR_INSTANCE_ID);
+        assert_eq!(
+            super::open_escrow(&iv, &ciphertext, &other, VECTOR_INSTANCE_ID),
+            Err(super::EscrowError::WrongKey)
+        );
+        assert_eq!(
+            super::open_escrow(&iv, &ciphertext, &[1_u8; 16], VECTOR_INSTANCE_ID),
+            Err(super::EscrowError::InvalidWrappingKey)
+        );
     }
 
     #[test]

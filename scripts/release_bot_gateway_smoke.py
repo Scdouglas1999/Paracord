@@ -65,7 +65,7 @@ def run(args):
         env = {k: v for k, v in os.environ.items() if not k.startswith("PARACORD_")}
         env.update(PARACORD_BIND_ADDRESS=f"127.0.0.1:{args.port}", PARACORD_DATABASE_ENGINE=engine,
                    PARACORD_DATABASE_URL=url, PARACORD_JWT_SECRET="bot-gateway-fixture-only-0123456789abcdef",
-                   PARACORD_TLS_ENABLED="false", PARACORD_SETUP_REQUIRE_CLAIM="false",
+                   PARACORD_TLS_ENABLED="false", PARACORD_AT_REST_ENABLED="false", PARACORD_SETUP_REQUIRE_CLAIM="false",
                    PARACORD_AUTH_REQUIRE_EMAIL="true", PARACORD_REGISTRATION_ENABLED="true", PARACORD_REGISTRATION_MODE="open",
                    PARACORD_STORAGE_PATH=str(data / "uploads"), PARACORD_MEDIA_STORAGE_PATH=str(data / "files"),
                    PARACORD_BACKUP_DIR=str(data / "backups"), PARACORD_VOICE_PORT=str(args.port + 1000),

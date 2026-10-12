@@ -127,6 +127,7 @@ def run_smoke(args: argparse.Namespace) -> None:
                 "PARACORD_DATABASE_URL": f"sqlite://{db_path.as_posix()}?mode=rwc",
                 "PARACORD_JWT_SECRET": "template-safety-smoke-secret-0123456789abcdef",
                 "PARACORD_TLS_ENABLED": "false",
+                "PARACORD_AT_REST_ENABLED": "false",
                 "PARACORD_STORAGE_PATH": str(data_dir / "uploads"),
                 "PARACORD_MEDIA_STORAGE_PATH": str(data_dir / "files"),
                 "PARACORD_BACKUP_DIR": str(data_dir / "backups"),

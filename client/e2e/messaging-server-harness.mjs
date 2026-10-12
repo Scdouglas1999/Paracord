@@ -16,7 +16,7 @@ const claimToken = 'messaging-e2e-first-owner-claim-token-0123456789';
 const environment = { ...process.env,
   PARACORD_BIND_ADDRESS: `127.0.0.1:${port}`,
   PARACORD_DATABASE_ENGINE: 'sqlite', PARACORD_DATABASE_URL: `sqlite://${join(directory, 'paracord.db')}?mode=rwc`,
-  PARACORD_JWT_SECRET: 'messaging-e2e-jwt-secret-0123456789abcdef', PARACORD_TLS_ENABLED: 'false',
+  PARACORD_JWT_SECRET: 'messaging-e2e-jwt-secret-0123456789abcdef', PARACORD_TLS_ENABLED: 'false', PARACORD_AT_REST_ENABLED: 'false',
   PARACORD_STORAGE_PATH: join(directory, 'uploads'), PARACORD_MEDIA_STORAGE_PATH: join(directory, 'files'), PARACORD_BACKUP_DIR: join(directory, 'backups'),
   PARACORD_REGISTRATION_ENABLED: 'true', PARACORD_REGISTRATION_MODE: 'open', PARACORD_AUTH_REQUIRE_EMAIL: 'true', PARACORD_LOG_ANSI: 'false', RUST_LOG: 'warn',
   // Every browser context in this suite is a distinct synthetic client. Without

@@ -12,6 +12,9 @@ pub async fn run(args: &RestoreBackupArgs, config_path: &str) -> Result<()> {
         bail!("restore requires the existing recovery configuration; refusing to generate replacement secrets");
     }
     let mut recovered = config::Config::load(config_path)?;
+    if args.escrow_key_stdin {
+        restore_key_from_escrow(&args.archive, &recovered)?;
+    }
     let profile = crate::build_at_rest_profile(&recovered)?;
     let engine = crate::map_db_engine(recovered.database.engine);
     let postgres = engine == paracord_db::DatabaseEngine::Postgres;
@@ -130,7 +133,7 @@ pub async fn run(args: &RestoreBackupArgs, config_path: &str) -> Result<()> {
         shell.push_str(&format!("cd {}\n", shell_quote(&working_dir.to_string_lossy())));
         shell.push_str(&format!("if [ ! -f {} ] || [ -f {} ]; then echo 'Recovery preparation is incomplete; refusing activation' >&2; exit 1; fi\n", shell_quote(&config_file.to_string_lossy()), shell_quote(&output.join("RESTORE_FAILED.txt").to_string_lossy())));
         for (name, value) in &environment { shell.push_str(&format!("export {name}={}\n", shell_quote(value))); }
-        if recovered.at_rest.enabled {
+        if recovered.at_rest.enabled && recovered.at_rest.key_source == paracord_contracts::host::KeySource::Env {
             let name = &recovered.at_rest.key_env;
             if !valid_environment_name(name) { bail!("invalid at-rest key environment variable name"); }
             shell.push_str(&format!(": \"${{{name}:?Set the original at-rest master key before activation}}\"\n"));
@@ -141,7 +144,7 @@ pub async fn run(args: &RestoreBackupArgs, config_path: &str) -> Result<()> {
         powershell.push_str(&format!("Set-Location {}\n", powershell_quote(&working_dir.to_string_lossy())));
         powershell.push_str(&format!("if (-not (Test-Path -LiteralPath {}) -or (Test-Path -LiteralPath {})) {{ throw 'Recovery preparation is incomplete; refusing activation' }}\n", powershell_quote(&config_file.to_string_lossy()), powershell_quote(&output.join("RESTORE_FAILED.txt").to_string_lossy())));
         for (name, value) in &environment { powershell.push_str(&format!("$env:{name} = {}\n", powershell_quote(value))); }
-        if recovered.at_rest.enabled {
+        if recovered.at_rest.enabled && recovered.at_rest.key_source == paracord_contracts::host::KeySource::Env {
             powershell.push_str(&format!("if (-not $env:{}) {{ throw 'Set the original at-rest master key before activation' }}\n", recovered.at_rest.key_env));
         }
         powershell.push_str(&format!("& {} --config {}\nexit $LASTEXITCODE\n", powershell_quote(&binary.to_string_lossy()), powershell_quote(&config_file.to_string_lossy())));
@@ -158,6 +161,50 @@ pub async fn run(args: &RestoreBackupArgs, config_path: &str) -> Result<()> {
         return Err(error);
     }
     tracing::info!("Recovery verified: {} attachments, {} encrypted secrets, {} repaired tails. Configuration: {}. Stop all old instances before activating; see ACTIVATE.md.", report.verified_attachments, report.verified_encrypted_secrets, report.repaired_channel_tails, output.join("paracord.toml").display());
+    Ok(())
+}
+
+/// `--escrow-key-stdin` (docs/setup-spec.md §4.7, §4.8): read the owner's
+/// escrow key from standard input, unwrap the storage key from the archive's
+/// escrow, and store it in the config's key source. A source that already
+/// holds a key must hold this one; a different key is never replaced.
+fn restore_key_from_escrow(archive: &Path, config: &config::Config) -> Result<()> {
+    use crate::at_rest_boot;
+    if !config.at_rest.enabled {
+        bail!(
+            "--escrow-key-stdin restores an encrypted server, but [at_rest] is off in this config"
+        );
+    }
+    let manifest = paracord_core::backup::read_archive_manifest(archive)?;
+    let escrow = manifest.recovery.and_then(|r| r.key_escrow).context(
+        "this archive carries no escrowed storage key (it was made before the owner escrowed one)",
+    )?;
+    let mut line = String::new();
+    std::io::stdin()
+        .read_line(&mut line)
+        .context("cannot read the escrow key from standard input")?;
+    let wrapping_key = paracord_core::storage_key::decode_b64url(line.trim())
+        .filter(|k| k.len() == 32)
+        .context("the escrow key on standard input must be b64url of 32 bytes")?;
+    let key = paracord_core::storage_key::unwrap_escrow(&escrow, &wrapping_key)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    match at_rest_boot::resolve_key(&config.at_rest) {
+        Ok(existing) if existing == key => {
+            tracing::info!("The configured key source already holds this storage key.");
+            return Ok(());
+        }
+        Ok(_) => bail!(
+            "{} already holds a different storage key; refusing to replace it",
+            at_rest_boot::describe_source(&config.at_rest)
+        ),
+        Err(_) => {}
+    }
+    let placement = at_rest_boot::placement_from_config(&config.at_rest)?;
+    at_rest_boot::store_key(&placement, &key)?;
+    tracing::info!(
+        "Storage key recovered from the archive's escrow and stored in {}.",
+        at_rest_boot::describe_source(&config.at_rest)
+    );
     Ok(())
 }
 

@@ -13,10 +13,17 @@
 //   cargo build --release --bin paracord-server
 //
 // Usage:
-//   node scripts/live-env.mjs [--port 18420] [--data /path] [--keep]
+//   node scripts/live-env.mjs [--port 18420] [--data /path] [--keep] [--at-rest]
+//
+// Stored-data encryption stays off unless --at-rest is given, so a run never
+// reaches for the system keychain (a plain first run would). With --at-rest the
+// instance encrypts its database (SQLCipher) and files with a key passed through
+// the `env` source; the key is kept in <data>/at-rest.key.hex so --keep restarts
+// open the same data.
 
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -31,9 +38,11 @@ function arg(name, fallback) {
 const port = arg('port', '18420');
 const dataDir = arg('data', join(repoRoot, '.live-env'));
 const keep = process.argv.includes('--keep');
+const atRest = process.argv.includes('--at-rest');
 const origin = `http://127.0.0.1:${port}`;
 
-const serverBin = join(repoRoot, 'target', 'release', 'paracord-server');
+// PARACORD_LIVE_ENV_BIN points at another build (a shared CARGO_TARGET_DIR, a debug build).
+const serverBin = process.env.PARACORD_LIVE_ENV_BIN ?? join(repoRoot, 'target', 'release', 'paracord-server');
 if (!existsSync(serverBin)) {
   console.error(`live-env: no server binary at ${serverBin}\n  cd client && npm run build\n  cargo build --release --bin paracord-server`);
   process.exit(1);
@@ -42,8 +51,22 @@ if (!existsSync(serverBin)) {
 if (!keep) rmSync(dataDir, { recursive: true, force: true });
 mkdirSync(dataDir, { recursive: true });
 
+function atRestEnv() {
+  if (!atRest) return { PARACORD_AT_REST_ENABLED: 'false' };
+  const keyPath = join(dataDir, 'at-rest.key.hex');
+  if (!existsSync(keyPath)) writeFileSync(keyPath, `hex:${randomBytes(32).toString('hex')}\n`, { mode: 0o600 });
+  return {
+    PARACORD_AT_REST_ENABLED: 'true',
+    PARACORD_AT_REST_KEY_SOURCE: 'env',
+    PARACORD_AT_REST_KEY: readFileSync(keyPath, 'utf8').trim(),
+    PARACORD_AT_REST_ENCRYPT_SQLITE: 'true',
+    PARACORD_AT_REST_ENCRYPT_FILES: 'true',
+  };
+}
+
 const env = {
   ...process.env,
+  ...atRestEnv(),
   PARACORD_BIND_ADDRESS: `127.0.0.1:${port}`,
   PARACORD_DATABASE_ENGINE: 'sqlite',
   PARACORD_DATABASE_URL: `sqlite://${join(dataDir, 'paracord.db')}?mode=rwc`,
@@ -103,5 +126,5 @@ const deadline = Date.now() + 60_000;
     }
     await new Promise(resolve => setTimeout(resolve, 250));
   }
-  console.log(`\nlive-env ready\n  url:  ${origin}\n  data: ${dataDir}\n  log:  ${logPath}\n`);
+  console.log(`\nlive-env ready\n  url:  ${origin}\n  data: ${dataDir}\n  log:  ${logPath}\n  stored data: ${atRest ? 'encrypted (key via env)' : 'not encrypted'}\n`);
 })();

@@ -10,20 +10,13 @@
 //!
 //! # Seams
 //!
-//! Three facts belong to other packages of the setup program and are not
-//! known to this crate yet. They are isolated in [`seams`] so that each plugs
-//! in by replacing one function body, and the interim behavior is stated, not
-//! hidden:
+//! Facts that belong to other packages of the setup program and are not
+//! known to this crate. They are isolated in [`seams`]:
 //!
-//! | Seam | Owner | Until it lands |
-//! |---|---|---|
-//! | [`seams::storage`] | S4 (storage key) | what the running config proves: files are encrypted when a file cryptor is loaded; SQLite encryption, key source and protection are reported unknown/false |
-//! | [`seams::write_escrow`] | S4 | answers 501 `not_built` (an escrow that did nothing would be a silent no-op) |
-//!
-//! Reachability (`seams::reachability`, `seams::request_reachability_retry`) is
-//! S5's and is wired to `paracord_core::reachability::hub()`.
-//!
-//! `rg not_built` finds every one that is left.
+//! Storage (`seams::storage`, `seams::write_escrow`) is S4's and is wired to
+//! `paracord_core::storage_key`. Reachability (`seams::reachability`,
+//! `seams::request_reachability_retry`) is S5's and is wired to
+//! `paracord_core::reachability::hub()`.
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -60,8 +53,6 @@ pub const SETTING_BACKUP_LAST_ERROR: &str = "backup_last_error";
 /// A route failed in a way the plain `ApiError` set cannot say.
 pub enum StatusError {
     Api(ApiError),
-    /// A package this one depends on has not landed (see the module docs).
-    NotBuilt(&'static str),
 }
 
 impl From<ApiError> for StatusError {
@@ -84,14 +75,6 @@ impl IntoResponse for StatusError {
     fn into_response(self) -> Response {
         match self {
             StatusError::Api(err) => err.into_response(),
-            StatusError::NotBuilt(what) => (
-                StatusCode::NOT_IMPLEMENTED,
-                Json(json!({
-                    "code": "not_built",
-                    "message": format!("{what} is not built yet."),
-                })),
-            )
-                .into_response(),
         }
     }
 }
@@ -103,18 +86,14 @@ impl IntoResponse for StatusError {
 pub mod seams {
     use super::*;
 
-    /// SEAM(S4): `StorageStatus` as the running server knows it (spec §4.5).
-    /// S4 reports `sqlite_encrypted` from `PRAGMA cipher_version` on the live
-    /// pool, and the key source and protection the key was resolved from.
-    pub fn storage(state: &AppState, escrowed: bool) -> StorageStatus {
-        let files_encrypted = state.config.file_cryptor.is_some();
+    /// `StorageStatus` as the running server observed it at start (spec §4.5,
+    /// `paracord_core::storage_key`): `sqlite_encrypted` from the live pool,
+    /// the key source and protection the key was resolved from. `escrowed`
+    /// is whether the escrow file is on disk now.
+    pub fn storage(_state: &AppState, escrowed: bool) -> StorageStatus {
         StorageStatus {
-            enabled: files_encrypted,
-            sqlite_encrypted: false,
-            files_encrypted,
-            key_source: None,
-            protection: None,
             escrowed,
+            ..paracord_core::storage_key::status()
         }
     }
 
@@ -145,16 +124,51 @@ pub mod seams {
         Ok(())
     }
 
-    /// SEAM(S4): wrap the storage key under `wrapping_key` (AES-256-GCM, AAD
+    /// Wrap the storage key under `wrapping_key` (AES-256-GCM, AAD
     /// `"paracord/host-storage-escrow/v1|" + instance_id`, spec §4.7) and write
-    /// the escrow JSON to `path`, atomically and only if it is absent. The
-    /// pre-checks (key length, 409 when present) are done by the caller.
+    /// the escrow JSON to `path`, atomically and only if it is absent
+    /// (`paracord_core::storage_key`). The escrow names the claiming owner's
+    /// identity key, so there has to be one.
     pub async fn write_escrow(
-        _state: &AppState,
-        _wrapping_key: &[u8; 32],
-        _path: &Path,
+        state: &AppState,
+        wrapping_key: &[u8; 32],
+        path: &Path,
     ) -> Result<(), StatusError> {
-        Err(StatusError::NotBuilt("Saving the storage key escrow"))
+        use paracord_core::storage_key::EscrowWriteError;
+        let setup = paracord_db::instance_setup::get(&state.db)
+            .await
+            .map_err(ApiError::from)?;
+        let owner_id = setup.claimed_by_user_id.ok_or_else(|| {
+            ApiError::Conflict("this server has no owner yet, so there is no recovery phrase to escrow the key under".into())
+        })?;
+        let owner = paracord_db::users::get_user_by_id(&state.db, owner_id)
+            .await
+            .map_err(ApiError::from)?
+            .ok_or_else(|| {
+                ApiError::Conflict("the server's owner account no longer exists".into())
+            })?;
+        let public_key = owner
+            .public_key
+            .filter(|key| !key.trim().is_empty())
+            .ok_or_else(|| {
+                ApiError::Conflict(
+                    "the owner has no identity key yet; finish the account first".into(),
+                )
+            })?;
+        paracord_core::storage_key::current()
+            .write_escrow_at(path, wrapping_key, &public_key)
+            .map(|_| paracord_core::storage_key::notify_changed())
+            .map_err(|error| {
+                StatusError::Api(match error {
+                    EscrowWriteError::AlreadyEscrowed
+                    | EscrowWriteError::NotEncrypted
+                    | EscrowWriteError::NotConfigured => ApiError::Conflict(error.to_string()),
+                    EscrowWriteError::BadRequest(message) => ApiError::BadRequest(message),
+                    EscrowWriteError::Io(message) => {
+                        ApiError::Internal(anyhow::anyhow!("escrow write failed: {message}"))
+                    }
+                })
+            })
     }
 }
 

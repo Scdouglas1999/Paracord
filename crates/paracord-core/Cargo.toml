@@ -50,3 +50,6 @@ sha2 = { workspace = true }
 hkdf = { workspace = true }
 hmac = { workspace = true }
 sqlx = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

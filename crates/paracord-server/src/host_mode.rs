@@ -171,29 +171,11 @@ fn create_private_dir(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// SEAM(S4): generate the 32-byte storage key, store it in the configured
-/// source and read it back (spec §2.7, §4.3). Until S4's resolver lands only
-/// the `env` source can be provisioned (the operator owns that key, so
-/// "provisioning" is proving it is present and valid); the others fail loudly
-/// instead of writing `enabled = true` without a key anywhere.
+/// Generate the 32-byte storage key, store it in the configured source and
+/// read it back (spec §2.7, §4.3; `at_rest_boot`). For `env` the key is the
+/// operator's, so this proves it is present and valid.
 fn provision_storage_key(config: &Config) -> Result<()> {
-    match config.at_rest.key_source {
-        KeySource::Env => {
-            let name = config.at_rest.key_env.trim();
-            let raw = std::env::var(name).with_context(|| {
-                format!("key_source = \"env\" but the environment variable {name} is not set")
-            })?;
-            paracord_util::at_rest::parse_master_key(&raw)
-                .map_err(|err| anyhow::anyhow!("the key in {name} is not usable: {err}"))?;
-            Ok(())
-        }
-        other => bail!(
-            "storing the storage key in the {} source is not built yet; \
-             set {KEY_SOURCE_ENV}=env with the key in {} to initialize without it",
-            other.as_str(),
-            config.at_rest.key_env
-        ),
-    }
+    crate::at_rest_boot::provision_configured_source(&config.at_rest).map(|_| ())
 }
 
 /// `paracord-host init --profile desktop-host --root R --port P`.

@@ -25,6 +25,11 @@ pub struct RecoveryMetadata {
     pub storage_type: String,
     /// Authenticated canary verifies the separately retained at-rest key.
     pub key_check: Option<String>,
+    /// The storage key wrapped under the owner's recovery phrase (setup spec
+    /// §4.7), so `restore-backup --escrow-key-stdin` can recover the key with
+    /// the archive alone. Absent until the owner escrows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_escrow: Option<paracord_contracts::host::StorageKeyEscrow>,
 }
 
 const RECOVERY_CANARY: &[u8] = b"Paracord backup recovery key v1";
@@ -253,6 +258,7 @@ pub async fn create_backup_from_pool(
             files_encrypted: file_cryptor.is_some(),
             storage_type: if local_storage { "local" } else { "s3" }.into(),
             key_check,
+            key_escrow: crate::storage_key::current_escrow(),
         }),
     };
     let destination = Path::new(backup_dir).join(&filename);
@@ -272,6 +278,32 @@ pub async fn create_backup_from_pool(
     .map_err(|e| CoreError::Internal(e.to_string()))?
     .map_err(CoreError::Internal)?;
     Ok(filename)
+}
+
+/// Read only `manifest.json` from a backup archive (at most 1 MiB), without
+/// unpacking anything else. `restore-backup --escrow-key-stdin` needs the
+/// escrow before it can build the key that verifies the rest.
+pub fn read_archive_manifest(archive_path: &Path) -> anyhow::Result<BackupManifest> {
+    use anyhow::{bail, Context};
+    use std::io::Read;
+    let decoder = flate2::read::MultiGzDecoder::new(
+        std::fs::File::open(archive_path)
+            .with_context(|| format!("cannot open archive {}", archive_path.display()))?,
+    );
+    let mut archive = tar::Archive::new(decoder);
+    for entry in archive.entries()? {
+        let entry = entry?;
+        if entry.path()?.as_ref() != Path::new("manifest.json") {
+            continue;
+        }
+        if entry.size() > 1024 * 1024 {
+            bail!("archive manifest exceeds the 1 MiB limit");
+        }
+        let mut bytes = Vec::new();
+        entry.take(1024 * 1024 + 1).read_to_end(&mut bytes)?;
+        return serde_json::from_slice(&bytes).context("archive manifest is not valid JSON");
+    }
+    bail!("archive has no manifest.json")
 }
 
 /// Live database replacement is deliberately unavailable. Use the offline

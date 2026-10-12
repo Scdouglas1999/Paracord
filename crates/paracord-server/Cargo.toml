@@ -66,6 +66,27 @@ moka = { workspace = true }
 dashmap = { workspace = true }
 rust-embed = { workspace = true, optional = true }
 mime_guess = { workspace = true, optional = true }
+uuid = { workspace = true }
+# encrypt-storage drives SQLCipher on single connections (ATTACH, sqlcipher_export).
+sqlx = { workspace = true }
+
+# The at-rest storage key in the OS credential store (setup spec §4.2). The
+# same platform stores as the desktop app (client/src-tauri/Cargo.toml):
+# `keyring` with no platform feature silently falls back to an in-process mock
+# store, so every target names its real one, and `at_rest_boot` proves a
+# write/read/delete roundtrip through fresh entries before it trusts one.
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", features = ["async-secret-service", "async-io", "crypto-rust"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
+
+[target.'cfg(unix)'.dependencies]
+# geteuid(), for the key file's owner check.
+libc = "0.2"
 
 [features]
 default = ["embed-ui"]

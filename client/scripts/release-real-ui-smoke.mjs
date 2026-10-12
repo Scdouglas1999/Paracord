@@ -319,6 +319,7 @@ async function runSmoke() {
     PARACORD_DATABASE_URL: `sqlite://${path.join(tempDir, 'paracord.db').replaceAll('\\', '/')}?mode=rwc`,
     PARACORD_JWT_SECRET: 'release-real-ui-smoke-secret-0123456789abcdef',
     PARACORD_TLS_ENABLED: 'false',
+    PARACORD_AT_REST_ENABLED: 'false',
     PARACORD_STORAGE_PATH: uploadDir,
     PARACORD_MEDIA_STORAGE_PATH: path.join(tempDir, 'files'),
     PARACORD_BACKUP_DIR: path.join(tempDir, 'backups'),
