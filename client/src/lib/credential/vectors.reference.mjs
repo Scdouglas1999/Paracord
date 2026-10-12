@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* global Buffer, process, console */
 // Independent reference for the one-password credential (spec §3.2, §3.3,
 // §3.6, §3.14, §7.1). It uses only node:crypto (scrypt, HKDF, AES-256-GCM,
 // Ed25519) and none of the client code, so the vectors it writes check the
@@ -36,7 +37,7 @@ const range = (start, length) => Buffer.from(Array.from({ length }, (_, i) => (s
 
 function loadWordlist() {
   const source = fs.readFileSync(path.join(repo, 'client/src/lib/bip39-wordlist.ts'), 'utf8');
-  const words = [...source.matchAll(/^  '([a-z]+)',$/gm)].map((m) => m[1]);
+  const words = [...source.matchAll(/^ {2}'([a-z]+)',$/gm)].map((m) => m[1]);
   const digest = hex(sha256(words.join('\n') + '\n'));
   if (words.length !== 2048 || digest !== BIP39_ENGLISH_SHA256) {
     throw new Error(`client/src/lib/bip39-wordlist.ts is not the canonical BIP39 English list (sha256 ${digest})`);
