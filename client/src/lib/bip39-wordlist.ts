@@ -1,5 +1,14 @@
 // Standard BIP39 English wordlist (2048 words).
 // Source: https://github.com/bitcoin/bips/blob/master/bip-0039/english.txt
+//
+// This is a wire format, not prose: keep it byte-for-byte identical to the
+// source (word 103 is "artefact"), whatever the house spelling. The American
+// English sweep (e6f874b0) once changed it to "artifact"; phrases shown since
+// then may carry that spelling, so parsers accept it through
+// `BIP39_WORD_ALIASES`. `lib/credential/vectors.reference.mjs` checks the
+// list against the source's SHA-256.
+export const BIP39_WORD_ALIASES: Readonly<Record<string, string>> = { artifact: 'artefact' };
+
 export const wordlist: string[] = [
   'abandon',
   'ability',
@@ -104,7 +113,7 @@ export const wordlist: string[] = [
   'arrive',
   'arrow',
   'art',
-  'artifact',
+  'artefact',
   'artist',
   'artwork',
   'ask',
