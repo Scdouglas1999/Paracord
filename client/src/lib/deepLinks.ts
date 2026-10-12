@@ -37,8 +37,8 @@ import { isTauri } from './tauriEnv';
  */
 
 export const FIRST_RUN_JOIN_PATH = '/welcome/join/invite';
-/** Until the first-run sign-in step exists this is the server screen that already takes a server. */
-export const FIRST_RUN_SIGN_IN_PATH = '/connect';
+/** The first run's sign-in step (setup-spec §1.12), which takes the server from `useDeepLinkIntake`. */
+export const FIRST_RUN_SIGN_IN_PATH = '/welcome/sign-in';
 
 const DEEP_LINK_EVENT = 'deep-link';
 export const UNKNOWN_LINK_MESSAGE = "That link isn't a Paracord invite.";

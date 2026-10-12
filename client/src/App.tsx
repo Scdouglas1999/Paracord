@@ -4,9 +4,10 @@ import { CordMark } from './components/brand/CordMark';
 import { BrandSplash } from './components/brand/BrandSplash';
 import { LoginPage } from './pages/LoginPage';
 import { RegisterPage } from './pages/RegisterPage';
-import { ServerConnectPage } from './pages/ServerConnectPage';
+import { ConnectRedirect } from './pages/ServerConnectPage';
 import { AccountSetupPage } from './pages/AccountSetupPage';
-import { InstanceSetupPage } from './pages/InstanceSetupPage';
+import { FirstRunHandoff } from './components/firstRun/Handoff';
+import { useHostStore } from './stores/hostStore';
 import { AccountUnlockPage } from './pages/AccountUnlockPage';
 import { AccountRecoverPage } from './pages/AccountRecoverPage';
 import { TermsPage } from './pages/TermsPage';
@@ -27,6 +28,8 @@ const GuildGameServersPage = lazy(() => import('./pages/GuildGameServersPage').t
 const DMPage = lazy(() => import('./pages/DMPage').then(m => ({ default: m.DMPage })));
 const FriendsPage = lazy(() => import('./pages/FriendsPage').then(m => ({ default: m.FriendsPage })));
 const InboxPage = lazy(() => import('./components/ix/people/InboxPage').then(m => ({ default: m.InboxPage })));
+// The first run (docs/setup-spec.md §1): its own chunk; the loading screen's final frame covers it.
+const FirstRunPage = lazy(() => import('./pages/firstRun/FirstRunPage').then(m => ({ default: m.FirstRunPage })));
 const InvitePage = lazy(() => import('./pages/InvitePage').then(m => ({ default: m.InvitePage })));
 const BotAuthorizePage = lazy(() => import('./pages/BotAuthorizePage').then(m => ({ default: m.BotAuthorizePage })));
 const AdminPage = lazy(() => import('./pages/AdminPage').then(m => ({ default: m.AdminPage })));
@@ -533,8 +536,25 @@ function GuardStalled({ to }: { to: CryptoAuthRedirect | '/app' }) {
   );
 }
 
-export default function App() {
+/** A first-run route: its own chunk, behind the loading screen's final frame. */
+function firstRun(mode: 'desktop' | 'claim') {
   return (
+    <ErrorBoundary>
+      <Suspense fallback={<BrandSplash label="Just a moment..." />}>
+        <FirstRunPage mode={mode} />
+      </Suspense>
+    </ErrorBoundary>
+  );
+}
+
+export default function App() {
+  // Paracord on this computer (docs/setup-spec.md §2.8): update and start the
+  // hosted server, once, when the desktop app opens.
+  useEffect(() => {
+    if (isTauri()) void useHostStore.getState().onLaunch();
+  }, []);
+  return (
+    <>
     <Routes>
       {/* Optional device crypto identity */}
       <Route path="/setup" element={route(<AccountSetupPage />)} />
@@ -544,11 +564,17 @@ export default function App() {
       <Route path="/import" element={<Navigate to="/app?settings=identity" replace />} />
 
       {/* Server connection */}
-      <Route path="/connect" element={route(<ServerConnectPage />)} />
+      <Route path="/connect" element={route(<ConnectRedirect />)} />
 
       {/* First-owner claim. `/setup` above is the per-device crypto identity;
           this is the server itself getting an owner for the first time. */}
-      <Route path="/setup-server" element={route(<InstanceSetupPage />)} />
+      <Route path="/setup-server" element={firstRun('claim')} />
+      <Route path="/setup-server/:step" element={firstRun('claim')} />
+
+      {/* The first run (docs/setup-spec.md §1.14): launch, welcome, host, join, sign in. */}
+      <Route path="/welcome" element={firstRun('desktop')} />
+      <Route path="/welcome/sign-in" element={firstRun('desktop')} />
+      <Route path="/welcome/:path/:step" element={firstRun('desktop')} />
 
       {/* Password auth */}
       <Route path="/login" element={route(<AuthRoute><LoginPage /></AuthRoute>)} />
@@ -556,6 +582,7 @@ export default function App() {
 
       {/* Invites, legal */}
       <Route path="/invite/:code" element={lazyRoute(<InvitePage />)} />
+      <Route path="/invite/:code/:step" element={lazyRoute(<InvitePage />)} />
       <Route path="/terms" element={route(<TermsPage />)} />
       <Route path="/privacy" element={route(<PrivacyPage />)} />
 
@@ -612,5 +639,7 @@ export default function App() {
       {/* Default: send to app (which handles auth redirects) */}
       <Route path="*" element={<Navigate to="/app" />} />
     </Routes>
+    <FirstRunHandoff />
+    </>
   );
 }

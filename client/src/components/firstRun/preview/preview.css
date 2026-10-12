@@ -1,0 +1,300 @@
+/* The first run's live preview (docs/setup-spec.md §1.9): the app at the
+   window's own size, scaled by the stage (firstRun.css `.fr-pre`). The geometry
+   is Index's (docs/index-spec.md §3.1) as the prototype draws it; the sidebar
+   reuses Index's row, room, search and dock recipes. Static: nothing here
+   animates except the dock avatar appearing and the status dot's color. */
+
+.fr-pv {
+  position: absolute;
+  inset: 0;
+  --ix-hue: var(--fr-hue);
+}
+.fr-app {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: 316px 1fr;
+  background: var(--ix-main);
+  line-height: normal;
+}
+/* Before an invite is chosen the join preview is a promise, not a place (§1.9). */
+.fr-app[data-dim] {
+  filter: saturate(0.2) brightness(0.6);
+}
+.fr-app[data-blur] .fr-app__main {
+  filter: blur(3px);
+}
+.fr-app__side {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: inset -1px 0 0 var(--ix-edge-side);
+}
+.fr-app__pane {
+  flex: 1;
+  padding: 16px 12px 8px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.fr-app__sh {
+  padding: 4px 6px 0;
+}
+.fr-app__shtext {
+  min-width: 0;
+}
+.fr-app__shtext b {
+  display: block;
+  font-size: 17px;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+}
+.fr-app__shtext small {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--ix-ink-3);
+  margin-top: 1px;
+}
+.fr-app__shtext small i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ix-fill-2);
+  transition: background-color 300ms var(--ix-ease);
+}
+.fr-app__shtext small i[data-on] {
+  background: var(--fr-ok);
+}
+.fr-app__search {
+  margin: 14px 0 4px;
+  cursor: default;
+}
+.fr-app__label {
+  padding: 16px 8px 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ix-ink-3);
+}
+.fr-app__ch {
+  cursor: default;
+  height: auto;
+  grid-template-rows: auto auto;
+}
+.fr-app__ch[aria-current='page'] .ix-ch__name {
+  color: var(--ix-ink);
+}
+.fr-app__rm {
+  cursor: default;
+}
+.fr-app__dock {
+  flex-shrink: 0;
+}
+.fr-app__dock .ix-dock__item {
+  cursor: default;
+}
+.fr-app__plus {
+  color: var(--ix-ink-3);
+}
+.fr-app__spacer {
+  flex: 1;
+}
+.fr-app__me {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  transition: opacity 300ms var(--ix-ease), transform 400ms var(--ix-spring);
+}
+.fr-app__me[data-hidden] {
+  opacity: 0;
+  transform: scale(0.6);
+}
+.fr-app__ind {
+  position: absolute;
+  left: 25px;
+  bottom: 7px;
+  width: 16px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--ix-ink);
+}
+
+/* Main. */
+.fr-app__main {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+.fr-app__title {
+  padding: 64px 40px 0;
+  font-size: 34px;
+  font-weight: 650;
+  letter-spacing: -0.025em;
+}
+.fr-app__title small {
+  display: block;
+  font-size: 14.5px;
+  font-weight: 500;
+  color: var(--ix-ink-3);
+  letter-spacing: 0;
+  margin-top: 6px;
+}
+.fr-app__welcome {
+  margin: auto 40px 40px;
+  display: grid;
+  gap: 14px;
+}
+.fr-app__welcome h3 {
+  margin: 0;
+  font-weight: 700;
+  font-size: 24px;
+  letter-spacing: -0.02em;
+}
+.fr-app__welcome p {
+  margin: 0;
+  color: var(--ix-ink-3);
+  font-size: 15px;
+}
+.fr-app__cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-top: 6px;
+}
+.fr-app__card {
+  border-radius: 16px;
+  padding: 16px;
+  background: var(--ix-fill-card);
+  box-shadow: inset 0 0 0 1px var(--ix-line);
+  display: grid;
+  gap: 6px;
+}
+.fr-app__card svg {
+  color: hsl(var(--fr-hue) 70% 78%);
+  margin-bottom: 6px;
+}
+.fr-app__card b {
+  font-size: 15px;
+}
+.fr-app__card span {
+  font-size: 13px;
+  color: var(--ix-ink-3);
+  line-height: 1.45;
+}
+.fr-app__compose {
+  margin: 0 40px 28px;
+  height: 50px;
+  flex-shrink: 0;
+  border-radius: 15px;
+  background: var(--ix-fill-field);
+  box-shadow: inset 0 0 0 1px var(--ix-line);
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  color: var(--ix-ink-3);
+  font-size: 15px;
+}
+
+/* The join preview's placeholders: shapes where a member would see words. */
+.fr-app__ghost {
+  display: grid;
+  gap: 7px;
+  align-content: center;
+  padding: 0 10px;
+  border-radius: 12px;
+}
+.fr-app__ghost i {
+  display: block;
+  height: 10px;
+  border-radius: 5px;
+  background: var(--ix-fill-2);
+}
+.fr-app__ghost--ch {
+  height: 52px;
+}
+.fr-app__ghost--ch i:first-child {
+  width: 34%;
+}
+.fr-app__ghost--ch i:last-child {
+  width: 72%;
+  background: var(--ix-fill);
+}
+.fr-app__ghost--ch[data-i='0'] {
+  background: hsl(var(--fr-hue) 50% 60% / 0.17);
+  box-shadow: inset 0 0 0 1px hsl(var(--fr-hue) 60% 72% / 0.12);
+}
+.fr-app__ghost--ch[data-i='1'] i:last-child {
+  width: 58%;
+}
+.fr-app__ghost--ch[data-i='2'] i:first-child {
+  width: 26%;
+}
+.fr-app__ghost--rm {
+  height: 36px;
+}
+.fr-app__ghost--rm i {
+  width: 42%;
+  background: var(--ix-fill);
+}
+.fr-app__ghost--rm[data-i='1'] i {
+  width: 56%;
+}
+.fr-app__titlebar {
+  display: block;
+  width: 180px;
+  height: 30px;
+  border-radius: 10px;
+  background: var(--ix-fill-2);
+}
+.fr-app__msgs {
+  margin-top: auto;
+  padding: 0 40px 18px;
+  display: grid;
+  gap: 16px;
+}
+.fr-app__msg {
+  display: grid;
+  grid-template-columns: 38px 1fr;
+  gap: 8px 12px;
+}
+.fr-app__msg i {
+  display: block;
+  height: 11px;
+  border-radius: 6px;
+  background: var(--ix-fill-2);
+}
+.fr-app__msg i.fr-app__msgav {
+  grid-row: 1 / 3;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+}
+.fr-app__msg i:nth-child(2) {
+  width: 90px;
+  margin-top: 4px;
+}
+.fr-app__msg i:nth-child(3) {
+  width: 340px;
+  background: var(--ix-fill);
+}
+.fr-app__msg[data-i='1'] i:nth-child(3) {
+  width: 220px;
+}
+.fr-app__msg[data-i='2'] i:nth-child(3) {
+  width: 160px;
+}
+.fr-app__composebar {
+  display: block;
+  width: 140px;
+  height: 11px;
+  border-radius: 6px;
+  background: var(--ix-fill);
+}

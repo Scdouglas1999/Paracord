@@ -1,78 +1,12 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router';
-import { RefreshCw, Server, Sparkles, X } from 'lucide-react';
-import { useServerListStore, resolveDefaultServerTarget } from '../stores/serverListStore';
-import { gateway } from '../gateway/manager';
-import { setStoredServerUrl, normalizeConnectInput } from '../lib/config/apiBaseUrl';
-import { parseInviteLink } from '../lib/inviteLinks';
-import { OnboardingWizard, hasCompletedOnboarding } from '../components/onboarding/OnboardingWizard';
-import { ErrorBanner } from '../components/ui/Feedback';
-import { Button } from '../components/ui/Button';
-import { IconButton } from '../components/ui/IconButton';
-import { Input } from '../components/ui/Input';
-import { Divider } from '../components/ui/Divider';
-import { syncTrustedHosts } from '../lib/trustedHosts';
+import { useEffect } from 'react';
+import { Navigate } from 'react-router';
+
+import { openAddServer } from '../components/ix/dock/addServerStore';
+import { BrandSplash } from '../components/brand/BrandSplash';
+import { getStoredServerUrl } from '../lib/config/apiBaseUrl';
 import { isTauri } from '../lib/tauriEnv';
-import { AUTH_FORM, AuthCanvas, AuthCard, AuthHeading, AuthScroll, Field } from './authScaffold';
-import { CordSpinner } from '../components/brand/CordMark';
-
-const PUBLIC_DEMO_SERVER_URL = (
-  import.meta.env.VITE_PUBLIC_DEMO_SERVER_URL || 'https://demo.paracord.chat'
-).trim();
-
-function canonicalServerBaseFromResolvedUrl(value: string): string {
-  try {
-    const parsed = new URL(value);
-    return `${parsed.protocol}//${parsed.host}`;
-  } catch {
-    // normalizeConnectInput is the single source of truth for connect-input
-    // normalization (shared with the data layer), used only as a fallback here.
-    return normalizeConnectInput(value);
-  }
-}
-
-/**
- * Parse user input to detect server URL + optional invite code.
- *
- * Accepted formats:
- *   1. Portable link:  paracord://invite/<token>
- *   2. Regular invite URL:  http(s)://host(:port)/invite/CODE
- *   3. Plain server address:  host:port  or  http(s)://host(:port)
- */
-function parseInput(input: string): { serverUrl: string; inviteCode?: string } {
-  const trimmed = input.trim();
-
-  // 1-2. An invite link of any accepted shape (lib/inviteLinks.ts is the one parser)
-  const link = parseInviteLink(trimmed);
-  if (link) return { serverUrl: link.serverUrl, inviteCode: link.code };
-
-  // 3. Plain server URL / address
-  return { serverUrl: normalizeConnectInput(trimmed) };
-}
-
-function isLocalhostHost(hostname: string): boolean {
-  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
-}
-
-/** Probe /health via Tauri's Rust-side HTTP client (bypasses WebView2 TLS restrictions). */
-async function probeServerViaTauri(serverUrl: string): Promise<{ name: string; canonicalServerUrl: string }> {
-  const { invoke } = await import('@tauri-apps/api/core');
-  const data = await invoke<{ service?: string; name?: string }>('probe_server', { serverUrl });
-  if (data.service !== 'paracord') {
-    throw new Error('Not a Paracord instance');
-  }
-  const canonicalServerUrl = canonicalServerBaseFromResolvedUrl(serverUrl);
-  let fallbackName = canonicalServerUrl;
-  try {
-    fallbackName = new URL(canonicalServerUrl).host;
-  } catch {
-    // keep canonical URL as fallback
-  }
-  return {
-    name: data.name || fallbackName,
-    canonicalServerUrl,
-  };
-}
+import { useAuthStore } from '../stores/authStore';
+import { useServerListStore } from '../stores/serverListStore';
 
 /**
  * The target server is up and answering, but its CORS allowlist does not
@@ -174,53 +108,6 @@ function currentOrigin(): string {
   return typeof window !== 'undefined' && window.location ? window.location.origin : '';
 }
 
-/** Probe /health via browser fetch (works in web builds). */
-async function probeServerViaFetch(serverUrl: string): Promise<{ name: string; canonicalServerUrl: string }> {
-  let resp: Response;
-  try {
-    resp = await fetch(`${serverUrl}/health`, {
-      method: 'GET',
-      signal: AbortSignal.timeout(10_000),
-    });
-  } catch (err) {
-    if (err instanceof DOMException && err.name === 'TimeoutError') {
-      throw new Error('Connection timed out while probing the instance health endpoint.');
-    }
-    if (err instanceof TypeError) {
-      // Reachable but refused => the peer's CORS allowlist, not the network.
-      if (await probeRespondsWithoutCors(serverUrl)) {
-        throw new CorsBlockedError(hostOf(serverUrl), currentOrigin());
-      }
-      throw new Error('Network request failed. Check DNS, protocol, CORS, and TLS certificate settings.');
-    }
-    throw err;
-  }
-  if (!resp.ok) throw new Error('The instance returned an error');
-  const data = await resp.json();
-  if (data.service !== 'paracord') {
-    throw new Error('Not a Paracord instance');
-  }
-  const canonicalServerUrl = canonicalServerBaseFromResolvedUrl(resp.url || serverUrl);
-  let fallbackName = canonicalServerUrl;
-  try {
-    fallbackName = new URL(canonicalServerUrl).host;
-  } catch {
-    // keep canonical URL as fallback
-  }
-  return {
-    name: data.name || fallbackName,
-    canonicalServerUrl,
-  };
-}
-
-/** Probe /health and verify this is a Paracord instance. Uses Rust-side HTTP in Tauri, fetch in browser. */
-async function probeServer(serverUrl: string): Promise<{ name: string; canonicalServerUrl: string }> {
-  if (isTauri()) {
-    return probeServerViaTauri(serverUrl);
-  }
-  return probeServerViaFetch(serverUrl);
-}
-
 /**
  * The server's own sentence when it refused to create an account for this
  * device: an invite-only server without a usable invite. `null` for anything
@@ -316,275 +203,24 @@ export async function explainConnectionFailure(err: unknown, serverUrl?: string)
   return toFriendlyConnectionError(err);
 }
 
-export function ServerConnectPage() {
-  // Prefill the sensible default (the current origin in browser builds), sourced
-  // from the data layer so URL logic isn't duplicated on the connect screen.
-  const [url, setUrl] = useState(() => resolveDefaultServerTarget());
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [status, setStatus] = useState('');
-  const [showOnboarding, setShowOnboarding] = useState(() => !hasCompletedOnboarding());
-  const [reconnectingId, setReconnectingId] = useState<string | null>(null);
-  const navigate = useNavigate();
-  const servers = useServerListStore((s) => s.servers);
+/**
+ * `/connect` (docs/setup-spec.md §1.14). Its first-run role went to the first
+ * run (`/welcome`): with no servers and no session, that is where it sends
+ * you. Otherwise adding a server is the dock's Add server sheet, Join tab, over
+ * the app. The connection-error helpers above are kept for the pages that
+ * still explain a failed connection.
+ */
+export function ConnectRedirect() {
+  const tokensHydrated = useServerListStore((s) => s.tokensHydrated);
+  const servers = useServerListStore((s) => s.servers.length);
+  const token = useAuthStore((s) => s.token);
+  const firstRun = servers === 0 && !token && !getStoredServerUrl();
 
-  // Show onboarding wizard for first-time users with no servers
-  if (showOnboarding && servers.length === 0) {
-    return (
-      <OnboardingWizard
-        onComplete={() => setShowOnboarding(false)}
-        onTryDemo={() => {
-          setUrl(PUBLIC_DEMO_SERVER_URL);
-          setShowOnboarding(false);
-        }}
-      />
-    );
-  }
+  useEffect(() => {
+    if (tokensHydrated && !firstRun) openAddServer('join');
+  }, [tokensHydrated, firstRun]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-    setLoading(true);
-    setStatus('');
-
-    const input = url.trim();
-    if (!input) {
-      setError('Paste your invite link to continue.');
-      setLoading(false);
-      return;
-    }
-
-    // Remembered across the try/catch so a failure late in the flow can still
-    // ask whether the target server is up and merely refusing this origin.
-    let probedServerUrl: string | undefined;
-
-    try {
-      const { serverUrl, inviteCode } = parseInput(input);
-      probedServerUrl = serverUrl;
-      const parsedUrl = new URL(serverUrl);
-      if (parsedUrl.protocol !== 'https:' && !(parsedUrl.protocol === 'http:' && isLocalhostHost(parsedUrl.hostname))) {
-        throw new Error(
-          'That link starts with http://, which is only allowed for a server on this same computer. Ask for a link that starts with https://.',
-        );
-      }
-
-      // Ask Rust to verify/trust the host so WebView2 allows self-signed certs during probe.
-      const existingUrls = useServerListStore.getState().servers.map((s) => s.url);
-      await syncTrustedHosts([...existingUrls, serverUrl]);
-
-      setStatus('Finding the server…');
-      const probe = await probeServer(serverUrl);
-      const canonicalServerUrl = probe.canonicalServerUrl;
-      const serverName = probe.name;
-
-      // Add server to the multi-server list
-      const serverId = useServerListStore.getState().addServer(canonicalServerUrl, serverName);
-      setStoredServerUrl(canonicalServerUrl);
-
-      // Try challenge-response auth if the local account is set up.
-      // If not, just save the server and redirect to login for password auth.
-      setStatus('Signing you in…');
-      try {
-        await gateway.connectServer(serverId, { inviteCode });
-      } catch (authErr) {
-        gateway.disconnectServer(serverId);
-        const refusal = accountRefusalMessage(authErr);
-        if (refusal) {
-          // The server is up and said exactly why it will not make an account
-          // here (invite-only, or sign-ups closed). That sentence is the answer.
-          useServerListStore.getState().removeServer(serverId);
-          throw new Error(refusal);
-        }
-        const msg = authErr instanceof Error ? authErr.message : '';
-        if (msg.includes('not unlocked') || msg.includes('No server token')) {
-          // Account not set up for challenge-response — fall through to login
-          if (inviteCode) {
-            navigate(`/invite/${inviteCode}`);
-          } else {
-            navigate('/login');
-          }
-          return;
-        }
-        useServerListStore.getState().removeServer(serverId);
-        throw new Error(
-          msg || 'Instance authentication failed.',
-        );
-      }
-
-      if (inviteCode) {
-        navigate(`/invite/${inviteCode}`);
-      } else {
-        navigate('/app');
-      }
-    } catch (err) {
-      setError(await explainConnectionFailure(err, probedServerUrl));
-    } finally {
-      setLoading(false);
-      setStatus('');
-    }
-  };
-
-  const handleRemoveServer = (serverId: string) => {
-    gateway.disconnectServer(serverId);
-    useServerListStore.getState().removeServer(serverId);
-  };
-
-  const handleReconnectServer = async (serverId: string) => {
-    const server = servers.find((entry) => entry.id === serverId);
-    if (!server) return;
-    setError('');
-    setStatus('');
-    setReconnectingId(serverId);
-    try {
-      useServerListStore.getState().setActive(serverId);
-      setStoredServerUrl(server.url);
-      await gateway.connectServer(serverId);
-      navigate('/app');
-    } catch (err) {
-      setError(await explainConnectionFailure(err, server.url));
-    } finally {
-      setReconnectingId(null);
-    }
-  };
-
-  return (
-    <AuthCanvas>
-      <div className="mx-auto flex w-full min-h-0 max-w-[400px] flex-col gap-8 sm:max-h-full short-window:max-w-[840px] short-window:flex-row short-window:items-start short-window:gap-10">
-        <AuthCard className="short-window:flex-1">
-          <form onSubmit={handleSubmit} className={AUTH_FORM}>
-            <AuthHeading
-              title="Join a server"
-              subtitle="Paste the invite link you were sent. That is all you need."
-            />
-
-            {error && <ErrorBanner multiline message={error} />}
-
-            {/* The accepted formats are reference material, so on a short,
-                wide window they sit beside the box they describe rather than
-                below it. */}
-            <AuthScroll paired>
-            <Field label="Invite link" required>
-              <Input
-                type="text"
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                required
-                className="pc-mono"
-                placeholder="Paste your invite link here"
-                autoFocus
-              />
-            </Field>
-
-            {/* One sentence, not a table of URL formats: the person on this
-                screen was sent a link, and the box takes whatever they paste —
-                an invite, a paracord:// link, or a bare address. */}
-            <p className="text-[13px] leading-relaxed text-[var(--ix-ink-3)]">
-              No invite link? The address of the server works too, for example{' '}
-              <span className="pc-mono">chat.example.com</span>. Whoever runs it can tell you.
-            </p>
-            </AuthScroll>
-
-            {status && (
-              <div
-                className="pc-well flex items-center gap-2 px-4 py-2.5 text-[14px] text-[var(--ix-ink-2)]"
-                aria-live="polite"
-              >
-                <CordSpinner className="shrink-0" />
-                <span>{status}</span>
-              </div>
-            )}
-
-            <div className="flex flex-col gap-2.5">
-              <Button type="submit" size="lg" loading={loading} disabled={loading} className="w-full">
-                Continue
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="lg"
-                onClick={() => setUrl(PUBLIC_DEMO_SERVER_URL)}
-                className="w-full"
-              >
-                <Sparkles size={15} aria-hidden />
-                Just looking? Try the demo server
-              </Button>
-            </div>
-          </form>
-        </AuthCard>
-
-        {/* Recent instances — selectable rows under the form, divided by a hairline
-            rather than tiled as identical cards. Beside it on a short, wide window. */}
-        {servers.length > 0 && (
-          <AuthCard className="short-window:flex-1">
-            <div className="flex min-h-0 flex-col">
-              <div className="flex items-center justify-between pb-1">
-                <h2 className="ix-auth__step">Servers you have joined</h2>
-                <span className="text-[12.5px] font-medium tabular-nums text-[var(--ix-ink-3)]">{servers.length}</span>
-              </div>
-              <ul className="-mx-2 mt-1 flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain">
-                {servers.map((server, index) => {
-                  // Presence here is a word, never a colored dot (spec §1.5, §6.6).
-                  const stateLabel = server.connected
-                    ? 'Connected'
-                    : server.token
-                      ? 'Saved — not connected'
-                      : 'Sign-in required';
-                  const reconnecting = reconnectingId === server.id;
-                  return (
-                    <li key={server.id}>
-                      {index > 0 && <Divider className="mx-2 w-auto" />}
-                      <div className="flex items-center gap-3 rounded-[12px] px-2 py-3 transition-colors duration-[40ms] ease-[var(--ix-ease)] hover:bg-[var(--ix-fill)]">
-                        <span
-                          className="pc-well flex h-9 w-9 shrink-0 items-center justify-center text-[var(--ix-ink-2)]"
-                          aria-hidden
-                        >
-                          <Server size={17} />
-                        </span>
-                        <div className="min-w-0 flex-1">
-                          <div className="truncate text-[14.5px] font-semibold text-[var(--ix-ink)]">
-                            {server.name}
-                          </div>
-                          <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
-                            <span className="shrink-0 text-[13px] text-[var(--ix-ink-2)]">{stateLabel}</span>
-                            <span className="truncate pc-mono text-[13px] text-[var(--ix-ink-3)]">
-                              · {server.url}
-                            </span>
-                          </div>
-                        </div>
-                        <div className="flex shrink-0 items-center gap-1">
-                          {!server.connected && (
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              onClick={() => void handleReconnectServer(server.id)}
-                              disabled={reconnecting}
-                            >
-                              <RefreshCw size={13} className={reconnecting ? 'animate-spin' : ''} aria-hidden />
-                              {reconnecting ? 'Reconnecting…' : 'Reconnect'}
-                            </Button>
-                          )}
-                          <IconButton
-                            label={`Remove ${server.name}`}
-                            onClick={() => handleRemoveServer(server.id)}
-                          >
-                            <X size={15} />
-                          </IconButton>
-                        </div>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-              <Divider className="mt-1" />
-              <div className="pt-4">
-                <Button size="lg" variant="glass" onClick={() => navigate('/app')} className="w-full">
-                  Continue to app
-                </Button>
-              </div>
-            </div>
-          </AuthCard>
-        )}
-      </div>
-    </AuthCanvas>
-  );
+  if (!tokensHydrated) return <BrandSplash label="Just a moment..." />;
+  if (firstRun) return <Navigate to={isTauri() ? '/welcome' : '/login'} replace />;
+  return <Navigate to="/app" replace />;
 }

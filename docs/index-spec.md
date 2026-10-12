@@ -742,6 +742,14 @@ ground with the main glow at hue 210, a centered 400px column, the Paracord
 mark, title 28/700, fields 44 tall radius 12 `rgba(255,255,255,.055)` with a
 hairline, one cream primary, text secondary actions. `BrandSplash` unchanged.
 
+The first run (`/welcome`, `/welcome/host|join/:step`, `/welcome/sign-in`,
+`/setup-server`, and `/invite/:code` for someone without a session on the web)
+is governed by [`setup-spec.md`](setup-spec.md) §1 instead: it owns the whole
+window (the launch, the split welcome, the steps beside a live preview of the
+app). `OnboardingWizard` and `/connect`'s first-run role are retired; `/connect`
+now sends a person with no servers to `/welcome` and otherwise opens the dock's
+Add server sheet on Join.
+
 ---
 
 ## 7. Call view
@@ -912,7 +920,9 @@ data are unchanged and the surface is restyled to Index tokens.
 | `/app/friends` | Friends page (People) with a segmented control Online / All / Requests / Blocked and **Add friend** (cream) |
 | `/app/admin`, `/app/developers`, `/app/oauth2/authorize` | Pages in main from the account menu; bot authorize keeps the auth layout |
 | `/app/discovery`, `/app/templates` | The dock's `+` sheet: Create (templates inside), Join with a link, **Discover** (opens the Discover page in main) |
-| `/login`, `/register`, `/connect`, `/setup-server`, `/setup`, `/unlock`, `/recover`, `/invite/:code`, `/terms`, `/privacy` | Auth layout (§6.14) |
+| `/login`, `/register`, `/setup`, `/unlock`, `/recover`, `/invite/:code` (signed in), `/terms`, `/privacy` | Auth layout (§6.14) |
+| `/welcome…`, `/setup-server`, `/invite/:code` (no session, web) | The first run ([`setup-spec.md`](setup-spec.md) §1.14) |
+| `/connect` | No servers: `/welcome`; otherwise the Add server sheet, Join tab |
 | `/design-tokens`, `/media-test` (DEV) | Index section added to `/design-tokens`; media test unchanged |
 
 ### 8.2 Shell and global surfaces

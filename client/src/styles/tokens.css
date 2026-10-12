@@ -1173,3 +1173,41 @@ body {
   user-select: none;
   -webkit-user-select: none;
 }
+
+/* =============================================================================
+   First run (docs/setup-spec.md §1; the approved prototype
+   output/design-reference/setup/paracord-first-run.html). The first run owns the
+   whole window and is drawn on the Index ground and inks; these are the few
+   prototype values Index has no token for. Hue-derived colors are written in
+   firstRun.css as `hsl(var(--fr-hue) …)`. Owned by S13.
+   ============================================================================= */
+:root {
+  /* Setup rows and the password meter: done, warned, too weak. */
+  --fr-ok: #8fd9a8;
+  --fr-warn: #ffcf8a;
+  --fr-weak: #ff9b8a;
+  --fr-ok-fill: hsl(145 45% 40% / 0.3);
+  --fr-ok-edge: hsl(145 50% 60% / 0.4);
+  --fr-warn-fill: hsl(38 70% 45% / 0.25);
+  --fr-warn-edge: hsl(38 70% 65% / 0.4);
+  /* The welcome's two halves: host is ember, join is the friend's blue. */
+  --fr-host-glow: hsl(22 78% 48% / 0.34);
+  --fr-join-glow: hsl(204 72% 50% / 0.3);
+  --fr-host-ink: hsl(28 80% 72%);
+  --fr-join-ink: hsl(204 70% 76%);
+  --fr-mark-shadow: rgba(255, 160, 80, 0.3);
+  /* Quiet surfaces the prototype draws at its own strengths. */
+  --fr-edge: rgba(255, 255, 255, 0.12);
+  --fr-placeholder: rgba(235, 238, 242, 0.3);
+  --fr-check-edge: rgba(255, 255, 255, 0.25);
+  --fr-vcard: rgba(22, 23, 26, 0.9);
+  --fr-shadow-vcard: 0 18px 40px rgba(0, 0, 0, 0.35);
+  --fr-reveal: rgba(20, 21, 24, 0.85);
+  --fr-shadow-reveal: 0 10px 30px rgba(0, 0, 0, 0.4);
+  --fr-howto: rgba(0, 0, 0, 0.25);
+  --fr-badge: rgba(14, 15, 17, 0.75);
+  --fr-scrim: rgba(5, 6, 8, 0.55);
+  --fr-shadow-sheet: 0 40px 100px rgba(0, 0, 0, 0.6);
+  --fr-shadow-preview: 0 60px 140px rgba(0, 0, 0, 0.55);
+  --fr-qr-tile: #1d1a18;
+}

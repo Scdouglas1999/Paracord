@@ -9,7 +9,10 @@ import { InvitePage } from './InvitePage';
 const mockAuthState = vi.hoisted(() => ({
   token: 'auth-token' as string | null,
   user: { id: 'user-1', username: 'User' },
+  sessionBootstrapComplete: true,
 }));
+
+vi.mock('./firstRun/FirstRunPage', () => ({ FirstRunPage: ({ mode }: { mode: string }) => `First run: ${mode}` }));
 
 const mockInviteApi = vi.hoisted(() => ({
   get: vi.fn(),
@@ -130,31 +133,13 @@ describe('InvitePage', () => {
     expect(mockInviteApi.accept).not.toHaveBeenCalled();
   });
 
-  it('offers somebody with no account a way to make one, and keeps the sign-in path', async () => {
-    const user = userEvent.setup();
+  it('gives somebody with no session the first-run join path (setup-spec §6.6)', async () => {
     mockAuthState.token = null;
 
     renderInvitePage();
 
-    expect(await screen.findByText('Launch Guild')).toBeInTheDocument();
-    // An ordinary server asks a newcomer for nothing at all.
-    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
-    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole('button', { name: 'Create an account to join' }));
-    expect(await screen.findByText('Register page')).toBeInTheDocument();
-    expect(sessionStorage.getItem('paracord:pending-invite')).toBe('abc123');
+    expect(await screen.findByText('First run: web')).toBeInTheDocument();
     expect(mockInviteApi.accept).not.toHaveBeenCalled();
-  });
-
-  it('sends somebody who already has an account to sign in', async () => {
-    const user = userEvent.setup();
-    mockAuthState.token = null;
-
-    renderInvitePage();
-
-    await user.click(await screen.findByRole('button', { name: 'I already have an account' }));
-    expect(await screen.findByText('Login page')).toBeInTheDocument();
   });
 
   it('joins an ungated server with one press and nothing to fill in', async () => {

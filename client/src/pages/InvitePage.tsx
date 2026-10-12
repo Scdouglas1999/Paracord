@@ -1,6 +1,6 @@
 import { useCurrentAccountScope } from '../hooks/useCurrentUser';
 import { guildLandingPath } from '../lib/guildNavigation';
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router';
 import { ArrowRight, Hash, Users } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
@@ -19,11 +19,36 @@ import { Divider } from '../components/ui/Divider';
 import { ServerMark } from '../components/ix/identity';
 import { AUTH_FORM, AuthCanvas, AuthCard, AuthScroll, Field } from './authScaffold';
 import type { InvitePreview } from '../api/generated/InvitePreview';
+import { BrandSplash } from '../components/brand/BrandSplash';
+
+/** The first run's own chunk: a signed-in visitor never loads it. */
+const FirstRunPage = lazy(() => import('./firstRun/FirstRunPage').then((m) => ({ default: m.FirstRunPage })));
 
 /** Where the desktop installers live. */
 const APP_DOWNLOAD_URL = 'https://github.com/Scdouglas1999/Paracord/releases/latest';
 
+/**
+ * `/invite/:code`. On a server's own web page, someone without a session gets
+ * the first run's join path (docs/setup-spec.md §6.6): the invite resolved,
+ * then an account, the setup rows, the phrase, and the app. Everyone else (a
+ * signed-in browser, the desktop app) accepts the invite here.
+ */
 export function InvitePage() {
+  const token = useAuthStore((s) => s.token);
+  const bootstrapped = useAuthStore((s) => s.sessionBootstrapComplete);
+  const { step } = useParams();
+  if (!isTauri() && (!token || (step && step !== 'accept'))) {
+    if (!bootstrapped) return <BrandSplash label="Just a moment..." />;
+    return (
+      <Suspense fallback={<BrandSplash label="Just a moment..." />}>
+        <FirstRunPage mode="web" />
+      </Suspense>
+    );
+  }
+  return <InviteAcceptPage />;
+}
+
+function InviteAcceptPage() {
   const guildScope = useCurrentAccountScope();
   const { code } = useParams();
   const navigate = useNavigate();

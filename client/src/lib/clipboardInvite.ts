@@ -75,6 +75,8 @@ export function watchClipboardInvite(watch: ClipboardInviteWatch): () => void {
       const link = await peekClipboardInvite();
       // The screen may have changed while the read was in flight.
       if (link && !stopped && watch.isActive() && watch.fieldIsEmpty()) watch.onInvite(link);
+      // Not delivered (the watch stopped mid-read, e.g. a remount): offer it again next time.
+      else if (link) offered.delete(`${link.serverUrl}|${link.code}`);
     } catch (reason) {
       (watch.onError ?? ((r: unknown) => console.warn('[clipboard] could not read the clipboard:', r instanceof Error ? r.message : String(r))))(reason);
     } finally {

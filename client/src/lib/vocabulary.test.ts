@@ -305,20 +305,20 @@ describe('the host you run is an instance', () => {
   // a newcomer sees talks about the thing they were sent and the thing they are
   // joining. (2026-09-20: install and first run must need no glossary.)
   it('asks a newcomer for an invite link, in words they already have', () => {
-    const copy = copyOf('pages/ServerConnectPage.tsx');
-    expect(copy).toContain('Join a server');
+    const copy = copyOf('components/firstRun/InviteStep.tsx');
+    expect(copy).toContain('Paste your invite');
     expect(copy).toContain('Invite link');
-    expect(copy).not.toContain('Connect to an instance');
-    expect(copy).not.toContain('Probing');
+    expect(copy).not.toMatch(/\binstance\b/i);
     expect(copy).not.toContain('portable link');
   });
 
-  it('claims an instance, and names the first server inside it', () => {
-    const copy = copyOf('pages/InstanceSetupPage.tsx');
-    expect(copy).toContain('Set up your Paracord instance');
-    expect(copy).toContain('Instance name');
-    expect(copy).toContain('First server name');
-    expect(copy).toContain('Claim this instance');
+  it('the first run names the server and this computer, never the instance', () => {
+    for (const file of ['components/firstRun/Welcome.tsx', 'components/firstRun/NameStep.tsx', 'pages/firstRun/rows.ts']) {
+      const copy = copyOf(file);
+      expect(copy).not.toMatch(/\binstance\b/i);
+      expect(copy).not.toMatch(/\broom\b/i);
+    }
+    expect(copyOf('components/firstRun/NameStep.tsx')).toContain('What should we call your server?');
   });
 
   it('administers an instance, not a server', () => {
