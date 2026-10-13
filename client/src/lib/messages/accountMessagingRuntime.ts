@@ -478,7 +478,7 @@ export class AccountMessagingRuntime {
         this.assertDeliveryReady(intent.channelId);
         if (intent.intent.encryption.kind === 'dm') {
           if (!dm) throw new Error('Unlock this conversation’s encrypted account before delivery.');
-          return dm.prepareIntent(tx, intent);
+          return dm.prepareIntent(tx, intent, this.peerPrekeyGeneration(intent.channelId, intent.intent.encryption.peer.id));
         }
         if (intent.intent.encryption.kind === 'group') {
           if (!group) throw new Error('Unlock this conversation’s encrypted account before delivery.');
@@ -715,6 +715,16 @@ export class AccountMessagingRuntime {
     await this.enroll();
     if (!this.identity) throw new Error(this.store.getState().encryptionError ?? 'Set up and unlock the identity enrolled for this server account.');
     this.identity.session.assertCurrent(); return this.identity;
+  }
+  /**
+   * The DM recipient's current prekey generation as this account last saw it.
+   * The projection is refreshed when the recipient publishes keys (their
+   * USER_UPDATE refetches the DM list) and on every send, so a draft prepared
+   * after their keys moved to a new device is encrypted for that device.
+   */
+  private peerPrekeyGeneration(channelId: string, peerId: string): string | null {
+    const recipient = getAccountChannelView(this.scope).channelsById[channelId]?.recipient;
+    return recipient?.id === peerId ? recipient.prekey_generation ?? null : null;
   }
   private conversation(channelId: string) {
     const channel = getAccountChannelView(this.scope).channelsById[channelId];

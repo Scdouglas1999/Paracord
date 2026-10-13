@@ -238,6 +238,12 @@ pub async fn get_keys(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
+    // The generation lets a sender tell, without another request, whether the
+    // ratchet it holds was built against the device that holds these keys.
+    let generation = paracord_db::prekeys::get_prekey_generation(&state.db, user_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
     let opk_json = opk.map(|o| {
         json!({
             "id": o.id,
@@ -253,6 +259,7 @@ pub async fn get_keys(
             "signature": spk.signature,
         },
         "one_time_prekey": opk_json,
+        "prekey_generation": generation.map(|id| id.to_string()),
     })))
 }
 

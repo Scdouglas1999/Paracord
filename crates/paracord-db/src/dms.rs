@@ -12,6 +12,7 @@ pub struct DmChannelWithRecipientRow {
     pub recipient_discriminator: i16,
     pub recipient_avatar_hash: Option<String>,
     pub recipient_public_key: Option<String>,
+    pub recipient_prekey_generation: Option<i64>,
 }
 
 pub async fn find_dm_channel_between(
@@ -93,11 +94,13 @@ pub async fn list_user_dm_channels(
                 u.display_name AS recipient_display_name,
                 u.discriminator AS recipient_discriminator,
                 u.avatar_hash AS recipient_avatar_hash,
-                u.public_key AS recipient_public_key
+                u.public_key AS recipient_public_key,
+                kg.generation AS recipient_prekey_generation
          FROM channels c
          INNER JOIN dm_recipients me ON me.channel_id = c.id
          INNER JOIN dm_recipients other ON other.channel_id = c.id AND other.user_id != me.user_id
          INNER JOIN users u ON u.id = other.user_id
+         LEFT JOIN prekey_generations kg ON kg.user_id = u.id
          WHERE c.channel_type = 1 AND me.user_id = $1
          ORDER BY CASE WHEN c.last_message_id IS NULL THEN 1 ELSE 0 END, c.last_message_id DESC, c.id DESC",
     )

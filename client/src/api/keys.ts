@@ -45,6 +45,12 @@ export interface PrekeyBundleResponse {
     id: number;
     public_key: string;
   } | null;
+  /**
+   * Server snowflake naming this bundle's generation. It advances when a new
+   * device under the same identity replaces the published bundle. Older
+   * servers omit it.
+   */
+  prekey_generation?: string | null;
 }
 
 export interface OwnPublicKeysResponse {

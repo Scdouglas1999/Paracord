@@ -3,7 +3,7 @@ import type { AccountVault, VaultTransaction } from '../crypto/accountVault';
 import type { AccountScope } from '../serverScope';
 import type { Message } from '../../types';
 
-const fixture = vi.hoisted(() => ({ openLocal: vi.fn(), openIdentity: vi.fn(), decrypt: vi.fn(), acknowledge: vi.fn(), review: vi.fn(), preparedAfterDeletion: vi.fn(), sent: vi.fn(), recovery: vi.fn() }));
+const fixture = vi.hoisted(() => ({ openLocal: vi.fn(), openIdentity: vi.fn(), decrypt: vi.fn(), acknowledge: vi.fn(), review: vi.fn(), preparedAfterDeletion: vi.fn(), preparedForGeneration: vi.fn(), sent: vi.fn(), recovery: vi.fn() }));
 vi.mock('../crypto/deviceAccountVault', () => ({ openDeviceAccountVault: fixture.openLocal }));
 vi.mock('../crypto/accountVaultSession', () => ({ openAccountVault: fixture.openIdentity }));
 vi.mock('../crypto/prekeyEnrollment', async importOriginal => ({ ...await importOriginal<object>(), createAccountPrekeyEnrollment: () => ({ ensure: async () => {} }) }));
@@ -16,7 +16,8 @@ vi.mock('./durableDm', () => ({ createDurableDm: (vault: AccountVault) => ({
   uploadStagedAttachments: async () => {},
   markExternalRemoval: async (channelId: string) => vault.transact(async tx => tx.put('test.removals', channelId, true)),
   assertPreparedDeliveryAllowed: async (channelId: string) => vault.transact(async tx => { if (await tx.get('test.removals', channelId)) throw new Error('Unresolved generation removal'); }),
-  prepareIntent: async (tx: VaultTransaction, intent: { nonce: string; channelId: string }) => {
+  prepareIntent: async (tx: VaultTransaction, intent: { nonce: string; channelId: string }, peerPrekeyGeneration?: string | null) => {
+    fixture.preparedForGeneration(peerPrekeyGeneration);
     fixture.preparedAfterDeletion(await tx.get('test.removals', intent.channelId));
     tx.remove('test.removals', intent.channelId);
     return { nonce: intent.nonce, content: '', e2ee: { version: 2, nonce: 'payload-nonce', ciphertext: 'prepared-ciphertext', header: 'header' } };
@@ -235,6 +236,19 @@ describe('production encrypted event journal', () => {
     expect(fixture.preparedAfterDeletion).toHaveBeenCalledWith(true);
     expect(await identity.vault.transact(tx => tx.get('messages.deleted', JSON.stringify(['10', '100'])))).not.toBeNull();
     expect(JSON.parse(fixture.sent.mock.calls[0][0].data)).toMatchObject({ content: '', e2ee: { ciphertext: 'prepared-ciphertext' } });
+  });
+  // The recipient signed in on another computer and published its keys: the
+  // send-time refresh carries the new prekey generation, and preparation must
+  // use it rather than anything recorded when the draft was queued.
+  it('prepares a DM against the recipient prekey generation refreshed at send time', async () => {
+    useAccountStore.setState({ isUnlocked: true }); await runtime.enroll();
+    useChannelStore.getState().updateChannel({ id: '10', recipient: { id: '2', public_key: '22'.repeat(32), prekey_generation: '500' } } as never, scope);
+    vi.spyOn(useChannelStore.getState(), 'fetchDmChannels').mockImplementation(async () => {
+      useChannelStore.getState().updateChannel({ id: '10', recipient: { id: '2', public_key: '22'.repeat(32), prekey_generation: '900' } } as never, scope);
+    });
+    await runtime.send('10', 'reaches the new computer');
+    await vi.waitFor(() => expect(fixture.sent).toHaveBeenCalledTimes(1));
+    expect(fixture.preparedForGeneration).toHaveBeenCalledWith('900');
   });
   it('holds current-history envelopes and deletions separately until explicit review', async () => {
     runtime.dispose();

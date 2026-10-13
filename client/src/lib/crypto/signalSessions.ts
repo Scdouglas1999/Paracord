@@ -12,6 +12,22 @@ import { bytesToHex, fromBase64, toBase64 } from './util';
 
 export interface SignalSessionReference { registryId: string; generationId: string }
 const RETIRED_SEND_NAMESPACE = 'signal.retired-sends';
+/**
+ * What each ratchet generation was built against, so a sender can tell whether
+ * it still reaches the device that holds the peer's current keys.
+ *
+ * An account publishes one prekey bundle, and the server names it with a
+ * prekey generation (a server snowflake) that advances when a new device under
+ * the same identity replaces the bundle. A generation this device started via
+ * X3DH is anchored to the generation of the bundle it fetched; one the peer
+ * started is anchored to the server ID of that initial message, which is
+ * ordered against the generation because both are server snowflakes. A ratchet
+ * anchored before the peer's current generation leads to a device that no
+ * longer receives new sessions, so the next send starts a fresh X3DH session
+ * with the current bundle instead.
+ */
+const GENERATION_ANCHOR_NAMESPACE = 'signal.generation-anchors';
+interface GenerationAnchor { version: 1; anchor: string | null }
 
 async function isSendingRetired(transaction: VaultTransaction, session: SignalSessionReference): Promise<boolean> {
   const marker = await transaction.get<{ version: number }>(RETIRED_SEND_NAMESPACE, JSON.stringify([session.registryId, session.generationId]));
@@ -25,6 +41,30 @@ export async function retireSignalSendingSession(transaction: VaultTransaction, 
   if (!stored) throw new Error('The sending generation needed to resolve this message is missing.');
   deserializeState(stored);
   transaction.put(RETIRED_SEND_NAMESPACE, JSON.stringify([session.registryId, session.generationId]), { version: 1 });
+}
+
+function anchorId(registryId: string, generationId: string) { return JSON.stringify([registryId, generationId]); }
+
+/** True when the generation predates the peer's current prekey generation (or cannot show that it does not). */
+async function predatesPeerKeys(transaction: VaultTransaction, session: SignalSessionReference, current: string): Promise<boolean> {
+  const record = await transaction.get<GenerationAnchor>(GENERATION_ANCHOR_NAMESPACE, anchorId(session.registryId, session.generationId));
+  if (record && (record.version !== 1 || (record.anchor !== null && typeof record.anchor !== 'string'))) {
+    throw new Error('The encrypted DM generation anchor is invalid.');
+  }
+  // Generations from before anchors existed, and sessions built against a
+  // bundle the server named no generation for, cannot show they reach the
+  // current device; one fresh X3DH session settles it.
+  if (!record || record.anchor === null) return true;
+  assertSignalMessageId(record.anchor);
+  return BigInt(record.anchor) < BigInt(current);
+}
+
+/** A peer prekey generation is a server snowflake, like a message ID. */
+export function assertPrekeyGeneration(generation: string): void {
+  if (typeof generation !== 'string' || !/^[1-9][0-9]{0,18}$/.test(generation)
+    || BigInt(generation) > 9223372036854775807n) {
+    throw new Error('The server named an invalid prekey generation for this contact.');
+  }
 }
 
 interface SessionIndex {
@@ -52,7 +92,18 @@ export function createSignalSessionCipher(
   channelId: string,
   keysApi: DmCipherDependencies['keysApi'],
 ) {
-  const dependencies = createSignalVaultDependencies(transaction, channelId, keysApi);
+  // The bundle generation of the most recent X3DH fetch in this cipher, so a
+  // generation this device starts is anchored to exactly what it encrypted to.
+  let fetchedGeneration: string | null | undefined;
+  const dependencies = createSignalVaultDependencies(transaction, channelId, {
+    async getBundle(userId: string) {
+      const response = await keysApi.getBundle(userId);
+      const generation = response.data.prekey_generation ?? null;
+      if (generation !== null) assertPrekeyGeneration(generation);
+      fetchedGeneration = generation;
+      return response;
+    },
+  });
 
   async function sessions(privateKey: Uint8Array, peerPublicKey: string) {
     const own = bytesToHex(ed25519.getPublicKey(privateKey));
@@ -82,8 +133,19 @@ export function createSignalSessionCipher(
 
   async function encryptDmMessageWithSession(
     channel: string, plaintext: string, privateKey: Uint8Array, peerPublicKey: string, peerUserId: string,
-    options: { independent?: boolean } = {},
+    options: {
+      independent?: boolean;
+      /**
+       * The peer's current prekey generation as this account last saw it (the
+       * DM recipient projection, refreshed on the peer's key publication and on
+       * every send). `undefined` or `null`: the server names none, so the
+       * active ratchet is used as before.
+       */
+      peerPrekeyGeneration?: string | null;
+    } = {},
   ): Promise<{ payload: MessageE2eePayload; session: SignalSessionReference }> {
+    const current = options.peerPrekeyGeneration ?? null;
+    if (current !== null) assertPrekeyGeneration(current);
     await dependencies.assertPinnedDmPeerIdentity(channel, peerPublicKey, peerUserId);
     const registry = await sessions(privateKey, peerPublicKey);
     if (!registry.index && (await transaction.list(registry.namespace)).length) {
@@ -93,7 +155,16 @@ export function createSignalSessionCipher(
       ? await transaction.get<SerializedRatchetState>(registry.namespace, registry.index.activeId) : null;
     if (registry.index && !stored) throw new Error('The active encrypted DM session is missing.');
     const previousState = stored ? deserializeState(stored) : null;
-    const retired = registry.index && await isSendingRetired(transaction, { registryId: registry.id, generationId: registry.index.activeId });
+    let retired = registry.index && await isSendingRetired(transaction, { registryId: registry.id, generationId: registry.index.activeId });
+    if (registry.index && !retired && !options.independent && current !== null) {
+      const active = { registryId: registry.id, generationId: registry.index.activeId };
+      if (await predatesPeerKeys(transaction, active, current)) {
+        // The peer's keys moved to another device after this ratchet began.
+        // Keep the generation for delayed reads; stop sending on it.
+        await retireSignalSendingSession(transaction, active);
+        retired = true;
+      }
+    }
     const index = registry.index && !retired && !options.independent ? registry.index
       : { version: 2 as const, activeId: crypto.randomUUID(), lastMessageId: registry.index?.lastMessageId ?? null };
     const state = retired || options.independent ? null : previousState;
@@ -105,8 +176,14 @@ export function createSignalSessionCipher(
         if (!options.independent || !registry.index) transaction.put(SIGNAL_SESSION_NAMESPACE, registry.id, index);
       },
     });
+    fetchedGeneration = undefined;
     const payload = await cipher.encryptDmMessageV2(channel, plaintext, privateKey, peerPublicKey, peerUserId);
     const session = { registryId: registry.id, generationId: index.activeId };
+    if (!state) {
+      // A new X3DH generation: anchor it to the bundle it was encrypted to.
+      if (fetchedGeneration === undefined) throw new Error('A new encrypted DM session was started without the contact’s published keys.');
+      transaction.put(GENERATION_ANCHOR_NAMESPACE, anchorId(registry.id, index.activeId), { version: 1, anchor: fetchedGeneration } satisfies GenerationAnchor);
+    }
     // Mutable messages must not introduce a ratchet dependency for later sends.
     // The independent generation remains available for decrypting replies.
     if (options.independent) await retireSignalSendingSession(transaction, session);
@@ -186,7 +263,12 @@ export function createSignalSessionCipher(
     const cipher = createDmCipher({
       ...dependencies,
       async loadSession() { return null; },
-      async saveSession(_own, _peer, state) { remember(newId, state); },
+      async saveSession(_own, _peer, state) {
+        remember(newId, state);
+        // The peer's device started this generation when the server accepted
+        // this message; that orders it against the peer's prekey generations.
+        transaction.put(GENERATION_ANCHOR_NAMESPACE, anchorId(registry.id, newId), { version: 1, anchor: messageId } satisfies GenerationAnchor);
+      },
     });
     return cipher.decryptDmMessage(channel, payload, privateKey, peerPublicKey, peerUserId);
   }

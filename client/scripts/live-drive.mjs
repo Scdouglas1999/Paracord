@@ -813,6 +813,47 @@ async function scenarios(people, browser) {
     }
   });
 
+  // Setup F3: a contact's next DM reaches a device that has just published its
+  // keys, with no message from that device first. The earlier conversation is
+  // not readable there (per-device sessions, by design); the next one is.
+  await step('second device receives the next DM without sending first', async () => {
+    const generation = async () => {
+      const { body } = await ada.call('GET', '/users/@me/dms');
+      return (Array.isArray(body) ? body : []).find(channel => channel.id === state.dmId)?.recipient?.prekey_generation ?? null;
+    };
+    const before = await generation();
+    assert(before, 'the DM list names no prekey generation for grace');
+    // The first computer is switched off for this step: it no longer holds
+    // the published keys, so what it would show is not what is measured.
+    await grace.page.goto('about:blank').catch(() => {});
+    const second = await signIn(browser, { ...grace, label: 'grace-2', password: CHANGED_PASSWORD });
+    try {
+      await go(second, `/app/dms/${state.dmId}`);
+      await dismissOverlays(second.page, 700, 6000);
+      await takeAnyUnlockOffer(second);
+      const publish = second.page.getByRole('button', { name: 'Publish new keys for this device' });
+      await publish.waitFor({ state: 'visible', timeout: 45000 });
+      await shot(second, '09b-offer-fresh-keys');
+      await publish.click();
+      const after = await until(async () => {
+        const now = await generation();
+        return now && now !== before ? now : null;
+      }, 'grace’s second device never published its keys', 45000);
+      await waitUntilSendable(second);
+
+      // ada was not told to do anything: her next message just goes.
+      await openEncrypted(ada, state.dmId);
+      const text = `to the new computer ${stamp}`;
+      await say(ada, text);
+      await second.page.getByText(text, { exact: false }).first().waitFor({ timeout: 45000 })
+        .catch(async error => { await shot(second, '09c-next-dm-missing'); throw error; });
+      await shot(second, '09c-next-dm-on-new-device');
+      return `generation ${before} → ${after}; ada’s next DM decrypts on grace-2 before grace-2 sends anything`;
+    } finally {
+      await second.context.close().catch(() => {});
+    }
+  });
+
   await step('v1 account moves to one password', async () => {
     const vera = await registerLegacy('vera');
     const context = await browser.newContext({ baseURL: BASE, viewport: { width: 1440, height: 900 } });

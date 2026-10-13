@@ -120,6 +120,28 @@ pub async fn publish_prekeys(
             .execute(&mut *tx)
             .await?;
     }
+    // A new prekey generation starts with the account's first signed prekey and
+    // with every whole-bundle replacement. Rotations and top-ups keep it.
+    let first_signed_prekey = if signed.is_some() && !replace_existing {
+        let (existing,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM signed_prekeys WHERE user_id = $1")
+                .bind(user_id)
+                .fetch_one(&mut *tx)
+                .await?;
+        existing == 0
+    } else {
+        false
+    };
+    if replace_existing || first_signed_prekey {
+        sqlx::query(
+            "INSERT INTO prekey_generations (user_id, generation) VALUES ($1, $2)
+             ON CONFLICT (user_id) DO UPDATE SET generation = EXCLUDED.generation",
+        )
+        .bind(user_id)
+        .bind(paracord_util::snowflake::generate(1))
+        .execute(&mut *tx)
+        .await?;
+    }
     if let Some((id, key, signature)) = signed {
         sqlx::query(
             "INSERT INTO signed_prekeys (id, user_id, public_key, signature)
@@ -384,8 +406,23 @@ pub async fn list_one_time_prekeys(
     Ok(rows)
 }
 
+/// The account's current prekey generation (see the `prekey_generations`
+/// migration), or `None` for an account that has not published since it existed.
+pub async fn get_prekey_generation(pool: &DbPool, user_id: i64) -> Result<Option<i64>, DbError> {
+    let row: Option<(i64,)> =
+        sqlx::query_as("SELECT generation FROM prekey_generations WHERE user_id = $1")
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await?;
+    Ok(row.map(|(generation,)| generation))
+}
+
 /// Delete all prekeys (signed and one-time) for a user.
 pub async fn delete_all_prekeys(pool: &DbPool, user_id: i64) -> Result<(), DbError> {
+    sqlx::query("DELETE FROM prekey_generations WHERE user_id = $1")
+        .bind(user_id)
+        .execute(pool)
+        .await?;
     sqlx::query("DELETE FROM signed_prekeys WHERE user_id = $1")
         .bind(user_id)
         .execute(pool)

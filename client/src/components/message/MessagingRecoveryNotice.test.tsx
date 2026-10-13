@@ -7,7 +7,7 @@ import { createMessagingPanelRuntime } from '../../test/messagingPanelRuntimeMoc
 const DEVICE_KEY_LIMITATION =
   'Drafts use a device-bound encryption key. Recovery words alone cannot restore them; recovering this storage requires the complete device profile. Device encryption does not protect messages from code running in this app’s origin.';
 const REENROLLMENT_LIMITATION =
-  'Your recovery phrase restored the identity this account is enrolled under, and that identity is what everyone you talk to verifies. This device can publish fresh keys under it, and your contacts pick them up on their next message. Messages sent before now stay unreadable here: import the account’s encrypted backup from Settings › Identity portability if you need them. Any other device still signed in to this account stops receiving new conversations until it sets up again.';
+  'This device restored the identity this account is enrolled under, and that identity is what everyone you talk to verifies. This device can publish fresh keys under it, and your contacts pick them up on their next message. Messages sent before now stay unreadable here: import the account’s encrypted backup from Settings › Identity portability if you need them. Any other device still signed in to this account stops receiving new messages until it sets up again.';
 const LEGACY_LIMITATION =
   'Older keys are retained because their instance ownership cannot be verified. Starting new encryption does not recover historical messages. Restore the original account backup if you need those keys; continue only to start a new session for this account.';
 
