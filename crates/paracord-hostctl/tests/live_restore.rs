@@ -183,6 +183,7 @@ fn restore_from_a_backup_on_a_fresh_computer() -> Result<()> {
             ))
         }),
         keychain_delete: Box::new(paracord_hostctl::keychain::delete),
+        port_free: Box::new(paracord_hostctl::preflight::port_bindable),
         manage_firewall: false,
         timing: Timing::default(),
     });

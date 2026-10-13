@@ -62,6 +62,8 @@ impl Default for Timing {
 pub type ApiFactory = Box<dyn Fn(u16, &HostConfig, &Path) -> Box<dyn HostApi> + Send + Sync>;
 /// Deletes a keychain entry (service, account).
 pub type KeychainDelete = Box<dyn Fn(&str, &str) -> Result<(), String> + Send + Sync>;
+/// Can the server's port be bound (TCP and UDP) right now?
+pub type PortFree = Box<dyn Fn(u16) -> bool + Send + Sync>;
 
 /// Everything outside this crate's logic, injectable for tests.
 pub struct HostParts {
@@ -75,6 +77,8 @@ pub struct HostParts {
     pub manager: Box<dyn ServiceManager>,
     pub api: ApiFactory,
     pub keychain_delete: KeychainDelete,
+    /// Asks the machine whether a port can be bound.
+    pub port_free: PortFree,
     /// Windows: add the firewall rule during row 1.
     pub manage_firewall: bool,
     pub timing: Timing,
@@ -109,6 +113,10 @@ pub struct HostInfo {
     pub home_url: Option<String>,
     /// Exit 78: why the server couldn't open its storage key (spec §2.8).
     pub storage_key_problem: Option<String>,
+    /// Spec §2.10: "Port {port} is in use by another program." while the
+    /// server isn't running and something else holds its port.
+    #[serde(default)]
+    pub port_problem: Option<String>,
     /// An update that didn't come up; the app shows the banner.
     pub update_failure: Option<UpdateRecord>,
     /// A version whose update was undone; not retried automatically.
@@ -179,6 +187,11 @@ fn failure(code: &'static str, detail: impl Into<String>) -> Failure {
         code,
         detail: detail.into(),
     }
+}
+
+/// The words for a taken port (spec §2.10).
+pub fn port_in_use_reason(port: u16) -> String {
+    format!("Port {port} is in use by another program.")
 }
 
 /// Why waiting for `/health` ended without it.
@@ -291,6 +304,7 @@ impl Host {
                 ))
             }),
             keychain_delete: Box::new(crate::keychain::delete),
+            port_free: Box::new(preflight::port_bindable),
             manage_firewall: cfg!(windows),
             timing: Timing::default(),
         }))
@@ -564,6 +578,23 @@ impl Host {
         Ok(done)
     }
 
+    /// Spec §2.10: the server isn't running and something else holds its port.
+    /// A running or starting service owns the port itself, so it is never
+    /// blamed; a failed port check says nothing.
+    fn port_in_use(&self, port: Option<u16>) -> Option<String> {
+        let port = port?;
+        let status = self.parts.manager.status().ok()?;
+        if !status.installed()
+            || matches!(status.state, ServiceState::Running | ServiceState::Starting)
+        {
+            return None;
+        }
+        if (self.parts.port_free)(port) {
+            return None;
+        }
+        Some(port_in_use_reason(port))
+    }
+
     /// Start the service unless it already answers, then wait for `/health`.
     fn start_and_wait(
         &self,
@@ -579,6 +610,9 @@ impl Host {
         if api.healthy() {
             return Ok(());
         }
+        if let Some(reason) = self.port_in_use(state.port) {
+            return Err(failure("port_in_use", reason));
+        }
         self.parts.manager.start(&self.spec(state)).map_err(|e| {
             failure(
                 "start_failed",
@@ -591,10 +625,10 @@ impl Host {
                 "storage_key",
                 format!("Paracord on this computer can't open its storage key: {reason}"),
             )),
-            Err(NotUp::Timeout) => Err(failure(
-                "start_timeout",
-                "Paracord on this computer didn't start.",
-            )),
+            Err(NotUp::Timeout) => Err(match self.port_in_use(state.port) {
+                Some(reason) => failure("port_in_use", reason),
+                None => failure("start_timeout", "Paracord on this computer didn't start."),
+            }),
         }
     }
 
@@ -804,6 +838,11 @@ impl Host {
                 logs::storage_key_reason(&self.parts.layout.server_log())
                     .unwrap_or_else(|| "the reason isn't in the log".into())
             });
+        let port_problem = if state.enabled && storage_key_problem.is_none() {
+            self.port_in_use(state.port)
+        } else {
+            None
+        };
         Ok(HostInfo {
             enabled: state.enabled,
             port: state.port,
@@ -818,6 +857,7 @@ impl Host {
                 .flatten()
                 .map(|p| format!("https://127.0.0.1:{p}")),
             storage_key_problem,
+            port_problem,
             update_failure: state.update.clone().filter(|u| u.failure.is_some()),
             held_version: state.held_version.clone(),
             instance_id: state.instance_id.clone(),

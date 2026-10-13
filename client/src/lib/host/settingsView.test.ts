@@ -77,6 +77,19 @@ describe('serviceView (spec 2.9 status words)', () => {
     expect(serviceView(info({ service: { state: 'stopped', enabled: true, exit_code: null } }), 'start', null).label).toBe('Starting');
   });
 
+  it("can't start: a port another program holds is named (spec 2.10)", () => {
+    const view = serviceView(
+      info({ service: { state: 'stopped', enabled: true, exit_code: null }, port_problem: 'Port 8443 is in use by another program.' }),
+      null,
+      null,
+    );
+    expect(view).toMatchObject({ kind: 'cant_start', label: "Can't start", reason: 'Port 8443 is in use by another program.' });
+    // A running server holds its own port; that is never a problem.
+    expect(
+      serviceView(info({ service: { state: 'running', enabled: true, exit_code: null }, port_problem: 'Port 8443 is in use by another program.' }), null, null).kind,
+    ).toBe('running');
+  });
+
   it("can't start: the storage key, the start error, the exit code, an unregistered service", () => {
     const key = serviceView(
       info({ service: { state: 'failed', enabled: true, exit_code: 78 }, storage_key_problem: 'the system keychain is locked' }),

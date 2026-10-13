@@ -1,8 +1,9 @@
 import { Link } from 'react-router';
 import { useStore } from 'zustand';
 import { useChannelStore } from '../../stores/channelStore';
+import { useServerConnectionStore } from '../../stores/serverConnectionStore';
 import { getAccountChannelView } from '../../lib/channelView';
-import { isGroupDm, pendingGroupMembers, runtimeAttachDecision, runtimeSendDecision } from '../../lib/messages/messagingReadiness';
+import { composerNoticeSuppressed, isGroupDm, pendingGroupMembers, runtimeAttachDecision, runtimeSendDecision } from '../../lib/messages/messagingReadiness';
 import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
 import { entityScopeKey as memberScopeKey, type AccountScope } from '../../lib/serverScope';
 import { Fragment, useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback, type CSSProperties, type ReactNode } from 'react';
@@ -480,6 +481,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
   const reduceMotion = useReducedMotion();
   const { actions: serverActions, encrypted, encryption, error: capabilityError, refresh: refreshActions, loading: actionsLoading } = useConversationActions(channelId);
   const runtimeState = useStore(messagingRuntime.store);
+  const identityHeld = useServerConnectionStore((s) => s.servers[scope.serverId]?.phase === 'identity-changed');
   const channel = useChannelStore(state => getAccountChannelView(scope, state).channelsById[channelId]);
   const channelType = channel?.channel_type ?? channel?.type;
   // A group conversation's own refusal is about who is in it, not about an
@@ -1606,7 +1608,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
           <span>Waiting for command response…</span>
         </div>
       )}
-      {!readOnly && !composerAction.allowed && blockerSettled && (
+      {!readOnly && !composerAction.allowed && blockerSettled && !composerNoticeSuppressed(composerAction.reason, identityHeld) && (
         <div role="status" className="ix-composer__note">
           <span>
             {composerAction.reason}
@@ -1749,7 +1751,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
       {/* The blocker row above already carries the reason a send was refused —
           for a blocked sender, word for word. Printing it again underneath said
           the same sentence twice, stacked, which reads as two problems. */}
-      {!readOnly && submitError && submitError !== composerAction.reason && (
+      {!readOnly && submitError && submitError !== composerAction.reason && !composerNoticeSuppressed(submitError, identityHeld) && (
         <div className="ix-composer__note ix-composer__note--error" role="alert">
           {submitError}
         </div>

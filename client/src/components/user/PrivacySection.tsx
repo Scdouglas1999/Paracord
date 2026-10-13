@@ -98,7 +98,7 @@ export function PrivacySection({ askForPassword, host }: PrivacySectionProps) {
           What&rsquo;s protected
         </Button>
       </div>
-      <ProtectedSheet open={sheetOpen} onClose={() => setSheetOpen(false)} host={host} />
+      <ProtectedSheet open={sheetOpen} onClose={() => setSheetOpen(false)} host={host} zIndexClassName="z-[160]" />
     </section>
   );
 }

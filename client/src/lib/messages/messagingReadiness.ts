@@ -3,6 +3,19 @@ import type { MessagingSnapshot } from './accountMessagingRuntime';
 
 export const GROUP_DM_CHANNEL_TYPE = 3;
 
+/** Why a send waits while the account's message recovery has not finished. */
+export const RECOVERY_WAIT_REASON = 'Wait for this account’s authenticated message recovery before sending.';
+
+/**
+ * Whether the composer says nothing about a refusal. A server held at
+ * identity-changed never completes recovery, and the identity strip above
+ * already says why, so the recovery wait would only repeat it with a cause
+ * the person cannot act on from here.
+ */
+export function composerNoticeSuppressed(reason: string | null | undefined, identityHeld: boolean): boolean {
+  return identityHeld && reason === RECOVERY_WAIT_REASON;
+}
+
 export function isGroupDm(channelType?: number | null): boolean {
   return channelType === GROUP_DM_CHANNEL_TYPE;
 }
@@ -62,7 +75,7 @@ export function runtimeSendDecision(
   if (!server.allowed) return server;
   if (state.storage !== 'ready') return block(state.error ?? (state.storage === 'awaiting-handshake'
     ? 'Wait for this server’s authenticated connection before sending.' : 'Save this draft in encrypted device storage before sending.'));
-  if (state.synchronization !== 'ready') return block('Wait for this account’s authenticated message recovery before sending.');
+  if (state.synchronization !== 'ready') return block(RECOVERY_WAIT_REASON);
   if (state.channelErrors?.[channelId]) return block(state.channelErrors[channelId]);
   if (!encrypted) return server;
   if (state.encryptionRecovery?.kind === 'legacy-session' && state.encryptionRecovery.channelId === channelId) return block(state.encryptionError ?? 'Review this conversation’s older encryption keys before sending.');

@@ -29,6 +29,8 @@ export interface ProtectedSheetProps {
   open: boolean;
   onClose: () => void;
   host?: ProtectedHostRows;
+  /** "z-[160]" when it opens over Settings (a windowed overlay at z-[150]). */
+  zIndexClassName?: string;
 }
 
 /**
@@ -39,7 +41,7 @@ export interface ProtectedSheetProps {
  * the server refuses. The sheet only opens once the account exists, so every
  * switch has somewhere to write.
  */
-export function ProtectedSheet({ open, onClose, host }: ProtectedSheetProps) {
+export function ProtectedSheet({ open, onClose, host, zIndexClassName }: ProtectedSheetProps) {
   const titleId = useId();
   const descId = useId();
   const privacy = usePrivacySettings();
@@ -59,6 +61,7 @@ export function ProtectedSheet({ open, onClose, host }: ProtectedSheetProps) {
       onClose={onClose}
       labeledBy={titleId}
       describedBy={descId}
+      zIndexClassName={zIndexClassName}
       panelClassName="!bg-[var(--ix-pop-solid)] w-[560px] rounded-[24px] px-[26px] pb-5 pt-6"
     >
       <h2 id={titleId} className="m-0 text-[22px] font-[620] leading-tight tracking-[-0.02em] text-[var(--ix-ink)]">

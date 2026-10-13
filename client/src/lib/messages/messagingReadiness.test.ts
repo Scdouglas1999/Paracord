@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { groupEnrollmentReason, GROUP_ROSTER_UNLOADED_REASON, runtimeSendDecision } from './messagingReadiness';
+import { composerNoticeSuppressed, groupEnrollmentReason, GROUP_ROSTER_UNLOADED_REASON, runtimeSendDecision } from './messagingReadiness';
 import type { MessagingSnapshot } from './accountMessagingRuntime';
 const allowed = { allowed: true, supported: true, reason: null };
 const ready: MessagingSnapshot = { storage: 'ready', synchronization: 'ready', encryption: 'ready', error: null, encryptionError: null, previousEpoch: null, draftGeneration: 0, queue: [], mutations: [], recovery: [] };
@@ -52,5 +52,15 @@ describe('production send readiness', () => {
     const state = { ...ready, channelErrors: { first: 'History retained for review' } };
     expect(runtimeSendDecision(allowed, state, true, 'first').allowed).toBe(false);
     expect(runtimeSendDecision(allowed, state, false, 'second')).toEqual(allowed);
+  });
+});
+
+describe('composer notice while a server is held at identity-changed', () => {
+  it('drops only the recovery wait, and only for a held server', () => {
+    const reason = runtimeSendDecision(allowed, { ...ready, synchronization: 'recovering' }, false, 'channel').reason;
+    expect(composerNoticeSuppressed(reason, true)).toBe(true);
+    expect(composerNoticeSuppressed(reason, false)).toBe(false);
+    expect(composerNoticeSuppressed('Unlock this server account’s encryption identity before sending.', true)).toBe(false);
+    expect(composerNoticeSuppressed(null, true)).toBe(false);
   });
 });

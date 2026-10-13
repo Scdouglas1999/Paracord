@@ -52,6 +52,8 @@ export interface HostingState {
   autostart: boolean;
   /** Exit 78: why the storage key can't be opened. */
   storageKeyProblem: string | null;
+  /** "Port {port} is in use by another program.": the host's own report of a taken port. */
+  portProblem: string | null;
   /** An update that didn't come up (spec 2.8). */
   updateFailed: boolean;
   heldVersion: string | null;
@@ -74,6 +76,7 @@ const HOSTING_DEFAULTS: HostingState = {
   exitCode: null,
   autostart: true,
   storageKeyProblem: null,
+  portProblem: null,
   updateFailed: false,
   heldVersion: null,
   escrowed: true,
@@ -176,6 +179,7 @@ export class TauriHost {
       service_error: h.enabled ? h.serviceError : null,
       home_url: h.enabled ? `https://127.0.0.1:${THIS_COMPUTER.port}` : null,
       storage_key_problem: h.storageKeyProblem,
+      port_problem: h.portProblem,
       update_failure: h.updateFailed
         ? { from_version: '3.4.0', to_version: '3.5.0', backup_name: 'paracord_backup_20261012_203000.tar.gz', failure: 'the server did not answer /health within 60 s' }
         : null,

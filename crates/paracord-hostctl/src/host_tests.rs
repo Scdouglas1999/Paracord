@@ -26,6 +26,8 @@ struct World {
     start_comes_up: bool,
     /// Exit 78 instead of coming up.
     start_exits_78: bool,
+    /// Another program holds the server's port.
+    port_taken: bool,
     // server
     status: Option<HostStatus>,
     /// Reachability answers served in order (the last one repeats).
@@ -299,6 +301,7 @@ fn rig_with(version: &str, init_fails: bool, world: World) -> Rig {
     let world = Arc::new(Mutex::new(world));
     let api_world = world.clone();
     let key_world = world.clone();
+    let port_world = world.clone();
     let layout = HostLayout::for_app_dir(&app_dir);
     let host = Host::new(HostParts {
         state_path: layout::state_file(&app_dir),
@@ -323,6 +326,7 @@ fn rig_with(version: &str, init_fails: bool, world: World) -> Rig {
                 .push((s.into(), a.into()));
             Ok(())
         }),
+        port_free: Box::new(move |_| !port_world.lock().unwrap().port_taken),
         manage_firewall: false,
         timing: Timing {
             health_poll: Duration::from_millis(5),
@@ -503,6 +507,39 @@ fn a_server_that_cannot_open_its_key_says_so() {
 
 #[cfg(unix)]
 #[test]
+fn a_taken_port_is_named_when_the_server_cannot_start() {
+    let rig = hosted_rig("3.4.0", "3.4.0");
+    {
+        let mut w = rig.world.lock().unwrap();
+        w.running = false;
+        w.port_taken = true;
+        w.calls.clear();
+    }
+    let err = rig.host.start().unwrap_err().to_string();
+    assert_eq!(err, "Port 8443 is in use by another program.");
+    // It never asked the service manager to start into a taken port.
+    assert!(!rig.world.lock().unwrap().calls.iter().any(|c| c == "start"));
+    let info = rig.host.info().unwrap();
+    assert_eq!(
+        info.port_problem.as_deref(),
+        Some("Port 8443 is in use by another program.")
+    );
+    // Once the port is free, Start works again and the problem is gone.
+    rig.world.lock().unwrap().port_taken = false;
+    rig.host.start().unwrap();
+    assert_eq!(rig.host.info().unwrap().port_problem, None);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_running_server_is_never_blamed_for_its_own_port() {
+    let rig = hosted_rig("3.4.0", "3.4.0");
+    rig.world.lock().unwrap().port_taken = true; // the server itself holds it
+    assert_eq!(rig.host.info().unwrap().port_problem, None);
+}
+
+#[cfg(unix)]
+#[test]
 fn a_server_that_never_answers_times_out() {
     let rig = rig_with(
         "3.4.0",
@@ -661,6 +698,7 @@ fn hosted_rig(installed: &str, bundled: &str) -> Rig {
         manager,
         api,
         keychain_delete,
+        port_free,
         manage_firewall,
         timing,
         ..
@@ -679,6 +717,7 @@ fn hosted_rig(installed: &str, bundled: &str) -> Rig {
             manager,
             api,
             keychain_delete,
+            port_free,
             manage_firewall,
             timing,
         }),

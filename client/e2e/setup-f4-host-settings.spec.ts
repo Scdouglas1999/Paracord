@@ -25,6 +25,7 @@ const RT_PORT = Number(process.env.PARACORD_E2E_SETUP_RT_PORT ?? 4995);
 const NOW = Date.parse(CLOCK.start);
 const ago = (ms: number) => new Date(NOW - ms).toISOString();
 const HOUR = 3_600_000;
+const THIS_COMPUTER_PORT = 8443;
 
 interface Opened {
   host: TauriHost;
@@ -177,6 +178,13 @@ test.describe('Paracord on this computer', () => {
     await shoot(page, 'cant-start', false);
   });
 
+  test("can't start: another program holds the port (spec 2.10)", async ({ page }) => {
+    await openHostSettings(page, { service: 'stopped', portProblem: 'Port 8443 is in use by another program.' });
+    await expect(page.getByTestId('host-state')).toHaveText("Can't start");
+    await expect(page.getByTestId('host-reason')).toHaveText('Port 8443 is in use by another program.');
+    await shoot(page, 'cant-start-port', false);
+  });
+
   test("can't start: the storage key", async ({ page }) => {
     await openHostSettings(page, { service: 'failed', exitCode: 78, storageKeyProblem: 'the system keychain is locked or not running' });
     await expect(page.getByTestId('host-state')).toHaveText("Can't start");
@@ -270,6 +278,19 @@ test.describe('Paracord on this computer', () => {
     await shoot(page, 'removed', false);
   });
 
+  test('Remove that was the app\'s only server: signs out of it and goes to the welcome screen', async ({ page }) => {
+    const { host } = await openHostSettings(page);
+    // The app's home server is this computer's own server.
+    await page.evaluate((port) => window.localStorage.setItem('paracord:v2:server-url', `https://127.0.0.1:${port}`), THIS_COMPUTER_PORT);
+    await page.getByTestId('host-remove').click();
+    await page.getByTestId('host-remove-confirm').click();
+    await expect.poll(() => host.calls('host_remove').length).toBe(1);
+    await expect(page).toHaveURL(/\/welcome/);
+    expect(await page.evaluate(() => window.localStorage.getItem('paracord:v2:server-url'))).toBeNull();
+    await expect(page.getByText('unavailable', { exact: false })).toHaveCount(0);
+    await shoot(page, 'removed-welcome', false);
+  });
+
   test('Remove and delete the data: the server name must be typed', async ({ page }) => {
     const { host } = await openHostSettings(page);
     await page.getByTestId('host-remove').click();
@@ -294,6 +315,22 @@ test.describe('Paracord on this computer', () => {
     await page.getByTestId('host-remove-confirm').click();
     await expect(page.getByTestId('host-remove-dialog').getByRole('alert')).toContainText("It wasn't removed: Couldn't delete");
     await shoot(page, 'remove-failed', false);
+  });
+
+  test("Settings › Privacy › What's protected opens above Settings", async ({ page }) => {
+    await openApp(page, {});
+    await openSettings(page, 'activity');
+    await page.getByRole('button', { name: /What.s protected/ }).click();
+    const rows = page.getByTestId('protected-rows');
+    await expect(rows).toBeVisible();
+    // The sheet's own row is what a click at its center reaches, not Settings beneath it.
+    const reached = await rows.evaluate((el) => {
+      const box = el.getBoundingClientRect();
+      const top = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+      return !!top && el.contains(top);
+    });
+    expect(reached, 'the sheet is on top of Settings').toBe(true);
+    await shoot(page, 'protected-sheet', false);
   });
 
   test('a computer that does not host: no row in Settings', async ({ page }) => {

@@ -56,6 +56,9 @@ export function serviceView(info: HostInfo, pending: PendingAction, startError: 
   if (info.storage_key_problem) {
     return { kind: 'cant_start', label: "Can't start", tone: 'fail', reason: `It can't open its storage key: ${sentence(info.storage_key_problem)}` };
   }
+  if (info.port_problem && info.service.state !== 'running' && info.service.state !== 'starting') {
+    return { kind: 'cant_start', label: "Can't start", tone: 'fail', reason: sentence(info.port_problem) };
+  }
   switch (info.service.state) {
     case 'running':
       return { kind: 'running', label: 'Running', tone: 'ok', reason: null };

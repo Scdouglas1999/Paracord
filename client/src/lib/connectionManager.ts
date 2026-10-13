@@ -835,6 +835,16 @@ class ConnectionManager {
     useServerConnectionStore.getState().forget(serverId);
   }
 
+  /**
+   * Let go of a server for good (its host was removed from this computer):
+   * close its transport and drop its connection state, so the sidebar and the
+   * status bar do not keep an "unavailable" entry for something that is gone.
+   */
+  dropServer(serverId: string): void {
+    this.disconnectServer(serverId);
+    this.forgetServer(serverId);
+  }
+
   /** Try a server again now ("Try now"), instead of waiting out its back-off. */
   retryServer(serverId: string): Promise<void> {
     this.clearServerRetry(serverId);

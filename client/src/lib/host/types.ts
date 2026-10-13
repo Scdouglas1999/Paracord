@@ -35,6 +35,8 @@ export interface HostInfo {
   home_url: string | null;
   /** Exit 78: why the server can't open its storage key. */
   storage_key_problem: string | null;
+  /** "Port {port} is in use by another program.": the server is down and something else holds its port. */
+  port_problem?: string | null;
   /** An update that didn't come up: show the banner (spec 2.8). */
   update_failure: UpdateRecord | null;
   held_version: string | null;

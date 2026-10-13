@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Copy, FileText, HardDriveDownload, Power, RotateCw, Trash2, UserPlus } from 'lucide-react';
 
+import { useNavigate } from 'react-router';
 import { getServerApi } from '../../api/activeClient';
 import { extractApiError } from '../../api/client';
 import { withUnlockedPrivateKey } from '../../lib/accountSession';
@@ -15,6 +16,7 @@ import {
   type ReachChip,
   type Tone,
 } from '../../lib/host/settingsView';
+import { leaveRemovedHost } from '../../lib/host/afterRemove';
 import { homeOrigin } from '../../lib/oneCredential';
 import { LOCAL_SERVER_ID } from '../../lib/serverScope';
 import { isTauri } from '../../lib/tauriEnv';
@@ -82,6 +84,7 @@ export function HostSettingsSection({ onCloseSettings }: { onCloseSettings?: () 
   const status = useHostStore((s) => s.status);
   const storeError = useHostStore((s) => s.error);
   const server = useHostedServer();
+  const navigate = useNavigate();
 
   const [pending, setPending] = useState<PendingAction>(null);
   const [startError, setStartError] = useState<string | null>(null);
@@ -556,9 +559,14 @@ export function HostSettingsSection({ onCloseSettings }: { onCloseSettings?: () 
         serverName={serverName}
         onClose={() => setRemoveOpen(false)}
         onRemove={async (deleteData) => {
+          const hostUrl = useHostStore.getState().info?.home_url ?? null;
           const ok = await useHostStore.getState().remove(deleteData);
           if (!ok) throw new Error(useHostStore.getState().error ?? 'it gave no reason');
           toast.success(deleteData ? 'Paracord and its data were removed from this computer.' : 'Paracord was removed from this computer. Its data is kept.');
+          // Its server is gone: sign out of it and take it out of the app.
+          const next = hostUrl ? await leaveRemovedHost(hostUrl) : ({ kind: 'unchanged' } as const);
+          if (next.kind === 'welcome') navigate('/welcome', { replace: true });
+          else if (next.kind === 'switched') onCloseSettings?.();
         }}
       />
     </div>
