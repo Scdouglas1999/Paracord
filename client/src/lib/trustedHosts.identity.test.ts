@@ -28,6 +28,7 @@ import {
   loadIdentityChange,
   pinHostFromUrl,
   probeServerIdentity,
+  setTrustSource,
   syncTrustedHosts,
   trustServer,
   trustSettled,
@@ -118,6 +119,39 @@ describe('first contact (§7.3)', () => {
       caVerified: false,
     });
     expect(invoke).toHaveBeenCalledWith('probe_server', { serverUrl: 'https://kanto.example' });
+  });
+
+  // Bug F1: after a restore the sign-in screen probes this computer's own server
+  // before any sync has verified it; the shell trusts it by its certificate on the
+  // next sync, so the refusal asks for one and the probe runs again.
+  it('re-checks trust once when a saved server was refused before it left the machine', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.now() + 60_000);
+    setTrustSource(() => ['https://127.0.0.1:8443']);
+    try {
+      vi.mocked(invoke).mockImplementation(async (command: string) => {
+        if (command === 'update_trusted_server_hosts') return undefined;
+        if (vi.mocked(invoke).mock.calls.filter(([name]) => name === 'probe_server').length === 1) {
+          throw 'Native fetch target is not in the trusted server list';
+        }
+        return { status: 'ok', service: 'paracord', fingerprint: NEW, ca_verified: false };
+      });
+      await expect(probeServerIdentity('https://127.0.0.1:8443')).resolves.toMatchObject({ fingerprint: NEW });
+      expect(vi.mocked(invoke).mock.calls.map(([name]) => name)).toEqual([
+        'probe_server',
+        'update_trusted_server_hosts',
+        'probe_server',
+      ]);
+    } finally {
+      setTrustSource(null);
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not retry a probe refused for any other reason', async () => {
+    vi.mocked(invoke).mockRejectedValueOnce('TLS certificate pin mismatch for 127.0.0.1');
+    await expect(probeServerIdentity('https://127.0.0.1:8443')).rejects.toBe('TLS certificate pin mismatch for 127.0.0.1');
+    expect(invoke).toHaveBeenCalledTimes(1);
   });
 
   it('surfaces the refusal when the identity changed while the card was showing', async () => {

@@ -274,8 +274,18 @@ asks for the password.
   from before show as "Encrypted message" on the new device.
 - A new device then publishes fresh prekeys under the same identity. You approve this
   with **Publish new keys for this device**. Any other device signed in to the same account
-  stops getting new encrypted conversations until it is set up again. In practice, one
+  stops getting new encrypted messages until it is set up again. In practice, one
   device per account handles encrypted messages at a time.
+- Your contacts' next message reaches the new device without it having to write first.
+  The server names each published bundle with a **prekey generation**, a server ID that
+  changes only when a device replaces the whole bundle. It is in the bundle a sender
+  fetches and in the DM list (`recipient.prekey_generation`), and publishing keys tells the
+  account's contacts to reload that list. A sender remembers which generation each of its
+  ratchets was started against (the bundle it fetched, or the server ID of the first
+  message the other side sent). If a ratchet is older than the contact's current
+  generation, the sender stops sending on it and starts a new session (X3DH) with the
+  current bundle. The old ratchet stays for reading late messages. Source:
+  `client/src/lib/crypto/signalSessions.ts`, `crates/paracord-db/src/prekeys.rs`.
 - On a server you set up on your own computer, the same phrase also restores the server's
   stored-data key; see [Recovering the storage key](#recovering-the-storage-key).
 

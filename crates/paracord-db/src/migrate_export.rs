@@ -74,6 +74,7 @@ pub const MIGRATION_TABLE_ORDER: &[&str] = &[
     "mfa_configs",
     "one_time_prekeys",
     "prekey_publication_receipts",
+    "prekey_generations",
     "password_reset_tokens",
     "relationships",
     "security_events",

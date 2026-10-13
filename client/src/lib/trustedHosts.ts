@@ -105,6 +105,16 @@ export async function recheckTrust(): Promise<boolean> {
   return true;
 }
 
+/**
+ * Verify every saved server now, whatever the cooldown: the person just trusted a
+ * server's new identity, and the next request to it must not meet the refusal the
+ * last sync left behind.
+ */
+export async function resyncTrust(): Promise<void> {
+  const urls = trustSource?.() ?? [];
+  if (urls.length > 0) await syncTrustedHosts(urls);
+}
+
 async function runSync(serverUrls: string[]): Promise<void> {
   if (!isTauri()) return;
   // Sanitize the caller-supplied list (trim, drop empties, dedupe) so the
@@ -259,10 +269,23 @@ export interface ServerProbe {
   [key: string]: unknown;
 }
 
-/** Ask the shell for a server's `/health` and identity (desktop only). Refusals and pin mismatches are thrown as they are. */
+/**
+ * Ask the shell for a server's `/health` and identity (desktop only). Refusals and pin mismatches are thrown as they are.
+ *
+ * A saved server the shell has not verified yet (this computer's own server right after setup or a restore, which the
+ * shell trusts by its certificate on the next sync) is refused before anything is sent: like the desktop HTTP adapter,
+ * that refusal asks for one re-check and the probe runs once more.
+ */
 export async function probeServerIdentity(serverUrl: string): Promise<ServerProbe> {
   const { invoke } = await import('@tauri-apps/api/core');
-  const answer = await invoke<Record<string, unknown>>('probe_server', { serverUrl });
+  const probe = () => invoke<Record<string, unknown>>('probe_server', { serverUrl });
+  let answer: Record<string, unknown>;
+  try {
+    answer = await probe();
+  } catch (error) {
+    if (!isTrustRefusal(error) || !(await recheckTrust())) throw error;
+    answer = await probe();
+  }
   const { fingerprint, ca_verified: caVerified, ...health } = answer;
   return {
     ...health,

@@ -52,6 +52,9 @@ pub async fn list_dms(
                     "discriminator": c.recipient_discriminator,
                     "avatar_hash": c.recipient_avatar_hash,
                     "public_key": c.recipient_public_key,
+                    // Changes when the recipient's keys move to a new device;
+                    // a sender's next message then starts a fresh session.
+                    "prekey_generation": c.recipient_prekey_generation.map(|id| id.to_string()),
                 }
             })
         })

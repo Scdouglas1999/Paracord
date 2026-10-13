@@ -13,6 +13,8 @@ import {
   setRefreshToken,
 } from '../lib/authToken';
 import { resetRefreshCoordination } from '../lib/authRefreshCoordinator';
+import { getStoredServerUrl } from '../lib/config/apiBaseUrl';
+import { isPinMismatch, loadIdentityChange } from '../lib/trustedHosts';
 import { clearSessionEndedNotice } from '../lib/sessionEnded';
 import { clearDownloadTicketCache, startDownloadTicketLifecycle } from '../lib/downloadTicket';
 import { clearAuthenticatedImageCache } from '../lib/authenticatedImage';
@@ -213,6 +215,14 @@ export const useAuthStore = create<AuthState>()((set) => ({
         return;
       }
       setAccessToken(null);
+      // The home server presented a certificate other than the pinned one: the
+      // refresh token is kept (only the person decides), and the shell's record
+      // of the change is loaded before the guards look, so the launch shows the
+      // identity-changed screen instead of the sign-in form (§7.4).
+      if (isPinMismatch(err)) {
+        const home = getStoredServerUrl();
+        if (home) await loadIdentityChange(home).catch(() => null);
+      }
       if (isUnauthorizedError(err)) {
         setRefreshToken(null);
         // The server has spoken: there is no session behind this origin's

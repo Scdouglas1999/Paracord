@@ -46,6 +46,12 @@ export interface Channel {
     discriminator: string | number;
     avatar_hash?: string | null;
     public_key?: string | null;
+    /**
+     * The recipient's current prekey generation (a server snowflake). It
+     * advances when a new device replaces their published keys; the next DM
+     * then starts a session with that device. Older servers omit it.
+     */
+    prekey_generation?: string | null;
   };
   /**
    * For group DMs (type 3), the server's name for this exact membership.

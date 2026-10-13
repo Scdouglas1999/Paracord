@@ -26,14 +26,15 @@ async function cacheId(channelId: string, peer: Peer, payload: MessageE2eePayloa
 export function createDurableDm(vault: AccountVault, privateKey: Uint8Array, keysApi: DmCipherDependencies['keysApi'],
   uploadAttachment?: EncryptedAttachmentUploader) {
   async function build(transaction: VaultTransaction, nonce: string, channelId: string, peer: Peer, content: string, referencedMessageId?: string,
-    attachments: readonly EncryptedAttachmentDescriptor[] = [], forwardedFrom?: ForwardedFromRequest, sealedForward?: SealedForward): Promise<SendMessageRequest> {
+    attachments: readonly EncryptedAttachmentDescriptor[] = [], forwardedFrom?: ForwardedFromRequest, sealedForward?: SealedForward,
+    peerPrekeyGeneration?: string | null): Promise<SendMessageRequest> {
     // With attachments or a sealed forward the encrypted plaintext becomes a
     // versioned body that carries them; otherwise it stays the bare text every
     // earlier message used.
     if (forwardedFrom && sealedForward) throw new Error('A forward names its source either in the clear or inside the encrypted body, not both.');
     const body = encodeMessageBody(content, attachments, sealedForward);
     const cipher = createSignalSessionCipher(transaction, channelId, keysApi);
-    const { payload: e2ee, session } = await cipher.encryptDmMessageWithSession(channelId, body, privateKey, peer.publicKey, peer.id);
+    const { payload: e2ee, session } = await cipher.encryptDmMessageWithSession(channelId, body, privateKey, peer.publicKey, peer.id, { peerPrekeyGeneration });
     transaction.put(SEND_SESSION_NAMESPACE, nonce, { channelId, peer, referencedMessageId, forwardedFrom, sealedForward, session } satisfies SendSession);
     const id = await cacheId(channelId, peer, e2ee);
     transaction.put(PLAINTEXT_NAMESPACE, id, { content: body });
@@ -135,16 +136,23 @@ export function createDurableDm(vault: AccountVault, privateKey: Uint8Array, key
         });
       }
     },
-    async prepareIntent(transaction: VaultTransaction, intent: DurableIntent) {
+    /**
+     * `peerPrekeyGeneration` is the recipient's current prekey generation from
+     * the live conversation, not the one recorded when the draft was queued:
+     * a send prepared after the recipient's keys moved to a new device must
+     * start a session with that device.
+     */
+    async prepareIntent(transaction: VaultTransaction, intent: DurableIntent, peerPrekeyGeneration?: string | null) {
       if (intent.intent.encryption.kind !== 'dm') throw new Error('A DM encryptor cannot prepare an unencrypted draft.');
       if (intent.intent.attachmentIds?.length) throw new Error('An encrypted conversation cannot reference a plaintext upload.');
       await reconcileExternalRemovals(transaction, intent.channelId, intent.intent.encryption.peer);
       const attachments = await collectUploadedDescriptors(transaction, intent.id);
       return build(transaction, intent.nonce, intent.channelId, intent.intent.encryption.peer, intent.draft.content, intent.intent.referencedMessageId, attachments,
-        intent.intent.forwardedFrom, intent.intent.sealedForward);
+        intent.intent.forwardedFrom, intent.intent.sealedForward, peerPrekeyGeneration);
     },
-    async prepare(channelId: string, peer: Peer, content: string, referencedMessageId?: string) {
-      return prepareDurableSend(vault, channelId, content, (transaction, nonce) => build(transaction, nonce, channelId, peer, content, referencedMessageId));
+    async prepare(channelId: string, peer: Peer, content: string, referencedMessageId?: string, peerPrekeyGeneration?: string | null) {
+      return prepareDurableSend(vault, channelId, content, (transaction, nonce) => build(transaction, nonce, channelId, peer, content, referencedMessageId,
+        [], undefined, undefined, peerPrekeyGeneration));
     },
     async reconcileRemoved(transaction: VaultTransaction, removed: DurableSend) {
       await retireForMutation(transaction, removed, true);

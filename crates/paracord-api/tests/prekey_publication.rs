@@ -571,3 +571,136 @@ async fn a_replacement_is_refused_unless_it_is_a_complete_identity_bound_bundle(
         1
     );
 }
+
+/// A sender learns that the recipient's keys moved to a new device from the
+/// prekey generation: minted with the first signed prekey, kept by rotations
+/// and top-ups, advanced by a whole-bundle replacement (and not by its replay),
+/// and shown both in the peer bundle and in the DM list's recipient.
+#[tokio::test]
+async fn prekey_generation_advances_only_when_a_device_replaces_the_bundle() {
+    let (app, token, user_id) = setup().await;
+    let identity = enroll_test_identity(&app, user_id).await;
+    let peer =
+        create_authenticated_user_token(&app.db, &app.jwt_secret, "prekeypeer", "PrekeyPeer123!")
+            .await
+            .unwrap();
+    let (_, peer_user) = dispatch_json(
+        &app.app,
+        build_json_request(Method::GET, "/api/v1/users/@me", None, Some(&peer)).unwrap(),
+    )
+    .await
+    .unwrap();
+    let peer_id: i64 = peer_user["id"].as_str().unwrap().parse().unwrap();
+    paracord_db::dms::create_dm_channel(
+        &app.db,
+        paracord_util::snowflake::generate(1),
+        peer_id,
+        user_id,
+    )
+    .await
+    .unwrap();
+    let observed = |app: &TestApp| {
+        let peer = peer.clone();
+        let app_router = app.app.clone();
+        async move {
+            let (status, bundle) = dispatch_json(
+                &app_router,
+                build_json_request(
+                    Method::GET,
+                    &format!("/api/v1/users/{user_id}/keys"),
+                    None,
+                    Some(&peer),
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(status, StatusCode::OK, "{bundle}");
+            let (status, dms) = dispatch_json(
+                &app_router,
+                build_json_request(Method::GET, "/api/v1/users/@me/dms", None, Some(&peer))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(status, StatusCode::OK, "{dms}");
+            let listed = dms
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|channel| {
+                    channel["recipient"]["id"].as_str() == Some(user_id.to_string().as_str())
+                })
+                .unwrap()["recipient"]["prekey_generation"]
+                .clone();
+            assert_eq!(
+                bundle["prekey_generation"], listed,
+                "both views name one generation"
+            );
+            listed
+        }
+    };
+
+    assert_eq!(
+        paracord_db::prekeys::get_prekey_generation(&app.db, user_id)
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        call(
+            &app,
+            Some(&token),
+            Method::PUT,
+            Some(identified_bundle(100, &identity))
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let first = observed(&app).await;
+    assert!(
+        first.as_str().is_some_and(|id| id.parse::<i64>().is_ok()),
+        "{first}"
+    );
+
+    // Rotation and top-up from the same device keep the generation.
+    let mut rotation = identified_bundle(200, &identity);
+    rotation.as_object_mut().unwrap().remove("one_time_prekeys");
+    rotation
+        .as_object_mut()
+        .unwrap()
+        .remove("last_resort_prekey");
+    assert_eq!(
+        call(&app, Some(&token), Method::PUT, Some(rotation))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let mut top_up = identified_bundle(300, &identity);
+    top_up.as_object_mut().unwrap().remove("signed_prekey");
+    top_up.as_object_mut().unwrap().remove("last_resort_prekey");
+    assert_eq!(
+        call(&app, Some(&token), Method::PUT, Some(top_up)).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(observed(&app).await, first);
+
+    // A new device replaces the bundle: a later generation.
+    let mut replacement = identified_bundle(400, &identity);
+    replacement["replace_existing"] = json!(true);
+    let (status, response) = call(&app, Some(&token), Method::PUT, Some(replacement.clone())).await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+    let second = observed(&app).await;
+    let parse = |value: &Value| value.as_str().unwrap().parse::<i64>().unwrap();
+    assert!(parse(&second) > parse(&first), "{first} -> {second}");
+
+    // Replaying that publication returns its receipt and mints nothing.
+    assert_eq!(
+        call(&app, Some(&token), Method::PUT, Some(replacement))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(observed(&app).await, second);
+}

@@ -3,7 +3,9 @@ import { useState } from 'react';
 import { gateway } from '../../../gateway/manager';
 import { useAuthStore } from '../../../stores/authStore';
 import { useServerConnectionStore } from '../../../stores/serverConnectionStore';
-import { useServerListStore } from '../../../stores/serverListStore';
+import { useServerListStore, type ServerEntry } from '../../../stores/serverListStore';
+import { configuredHomeServerUrl } from '../../../lib/serverIdentity';
+import { LOCAL_SERVER_ID } from '../../../lib/serverScope';
 import { BannerStrip } from '../conversation/BannerStrip';
 import { IdentityChangedSheet } from '../../firstRun/IdentityChangedSheet';
 import { serverDisplayName } from './ServerSignInDialog';
@@ -19,7 +21,8 @@ import { useServerSignInDialog } from './serverSignInDialogStore';
  *
  * A saved server whose certificate changed while you were using it (docs/setup-spec.md
  * §7.4) gets a strip too, with Review: its places are still on screen from before, so
- * the sidebar's "Identity changed" state may not be showing.
+ * the sidebar's "Identity changed" state may not be showing. That includes the home
+ * server the first run joined or set up, which has no entry in the server list.
  */
 export function ServerSessionBanner() {
   const phases = useServerConnectionStore((state) => state.servers);
@@ -34,7 +37,14 @@ export function ServerSessionBanner() {
     const phase = phases[server.id];
     return phase?.phase === 'signed-out' && phase.endedHere;
   });
-  const changed = servers.filter((server) => phases[server.id]?.phase === 'identity-changed');
+  const changed: Array<Pick<ServerEntry, 'id' | 'name' | 'url'>> = servers.filter(
+    (server) => phases[server.id]?.phase === 'identity-changed',
+  );
+  // The home server (the first run's, `__local__`) is in no list: its strip comes from its phase and its address.
+  const homeUrl = configuredHomeServerUrl();
+  if (phases[LOCAL_SERVER_ID]?.phase === 'identity-changed' && homeUrl) {
+    changed.push({ id: LOCAL_SERVER_ID, name: '', url: homeUrl });
+  }
   const review = changed.find((server) => server.id === reviewing) ?? null;
   if (ended.length === 0 && changed.length === 0) return null;
 

@@ -359,7 +359,8 @@ fn apply_failure(shared: &Shared, failure: &MapFailure, lan_ip: Option<IpAddr>) 
         r.method = None;
         // Only the router may name the external address, and it just failed to.
         r.external_ip = None;
-        r.gateway_ip = None;
+        // The router that answered, if any: a refusal still knows its address.
+        r.gateway_ip = failure.gateway_ip.map(|ip| ip.to_string());
         r.lan_ip = lan_ip.map(|ip| ip.to_string());
         r.lease_expires_at = None;
         r.next_retry_at = Some(stamp(after(retry)));

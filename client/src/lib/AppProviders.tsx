@@ -56,6 +56,11 @@ function AppInitializer({ children }: { children: ReactNode }) {
   const token = useAuthStore((s) => s.token);
   const homeUserId = useAuthStore(s => s.user?.id);
   const activeServerId = useServerListStore((s) => s.activeServerId);
+  // A remote server's own token arriving (or rotating) is what lets a download
+  // ticket be minted there; see `downloadTicket.ts`.
+  const activeServerToken = useServerListStore(
+    (s) => s.servers.find((server) => server.id === s.activeServerId)?.token ?? null,
+  );
   const servers = useServerListStore((s) => s.servers);
   // The one scope that names this account on the home server. On the desktop
   // the server the user added IS the home server, so the entry's id is that
@@ -91,7 +96,7 @@ function AppInitializer({ children }: { children: ReactNode }) {
     if (token) {
       startDownloadTicketLifecycle();
     }
-  }, [token, activeServerId]);
+  }, [token, activeServerId, activeServerToken]);
 
   useEffect(() => {
     if (token) {

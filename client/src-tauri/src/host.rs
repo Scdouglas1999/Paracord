@@ -236,10 +236,191 @@ pub async fn host_allow_firewall(app: AppHandle) -> Result<String, String> {
     .await
 }
 
+/// The server this app hosts, as setup, a restore or launch supervision left
+/// it on disk: its loopback origin and the SHA-256 fingerprint of the
+/// certificate it serves.
+///
+/// The app installed that server and reads its certificate from disk, as the
+/// control client does (`paracord_hostctl::control::LoopbackHost`), so it never
+/// asks the person whether to trust it (bug F1, setup-s15-checkpoint.md §4.1):
+/// `update_trusted_server_hosts` trusts this exact origin when, and only when,
+/// the server on it presents exactly this certificate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OwnServer {
+    /// `https://127.0.0.1:<port>`, in the form `trusted_origin_from_url` gives.
+    pub(crate) origin: String,
+    /// The certificate's fingerprint, or why it could not be read (the server
+    /// has not made it yet, a broken config). Nothing on the origin is trusted
+    /// without it.
+    pub(crate) fingerprint: Result<[u8; 32], String>,
+}
+
+/// The hosted server under `app_local_data_dir`, read fresh from `host.json`,
+/// its config and its certificate file (setup writes them in `init`, a restore
+/// points `host.json` at the recovered config, and a restored server makes a
+/// new certificate at its first start). `None` when this computer does not
+/// host; an error only when `host.json` itself cannot be read.
+pub(crate) fn own_server_in(
+    app_local_data_dir: &std::path::Path,
+) -> Result<Option<OwnServer>, String> {
+    use paracord_hostctl::layout::{state_file, HostLayout};
+    use paracord_hostctl::HostState;
+
+    let state = HostState::load(&state_file(app_local_data_dir)).map_err(|e| format!("{e:#}"))?;
+    let Some(port) = state.port.filter(|_| state.enabled) else {
+        return Ok(None);
+    };
+    let config_path = state
+        .config_path
+        .clone()
+        .unwrap_or_else(|| HostLayout::for_app_dir(app_local_data_dir).default_config());
+    Ok(Some(OwnServer {
+        origin: format!("https://127.0.0.1:{port}"),
+        fingerprint: certificate_fingerprint(&config_path),
+    }))
+}
+
+/// SHA-256 of the first certificate in the file `[tls] cert_path` of the
+/// config at `config_path` names.
+fn certificate_fingerprint(config_path: &std::path::Path) -> Result<[u8; 32], String> {
+    use paracord_hostctl::config::HostConfig;
+    use paracord_hostctl::control::first_certificate_der;
+    use sha2::{Digest, Sha256};
+
+    let config = HostConfig::load(config_path).map_err(|e| format!("{e:#}"))?;
+    let pem = std::fs::read_to_string(&config.cert_path).map_err(|e| {
+        format!(
+            "the certificate of Paracord on this computer isn't readable ({}: {e})",
+            config.cert_path.display()
+        )
+    })?;
+    let der = first_certificate_der(&pem).map_err(|e| {
+        format!(
+            "the certificate of Paracord on this computer isn't usable ({}: {e:#})",
+            config.cert_path.display()
+        )
+    })?;
+    Ok(Sha256::digest(&der).into())
+}
+
+/// [`own_server_in`] for this app's data folder, read on a blocking thread.
+/// An error names the reason; `Ok(None)` means this computer does not host.
+pub(crate) async fn own_server(app: &AppHandle) -> Result<Option<OwnServer>, String> {
+    let dir = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| format!("Couldn't find this app's data folder ({e})."))?;
+    tauri::async_runtime::spawn_blocking(move || own_server_in(&dir))
+        .await
+        .map_err(|e| format!("Reading the hosted server's certificate stopped ({e})."))?
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use sha2::{Digest, Sha256};
+
     #[test]
     fn progress_event_name_is_the_contract() {
         assert_eq!(super::PROGRESS_EVENT, "host://progress");
+    }
+
+    /// A fresh app data folder under the system temp dir.
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "paracord-own-server-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// What setup leaves behind: `host.json`, the server's config and its
+    /// certificate. Returns the certificate's DER.
+    fn hosted(
+        dir: &std::path::Path,
+        enabled: bool,
+        config_path: Option<&std::path::Path>,
+    ) -> Vec<u8> {
+        let certs = dir.join("host/data/certs");
+        std::fs::create_dir_all(&certs).unwrap();
+        let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+        std::fs::write(certs.join("cert.pem"), cert.cert.pem()).unwrap();
+        let config = config_path
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_else(|| dir.join("host/config/paracord.toml"));
+        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+        std::fs::write(
+            &config,
+            format!(
+                "[tls]\ncert_path = {:?}\n[host]\ncontrol_token_file = \"t\"\n[backup]\nbackup_dir = \"b\"\n",
+                certs.join("cert.pem")
+            ),
+        )
+        .unwrap();
+        let state = paracord_hostctl::HostState {
+            enabled,
+            port: Some(8447),
+            config_path: config_path.map(std::path::Path::to_path_buf),
+            ..Default::default()
+        };
+        state
+            .save(&paracord_hostctl::layout::state_file(dir))
+            .unwrap();
+        cert.cert.der().to_vec()
+    }
+
+    #[test]
+    fn the_hosted_server_is_its_loopback_origin_and_the_certificate_on_disk() {
+        let dir = scratch("setup");
+        let der = hosted(&dir, true, None);
+        let own = own_server_in(&dir).unwrap().unwrap();
+        assert_eq!(own.origin, "https://127.0.0.1:8447");
+        assert_eq!(
+            crate::trusted_origin_from_url("https://127.0.0.1:8447/").as_deref(),
+            Some(own.origin.as_str())
+        );
+        let expected: [u8; 32] = Sha256::digest(&der).into();
+        assert_eq!(own.fingerprint, Ok(expected));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_restore_reads_the_certificate_of_the_recovered_config() {
+        let dir = scratch("restore");
+        let recovered = dir.join("host/restores/20261012T000000Z/paracord.toml");
+        let der = hosted(&dir, true, Some(&recovered));
+        let own = own_server_in(&dir).unwrap().unwrap();
+        let expected: [u8; 32] = Sha256::digest(&der).into();
+        assert_eq!(own.fingerprint, Ok(expected));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_computer_that_does_not_host_has_no_own_server() {
+        let never = scratch("never");
+        assert_eq!(own_server_in(&never).unwrap(), None);
+        std::fs::remove_dir_all(never).unwrap();
+
+        let removed = scratch("removed");
+        hosted(&removed, false, None);
+        assert_eq!(own_server_in(&removed).unwrap(), None);
+        std::fs::remove_dir_all(removed).unwrap();
+    }
+
+    #[test]
+    fn a_hosted_server_without_its_certificate_names_the_reason() {
+        let dir = scratch("nocert");
+        hosted(&dir, true, None);
+        std::fs::remove_file(dir.join("host/data/certs/cert.pem")).unwrap();
+        let own = own_server_in(&dir).unwrap().unwrap();
+        assert_eq!(own.origin, "https://127.0.0.1:8447");
+        let err = own.fingerprint.unwrap_err();
+        assert!(err.contains("isn't readable"), "{err}");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

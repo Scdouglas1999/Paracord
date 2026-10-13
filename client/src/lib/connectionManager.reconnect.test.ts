@@ -23,6 +23,9 @@ import { refreshSharedSession } from '../api/client';
 import { useAuthStore } from '../stores/authStore';
 import { useServerConnectionStore } from '../stores/serverConnectionStore';
 import { useServerListStore, type ServerEntry } from '../stores/serverListStore';
+import { useUIStore } from '../stores/uiStore';
+import { LOCAL_SERVER_ID } from './serverScope';
+import { useIdentityChangeStore } from './trustedHosts';
 import { coordinateRefresh, HOME_REFRESH_SCOPE, resetRefreshCoordination } from './authRefreshCoordinator';
 import { getRefreshToken, setAccessToken, setRefreshToken } from './authToken';
 import { clearStoredServerUrl, setStoredServerUrl } from './config/apiBaseUrl';
@@ -328,6 +331,87 @@ describe('a saved server whose certificate changed (docs/setup-spec.md §7.4)', 
     expect(requests).toHaveLength(sent);
     // The credential is not touched: the person may still trust the new identity.
     expect(useServerListStore.getState().getServer('s_lan')).toMatchObject({ token: 'access-expired', refreshToken: 'refresh-1' });
+  });
+});
+
+describe('the server the first run joined, whose certificate changed (bug F1, setup-s15 §4.2)', () => {
+  // The first run's server is the home server, `__local__`: no entry in the
+  // server list, the home session's token. It used to be left out of the
+  // identity-change classification, so it reconnected forever behind "The
+  // instance is restarting".
+  const HOME = 'https://203.0.113.1:8443';
+  const local = () => phase(LOCAL_SERVER_ID);
+  const recordChange = () =>
+    useIdentityChangeStore.getState().record({ host: '203.0.113.1', pinnedFp: '00'.repeat(32), presentedFp: 'ff'.repeat(32) });
+
+  beforeEach(() => {
+    setStoredServerUrl(HOME);
+    useServerListStore.setState({ servers: [], activeServerId: null });
+    useAuthStore.setState({ token: 'home-access', user: currentUser as never });
+    setRefreshToken('home-refresh');
+    useIdentityChangeStore.setState({ changes: {} });
+    useUIStore.getState().setServerRestarting(false);
+  });
+
+  it('is identity-changed when its stream cannot be set up for a pin mismatch, and nothing retries it', async () => {
+    answer = () => 'pin-mismatch';
+    await connectionManager.connectAll().catch(() => {});
+    await settle();
+    recordChange();
+
+    expect(local()?.phase).toBe('identity-changed');
+    expect(manager.connections.has(LOCAL_SERVER_ID)).toBe(false);
+    const sent = requests.length;
+    await advance(120_000);
+    await connectionManager.connectAll().catch(() => {});
+    await settle();
+    expect(requests).toHaveLength(sent);
+    expect(local()?.phase).toBe('identity-changed');
+    // Nothing about the session is thrown away: the person may trust the new identity.
+    expect(useAuthStore.getState().token).toBe('home-access');
+    expect(getRefreshToken()).toBe('home-refresh');
+  });
+
+  it('turns "the instance is restarting" into identity-changed when it comes back with another certificate', async () => {
+    const healthy = server({ valid: new Set(['home-access']), refresh: new Map() });
+    let changed = false;
+    answer = (request) => (changed ? 'pin-mismatch' : healthy(request));
+    await connectionManager.connectAll();
+    await settle();
+    expect(Stream.instances).toHaveLength(1);
+    Stream.instances[0].open();
+    expect(local()).toBeNull();
+
+    // The host restarts with a new certificate: the shell records the change when
+    // the stream tries again, and the stream's setup is refused.
+    useUIStore.getState().setServerRestarting(true);
+    changed = true;
+    recordChange();
+    Stream.instances[0].fail();
+    await advance(1_000);
+    await settle();
+
+    expect(local()?.phase).toBe('identity-changed');
+    expect(useUIStore.getState().serverRestarting).toBe(false);
+    const sent = requests.length;
+    await advance(120_000);
+    expect(requests).toHaveLength(sent);
+    expect(Stream.instances).toHaveLength(1);
+
+    // "Stay disconnected" changes nothing; a reconcile (focus, a store write) holds too.
+    await connectionManager.connectAll().catch(() => {});
+    await settle();
+    expect(local()?.phase).toBe('identity-changed');
+    expect(requests).toHaveLength(sent);
+
+    // "Trust the new identity": the shell re-pins and the record is cleared; the
+    // banner's onTrusted reconnects it.
+    changed = false;
+    useIdentityChangeStore.getState().clear('203.0.113.1');
+    await connectionManager.retryServer(LOCAL_SERVER_ID);
+    await settle();
+    expect(local()).toBeNull();
+    expect(Stream.instances).toHaveLength(2);
   });
 });
 
