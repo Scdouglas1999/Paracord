@@ -1,0 +1,43 @@
+# A private PipeWire graph for one side of a stream audit (@NAME@). It has no
+# device monitor and no hardware: two null audio nodes and whatever the audit's
+# own processes add (the synthetic screen, the stream-audio capture sink the app
+# creates). Nothing in it can reach a real microphone, speaker or camera.
+context.properties = {
+    core.name           = @NAME@
+    core.daemon         = true
+    default.clock.rate  = 48000
+    module.x11.bell     = false
+    module.jackdbus-detect = false
+    module.portal       = false
+    module.rt           = false
+}
+context.spa-libs = {
+    audio.convert.* = audioconvert/libspa-audioconvert
+    video.convert.* = videoconvert/libspa-videoconvert
+    support.*       = support/libspa-support
+}
+context.modules = [
+    { name = libpipewire-module-protocol-native }
+    { name = libpipewire-module-metadata }
+    { name = libpipewire-module-spa-node-factory }
+    { name = libpipewire-module-client-node }
+    { name = libpipewire-module-client-device }
+    { name = libpipewire-module-adapter }
+    { name = libpipewire-module-link-factory }
+    { name = libpipewire-module-session-manager }
+    { name = libpipewire-module-access args = { } }
+]
+context.objects = [
+    { factory = spa-node-factory
+        args = { factory.name = support.node.driver node.name = Dummy-Driver node.group = pipewire.dummy
+                 priority.driver = 20000 } }
+    { factory = spa-node-factory
+        args = { factory.name = support.node.driver node.name = Freewheel-Driver priority.driver = 19000
+                 node.group = pipewire.freewheel node.freewheel = true } }
+    { factory = adapter
+        args = { factory.name = support.null-audio-sink node.name = glass_g23_out node.description = "stream audit null output (@NAME@)"
+                 media.class = Audio/Sink object.linger = true audio.position = [ FL FR ] priority.session = 2000 } }
+    { factory = adapter
+        args = { factory.name = support.null-audio-sink node.name = glass_g23_mic node.description = "stream audit null microphone (@NAME@)"
+                 media.class = Audio/Source/Virtual object.linger = true audio.position = [ FL FR ] priority.session = 2000 } }
+]

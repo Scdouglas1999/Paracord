@@ -1,0 +1,7 @@
+# WirePlumber for a stream-audit graph: the linking policy only. No ALSA,
+# Bluetooth, V4L2 or libcamera monitor, no portal or logind, no saved state.
+wireplumber.profiles = {
+  stream-audit = {
+    inherits = [ policy, mixin.systemwide-session, mixin.stateless ]
+  }
+}
