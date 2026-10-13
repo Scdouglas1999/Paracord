@@ -729,10 +729,15 @@ impl Host {
     }
 
     /// `host_write_escrow`. An escrow that already exists (409, a resumed
-    /// setup) counts as written: it is this owner's, written once.
-    pub fn write_escrow(&self, wrapping_key: &str) -> Result<()> {
+    /// setup) counts as written: it is this owner's, written once. A phrase
+    /// that is not the owner's current one fails (`owner_public_key` is the
+    /// key `wrapping_key` was derived from).
+    pub fn write_escrow(&self, wrapping_key: &str, owner_public_key: &str) -> Result<()> {
         let mut state = self.load_state()?;
-        match self.api(&state)?.write_escrow(wrapping_key)? {
+        match self
+            .api(&state)?
+            .write_escrow(wrapping_key, owner_public_key)?
+        {
             EscrowOutcome::Written | EscrowOutcome::AlreadyPresent => {}
         }
         state.record_step(steps::ESCROW);

@@ -126,49 +126,49 @@ pub mod seams {
 
     /// Wrap the storage key under `wrapping_key` (AES-256-GCM, AAD
     /// `"paracord/host-storage-escrow/v1|" + instance_id`, spec §4.7) and write
-    /// the escrow JSON to `path`, atomically and only if it is absent
-    /// (`paracord_core::storage_key`). The escrow names the claiming owner's
-    /// identity key, so there has to be one.
+    /// the escrow JSON to `path` (`paracord_core::storage_key`), naming
+    /// `owner_public_key` (already checked against the owner by
+    /// [`super::store_escrow`]). With `replace`, a stale escrow at `path` is
+    /// swapped for the new one by a rename, so a failure keeps the old file.
     pub async fn write_escrow(
-        state: &AppState,
         wrapping_key: &[u8; 32],
+        owner_public_key: &str,
         path: &Path,
+        replace: bool,
     ) -> Result<(), StatusError> {
         use paracord_core::storage_key::EscrowWriteError;
-        let setup = paracord_db::instance_setup::get(&state.db)
-            .await
-            .map_err(ApiError::from)?;
-        let owner_id = setup.claimed_by_user_id.ok_or_else(|| {
-            ApiError::Conflict("this server has no owner yet, so there is no recovery phrase to escrow the key under".into())
-        })?;
-        let owner = paracord_db::users::get_user_by_id(&state.db, owner_id)
-            .await
-            .map_err(ApiError::from)?
-            .ok_or_else(|| {
-                ApiError::Conflict("the server's owner account no longer exists".into())
-            })?;
-        let public_key = owner
-            .public_key
-            .filter(|key| !key.trim().is_empty())
-            .ok_or_else(|| {
-                ApiError::Conflict(
-                    "the owner has no identity key yet; finish the account first".into(),
-                )
-            })?;
-        paracord_core::storage_key::current()
-            .write_escrow_at(path, wrapping_key, &public_key)
-            .map(|_| paracord_core::storage_key::notify_changed())
-            .map_err(|error| {
-                StatusError::Api(match error {
-                    EscrowWriteError::AlreadyEscrowed
-                    | EscrowWriteError::NotEncrypted
-                    | EscrowWriteError::NotConfigured => ApiError::Conflict(error.to_string()),
-                    EscrowWriteError::BadRequest(message) => ApiError::BadRequest(message),
-                    EscrowWriteError::Io(message) => {
-                        ApiError::Internal(anyhow::anyhow!("escrow write failed: {message}"))
-                    }
-                })
+        let runtime = paracord_core::storage_key::current();
+        let map = |error: EscrowWriteError| {
+            StatusError::Api(match error {
+                EscrowWriteError::AlreadyEscrowed => super::already_escrowed(),
+                EscrowWriteError::NotEncrypted | EscrowWriteError::NotConfigured => {
+                    ApiError::Conflict(error.to_string())
+                }
+                EscrowWriteError::BadRequest(message) => ApiError::BadRequest(message),
+                EscrowWriteError::Io(message) => {
+                    ApiError::Internal(anyhow::anyhow!("escrow write failed: {message}"))
+                }
             })
+        };
+        if !replace {
+            runtime
+                .write_escrow_at(path, wrapping_key, owner_public_key)
+                .map_err(map)?;
+        } else {
+            let mut staged = path.as_os_str().to_owned();
+            staged.push(".replacing");
+            let staged = PathBuf::from(staged);
+            let _ = std::fs::remove_file(&staged);
+            runtime
+                .write_escrow_at(&staged, wrapping_key, owner_public_key)
+                .map_err(map)?;
+            if let Err(error) = std::fs::rename(&staged, path) {
+                let _ = std::fs::remove_file(&staged);
+                return Err(map(EscrowWriteError::Io(error.to_string())));
+            }
+        }
+        paracord_core::storage_key::notify_changed();
+        Ok(())
     }
 }
 
@@ -384,9 +384,38 @@ pub fn escrow_path(state: &AppState) -> PathBuf {
     }
 }
 
+/// 409 `escrow_exists`: this owner's escrow for this instance is on disk.
+fn already_escrowed() -> ApiError {
+    ApiError::Refused {
+        status: StatusCode::CONFLICT,
+        code: "escrow_exists",
+        message: "the storage key is already escrowed".into(),
+    }
+}
+
+/// 409 `escrow_owner_mismatch`: the wrapping key was derived from an identity
+/// that is not the owner's current one.
+fn escrow_owner_mismatch() -> ApiError {
+    ApiError::Refused {
+        status: StatusCode::CONFLICT,
+        code: "escrow_owner_mismatch",
+        message: "That recovery phrase isn't the server owner's current one (the owner started \
+                  over with a new phrase), so it can't protect the storage key. Use the owner's \
+                  current recovery phrase."
+            .into(),
+    }
+}
+
 /// Shared by `POST /host/storage-key/escrow` and `POST /admin/storage-key/escrow`.
-/// One call per instance: the wrapping key is never stored, so a second call
-/// could only replace a good escrow.
+///
+/// An escrow is always sealed for the owner's *current* identity key: the
+/// request names the public key its wrapping key was derived from, and a key
+/// that is not the owner's `users.public_key` is refused
+/// (`escrow_owner_mismatch`), since the escrow file would name one key while
+/// only another phrase could open it. One escrow per instance and owner key:
+/// the wrapping key is never stored, so a second call could only replace a good
+/// escrow (`escrow_exists`). An escrow left from before the owner started over
+/// (another owner key) or for another instance is stale and is replaced.
 pub async fn store_escrow(
     state: &AppState,
     request: &StorageKeyEscrowRequest,
@@ -397,11 +426,66 @@ pub async fn store_escrow(
     let wrapping_key: [u8; 32] = decoded
         .try_into()
         .map_err(|_| ApiError::BadRequest("wrapping_key must be 32 bytes".into()))?;
-    let path = escrow_path(state);
-    if tokio::fs::try_exists(&path).await.unwrap_or(false) {
-        return Err(ApiError::Conflict("the storage key is already escrowed".into()).into());
+    let claimed_key = request.owner_public_key.trim().to_ascii_lowercase();
+    if paracord_util::hex::hex_decode(&claimed_key).is_none_or(|key| key.len() != 32) {
+        return Err(ApiError::BadRequest("owner_public_key must be hex of 32 bytes".into()).into());
     }
-    seams::write_escrow(state, &wrapping_key, &path).await
+    let path = escrow_path(state);
+    let existing = if tokio::fs::try_exists(&path).await.unwrap_or(false) {
+        // An escrow that cannot be read is never overwritten: it may be good.
+        Some(
+            paracord_core::storage_key::read_escrow_file(&path)
+                .map_err(|_| StatusError::Api(already_escrowed()))?,
+        )
+    } else {
+        None
+    };
+    let owner_key = owner_public_key(state).await?;
+    if claimed_key != owner_key {
+        return Err(escrow_owner_mismatch().into());
+    }
+    let replace = match existing {
+        None => false,
+        Some(escrow) => {
+            let instance_id = paracord_core::storage_key::current().instance_id;
+            if Some(escrow.instance_id.as_str()) == instance_id.as_deref()
+                && escrow
+                    .owner_public_key
+                    .trim()
+                    .eq_ignore_ascii_case(&owner_key)
+            {
+                return Err(already_escrowed().into());
+            }
+            true
+        }
+    };
+    seams::write_escrow(&wrapping_key, &owner_key, &path, replace).await
+}
+
+/// The claiming owner's identity public key (lowercase hex): an escrow names
+/// it, so there has to be one.
+async fn owner_public_key(state: &AppState) -> Result<String, StatusError> {
+    let setup = paracord_db::instance_setup::get(&state.db)
+        .await
+        .map_err(ApiError::from)?;
+    let owner_id = setup.claimed_by_user_id.ok_or_else(|| {
+        ApiError::Conflict(
+            "this server has no owner yet, so there is no recovery phrase to escrow the key under"
+                .into(),
+        )
+    })?;
+    let owner = paracord_db::users::get_user_by_id(&state.db, owner_id)
+        .await
+        .map_err(ApiError::from)?
+        .ok_or_else(|| ApiError::Conflict("the server's owner account no longer exists".into()))?;
+    let public_key = owner
+        .public_key
+        .map(|key| key.trim().to_ascii_lowercase())
+        .filter(|key| !key.is_empty())
+        .ok_or_else(|| {
+            ApiError::Conflict("the owner has no identity key yet; finish the account first".into())
+        })?;
+    Ok(public_key)
 }
 
 // ── Status ──────────────────────────────────────────────────────────────────

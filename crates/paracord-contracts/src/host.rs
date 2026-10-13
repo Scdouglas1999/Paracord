@@ -181,6 +181,11 @@ pub struct InstanceStatusUpdate {
 pub struct StorageKeyEscrowRequest {
     /// b64url of the 32-byte `escrow_key`.
     pub wrapping_key: String,
+    /// Hex of the identity public key `wrapping_key` was derived from. It must
+    /// be the owner's current key (`users.public_key`), else 409
+    /// `escrow_owner_mismatch`: an escrow is always sealed for the owner's
+    /// current recovery phrase.
+    pub owner_public_key: String,
 }
 
 /// `PATCH /api/v1/admin/backups` (spec §8.5).

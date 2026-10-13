@@ -13,7 +13,7 @@ import { useAuthStore } from '../../stores/authStore';
 import { useFirstRunStore, type AccountField, type FirstRunResult } from '../../stores/firstRunStore';
 import type { LoginResponse } from '../../types';
 import { useHostStore } from '../../stores/hostStore';
-import { escrowWrappingKey } from './escrow';
+import { escrowRequest, escrowWrappingKey, type EscrowRequest } from './escrow';
 import { hostOf } from './inviteCheck';
 import { acceptInvite, firstTextChannel } from './landing';
 import { CLAIM_STORAGE_OFF_WARN, hostRows, joinRows, RowSequencer, storageCopy } from './rows';
@@ -167,9 +167,9 @@ async function createHostAccount(port: number): Promise<void> {
     setStoredServerUrl(info?.home_url ?? loopbackUrl(port));
     const prepared = await prepareNewIdentity(s.account.password);
     let claim: ClaimResponse;
-    let wrappingKey: string;
+    let escrow: EscrowRequest;
     try {
-      wrappingKey = escrowWrappingKey(prepared.privateKey, instanceId);
+      escrow = await escrowRequest(prepared.privateKey, instanceId);
       claim = (await host.claim({
         username: s.account.username.trim(),
         display_name: s.account.displayName.trim() || null,
@@ -187,7 +187,7 @@ async function createHostAccount(port: number): Promise<void> {
     }
     const { phrase } = await adoptNewAccount(prepared, claim, [s.account.username.trim()]);
     await recordPrivacyDefaults().catch(() => undefined);
-    await host.writeEscrow(wrappingKey);
+    await host.writeEscrow(escrow);
     const guildId = claim.space?.id ?? null;
     const channelId = guildId ? await firstTextChannel(guildId, claim.space?.system_channel_id ?? null) : null;
     finishAccount(phrase, { serverUrl: info?.home_url ?? loopbackUrl(port), guildId, channelId, serverName: name, hue: s.hue });
@@ -393,13 +393,13 @@ async function escrowAfterClaim(status: HostStatus): Promise<string | null> {
   if (!words) return `Encrypted on disk, but Paracord no longer has your recovery phrase to protect its key with.${kept}`;
   try {
     const key = privateKeyFromPhrase(words.join(' '));
-    let wrappingKey: string;
+    let body: EscrowRequest;
     try {
-      wrappingKey = escrowWrappingKey(key, instanceId);
+      body = await escrowRequest(key, instanceId);
     } finally {
       key.fill(0);
     }
-    await getServerApi(LOCAL_SERVER_ID).post('/admin/storage-key/escrow', { wrapping_key: wrappingKey });
+    await getServerApi(LOCAL_SERVER_ID).post('/admin/storage-key/escrow', body);
     return null;
   } catch (error) {
     const statusCode = (error as { response?: { status?: number } } | null)?.response?.status;
@@ -519,11 +519,16 @@ export async function checkRestorePhrase(): Promise<boolean> {
   }
 }
 
-/** The escrow key for `instanceId` from the phrase in memory (zeroed straight after). */
-function restoreWrappingKey(instanceId: string): string {
+/**
+ * The escrow body for `instanceId` from the phrase in memory (zeroed straight
+ * after). If the owner used "Start over" after this backup's escrow was made,
+ * the phrase opened the backup but is not the owner's current one, and the
+ * server refuses it (row 3 fails with its reason, nothing is sealed under it).
+ */
+async function restoreEscrowRequest(instanceId: string): Promise<EscrowRequest> {
   const key = privateKeyFromPhrase(phraseWords(store().restore.phrase).join(' '));
   try {
-    return escrowWrappingKey(key, instanceId);
+    return await escrowRequest(key, instanceId);
   } finally {
     key.fill(0);
   }
@@ -588,7 +593,7 @@ export async function runRestoreSetup(): Promise<void> {
     account: async () => {
       const instanceId = (await useHostStore.getState().loadInfo())?.instance_id;
       if (!instanceId) throw new Error("Paracord on this computer didn't say which server it is, so your recovery phrase can't protect its storage key.");
-      await useHostStore.getState().writeEscrow(restoreWrappingKey(instanceId));
+      await useHostStore.getState().writeEscrow(await restoreEscrowRequest(instanceId));
     },
   });
   if (run !== setupRun) return;

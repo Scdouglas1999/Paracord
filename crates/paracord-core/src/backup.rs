@@ -368,6 +368,8 @@ pub struct RestoreReport {
 /// this succeeds and after separately validating TLS/config recovery material.
 pub async fn prepare_restore(options: RestoreOptions<'_>) -> anyhow::Result<RestoreReport> {
     use anyhow::Context;
+    // `mut` is used only by the Unix mode below.
+    #[cfg_attr(not(unix), allow(unused_mut))]
     let mut builder = std::fs::DirBuilder::new();
     #[cfg(unix)]
     {

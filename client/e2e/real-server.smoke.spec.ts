@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { connect } from 'node:http2';
 import { isGuildDetail, isGuildSummaryList } from '../src/api/generated/validators';
+import { answerUnlock, gotoUnlocked, registerAccount, registrationBody, signInAccount } from './fixtures/onePassword';
 
 // Real-server smoke: unlike smoke.spec.ts, this test does NOT mock any /api
 // route. It runs against the actual release `paracord-server` binary launched by
@@ -54,9 +55,7 @@ test('embedded UI boots and real auth round trip succeeds', async ({ page, reque
   // Server password policy: 10-128 UTF-8 bytes with ASCII upper/lower/digit/special.
   const password = 'E2e-Smoke-Password-123!';
 
-  const registerResp = await request.post(`${BASE}/api/v1/auth/register`, {
-    data: { email, username, password },
-  });
+  const registerResp = await registerAccount(request, BASE, { email, username, password });
   expect(
     registerResp.ok(),
     `register failed: ${registerResp.status()} ${await registerResp.text()}`,
@@ -74,10 +73,7 @@ test('embedded UI boots and real auth round trip succeeds', async ({ page, reque
   const csrf = cookies.find((c) => c.name === 'paracord_csrf')?.value;
   expect(csrf, 'register should set a readable paracord_csrf cookie').toBeTruthy();
 
-  const loginResp = await request.post(`${BASE}/api/v1/auth/login`, {
-    headers: { 'x-paracord-csrf': csrf! },
-    data: { email, password },
-  });
+  const loginResp = await signInAccount(request, BASE, email, password);
   expect(
     loginResp.ok(),
     `login failed: ${loginResp.status()} ${await loginResp.text()}`,
@@ -111,101 +107,95 @@ test('embedded UI boots and real auth round trip succeeds', async ({ page, reque
   expect(pageErrors).toEqual([]);
 });
 
-test('real identity setup survives rejected credentials and reload, then adopts the session and keeps identity enrollment separate on account changes', async ({ page, request }) => {
+// One password (docs/setup-spec.md §3.3): sign-up makes the account's identity
+// with it and shows its phrase; the old separate "secure this device" enrollment
+// (`/setup?migrate`, `/auth/attach-public-key` with a second password) is gone.
+// What still has to hold against the real server: a rejected password changes
+// nothing, every account gets its own identity, and changing accounts in one
+// browser never attaches one account's identity to another.
+test('one-password sign-up makes each account its own identity, survives a rejected password, and never attaches it to another account', async ({ page, request }) => {
   const unique = Date.now();
-  const email = `identity-${unique}@example.test`;
-  const username = `identity${unique}`.slice(0, 32);
   const password = 'Server-Password-123!';
-  const registered = await request.post(`${BASE}/api/v1/auth/register`, { data: { email, username, password } });
-  expect(registered.ok()).toBe(true);
-  const account = (await registered.json()).user;
-  await page.goto('/login');
-  await page.locator('input[autocomplete="username"]').fill(email);
-  await page.locator('input[autocomplete="current-password"]').fill(password);
-  await page.getByRole('button', { name: 'Log in', exact: true }).click();
-  await expect(page).toHaveURL(/\/app/);
-  await page.goto(`/setup?migrate=1&server=__local__&user=${account.id}`);
-  await page.getByLabel('New encryption password', { exact: false }).fill('Separate encryption password');
-  await page.getByLabel('Confirm password', { exact: false }).fill('Separate encryption password');
-  await page.getByLabel('Current sign-in password', { exact: false }).fill('Wrong-Server-Password-123!');
-  await page.getByRole('button', { name: 'Secure account' }).click();
-  await expect(page.getByText('The instance rejected that sign-in.', { exact: false })).toBeVisible();
-  const original = await page.evaluate(() => localStorage.getItem('paracord:encrypted-identity:v1'));
-  expect(original).toBeTruthy();
-  await page.reload();
-  await page.getByLabel('Encryption password', { exact: false }).fill('Separate encryption password');
-  await page.getByLabel('Current sign-in password', { exact: false }).fill(password);
-  const profiles: Array<{ status: number; authorization?: string }> = [];
-  page.on('response', response => {
-    if (response.url().endsWith('/api/v1/users/@me')) profiles.push({ status: response.status(), authorization: response.request().headers().authorization });
+  const attachments: string[] = [];
+  page.on('request', (sent) => {
+    if (sent.url().endsWith('/auth/attach-public-key')) attachments.push(sent.url());
   });
-  const attached = page.waitForResponse(response => response.url().endsWith('/api/v1/auth/attach-public-key'));
-  await page.getByRole('button', { name: 'Secure account' }).click();
-  const response = await attached;
-  expect(response.status()).toBe(200);
-  const result = await response.json();
-  expect(result.user.id).toBe(account.id);
-  expect(result.user.public_key).toBe(JSON.parse(original!).publicKey);
-  await expect(page.getByRole('heading', { name: 'Recovery phrase' })).toBeVisible();
-  await expect.poll(() => profiles.some(profile => profile.status === 200 && profile.authorization === `Bearer ${result.token}`)).toBe(true);
-  expect(await page.evaluate(() => localStorage.getItem('paracord:encrypted-identity:v1'))).toBe(original);
-  await page.getByRole('checkbox').check(); await page.getByRole('button', { name: 'Continue' }).click();
-  await expect(page).toHaveURL(/\/app/);
 
-  // Keep the unlocked device identity in this browser while changing server
-  // accounts through the real UI. Login/registration must not install it as a
-  // credential on the next account or copy the home token into a remote entry.
-  const implicitAttachments: string[] = [];
-  page.on('request', request => {
-    if (request.url().endsWith('/auth/attach-public-key')) implicitAttachments.push(request.url());
-  });
+  async function signUp(label: string) {
+    const email = `${label}-${unique}@example.test`;
+    const username = `${label}${unique}`.slice(0, 32);
+    await page.goto('/register');
+    await expect(page.getByRole('heading', { name: 'Create your account' })).toBeVisible();
+    await page.getByLabel('Email', { exact: false }).fill(email);
+    await page.getByLabel('Username', { exact: false }).fill(username);
+    await page.getByRole('button', { name: 'Continue', exact: true }).click();
+    await expect(page.getByText('Step 2 of 2')).toBeVisible();
+    await page.getByLabel('Password', { exact: false }).first().fill(password);
+    await page.getByLabel('Confirm password', { exact: false }).fill(password);
+    const terms = page.getByRole('checkbox');
+    if (await terms.count()) await terms.first().check();
+    const registration = page.waitForResponse((response) => response.url().endsWith('/auth/credential/register'));
+    await page.getByRole('button', { name: 'Create account', exact: true }).click();
+    const response = await registration;
+    expect(response.status()).toBe(201);
+    const body = await response.json();
+    expect(body.user.public_key).toMatch(/^[0-9a-f]{64}$/);
+    // The phrase is shown once, before the app.
+    await expect(page.getByRole('heading', { name: 'Save your recovery phrase' })).toBeVisible();
+    await expect(page.locator('[data-testid="recovery-phrase"] li')).toHaveCount(24);
+    await page.getByRole('checkbox').check();
+    await page.getByRole('button', { name: 'Continue', exact: true }).click();
+    await expect(page).toHaveURL(/\/app/);
+    return { email, publicKey: body.user.public_key as string };
+  }
+
   async function logout() {
     await openAccountMenu(page);
     await page.getByRole('menuitem', { name: 'Sign out' }).click();
     await expect(page.getByRole('heading', { name: 'Welcome back' })).toBeVisible();
-    // A device that holds an identity is asked to unlock it after a sign-out,
-    // not to sign in. "Welcome back" heads both screens; the way on to another
-    // account is the password sign-in, which is where "Create one" lives.
+    // A device that holds an identity is asked to unlock it after a sign-out;
+    // the way on to another account is the password sign-in.
     const passwordInstead = page.getByRole('button', { name: 'Sign in with a password instead' });
     if (await passwordInstead.isVisible()) await passwordInstead.click();
   }
+
+  const first = await signUp('identity');
   await logout();
   await page.getByRole('link', { name: 'Create one' }).click();
-  await expect(page.getByRole('heading', { name: 'Create your account' })).toBeVisible();
-  // Registration is two steps — who you are, then the password and the terms.
-  const secondEmail = `second-${unique}@example.test`;
-  await page.getByLabel('Email', { exact: false }).fill(secondEmail);
-  await page.getByLabel('Username', { exact: false }).fill(`second${unique}`);
-  await page.getByRole('button', { name: 'Continue', exact: true }).click();
-  await expect(page.getByText('Step 2 of 2')).toBeVisible();
-  await page.getByLabel('Password', { exact: false }).first().fill(password);
-  await page.getByLabel('Confirm password', { exact: false }).fill(password);
-  await page.getByRole('checkbox').check();
-  const registrationResponse = page.waitForResponse(response => response.url().endsWith('/auth/register'));
-  await page.getByRole('button', { name: 'Create account', exact: true }).click();
-  const registration = await registrationResponse;
-  expect(registration.status()).toBe(201);
-  const second = await registration.json();
-  expect(second.user.public_key).toBeNull();
-  await expect(page).toHaveURL(/\/app/);
-  expect((await request.get(`${BASE}/api/v1/users/@me`, { headers: { Authorization: `Bearer ${second.token}` } })).status()).toBe(200);
+  const second = await signUp('second');
+  expect(second.publicKey).not.toBe(first.publicKey);
   await logout();
-  await page.locator('input[autocomplete="username"]').fill(secondEmail);
-  await page.locator('input[autocomplete="current-password"]').fill(password);
+
+  // A wrong password is refused and changes nothing; the right one signs in.
+  await page.locator('input[autocomplete="username"]').fill(first.email);
+  await page.locator('input[autocomplete="current-password"]').fill('Wrong-Server-Password-123!');
+  const rejected = page.waitForResponse((response) => response.url().endsWith('/auth/credential/login'));
   await page.getByRole('button', { name: 'Log in', exact: true }).click();
+  expect((await rejected).status()).toBe(401);
+  await expect(page.getByRole('alert')).toBeVisible();
+  await page.locator('input[autocomplete="current-password"]').fill(password);
+  const signedIn = page.waitForResponse((response) => response.url().endsWith('/auth/credential/login'));
+  await page.getByRole('button', { name: 'Log in', exact: true }).click();
+  expect((await signedIn).status()).toBe(200);
   await expect(page).toHaveURL(/\/app/);
-  await openAccountMenu(page);
-  await page.getByRole('menuitem', { name: /^Settings/ }).click();
-  expect(implicitAttachments).toEqual([]);
-  expect(await page.evaluate(() => localStorage.getItem('paracord:encrypted-identity:v1'))).toBe(original);
 
+  // Each account still has exactly the identity it was made with (the UI
+  // sign-outs revoked their own sessions, so each is asked afresh).
+  for (const account of [first, second]) {
+    const login = await signInAccount(request, BASE, account.email, password);
+    expect(login.status()).toBe(200);
+    const { token } = await login.json();
+    const me = await request.get(`${BASE}/api/v1/users/@me`, { headers: { Authorization: `Bearer ${token}` } });
+    expect(me.status()).toBe(200);
+    expect((await me.json()).public_key).toBe(account.publicKey);
+  }
+  expect(attachments).toEqual([]);
 });
-
 
 test('the release API seals uncertain deliveries and protects edit replays', async ({ request, playwright }) => {
   const unique = Date.now();
-  const registered = await request.post(`${BASE}/api/v1/auth/register`, {
-    data: { email: `resolution-${unique}@example.test`, username: `resolve${unique}`, password: 'Resolution-Password-123!' },
+  const registered = await registerAccount(request, BASE, {
+    email: `resolution-${unique}@example.test`, username: `resolve${unique}`, password: 'Resolution-Password-123!',
   });
   expect(registered.status()).toBe(201);
   const account = await registered.json();
@@ -262,9 +252,7 @@ test('real message edits retain readable history after reload', async ({ page, r
   const unique = Date.now();
   const email = `edit-history-${unique}@example.test`;
   const password = 'Edit-History-Password-123!';
-  const registered = await request.post(`${BASE}/api/v1/auth/register`, {
-    data: { email, username: `edithistory${unique}`, password },
-  });
+  const registered = await registerAccount(request, BASE, { email, username: `edithistory${unique}`, password });
   expect(registered.status()).toBe(201);
   const account = await registered.json();
   const client = await playwright.request.newContext({ extraHTTPHeaders: { Authorization: `Bearer ${account.token}` } });
@@ -280,7 +268,7 @@ test('real message edits retain readable history after reload', async ({ page, r
     await page.locator('input[autocomplete="current-password"]').fill(password);
     await page.getByRole('button', { name: 'Log in', exact: true }).click();
     await expect(page).toHaveURL(/\/app/);
-    await page.goto(`/app/guilds/${guild.id}/channels/${channel.id}`);
+    await gotoUnlocked(page, `/app/guilds/${guild.id}/channels/${channel.id}`, password);
     await expect(page.getByPlaceholder('Message edit-history', { exact: true })).toBeVisible();
     const original = 'First version from the real composer';
     await page.getByPlaceholder('Message edit-history', { exact: true }).fill(original);
@@ -303,6 +291,7 @@ test('real message edits retain readable history after reload', async ({ page, r
       preceding = content;
     }
     await page.reload();
+    await answerUnlock(page, password);
     await expect(feed.getByText(preceding, { exact: true })).toBeVisible();
     // An edited message wears "edited"; the mark is the way into its history.
     const editedMark = feed.getByRole('button', { name: 'Edited. Show the edit history', exact: true });
@@ -373,9 +362,13 @@ test('the release HTTP/2 server multiplexes requests and preserves authenticated
     expect(health.status).toBe(200);
     expect(anonymous.status).toBe(401);
     const unique = Date.now(); const username = `http2${unique}`;
-    const registered = await request('/api/v1/auth/register', 'POST', {
-      email: `http2-${unique}@example.test`, username, password: 'Http2-Transport-Password-123!',
-    });
+    const challenge = await request('/api/v1/auth/challenge', 'POST');
+    expect(challenge.status, challenge.body).toBe(200);
+    const { body: registration } = registrationBody(
+      { email: `http2-${unique}@example.test`, username, password: 'Http2-Transport-Password-123!' },
+      JSON.parse(challenge.body),
+    );
+    const registered = await request('/api/v1/auth/credential/register', 'POST', registration);
     expect(registered.status, registered.body).toBe(201);
     const account = JSON.parse(registered.body);
     const [own, unauthorized, again] = await Promise.all([
@@ -397,7 +390,7 @@ test('the Inbox follows live mention creation, edits and deletion and opens the 
     const context = await playwright.request.newContext();
     const email = `${label}-${unique}@example.test`;
     try {
-      const response = await context.post(`${BASE}/api/v1/auth/register`, { data: { email, username: `${label}${unique}`, password } });
+      const response = await registerAccount(context, BASE, { email, username: `${label}${unique}`, password });
       expect(response.status(), await response.text()).toBe(201);
       return { ...await response.json(), email };
     } finally { await context.dispose(); }
@@ -425,6 +418,9 @@ test('the Inbox follows live mention creation, edits and deletion and opens the 
       window.EventSource = class extends NativeEventSource {
         constructor(url: string | URL, options?: EventSourceInit) {
           super(url, options);
+          // READY counts for the stream the app holds now: an unlock after a
+          // full load replaces the stream the locked page opened.
+          observed.readyUser = '';
           const observe = (event: MessageEvent<string>) => {
             try {
               const frame = JSON.parse(event.data);
@@ -444,7 +440,9 @@ test('the Inbox follows live mention creation, edits and deletion and opens the 
     await expect(page).toHaveURL(/\/app/);
     // Index has no Home: what needs you is the People place's Inbox
     // (docs/index-spec.md §6.6), its Mentions tab, one row per conversation.
-    await page.goto('/app/inbox');
+    // (In the app, not by a page load: a load locks the identity again.)
+    await page.getByRole('toolbar', { name: 'Servers' }).getByRole('button', { name: /^People/ }).click();
+    await page.getByRole('navigation', { name: 'People' }).getByRole('link', { name: /^Inbox/ }).click();
     const inbox = page.getByTestId('ix-inbox');
     await expect(page.getByTestId('ix-title')).toHaveText('Inbox');
     const rows = inbox.getByTestId('ix-inbox-row');
@@ -506,7 +504,7 @@ test('the Inbox follows live mention creation, edits and deletion and opens the 
     // unread tail disappears live when its only message is deleted.
     const read = await memberApi.put(`${BASE}/api/v1/channels/${channel.id}/read`, { data: { last_message_id: (await later.json()).id } });
     expect(read.ok(), await read.text()).toBe(true);
-    await page.goto('/app/inbox');
+    await gotoUnlocked(page, '/app/inbox', password);
     await page.waitForFunction(id => (window as unknown as { attentionWire: { readyUser: string } }).attentionWire.readyUser === id, member.user.id);
     // The Inbox keeps its page on the surface and says so when it is empty:
     // an absent list cannot tell you it checked.
@@ -535,9 +533,7 @@ test('real guild contracts keep the member count correct after join and reload',
     const registration = await playwright.request.newContext();
     try {
       const email = `${label}-${unique}@example.test`;
-      const response = await registration.post(`${BASE}/api/v1/auth/register`, {
-        data: { email, username: `${label}${unique}`, password },
-      });
+      const response = await registerAccount(registration, BASE, { email, username: `${label}${unique}`, password });
       expect(response.status(), await response.text()).toBe(201);
       const body = await response.json();
       return { email, token: body.token as string };
@@ -572,19 +568,25 @@ test('real guild contracts keep the member count correct after join and reload',
     const list = await listResponse.json();
     expect(isGuildSummaryList(list)).toBe(true);
     expect(list.find((space: { id: string }) => space.id === guild.id)?.member_count).toBe(2);
+    // Closed again straight after the join: every sign-up auto-joins the
+    // instance's public servers, and the other real-server specs sign up
+    // accounts in parallel, so a public server here could gain a third member.
+    const closed = await ownerApi.patch(`${BASE}/api/v1/guilds/${guild.id}`, { data: { visibility: 'private' } });
+    expect(closed.status()).toBe(200);
 
     await page.goto('/login');
     await page.locator('input[autocomplete="username"]').fill(member.email);
     await page.locator('input[autocomplete="current-password"]').fill(password);
     await page.getByRole('button', { name: 'Log in', exact: true }).click();
     await expect(page).toHaveURL(/\/app/);
-    await page.goto(`/app/guilds/${guild.id}/channels/${channel.id}`);
+    await gotoUnlocked(page, `/app/guilds/${guild.id}/channels/${channel.id}`, password);
     // The sidebar's header counts the server: "2 members · N here now"
     // (docs/index-spec.md §4.1), from the guild contract the client validated.
     const header = page.getByTestId('ix-sidebar');
     await expect(header.getByText('Welcome count verification', { exact: true })).toBeVisible();
     await expect(header.getByText(/^2 members/)).toBeVisible();
     await page.reload();
+    await answerUnlock(page, password);
     await expect(header.getByText('Welcome count verification', { exact: true })).toBeVisible();
     await expect(header.getByText(/^2 members/)).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath('welcome-member-count.png'), fullPage: true });

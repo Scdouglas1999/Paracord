@@ -167,18 +167,21 @@ interface EntryScreen {
 const ENTRY_SCREENS: EntryScreen[] = [
   { name: 'login', url: '/login', action: /^Log in$/, settled: /Welcome back/ },
   { name: 'register', url: '/register', action: /^Continue$/, settled: /Create your account/ },
+  // The first-owner claim is the first run's claim mode (docs/setup-spec.md
+  // §2.11): it opens on Host › Name. `/connect` no longer has a screen of its
+  // own (a browser with no server goes to /login, the desktop to /welcome).
   {
     name: 'setup-server',
     url: '/setup-server',
     action: /^Continue$/,
-    settled: /Set up your Paracord instance/,
+    settled: /What should we call your server\?/,
   },
-  // A browser that has never been here gets the first-run explainer, not the
-  // address form; both are measured, this one here and the form below.
-  { name: 'connect-onboarding', url: '/connect', action: /^Next$/, settled: /Welcome to Paracord/ },
   { name: 'account-setup', url: '/setup', action: /^Create identity$/, settled: /local identity/i },
   { name: 'account-recover', url: '/recover', action: /^Continue$/, settled: /Recover your account/ },
-  { name: 'invite', url: '/invite/kestrel', action: /^(Accept invite|Create an account to join)$/, settled: /invited/i },
+  // The web join (the first run's Join path in a browser, §1.7): the preview
+  // mocked here is the pre-setup shape, so the screen names an older server;
+  // what is measured is that the screen and its Continue fit.
+  { name: 'invite', url: '/invite/kestrel', action: /^Continue$/, settled: /Paste your invite/ },
 ];
 
 test.describe('first-run and account screens fit a native window', () => {
@@ -222,106 +225,27 @@ test.describe('first-run and account screens fit a native window', () => {
     }
   });
 
-  test('the first-owner wizard fits at every step, and Enter walks it', async ({ page }) => {
+  test('the first-owner claim fits at every step, and Enter walks it', async ({ page }) => {
     await mockEntryScreens(page, { setupRequired: true });
     await page.setViewportSize(NATIVE_MIN);
-    await page.goto('/setup-server');
+    await page.goto('/setup-server#claim=A1B2C3D4E5F6G7H8J9K0MNPQRSTVWXYZ23456789');
 
-    const steps = [
-      { title: /Enter your setup code/, counter: 'Step 1 of 5' },
-      { title: /Create the owner account/, counter: 'Step 2 of 5' },
-      { title: /Protect the owner account/, counter: 'Step 3 of 5' },
-      { title: /Name the place/, counter: 'Step 4 of 5' },
-      { title: /Who can get in/, counter: 'Step 5 of 5' },
-    ];
+    // Host › Name: the field has focus, and Enter advances like Continue.
+    await expect(page.getByRole('heading', { name: 'What should we call your server?' })).toBeVisible();
+    await expect(page.locator('input:focus')).toHaveCount(1);
+    await page.getByTestId('fr-server-name').fill('Riverside Studio');
+    await expect(page.getByRole('button', { name: /^Continue$/ }).first()).toBeInViewport({ ratio: 1 });
+    await expectNoPageScroll(page, 'claim name at 940x500');
+    await page.keyboard.press('Enter');
 
-    const fill = async (label: RegExp, value: string) => {
-      await page.getByLabel(label).first().fill(value);
-    };
+    // Host › Account.
+    await expect(page.getByRole('heading', { name: 'Make your account' })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Continue$/ }).first()).toBeInViewport({ ratio: 1 });
+    await expectNoPageScroll(page, 'claim account at 940x500');
 
-    for (const [index, step] of steps.entries()) {
-      await expect(page.getByRole('heading', { name: step.title })).toBeVisible();
-      await expect(page.getByText(step.counter, { exact: true })).toBeVisible();
-
-      // The step's own first field has focus, so the whole wizard is typeable
-      // without reaching for the mouse. The last step is a choice, and starts
-      // on the chosen option.
-      await expect(
-        page.locator(index === steps.length - 1 ? '[role="radio"]:focus' : 'input:focus'),
-      ).toHaveCount(1);
-
-      const action = page
-        .getByRole('button', { name: index === steps.length - 1 ? /^Claim this instance$/ : /^Continue$/ })
-        .first();
-      await expect(action).toBeInViewport({ ratio: 1 });
-      await expectNoPageScroll(page, `setup step ${index + 1} at 940x500`);
-
-      if (index === steps.length - 1) break;
-
-      if (index === 0) await fill(/Setup code/, 'A1B2C3D4E5F6G7H8J9K0MNPQRSTVWXYZ23456789');
-      if (index === 1) {
-        await fill(/Username/, 'ada');
-        await fill(/Email/, 'ada@example.test');
-      }
-      if (index === 2) {
-        await fill(/^Password/, 'Riverside-123!');
-        await fill(/Confirm password/, 'Riverside-123!');
-      }
-      if (index === 3) {
-        await fill(/Instance name/, 'Riverside Studio');
-        await fill(/First server name/, 'The Lounge');
-      }
-      // Enter advances, exactly like the visible button.
-      await page.keyboard.press('Enter');
-    }
-
-    // Back keeps every typed value, on every step it walks past.
-    await page.getByRole('button', { name: /^Back$/ }).click();
-    await expect(page.getByLabel(/Instance name/)).toHaveValue('Riverside Studio');
-    await page.getByRole('button', { name: /^Back$/ }).click();
-    await expect(page.getByLabel(/Confirm password/)).toHaveValue('Riverside-123!');
-    await page.getByRole('button', { name: /^Back$/ }).click();
-    await expect(page.getByLabel(/Username/)).toHaveValue('ada');
-    await page.getByRole('button', { name: /^Back$/ }).click();
-    await expect(page.getByLabel(/Setup code/)).toHaveValue(
-      'A1B2C3D4E5F6G7H8J9K0MNPQRSTVWXYZ23456789',
-    );
-  });
-
-  test('the connect screen fits with the explainer done and servers listed', async ({ page }) => {
-    await mockEntryScreens(page, { setupRequired: false });
-    await page.addInitScript(() => {
-      try {
-        window.localStorage.setItem('paracord:v2:onboarding-complete', '1');
-        window.localStorage.setItem(
-          'paracord:servers',
-          JSON.stringify({
-            version: 0,
-            state: {
-              activeServerId: 's1',
-              servers: ['one', 'two', 'three', 'four', 'five'].map((name, index) => ({
-                id: `s${index + 1}`,
-                url: `https://${name}.example.test`,
-                name: `${name}.example.test`,
-                token: index === 1 ? null : 'token',
-                connected: index === 0,
-              })),
-            },
-          }),
-        );
-      } catch {
-        /* storage unavailable */
-      }
-    });
-
-    for (const [label, viewport] of NATIVE_VIEWPORTS) {
-      await page.setViewportSize(viewport);
-      await page.goto('/connect');
-      const action = page.getByRole('button', { name: /^Continue$/ });
-      await expect(action).toBeVisible();
-      await expect(action).toBeInViewport({ ratio: 1 });
-      await expectNoPageScroll(page, `connect at ${label}`);
-    }
+    // Back keeps the typed name.
+    await page.getByRole('button', { name: /^Back$/ }).first().click();
+    await expect(page.getByTestId('fr-server-name')).toHaveValue('Riverside Studio');
   });
 
   test('a long legal document scrolls its own region instead of being cut off', async ({

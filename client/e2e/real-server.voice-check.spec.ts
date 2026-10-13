@@ -1,5 +1,6 @@
 import { resolve } from 'node:path';
 import { expect, test, type Browser, type Page } from '@playwright/test';
+import { gotoUnlocked, registerAccount } from './fixtures/onePassword';
 
 // Real-server coverage for the guided voice connection check (improvement
 // item 13). Nothing here is mocked: the check reads the real
@@ -100,8 +101,7 @@ function registerSharedAccount(page: Page): Promise<{ email: string; password: s
   // Registration goes through the loopback address: Playwright's Node-side
   // request context does not honor Chromium's host-resolver rules, so the
   // blocked-media hostname exists only inside the browser.
-  return page.request
-    .post(`${BASE}/api/v1/auth/register`, { data: { email, username, password } })
+  return registerAccount(page.request, BASE, { email, username, password })
     .then(async (registered) => {
       expect(
         registered.ok(),
@@ -327,9 +327,7 @@ test.describe('voice connection check from inside a call', () => {
       const unique = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
       const email = `voicecheckcall-${unique}@example.test`;
       const password = 'Voice-Check-Password-123!';
-      const registered = await page.request.post(`${BASE}/api/v1/auth/register`, {
-        data: { email, username: `vcc${unique}`.slice(0, 32), password },
-      });
+      const registered = await registerAccount(page.request, BASE, { email, username: `vcc${unique}`.slice(0, 32), password });
       expect(registered.ok(), `register failed: ${registered.status()} ${await registered.text()}`).toBeTruthy();
       const token = (await registered.json()).token as string;
       const csrf = (await page.request.storageState()).cookies.find((cookie) => cookie.name === 'paracord_csrf')?.value;
@@ -354,7 +352,7 @@ test.describe('voice connection check from inside a call', () => {
 
       // A voice channel's route is its chat; its row in the sidebar joins it, and
       // once you are in, the room's card in the sidebar is yours.
-      await page.goto(`${BASE}/app/guilds/${guildId}/channels/${channelId}`);
+      await gotoUnlocked(page, `${BASE}/app/guilds/${guildId}/channels/${channelId}`, password);
       // (A new server comes with a "Lounge" of its own: pick ours by its id.)
       const row = page.locator(`[data-testid="ix-room-row"][data-channel-id="${channelId}"]`);
       await row.click();

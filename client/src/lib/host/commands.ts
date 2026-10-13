@@ -36,10 +36,10 @@ export async function hostClaim(request: NewOwnerClaim): Promise<unknown> {
   return invoke('host_claim', { request });
 }
 
-/** `wrappingKey`: b64url of the 32-byte escrow key (spec 4.7). */
-export async function hostWriteEscrow(wrappingKey: string): Promise<void> {
+/** `wrapping_key`: b64url of the 32-byte escrow key; `owner_public_key`: the hex identity key it comes from (spec 4.7). */
+export async function hostWriteEscrow(request: { wrapping_key: string; owner_public_key: string }): Promise<void> {
   const { invoke } = await core();
-  await invoke('host_write_escrow', { wrappingKey });
+  await invoke('host_write_escrow', { wrappingKey: request.wrapping_key, ownerPublicKey: request.owner_public_key });
 }
 
 export async function hostStatus(): Promise<HostStatus> {

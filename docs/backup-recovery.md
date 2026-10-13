@@ -118,9 +118,13 @@ recovery phrase opens it. That value (the escrow key) is the base64url text of 3
 
   A server restored by hand has no recovery copy of its own until the owner saves one
   again. Sign in as the owner and call `POST /api/v1/admin/storage-key/escrow` with
-  `{"wrapping_key": "<key>"}`, where the key comes from
-  `paracord-server escrow-key --instance-id <[host] instance_id of the new config>`
-  (same phrase on standard input). Backups made after that carry it again.
+  the body `paracord-server escrow-key --json --instance-id <[host] instance_id of the
+  new config>` prints (`{"wrapping_key": …, "owner_public_key": …}`; the owner's
+  *current* phrase on standard input). The server refuses a phrase that is not the
+  owner's current one (409 `escrow_owner_mismatch`): if the owner used "Start over"
+  after this backup's recovery copy was made, the old phrase opened the backup but
+  only the new phrase can protect the restored key. Backups made after that carry it
+  again.
 
 An archive from before the owner saved a recovery copy has none, and cannot be restored
 without the original key.

@@ -7,6 +7,7 @@ import {
   type Locator,
   type Page,
 } from '@playwright/test';
+import { gotoUnlocked, registerAccount } from './fixtures/onePassword';
 
 // The end-to-end proof that a *browser* can hold a call on the native media
 // transport. Nothing here is mocked or stubbed: Chromium loads the embedded UI
@@ -391,9 +392,7 @@ async function register(api: APIRequestContext): Promise<Account> {
   const email = `voicejoin-${unique}@example.test`;
   const username = `vj${unique}`.slice(0, 32);
   const password = 'Voice-Join-Password-123!';
-  const response = await api.post(`${BASE}/api/v1/auth/register`, {
-    data: { email, username, password },
-  });
+  const response = await registerAccount(api, BASE, { email, username, password });
   expect(
     response.ok(),
     `register failed: ${response.status()} ${await response.text()}`,
@@ -650,7 +649,7 @@ test('a browser joins a guild voice room, its audio reaches the relay, and leavi
     );
     joinResponse.catch(() => {});
 
-    await page.goto(`${BASE}/app/guilds/${guildId}/channels/${channelId}`);
+    await gotoUnlocked(page, `${BASE}/app/guilds/${guildId}/channels/${channelId}`, account.password);
     await joinVoice(page);
 
     const join = await joinResponse;
@@ -772,7 +771,7 @@ test('two browsers in one room exchange audio through the relay', async ({ playw
       [guest, guestAccount],
     ] as const) {
       await signIn(page, account);
-      await page.goto(`${BASE}/app/guilds/${guildId}/channels/${channelId}`);
+      await gotoUnlocked(page, `${BASE}/app/guilds/${guildId}/channels/${channelId}`, account.password);
       await joinVoice(page);
       await expectJoined(page);
     }
@@ -887,7 +886,7 @@ test('a participant who closes their tab stops being in the room for everyone el
       [guest, guestAccount],
     ] as const) {
       await signIn(page, account);
-      await page.goto(`${BASE}/app/guilds/${guildId}/channels/${channelId}`);
+      await gotoUnlocked(page, `${BASE}/app/guilds/${guildId}/channels/${channelId}`, account.password);
       await joinVoice(page);
       await expectJoined(page);
     }
@@ -924,7 +923,7 @@ test('a participant who closes their tab stops being in the room for everyone el
     });
     expect(joined.ok(), `bystander invite accept: ${await joined.text()}`).toBeTruthy();
     await signIn(bystander, bystanderAccount);
-    await bystander.goto(`${BASE}/app/guilds/${guildId}/channels/${channelId}`);
+    await gotoUnlocked(bystander, `${BASE}/app/guilds/${guildId}/channels/${channelId}`, bystanderAccount.password);
     const bystanderRoster = await openRoster(bystander);
     await expect(bystanderRoster.getByRole('listitem')).toHaveCount(1, { timeout: 30_000 });
     await expect(cardOf(bystander, 'live').getByTestId('ix-card-join')).toBeVisible();
@@ -975,7 +974,7 @@ async function twoInOneRoom(
     [guest, guestAccount],
   ] as const) {
     await signIn(page, account);
-    await page.goto(`${BASE}/app/guilds/${guildId}/channels/${channelId}`);
+    await gotoUnlocked(page, `${BASE}/app/guilds/${guildId}/channels/${channelId}`, account.password);
     await joinVoice(page);
     await expectJoined(page);
   }

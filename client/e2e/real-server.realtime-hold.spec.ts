@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { registerAccount } from './fixtures/onePassword';
 
 // Can the app just sit there?
 //
@@ -46,9 +47,7 @@ test('a signed-in client holds one realtime session while it sits idle', async (
   const email = `rt-hold-${unique}@example.test`;
   const password = 'Rt-Hold-Password-123!';
 
-  const registerResp = await request.post(`${BASE}/api/v1/auth/register`, {
-    data: { email, username, password },
-  });
+  const registerResp = await registerAccount(request, BASE, { email, username, password });
   expect(
     registerResp.ok(),
     `register failed: ${registerResp.status()} ${await registerResp.text()}`,

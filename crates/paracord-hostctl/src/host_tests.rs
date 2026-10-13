@@ -11,6 +11,9 @@ use std::sync::Mutex;
 
 // ── Fakes ───────────────────────────────────────────────────────────────────
 
+/// The owner's identity key the fake server holds (`users.public_key`).
+const OWNER_KEY: &str = "ad1556f6b39cd51a513052c0be97b86e668adb99fadb813e0c02ebddf7037fd4";
+
 #[derive(Default)]
 struct World {
     // service
@@ -126,7 +129,10 @@ impl HostApi for FakeApi {
         w.backups.push(name.clone());
         Ok(BackupNowResponse { name })
     }
-    fn write_escrow(&self, key: &str) -> Result<EscrowOutcome> {
+    fn write_escrow(&self, key: &str, owner_public_key: &str) -> Result<EscrowOutcome> {
+        if owner_public_key != OWNER_KEY {
+            bail!("That recovery phrase isn't the server owner's current one (the owner started over with a new phrase), so it can't protect the storage key.");
+        }
         let mut w = self.0.lock().unwrap();
         let outcome = if w.escrows.is_empty() {
             EscrowOutcome::Written
@@ -414,8 +420,16 @@ fn setup_runs_rows_1_and_2_then_waits_for_row_3_then_finishes() {
         .unwrap_err()
         .to_string()
         .contains("already has an owner"));
-    rig.host.write_escrow("d3JhcA").unwrap();
-    rig.host.write_escrow("d3JhcA").unwrap(); // a 409 on resume counts as written
+    // A phrase that is not the owner's current one (the owner started over)
+    // fails row 3, records nothing, and rows 4-5 stay waiting.
+    let error = rig
+        .host
+        .write_escrow("d3JhcA", &"0".repeat(64))
+        .unwrap_err();
+    assert!(error.to_string().contains("current one"), "{error}");
+    assert!(!rig.state().has_step("escrow"));
+    rig.host.write_escrow("d3JhcA", OWNER_KEY).unwrap();
+    rig.host.write_escrow("d3JhcA", OWNER_KEY).unwrap(); // a 409 on resume counts as written
 
     assert_eq!(
         rig.events(8443),
@@ -537,7 +551,7 @@ fn reach_warns_with_the_spec_copy_and_backup_failure_is_reported() {
     );
     rig.events(8443);
     rig.host.claim(&owner()).unwrap();
-    rig.host.write_escrow("k").unwrap();
+    rig.host.write_escrow("k", OWNER_KEY).unwrap();
     let events = rig.events(8443);
     assert!(events.contains(&"4 reach warn [refused] Your router didn't allow it, so for now only people on your home network can join.".to_string()));
     assert_eq!(

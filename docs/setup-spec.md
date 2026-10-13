@@ -980,13 +980,18 @@ escrow_key = HKDF-SHA256(ikm = owner identity private key,
 ```
 
 During host row 3 the app derives `escrow_key` and calls
-`host_write_escrow` → `POST /host/storage-key/escrow { wrapping_key }` (loopback,
+`host_write_escrow` → `POST /host/storage-key/escrow { wrapping_key, owner_public_key }` (loopback,
 host token). The server writes `storage-key.escrow`:
 `{ version: 1, instance_id, owner_public_key, iv, ciphertext }` with AES-256-GCM,
 AAD = `"paracord/host-storage-escrow/v1|" + instance_id`, and puts the same JSON
 in every backup manifest (`BackupManifest.recovery`, `paracord-core/src/backup.rs`,
-new field `key_escrow`). The endpoint accepts one call per instance (409 after),
-and the wrapping key is not stored. Headless owners get the same escrow after
+new field `key_escrow`). The endpoint accepts one call per instance and owner key
+(409 `escrow_exists` after), and the wrapping key is not stored. `owner_public_key`
+names the identity key the wrapping key was derived from; one that is not the
+owner's current `users.public_key` is refused (409 `escrow_owner_mismatch`), so
+an escrow is always sealed for the owner's current phrase (a backup from before
+"Start over" opens with the old phrase, but cannot re-escrow under it). An escrow
+on disk for another owner key or instance is stale and is replaced. Headless owners get the same escrow after
 the claim (`POST /admin/storage-key/escrow`, owner only, same body).
 
 ### 4.8 Restore and plaintext migration (CLI + UI)
@@ -1340,10 +1345,10 @@ All JSON; errors `{ code, message }`. Contracts live in
 | `GET /api/v1/host/status` | loopback + host token | `HostStatus` |
 | `POST /api/v1/host/reachability/retry` | loopback + host token | → 202 |
 | `POST /api/v1/host/backup-now` | loopback + host token | → `{ name }` |
-| `POST /api/v1/host/storage-key/escrow` | loopback + host token | `{ wrapping_key }` → 204; 409 when present |
+| `POST /api/v1/host/storage-key/escrow` | loopback + host token | `{ wrapping_key, owner_public_key }` → 204; 409 `escrow_exists` when present, `escrow_owner_mismatch` for a key that is not the owner's current one |
 | `GET /api/v1/admin/host-status` | admin | `HostStatus` (reachability/storage/backups/tls; `ports`, `lan_ip`) |
 | `POST /api/v1/admin/reachability/retry` | admin | → 202 |
-| `POST /api/v1/admin/storage-key/escrow` | owner | `{ wrapping_key }` → 204 |
+| `POST /api/v1/admin/storage-key/escrow` | owner | `{ wrapping_key, owner_public_key }` → 204 (409s as above) |
 | `PATCH /api/v1/admin/backups` | admin | `{ enabled }` → 204 |
 | `PATCH /api/v1/users/@me/settings` | session | + `link_previews: bool` |
 | Gateway `INSTANCE_STATUS_UPDATE` | admins | `{ reachability, storage, backups }` |
@@ -1435,7 +1440,7 @@ template-documented. CLI: `init --profile desktop-host --root --port`,
 | `host_preflight()` | `{ ok, port? , reason?, detail?, existing_url? }` |
 | `host_setup_start({ port })` | `()`; progress via `host://progress` |
 | `host_claim(request)` | `ClaimResponse` (token read from the claim file in Rust) |
-| `host_write_escrow({ wrapping_key })` | `()` |
+| `host_write_escrow({ wrapping_key, owner_public_key })` | `()` |
 | `host_status()` | `HostStatus` |
 | `host_retry_reachability()`, `host_backup_now()` | `()` / `{ name }` |
 | `host_start()`, `host_stop()`, `host_set_autostart(bool)` | `()` |

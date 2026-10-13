@@ -11309,14 +11309,30 @@ function validate103(data, { instancePath = "", parentData, parentDataProperty, 
   if (errors === 0) {
     if (data && typeof data == "object" && !Array.isArray(data)) {
       let missing0;
-      if (data.wrapping_key === void 0 && (missing0 = "wrapping_key")) {
+      if (data.wrapping_key === void 0 && (missing0 = "wrapping_key") || data.owner_public_key === void 0 && (missing0 = "owner_public_key")) {
         validate103.errors = [{ instancePath, schemaPath: "#/required", keyword: "required", params: { missingProperty: missing0 }, message: "must have required property '" + missing0 + "'" }];
         return false;
       } else {
-        if (data.wrapping_key !== void 0) {
-          if (typeof data.wrapping_key !== "string") {
-            validate103.errors = [{ instancePath: instancePath + "/wrapping_key", schemaPath: "#/properties/wrapping_key/type", keyword: "type", params: { type: "string" }, message: "must be string" }];
+        if (data.owner_public_key !== void 0) {
+          const _errs1 = errors;
+          if (typeof data.owner_public_key !== "string") {
+            validate103.errors = [{ instancePath: instancePath + "/owner_public_key", schemaPath: "#/properties/owner_public_key/type", keyword: "type", params: { type: "string" }, message: "must be string" }];
             return false;
+          }
+          var valid0 = _errs1 === errors;
+        } else {
+          var valid0 = true;
+        }
+        if (valid0) {
+          if (data.wrapping_key !== void 0) {
+            const _errs3 = errors;
+            if (typeof data.wrapping_key !== "string") {
+              validate103.errors = [{ instancePath: instancePath + "/wrapping_key", schemaPath: "#/properties/wrapping_key/type", keyword: "type", params: { type: "string" }, message: "must be string" }];
+              return false;
+            }
+            var valid0 = _errs3 === errors;
+          } else {
+            var valid0 = true;
           }
         }
       }
@@ -11328,7 +11344,7 @@ function validate103(data, { instancePath = "", parentData, parentDataProperty, 
   validate103.errors = vErrors;
   return errors === 0;
 }
-validate103.evaluated = { "props": { "wrapping_key": true }, "dynamicProps": false, "dynamicItems": false };
+validate103.evaluated = { "props": { "owner_public_key": true, "wrapping_key": true }, "dynamicProps": false, "dynamicItems": false };
 var isTransferOwnershipRequest = validate104;
 function validate104(data, { instancePath = "", parentData, parentDataProperty, rootData = data, dynamicAnchors = {} } = {}) {
   ;

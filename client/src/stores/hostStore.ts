@@ -67,7 +67,8 @@ interface HostStoreState {
   /** **Try again** on a failed row: resume with the last arguments. */
   retry: () => Promise<HostSetupPhase>;
   claim: (request: NewOwnerClaim) => Promise<unknown>;
-  writeEscrow: (wrappingKey: string) => Promise<void>;
+  /** The escrow body (`EscrowRequest` in pages/firstRun/escrow.ts). */
+  writeEscrow: (request: { wrapping_key: string; owner_public_key: string }) => Promise<void>;
   retryReachability: () => Promise<void>;
   allowFirewall: () => Promise<'allowed' | 'declined' | null>;
   loadInfo: () => Promise<HostInfo | null>;
@@ -234,7 +235,7 @@ export const useHostStore = create<HostStoreState>()((set, get) => {
     },
 
     claim: (request) => commands.hostClaim(request),
-    writeEscrow: (wrappingKey) => commands.hostWriteEscrow(wrappingKey),
+    writeEscrow: (request) => commands.hostWriteEscrow(request),
 
     async retryReachability() {
       const pacer = createPacer((event) => set((s) => ({ rows: applyProgress(s.rows, event) })));

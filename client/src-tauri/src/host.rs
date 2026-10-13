@@ -13,7 +13,7 @@
 //! Nothing here polls in the background: status is read when the page asks.
 //!
 //! Arguments use Tauri's default camelCase on the JS side
-//! (`invoke('host_write_escrow', { wrappingKey })`).
+//! (`invoke('host_write_escrow', { wrappingKey, ownerPublicKey })`).
 
 use std::sync::Mutex;
 
@@ -95,10 +95,18 @@ pub async fn host_claim(
     run(app, true, move |host, _| host.claim(&request)).await
 }
 
-/// Writes the storage-key escrow (spec §4.7). `wrapping_key` is b64url.
+/// Writes the storage-key escrow (spec §4.7). `wrapping_key` is b64url;
+/// `owner_public_key` is the hex identity key it was derived from.
 #[tauri::command]
-pub async fn host_write_escrow(app: AppHandle, wrapping_key: String) -> Result<(), String> {
-    run(app, true, move |host, _| host.write_escrow(&wrapping_key)).await
+pub async fn host_write_escrow(
+    app: AppHandle,
+    wrapping_key: String,
+    owner_public_key: String,
+) -> Result<(), String> {
+    run(app, true, move |host, _| {
+        host.write_escrow(&wrapping_key, &owner_public_key)
+    })
+    .await
 }
 
 #[tauri::command]

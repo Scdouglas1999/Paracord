@@ -1,7 +1,8 @@
+import { getPublicKeyAsync } from '@noble/ed25519';
 import { hkdf } from '@noble/hashes/hkdf.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 
-import { toB64url, utf8 } from '../../lib/credential/encoding';
+import { toB64url, toHex, utf8 } from '../../lib/credential/encoding';
 
 /**
  * The owner's escrow key (docs/setup-spec.md §4.7): the recovery phrase is the
@@ -30,4 +31,21 @@ export function escrowWrappingKey(identityPrivateKey: Uint8Array, instanceId: st
   } finally {
     key.fill(0);
   }
+}
+
+/**
+ * The escrow endpoints' body: the wrapping key and the identity public key it
+ * was derived from. The server refuses a key that is not the owner's current
+ * one (409 `escrow_owner_mismatch`), so an escrow is never sealed under a
+ * phrase the owner gave up with "Start over".
+ */
+export interface EscrowRequest {
+  wrapping_key: string;
+  owner_public_key: string;
+}
+
+export async function escrowRequest(identityPrivateKey: Uint8Array, instanceId: string): Promise<EscrowRequest> {
+  const wrapping_key = escrowWrappingKey(identityPrivateKey, instanceId);
+  const owner_public_key = toHex(await getPublicKeyAsync(identityPrivateKey));
+  return { wrapping_key, owner_public_key };
 }

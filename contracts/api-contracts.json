@@ -3963,13 +3963,18 @@
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "description": "`POST /api/v1/host/storage-key/escrow` and\n`POST /api/v1/admin/storage-key/escrow`: the key that wraps the storage key\n(spec §4.7). Never stored.",
       "properties": {
+        "owner_public_key": {
+          "description": "Hex of the identity public key `wrapping_key` was derived from. It must\nbe the owner's current key (`users.public_key`), else 409\n`escrow_owner_mismatch`: an escrow is always sealed for the owner's\ncurrent recovery phrase.",
+          "type": "string"
+        },
         "wrapping_key": {
           "description": "b64url of the 32-byte `escrow_key`.",
           "type": "string"
         }
       },
       "required": [
-        "wrapping_key"
+        "wrapping_key",
+        "owner_public_key"
       ],
       "title": "StorageKeyEscrowRequest",
       "type": "object"

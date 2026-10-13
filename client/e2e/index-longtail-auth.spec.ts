@@ -1,6 +1,5 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
-import path from 'node:path';
-import { installIndexScene, outDir, shoot, sidebar, type SizeName } from './fixtures/index';
+import { installIndexScene, shoot, sidebar, type SizeName } from './fixtures/index';
 import { Permissions } from '../src/types/permissions.types';
 
 /**
@@ -200,73 +199,11 @@ for (const size of SIZES) {
       await shotBoth(page, 'register-2', size);
     });
 
-    test('connect: the first-run explainer, then the address form and the server list', async ({ page }) => {
-      await signedOut(page);
-      await page.setViewportSize(size === 'desktop' ? { width: 1440, height: 900 } : { width: 390, height: 844 });
-      await page.goto('/connect');
-      await expect(page.getByText('Welcome to Paracord').first()).toBeVisible();
-      await expectIndexAuth(page, 'connect-onboarding', size);
-      await shotBoth(page, 'connect-onboarding', size);
-      await page.getByRole('button', { name: 'Next' }).click();
-      await expect(page.getByRole('button', { name: 'Paste my invite link' })).toBeVisible();
-      await expectIndexAuth(page, 'connect-onboarding-2', size);
-      await shotBoth(page, 'connect-onboarding-2', size);
-    });
-
-    test('connect: the address form with servers you have joined', async ({ page }) => {
-      await signedOut(page, {
-        storage: {
-          'paracord:v2:onboarding-complete': '1',
-          'paracord:server-list': JSON.stringify({
-            version: 0,
-            state: {
-              activeServerId: 's1',
-              servers: ['river', 'harbor', 'kestrel'].map((name, index) => ({
-                id: `s${index + 1}`,
-                url: `https://${name}.example.test`,
-                name: `${name}.example.test`,
-                token: index === 1 ? null : 'token',
-                connected: index === 0,
-              })),
-            },
-          }),
-        },
-      });
-      await page.setViewportSize(size === 'desktop' ? { width: 1440, height: 900 } : { width: 390, height: 844 });
-      await page.goto('/connect');
-      await expect(page.getByRole('button', { name: /^Continue$/ })).toBeVisible();
-      await expectIndexAuth(page, 'connect', size);
-      await shotBoth(page, 'connect', size);
-    });
-
-    test('the first-owner claim, every step', async ({ page }) => {
-      await signedOut(page, { setupRequired: true });
-      await page.setViewportSize(size === 'desktop' ? { width: 1440, height: 900 } : { width: 390, height: 844 });
-      await page.goto('/setup-server');
-      await expect(page.getByRole('heading', { name: /Enter your setup code/ })).toBeVisible();
-      await expectIndexAuth(page, 'setup-server-1', size);
-      await shotBoth(page, 'setup-server-1', size);
-      await page.getByLabel(/Setup code/).fill('A1B2C3D4E5F6G7H8J9K0MNPQRSTVWXYZ23456789');
-      await page.keyboard.press('Enter');
-      await expect(page.getByRole('heading', { name: /Create the owner account/ })).toBeVisible();
-      await shotBoth(page, 'setup-server-2', size);
-      await page.getByLabel(/Username/).fill('ada');
-      await page.getByLabel(/Email/).fill('ada@example.test');
-      await page.keyboard.press('Enter');
-      await expect(page.getByRole('heading', { name: /Protect the owner account/ })).toBeVisible();
-      await shotBoth(page, 'setup-server-3', size);
-      await page.getByLabel(/^Password/).fill('Riverside-123!');
-      await page.getByLabel(/Confirm password/).fill('Riverside-123!');
-      await page.keyboard.press('Enter');
-      await expect(page.getByRole('heading', { name: /Name the place/ })).toBeVisible();
-      await shotBoth(page, 'setup-server-4', size);
-      await page.getByLabel(/Instance name/).fill('Riverside Studio');
-      await page.getByLabel(/First server name/).fill('The Lounge');
-      await page.keyboard.press('Enter');
-      await expect(page.getByRole('heading', { name: /Who can get in/ })).toBeVisible();
-      await expectIndexAuth(page, 'setup-server-5', size);
-      await shotBoth(page, 'setup-server-5', size);
-    });
+    // The connect page, the first-owner wizard and the old invite page were
+    // retired by the first run (docs/setup-spec.md §1.14, S13): `/connect`
+    // only redirects, and `/setup-server` (claim mode) and `/invite/:code`
+    // (the web join) are first-run screens with their own design, reviewed in
+    // e2e/setup-s13.spec.ts against the prototype, not Index entry pages.
 
     test('account setup, unlock and recover', async ({ page }) => {
       await signedOut(page, { storage: { 'paracord:account:exists': '1' } });
@@ -285,15 +222,6 @@ for (const size of SIZES) {
       await expect(page.getByRole('heading', { name: 'Recover your account' })).toBeVisible();
       await expectIndexAuth(page, 'account-recover', size);
       await shotBoth(page, 'account-recover', size);
-    });
-
-    test('an invite', async ({ page }) => {
-      await signedOut(page);
-      await page.setViewportSize(size === 'desktop' ? { width: 1440, height: 900 } : { width: 390, height: 844 });
-      await page.goto('/invite/kestrel');
-      await expect(page.getByText(/invited/i).first()).toBeVisible();
-      await expectIndexAuth(page, 'invite', size);
-      await shotBoth(page, 'invite', size);
     });
 
     test('terms and privacy', async ({ page }) => {
@@ -369,53 +297,6 @@ for (const size of SIZES) {
     await shotBoth(page, 'bot-authorize', size);
   });
 }
-
-/** The fit law (auth-fit.spec.ts) for the one page whose layout changed shape: the form and the servers list. */
-test('connect with servers listed fits 1280x740 and 940x500 without scrolling the page', async ({ page }) => {
-  await signedOut(page, {
-    storage: {
-      'paracord:v2:onboarding-complete': '1',
-      'paracord:server-list': JSON.stringify({
-        version: 0,
-        state: {
-          activeServerId: 's1',
-          servers: ['one', 'two', 'three', 'four', 'five'].map((name, index) => ({
-            id: `s${index + 1}`,
-            url: `https://${name}.example.test`,
-            name: `${name}.example.test`,
-            token: null,
-            connected: false,
-          })),
-        },
-      }),
-    },
-  });
-  for (const viewport of [
-    { width: 1280, height: 740 },
-    { width: 940, height: 500 },
-  ]) {
-    await page.setViewportSize(viewport);
-    await page.goto('/connect');
-    await expect(page.getByText('Servers you have joined')).toBeVisible();
-    const action = page.getByRole('button', { name: /^Continue$/ });
-    await expect(action).toBeInViewport({ ratio: 1 });
-    await expect(page.getByRole('button', { name: 'Continue to app' })).toBeInViewport({ ratio: 1 });
-    const m = await page.evaluate(() => {
-      const canvas = document.querySelector('[aria-label="Account access"]')!;
-      return {
-        content: document.documentElement.scrollHeight,
-        window: document.documentElement.clientHeight,
-        canvasContent: canvas.scrollHeight,
-        canvasWindow: canvas.clientHeight,
-      };
-    });
-    expect(m.content, `page at ${viewport.width}x${viewport.height}`).toBeLessThanOrEqual(m.window + 1);
-    expect(m.canvasContent, `canvas at ${viewport.width}x${viewport.height}`).toBeLessThanOrEqual(m.canvasWindow + 1);
-    await page.waitForTimeout(350);
-    await page.screenshot({ path: path.join(outDir(), `auth-connect-servers-${viewport.width}x${viewport.height}.png`) });
-    await expectIndexAuth(page, 'connect-servers', 'phone');
-  }
-});
 
 for (const size of SIZES) {
   test(`account setup shows the recovery phrase at ${size}`, async ({ page }) => {

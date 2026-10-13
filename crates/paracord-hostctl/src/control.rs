@@ -23,7 +23,8 @@ use rustls::{DigitallySignedStruct, SignatureScheme};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EscrowOutcome {
     Written,
-    /// 409: an escrow for this instance already exists (a resumed setup).
+    /// 409: an escrow for this instance and owner key already exists (a
+    /// resumed setup). A 409 `escrow_owner_mismatch` is an error instead.
     AlreadyPresent,
 }
 
@@ -34,7 +35,9 @@ pub trait HostApi: Send + Sync {
     fn status(&self) -> Result<HostStatus>;
     fn retry_reachability(&self) -> Result<()>;
     fn backup_now(&self) -> Result<BackupNowResponse>;
-    fn write_escrow(&self, wrapping_key: &str) -> Result<EscrowOutcome>;
+    /// `owner_public_key`: hex of the identity key `wrapping_key` comes from;
+    /// the server refuses one that is not the owner's current key.
+    fn write_escrow(&self, wrapping_key: &str, owner_public_key: &str) -> Result<EscrowOutcome>;
     /// `POST /setup/credential-claim`; returns the server's `ClaimResponse`.
     fn claim(&self, token: &str, owner: &NewOwnerClaim) -> Result<serde_json::Value>;
 }
@@ -313,7 +316,7 @@ impl HostApi for LoopbackHost {
         Ok(response.json()?)
     }
 
-    fn write_escrow(&self, wrapping_key: &str) -> Result<EscrowOutcome> {
+    fn write_escrow(&self, wrapping_key: &str, owner_public_key: &str) -> Result<EscrowOutcome> {
         let response = self
             .host_request(
                 reqwest::Method::POST,
@@ -322,11 +325,24 @@ impl HostApi for LoopbackHost {
             )?
             .json(&StorageKeyEscrowRequest {
                 wrapping_key: wrapping_key.to_string(),
+                owner_public_key: owner_public_key.to_string(),
             })
             .send()?;
         match response.status() {
             s if s.is_success() => Ok(EscrowOutcome::Written),
-            reqwest::StatusCode::CONFLICT => Ok(EscrowOutcome::AlreadyPresent),
+            reqwest::StatusCode::CONFLICT => {
+                // Every other 409 (already escrowed, not encrypted) leaves a
+                // good state behind; a phrase that is not the owner's does not.
+                let body: serde_json::Value = response.json().unwrap_or_default();
+                if body.get("code").and_then(|c| c.as_str()) == Some("escrow_owner_mismatch") {
+                    let message = body
+                        .get("message")
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("that recovery phrase is not the server owner's current one");
+                    bail!("{message}");
+                }
+                Ok(EscrowOutcome::AlreadyPresent)
+            }
             _ => Err(error_text(response)),
         }
     }

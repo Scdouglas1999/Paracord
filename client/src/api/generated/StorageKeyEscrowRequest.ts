@@ -8,6 +8,13 @@
  */
 export interface StorageKeyEscrowRequest {
   /**
+   * Hex of the identity public key `wrapping_key` was derived from. It must
+   * be the owner's current key (`users.public_key`), else 409
+   * `escrow_owner_mismatch`: an escrow is always sealed for the owner's
+   * current recovery phrase.
+   */
+  owner_public_key: string;
+  /**
    * b64url of the 32-byte `escrow_key`.
    */
   wrapping_key: string;

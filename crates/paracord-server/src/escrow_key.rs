@@ -59,8 +59,23 @@ pub fn run(args: &EscrowKeyArgs) -> Result<()> {
         &instance_id,
         escrow.as_ref().map(|e| e.owner_public_key.as_str()),
     );
+    let public_key = args.json.then(|| {
+        private_key_from_phrase(&line).map(|mut private_key| {
+            let public_key = public_key_hex(&private_key);
+            private_key.fill(0);
+            public_key
+        })
+    });
     line.replace_range(.., &" ".repeat(line.len()));
-    println!("{}", key?);
+    let key = key?;
+    match public_key {
+        // The escrow endpoint wants the identity key the escrow key came from.
+        Some(public_key) => println!(
+            "{}",
+            serde_json::json!({ "wrapping_key": key, "owner_public_key": public_key? })
+        ),
+        None => println!("{key}"),
+    }
     Ok(())
 }
 

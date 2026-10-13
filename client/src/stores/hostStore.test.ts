@@ -196,8 +196,8 @@ describe('hostStore commands', () => {
       if (command === 'host_info') return { enabled: false, completed_steps: [] };
       return undefined;
     });
-    await useHostStore.getState().writeEscrow('d3JhcA');
-    expect(invokeMock).toHaveBeenCalledWith('host_write_escrow', { wrappingKey: 'd3JhcA' });
+    await useHostStore.getState().writeEscrow({ wrapping_key: 'd3JhcA', owner_public_key: 'ad15' });
+    expect(invokeMock).toHaveBeenCalledWith('host_write_escrow', { wrappingKey: 'd3JhcA', ownerPublicKey: 'ad15' });
     expect(await useHostStore.getState().setAutostart(false)).toBe(true);
     expect(invokeMock).toHaveBeenCalledWith('host_set_autostart', { enabled: false });
     expect(await useHostStore.getState().remove(true)).toBe(false);

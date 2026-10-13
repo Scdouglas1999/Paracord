@@ -436,6 +436,8 @@ test.describe('claim mode (a headless install, web)', () => {
       if (atRest === 'on') {
         expect(escrows).toHaveLength(1);
         expect((escrows[0] as { wrapping_key: string }).wrapping_key).toMatch(/^[A-Za-z0-9_-]{43}$/);
+        // The identity key it was derived from: the server refuses one that isn't the owner's current key.
+        expect((escrows[0] as { owner_public_key: string }).owner_public_key).toMatch(/^[0-9a-f]{64}$/);
         await expect(page.getByTestId('fr-setup-rows').locator('[data-row="2"]')).toHaveAttribute('data-state', 'ok');
       } else {
         // Nothing to escrow on a server that stores data unencrypted.
@@ -525,7 +527,7 @@ test.describe('restore from a backup (S13b, spec §1.4, §4.8)', () => {
     await scene.host!.finish();
     // Row 3: the escrow again, for the restored instance, then rows 4 and 5.
     await expect.poll(async () => scene.host!.calls('host_setup_start').length, { timeout: 10_000 }).toBe(2);
-    expect(scene.host!.calls('host_write_escrow')[0].args).toEqual({ wrappingKey: RESTORE_VECTOR.wrappingKey });
+    expect(scene.host!.calls('host_write_escrow')[0].args).toEqual({ wrappingKey: RESTORE_VECTOR.wrappingKey, ownerPublicKey: RESTORE_VECTOR.publicKey });
     await scene.host!.finish();
     await expect(page.getByTestId('fr-setup-continue')).toBeEnabled({ timeout: 10_000 });
     await expect(page.getByTestId('fr-see-protected')).toHaveCount(0);

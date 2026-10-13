@@ -23,6 +23,8 @@ use paracord_core::HostRuntimeConfig;
 use serde_json::{json, Value};
 
 const TOKEN: &str = "test-control-token-0123456789abcdef";
+/// The S1 vector identity's public key (`credential_vectors.json`).
+const OWNER_KEY: &str = "ad1556f6b39cd51a513052c0be97b86e668adb99fadb813e0c02ebddf7037fd4";
 
 struct Host {
     app: TestApp,
@@ -120,7 +122,8 @@ async fn every_host_route_refuses_a_caller_without_the_token() -> anyhow::Result
         (Method::POST, "/api/v1/host/storage-key/escrow"),
     ];
     for (method, path) in routes {
-        let body = (method != Method::GET).then(|| json!({ "wrapping_key": b64url(&[7u8; 32]) }));
+        let body = (method != Method::GET)
+            .then(|| json!({ "wrapping_key": b64url(&[7u8; 32]), "owner_public_key": OWNER_KEY }));
         for token in [None, Some("wrong"), Some("")] {
             let (status, payload) = call(
                 &host,
@@ -347,8 +350,9 @@ async fn escrow_checks_its_input_before_anything_else() -> anyhow::Result<()> {
     let path = "/api/v1/host/storage-key/escrow";
 
     for bad in [
-        json!({ "wrapping_key": "not base64 !!" }),
-        json!({ "wrapping_key": b64url(&[1u8; 16]) }),
+        json!({ "wrapping_key": "not base64 !!", "owner_public_key": OWNER_KEY }),
+        json!({ "wrapping_key": b64url(&[1u8; 16]), "owner_public_key": OWNER_KEY }),
+        json!({ "wrapping_key": b64url(&[1u8; 32]), "owner_public_key": "abcd" }),
     ] {
         let (status, payload) = call(
             &host,
@@ -365,7 +369,7 @@ async fn escrow_checks_its_input_before_anything_else() -> anyhow::Result<()> {
         host_request(
             Method::POST,
             path,
-            Some(json!({ "wrapping_key": b64url(&[1u8; 32]) })),
+            Some(json!({ "wrapping_key": b64url(&[1u8; 32]), "owner_public_key": OWNER_KEY })),
             Some(TOKEN),
         ),
     )
@@ -385,7 +389,7 @@ async fn the_escrow_needs_an_owner() -> anyhow::Result<()> {
         host_request(
             Method::POST,
             "/api/v1/host/storage-key/escrow",
-            Some(json!({ "wrapping_key": b64url(&[1u8; 32]) })),
+            Some(json!({ "wrapping_key": b64url(&[1u8; 32]), "owner_public_key": OWNER_KEY })),
             Some(TOKEN),
         ),
     )
@@ -517,7 +521,7 @@ async fn only_the_owner_may_escrow_the_storage_key() -> anyhow::Result<()> {
         .await?
     );
 
-    let body = json!({ "wrapping_key": b64url(&[9u8; 32]) });
+    let body = json!({ "wrapping_key": b64url(&[9u8; 32]), "owner_public_key": OWNER_KEY });
     let path = "/api/v1/admin/storage-key/escrow";
 
     let (status, payload) = dispatch_json(
@@ -537,7 +541,7 @@ async fn only_the_owner_may_escrow_the_storage_key() -> anyhow::Result<()> {
         build_json_request(
             Method::POST,
             path,
-            Some(json!({ "wrapping_key": "short" })),
+            Some(json!({ "wrapping_key": "short", "owner_public_key": OWNER_KEY })),
             Some(&tokens[0].0),
         )?,
     )
@@ -551,7 +555,7 @@ async fn only_the_owner_may_escrow_the_storage_key() -> anyhow::Result<()> {
         "d2cb3a96fd540c24f68825716fdb1e8c2549542d67fd5d25107635c2959f8d9c",
     )
     .unwrap();
-    let identity_public = "ad1556f6b39cd51a513052c0be97b86e668adb99fadb813e0c02ebddf7037fd4";
+    let identity_public = OWNER_KEY;
     paracord_db::users::update_user_public_key(&app.db, tokens[0].1, identity_public).await?;
     let master_key = paracord_util::at_rest::generate_master_key();
     paracord_core::storage_key::init(paracord_core::storage_key::StorageKeyRuntime {
@@ -564,7 +568,7 @@ async fn only_the_owner_may_escrow_the_storage_key() -> anyhow::Result<()> {
         ..Default::default()
     });
     let escrow_key = paracord_util::at_rest::derive_escrow_key(&identity_private, INSTANCE);
-    let body = json!({ "wrapping_key": b64url(&escrow_key) });
+    let body = json!({ "wrapping_key": b64url(&escrow_key), "owner_public_key": identity_public });
     let (status, payload) = dispatch_json(
         &app.app,
         build_json_request(Method::POST, path, Some(body.clone()), Some(&tokens[0].0))?,
@@ -581,9 +585,81 @@ async fn only_the_owner_may_escrow_the_storage_key() -> anyhow::Result<()> {
 
     let (status, payload) = dispatch_json(
         &app.app,
-        build_json_request(Method::POST, path, Some(body), Some(&tokens[0].0))?,
+        build_json_request(Method::POST, path, Some(body.clone()), Some(&tokens[0].0))?,
     )
     .await?;
     assert_eq!(status, StatusCode::CONFLICT, "write-once: {payload}");
+    assert_eq!(payload["code"], "escrow_exists", "{payload}");
+
+    // "Start over": the owner now has a new identity. A backup from before
+    // still opens with the old phrase, so a client restoring it would derive
+    // the escrow key from the old phrase. The server refuses that key: the
+    // escrow would name the new owner key while only the old phrase opens it.
+    let new_private = [0x5a_u8; 32];
+    let new_public = "1111111111111111111111111111111111111111111111111111111111111111";
+    paracord_db::users::update_user_public_key(&app.db, tokens[0].1, new_public).await?;
+    let before = std::fs::read(&escrow_file)?;
+    let (status, payload) = dispatch_json(
+        &app.app,
+        build_json_request(Method::POST, path, Some(body.clone()), Some(&tokens[0].0))?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::CONFLICT, "old phrase: {payload}");
+    assert_eq!(payload["code"], "escrow_owner_mismatch", "{payload}");
+    // Any key other than the owner's current one is refused the same way.
+    let (status, payload) = dispatch_json(
+        &app.app,
+        build_json_request(
+            Method::POST,
+            path,
+            Some(
+                json!({ "wrapping_key": b64url(&escrow_key), "owner_public_key": "22".repeat(32) }),
+            ),
+            Some(&tokens[0].0),
+        )?,
+    )
+    .await?;
+    assert_eq!(
+        payload["code"], "escrow_owner_mismatch",
+        "{status} {payload}"
+    );
+    assert_eq!(std::fs::read(&escrow_file)?, before, "nothing was replaced");
+
+    // The new phrase replaces the stale escrow (it names the old key), and the
+    // result opens with the new phrase only.
+    let new_escrow_key = paracord_util::at_rest::derive_escrow_key(&new_private, INSTANCE);
+    let new_body = json!({
+        "wrapping_key": b64url(&new_escrow_key),
+        "owner_public_key": new_public.to_ascii_uppercase(),
+    });
+    let (status, payload) = dispatch_json(
+        &app.app,
+        build_json_request(
+            Method::POST,
+            path,
+            Some(new_body.clone()),
+            Some(&tokens[0].0),
+        )?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{payload}");
+    let escrow = paracord_core::storage_key::read_escrow_file(&escrow_file)?;
+    assert_eq!(escrow.owner_public_key, new_public);
+    assert_eq!(
+        paracord_core::storage_key::unwrap_escrow(&escrow, &new_escrow_key).unwrap(),
+        master_key
+    );
+    assert!(paracord_core::storage_key::unwrap_escrow(&escrow, &escrow_key).is_err());
+    assert!(
+        !dir.path().join("storage-key.escrow.replacing").exists(),
+        "no staging file left"
+    );
+    let (status, payload) = dispatch_json(
+        &app.app,
+        build_json_request(Method::POST, path, Some(new_body), Some(&tokens[0].0))?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::CONFLICT, "write-once again: {payload}");
+    assert_eq!(payload["code"], "escrow_exists", "{payload}");
     Ok(())
 }

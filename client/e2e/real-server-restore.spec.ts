@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext, type BrowserContext, type Page } from '@playwright/test';
+import { gotoUnlocked, registerAccount } from './fixtures/onePassword';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { createSocket } from 'node:dgram';
@@ -344,9 +345,7 @@ test('restored backup replaces live history for connected browsers without a rel
       const context = await playwright.request.newContext();
       const email = `${label}-${unique}@example.test`;
       try {
-        const response = await context.post(`${BASE}/api/v1/auth/register`, {
-          data: { email, username: `${label}${unique}`, password },
-        });
+        const response = await registerAccount(context, BASE, { email, username: `${label}${unique}`, password });
         expect(response.status(), await response.text()).toBe(201);
         return { ...(await response.json()), email };
       } finally {
@@ -438,7 +437,7 @@ test('restored backup replaces live history for connected browsers without a rel
     // is opened by the sidebar's own row, so nothing reloads and the wire the
     // clients hold stays the one observed above. The unread baseline mention
     // must already be visible.
-    await ownerPage.goto(`${BASE}/app/guilds/${guild.id}/channels/${channel.id}`);
+    await gotoUnlocked(ownerPage, `${BASE}/app/guilds/${guild.id}/channels/${channel.id}`, password);
     await expect(ownerPage.getByText(ledgerPhrase).first()).toBeVisible();
     // A launch with no memory opens the member's first server; People is the
     // dock's first place, and its sidebar's Inbox row opens the page.

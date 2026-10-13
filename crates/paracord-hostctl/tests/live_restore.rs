@@ -240,7 +240,7 @@ fn restore_from_a_backup_on_a_fresh_computer() -> Result<()> {
                 &instance,
             ],
         )?;
-        host.write_escrow(&new_key)?;
+        host.write_escrow(&new_key, &escrow.owner_public_key)?;
         host.setup(port, &emit)?;
         assert!(host.status()?.storage.escrowed);
         let rows = events.lock().unwrap();

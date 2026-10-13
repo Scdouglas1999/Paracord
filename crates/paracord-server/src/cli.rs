@@ -73,6 +73,10 @@ pub struct EscrowKeyArgs {
     /// archive's. With --archive, the phrase is still checked against it.
     #[arg(long)]
     pub instance_id: Option<String>,
+    /// Print the `POST /api/v1/admin/storage-key/escrow` body
+    /// (`{"wrapping_key", "owner_public_key"}`) instead of the bare key.
+    #[arg(long)]
+    pub json: bool,
 }
 
 /// Where `encrypt-storage` keeps the new key.
