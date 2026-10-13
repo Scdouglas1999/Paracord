@@ -246,6 +246,10 @@ pub struct MapFailure {
     pub kind: FailureKind,
     /// In plain words.
     pub reason: String,
+    /// The router that answered, when one did (the UPnP control URL host, or
+    /// the NAT-PMP/PCP gateway that sent a result code). `None` when nothing
+    /// answered, so the sheet only names an address it knows is the router's.
+    pub gateway_ip: Option<IpAddr>,
 }
 
 impl MapFailure {
@@ -253,6 +257,7 @@ impl MapFailure {
         Self {
             kind: FailureKind::Refused,
             reason: reason.into(),
+            gateway_ip: None,
         }
     }
 
@@ -260,7 +265,15 @@ impl MapFailure {
         Self {
             kind: FailureKind::NoAnswer,
             reason: reason.into(),
+            gateway_ip: None,
         }
+    }
+
+    /// Record which router this failure came from.
+    #[must_use]
+    pub fn via_gateway(mut self, gateway: IpAddr) -> Self {
+        self.gateway_ip = Some(gateway);
+        self
     }
 }
 
@@ -344,6 +357,7 @@ pub async fn establish(
     let deadline = tokio::time::Instant::now() + budget;
     let mut reasons: Vec<String> = Vec::new();
     let mut refused = false;
+    let mut gateway_ip: Option<IpAddr> = None;
 
     for router in routers {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
@@ -366,6 +380,9 @@ pub async fn establish(
             }
             Ok(Err(failure)) => {
                 refused |= failure.kind == FailureKind::Refused;
+                // The first router that answered names the address; a later
+                // method that answered and refused does not replace it.
+                gateway_ip = gateway_ip.or(failure.gateway_ip);
                 reasons.push(format!("{}: {}", router.method(), failure.reason));
             }
             Err(_) => reasons.push(format!(
@@ -389,6 +406,7 @@ pub async fn establish(
                 FailureKind::NoAnswer
             },
             reason,
+            gateway_ip,
         }),
     }
 }
@@ -478,16 +496,22 @@ impl UpnpRouter {
         // Bounded below the overall budget so a silent router still leaves
         // time for NAT-PMP.
         let gateway = self.gateway(Duration::from_secs(4)).await?;
+        // The router answered discovery, so every failure from here on names it.
+        let router_ip = gateway.addr.ip();
         let local_ip = local_ip_toward(gateway.addr).map_err(|err| {
             MapFailure::refused(format!(
                 "could not work out this computer's address ({err})"
             ))
+            .via_gateway(router_ip)
         })?;
         let lease_seconds = u32::try_from(lease.as_secs()).unwrap_or(u32::MAX);
 
         let mut granted = Some(lease);
         for (port, transport) in request.entries() {
-            if add_upnp_mapping(&gateway, local_ip, port, transport, lease_seconds).await? {
+            if add_upnp_mapping(&gateway, local_ip, port, transport, lease_seconds)
+                .await
+                .map_err(|failure| failure.via_gateway(router_ip))?
+            {
                 // The router only keeps permanent entries: nothing expires, so
                 // there is no lease to renew against.
                 granted = None;
@@ -498,6 +522,7 @@ impl UpnpRouter {
             MapFailure::refused(format!(
                 "the router opened the ports but would not say its public address ({err})"
             ))
+            .via_gateway(router_ip)
         })?;
         Ok(Mapping {
             external_ip,
@@ -560,9 +585,107 @@ fn upnp_protocol(transport: Transport) -> igd_next::PortMappingProtocol {
     }
 }
 
+/// The UPnP calls the mapping logic needs, so that logic can be tested against
+/// a scripted router instead of the network.
+trait UpnpControl: Send + Sync {
+    fn add_port(
+        &self,
+        protocol: igd_next::PortMappingProtocol,
+        port: u16,
+        local_addr: SocketAddr,
+        lease_seconds: u32,
+        description: &str,
+    ) -> BoxFuture<'_, Result<(), igd_next::AddPortError>>;
+
+    /// The router's current entry for this outside port and protocol, if it
+    /// has one and will say so.
+    fn existing_mapping(
+        &self,
+        protocol: igd_next::PortMappingProtocol,
+        port: u16,
+    ) -> BoxFuture<'_, Result<Option<ExistingMapping>, String>>;
+}
+
+/// A mapping already on the router.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ExistingMapping {
+    internal_client: String,
+    internal_port: u16,
+    enabled: bool,
+}
+
+/// How many table rows to read looking for our port before giving up.
+const UPNP_TABLE_LIMIT: u32 = 512;
+
+impl UpnpControl for igd_next::aio::Gateway<igd_next::aio::tokio::Tokio> {
+    fn add_port(
+        &self,
+        protocol: igd_next::PortMappingProtocol,
+        port: u16,
+        local_addr: SocketAddr,
+        lease_seconds: u32,
+        description: &str,
+    ) -> BoxFuture<'_, Result<(), igd_next::AddPortError>> {
+        let description = description.to_string();
+        Box::pin(async move {
+            igd_next::aio::Gateway::add_port(
+                self,
+                protocol,
+                port,
+                local_addr,
+                lease_seconds,
+                &description,
+            )
+            .await
+        })
+    }
+
+    /// igd-next has no GetSpecificPortMappingEntry, so read the router's
+    /// mapping table by index until the entry turns up or the table ends.
+    fn existing_mapping(
+        &self,
+        protocol: igd_next::PortMappingProtocol,
+        port: u16,
+    ) -> BoxFuture<'_, Result<Option<ExistingMapping>, String>> {
+        Box::pin(async move {
+            for index in 0..UPNP_TABLE_LIMIT {
+                match self.get_generic_port_mapping_entry(index).await {
+                    Ok(entry) => {
+                        if entry.external_port == port && entry.protocol == protocol {
+                            return Ok(Some(ExistingMapping {
+                                internal_client: entry.internal_client,
+                                internal_port: entry.internal_port,
+                                enabled: entry.enabled,
+                            }));
+                        }
+                    }
+                    Err(igd_next::GetGenericPortMappingEntryError::SpecifiedArrayIndexInvalid) => {
+                        return Ok(None);
+                    }
+                    Err(err) => return Err(err.to_string()),
+                }
+            }
+            Err(format!(
+                "the router's mapping table has more than {UPNP_TABLE_LIMIT} entries"
+            ))
+        })
+    }
+}
+
+/// Is an existing entry this computer's own, pointing at the same port?
+fn is_ours(existing: &ExistingMapping, local_ip: IpAddr, port: u16) -> bool {
+    existing.enabled
+        && existing.internal_port == port
+        && existing
+            .internal_client
+            .trim()
+            .parse::<IpAddr>()
+            .is_ok_and(|client| client == local_ip)
+}
+
 /// `Ok(true)` when the router only keeps permanent entries and one was made.
 async fn add_upnp_mapping(
-    gateway: &igd_next::aio::Gateway<igd_next::aio::tokio::Tokio>,
+    gateway: &dyn UpnpControl,
     local_ip: IpAddr,
     port: u16,
     transport: Transport,
@@ -580,9 +703,30 @@ async fn add_upnp_mapping(
         .await
     {
         Ok(()) => Ok(false),
-        // The mapping already exists. On a restart or a renewal that is our own
-        // entry, which is exactly the state we wanted.
-        Err(igd_next::AddPortError::PortInUse) => Ok(false),
+        // Error 718 (ConflictInMappingEntry) means either "you already have
+        // this entry" or "someone else has it / the router's rules deny it".
+        // Only the router's own table can tell the two apart, so ask it; an
+        // entry we cannot show is ours is a refusal, never an open port.
+        Err(igd_next::AddPortError::PortInUse) => {
+            let label = transport.label();
+            match gateway.existing_mapping(protocol, port).await {
+                Ok(Some(existing)) if is_ours(&existing, local_ip, port) => Ok(false),
+                Ok(Some(existing)) => Err(MapFailure::refused(format!(
+                    "the router already forwards {label} {port} to {}:{} instead of this \
+                     computer ({local_ip}), and it will not replace that entry",
+                    existing.internal_client.trim(),
+                    existing.internal_port
+                ))),
+                Ok(None) => Err(MapFailure::refused(format!(
+                    "the router refused {label} {port} (conflict in mapping entry) and shows \
+                     no existing entry for it, so its rules do not allow this mapping"
+                ))),
+                Err(why) => Err(MapFailure::refused(format!(
+                    "the router refused {label} {port} (conflict in mapping entry) and would \
+                     not say whether the entry that is there belongs to this computer ({why})"
+                ))),
+            }
+        }
         // Some routers refuse timed leases outright and only keep permanent
         // entries. Asking again for a permanent one is the honest retry; it is
         // still removed on a graceful shutdown.
@@ -666,7 +810,9 @@ impl Router for NatPmpRouter {
                     options,
                 )
                 .await
-                .map_err(|err| natpmp_failure(&err, transport, port))?;
+                .map_err(|err| {
+                    tag_if_answered(natpmp_failure(&err, transport, port), gateway_ip)
+                })?;
 
                 // A different outside port is not usable here: clients derive
                 // both the app URL and the media port from this one number, so
@@ -679,7 +825,8 @@ impl Router for NatPmpRouter {
                         "this router mapped {} {port} to a different outside port ({assigned}), \
                          which Paracord cannot use",
                         transport.label()
-                    )));
+                    ))
+                    .via_gateway(IpAddr::V4(gateway_ip)));
                 }
 
                 let given = Duration::from_secs(u64::from(mapping.lifetime()));
@@ -720,7 +867,8 @@ impl Router for NatPmpRouter {
                                 }
                                 _ => MapFailure::refused(reason),
                             }
-                        })?;
+                        })
+                        .map_err(|failure| tag_if_answered(failure, gateway_ip))?;
                     IpAddr::V4(ip)
                 }
             };
@@ -774,6 +922,16 @@ fn natpmp_failure(err: &crab_nat::MappingFailure, transport: Transport, port: u1
         ))
     } else {
         MapFailure::refused(reason)
+    }
+}
+
+/// Name the gateway on a failure only when it answered (a result code came
+/// back); a silent gateway is not known to be a router at all.
+fn tag_if_answered(failure: MapFailure, gateway: Ipv4Addr) -> MapFailure {
+    if failure.kind == FailureKind::Refused {
+        failure.via_gateway(IpAddr::V4(gateway))
+    } else {
+        failure
     }
 }
 
@@ -1263,5 +1421,215 @@ mod tests {
         assert!(direct.is_mapped());
         assert_eq!(direct.external_ip(), Some("198.51.100.20".parse().unwrap()));
         assert!(direct.status_line().contains("198.51.100.20"));
+    }
+
+    // ── UPnP conflicts (error 718) against a scripted router ───────────────
+
+    use std::collections::VecDeque;
+
+    /// A UPnP router that answers `AddPortMapping` from a script and shows
+    /// whatever mapping table the test gave it.
+    struct FakeUpnp {
+        adds: std::sync::Mutex<VecDeque<Result<(), igd_next::AddPortError>>>,
+        table: Result<Option<ExistingMapping>, String>,
+        lookups: AtomicUsize,
+    }
+
+    impl FakeUpnp {
+        fn new(
+            adds: Vec<Result<(), igd_next::AddPortError>>,
+            table: Result<Option<ExistingMapping>, String>,
+        ) -> Self {
+            Self {
+                adds: std::sync::Mutex::new(adds.into()),
+                table,
+                lookups: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl UpnpControl for FakeUpnp {
+        fn add_port(
+            &self,
+            _protocol: igd_next::PortMappingProtocol,
+            _port: u16,
+            _local_addr: SocketAddr,
+            _lease_seconds: u32,
+            _description: &str,
+        ) -> BoxFuture<'_, Result<(), igd_next::AddPortError>> {
+            let next = self.adds.lock().unwrap().pop_front().expect("scripted add");
+            Box::pin(async move { next })
+        }
+
+        fn existing_mapping(
+            &self,
+            _protocol: igd_next::PortMappingProtocol,
+            _port: u16,
+        ) -> BoxFuture<'_, Result<Option<ExistingMapping>, String>> {
+            self.lookups.fetch_add(1, Ordering::SeqCst);
+            let answer = self.table.clone();
+            Box::pin(async move { answer })
+        }
+    }
+
+    const ME: &str = "192.168.50.20";
+
+    fn entry(client: &str, port: u16) -> ExistingMapping {
+        ExistingMapping {
+            internal_client: client.to_string(),
+            internal_port: port,
+            enabled: true,
+        }
+    }
+
+    async fn add_one(router: &FakeUpnp) -> Result<bool, MapFailure> {
+        add_upnp_mapping(router, ME.parse().unwrap(), 8090, Transport::Tcp, 3600).await
+    }
+
+    #[tokio::test]
+    async fn a_conflict_that_is_our_own_entry_is_a_success() {
+        let router = FakeUpnp::new(
+            vec![Err(igd_next::AddPortError::PortInUse)],
+            Ok(Some(entry(ME, 8090))),
+        );
+        assert!(!add_one(&router).await.unwrap());
+        assert_eq!(router.lookups.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_conflict_with_another_device_is_a_refusal_that_names_it() {
+        let router = FakeUpnp::new(
+            vec![Err(igd_next::AddPortError::PortInUse)],
+            Ok(Some(entry("192.168.50.99", 8090))),
+        );
+        let failure = add_one(&router).await.unwrap_err();
+        assert_eq!(failure.kind, FailureKind::Refused);
+        assert!(
+            failure.reason.contains("192.168.50.99"),
+            "{}",
+            failure.reason
+        );
+    }
+
+    #[tokio::test]
+    async fn our_address_with_a_different_inside_port_is_not_ours() {
+        let router = FakeUpnp::new(
+            vec![Err(igd_next::AddPortError::PortInUse)],
+            Ok(Some(entry(ME, 9999))),
+        );
+        let failure = add_one(&router).await.unwrap_err();
+        assert_eq!(failure.kind, FailureKind::Refused);
+    }
+
+    #[tokio::test]
+    async fn a_disabled_entry_is_not_an_open_port() {
+        let mut disabled = entry(ME, 8090);
+        disabled.enabled = false;
+        let router = FakeUpnp::new(
+            vec![Err(igd_next::AddPortError::PortInUse)],
+            Ok(Some(disabled)),
+        );
+        assert_eq!(
+            add_one(&router).await.unwrap_err().kind,
+            FailureKind::Refused
+        );
+    }
+
+    #[tokio::test]
+    async fn a_conflict_with_no_entry_to_show_is_a_refusal() {
+        // A router whose rules deny the mapping answers 718 with nothing there.
+        let router = FakeUpnp::new(vec![Err(igd_next::AddPortError::PortInUse)], Ok(None));
+        let failure = add_one(&router).await.unwrap_err();
+        assert_eq!(failure.kind, FailureKind::Refused);
+        assert!(
+            failure.reason.contains("no existing entry"),
+            "{}",
+            failure.reason
+        );
+    }
+
+    #[tokio::test]
+    async fn a_conflict_that_cannot_be_checked_is_a_refusal_not_a_guess() {
+        let router = FakeUpnp::new(
+            vec![Err(igd_next::AddPortError::PortInUse)],
+            Err("not authorized".to_string()),
+        );
+        let failure = add_one(&router).await.unwrap_err();
+        assert_eq!(failure.kind, FailureKind::Refused);
+        assert!(
+            failure.reason.contains("not authorized"),
+            "{}",
+            failure.reason
+        );
+    }
+
+    #[tokio::test]
+    async fn other_upnp_errors_are_refusals_and_never_look_anything_up() {
+        for err in [
+            igd_next::AddPortError::ActionNotAuthorized,
+            igd_next::AddPortError::SamePortValuesRequired,
+            igd_next::AddPortError::DescriptionTooLong,
+        ] {
+            let router = FakeUpnp::new(vec![Err(err)], Ok(Some(entry(ME, 8090))));
+            let failure = add_one(&router).await.unwrap_err();
+            assert_eq!(failure.kind, FailureKind::Refused);
+            assert_eq!(router.lookups.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_router_that_only_keeps_permanent_entries_gets_one() {
+        let router = FakeUpnp::new(
+            vec![
+                Err(igd_next::AddPortError::OnlyPermanentLeasesSupported),
+                Ok(()),
+            ],
+            Ok(None),
+        );
+        assert!(add_one(&router).await.unwrap());
+    }
+
+    #[test]
+    fn a_failure_remembers_which_router_answered() {
+        let failure = MapFailure::refused("no").via_gateway("192.168.50.1".parse().unwrap());
+        assert_eq!(failure.gateway_ip, Some("192.168.50.1".parse().unwrap()));
+        assert_eq!(MapFailure::no_answer("quiet").gateway_ip, None);
+        // A silent NAT-PMP gateway is not named; one that sent a result code is.
+        let gw: Ipv4Addr = "192.168.50.1".parse().unwrap();
+        assert_eq!(
+            tag_if_answered(MapFailure::no_answer("x"), gw).gateway_ip,
+            None
+        );
+        assert_eq!(
+            tag_if_answered(MapFailure::refused("x"), gw).gateway_ip,
+            Some(IpAddr::V4(gw))
+        );
+    }
+
+    #[tokio::test]
+    async fn establish_carries_the_answering_routers_address_through() {
+        let gw: IpAddr = "192.168.50.1".parse().unwrap();
+        let routers: Vec<Arc<dyn Router>> = vec![
+            Arc::new(FakeRouter::new(
+                "UPnP",
+                Err(MapFailure::no_answer("none").via_gateway(gw)),
+            )),
+            Arc::new(FakeRouter::new(
+                "NAT-PMP/PCP",
+                Err(MapFailure::no_answer("none")),
+            )),
+        ];
+        let request = PortRequest {
+            tcp_port: 8090,
+            udp_port: 8090,
+        };
+        let attempt = establish(
+            &routers,
+            request,
+            Duration::from_secs(3600),
+            Duration::from_secs(5),
+        )
+        .await;
+        assert_eq!(attempt.result.err().unwrap().gateway_ip, Some(gw));
     }
 }

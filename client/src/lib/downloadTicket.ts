@@ -1,6 +1,8 @@
 import { getApi } from '../api/activeClient';
 import { connectionManager } from './connectionManager';
 import { resolveActiveServerOrigin, resolveApiBaseUrl } from './config/apiBaseUrl';
+import { getAccessToken } from './authToken';
+import { useServerListStore } from '../stores/serverListStore';
 
 /** Must stay in sync with server `DOWNLOAD_TICKET_TTL` (240s). */
 const DOWNLOAD_TICKET_TTL_MS = 240_000;
@@ -48,6 +50,36 @@ export function subscribeDownloadTicket(listener: () => void): () => void {
   return () => {
     listeners.delete(listener);
   };
+}
+
+/**
+ * The bearer token the minting client would send, or null when nobody is signed
+ * in. A ticket is minted by an authenticated route, so asking without a session
+ * can only earn a 401 — and avatars on the sign-in screen subscribe to tickets
+ * long before anyone has signed in.
+ */
+function sessionToken(): string | null {
+  const list = useServerListStore.getState();
+  const active = list.activeServerId
+    ? list.servers.find((server) => server.id === list.activeServerId)
+    : undefined;
+  const token = active ? active.token : getAccessToken();
+  return token && token !== 'null' && token !== 'undefined' ? token : null;
+}
+
+/**
+ * The token the server last refused to mint a ticket for. While the session
+ * token is still that one, asking again would only repeat the 401; a new
+ * token (a sign-in, a refresh) lifts the block.
+ */
+let unauthorizedToken: string | null = null;
+
+function isUnauthorized(err: unknown): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    (err as { response?: { status?: number } }).response?.status === 401
+  );
 }
 
 /** Origin of an API base URL, treating a relative base as the page origin. */
@@ -182,6 +214,7 @@ export function clearDownloadTicketCache(): void {
   }
   cache = null;
   fetchPromise = null;
+  unauthorizedToken = null;
   cancelServerKeyRetry();
   notifyTicketChanged();
 }
@@ -199,6 +232,13 @@ async function fetchDownloadTicket(): Promise<string | null> {
 }
 
 export async function ensureDownloadTicket(): Promise<string | null> {
+  // No session, or a session the server just refused: there is nothing to
+  // retry. The session appearing or changing starts the next attempt.
+  const token = sessionToken();
+  if (!token || token === unauthorizedToken) {
+    cancelServerKeyRetry();
+    return null;
+  }
   const serverKey = currentServerKey();
   if (!serverKey) {
     scheduleServerKeyRetry();
@@ -229,7 +269,14 @@ export async function ensureDownloadTicket(): Promise<string | null> {
           return ticket;
         }
         return null;
-      } catch {
+      } catch (err) {
+        if (isUnauthorized(err)) {
+          // The server does not accept this session. Retrying every few
+          // hundred milliseconds only fills its log with 401s.
+          unauthorizedToken = token;
+          cancelServerKeyRetry();
+          return null;
+        }
         // A mint that failed (server down, token mid-refresh) must be retried:
         // every ticketed image on screen is waiting on it.
         scheduleServerKeyRetry();

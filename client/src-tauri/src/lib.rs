@@ -8,6 +8,8 @@
 
 mod audio_capture;
 mod commands;
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod deep_link_desktop;
 mod host;
 #[cfg(target_os = "linux")]
 mod linux_frame_clock;
@@ -2419,8 +2421,15 @@ pub fn run() {
             // the app bundle's Info.plist, so runtime registration is skipped
             // there. Best-effort: a failure (e.g. sandboxed env) must not abort
             // startup.
-            #[cfg(any(target_os = "linux", target_os = "windows"))]
+            #[cfg(target_os = "windows")]
             if let Err(err) = app.deep_link().register_all() {
+                eprintln!("failed to register paracord:// deep link scheme: {err}");
+            }
+            // Linux writes its own handler entry: the plugin's quotes the program
+            // path, which `xdg-open` cannot run on desktops without a DE-specific
+            // opener (see `deep_link_desktop`).
+            #[cfg(target_os = "linux")]
+            if let Err(err) = deep_link_desktop::register(app.handle(), &["paracord"]) {
                 eprintln!("failed to register paracord:// deep link scheme: {err}");
             }
             // Cold start: the app was launched by opening a link.

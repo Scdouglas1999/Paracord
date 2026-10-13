@@ -219,6 +219,27 @@ async fn an_answer_that_says_no_is_refused_and_silence_is_no_answer() {
     handle.release().await;
 }
 
+/// The sheet names the router that said no, instead of guessing 192.168.x.1.
+#[tokio::test]
+async fn a_refusal_still_names_the_router_that_answered() {
+    let (r, handle) = verdict(
+        Scripted::new(vec![Err(MapFailure::refused(
+            "the router refused TCP 8443",
+        )
+        .via_gateway("192.168.50.1".parse().unwrap()))]),
+        Some("192.168.50.20"),
+    )
+    .await;
+    assert_eq!(r.state, ReachabilityState::Refused);
+    assert_eq!(r.gateway_ip.as_deref(), Some("192.168.50.1"));
+    handle.release().await;
+
+    // Nothing answered: no address is invented.
+    let (r, handle) = verdict(Scripted::silent(), Some("192.168.50.20")).await;
+    assert_eq!(r.gateway_ip, None);
+    handle.release().await;
+}
+
 /// One method answering "no" outweighs another that was merely silent.
 #[tokio::test]
 async fn a_refusal_from_any_method_wins_over_silence() {
