@@ -6,6 +6,7 @@
     clippy::too_many_arguments
 )]
 
+mod app_identity;
 mod audio_capture;
 mod commands;
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -21,6 +22,7 @@ mod now_playing;
 mod pulse_router;
 mod tray;
 mod trust_cmds;
+mod window_chrome;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -2379,24 +2381,22 @@ fn configure_linux_gstreamer_audio_backend() {
 #[cfg(not(target_os = "linux"))]
 fn configure_linux_gstreamer_audio_backend() {}
 
-/// Give the window back to the compositor's own titlebar.
-///
-/// On Wayland tao installs a GTK header bar of its own, wrapped in an event box
-/// that sits above its child — so the minimize/maximize/close buttons never see
-/// a click, and the bar is GTK's tall gray one rather than the desktop's. With
-/// no custom titlebar GTK negotiates server-side decorations where the
-/// compositor offers them (KWin does) and draws its own stock, working header
-/// where it does not (GNOME).
+/// The main window's own chrome on Linux (`window_chrome`): tao's header bar
+/// dropped, and the window icon at every size for X11.
 #[cfg(target_os = "linux")]
-fn use_compositor_titlebar(app: &tauri::AppHandle) {
-    use gtk::prelude::GtkWindowExt;
+fn prepare_main_window(app: &tauri::AppHandle) {
     use tauri::Manager;
 
     let Some(window) = app.get_webview_window("main") else {
         return;
     };
     match window.gtk_window() {
-        Ok(gtk_window) => gtk_window.set_titlebar(None::<&gtk::Widget>),
+        Ok(gtk_window) => {
+            window_chrome::undecorate(&gtk_window);
+            if let Err(err) = app_identity::set_window_icons(&gtk_window) {
+                eprintln!("[window] {err}");
+            }
+        }
         Err(err) => eprintln!("[window] could not reach the GTK window: {err}"),
     }
 }
@@ -2478,6 +2478,8 @@ fn init_tracing() {
 }
 
 pub fn run() {
+    // Before GTK starts: the window's app id and WM_CLASS come from it.
+    app_identity::claim_process_identity();
     init_tracing();
     configure_linux_gstreamer_audio_backend();
     #[cfg(target_os = "linux")]
@@ -2531,12 +2533,22 @@ pub fn run() {
             if let Err(err) = app.deep_link().register_all() {
                 eprintln!("failed to register paracord:// deep link scheme: {err}");
             }
-            // Linux writes its own handler entry: the plugin's quotes the program
-            // path, which `xdg-open` cannot run on desktops without a DE-specific
-            // opener (see `deep_link_desktop`).
+            // Linux: the scheme lives on the app's one desktop entry
+            // (com.paracord.desktop.desktop, whose name is the window's app id),
+            // found or written by `deep_link_desktop`, never the plugin's (its
+            // quoted Exec path defeats `xdg-open` on desktops without a
+            // DE-specific opener).
             #[cfg(target_os = "linux")]
-            if let Err(err) = deep_link_desktop::register(app.handle(), &["paracord"]) {
-                eprintln!("failed to register paracord:// deep link scheme: {err}");
+            {
+                let line = match deep_link_desktop::register(app.handle(), &["paracord"]) {
+                    Ok(what) => format!("[desktop-entry] {what}"),
+                    Err(err) => format!("[desktop-entry] paracord:// is NOT registered: {err}"),
+                };
+                eprintln!("{line}");
+                let _ = commands::append_client_log(
+                    app.handle().clone(),
+                    format!("{} {line}", chrono_like_timestamp_utc()),
+                );
             }
             // Cold start: the app was launched by opening a link.
             if let Ok(Some(urls)) = app.deep_link().get_current() {
@@ -2554,7 +2566,13 @@ pub fn run() {
             #[cfg(windows)]
             configure_webview2_overrides(app);
             #[cfg(target_os = "linux")]
-            use_compositor_titlebar(app.handle());
+            prepare_main_window(app.handle());
+            #[cfg(windows)]
+            if let Some(window) = tauri::Manager::get_webview_window(app, "main") {
+                if let Err(err) = window_chrome::round_corners(&window) {
+                    eprintln!("[window] {err}");
+                }
+            }
             #[cfg(target_os = "linux")]
             pace_main_window(app.handle());
 
@@ -2587,6 +2605,7 @@ pub fn run() {
 
     let builder = builder.invoke_handler(tauri::generate_handler![
         take_pending_deep_links,
+        window_chrome::window_titlebar_double_click,
         commands::greet,
         commands::get_app_version,
         commands::get_update_target,
@@ -2699,6 +2718,9 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
+    // GTK is up and no window exists yet (they are made when the app runs).
+    #[cfg(target_os = "linux")]
+    app_identity::claim_window_class();
 
     app.run(|app_handle, event| {
         if matches!(event, tauri::RunEvent::Exit) {

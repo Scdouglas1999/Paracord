@@ -42,7 +42,8 @@ export function Toolbar() {
   const name = user?.display_name || user?.username || '';
 
   return (
-    <div className="ix-toolbar" data-testid="ix-toolbar" data-folded={folded ? 'true' : 'false'}>
+    // The toolbar is the window's title bar too (window-chrome): a press on it, not on its controls, moves the window.
+    <div className="ix-toolbar" data-testid="ix-toolbar" data-folded={folded ? 'true' : 'false'} data-window-drag="deep">
       {onBack && (
         <button type="button" className="ix-tool ix-toolbar__back" aria-label={backLabel} title={backLabel} onClick={onBack}>
           <IxGlyph name="chevron" size={18} />

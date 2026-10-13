@@ -587,7 +587,7 @@ test.describe('the launch banner (S13b, spec §2.8)', () => {
     await expect(page.getByTestId('ix-host-log')).toContainText('did not answer /health');
     await page.waitForTimeout(500);
     await scene.shoot('update-failed-details');
-    await page.getByRole('button', { name: 'Close' }).click();
+    await page.getByRole('button', { name: 'Close', exact: true }).click();
 
     let release: () => void = () => undefined;
     scene.host!.rollbackHold = new Promise<void>((resolve) => (release = resolve));

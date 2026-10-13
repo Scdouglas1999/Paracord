@@ -84,6 +84,10 @@ windows = { version = "0.61", features = [
     "Win32_System_Com",
     "Win32_System_Threading",
     "Win32_UI_WindowsAndMessaging",
+    # The process's AppUserModelID (app_identity.rs) and the window's rounded
+    # corners on Windows 11 (window_chrome.rs).
+    "Win32_UI_Shell",
+    "Win32_Graphics_Dwm",
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Security_Cryptography",

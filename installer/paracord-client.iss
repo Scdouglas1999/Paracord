@@ -48,8 +48,11 @@ Source: "..\client\src-tauri\binaries\paracord-host-x86_64-pc-windows-msvc.exe";
 Source: "MicrosoftEdgeWebview2Setup.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall dontcopy; Check: NeedsWebView2
 
 [Icons]
-Name: "{group}\Paracord"; Filename: "{app}\Paracord.exe"
-Name: "{autodesktop}\Paracord"; Filename: "{app}\Paracord.exe"; Tasks: desktopicon
+; AppUserModelID: the id the app claims at start (app_identity.rs, the bundle
+; identifier), so a pinned shortcut, the running window and its notifications
+; are one taskbar entry. The NSIS and MSI installers stamp the same id.
+Name: "{group}\Paracord"; Filename: "{app}\Paracord.exe"; AppUserModelID: "com.paracord.desktop"
+Name: "{autodesktop}\Paracord"; Filename: "{app}\Paracord.exe"; Tasks: desktopicon; AppUserModelID: "com.paracord.desktop"
 Name: "{group}\Uninstall Paracord"; Filename: "{uninstallexe}"
 
 [Run]

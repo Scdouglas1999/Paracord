@@ -18,7 +18,7 @@ export function BrandSplash({ label }: { label: string }) {
   useBootSplashHold();
   const bootGone = useBootSplashGone();
   return (
-    <div className="pc-boot is-static" data-testid="brand-splash">
+    <div className="pc-boot is-static" data-testid="brand-splash" data-window-drag="deep">
       <div className="pc-boot__stage">
         <div className="pc-boot__glow" />
         <div className="pc-boot__art">

@@ -21,6 +21,7 @@ import { HostLaunchBanner } from '../components/host/HostLaunchBanner';
 import { ServerSignInDialog } from '../components/ix/session/ServerSignInDialog';
 import { UpdateNotification } from '../components/UpdateNotification';
 import { ToastContainer } from '../components/ui/Toast';
+import { WindowChrome } from '../components/windowChrome/WindowChrome';
 import { ImageLightbox } from '../components/ui/ImageLightbox';
 import { logVoiceDiagnostic } from './desktopDiagnostics';
 import { startDownloadTicketLifecycle } from './downloadTicket';
@@ -157,6 +158,7 @@ function AppInitializer({ children }: { children: ReactNode }) {
         <UpdateNotification />
       </BannerStack>
       <ToastContainer />
+      <WindowChrome />
       <ImageLightbox />
       <ServerSignInDialog />
       {children}

@@ -1,0 +1,305 @@
+/* The window's own chrome (docs/design/index-checkpoints/window-chrome.md,
+   docs/index-spec.md §3 "Window chrome"). components/windowChrome/WindowChrome.tsx
+   marks the document; nothing here applies in a browser tab.
+
+   Linux and Windows (frameless): minimize / maximize / close at the top right,
+   in the band of whatever holds the top right (main's toolbar, a sheet's
+   header, the call view's header), and every surface there leaves room for
+   them (--wc-reserve). Linux: a 1px hairline edge and resize edges while the
+   window is neither maximized nor full screen; square corners (a rounded
+   corner needs a transparent toplevel, which the frame pacing forbids).
+   macOS (overlay): the native traffic lights over the sidebar's top left; the
+   sidebar's top band is taller to hold them.
+
+   Only colors and opacity transition here (the motion lint). */
+
+:root {
+  /* One control: 30 square, radius 9 (the sidebar header's options button). */
+  --wc-size: 30px;
+  --wc-gap: 2px;
+  --wc-right: 14px;
+  --wc-width: calc(3 * var(--wc-size) + 2 * var(--wc-gap));
+  /* What a surface leaves at its right for the controls, from the window's
+     right edge: the controls, their margin, and a 9 + 1 + 9 separator (plus the
+     group's gap after it). */
+  --wc-reserve: 0px;
+  /* The center line of the band the controls sit in, from the window's top. */
+  --wc-center: calc(var(--ix-toolbar-h, 58px) / 2);
+  /* macOS: the band over the sidebar that holds the traffic lights. */
+  --wc-lights-band: 0px;
+}
+
+:root[data-window-chrome='frameless']:not([data-window-state='fullscreen']) {
+  --wc-reserve: calc(var(--wc-right) + var(--wc-width) + var(--wc-gap) + 19px);
+}
+
+/* Where the band is: main's toolbar (moved down by the banners over main), a
+   sheet's header or the call view's header (both inset 10 over main), or the
+   call view's own header when it fills the window. */
+:root[data-window-surface='toolbar'] {
+  --wc-center: calc(var(--ix-banner-inset, 0px) + var(--ix-toolbar-h, 58px) / 2);
+}
+
+:root[data-window-surface='sheet'] {
+  --wc-center: calc(var(--ix-banner-inset, 0px) + 10px + var(--ix-toolbar-h, 58px) / 2);
+}
+
+:root[data-window-surface='call'] {
+  --wc-center: calc(var(--ix-banner-inset, 0px) + 10px + 18px + 18px);
+}
+
+:root[data-window-surface='fill'] {
+  --wc-center: calc(14px + 17px);
+}
+
+/* A page with its own bar sets its height (the first run: 64). */
+:root[data-window-band] {
+  --wc-center: calc(var(--wc-band, 58px) / 2);
+}
+
+/* ---- The controls ---------------------------------------------------------------- */
+.wc-controls {
+  position: fixed;
+  top: calc(var(--wc-center) - var(--wc-size) / 2);
+  right: var(--wc-right);
+  z-index: 2147483100;
+  display: flex;
+  gap: var(--wc-gap);
+}
+
+/* The separator from what the surface has on its right (the toolbar's avatar). */
+.wc-controls::before {
+  content: '';
+  align-self: center;
+  width: 1px;
+  height: 18px;
+  margin-right: 9px;
+  background: var(--ix-line);
+}
+
+.wc-btn {
+  display: grid;
+  place-items: center;
+  width: var(--wc-size);
+  height: var(--wc-size);
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--ix-ink-3);
+  cursor: default;
+  transition: background-color 40ms var(--ix-ease), color 40ms var(--ix-ease);
+}
+
+.wc-btn:hover {
+  background: var(--ix-fill);
+  color: var(--ix-ink);
+}
+
+.wc-btn:active {
+  background: var(--ix-fill-2);
+  color: var(--ix-ink);
+}
+
+.wc-btn:focus-visible {
+  outline: var(--ix-focus);
+  outline-offset: var(--ix-focus-offset, 2px);
+}
+
+/* An inactive window's controls step back, as native ones do. */
+:root[data-window-focus='inactive'] .wc-btn:not(:hover, :focus-visible) {
+  opacity: 0.55;
+}
+
+/* Over a stream that fills the window the controls go with the call's own
+   chrome (§7.7: shown on a move, gone after 2 s of stillness). */
+:root[data-window-surface='fill']:has(.ix-call[data-immersive]:is([data-chrome='hidden'], [data-chrome='gone'])) .wc-controls {
+  opacity: 0;
+  transition: opacity var(--duration-normal, 55ms) var(--ix-ease);
+}
+
+:root[data-window-surface='fill'] .wc-controls {
+  transition: opacity var(--duration-normal, 55ms) var(--ix-ease);
+}
+
+:root[data-window-surface='fill'] .wc-btn {
+  /* Near-solid over video, never a blur (§7.6), as the call's own chrome. */
+  background: var(--ix-pop-solid);
+  color: var(--ix-ink-2);
+}
+
+:root[data-window-surface='fill'] .wc-btn:hover {
+  background: color-mix(in srgb, var(--ix-ink) 12%, var(--ix-pop-solid));
+  color: var(--ix-ink);
+}
+
+/* ---- Room for them ---------------------------------------------------------------- */
+:root[data-window-chrome='frameless'] .ix-toolbar {
+  padding-right: max(20px, var(--wc-reserve));
+}
+
+:root[data-window-chrome='frameless'] .ix-sheet-host .ix-sheet__header {
+  padding-right: max(12px, calc(var(--wc-reserve) - var(--ix-inset, 10px)));
+}
+
+:root[data-window-chrome='frameless'] .ix-call-host .ix-call:not([data-immersive]) .ix-call-head {
+  padding-right: max(var(--ix-call-pad, 20px), calc(var(--wc-reserve) - var(--ix-inset, 10px)));
+}
+
+:root[data-window-chrome='frameless'] .ix-call[data-immersive] .ix-call-head {
+  padding-right: max(18px, var(--wc-reserve));
+}
+
+/* With the chat column open the header ends at the column; the controls sit
+   over the column's own top, which has no header to collide with. */
+:root[data-window-chrome='frameless'] .ix-call[data-immersive][data-chat='true'] .ix-call-head {
+  padding-right: 18px;
+}
+
+:root[data-window-surface='fill']:has(.ix-call[data-immersive][data-chat='true']) .wc-btn:not(:hover, :active) {
+  background: transparent;
+}
+
+:root[data-window-chrome='frameless'] .fr-tb {
+  padding-right: max(28px, var(--wc-reserve));
+}
+
+/* ---- Linux: the edge and the resize bands ------------------------------------------ */
+:root[data-window-platform='linux'][data-window-state='normal'] body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 2147483200;
+  box-shadow: inset 0 0 0 1px var(--wc-edge);
+  pointer-events: none;
+}
+
+.wc-resize__edge {
+  position: fixed;
+  z-index: 2147483300;
+}
+
+.wc-resize__edge[data-edge='North'] {
+  top: 0;
+  right: 14px;
+  left: 14px;
+  height: 5px;
+  cursor: n-resize;
+}
+
+.wc-resize__edge[data-edge='South'] {
+  right: 14px;
+  bottom: 0;
+  left: 14px;
+  height: 5px;
+  cursor: s-resize;
+}
+
+.wc-resize__edge[data-edge='East'] {
+  top: 14px;
+  right: 0;
+  bottom: 14px;
+  width: 5px;
+  cursor: e-resize;
+}
+
+.wc-resize__edge[data-edge='West'] {
+  top: 14px;
+  bottom: 14px;
+  left: 0;
+  width: 5px;
+  cursor: w-resize;
+}
+
+.wc-resize__edge[data-edge='NorthWest'],
+.wc-resize__edge[data-edge='NorthEast'],
+.wc-resize__edge[data-edge='SouthWest'],
+.wc-resize__edge[data-edge='SouthEast'] {
+  width: 14px;
+  height: 14px;
+}
+
+/* A corner is an L, so the 14 square does not swallow what sits just inside it. */
+.wc-resize__edge[data-edge='NorthWest'] {
+  top: 0;
+  left: 0;
+  cursor: nw-resize;
+  clip-path: polygon(0 0, 100% 0, 100% 5px, 5px 5px, 5px 100%, 0 100%);
+}
+
+.wc-resize__edge[data-edge='NorthEast'] {
+  top: 0;
+  right: 0;
+  cursor: ne-resize;
+  clip-path: polygon(0 0, 100% 0, 100% 100%, calc(100% - 5px) 100%, calc(100% - 5px) 5px, 0 5px);
+}
+
+.wc-resize__edge[data-edge='SouthWest'] {
+  bottom: 0;
+  left: 0;
+  cursor: sw-resize;
+  clip-path: polygon(0 0, 5px 0, 5px calc(100% - 5px), 100% calc(100% - 5px), 100% 100%, 0 100%);
+}
+
+.wc-resize__edge[data-edge='SouthEast'] {
+  right: 0;
+  bottom: 0;
+  cursor: se-resize;
+  clip-path: polygon(calc(100% - 5px) 0, 100% 0, 100% 100%, 0 100%, 0 calc(100% - 5px), calc(100% - 5px) calc(100% - 5px));
+}
+
+/* ---- The drag bands ------------------------------------------------------------------ */
+/* The sidebar's top band (IxFrame): over the pane's own top padding. */
+.ix-side__drag {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 3;
+  height: 12px;
+}
+
+:root:not([data-window-chrome]) .ix-side__drag {
+  display: none;
+}
+
+/* ---- macOS: room for the traffic lights over the sidebar ----------------------------- */
+:root[data-window-chrome='overlay']:not([data-window-state='fullscreen']) {
+  --wc-lights-band: 40px;
+}
+
+:root[data-window-chrome='overlay'] .ix-side__drag {
+  height: var(--wc-lights-band);
+}
+
+:root[data-window-chrome='overlay'] .ix-side__pinned,
+:root[data-window-chrome='overlay'] .ix-pane {
+  margin-top: var(--wc-lights-band);
+}
+
+:root[data-window-chrome='overlay'] .ix-side:has(> .ix-side__pinned:not(:empty)) .ix-pane {
+  margin-top: 0;
+}
+
+:root[data-window-chrome='overlay'] .fr-tb {
+  padding-left: 92px;
+}
+
+/* Dev preview only: where macOS draws the lights (12px, 8 apart, from x 20). */
+.wc-lights-preview {
+  position: fixed;
+  top: 18px;
+  left: 20px;
+  z-index: 2147483100;
+  display: flex;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.wc-lights-preview > i {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--ix-fill-2);
+  box-shadow: inset 0 0 0 1px var(--ix-line);
+}

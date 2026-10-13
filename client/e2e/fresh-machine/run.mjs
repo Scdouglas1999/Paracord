@@ -547,8 +547,12 @@ async function s2() {
   check('still one app process after the warm link', count === '1', count);
   await friend.ui.press('Escape');
   await sleep(800);
-  const handler = L.exec(friend.name, ['sh', '-c', 'grep ^Exec= /home/sam/.local/share/applications/paracord-desktop-handler.desktop'], { allowFail: true }).out;
-  check('the handler entry the app wrote has an unquoted Exec= path', /^Exec=\/opt\/paracord\/paracord-desktop %u$/.test(handler), handler);
+  // The scheme lives on the packaged entry (com.paracord.desktop.desktop); the app
+  // writes no entry of its own beside it and no separate handler entry.
+  const handler = pc(friend, 'sam', 'xdg-mime', 'query', 'default', 'x-scheme-handler/paracord').out.trim();
+  check('paracord:// opens the app\'s own entry, com.paracord.desktop.desktop', handler === 'com.paracord.desktop.desktop', handler);
+  const userEntries = L.exec(friend.name, ['sh', '-c', 'ls /home/sam/.local/share/applications 2>/dev/null | grep -i paracord'], { allowFail: true }).out.trim();
+  check('no handler or duplicate entry in the user\'s applications', userEntries === '', userEntries);
   // A session that is not GNOME/KDE/XFCE (sway): xdg-open takes its generic path.
   const xdg = pc(friend, 'sam', 'env', 'XDG_CURRENT_DESKTOP=sway', 'XDG_SESSION_DESKTOP=sway', 'timeout', '10', 'xdg-open', portable);
   check('xdg-open on a non-GNOME session (generic path) hands the paracord:// link over', xdg.status === 0, (xdg.err || xdg.out).split('\n').filter((l) => !l.includes('command not found')).join(' / '));

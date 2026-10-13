@@ -434,6 +434,19 @@ jobs:
           ls -l "$app"
           test -x "$app/paracord-host" || { echo "paracord-host is not inside Paracord.app" >&2; exit 1; }
 
+      # The bundle id is the app's one identity (window-chrome.md), and the Dock
+      # icon is the .icns the bundler copied in.
+      - name: Verify the app's identity and icon (macOS)
+        shell: bash
+        run: |
+          set -euo pipefail
+          contents="target/${{ matrix.target }}/release/bundle/macos/Paracord.app/Contents"
+          bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$contents/Info.plist")"
+          [ "$bundle_id" = "com.paracord.desktop" ] || { echo "CFBundleIdentifier is $bundle_id" >&2; exit 1; }
+          icon="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$contents/Info.plist")"
+          cmp "$contents/Resources/${icon%.icns}.icns" client/src-tauri/icons/icon.icns || { echo "the bundled icon is not icons/icon.icns" >&2; exit 1; }
+          node client/scripts/check-app-identity.mjs
+
       # The bundler names the updater archive after the product alone
       # (Paracord.app.tar.gz), so the Apple Silicon and Intel archives arrive
       # with one name: the release step refuses two assets with the same name,
@@ -568,6 +581,18 @@ jobs:
           if (-not $nsis) { throw "no NSIS installer was built" }
           if (-not (Test-Path target/release/paracord-host.exe)) { throw "tauri build did not place paracord-host.exe beside the app" }
           Get-Item target/release/paracord-host.exe, target/release/paracord-desktop.exe | Select-Object Name, Length
+
+      # The exe carries the Ember mark (icons/icon.ico) as its icon, which is
+      # what the taskbar, Alt+Tab and the Start menu show; the shortcuts and the
+      # running process share the AppUserModelID (window-chrome.md).
+      - name: Verify the app's identity and icon (Windows)
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Drawing
+          $icon = [System.Drawing.Icon]::ExtractAssociatedIcon((Resolve-Path target/release/paracord-desktop.exe))
+          if (-not $icon) { throw "paracord-desktop.exe has no icon" }
+          node client/scripts/check-app-identity.mjs
+          if ($LASTEXITCODE -ne 0) { throw "app identity check failed" }
 
       - name: Download WebView2 bootstrapper
         shell: pwsh

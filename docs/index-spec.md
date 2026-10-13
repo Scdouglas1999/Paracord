@@ -242,7 +242,8 @@ The window is two flush columns on `--ix-ground`:
 
 - Sidebar 316px, full height, hairline `inset -1px 0 0 rgba(255,255,255,.05)`
   on its right edge. Main fills the rest. No outer gutters (the window is the
-  frame). The desktop title bar (Tauri decorations) is unchanged.
+  frame). The desktop window has no native title bar on Linux and Windows; its
+  chrome is the app's (§3.2).
 - **Conversation column.** Main content (title, feed, message box) sits in a
   column of at most 920px, centered in main; side padding 48px inside it (the
   prototype at 1280 shows the 48px padding with the column filling main). The
@@ -283,6 +284,31 @@ The window is two flush columns on `--ix-ground`:
 | Event card | width 400 (max 100%); radius 20; `--ix-card`; padding 16; grid `auto 1fr`, gap 4 14; day tile 48×52 radius 12 `rgba(255,255,255,.07)`; actions margin-top 10 gap 8, buttons padding 8 12 radius 10 `rgba(255,255,255,.08)` 13.5/600, primary cream |
 | Message box | margin 0 36 18; radius 24; `rgba(255,255,255,.055)` + hairline; 52 closed, 98 open; row padding 0 8 0 18, gap 10; input 15; send 36 circle `rgba(255,255,255,.08)`, cream with text; tools row padding 0 12 12, gap 6, chips padding 6 10 radius 8 `--ix-fill` 12.5 ink-2 glyph 14; open edge `inset 0 0 0 1px rgba(255,255,255,.18)` + focus halo |
 | Call surface | inset 10 inside main; radius 24; `--ix-call`; header padding 18 20 gap 12 (speaker amber, name 18/700, server 13 amber, spacer, "Back to chat"); tiles gap 12 padding 0 20 16, 2 columns (3 when more than 4); tile radius 20, background `radial-gradient(120% 100% at 50% 0%, hsl(person-h 30% 24%), #121316 70%)`, avatar 88; talker `inset 0 0 0 2px amber` + `0 0 40px rgba(amber,.16)`; name 14/600 at 16/14 from bottom-left with waveform; controls centered gap 10 padding 0 0 20, buttons height 46 radius 23 min-width 46 padding 0 16 `rgba(255,255,255,.08)` 14/600 |
+
+### 3.2 Window chrome (desktop)
+
+"Paracord as a slate of glass on your desktop" (owner, 2026-10-12). The full
+account, with measurements, is `docs/design/index-checkpoints/window-chrome.md`.
+
+- **Linux and Windows: frameless.** Minimize, maximize (restore) and close are
+  the app's: 30×30, radius 9, glyph 16 in `--ix-ink-3`, hover `--ix-fill` and
+  ink, pressed `--ix-fill-2`, 2 apart, 14 from the right, behind a 1×18
+  `--ix-line` separator; tooltips "Minimize", "Maximize"/"Restore", "Close",
+  names "… window" (close keeps the app in the tray). They sit in the band of whatever
+  holds the window's top right: main's toolbar (centered on its 58), a sheet's
+  header, the call view's header (inset 10), the call's own header when a stream
+  fills the window (near-solid, and they go with the call's chrome after 2 s of
+  stillness), the first run's bar (64). That surface leaves `--wc-reserve` at its
+  right. Full screen: none.
+- **Drag.** The toolbar (not its controls), the sidebar's top 12, the first
+  run's bar and the sign-in pages' empty ground move the window; a double click
+  does what the desktop's own title bars do.
+- **Edges.** Linux: a 1px `--wc-edge` hairline and invisible resize edges (5,
+  corners 14) while neither maximized nor full screen; square corners (a
+  rounded corner costs a transparent window: measured, refused). Windows: the
+  system's resize border, shadow and Windows 11 rounding.
+- **macOS: overlay.** The traffic lights stay native, over the sidebar's top
+  left; the sidebar's top band is 40 and drags the window.
 
 ---
 

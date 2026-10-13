@@ -134,14 +134,16 @@ export function startComputer({ name, hostname, network, ip, router, binDir }) {
     docker(['cp', join(binDir, f), `${name}:/opt/paracord/${f}`]);
   }
   exec(name, ['chmod', '0755', '/opt/paracord/paracord-desktop', '/opt/paracord/paracord-host', '/opt/paracord/tauri-driver']);
-  // What the .deb/.rpm puts in place besides the binaries: the desktop entry
-  // with the paracord:// scheme (tauri.conf.json plugins.deep-link), so a
-  // link can start the app before it has ever run.
+  // What the .deb/.rpm puts in place besides the binaries: the app's desktop
+  // entry (client/src-tauri/linux/com.paracord.desktop.desktop, named after the
+  // window's app id) with the paracord:// scheme, so a link can start the app
+  // before it has ever run.
   const entry = [
     '[Desktop Entry]', 'Type=Application', 'Name=Paracord', 'Exec=/opt/paracord/paracord-desktop %u',
-    'Terminal=false', 'Categories=Network;Chat;', 'MimeType=x-scheme-handler/paracord', '',
+    'Icon=com.paracord.desktop', 'Terminal=false', 'Categories=Network;InstantMessaging;Chat;',
+    'MimeType=x-scheme-handler/paracord;', 'StartupWMClass=com.paracord.desktop', '',
   ].join('\n');
-  exec(name, ['sh', '-c', 'cat > /usr/share/applications/paracord-desktop.desktop && update-desktop-database /usr/share/applications'], { input: entry });
+  exec(name, ['sh', '-c', 'cat > /usr/share/applications/com.paracord.desktop.desktop && update-desktop-database /usr/share/applications'], { input: entry });
   exec(name, ['sh', '-c', `printf %s '${KEYRING_PASSWORD}' > /etc/fresh-machine/keyring-password && chown sam /etc/fresh-machine/keyring-password && chmod 0400 /etc/fresh-machine/keyring-password`]);
   signIn(name);
   return name;

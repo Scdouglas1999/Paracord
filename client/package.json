@@ -16,6 +16,7 @@
     "test:contrast": "node ./scripts/contrast-audit.mjs",
     "test:tokens": "node ./scripts/literal-color-audit.mjs",
     "test:motion-lint": "node ./scripts/motion-lint.mjs",
+    "test:app-identity": "node ./scripts/check-app-identity.mjs",
     "test:e2e": "playwright test",
     "test:e2e:index": "playwright test -c e2e/index-review.config.ts",
     "test:motion": "PARACORD_E2E_MOTION=1 playwright test",

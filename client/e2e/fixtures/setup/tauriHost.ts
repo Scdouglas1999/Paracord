@@ -441,6 +441,17 @@ export class TauriHost {
         return ok();
       case 'get_client_log_path':
         return ok('/tmp/paracord-client.log');
+      // The window's own chrome (window-chrome.md): a resting, normal window.
+      case 'plugin:window|is_fullscreen':
+      case 'plugin:window|is_maximized':
+        return ok(false);
+      case 'plugin:window|minimize':
+      case 'plugin:window|toggle_maximize':
+      case 'plugin:window|close':
+      case 'plugin:window|start_dragging':
+      case 'plugin:window|start_resize_dragging':
+      case 'window_titlebar_double_click':
+        return ok(command === 'window_titlebar_double_click' ? 'toggle-maximize' : null);
       default:
         if (QUIET.has(command)) return ok();
         break;

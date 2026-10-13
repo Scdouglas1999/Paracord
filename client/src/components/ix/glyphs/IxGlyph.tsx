@@ -9,7 +9,8 @@ import type { ReactNode, SVGProps } from 'react';
  * The verb glyphs the call view keeps (listen, watch, clip, flame, theater) are
  * the Glass paths restroked to 1.7 (§2.6); a solid shape (listen's dot, watch's
  * pupil, the flame's ember) has no stroke. Full screen and its exit are four
- * corners pointing out and in (§7.7).
+ * corners pointing out and in (§7.7). The window's own minimize, maximize,
+ * restore and close (window-chrome) are drawn a little inside the grid.
  *
  * Size is a prop in px; the stroke scales with the glyph, as in the prototype.
  * The default is the prototype's 18; the sizes in use are 12 (lock), 14 (chip
@@ -46,6 +47,10 @@ export const IX_GLYPH_NAMES = [
   'theater',
   'fullScreen',
   'fullScreenExit',
+  'windowMinimize',
+  'windowMaximize',
+  'windowRestore',
+  'windowClose',
 ] as const;
 export type IxGlyphName = (typeof IX_GLYPH_NAMES)[number];
 
@@ -177,6 +182,17 @@ const BODIES: Record<IxGlyphName, ReactNode> = {
   ),
   fullScreen: <path d="M4 9V5.5A1.5 1.5 0 0 1 5.5 4H9M15 4h3.5A1.5 1.5 0 0 1 20 5.5V9M20 15v3.5a1.5 1.5 0 0 1-1.5 1.5H15M9 20H5.5A1.5 1.5 0 0 1 4 18.5V15" />,
   fullScreenExit: <path d="M9 4v3.5A1.5 1.5 0 0 1 7.5 9H4M20 9h-3.5A1.5 1.5 0 0 1 15 7.5V4M15 20v-3.5a1.5 1.5 0 0 1 1.5-1.5H20M4 15h3.5A1.5 1.5 0 0 1 9 16.5V20" />,
+  // The window's own controls (Linux, Windows): drawn smaller than the tools
+  // beside them, so they read as the window's, not the conversation's.
+  windowMinimize: <path d="M6.5 12h11" />,
+  windowMaximize: <rect x="6" y="6" width="12" height="12" rx="2.6" />,
+  windowRestore: (
+    <>
+      <rect x="5.5" y="8.5" width="10" height="10" rx="2.2" />
+      <path d="M9 5.5h7.3a2.2 2.2 0 0 1 2.2 2.2V15" />
+    </>
+  ),
+  windowClose: <path d="m7 7 10 10M17 7 7 17" />,
 };
 
 export interface GlyphFrameProps extends Omit<SVGProps<SVGSVGElement>, 'ref'> {

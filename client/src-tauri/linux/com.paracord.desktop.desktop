@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Paracord
+Comment=Chat, voice and video with your servers and friends
+Exec=paracord-desktop %u
+Icon=com.paracord.desktop
+Terminal=false
+Categories=Network;InstantMessaging;Chat;
+MimeType=x-scheme-handler/paracord;
+StartupWMClass=com.paracord.desktop

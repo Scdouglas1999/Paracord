@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Take the Wayland client libraries out of a freshly built Paracord AppImage so
-# the AppImage uses the host's copies.
+# Finish a freshly built Paracord AppImage: take the Wayland client libraries
+# out so it uses the host's copies, and make its own desktop entry and icon the
+# app's (com.paracord.desktop).
 #
 # Usage (from client/, after `npx tauri build --bundles appimage`):
 #   scripts/finalize-appimage.sh ../target/release/bundle/appimage/Paracord_<version>_amd64.AppImage
@@ -16,6 +17,14 @@
 # display: EGL_BAD_PARAMETER" before the window appears. libwayland keeps its
 # ABI backward compatible, so the host's copy (always present where Mesa is)
 # serves the bundled GTK and WebKit as well.
+#
+# The identity: the window's app id is com.paracord.desktop (app_identity.rs),
+# and a taskbar finds the icon through the desktop entry of that name. The
+# Tauri bundler always names the AppImage's root entry after the product
+# (Paracord.desktop, here rendered from linux/bundler-alias.desktop and hidden),
+# so this script puts com.paracord.desktop.desktop (installed into the AppDir by
+# tauri.conf.json bundle.linux.appimage.files) at the root instead, with its
+# icon as the root icon and .DirIcon: what AppImage integrators copy.
 #
 # The script repacks the AppImage with the same linuxdeploy AppImage plugin the
 # Tauri bundler used, and re-signs it when an updater signature (.sig) sits next
@@ -57,17 +66,27 @@ wayland_libs() {
 }
 
 mapfile -t bundled < <(wayland_libs "$appdir")
-if [ "${#bundled[@]}" -eq 0 ]; then
-  echo "finalize-appimage: no Wayland client libraries bundled in $(basename "$appimage"); nothing to do"
-  exit 0
-fi
-
 for lib in "${bundled[@]}"; do
   echo "finalize-appimage: removing ${lib#"$appdir"/}"
   rm -f "$lib"
 done
 mapfile -t left < <(wayland_libs "$appdir")
 [ "${#left[@]}" -eq 0 ] || die "Wayland libraries still present after removal: ${left[*]}"
+
+app_id=com.paracord.desktop
+entry="usr/share/applications/$app_id.desktop"
+icon="usr/share/icons/hicolor/512x512/apps/$app_id.png"
+[ -f "$appdir/$entry" ] || die "the AppImage has no $entry (tauri.conf.json bundle.linux.appimage.files)"
+[ -f "$appdir/$icon" ] || die "the AppImage has no $icon (tauri.conf.json bundle.linux.appimage.files)"
+grep -qx "Icon=$app_id" "$appdir/$entry" || die "$entry does not name Icon=$app_id"
+grep -qx "StartupWMClass=$app_id" "$appdir/$entry" || die "$entry does not name StartupWMClass=$app_id"
+# The root entry and icon the bundler made (Paracord.desktop, Paracord.png and
+# whatever linuxdeploy copied beside them) give way to the app's own.
+find "$appdir" -maxdepth 1 \( -name '*.desktop' -o -name '*.png' -o -name '*.svg' -o -name '.DirIcon' \) -exec rm -f {} +
+ln -s "$entry" "$appdir/$app_id.desktop"
+cp "$appdir/$icon" "$appdir/$app_id.png"
+ln -s "$app_id.png" "$appdir/.DirIcon"
+echo "finalize-appimage: root entry and icon are now $app_id"
 
 out="$work/out.AppImage"
 (
@@ -81,12 +100,15 @@ chmod 755 "$out"
 # Check the packed result, not just the directory it was packed from.
 check="$work/check"
 mkdir "$check"
-(cd "$check" && "$out" --appimage-extract 'usr/lib/libwayland-*' >/dev/null) || die "could not read back the repacked AppImage"
+(cd "$check" && "$out" --appimage-extract >/dev/null) || die "could not read back the repacked AppImage"
 mapfile -t repacked < <(wayland_libs "$check")
 [ "${#repacked[@]}" -eq 0 ] || die "repacked AppImage still bundles: ${repacked[*]}"
+mapfile -t roots < <(find "$check/squashfs-root" -maxdepth 1 -name '*.desktop' -printf '%f\n')
+[ "${roots[*]}" = "$app_id.desktop" ] || die "repacked AppImage's root entry is '${roots[*]}', not $app_id.desktop"
+[ -s "$check/squashfs-root/.DirIcon" ] || die "repacked AppImage has no .DirIcon"
 
 mv -f "$out" "$appimage"
-echo "finalize-appimage: repacked $(basename "$appimage") without its Wayland client libraries"
+echo "finalize-appimage: repacked $(basename "$appimage"): host Wayland libraries, $app_id entry and icon"
 
 if [ -e "$sig" ]; then
   rm -f "$sig"

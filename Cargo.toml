@@ -206,5 +206,7 @@ env-libvpx-sys = { path = "vendor/env-libvpx-sys" }
 libspa-sys = { path = "vendor/libspa-sys" }
 pipewire-sys = { path = "vendor/pipewire-sys" }
 # Walk the GTK parent chain to GtkWindow in undecorated resize handlers so
-# Paracord's Linux native-render Overlay/Fixed reparent does not panic on click.
+# Paracord's Linux native-render Overlay/Fixed reparent does not panic on click,
+# and attach no press-to-resize handler on Linux: the page's own resize edges
+# start the resize (docs/design/index-checkpoints/window-chrome.md).
 tauri-runtime-wry = { path = "vendor/tauri-runtime-wry" }

@@ -142,6 +142,8 @@ export function IxFrame({ guildId, channelId, children }: IxFrameProps) {
           inert={sideInert}
         >
           <TintLayers hue={hue} kind="side" />
+          {/* The window's drag band over the sidebar's top (window-chrome; macOS: the traffic lights' band). */}
+          <div className="ix-side__drag" data-window-drag="" aria-hidden="true" />
           <div className="ix-side__pinned">
             <CardSlot place={place} position="pinned" />
           </div>

@@ -44,7 +44,11 @@ export function AuthCanvas({ children, className }: { children: ReactNode; class
       className={cn('ix-auth ix-hue-main ix-lt--main h-dvh w-full overflow-y-auto sm:overflow-hidden', className)}
       style={{ '--ix-hue': PEOPLE_HUE } as CSSProperties}
     >
-      <div className="flex min-h-full w-full items-center justify-center px-4 py-10 sm:h-full sm:min-h-0 sm:py-6">
+      {/* The empty ground around the column moves the desktop window (window-chrome). */}
+      <div
+        className="flex min-h-full w-full items-center justify-center px-4 py-10 sm:h-full sm:min-h-0 sm:py-6"
+        data-window-drag=""
+      >
         {children}
       </div>
     </div>

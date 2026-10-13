@@ -88,6 +88,7 @@
 /* The long tail (IX-17): settings, dialogs, the entry pages; the scope and what a layered recipe cannot do. */
 @import './ix-longtail.css';
 @import './ix-phone.css';
+@import './window-chrome.css';
 @import './utilities.css';
 /* Last, and in a layer of its own: the §9 focus ring outranks the utilities, so
    a resting-state `shadow-*` cannot silently delete it. See focus.css. */

@@ -5267,6 +5267,10 @@ You may have it installed on another user account, but it is not available for t
   .map_err(|e| Error::CreateWebview(Box::new(e)))?;
 
   if kind == WebviewKind::WindowContent {
+    // Paracord: no press-to-resize handler on the GTK webview. The page draws
+    // its own resize edges and starts the resize itself (`startResizeDragging`,
+    // client/src/lib/windowChrome), with resize cursors and wider corners; a
+    // second resize begun natively by the same press would race it.
     #[cfg(any(
       target_os = "linux",
       target_os = "dragonfly",
@@ -5274,7 +5278,7 @@ You may have it installed on another user account, but it is not available for t
       target_os = "netbsd",
       target_os = "openbsd"
     ))]
-    undecorated_resizing::attach_resize_handler(&webview);
+    let _ = undecorated_resizing::attach_resize_handler;
     #[cfg(windows)]
     if window.is_resizable() && !window.is_decorated() {
       undecorated_resizing::attach_resize_handler(window.hwnd(), window.has_undecorated_shadow());

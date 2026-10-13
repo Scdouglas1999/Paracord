@@ -573,6 +573,12 @@ jobs:
       - name: Contrast audit
         working-directory: client
         run: npm run test:contrast
+      # One app id across the window, the Linux entry and icons, the Inno
+      # shortcuts; every .ico/.icns size; the frameless window and macOS's
+      # traffic lights (docs/design/index-checkpoints/window-chrome.md).
+      - name: App identity and window config
+        working-directory: client
+        run: npm run test:app-identity
       - name: Test
         working-directory: client
         run: npm run test --if-present
@@ -680,6 +686,12 @@ jobs:
       - name: Desktop client check (macOS)
         if: matrix.os == 'macos-latest'
         run: cargo check --manifest-path client/src-tauri/Cargo.toml --all-targets
+
+      # The window chrome's macOS arm (the title bar double-click setting, the
+      # overlay title bar config) and the app id, run where they compile.
+      - name: Desktop window chrome tests (macOS)
+        if: matrix.os == 'macos-latest'
+        run: cargo test --manifest-path client/src-tauri/Cargo.toml --lib -- window_chrome app_identity
 
   docker-image:
     name: Docker Image

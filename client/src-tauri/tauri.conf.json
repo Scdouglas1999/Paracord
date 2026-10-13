@@ -19,7 +19,9 @@
         "minWidth": 940,
         "minHeight": 560,
         "resizable": true,
-        "fullscreen": false
+        "fullscreen": false,
+        "decorations": false,
+        "shadow": true
       }
     ],
     "security": {
@@ -37,7 +39,41 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "linux": {
+      "deb": {
+        "desktopTemplate": "linux/bundler-alias.desktop",
+        "files": {
+          "/usr/share/applications/com.paracord.desktop.desktop": "linux/com.paracord.desktop.desktop",
+          "/usr/share/icons/hicolor/32x32/apps/com.paracord.desktop.png": "icons/32x32.png",
+          "/usr/share/icons/hicolor/64x64/apps/com.paracord.desktop.png": "icons/64x64.png",
+          "/usr/share/icons/hicolor/128x128/apps/com.paracord.desktop.png": "icons/128x128.png",
+          "/usr/share/icons/hicolor/256x256/apps/com.paracord.desktop.png": "icons/128x128@2x.png",
+          "/usr/share/icons/hicolor/512x512/apps/com.paracord.desktop.png": "icons/icon.png"
+        }
+      },
+      "rpm": {
+        "desktopTemplate": "linux/bundler-alias.desktop",
+        "files": {
+          "/usr/share/applications/com.paracord.desktop.desktop": "linux/com.paracord.desktop.desktop",
+          "/usr/share/icons/hicolor/32x32/apps/com.paracord.desktop.png": "icons/32x32.png",
+          "/usr/share/icons/hicolor/64x64/apps/com.paracord.desktop.png": "icons/64x64.png",
+          "/usr/share/icons/hicolor/128x128/apps/com.paracord.desktop.png": "icons/128x128.png",
+          "/usr/share/icons/hicolor/256x256/apps/com.paracord.desktop.png": "icons/128x128@2x.png",
+          "/usr/share/icons/hicolor/512x512/apps/com.paracord.desktop.png": "icons/icon.png"
+        }
+      },
+      "appimage": {
+        "files": {
+          "/usr/share/applications/com.paracord.desktop.desktop": "linux/com.paracord.desktop.desktop",
+          "/usr/share/icons/hicolor/32x32/apps/com.paracord.desktop.png": "icons/32x32.png",
+          "/usr/share/icons/hicolor/64x64/apps/com.paracord.desktop.png": "icons/64x64.png",
+          "/usr/share/icons/hicolor/128x128/apps/com.paracord.desktop.png": "icons/128x128.png",
+          "/usr/share/icons/hicolor/256x256/apps/com.paracord.desktop.png": "icons/128x128@2x.png",
+          "/usr/share/icons/hicolor/512x512/apps/com.paracord.desktop.png": "icons/icon.png"
+        }
+      }
+    }
   },
   "plugins": {
     "deep-link": {

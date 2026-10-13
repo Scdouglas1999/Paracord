@@ -1,0 +1,12 @@
+[Desktop Entry]
+# The Tauri bundler always writes <productName>.desktop (Paracord.desktop).
+# Paracord's entry is com.paracord.desktop.desktop, installed beside this one:
+# its name is the window's app id, so taskbars find the icon. Hidden=true makes
+# desktops treat this file as absent, so the app is listed once.
+Type=Application
+Name={{name}}
+Exec={{exec}}
+Icon={{icon}}
+Categories=Network;
+Terminal=false
+Hidden=true
