@@ -431,12 +431,22 @@ impl FrameDecryptor {
         }
     }
 
-    /// Set the decryption key for a specific sender SSRC + epoch.
-    pub fn set_peer_key(&mut self, ssrc: u32, epoch: u8, key: &[u8; KEY_SIZE]) {
-        if self.ring.set(ssrc, epoch, key) {
+    /// Set the decryption key for a specific sender SSRC + epoch. Returns
+    /// whether that changed the key the SSRC opens under (`false` when the same
+    /// key was already installed), so a receiver can tell a new key, whose
+    /// stream needs a fresh keyframe, from a repeated delivery of the old one.
+    pub fn set_peer_key(&mut self, ssrc: u32, epoch: u8, key: &[u8; KEY_SIZE]) -> bool {
+        let changed = self.ring.set(ssrc, epoch, key);
+        if changed {
             self.replay.remove(&(ssrc, epoch));
             self.failures_since_open.remove(&(ssrc, epoch));
         }
+        changed
+    }
+
+    /// Whether a key specific to `(ssrc, epoch)` is installed.
+    pub fn has_peer_key(&self, ssrc: u32, epoch: u8) -> bool {
+        self.ring.keys.contains_key(&(ssrc, epoch))
     }
 
     /// Remove the key for a given epoch.
@@ -615,6 +625,20 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn set_peer_key_says_whether_the_key_changed() {
+        let mut decryptor = FrameDecryptor::new();
+        // A first key, the same key again (a repeated delivery), then a new
+        // key at the same epoch (a fresh share), then the new key's epoch.
+        assert!(decryptor.set_peer_key(7, 1, &test_key()));
+        assert!(!decryptor.set_peer_key(7, 1, &test_key()));
+        assert!(decryptor.set_peer_key(7, 1, &[42; KEY_SIZE]));
+        assert!(decryptor.set_peer_key(7, 2, &[42; KEY_SIZE]));
+        assert!(decryptor.has_peer_key(7, 2));
+        decryptor.remove_peer_key(7, 2);
+        assert!(!decryptor.has_peer_key(7, 2));
     }
 
     #[test]

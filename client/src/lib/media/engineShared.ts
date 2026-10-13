@@ -511,3 +511,48 @@ export class TrackKeyGrace {
     this.waiting.clear();
   }
 }
+
+/**
+ * The native side's `media_decrypt_failing`: packets of one SSRC keep failing
+ * to open (stream-fix-v2). `keyProblem` is true when a key would cure it (none
+ * installed for the packets' epoch, or a stale one), false for replays and
+ * malformed packets. `streamId`/`trackId` name the video track when the native
+ * side knows it; an audio SSRC is found by {@link publishedTrackForSsrc}.
+ */
+export interface DecryptFailing {
+  ssrc: number;
+  epoch: number;
+  reason: string;
+  keyProblem: boolean;
+  streamId: string | null;
+  trackId: string | null;
+  consecutiveFailures: number;
+}
+
+/** Read a `media_decrypt_failing` payload; null for anything malformed. */
+export function readDecryptFailing(raw: unknown): DecryptFailing | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const value = raw as Record<string, unknown>;
+  if (typeof value.ssrc !== 'number' || !Number.isInteger(value.ssrc)) return null;
+  const text = (key: string) => (typeof value[key] === 'string' && value[key] ? (value[key] as string) : null);
+  return {
+    ssrc: value.ssrc,
+    epoch: typeof value.epoch === 'number' ? value.epoch : 0,
+    reason: text('reason') ?? 'unknown',
+    keyProblem: value.keyProblem === true,
+    streamId: text('streamId'),
+    trackId: text('trackId'),
+    consecutiveFailures: typeof value.consecutiveFailures === 'number' ? value.consecutiveFailures : 0,
+  };
+}
+
+/** The published track one of whose layers is `ssrc`, if any. */
+export function publishedTrackForSsrc(
+  tracks: Iterable<PublishedTrackDescriptor>,
+  ssrc: number,
+): PublishedTrackDescriptor | null {
+  for (const track of tracks) {
+    if (track.layers.some((layer) => layer.ssrc === ssrc)) return track;
+  }
+  return null;
+}

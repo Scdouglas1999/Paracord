@@ -164,4 +164,18 @@ describe('watchNotice', () => {
   it('says so when the person stopped sharing', () => {
     expect(watchNotice({ ...base, phase: 'ended', streamerSharing: false }).text).toBe('Vincent stopped sharing.');
   });
+
+  it('says so over a watch that stays connected for the next share, never over a frozen frame', () => {
+    // The watch is live (its connection waits for Vincent to share again);
+    // the box has dropped the last share's picture (StreamSurface `sharing`).
+    const stopped = watchNotice({ ...base, phase: 'live', streamerSharing: false, hasPicture: false });
+    expect(stopped).toEqual({ text: 'Vincent stopped sharing.', retry: false, pending: false });
+    // Sharing again: wait for the new share's first frame, then show it.
+    expect(watchNotice({ ...base, phase: 'live', streamerSharing: true, hasPicture: false }).text).toBe(
+      "Waiting for Vincent's screen…",
+    );
+    expect(watchNotice({ ...base, phase: 'live', streamerSharing: true, hasPicture: true }).text).toBeNull();
+    // A frame that beats the voice state's "sharing" is shown, not hidden.
+    expect(watchNotice({ ...base, phase: 'live', streamerSharing: false, hasPicture: true }).text).toBeNull();
+  });
 });

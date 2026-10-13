@@ -236,7 +236,10 @@ export function watchNotice(args: {
 }): WatchNotice {
   const { phase, streamerName } = args;
   const whose = streamerName === 'You' ? 'your screen' : `${streamerName}'s screen`;
-  if (!args.streamerSharing && phase !== 'live') {
+  // Stopped: say so, also over a watch that stays connected for the next
+  // share (a frozen last frame is not live). A picture that arrives before the
+  // voice state says the share began is shown.
+  if (!args.streamerSharing && (phase !== 'live' || !args.hasPicture)) {
     return { text: streamerName === 'You' ? 'You stopped sharing.' : `${streamerName} stopped sharing.`, retry: false, pending: false };
   }
   switch (phase) {

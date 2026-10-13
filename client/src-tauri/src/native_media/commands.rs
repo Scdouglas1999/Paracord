@@ -1437,6 +1437,13 @@ pub async fn media_send_track_key_announce(
     let guard = state.session.lock().await;
     let session = guard.as_ref().ok_or("no active session")?;
     let payload = parse_encrypted_key_recipients(encrypted_keys)?;
+    tracing::info!(
+        stream_id = %stream_id,
+        track_id = %track_id,
+        epoch,
+        recipients = ?payload.iter().map(|(recipient, _)| *recipient).collect::<Vec<_>>(),
+        "announcing a stream key"
+    );
     let codec = codec
         .as_deref()
         .and_then(super::capabilities::video_codec_from_label);
@@ -1662,20 +1669,49 @@ pub async fn media_apply_track_sender_key(
     let session = guard.as_ref().ok_or("no active session")?;
     let stream_id = StreamId::new(stream_id);
     let track_id = TrackId::new(track_id);
-    let track = {
+    let (track, keyframe_request) = {
         let mut registry = session.stream_registry.lock().await;
         registry.store_delivered_track_key(&stream_id, &track_id, epoch, key);
-        registry.get_published_track(&stream_id, &track_id)
+        let track = registry.get_published_track(&stream_id, &track_id);
+        let keyframe_request = track
+            .as_ref()
+            .and_then(|track| super::events::keyframe_request_for_new_key(&registry, track));
+        (track, keyframe_request)
     };
 
     if let Some(track) = track {
-        let mut decryptor = session
-            .frame_decryptor
-            .lock()
-            .map_err(|_| "frame decryptor lock poisoned".to_string())?;
-        for layer in &track.layers {
-            decryptor.set_peer_key(layer.ssrc, epoch, &key);
+        let changed = {
+            let mut decryptor = session
+                .frame_decryptor
+                .lock()
+                .map_err(|_| "frame decryptor lock poisoned".to_string())?;
+            super::events::install_track_key(&mut decryptor, &track, epoch, &key)
+        };
+        tracing::info!(
+            stream_id = %stream_id.0,
+            track_id = %track_id.0,
+            epoch,
+            ssrcs = ?track.layers.iter().map(|layer| layer.ssrc).collect::<Vec<_>>(),
+            changed,
+            "installed a delivered stream key"
+        );
+        // A new key (not a repeat of the one installed): whatever the
+        // publisher sealed with it before it got here is lost, its keyframe
+        // included, so ask for one.
+        if changed {
+            if let Some(request) = keyframe_request {
+                super::events::request_keyframes_for_new_key(session.connection.inner(), request);
+            }
         }
+    } else {
+        // Kept until the track's publish arrives, which installs it then
+        // (`events::apply_delivered_track_key`).
+        tracing::info!(
+            stream_id = %stream_id.0,
+            track_id = %track_id.0,
+            epoch,
+            "holding a delivered stream key for a track not yet published here"
+        );
     }
 
     Ok(())

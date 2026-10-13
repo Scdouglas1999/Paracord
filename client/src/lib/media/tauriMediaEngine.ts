@@ -26,6 +26,8 @@ import {
   selectPublishedLayer,
   wrapSenderKeyForRecipients,
   keyRecipients,
+  publishedTrackForSsrc,
+  readDecryptFailing,
   readRosterKind,
   samePublishedTrack,
   type RosterKind,
@@ -1322,6 +1324,27 @@ export class TauriMediaEngine implements MediaEngine {
       void this.announceWrappedTrackKey(track, [payload.recipientUserId]).catch(error => this.failKeyExchange(error));
     });
 
+    // Packets of a track this side receives keep failing to open (the native
+    // side says so after a run of them, and again every couple of seconds
+    // while it lasts): its key never arrived, or a stale one is installed.
+    // Say so in the log, and ask for the key again (stream-fix-v2).
+    const decryptFailingUnlisten = await this.listenOwned('media_decrypt_failing', (event) => {
+      const failing = readDecryptFailing(event.payload);
+      if (!failing) return;
+      const track =
+        (failing.streamId && failing.trackId
+          ? this.publishedTracks.get(`${failing.streamId}:${failing.trackId}`)
+          : undefined) ?? publishedTrackForSsrc(this.publishedTracks.values(), failing.ssrc);
+      logVoiceDiagnostic('[media] packets keep failing to decrypt', {
+        ...failing,
+        streamId: track?.streamId ?? failing.streamId,
+        trackId: track?.trackId ?? failing.trackId,
+        publisherUserId: track ? String(track.publisherUserId) : null,
+      });
+      if (!failing.keyProblem || !track) return;
+      this.askForTrackKeyAgain(track);
+    });
+
     this.unlisteners.push(
       audioKeyUnlisten,
       streamKeyUnlisten,
@@ -1329,7 +1352,37 @@ export class TauriMediaEngine implements MediaEngine {
       participantJoinDetailsUnlisten,
       participantLeaveUnlisten,
       requestStreamKeyUnlisten,
+      decryptFailingUnlisten,
     );
+  }
+
+  /**
+   * Ask for a remote track's key again: subscribe to it again. The relay
+   * answers a subscription with the newest key it holds for this receiver, or
+   * asks the publisher to wrap one, and asks the publisher for a keyframe
+   * (`SubscribeStream`). Only a track this side receives, never its own.
+   */
+  private askForTrackKeyAgain(track: PublishedTrackDescriptor): void {
+    if (this.disposed || String(track.publisherUserId) === String(this.localUserId ?? '')) return;
+    const userId = String(track.publisherUserId);
+    if (track.kind === 'audio') {
+      const registered = this.screenAudioRegistrations.get(userId);
+      if (registered?.streamId !== track.streamId || registered.trackId !== track.trackId) return;
+      logVoiceDiagnostic('[media] asking for a stream key again', { streamId: track.streamId, trackId: track.trackId });
+      void this.registerTrackSubscription({ streamId: track.streamId, trackId: track.trackId, requestedLayer: 0 })
+        .catch(() => {});
+      return;
+    }
+    const subscription = Array.from(this.videoSubscriptions.values()).find(
+      (sub) => sub.streamId === track.streamId && sub.trackId === track.trackId,
+    );
+    if (!subscription) return;
+    logVoiceDiagnostic('[media] asking for a stream key again', { streamId: track.streamId, trackId: track.trackId });
+    void this.registerTrackSubscription({
+      streamId: track.streamId,
+      trackId: track.trackId,
+      viewport: subscription.nativeTile ? canvasViewport(subscription.canvas) : undefined,
+    }).catch(() => {});
   }
 
   /**

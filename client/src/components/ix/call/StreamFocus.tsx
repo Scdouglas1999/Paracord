@@ -184,6 +184,7 @@ function StreamPicture({
       streamerId={streamTarget.streamerId}
       notice={noticeNode}
       onPicture={setHasPicture}
+      sharing={model.streamerSharing}
       className="ix-call-stream"
       style={style}
     >

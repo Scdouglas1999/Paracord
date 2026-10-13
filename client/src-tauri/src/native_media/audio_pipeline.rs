@@ -408,7 +408,12 @@ pub fn spawn_datagram_recv_task(session: &mut NativeMediaSession, app: super::Ca
                         );
                         // N11 (AU12): make a run of decrypt failures loud rather
                         // than manifesting as silently-missing media.
-                        super::events::note_decrypt_result(&app, header.ssrc, result.is_ok());
+                        super::events::note_decrypt_result(
+                            &app,
+                            header.ssrc,
+                            header.key_epoch,
+                            result.as_ref().err(),
+                        );
                         match result {
                             Ok(data) => data,
                             Err(_) => continue,

@@ -7,6 +7,8 @@ import {
   isViewableStream,
   keyRecipients,
   parseRelayCloseReason,
+  publishedTrackForSsrc,
+  readDecryptFailing,
   readRosterKind,
   reassembleVideoPayload,
   selectPublishedLayer,
@@ -384,5 +386,30 @@ describe('the relay\'s close reasons', () => {
     expect(parseRelayCloseReason('Native voice connection lost: timed out')).toBeNull();
     expect(isTerminalViewCloseReason('media access revoked')).toBe(true);
     expect(isTerminalViewCloseReason('Connection lost')).toBe(false);
+  });
+});
+
+describe('decrypt-failure reports (stream-fix-v2)', () => {
+  it('reads the native report and refuses anything malformed', () => {
+    expect(readDecryptFailing({
+      ssrc: 7, epoch: 2, reason: 'no-key', keyProblem: true, streamId: 'stream:1:screen', trackId: 'screen', consecutiveFailures: 50,
+    })).toEqual({
+      ssrc: 7, epoch: 2, reason: 'no-key', keyProblem: true, streamId: 'stream:1:screen', trackId: 'screen', consecutiveFailures: 50,
+    });
+    // A report without a track (an audio SSRC) or a flag reads as no track, no key problem.
+    expect(readDecryptFailing({ ssrc: 7 })).toMatchObject({ streamId: null, trackId: null, keyProblem: false });
+    expect(readDecryptFailing({ ssrc: 1.5 })).toBeNull();
+    expect(readDecryptFailing(null)).toBeNull();
+  });
+
+  it('finds the published track an SSRC belongs to', () => {
+    const track = (trackId: string, ssrcs: number[]): PublishedTrackDescriptor => ({
+      streamId: 'stream:1:screen', trackId, publisherUserId: '1', kind: trackId === 'screen' ? 'video' : 'audio', codec: null,
+      layers: ssrcs.map((ssrc, layerId) => ({ layerId, ssrc, active: true }) as PublishedLayerDescriptor),
+    });
+    const tracks = [track('screen', [10, 11, 12]), track('screen-audio', [20])];
+    expect(publishedTrackForSsrc(tracks, 11)?.trackId).toBe('screen');
+    expect(publishedTrackForSsrc(tracks, 20)?.trackId).toBe('screen-audio');
+    expect(publishedTrackForSsrc(tracks, 99)).toBeNull();
   });
 });

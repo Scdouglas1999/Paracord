@@ -283,6 +283,13 @@ pub struct NativeMediaSession {
     pub stream_registry: Arc<tokio::sync::Mutex<StreamRegistry>>,
     pub session_participants: Arc<tokio::sync::Mutex<HashMap<i64, RemoteSessionParticipant>>>,
     pub track_sender_keys: Arc<tokio::sync::Mutex<HashMap<(StreamId, TrackId), SenderKeyState>>>,
+    /// The epoch of each local track's last key, kept after the track stops.
+    /// A track started again in the same call gets a new key under the *next*
+    /// epoch, never its last one: receivers file keys by `(ssrc, epoch)`, and
+    /// frames of the new share arriving before its key must not be tried
+    /// against the previous share's key, nor may a late delivery of that key
+    /// overwrite the new one (stream-fix-v2).
+    pub retired_track_key_epochs: HashMap<(StreamId, TrackId), u8>,
     pub stream_capabilities: MediaStreamCapabilities,
     pub published_video_track: Option<PublishedTrack>,
     pub published_screen_track: Option<PublishedTrack>,
@@ -612,6 +619,7 @@ impl NativeMediaSession {
             stream_registry: Arc::new(tokio::sync::Mutex::new(StreamRegistry::default())),
             session_participants: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             track_sender_keys: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            retired_track_key_epochs: HashMap::new(),
             stream_capabilities: advertised_capabilities
                 .unwrap_or_else(detect_media_stream_capabilities),
             published_video_track: None,

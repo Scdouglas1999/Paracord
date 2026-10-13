@@ -1569,11 +1569,42 @@ pub fn unbind_remote_video_track(stream_id: &str, track_id: &str) {
             .remote_ssrc_track_bindings
             .retain(|_, bound| bound != &key);
         state.remote_track_max_dimensions.remove(&key);
+        // The share ended. Its next share numbers its frames from 0 again, and
+        // a keyframe mark left from this one culled every keyframe of the next
+        // as "stale" until its frame ids climbed past it: minutes of frozen
+        // picture after a long share (stream audit B1).
+        state.remote_track_stream_high_water.remove(&key);
+        // The share behind a surface that stays up (a viewer still watching)
+        // ended: its next share is a new picture, announced to the page by a
+        // first-frame event of its own (the page shows "stopped sharing", then
+        // "waiting", until it comes).
+        if let Some(binding) = state.remote_track_surfaces.get(&key) {
+            binding
+                .first_frame_presented
+                .store(false, Ordering::Relaxed);
+        }
     }
 }
 
 #[cfg(not(feature = "vpx"))]
 pub fn unbind_remote_video_track(_stream_id: &str, _track_id: &str) {}
+
+/// The remote video track (stream id, track id) a relay-announced SSRC belongs
+/// to, for diagnostics that only know the SSRC (a run of packets that do not
+/// decrypt). `None` for audio and for SSRCs no `TrackPublish` named.
+#[cfg(feature = "vpx")]
+pub fn remote_video_track_for_ssrc(ssrc: u32) -> Option<(String, String)> {
+    let state = video_dispatch_state().lock().ok()?;
+    let key = state.remote_ssrc_track_bindings.get(&ssrc)?;
+    // Track keys are `{stream_id}:{track_id}`; track ids carry no colon.
+    let (stream_id, track_id) = key.rsplit_once(':')?;
+    Some((stream_id.to_string(), track_id.to_string()))
+}
+
+#[cfg(not(feature = "vpx"))]
+pub fn remote_video_track_for_ssrc(_ssrc: u32) -> Option<(String, String)> {
+    None
+}
 
 /// Whether a frame arriving on `ssrc` may claim to belong to `claimed_track_key`.
 ///
@@ -3513,7 +3544,12 @@ pub fn handle_video_stream_frame(
                 header.sequence,
                 &frame.payload,
             );
-            super::events::note_decrypt_result(app, header.ssrc, result.is_ok());
+            super::events::note_decrypt_result(
+                app,
+                header.ssrc,
+                header.key_epoch,
+                result.as_ref().err(),
+            );
             match result {
                 Ok(data) => data,
                 Err(_) => return,
@@ -4207,17 +4243,27 @@ pub async fn ensure_track_sender_key(
 ) -> Result<(), String> {
     use rand::RngCore;
 
+    let track_key = (track.stream_id.clone(), track.track_id.clone());
+    // A track that ran before in this call starts under the epoch after its
+    // last key's (see `retired_track_key_epochs`).
+    let epoch = super::events::fresh_track_key_epoch(
+        session.retired_track_key_epochs.get(&track_key).copied(),
+        session.current_key_epoch.load(Ordering::SeqCst),
+    );
     let key = {
         let mut sender_keys = session.track_sender_keys.lock().await;
         sender_keys
-            .entry((track.stream_id.clone(), track.track_id.clone()))
+            .entry(track_key)
             .or_insert_with(|| {
                 let mut key = [0u8; 16];
                 rand::thread_rng().fill_bytes(&mut key);
-                super::session::SenderKeyState {
-                    epoch: session.current_key_epoch.load(Ordering::SeqCst),
-                    key,
-                }
+                tracing::info!(
+                    stream_id = %track.stream_id.0,
+                    track_id = %track.track_id.0,
+                    epoch,
+                    "new sender key for a local track"
+                );
+                super::session::SenderKeyState { epoch, key }
             })
             .to_owned()
     };
@@ -4272,6 +4318,12 @@ pub async fn clear_track_sender_key(session: &mut NativeMediaSession, track: &Pu
         let mut sender_keys = session.track_sender_keys.lock().await;
         sender_keys.remove(&(track.stream_id.clone(), track.track_id.clone()))
     };
+    if let Some(state) = removed {
+        session.retired_track_key_epochs.insert(
+            (track.stream_id.clone(), track.track_id.clone()),
+            state.epoch,
+        );
+    }
     if let Ok(mut encryptor) = session.frame_encryptor.lock() {
         let epoch = removed
             .map(|state| state.epoch)
@@ -5002,6 +5054,25 @@ mod tests {
             stream_frame_is_newest(&track_key, 11),
             "a newer keyframe is accepted"
         );
+        if let Ok(mut state) = video_dispatch_state().lock() {
+            state.remote_track_stream_high_water.remove(&track_key);
+        }
+    }
+
+    #[test]
+    fn a_restarted_share_s_first_keyframe_is_not_culled_as_stale() {
+        // A long share left a keyframe mark at frame 9000; the publisher stops
+        // and shares again, numbering from 0. The unpublish between the two
+        // forgets the mark, so the new share's keyframes are taken.
+        let track_key = make_track_key("stream:reshare-test:screen", "screen");
+        assert!(stream_frame_is_newest(&track_key, 9_000));
+        assert!(!stream_frame_is_newest(&track_key, 12), "same share: stale");
+        unbind_remote_video_track("stream:reshare-test:screen", "screen");
+        assert!(
+            stream_frame_is_newest(&track_key, 0),
+            "the next share's opening keyframe is accepted"
+        );
+        assert!(stream_frame_is_newest(&track_key, 40));
         if let Ok(mut state) = video_dispatch_state().lock() {
             state.remote_track_stream_high_water.remove(&track_key);
         }

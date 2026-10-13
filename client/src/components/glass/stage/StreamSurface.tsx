@@ -32,12 +32,18 @@ export interface StreamSurfaceProps {
   notice: ReactNode;
   /** The picture arrived (first frame), or went away (another subscription). */
   onPicture?: (hasPicture: boolean) => void;
+  /**
+   * Whether the streamer is sharing now. When it turns false the picture is
+   * gone (the last frame is not live), and the stream's next share counts as
+   * a new picture: the box waits for its first frame (stream-fix-v2).
+   */
+  sharing?: boolean;
   className?: string;
   style?: CSSProperties;
   children?: ReactNode;
 }
 
-export function StreamSurface({ engine, streamerId, notice, onPicture, className, style, children }: StreamSurfaceProps) {
+export function StreamSurface({ engine, streamerId, notice, onPicture, sharing = true, className, style, children }: StreamSurfaceProps) {
   const boxRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [hasPicture, setHasPicture] = useState(false);
@@ -51,18 +57,24 @@ export function StreamSurface({ engine, streamerId, notice, onPicture, className
     reportRef.current?.(hasPicture);
   }, [hasPicture]);
 
+  // A stopped share takes its picture with it (the last frame is not live),
+  // and the next share is a new picture: the box waits for its first frame,
+  // which the engine reports again (stream-fix-v2).
+  const [sharedBefore, setSharedBefore] = useState(sharing);
+  if (sharing !== sharedBefore) {
+    setSharedBefore(sharing);
+    if (!sharing) setHasPicture(false);
+  }
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!engine || !canvas) return;
-    let sawFrame = false;
     const unsubscribe = engine.subscribeVideo(
       streamerId,
       canvas,
-      () => {
-        if (sawFrame) return;
-        sawFrame = true;
-        setHasPicture(true);
-      },
+      // Called for a share's first frame (the browser engine: every frame; an
+      // unchanged state renders nothing).
+      () => setHasPicture(true),
       { preferredTrackId: 'screen' },
     );
     return () => {

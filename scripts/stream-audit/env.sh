@@ -32,7 +32,7 @@ up)
   gcc -shared -fPIC -O2 -o "$OUT/libsaprobe.so" "$HERE/probe.c" -ldl -lpthread $(pkg-config --cflags libpipewire-0.3 libavcodec) || exit 1
   PARACORD_LIVE_ENV_BIN=$SA_SERVER_BIN PARACORD_AUTO_PORT_FORWARD=false \
     PARACORD_CORS_ALLOWED_ORIGINS=http://localhost:1477,http://127.0.0.1:1477 \
-    RUST_LOG=warn,paracord_api=info,paracord_relay=info \
+    RUST_LOG=${SA_SERVER_RUST_LOG:-warn,paracord_api=info,paracord_relay=info} \
     nohup node "$ROOT/scripts/live-env.mjs" --port "$PORT" --data "$OUT/live-env" > "$OUT/live-env.out" 2>&1 &
   echo $! > "$OUT/live-env.pid"
   nohup node "$HERE/drive/audit-serve.mjs" "$SA_DIST" 1477 "$OUT/cmds" > "$OUT/serve.log" 2>&1 &
