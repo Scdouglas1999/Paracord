@@ -17,6 +17,7 @@ import {
   ShieldAlert,
   Download,
   RefreshCw,
+  HardDrive,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
@@ -87,6 +88,7 @@ import { ThemeSelector } from '../customization/ThemeSelector';
 import { NOW_PLAYING_SETTING_KEY } from '../../lib/nowPlaying';
 import { isActivityDetectionOn } from '../../lib/features/privacyDefaults';
 import { PrivacySection } from './PrivacySection';
+import { HostSettingsSection, useHostedHere } from '../host/HostSettingsSection';
 import {
   applyAskForPassword,
   changeOnePassword,
@@ -116,9 +118,11 @@ type SettingsSection =
   | 'keybinds'
   | 'identity'
   | 'about'
-  | 'server';
+  | 'server'
+  | 'host';
 
-type NavItem = { id: SettingsSection; label: string; icon: LucideIcon; adminOnly?: boolean };
+/** `hostOnly`: shown only on the computer that hosts a server (setup spec §2.9). */
+type NavItem = { id: SettingsSection; label: string; icon: LucideIcon; adminOnly?: boolean; hostOnly?: boolean };
 
 // Sectioned nav (lantern-stage-spec §8 NavRow). Icons keep the rail
 // legible and consistent; grouping gives rhythm instead of one flat list.
@@ -139,6 +143,7 @@ const NAV_GROUPS: { label?: string; items: NavItem[] }[] = [
     items: [
       { id: 'identity', label: 'Identity', icon: Fingerprint },
       { id: 'server', label: 'Instance', icon: Server, adminOnly: true },
+      { id: 'host', label: 'This computer', icon: HardDrive, hostOnly: true },
       { id: 'about', label: 'About', icon: Info },
     ],
   },
@@ -269,6 +274,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
     audioOutputDevices.some((d) => isAdvancedMediaDevice(d)) ||
     videoInputDevices.some((d) => isAdvancedMediaDevice(d));
   const userIsAdmin = user ? isAdmin(user.flags ?? 0) : false;
+  const hostedHere = useHostedHere();
   const [restartConfirm, setRestartConfirm] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const localCryptoAccountReady = Boolean(accountPublicKey) || hasLocalCryptoAccount();
@@ -1089,6 +1095,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
     label: group.label,
     items: group.items
       .filter((item) => !item.adminOnly || userIsAdmin)
+      .filter((item) => !item.hostOnly || hostedHere)
       .map((item) => {
         const Icon = item.icon;
         return { id: item.id, label: item.label, icon: <Icon size={16} /> };
@@ -2438,6 +2445,8 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 </section>
               </div>
             )}
+
+            {activeSection === 'host' && <HostSettingsSection onCloseSettings={onClose} />}
 
             {activeSection === 'about' && (
               <div>

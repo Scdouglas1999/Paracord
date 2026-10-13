@@ -1,0 +1,210 @@
+/* Settings › "Paracord on this computer" (docs/setup-spec.md §2.9), in the Index
+   settings language (docs/index-spec.md §6.7): a well for the state at a glance,
+   then labeled rows. Tones reuse the setup rows' done / warned colors (--fr-ok,
+   --fr-warn) and the one danger ink, so the page and the setup screen agree. */
+
+.ix-host-glance {
+  padding: 16px 18px;
+}
+.ix-host-glance__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.ix-host-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 8px;
+}
+.ix-host-state {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--ix-ink);
+}
+.ix-host-state .ix-host-dot {
+  width: 10px;
+  height: 10px;
+}
+.ix-host-facts {
+  margin: 2px 0 0 20px;
+  font-size: 13px;
+  color: var(--ix-ink-3);
+  font-variant-numeric: tabular-nums;
+}
+.ix-host-reason {
+  margin: 10px 0 0 20px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ix-ink-2);
+}
+.ix-host-reason[data-tone='fail'] {
+  color: var(--ix-danger-ink);
+}
+.ix-host-update {
+  margin: 14px 0 0;
+  padding: 12px 0 0 20px;
+  border-top: 1px solid var(--ix-line);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ix-ink-2);
+}
+.ix-host-update[data-kind='failed'] > p {
+  color: var(--ix-danger-ink);
+}
+
+/* One dot, colored by tone: done, warned, failed, neutral. */
+.ix-host-dot {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ix-ink-3);
+}
+[data-tone='ok'] > .ix-host-dot {
+  background: var(--fr-ok);
+}
+[data-tone='warn'] > .ix-host-dot {
+  background: var(--fr-warn);
+}
+[data-tone='fail'] > .ix-host-dot {
+  background: var(--ix-danger-ink);
+}
+
+.ix-host-row {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  gap: 4px 20px;
+  padding: 18px 0;
+  border-top: 1px solid var(--ix-line);
+}
+.ix-host-row > h3 {
+  margin: 0;
+  padding-top: 2px;
+}
+.ix-host-row__body {
+  min-width: 0;
+}
+@media (max-width: 720px) {
+  .ix-host-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.ix-host-line {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0;
+  font-size: 14.5px;
+  line-height: 1.5;
+  color: var(--ix-ink);
+}
+.ix-host-line > .ix-host-dot {
+  transform: translateY(-1px);
+}
+.ix-host-sub {
+  margin: 4px 0 0 18px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ix-ink-3);
+}
+.ix-host-sub--first {
+  margin: 0;
+  font-size: 14px;
+  color: var(--ix-ink-2);
+}
+.ix-host-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.ix-host-line + .ix-host-chips,
+.ix-host-sub + .ix-host-chips {
+  margin-left: 18px;
+}
+.ix-host-sub--first + .ix-host-chips {
+  margin-left: 0;
+}
+.ix-host-escrow {
+  margin-top: 12px;
+}
+.ix-host-note {
+  margin: 8px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ix-ink-2);
+}
+.ix-host-note[data-tone='fail'] {
+  color: var(--ix-danger-ink);
+}
+
+.ix-host-words {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+}
+.ix-host-words > span {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--ix-ink);
+}
+.ix-host-words + .ix-host-sub {
+  margin-left: 0;
+}
+
+/* Remove dialog. */
+.ix-host-remove__kept {
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--ix-fill);
+  box-shadow: inset 0 0 0 1px var(--ix-line);
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--ix-ink-2);
+}
+.ix-host-remove__kept b {
+  color: var(--ix-ink);
+  font-weight: 600;
+}
+.ix-host-remove__check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 16px;
+  font-size: 14.5px;
+  font-weight: 500;
+  color: var(--ix-ink);
+  cursor: pointer;
+}
+.ix-host-remove__danger {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--ix-danger-fill);
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--ix-ink);
+}
+.ix-host-remove__danger p {
+  margin: 0 0 10px;
+}
+.ix-host-remove__label {
+  display: block;
+  font-size: 13px;
+  color: var(--ix-ink-2);
+}
+.ix-host-remove__label b {
+  color: var(--ix-ink);
+}
+.ix-host-remove__check[data-first] {
+  margin-top: 0;
+}

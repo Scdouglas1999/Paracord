@@ -35,7 +35,55 @@ export interface TauriHostOptions {
   restore?: RestoreScenario;
   /** What `host_on_launch` reports (spec 2.8). Default `none`. */
   launch?: LaunchScenario;
+  /**
+   * A computer that already hosts a server (Settings › "Paracord on this
+   * computer", spec 2.9, F4). Unset: the first-run behavior (nothing hosted
+   * until setup runs).
+   */
+  hosting?: Partial<HostingState>;
 }
+
+/** What the hosting computer reports, for Settings › "Paracord on this computer". */
+export interface HostingState {
+  /** `null`: the service manager couldn't be asked (`serviceError` says why). */
+  service: 'running' | 'stopped' | 'starting' | 'failed' | 'not_installed' | null;
+  serviceError: string | null;
+  exitCode: number | null;
+  autostart: boolean;
+  /** Exit 78: why the storage key can't be opened. */
+  storageKeyProblem: string | null;
+  /** An update that didn't come up (spec 2.8). */
+  updateFailed: boolean;
+  heldVersion: string | null;
+  escrowed: boolean;
+  lastBackupAt: string | null;
+  backupError: string | null;
+  /** `Reachability.confirmed_at`. */
+  confirmedAt: string | null;
+  /** `host_start` rejects with this (and the service stays stopped). */
+  startFails: string | null;
+  /** `host_remove` rejects with this. */
+  removeFails: string | null;
+  /** host.json gone or `enabled = false` after **Remove**. */
+  enabled: boolean;
+}
+
+const HOSTING_DEFAULTS: HostingState = {
+  service: 'running',
+  serviceError: null,
+  exitCode: null,
+  autostart: true,
+  storageKeyProblem: null,
+  updateFailed: false,
+  heldVersion: null,
+  escrowed: true,
+  lastBackupAt: '2026-10-12T04:00:00Z',
+  backupError: null,
+  confirmedAt: null,
+  startFails: null,
+  removeFails: null,
+  enabled: true,
+};
 
 /**
  * The backup the file picker returns: `escrowed` carries the escrow of the
@@ -111,15 +159,40 @@ export class TauriHost {
   launch: LaunchScenario;
   /** `host_rollback_update` waits for this when set (a spec shoots "restoring…"). */
   rollbackHold: Promise<void> | null = null;
+  /** Settings › "Paracord on this computer" (F4); null: not hosting yet. */
+  hosting: HostingState | null;
+  /** `host_start` / `host_stop` wait for this when set (a spec shoots "Starting"). */
+  serviceHold: Promise<void> | null = null;
+
+  /** `host_info` for a computer that hosts (F4). */
+  hostingInfo(h: HostingState): Record<string, unknown> {
+    return {
+      enabled: h.enabled,
+      port: THIS_COMPUTER.port,
+      autostart: h.autostart,
+      installed_version: '3.5.0',
+      completed_steps: ['install', 'init', 'service', 'start', 'storage', 'claim', 'escrow', 'reach', 'backup'],
+      service: h.enabled && h.service ? { state: h.service, enabled: h.autostart, exit_code: h.exitCode } : null,
+      service_error: h.enabled ? h.serviceError : null,
+      home_url: h.enabled ? `https://127.0.0.1:${THIS_COMPUTER.port}` : null,
+      storage_key_problem: h.storageKeyProblem,
+      update_failure: h.updateFailed
+        ? { from_version: '3.4.0', to_version: '3.5.0', backup_name: 'paracord_backup_20261012_203000.tar.gz', failure: 'the server did not answer /health within 60 s' }
+        : null,
+      held_version: h.heldVersion,
+      instance_id: RESTORE_VECTOR.instanceId,
+    };
+  }
 
   /** `HostStatus` (contract shape) for the scripted reach. */
   status(): Record<string, unknown> {
     const reachable = this.reach === 'open' || this.reach === 'direct';
+    const h = this.hosting;
     return {
       version: '3.5.0',
       started_at: '2026-10-12T20:30:00Z',
       setup_required: false,
-      storage: { enabled: true, sqlite_encrypted: true, files_encrypted: true, key_source: 'keychain', protection: 'login', escrowed: false },
+      storage: { enabled: true, sqlite_encrypted: true, files_encrypted: true, key_source: 'keychain', protection: 'login', escrowed: h?.escrowed ?? false },
       reachability: {
         state: this.reach,
         method: 'upnp',
@@ -130,9 +203,10 @@ export class TauriHost {
         lease_expires_at: null,
         next_retry_at: null,
         last_error: null,
-        confirmed_at: null,
+        confirmed_at: h?.confirmedAt ?? null,
       },
-      backups: { enabled: true, interval_seconds: 86400, keep: 14, last_backup_at: null, last_error: null },
+      backups: { enabled: true, interval_seconds: 86400, keep: 14, last_backup_at: h?.lastBackupAt ?? null, last_error: h?.backupError ?? null },
+      instance_id: RESTORE_VECTOR.instanceId,
       tls: { fingerprint_sha256: FINGERPRINT.kanto, self_signed: true },
       share: shareAddress(this.reach),
     };
@@ -152,6 +226,7 @@ export class TauriHost {
     this.backup = options.backup ?? 'escrowed';
     this.restore = options.restore ?? 'ok';
     this.launch = options.launch ?? 'none';
+    this.hosting = options.hosting ? { ...HOSTING_DEFAULTS, ...options.hosting } : null;
   }
 
   /** Every call of one command, in order. */
@@ -213,6 +288,7 @@ export class TauriHost {
         return ok();
       }
       case 'host_info':
+        if (this.hosting) return ok(this.hostingInfo(this.hosting));
         return ok({
           enabled: this.completed.size > 0,
           port: THIS_COMPUTER.port,
@@ -239,6 +315,11 @@ export class TauriHost {
         return ok({ info: { enabled: false, port: null, autostart: false, installed_version: null, completed_steps: [], service: null, service_error: null, home_url: null, storage_key_problem: null, update_failure: null, held_version: null }, update: { kind: 'none' }, start_error: null });
       case 'host_rollback_update':
         if (this.rollbackHold) await this.rollbackHold;
+        if (this.hosting) {
+          this.hosting.updateFailed = false;
+          this.hosting.heldVersion = '3.5.0';
+          this.hosting.service = 'running';
+        }
         return ok();
       case 'host_pick_backup':
         if (this.backup === 'not-a-backup') return fail('notes.txt isn\'t a Paracord backup.');
@@ -255,9 +336,36 @@ export class TauriHost {
       case 'host_allow_firewall':
         return ok('allowed');
       case 'host_status':
+        if (this.hosting && this.hosting.service !== 'running') return fail('Paracord on this computer is not running.');
         return ok(this.status());
+      case 'host_start':
+      case 'host_stop': {
+        if (!this.hosting) break;
+        if (this.serviceHold) await this.serviceHold;
+        if (command === 'host_start' && this.hosting.startFails) {
+          this.hosting.service = 'stopped';
+          return fail(this.hosting.startFails);
+        }
+        this.hosting.service = command === 'host_start' ? 'running' : 'stopped';
+        this.hosting.storageKeyProblem = null;
+        return ok();
+      }
+      case 'host_set_autostart':
+        if (!this.hosting) break;
+        this.hosting.autostart = Boolean(args?.enabled);
+        return ok();
+      case 'host_remove':
+        if (!this.hosting) break;
+        if (this.hosting.removeFails) return fail(this.hosting.removeFails);
+        this.hosting.enabled = false;
+        this.hosting.service = null;
+        return ok();
       case 'host_retry_reachability':
       case 'host_backup_now':
+        if (command === 'host_backup_now' && this.hosting) {
+          this.hosting.lastBackupAt = new Date(await this.page.evaluate(() => Date.now())).toISOString();
+          this.hosting.backupError = null;
+        }
         return ok(command === 'host_backup_now' ? { name: 'paracord-2026-10-12.tar.zst' } : null);
       case 'probe_server': {
         const url = new URL(String(args?.serverUrl ?? ''));
@@ -331,9 +439,11 @@ export class TauriHost {
         return ok('/tmp/paracord-client.log');
       default:
         if (QUIET.has(command)) return ok();
-        this.unstubbed.add(command);
-        return fail(`setup review harness: the Tauri command "${command}" is not stubbed`);
+        break;
     }
+    // Unscripted (or not for this scene, e.g. host_start before anything is hosted): refused, loudly.
+    this.unstubbed.add(command);
+    return fail(`setup review harness: the Tauri command "${command}" is not stubbed`);
   }
 
   private play(): void {

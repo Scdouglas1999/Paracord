@@ -3,11 +3,12 @@ import { useId, type ReactNode } from 'react';
 import { Modal } from '../ui/Modal';
 import { GoButton } from './primitives';
 
-function FrSheet({ open, onClose, title, sub, children, done = 'Got it', testId }: { open: boolean; onClose: () => void; title: string; sub: ReactNode; children?: ReactNode; done?: string; testId: string }) {
+/** `zIndexClassName`: "z-[160]" when the sheet opens over Settings (a windowed overlay at z-[150]). */
+function FrSheet({ open, onClose, title, sub, children, done = 'Got it', testId, zIndexClassName }: { open: boolean; onClose: () => void; title: string; sub: ReactNode; children?: ReactNode; done?: string; testId: string; zIndexClassName?: string }) {
   const titleId = useId();
   const subId = useId();
   return (
-    <Modal open={open} onClose={onClose} labeledBy={titleId} describedBy={subId} panelClassName="fr-sheet" size="auto">
+    <Modal open={open} onClose={onClose} labeledBy={titleId} describedBy={subId} panelClassName="fr-sheet" size="auto" zIndexClassName={zIndexClassName}>
       <div data-testid={testId}>
         <h3 id={titleId}>{title}</h3>
         <p id={subId} className="fr-sheet__sub">
@@ -33,6 +34,7 @@ export function RouterSheet({
   gatewayIp,
   lanIp,
   port,
+  zIndexClassName,
 }: {
   open: boolean;
   onClose: () => void;
@@ -40,11 +42,13 @@ export function RouterSheet({
   gatewayIp: string | null;
   lanIp: string | null;
   port: number;
+  zIndexClassName?: string;
 }) {
   return (
     <FrSheet
       open={open}
       onClose={onClose}
+      zIndexClassName={zIndexClassName}
       testId="fr-router-sheet"
       title="Let friends in"
       sub={`${variant === 'no_answer' ? "Your router didn't answer the automatic setup." : 'Your router blocked the automatic setup.'} You can open the way yourself in about two minutes.`}
@@ -85,11 +89,12 @@ export function RouterSheet({
  * The shared-address sheet (§5.4 "What can I do?"): the internet connection
  * has no public address of its own, so no port on this router helps alone.
  */
-export function SharedAddressSheet({ open, onClose, port }: { open: boolean; onClose: () => void; port: number }) {
+export function SharedAddressSheet({ open, onClose, port, zIndexClassName }: { open: boolean; onClose: () => void; port: number; zIndexClassName?: string }) {
   return (
     <FrSheet
       open={open}
       onClose={onClose}
+      zIndexClassName={zIndexClassName}
       testId="fr-shared-sheet"
       title="Friends outside can't reach you yet"
       sub="Your internet connection shares its public address with other customers, or another router sits in front of yours. Paracord can't open a way through that on its own."
