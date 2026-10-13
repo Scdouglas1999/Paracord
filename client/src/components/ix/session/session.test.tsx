@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAuthStore } from '../../../stores/authStore';
 import { useServerConnectionStore } from '../../../stores/serverConnectionStore';
 import { useServerListStore } from '../../../stores/serverListStore';
+import { clearStoredServerUrl, setStoredServerUrl } from '../../../lib/config/apiBaseUrl';
+import { LOCAL_SERVER_ID } from '../../../lib/serverScope';
 import { ServerSessionBanner } from './ServerSessionBanner';
 import { ServerSignInDialog } from './ServerSignInDialog';
 import { useServerSignInDialog } from './serverSignInDialogStore';
@@ -61,6 +63,25 @@ describe('the identity-changed banner (docs/setup-spec.md §7.4)', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: 'Review' }));
     expect(await screen.findByRole('heading', { name: 'Lantern has a new identity' })).toBeInTheDocument();
+  });
+});
+
+describe('the identity-changed banner for the server the first run joined (bug F1)', () => {
+  it('names the home server by its address and opens the review sheet', async () => {
+    setStoredServerUrl('https://203.0.113.1:8443');
+    useAuthStore.setState({ token: 'home-access' });
+    useServerListStore.setState({ servers: [] });
+    useServerConnectionStore.getState().set(LOCAL_SERVER_ID, { phase: 'identity-changed', attempts: 0, retryAt: null, endedHere: false });
+    try {
+      render(<ServerSessionBanner />);
+      expect(screen.getByTestId('ix-banner-identity-changed')).toHaveTextContent(
+        '203.0.113.1:8443 has a new identity. It stays disconnected until you review it.',
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Review' }));
+      expect(await screen.findByRole('heading', { name: '203.0.113.1:8443 has a new identity' })).toBeInTheDocument();
+    } finally {
+      clearStoredServerUrl();
+    }
   });
 });
 

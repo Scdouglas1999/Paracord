@@ -1144,6 +1144,14 @@ fn commit_trusted_origin(origin: &str, trusted: bool) {
 /// decided, so a slow or dead server earlier in the list does not hold up the
 /// ones after it.
 ///
+/// One origin never goes through the dialog: this computer's own server
+/// (`https://127.0.0.1:<port>` from `host.json`). The app installed it and reads
+/// its certificate from disk, so it is trusted exactly when the server on that
+/// origin presents that certificate, re-checked on every sync (setup, a restore
+/// and launch supervision all leave the current one on disk), and refused
+/// without asking when it presents another. Other loopback origins are not
+/// affected: they still need the dialog.
+///
 /// Fails only when no verification could be run at all (a list over 100
 /// servers, a TLS client that could not be built); the renderer reports it.
 #[tauri::command]
@@ -1159,6 +1167,12 @@ async fn update_trusted_server_hosts(
     }
     let _one_sync_at_a_time = TRUST_SYNC_LOCK.lock().await;
     let client = tls_pinning_client_with_timeout(Duration::from_secs(5))?;
+    // The server this app hosts, read from what it installed. Its origin is
+    // decided by its certificate below, never by the native dialog.
+    let own_server = host::own_server(&app).await.unwrap_or_else(|reason| {
+        eprintln!("could not read whether this computer hosts a server: {reason}");
+        None
+    });
 
     // The list first: a server taken out of it is untrusted at once, and a server
     // the user approved before (and, for HTTPS, still holds a pin for) is trusted
@@ -1185,10 +1199,34 @@ async fn update_trusted_server_hosts(
             continue;
         };
 
-        let previously_approved = is_user_approved_server_origin(&origin);
         let Some(host) = pin_host_from_url(raw_url) else {
             continue;
         };
+        // This computer's own server (bug F1): trusted when, and only when, it
+        // presents exactly the certificate this app installed it with. No
+        // dialog, no first-use capture, nothing persisted: every sync reads the
+        // certificate from disk again (a restore makes a new one).
+        match own_server_decision(&origin, own_server.as_ref()) {
+            OwnServerDecision::NotOwn => {}
+            OwnServerDecision::Unreadable(reason) => {
+                eprintln!("not trusting {origin}: {reason}");
+                commit_trusted_origin(&origin, false);
+                continue;
+            }
+            OwnServerDecision::Pinned(expected) => {
+                let was_trusted = TRUSTED_SERVER_ORIGINS
+                    .read()
+                    .is_ok_and(|trusted| trusted.contains(&origin));
+                let probe = match health_url_for_server(raw_url) {
+                    Ok(health_url) => probe_own_server(&health_url, expected).await,
+                    Err(_) => ServerProbe::Rejected,
+                };
+                commit_trusted_origin(&origin, trust_after_probe(probe, was_trusted));
+                continue;
+            }
+        }
+
+        let previously_approved = is_user_approved_server_origin(&origin);
         // A first use must be approved before making any request. In particular,
         // this keeps an XSS from using the native client as a localhost SSRF
         // primitive against arbitrary loopback ports. (An origin the person
@@ -1260,6 +1298,74 @@ async fn update_trusted_server_hosts(
         commit_trusted_origin(&origin, true);
     }
     Ok(())
+}
+
+/// How a sync treats one listed origin, given the server this computer hosts
+/// (`host::own_server`; `None` when `host.json` could not be read, which leaves
+/// every origin on the usual path).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum OwnServerDecision {
+    /// Not this computer's own server (or it hosts none): the usual first-contact path.
+    NotOwn,
+    /// The host's own origin, but its certificate could not be read: nothing on
+    /// it is trusted and nobody is asked.
+    Unreadable(String),
+    /// The host's own origin, pinned to the certificate it was installed with.
+    Pinned([u8; 32]),
+}
+
+fn own_server_decision(origin: &str, own: Option<&host::OwnServer>) -> OwnServerDecision {
+    match own {
+        Some(own) if own.origin == origin => match &own.fingerprint {
+            Ok(fingerprint) => OwnServerDecision::Pinned(*fingerprint),
+            Err(reason) => OwnServerDecision::Unreadable(reason.clone()),
+        },
+        _ => OwnServerDecision::NotOwn,
+    }
+}
+
+/// What the server on this computer's own origin answered, judged against the
+/// certificate this app installed it with: a different certificate is a
+/// positive failure (something else holds the port), the same one is whatever
+/// its `/health` says.
+fn own_server_verdict(
+    probe: ServerProbe,
+    presented: Option<[u8; 32]>,
+    expected: [u8; 32],
+) -> ServerProbe {
+    match presented {
+        Some(fingerprint) if fingerprint == expected => probe,
+        Some(_) => ServerProbe::Rejected,
+        // No handshake completed: it said nothing about who is there. A verified
+        // answer with no certificate is not HTTPS, so not this server.
+        None if probe == ServerProbe::Verified => ServerProbe::Rejected,
+        None => probe,
+    }
+}
+
+/// GET this computer's own server's `/health` on a connection of its own and
+/// compare the certificate it presents with `expected`.
+async fn probe_own_server(health_url: &str, expected: [u8; 32]) -> ServerProbe {
+    let observer = IdentityObserver::default();
+    let client = match tls_client_builder(Some(observer.clone())).and_then(|builder| {
+        builder
+            .timeout(Duration::from_secs(5))
+            .build()
+            .map_err(|e| format!("Failed to create HTTP client: {e}"))
+    }) {
+        Ok(client) => client,
+        Err(err) => {
+            eprintln!("could not check the hosted server's identity: {err}");
+            return ServerProbe::Unreachable;
+        }
+    };
+    let probe = probe_server_identity(&client, health_url).await;
+    let presented = observer
+        .lock()
+        .ok()
+        .and_then(|seen| *seen)
+        .map(|seen| seen.fingerprint);
+    own_server_verdict(probe, presented, expected)
 }
 
 /// Build a reqwest client whose TLS layer enforces trust-on-first-use pinning
@@ -3394,5 +3500,156 @@ mod sticky_trust_tests {
             }
         }
         assert_eq!(trusted, origins(&["a", "b"]));
+    }
+
+    /* ---- This computer's own server (bug F1) ------------------------------------ */
+
+    fn own(origin: &str, fingerprint: Result<[u8; 32], String>) -> host::OwnServer {
+        host::OwnServer {
+            origin: origin.to_string(),
+            fingerprint,
+        }
+    }
+
+    #[test]
+    fn only_the_hosted_origin_is_decided_by_its_certificate() {
+        let hosted = own("https://127.0.0.1:8443", Ok([7; 32]));
+        assert_eq!(
+            own_server_decision("https://127.0.0.1:8443", Some(&hosted)),
+            OwnServerDecision::Pinned([7; 32])
+        );
+        // Another loopback port, another scheme, localhost by name, a remote
+        // server: the usual path (the dialog for a first contact), unchanged.
+        for other in [
+            "https://127.0.0.1:8444",
+            "http://127.0.0.1:8443",
+            "https://localhost:8443",
+            "https://lan.example:8443",
+        ] {
+            assert_eq!(
+                own_server_decision(other, Some(&hosted)),
+                OwnServerDecision::NotOwn,
+                "{other}"
+            );
+        }
+        // A computer that does not host (or whose host.json could not be read).
+        assert_eq!(
+            own_server_decision("https://127.0.0.1:8443", None),
+            OwnServerDecision::NotOwn
+        );
+        // Hosting, certificate unreadable: refused without asking.
+        let unreadable = own("https://127.0.0.1:8443", Err("gone".into()));
+        assert_eq!(
+            own_server_decision("https://127.0.0.1:8443", Some(&unreadable)),
+            OwnServerDecision::Unreadable("gone".into())
+        );
+    }
+
+    #[test]
+    fn the_hosted_server_is_trusted_only_with_the_certificate_it_was_installed_with() {
+        use ServerProbe::*;
+        let ours = [1u8; 32];
+        let other = [2u8; 32];
+        assert_eq!(own_server_verdict(Verified, Some(ours), ours), Verified);
+        assert_eq!(own_server_verdict(Rejected, Some(ours), ours), Rejected);
+        assert_eq!(
+            own_server_verdict(Unreachable, Some(ours), ours),
+            Unreachable
+        );
+        // Something else on the port, even one that says it is Paracord.
+        assert_eq!(own_server_verdict(Verified, Some(other), ours), Rejected);
+        assert_eq!(own_server_verdict(Unreachable, Some(other), ours), Rejected);
+        // No handshake: nothing said about who is there.
+        assert_eq!(own_server_verdict(Unreachable, None, ours), Unreachable);
+        assert_eq!(own_server_verdict(Verified, None, ours), Rejected);
+    }
+
+    /// A TLS server on loopback presenting a fresh self-signed certificate and
+    /// answering every request with `raw`. Returns its health URL and the
+    /// certificate's fingerprint.
+    fn serve_tls(raw: &'static [u8]) -> (String, [u8; 32]) {
+        use std::io::{Read, Write};
+        let generated = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+        let cert = rustls::pki_types::CertificateDer::from(generated.cert.der().to_vec());
+        let fingerprint = sha256_fingerprint(cert.as_ref());
+        let key = rustls::pki_types::PrivateKeyDer::Pkcs8(
+            rustls::pki_types::PrivatePkcs8KeyDer::from(generated.key_pair.serialize_der()),
+        );
+        let config = Arc::new(
+            rustls::ServerConfig::builder_with_provider(Arc::new(
+                rustls::crypto::ring::default_provider(),
+            ))
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_no_client_auth()
+            .with_single_cert(vec![cert], key)
+            .unwrap(),
+        );
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { return };
+                let config = config.clone();
+                std::thread::spawn(move || {
+                    let Ok(connection) = rustls::ServerConnection::new(config) else {
+                        return;
+                    };
+                    let mut tls = rustls::StreamOwned::new(connection, stream);
+                    let mut seen = Vec::new();
+                    let mut buffer = [0u8; 1024];
+                    while !seen.windows(4).any(|window| window == b"\r\n\r\n") {
+                        match tls.read(&mut buffer) {
+                            Ok(0) | Err(_) => return,
+                            Ok(read) => seen.extend_from_slice(&buffer[..read]),
+                        }
+                    }
+                    let _ = tls.write_all(raw);
+                    let _ = tls.flush();
+                    tls.conn.send_close_notify();
+                    let _ = tls.flush();
+                });
+            }
+        });
+        (format!("https://127.0.0.1:{port}/health"), fingerprint)
+    }
+
+    #[tokio::test]
+    async fn the_hosted_server_presenting_its_certificate_is_verified_over_tls() {
+        let (url, fingerprint) = serve_tls(OK_PARACORD);
+        assert_eq!(
+            probe_own_server(&url, fingerprint).await,
+            ServerProbe::Verified
+        );
+    }
+
+    #[tokio::test]
+    async fn another_server_on_the_hosted_port_is_refused_over_tls() {
+        // A Paracord answer from a server whose certificate is not the one on disk.
+        let (url, fingerprint) = serve_tls(OK_PARACORD);
+        let mut installed = fingerprint;
+        installed[0] ^= 0xff;
+        assert_eq!(
+            probe_own_server(&url, installed).await,
+            ServerProbe::Rejected
+        );
+        // And the right certificate on something that is not Paracord.
+        let (url, fingerprint) =
+            serve_tls(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}");
+        assert_eq!(
+            probe_own_server(&url, fingerprint).await,
+            ServerProbe::Rejected
+        );
+    }
+
+    #[tokio::test]
+    async fn the_hosted_server_being_down_says_nothing_about_who_is_there() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        assert_eq!(
+            probe_own_server(&format!("https://127.0.0.1:{port}/health"), [0; 32]).await,
+            ServerProbe::Unreachable
+        );
     }
 }

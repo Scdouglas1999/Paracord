@@ -6,6 +6,7 @@ import { usePresence } from '../lib/motion';
 import { gateway } from '../gateway/manager';
 import { useUIStore } from '../stores/uiStore';
 import { useServerListStore } from '../stores/serverListStore';
+import { useServerConnectionStore } from '../stores/serverConnectionStore';
 import { useVoiceStore } from '../stores/voiceStore';
 import { useCurrentUser } from '../hooks/useCurrentUser';
 import { BannerStrip } from './ix/conversation/BannerStrip';
@@ -23,6 +24,9 @@ export function ConnectionStatusBar() {
     s.activeServerId ? s.servers.find((server) => server.id === s.activeServerId) : undefined
   );
   const voiceConnected = useVoiceStore((s) => s.connected);
+  const identityHeld = useServerConnectionStore((s) =>
+    Object.values(s.servers).some((server) => server.phase === 'identity-changed'),
+  );
   const signedIn = useCurrentUser() != null;
 
   const hasConnected = useRef(false);
@@ -69,8 +73,15 @@ export function ConnectionStatusBar() {
 
   const apiReachable = Boolean(activeServer?.apiReachable);
   const info = MESSAGES[status];
+  // Nothing is retrying a server held for an identity change: its own strip
+  // (ServerSessionBanner) says what happened, and "retrying automatically" would not be true.
   const offlineVisible =
-    status !== 'connected' && showBanner && !apiReachable && !voiceConnected && Boolean(info);
+    status !== 'connected' &&
+    showBanner &&
+    !apiReachable &&
+    !voiceConnected &&
+    !(status === 'disconnected' && identityHeld) &&
+    Boolean(info);
   const visible = offlineVisible || showConnected;
 
   const message = showConnected ? 'Back online' : info?.text ?? '';

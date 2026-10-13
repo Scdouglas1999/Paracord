@@ -52,6 +52,7 @@ const IxCardsGallery = import.meta.env.DEV
   : null;
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { Button } from './components/ui/Button';
+import { HomeIdentityChanged, useHomeIdentityChange } from './components/ix/session/HomeIdentityChanged';
 import { gateway } from './gateway/manager';
 import { useAccountStore } from './stores/accountStore';
 import { useServerListStore } from './stores/serverListStore';
@@ -167,6 +168,7 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const serverStatus = useServerStatus();
   const hasServerSession = tokensHydrated && hasHydratedServerSession(servers);
   const hasSession = Boolean(token || hasServerSession);
+  const homeIdentityChange = useHomeIdentityChange();
   /**
    * Is the device-key gate on? Unknown must fail closed.
    *
@@ -254,6 +256,13 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
   // Desktop: the keychain restore runs before anyone is asked for a password.
   if (onePasswordDevice && !isUnlocked && canRememberUnlock() && restoreState !== 'done') {
     return <BrandSplash label="Opening your account..." />;
+  }
+
+  // The home server's certificate changed and the pin refused the session's
+  // refresh (docs/setup-spec.md §7.4): say so and hold, never the sign-in form,
+  // which can only fail against that server.
+  if (!hasSession && homeIdentityChange) {
+    return <HomeIdentityChanged url={homeIdentityChange.url} />;
   }
 
   if (legacyAccount && hasSession && !moveDeferred()) {

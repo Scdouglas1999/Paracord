@@ -14,7 +14,7 @@ import { getAccessToken, getRefreshToken, setAccessToken, setRefreshToken } from
 import { getCurrentOriginServerUrl, getStoredServerUrl } from './config/apiBaseUrl';
 import { isTauri } from './tauriEnv';
 import { getTauriAdapter } from './tauriAxiosAdapter';
-import { identityChangeFor, isPinMismatch, syncTrustedHosts } from './trustedHosts';
+import { identityChangeFor, isPinMismatch, loadIdentityChange, syncTrustedHosts } from './trustedHosts';
 import { inflateSync } from 'fflate';
 import type { Activity, GatewayPayload } from '../types';
 import { GatewayEvents } from '../gateway/events';
@@ -678,8 +678,12 @@ class ConnectionManager {
         this.recoveryTimer = null;
       }
     } else if (status === 'disconnected' && !this.offline && !this.recoveryTimer) {
-      const servers = useServerListStore.getState().servers;
-      const localToken = useAuthStore.getState().token;
+      // A server held for an identity change is not waiting to come back by
+      // itself: only the person's review reconnects it.
+      const phases = useServerConnectionStore.getState().servers;
+      const held = (serverId: string) => phases[serverId]?.phase === 'identity-changed';
+      const servers = useServerListStore.getState().servers.filter((server) => !held(server.id));
+      const localToken = held(LOCAL_SERVER_ID) ? null : useAuthStore.getState().token;
       if (servers.length > 0 || localToken) {
         const delay = Math.min(5000 * Math.pow(2, this.recoveryAttempts), 60_000);
         this.recoveryAttempts++;
@@ -694,7 +698,17 @@ class ConnectionManager {
   /* ---- Each saved server's connection, as the UI reads it ------------------ */
 
   private setServerPhase(serverId: string, phase: ServerConnectionPhase, extra: Partial<ServerConnectionState> = {}): void {
-    if (serverId === LOCAL_SERVER_ID) return;
+    // The home server (`__local__`: the one the first run joined or set up) has
+    // no entry in the server list, so its connecting/retrying/signed-out states
+    // are the app-wide ones. An identity change is the exception: only the
+    // person can end it, and the banner and the launch screen must say so
+    // (docs/setup-spec.md §7.4). Any other phase ends it.
+    if (serverId === LOCAL_SERVER_ID) {
+      if (phase !== 'identity-changed') {
+        if (useServerConnectionStore.getState().servers[LOCAL_SERVER_ID]) useServerConnectionStore.getState().forget(LOCAL_SERVER_ID);
+        return;
+      }
+    }
     const current = useServerConnectionStore.getState().servers[serverId];
     useServerConnectionStore.getState().set(serverId, {
       phase,
@@ -797,9 +811,17 @@ class ConnectionManager {
     // A restart it announced is over (it answered, with another certificate):
     // "You'll reconnect automatically" is no longer true.
     useUIStore.getState().setServerRestarting(false);
-    this.disconnectServer(serverId);
+    const url =
+      this.connections.get(serverId)?.serverUrl ??
+      (serverId === LOCAL_SERVER_ID ? this.configuredLocalServerUrl() : useServerListStore.getState().getServer(serverId)?.url) ??
+      null;
+    // Held before the connection goes, so dropping it does not schedule a recovery.
     this.clearServerRetry(serverId);
     this.setServerPhase(serverId, 'identity-changed');
+    this.disconnectServer(serverId);
+    // The shell's record of the change, for a page that missed its announcement
+    // (the hold and the sheet both read it).
+    if (url) void loadIdentityChange(url).catch(() => null);
   }
 
   /** The credential this connection was built on was refused; nothing reconnects it but a sign-in. */
@@ -909,10 +931,27 @@ class ConnectionManager {
     }
   }
 
+  /**
+   * Is the home server held for an identity change nobody has accepted yet?
+   * Once the change is accepted (`acceptChangedIdentity` clears the record) the
+   * hold ends and the home server connects again.
+   */
+  private homeIdentityHeld(): boolean {
+    if (useServerConnectionStore.getState().servers[LOCAL_SERVER_ID]?.phase !== 'identity-changed') return false;
+    const url = this.configuredLocalServerUrl() ?? this.connections.get(LOCAL_SERVER_ID)?.serverUrl ?? null;
+    if (url && identityChangeFor(url)) return true;
+    useServerConnectionStore.getState().forget(LOCAL_SERVER_ID);
+    return false;
+  }
+
   async connectLocal(): Promise<void> {
     const inFlight = this.connecting.get(LOCAL_SERVER_ID);
     if (inFlight) {
       await inFlight;
+      return;
+    }
+    if (this.homeIdentityHeld()) {
+      logVoiceDiagnostic('[gateway] connectLocal: identity changed, holding the home server disconnected');
       return;
     }
 
@@ -1747,9 +1786,11 @@ class ConnectionManager {
       } catch (err) {
         if (!this.ownsTransport(conn, lane)) return;
         logVoiceDiagnostic('[gateway] SSE setup failed', { server: conn.serverId, error: err instanceof Error ? err.name : 'unknown' });
-        if (conn.serverId !== LOCAL_SERVER_ID && (isPinMismatch(err) || identityChangeFor(conn.serverUrl))) {
+        if (isPinMismatch(err) || identityChangeFor(conn.serverUrl)) {
           // The server came back with another certificate: reconnecting the stream
-          // cannot fix that (docs/setup-spec.md §7.4).
+          // cannot fix that (docs/setup-spec.md §7.4). The home server too: the
+          // first run's server is `__local__`, and it used to be left out here,
+          // reconnecting forever behind "The instance is restarting".
           this.noteIdentityChanged(conn.serverId);
           return;
         }
@@ -2437,6 +2478,8 @@ class ConnectionManager {
       }
     }
     const listed = new Set(useServerListStore.getState().servers.map((server) => server.id));
+    // The home server's identity change stays until it is accepted (`homeIdentityHeld`).
+    if (keepIds.has(LOCAL_SERVER_ID)) listed.add(LOCAL_SERVER_ID);
     for (const serverId of Object.keys(useServerConnectionStore.getState().servers)) {
       if (!listed.has(serverId)) this.forgetServer(serverId);
     }

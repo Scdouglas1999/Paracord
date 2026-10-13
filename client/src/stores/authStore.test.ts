@@ -56,7 +56,14 @@ vi.mock('../api/client', () => ({
   ),
 }));
 
+const mockLoadIdentityChange = vi.hoisted(() => vi.fn(async () => null));
+vi.mock('../lib/trustedHosts', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/trustedHosts')>()),
+  loadIdentityChange: mockLoadIdentityChange,
+}));
+
 import { useAuthStore } from './authStore';
+import { clearStoredServerUrl, setStoredServerUrl } from '../lib/config/apiBaseUrl';
 import { clearSessionHint, getAccessToken, hasSessionHint, setRefreshToken } from '../lib/authToken';
 
 const fakeUser = {
@@ -335,6 +342,35 @@ describe('authStore', () => {
       expect(useAuthStore.getState().token).toBeNull();
       expect(useAuthStore.getState().sessionBootstrapComplete).toBe(true);
       expect(setRefreshToken).toHaveBeenCalledWith(null);
+    });
+
+    // The server the first run joined came back with another certificate: the
+    // shell refused the refresh by its pin. The launch must show the identity
+    // change (bug F1), so its record is loaded and the credential is kept.
+    it('loads the home server\'s identity change when the pin refuses the refresh, and keeps the credential', async () => {
+      setStoredServerUrl('https://203.0.113.1:8443');
+      mockRefreshSharedSession.mockRejectedValue(new Error('TLS certificate pin mismatch for 203.0.113.1'));
+      try {
+        await useAuthStore.getState().initializeSession();
+        expect(mockLoadIdentityChange).toHaveBeenCalledWith('https://203.0.113.1:8443');
+        expect(useAuthStore.getState().token).toBeNull();
+        expect(useAuthStore.getState().sessionBootstrapComplete).toBe(true);
+        expect(setRefreshToken).not.toHaveBeenCalledWith(null);
+        expect(clearSessionHint).not.toHaveBeenCalled();
+      } finally {
+        clearStoredServerUrl();
+      }
+    });
+
+    it('does not look for an identity change when the refresh failed for another reason', async () => {
+      setStoredServerUrl('https://203.0.113.1:8443');
+      mockRefreshSharedSession.mockRejectedValue(new Error('Connection refused or unreachable'));
+      try {
+        await useAuthStore.getState().initializeSession();
+        expect(mockLoadIdentityChange).not.toHaveBeenCalled();
+      } finally {
+        clearStoredServerUrl();
+      }
     });
 
     // Every anonymous page view used to cost a POST /auth/refresh that could
