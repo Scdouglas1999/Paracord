@@ -251,3 +251,75 @@ All `pcfm-*` containers and networks removed (verified empty), and the
 `paracord-fresh/desktop` and `paracord-fresh/router` images deleted (the next
 run rebuilds them, a few minutes of Arch downloads). The build snapshot and
 binaries were in the scratchpad (RAM), not the repository.
+
+---
+
+## Run 2: `feat/setup` at `5650e6a7` (after M3 and F1–F5)
+
+**Result: 106 of 106 checks pass; all 8 scenarios pass. No native trust
+dialog appeared on any computer.** Run time 403 s. Binaries built from a
+`git archive` snapshot of `5650e6a7` with `scripts/fresh-machine/build.sh`
+(release `paracord-desktop`, release `paracord-host` staged by
+`npm run host:stage -- --release`, `tauri build --no-bundle`); both images
+rebuilt.
+
+### Harness changes for this run
+
+- **Settings checks go through the real page** (F4): Your account → Settings →
+  This computer, reading `host-state`, the whole reachability row
+  (`host-row-reach`, which carries the "A friend connected from outside …" note)
+  and `host-words`; **Back up now** is pressed and the new archive is checked on
+  disk. Added to S1 (after Open), S2 (after the friend's DM), S3 (after the
+  relaunch and after the sign-out/in), S5 (after the router allows it, and with
+  a refusing UPnP router: refused copy, "checks again every minute",
+  Settings › Show me how sheet) and S6 (shared-address copy, **What can I do?**).
+- **S5** checks the exact router-address line "Open your router's page at
+  192.168.50.1" in "Let friends in", both in setup and from Settings.
+- **S2 xdg-open on a non-GNOME session:** `XDG_CURRENT_DESKTOP=sway` makes
+  `xdg-open` take its generic path; it now hands the link to the running app,
+  which opens Join with it (one process). The handler entry the app writes is
+  checked: `Exec=/opt/paracord/paracord-desktop %u` (unquoted).
+- **S7** now expects the strip, opens **Review**, checks both word sets in the
+  sheet, presses **Stay disconnected** (nothing sent), then relaunches the
+  second device to the launch screen (`home-identity-changed`), checks the
+  words there, trusts it and lands in the app; then trusts on the running app
+  and checks a new message reaches the server.
+- **S8** checks that the restore raises no trust dialog.
+- Harness bugs fixed while doing this: `attempt()` counted a returned failure
+  string as a pass (the S7 words check and the S5 sheet check now throw); the
+  reachability text is read from the whole row, not just its first line.
+
+### Per scenario
+
+| # | Checks | Result and the evidence that changed since run 1 |
+|---|---|---|
+| 1 | 22/22 | Rows 1–5 ok, **no dialog** (F1). Settings: Running, "Your router opened the way. Friends can reach you at 203.0.113.1.", the server's words equal the words the harness computes from `cert.pem`, keychain storage line, Back up now makes an archive |
+| 2 | 21/21 | Settings shows "A friend connected from outside less than a minute ago." Cold `gio open` and warm `gio open` deep links as before; **xdg-open on a sway session works** (F2) |
+| 3 | 12/12 | Settings after the relaunch and after sign-out/in: Running, way open |
+| 4 | 7/7 | **Sam's next message after "Publish new keys" reaches the new device** without it sending first (F3, shot 043) |
+| 7 | 11/11 | Strip "203.0.113.1:8443 has a new identity. It stays disconnected until you review it." with no "instance is restarting"; sheet "words used to be zoo · chalk · husband · minimum. Now they're sing · when · car · drift."; Stay disconnected sends nothing (7 → 7); relaunch opens the launch screen (shot 048); Trust there and on the running app reconnects and a new message arrives (F1) |
+| 8 | 10/10 | Restore with no dialog and sign-in on the first try (F1) |
+| 5 | 14/14 | Sheet: "Open your router's page at 192.168.50.1" (F2); flip to the public invite after 59 s; with UPnP answering 718 the state is **refused** in Settings and the friend cannot connect, nothing claims otherwise (F2) |
+| 6 | 8/8 | Shared-address copy in setup and in Settings, What can I do?, no "reach you" claim |
+
+Screenshots (88, read): the scratchpad `s15-shots/` directory;
+`results.json` and logs in `s15-run/`.
+
+### Notes (no new bugs)
+
+- The identity-changed sheet shows "…" for the words for a moment while they
+  are computed, with **Trust** dimmed; the words appear within a second.
+  Expected, noted only because a screenshot taken immediately shows it.
+- The download-ticket loop (4.8) did not recur: the restored computer's server
+  log has no 401 storm before sign-in.
+- gnome-keyring aborted once on the cold deep-link computer (Riley) when the
+  `gio open`-started app was killed by the harness; the unlock unit restarted
+  it and nothing depended on it. Same upstream assertion as 4.9.
+- Starting the app right after a session sign-in sometimes needs one retry
+  (`tauri-driver` still coming up); the harness retries and logs it.
+
+### Cleanup
+
+0 `pcfm-*` containers, networks or volumes left; both `paracord-fresh/*`
+images deleted; the build snapshot and binaries removed from the scratchpad.
+`/home` had 123 GB free throughout.

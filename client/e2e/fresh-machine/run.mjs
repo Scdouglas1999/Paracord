@@ -321,6 +321,32 @@ async function joinFirstRun(c, label, person, link, { viaDeepLink = false } = {}
 
 // ── App steps ───────────────────────────────────────────────────────────
 
+/** Settings › This computer (spec §2.9): what the page says, read from the page. */
+async function hostSettings(c, name) {
+  const ui = c.ui;
+  await ui.press('Escape');
+  await sleep(300);
+  await ui.click('Your account');
+  await sleep(500);
+  await ui.click('Settings', { exact: false });
+  await ui.click('This computer');
+  await ui.tid('host-settings', 30000);
+  await until(async () => (await c.session.exists('[data-testid=host-state]', { loose: true })), `${c.name}: no host status on the page`, 30000);
+  await sleep(1500);
+  const read = async (id) => {
+    const el = await c.session.exists(`[data-testid=${id}]`, { loose: true });
+    return el ? (await c.session.exec('return arguments[0].innerText', { 'element-6066-11e4-a52e-4f735466cecf': el })).replace(/\s+/g, ' ').trim() : null;
+  };
+  const view = { state: await read('host-state'), reach: (await read('host-row-reach')) ?? (await read('host-reach')), words: await read('host-words'), page: (await read('host-settings')) ?? '' };
+  if (name) await shot(c, name);
+  return view;
+}
+
+async function closeSettings(c) {
+  await c.ui.press('Escape');
+  await sleep(500);
+}
+
 async function ensureApp(c, label) {
   if (!c.ui) {
     await launch(c, label);
@@ -410,6 +436,18 @@ async function s1() {
   check('Open lands in the server\'s general channel', /\/app\/guilds\/\d+\/channels\/\d+/.test(await host.ui.path()), await host.ui.path());
   st.hostWords = hostTrustWords(host);
   log(`  host trust words: ${st.hostWords.words.join(' · ')}`);
+
+  // Settings › This computer, through the real page.
+  const v = await hostSettings(host, 'settings-this-computer');
+  check('Settings › This computer says Running', /Running/.test(v.state ?? ''), v.state);
+  check(`Settings says the router opened the way at ${PUBLIC_IP}`, /opened the way/.test(v.reach ?? '') && (v.reach ?? '').includes(PUBLIC_IP), v.reach);
+  check('Settings shows this server\'s words, the same as its certificate\'s', (v.words ?? '').toLowerCase().includes(st.hostWords.words.join(' · ')), `${v.words} | ${st.hostWords.words.join(' · ')}`);
+  check('Settings names the storage as encrypted with the key in the keychain', /keychain/i.test(v.page), v.page.slice(0, 400));
+  const backupsBefore = L.exec(host.name, ['sh', '-c', `ls ${HOST_ROOT}/data/backups | wc -l`]).out;
+  await host.ui.clickTid('host-backup-now');
+  await attempt('Back up now in Settings makes a backup', () => until(() => L.exec(host.name, ['sh', '-c', `ls ${HOST_ROOT}/data/backups | wc -l`]).out !== backupsBefore, 'no new backup', 60000).then(() => true));
+  await shot(host, 'settings-after-backup');
+  await closeSettings(host);
 }
 
 async function s2() {
@@ -462,8 +500,10 @@ async function s2() {
   await say(host, st.reply1);
   await attempt('Alex reads Sam\'s reply', () => seesText(friend, st.reply1));
   await shot(friend, 'reply-read');
-  const status = await invoke(host, 'host_status');
-  check('the host recorded a connection from outside (confirmed_at)', !!status.reachability?.confirmed_at, status.reachability?.confirmed_at);
+  const sv = await hostSettings(host, 'settings-friend-connected');
+  check('Settings says a friend connected from outside', /A friend connected from outside/.test(sv.reach ?? ''), sv.reach);
+  await closeSettings(host);
+  await openDmWith(host, 'Alex');
 
   // Deep links. Cold: a new friend (Riley) who never ran Paracord clicks the
   // paracord:// link; the desktop entry the package installs starts the app.
@@ -506,9 +546,19 @@ async function s2() {
   const count = L.exec(friend.name, ['sh', '-c', 'pgrep -c -x paracord-deskto'], { allowFail: true }).out;
   check('still one app process after the warm link', count === '1', count);
   await friend.ui.press('Escape');
-  const xdg = pc(friend, 'sam', 'timeout', '10', 'xdg-open', portable);
-  check('xdg-open (no desktop environment, its generic path) opens a paracord:// link', xdg.status === 0, (xdg.err || xdg.out).split('\n').filter((l) => !l.includes('command not found')).join(' / '));
-  await sleep(2000);
+  await sleep(800);
+  const handler = L.exec(friend.name, ['sh', '-c', 'grep ^Exec= /home/sam/.local/share/applications/paracord-desktop-handler.desktop'], { allowFail: true }).out;
+  check('the handler entry the app wrote has an unquoted Exec= path', /^Exec=\/opt\/paracord\/paracord-desktop %u$/.test(handler), handler);
+  // A session that is not GNOME/KDE/XFCE (sway): xdg-open takes its generic path.
+  const xdg = pc(friend, 'sam', 'env', 'XDG_CURRENT_DESKTOP=sway', 'XDG_SESSION_DESKTOP=sway', 'timeout', '10', 'xdg-open', portable);
+  check('xdg-open on a non-GNOME session (generic path) hands the paracord:// link over', xdg.status === 0, (xdg.err || xdg.out).split('\n').filter((l) => !l.includes('command not found')).join(' / '));
+  await attempt('the xdg-open link reaches the running app and opens Join with it', async () => {
+    await until(async () => (await friend.session.exec("return [...document.querySelectorAll('input')].some((i) => i.value.includes('/invite/'))")), 'no Join field filled with the link', 20000);
+    return true;
+  });
+  await shot(friend, 'xdg-open-deeplink');
+  const count2 = L.exec(friend.name, ['sh', '-c', 'pgrep -c -x paracord-deskto'], { allowFail: true }).out;
+  check('still one app process after xdg-open', count2 === '1', count2);
   await friend.ui.press('Escape');
 }
 
@@ -530,6 +580,9 @@ async function s3() {
   await attempt('history decrypts after the relaunch', () => seesText(host, st.dm1));
   await attempt('the message sent while the app was closed arrives', () => seesText(host, st.dm2));
   await shot(host, 'relaunch-dm');
+  const rv = await hostSettings(host, 'settings-after-relaunch');
+  check('after the relaunch Settings says Running and the way is open', /Running/.test(rv.state ?? '') && /opened the way|connected from outside/.test(rv.reach ?? ''), `${rv.state} | ${rv.reach}`);
+  await closeSettings(host);
 
   // Sign out of the computer, sign in again.
   await quit(host);
@@ -545,6 +598,9 @@ async function s3() {
   );
   await launch(host, 'host-after-signin');
   await sleep(6000);
+  const sv3 = await hostSettings(host, 'settings-after-signin');
+  check('after sign-in Settings says Running, starts at sign-in, and the way is open', /Running/.test(sv3.state ?? '') && /opened the way|connected from outside/.test(sv3.reach ?? ''), `${sv3.state} | ${sv3.reach}`);
+  await closeSettings(host);
   await openDmWith(host, 'Alex');
   await attempt('the DM is readable after signing out and in', () => seesText(host, st.dm1));
   await shot(host, 'after-signin-dm');
@@ -613,9 +669,10 @@ async function s7() {
   const after = hostTrustWords(host);
   check('the server came back with a new certificate', after.fingerprint !== st.hostWords.fingerprint, after.words.join(' '));
   st.newWords = after;
-  const shownSheet = await friend.ui.waitText(/has a new identity|Identity changed/, 90000).then(() => true, () => false);
+  const shownStrip = await friend.ui.waitText(/has a new identity/, 90000).then(() => true, () => false);
   await shot(friend, 'after-cert-change');
-  check('the running friend app shows identity-changed', shownSheet, (await friend.ui.text()).slice(-300).replace(/\s+/g, ' '));
+  check('the running friend app shows identity-changed', shownStrip, (await friend.ui.text()).slice(-300).replace(/\s+/g, ' '));
+  check('no "instance is restarting" or "Connection lost" while held', !/instance is restarting|Connection lost/.test(await friend.ui.text()));
   let pending = null;
   try { pending = await invoke(friend, 'pending_identity_change', { host: PUBLIC_IP }); } catch { /* */ }
   check('the shell recorded the mismatch (old and new fingerprints)', pending?.pinned_fp === st.hostWords.fingerprint && pending?.presented_fp === after.fingerprint, JSON.stringify(pending));
@@ -624,24 +681,63 @@ async function s7() {
   await sleep(8000);
   const nowCount = JSON.parse(pc(host, 'db-messages', '50').out.replace(/^ok\s*/, '') || '[]').length;
   check('the friend stays disconnected: nothing it sends reaches the server', nowCount === before, `${before} → ${nowCount}`);
-  if (shownSheet) {
-    if (await friend.ui.hasButton('Review')) await friend.ui.click('Review');
-    await friend.ui.click('Stay disconnected').catch(() => {});
-    await sleep(4000);
-    check('"Stay disconnected" keeps it disconnected', JSON.parse(pc(host, 'db-messages', '50').out.replace(/^ok\s*/, '') || '[]').length === nowCount);
-    if (await friend.ui.hasButton('Review')) await friend.ui.click('Review');
-    await friend.ui.click('Trust the new identity');
-    await attempt('after Trust the friend reconnects', () => seesText(friend, st.dm1, 60000));
-  } else {
-    // Relaunch: the person closes and opens the app again.
-    await quit(friend);
-    await launch(friend, 'friend-relaunch');
-    await sleep(12000);
-    await shot(friend, 'relaunch-after-cert-change');
-    const t = await friend.ui.text();
-    check('after a relaunch the friend app shows identity-changed', /has a new identity|Identity changed/.test(t), `${await friend.ui.path()}: ${t.slice(0, 200).replace(/\s+/g, ' ')}`);
-    check('there is a way to trust the new identity', await friend.ui.hasButton('Trust the new identity') || await friend.ui.hasButton('Review'));
+  await attempt('Review opens the sheet with the old and the new words', async () => {
+    await friend.ui.click('Review');
+    await friend.ui.waitText(/Stay disconnected/, 20000);
+    const both = async () => {
+      const t = (await friend.ui.text()).toLowerCase();
+      return st.hostWords.words.every((w) => t.includes(w)) && after.words.every((w) => t.includes(w));
+    };
+    const shown = await until(both, 'words', 15000).then(() => true, () => false);
+    await shot(friend, 'identity-sheet');
+    if (!shown) {
+      const sheet = (await friend.ui.text()).match(/words used to be[^.]*\.[^.]*\./)?.[0] ?? '';
+      throw new Error(`after 15 s the sheet says "${sheet}"; expected old ${st.hostWords.words.join(' · ')} and new ${after.words.join(' · ')}`);
+    }
+    return true;
+  });
+  await friend.ui.click('Stay disconnected').catch(() => {});
+  await sleep(6000);
+  check('"Stay disconnected" keeps it disconnected', JSON.parse(pc(host, 'db-messages', '50').out.replace(/^ok\s*/, '') || '[]').length === nowCount);
+  await shot(friend, 'stayed-disconnected');
+
+  // The second device, closed and opened again: the launch screen.
+  const second = st.second;
+  if (second) {
+    await quit(second);
+    await launch(second, 'friend2-relaunch');
+    const held = await until(() => second.session.exists('[data-testid=home-identity-changed]', { loose: true }), 'no identity-changed launch screen', 60000).then(() => true, () => false);
+    await sleep(800);
+    await shot(second, 'relaunch-identity-changed');
+    check('after a relaunch the app opens on the identity-changed screen', held, `${await second.ui.path()}: ${(await second.ui.text()).slice(0, 200).replace(/\s+/g, ' ')}`);
+    if (held) {
+      await second.ui.click('Review');
+      await second.ui.waitText(/Stay disconnected/, 20000).catch(() => {});
+      await sleep(3000);
+      await shot(second, 'relaunch-identity-sheet');
+      const t2 = (await second.ui.text()).toLowerCase();
+      check('the launch-screen sheet shows the old and the new words', st.hostWords.words.every((w) => t2.includes(w)) && after.words.every((w) => t2.includes(w)),
+        (await second.ui.text()).match(/words used to be[^.]*\.[^.]*\./)?.[0] ?? '');
+      await second.ui.click('Trust the new identity');
+      await attempt('Trust on the launch screen restores the session and opens the app', async () => {
+        await until(async () => /\/app\//.test(await second.ui.path()), 'not in the app', 60000);
+        return true;
+      });
+      await shot(second, 'relaunch-trusted');
+    }
   }
+
+  // Trust on the running app.
+  if (await friend.ui.hasButton('Review')) await friend.ui.click('Review');
+  await attempt('Trust the new identity reconnects the running app', async () => {
+    await friend.ui.click('Trust the new identity');
+    await until(async () => !/has a new identity/.test(await friend.ui.text()), 'the strip stayed', 60000);
+    return true;
+  });
+  st.dm8 = `amber-kite-${stamp} after the new identity`;
+  await say(friend, st.dm8).catch(() => {});
+  await attempt('after Trust a message reaches the server', () => until(() => JSON.parse(pc(host, 'db-messages', '50').out.replace(/^ok\s*/, '') || '[]').length > nowCount, 'nothing arrived', 60000).then(() => true));
+  await shot(friend, 'after-trust');
 }
 
 async function s8() {
@@ -680,6 +776,7 @@ async function s8() {
   L.docker(['cp', local, `${fresh.name}:/home/sam/Downloads/Paracord backup.tar.gz`]);
   L.exec(fresh.name, ['chown', '-R', 'sam:sam', '/home/sam/Downloads']);
 
+  const restoreDialogs = fresh.dialogsSeen;
   const ui = await launch(fresh, 'restore');
   await ui.tid('fr-choose-host', 60000);
   await sleep(2500);
@@ -721,6 +818,7 @@ async function s8() {
   await until(async () => /\/app\//.test(await ui.path()), 'sign-in after restore did not reach the app', 90000);
   await sleep(4000);
   await shot(fresh, 'restored-app');
+  check('no native trust prompt for this computer\'s own server during the restore', fresh.dialogsSeen === restoreDialogs, `${fresh.dialogsSeen - restoreDialogs} dialog(s)`);
   const t = await ui.text();
   check(`the restored server is "${SERVER}" with its channels and members`, t.includes(SERVER) && t.includes('clips') && t.includes('plans') && /3 members|members/.test(t), t.slice(0, 200).replace(/\s+/g, ' '));
   const info = hostJson(fresh);
@@ -756,7 +854,7 @@ async function s5() {
   const sheet = await hostb.session.text(await hostb.ui.tid('fr-router-sheet'));
   await sleep(500);
   await shot(hostb, 'router-sheet');
-  check('the sheet names the router\'s address 192.168.50.1', sheet.includes('192.168.50.1'), sheet.replace(/\s+/g, ' '));
+  check('the sheet names the router\'s address: "Open your router\'s page at 192.168.50.1"', /router.s page at 192\.168\.50\.1/.test(sheet), sheet.replace(/\s+/g, ' '));
   check('the sheet names port 8443 and this computer 192.168.50.29', sheet.includes('8443') && sheet.includes('192.168.50.29'));
   await hostb.ui.click('Got it');
   await hostb.ui.click('Try again');
@@ -785,16 +883,31 @@ async function s5() {
   const status = await invoke(hostb, 'host_status');
   check('reachability is open', status.reachability?.state === 'open', JSON.stringify(status.reachability));
   check('a friend outside reaches the host now', health(st.friend, `https://${PUBLIC_IP}:8443`));
+  await hostb.ui.clickTid('fr-open-server');
+  await hostb.ui.waitText('Say hi to everyone', 60000).catch(() => {});
+  await sleep(2000);
+  const v5 = await hostSettings(hostb, 'settings-open-after-router-allows');
+  check(`Settings says the router opened the way at ${PUBLIC_IP}`, /opened the way/.test(v5.reach ?? '') && (v5.reach ?? '').includes(PUBLIC_IP), v5.reach);
 
   // A router that answers UPnP but refuses the mapping (miniupnpd answers 718).
   L.routerMode('pcfm-router', 'deny');
+  await closeSettings(hostb);
   pc(hostb, 'sam', 'systemctl', '--user', 'restart', 'paracord-host');
   await until(() => health(hostb, 'https://127.0.0.1:8443'), 'hostb did not restart', 60000);
-  await sleep(12000);
-  const denied = await invoke(hostb, 'host_status').catch((e) => ({ error: e.message }));
+  await sleep(14000);
   const reachable = health(st.friend, `https://${PUBLIC_IP}:8443`);
-  check('a router that answers UPnP and refuses the mapping is reported as refused', denied.reachability?.state === 'refused',
-    `state ${denied.reachability?.state} (${denied.reachability?.method}); friend can reach it: ${reachable}; router mappings: ${L.routerMappings('pcfm-router').replace(/\s+/g, ' ')}`);
+  const vd = await hostSettings(hostb, 'settings-router-refuses-upnp');
+  check('a router that answers UPnP and refuses the mapping is shown as refused in Settings', /didn.t allow it/.test(vd.reach ?? '') && /checks again every minute/.test(vd.page),
+    `${vd.reach}; friend can reach it: ${reachable}; router mappings: ${L.routerMappings('pcfm-router').replace(/\s+/g, ' ')}`);
+  check('nothing claims friends can reach it while refused', !/Friends can reach you/.test(vd.page) && !reachable);
+  await attempt('Settings › Show me how names the router 192.168.50.1', async () => {
+    await hostb.ui.clickTid('host-reach-howto');
+    const t = await hostb.ui.waitText(/Forward port/, 15000);
+    await shot(hostb, 'settings-router-sheet');
+    if (!/router.s page at 192\.168\.50\.1/.test(t)) throw new Error(t.slice(t.indexOf('Let friends in'), t.indexOf('Let friends in') + 300));
+    return true;
+  });
+  await hostb.ui.click('Got it').catch(() => {});
   L.routerMode('pcfm-router', 'allow');
 }
 
@@ -823,6 +936,12 @@ async function s6() {
   const link = await inviteLink(hostc);
   check('the invite is the home-network link', /^https:\/\/192\.168\.60\.28:8443\//.test(link ?? ''), link);
   check('no "Friends can reach you" anywhere', !/Friends can reach you|reach you at/.test(await hostc.ui.text()));
+  await hostc.ui.clickTid('fr-open-server');
+  await hostc.ui.waitText('Say hi to everyone', 60000).catch(() => {});
+  await sleep(2000);
+  const v6 = await hostSettings(hostc, 'settings-shared-address');
+  check('Settings shows the shared-address copy and What can I do?', /shares its public address/.test(v6.reach ?? '') && !!(await hostc.ui.maybeTid('host-reach-shared')), v6.reach);
+  check('Settings makes no "reach you" claim', !/Friends can reach you|reach you at/.test(v6.page));
 }
 
 // ── Main ────────────────────────────────────────────────────────────────
