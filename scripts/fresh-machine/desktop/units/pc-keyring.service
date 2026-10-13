@@ -1,0 +1,21 @@
+# Plays the part of pam_gnome_keyring: at sign-in the login keyring is
+# unlocked with the person's password before the session's services start
+# (paracord-host.service is After=default.target).
+[Unit]
+Description=Unlock the login keyring (stands in for PAM)
+Before=default.target
+ConditionPathExists=/etc/fresh-machine/keyring-password
+
+# gnome-keyring-daemon can abort on an assertion when a client goes away in
+# the middle of opening a Secret Service session (seen when the harness ends
+# the app abruptly). A fresh daemon would come up locked and every later
+# scenario would test gnome-keyring, not Paracord; the run records each crash.
+[Service]
+Type=forking
+Restart=on-failure
+RestartSec=1
+ExecStart=/bin/sh -c 'exec /usr/bin/gnome-keyring-daemon --daemonize --unlock --components=secrets < /etc/fresh-machine/keyring-password'
+ExecStartPost=/bin/sh -c 'for i in $(seq 1 50); do busctl --user status org.freedesktop.secrets >/dev/null 2>&1 && exit 0; sleep 0.1; done; exit 1'
+
+[Install]
+WantedBy=default.target

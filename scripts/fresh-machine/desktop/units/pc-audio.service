@@ -1,0 +1,14 @@
+# Null audio devices only: the container has no sound hardware, and the
+# default sink/source are null ones.
+[Unit]
+Description=PipeWire null sink and source
+After=pipewire-pulse.service
+Wants=pipewire-pulse.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'for i in $(seq 1 100); do pactl info >/dev/null 2>&1 && break; sleep 0.1; done; pactl load-module module-null-sink sink_name=pc_null_out sink_properties=device.description=NullOut; pactl load-module module-null-sink sink_name=pc_null_in media.class=Audio/Source/Virtual sink_properties=device.description=NullIn; pactl set-default-sink pc_null_out; pactl set-default-source pc_null_in'
+
+[Install]
+WantedBy=default.target

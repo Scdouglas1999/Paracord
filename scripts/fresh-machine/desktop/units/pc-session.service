@@ -1,0 +1,12 @@
+# sam's sign-in session. Stands in for the display manager: a PAM "login"
+# session registered with systemd-logind, which is what starts sam's user
+# manager (user@1000) and, when it ends, stops it again. Lingering is off.
+[Unit]
+Description=sam is signed in
+After=systemd-logind.service xvfb.service systemd-user-sessions.service
+
+[Service]
+User=sam
+PAMName=login
+Environment=XDG_SESSION_TYPE=x11 XDG_SESSION_CLASS=user XDG_SEAT=seat0 DISPLAY=:99
+ExecStart=/usr/bin/sleep infinity

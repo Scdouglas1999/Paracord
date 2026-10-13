@@ -1,0 +1,9 @@
+[Unit]
+Description=Virtual display :99 for the fresh-machine gate
+
+[Service]
+ExecStart=/usr/bin/Xvfb :99 -screen 0 1440x900x24 -nolisten tcp -ac
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
