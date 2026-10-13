@@ -1,0 +1,158 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Frame test</title>
+<!-- Paracord frame-timing gate page (scripts/frame-timing/README.md). Phases are
+     bracketed by FRMARK marks; per-phase page metrics go out as PHASERES lines. -->
+<style>
+  html, body { margin: 0; height: 100%; background: #101317; color: #e8e6e3; font: 14px system-ui, sans-serif; overflow: hidden; }
+  #status { position: fixed; left: 16px; bottom: 12px; z-index: 50; opacity: .7; }
+  .stage { position: fixed; inset: 0; display: none; overflow: hidden; }
+  .stage.on { display: block; }
+  .box { position: absolute; top: 40%; left: 5%; width: 160px; height: 160px; border-radius: 24px; background: #e8a14a; will-change: transform; }
+  @keyframes slide { from { transform: translateX(0); } to { transform: translateX(80vw); } }
+  .css .box { animation: slide 1s ease-in-out infinite alternate; }
+  /* The scroller: a long feed, like a channel. */
+  #scroller { position: absolute; inset: 0; overflow-y: auto; }
+  .row { height: 64px; margin: 8px 24px; border-radius: 12px; background: #1b2027; display: flex; align-items: center; padding: 0 16px; }
+  .row:nth-child(3n) { background: #222a33; }
+  .row b { color: #e8a14a; margin-right: 12px; }
+  /* Glass: blurred panels over moving color. */
+  .blobs { position: absolute; inset: -20%; will-change: transform; animation: drift 3s ease-in-out infinite alternate;
+    background: radial-gradient(circle at 20% 30%, #e8a14a 0 12%, transparent 13%),
+                radial-gradient(circle at 60% 60%, #4aa3e8 0 15%, transparent 16%),
+                radial-gradient(circle at 80% 20%, #6be89a 0 10%, transparent 11%),
+                radial-gradient(circle at 35% 80%, #e84a6b 0 14%, transparent 15%), #101317; }
+  @keyframes drift { from { transform: translate(0, 0); } to { transform: translate(12%, -8%); } }
+  .glass { position: absolute; border-radius: 20px; background: rgba(28, 32, 38, .45); border: 1px solid rgba(255,255,255,.12);
+    -webkit-backdrop-filter: blur(30px) saturate(1.4); backdrop-filter: blur(30px) saturate(1.4); }
+  .g1 { left: 4%; top: 6%; width: 22%; height: 88%; }
+  .g2 { left: 30%; top: 6%; width: 66%; height: 14%; }
+  .g3 { left: 30%; top: 26%; width: 40%; height: 40%; will-change: transform; animation: bob 1.2s ease-in-out infinite alternate; }
+  @keyframes bob { from { transform: translateY(0); } to { transform: translateY(30%); } }
+  .glasshead { position: fixed; left: 0; right: 0; top: 0; height: 96px; z-index: 5; background: rgba(16,19,23,.5);
+    -webkit-backdrop-filter: blur(24px); backdrop-filter: blur(24px); }
+</style>
+</head>
+<body>
+<div id="status">frame test</div>
+<div class="stage" id="s-box"><div class="box" id="box"></div></div>
+<div class="stage" id="s-scroll"><div class="glasshead" id="ghead" style="display:none"></div><div id="scroller"></div></div>
+<div class="stage" id="s-glass"><div class="blobs"></div><div class="glass g1"></div><div class="glass g2"></div><div class="glass g3"></div></div>
+<script>
+'use strict';
+const params = new URLSearchParams(location.search);
+const DUR = +(params.get('dur') || 6000);
+const GAP = 1500;
+const only = params.get('only');
+// The display's refresh, for the page-side histograms (the runner passes it).
+const HZ = +(params.get('hz') || 240);
+const VBLANK_MS = 1000 / HZ;
+const status = document.getElementById('status');
+if (params.has('hole')) { document.documentElement.style.background = 'transparent'; document.body.style.background = 'transparent'; }
+
+function post(handler, text) {
+  const h = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers[handler];
+  if (h) { h.postMessage(text); return; }
+  const t = window.__TAURI_INTERNALS__;
+  if (t) { if (handler !== 'quit') t.invoke('append_client_log', { line: (handler === 'result' ? 'RESULT ' : '') + text }); return; }
+  if (handler !== 'quit') fetch('/mark', { method: 'POST', body: (handler === 'result' ? 'RESULT ' : '') + text, keepalive: true });
+}
+const mark = (s) => post('mark', s);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Rows for the scroller.
+const sc = document.getElementById('scroller');
+const frag = document.createDocumentFragment();
+for (let i = 0; i < 600; i++) {
+  const d = document.createElement('div'); d.className = 'row';
+  d.innerHTML = `<b>row ${i}</b> The quick brown fox jumps over the lazy dog, message ${i} of the frame-timing feed.`;
+  frag.appendChild(d);
+}
+sc.appendChild(frag);
+
+function stats(iv) {
+  if (!iv.length) return null;
+  const s = [...iv].sort((a, b) => a - b);
+  const q = (p) => s[Math.min(s.length - 1, Math.floor(p * s.length))];
+  const mean = iv.reduce((a, b) => a + b, 0) / iv.length;
+  // Histogram in display refreshes (VBLANK_MS): <=1, 2, 3, 4, 5+
+  const H = { '1v': 0, '2v': 0, '3v': 0, '4v': 0, '5v+': 0 };
+  for (const x of iv) { const v = Math.max(1, Math.round(x / VBLANK_MS)); H[v >= 5 ? '5v+' : v + 'v']++; }
+  for (const k in H) H[k] = +(H[k] / iv.length * 100).toFixed(1);
+  return { n: iv.length, rate: +(1000 / mean).toFixed(1), median: +q(.5).toFixed(2), p5: +q(.05).toFixed(2), p95: +q(.95).toFixed(2), p99: +q(.99).toFixed(2), max: +s[s.length - 1].toFixed(2), hist: H };
+}
+
+function rafCounter() {
+  const ts = []; let on = true;
+  const loop = (t) => { if (!on) return; ts.push(t); requestAnimationFrame(loop); };
+  requestAnimationFrame(loop);
+  return () => { on = false; const iv = []; for (let i = 1; i < ts.length; i++) iv.push(ts[i] - ts[i - 1]); return stats(iv.filter((x) => x < 100)); };
+}
+
+function show(id, cls) {
+  for (const s of document.querySelectorAll('.stage')) s.classList.remove('on', 'css');
+  if (id) { const el = document.getElementById(id); el.classList.add('on'); if (cls) el.classList.add(cls); }
+}
+
+const phases = {
+  // Nothing on screen changes and nothing asks for frames: what the app costs at rest.
+  idle: async () => { show(null); await sleep(DUR); return {}; },
+  'idle-raf': async () => { show(null); const stop = rafCounter(); await sleep(DUR); return { raf: stop() }; },
+  'css-anim': async () => { show('s-box', 'css'); await sleep(DUR); return {}; },
+  'css-anim-raf': async () => { show('s-box', 'css'); const stop = rafCounter(); await sleep(DUR); return { raf: stop() }; },
+  'raf-anim': async () => {
+    show('s-box'); const box = document.getElementById('box'); const w = innerWidth * 0.8; let on = true; const ts = [];
+    const loop = (t) => { if (!on) return; ts.push(t); const p = (t % 2000) / 1000; box.style.transform = `translateX(${(p < 1 ? p : 2 - p) * w}px)`; requestAnimationFrame(loop); };
+    requestAnimationFrame(loop); await sleep(DUR); on = false;
+    const iv = []; for (let i = 1; i < ts.length; i++) iv.push(ts[i] - ts[i - 1]); return { raf: stats(iv.filter((x) => x < 100)) };
+  },
+  scroll: async () => scrollPhase(false),
+  'scroll-glass': async () => scrollPhase(true),
+  glass: async () => { show('s-glass'); const stop = rafCounter(); await sleep(DUR); return { raf: stop() }; },
+};
+
+async function scrollPhase(glass) {
+  show('s-scroll'); document.getElementById('ghead').style.display = glass ? 'block' : 'none';
+  sc.scrollTop = 0; await sleep(300);
+  const ev = []; const tops = [];
+  const onScroll = (e) => { ev.push(e.timeStamp); };
+  sc.addEventListener('scroll', onScroll, { passive: true });
+  const stop = rafCounter();
+  let on = true; let lastTop = -1; let changes = []; let lastChange = 0;
+  const sample = (t) => { if (!on) return; if (sc.scrollTop !== lastTop) { if (lastChange) changes.push(t - lastChange); lastChange = t; lastTop = sc.scrollTop; } requestAnimationFrame(sample); };
+  requestAnimationFrame(sample);
+  const end = performance.now() + DUR; let dir = 1;
+  while (performance.now() < end) {
+    if (sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 700) dir = -1; else if (sc.scrollTop < 700) dir = 1;
+    sc.scrollBy({ top: 600 * dir, behavior: 'smooth' });
+    await sleep(300);
+  }
+  on = false; sc.removeEventListener('scroll', onScroll);
+  const iv = []; for (let i = 1; i < ev.length; i++) iv.push(ev[i] - ev[i - 1]);
+  return { raf: stop(), scrollEvents: stats(iv.filter((x) => x < 100)), scrollTopChanges: stats(changes.filter((x) => x < 100)) };
+}
+
+(async () => {
+  if (window.__TAURI_INTERNALS__) { try { await window.__TAURI_INTERNALS__.invoke('plugin:window|show', { label: 'main' }); mark('shown'); } catch (e) { mark('show failed ' + e); } }
+  await sleep(+(params.get('wait') || 3000));
+  let gl = null; try { const c = document.createElement('canvas').getContext('webgl'); const e = c.getExtension('WEBGL_debug_renderer_info'); gl = c.getParameter(e ? e.UNMASKED_RENDERER_WEBGL : c.RENDERER); } catch (e) { gl = 'n/a ' + e; }
+  const out = { gl, hz: HZ, ua: navigator.userAgent, w: innerWidth, h: innerHeight, dpr: devicePixelRatio, label: params.get('label') || '', phases: {} };
+  for (const [name, fn] of Object.entries(phases)) {
+    if (only && !only.split(',').includes(name)) continue;
+    status.textContent = name;
+    await sleep(GAP);
+    mark(`FRMARK start ${name}`);
+    out.phases[name] = await fn();
+    mark(`FRMARK end ${name}`);
+    mark(`PHASERES ${name} ${JSON.stringify(out.phases[name])}`);
+  }
+  show(null); status.textContent = 'done';
+  post('result', JSON.stringify({ ...out, phases: undefined }));
+  await sleep(500);
+  if (!params.has('stay')) post('quit', '');
+})();
+</script>
+</body>
+</html>

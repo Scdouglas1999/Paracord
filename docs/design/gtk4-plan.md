@@ -43,6 +43,9 @@ Raw numbers and how to rerun the spike are in
      - It is a precondition for anything above 60 for page-driven updates,
        and it has no effect while the timer is the source.
    - **C2. Upstream a WebKit patch for the display-link timer.**
+     *Not pursued (owner decision, 2026-10-13): nothing is submitted to WebKit
+     and no patched WebKitGTK is bundled. C1 and C3 are done; see
+     `index-checkpoints/route-c.md`.*
      - `DisplayVBlankMonitorTimer` should tick at the monitor's refresh rate
        on absolute deadlines, not `sleep_for(1000 / 60)`.
      - Better, on GTK, drive it from the toplevel's frame clock.

@@ -2444,6 +2444,43 @@ fn pace_main_window(app: &tauri::AppHandle) {
     }
 }
 
+/// Let the main webview's page rendering follow WebKit's display link instead
+/// of being held near 60 a second (`linux_webkit::release_page_rendering_rate`),
+/// and say what happened in the client log. A WebKitGTK without the setting
+/// (older than 2.42) is reported as an error line; the app still runs.
+#[cfg(target_os = "linux")]
+fn release_main_page_rendering_rate(app: &tauri::AppHandle) {
+    use tauri::Manager;
+
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let handle = app.clone();
+    let report = move |line: String| {
+        eprintln!("{line}");
+        let _ = commands::append_client_log(
+            handle.clone(),
+            format!("{} {line}", chrono_like_timestamp_utc()),
+        );
+    };
+    let on_view = {
+        let report = report.clone();
+        move |webview: tauri::webview::PlatformWebview| {
+            report(
+                match linux_webkit::release_page_rendering_rate(&webview.inner()) {
+                    Ok(what) => format!("[webkit] page rendering: {what}"),
+                    Err(err) => format!("[webkit] page rendering NOT released from 60 fps: {err}"),
+                },
+            );
+        }
+    };
+    if let Err(err) = window.with_webview(on_view) {
+        report(format!(
+            "[webkit] page rendering NOT released from 60 fps: could not reach the webview: {err}"
+        ));
+    }
+}
+
 /// Route the native layers' `tracing` events to stderr, which is where the
 /// desktop log already collects everything else this process prints.
 ///
@@ -2575,6 +2612,8 @@ pub fn run() {
             }
             #[cfg(target_os = "linux")]
             pace_main_window(app.handle());
+            #[cfg(target_os = "linux")]
+            release_main_page_rendering_rate(app.handle());
 
             // Native video (Glass spec §2): every remote video in the desktop
             // app is decoded and drawn natively under a transparent webview.

@@ -56,6 +56,22 @@
 //! WebKit tear its compositor down the next time the layer tree changes (the
 //! first pressed-state transform is enough). The window then never paints
 //! again while both processes sit idle — it looks like a hang on first click.
+//!
+//! ## Page rendering rate ([`release_page_rendering_rate`])
+//!
+//! WebKitGTK paces what the page's main thread drives (`requestAnimationFrame`,
+//! scrolling, layout) by its display link, and by default it also holds those
+//! rendering updates near 60 a second whatever the display's rate
+//! (`PreferPageRenderingUpdatesNear60FPS`, on by default in the GTK port). The
+//! app turns that preference off on the main webview through WebKit's public
+//! `WebKitFeature` API (WebKitGTK 2.42 and later), so page updates follow the
+//! display link's rate wherever the display link knows the real refresh.
+//!
+//! It changes nothing on a machine whose display link is WebKit's fallback
+//! timer (NVIDIA, where the DRM vblank monitor cannot be used): that timer
+//! ticks about 60 times a second, so the page stays near 60 there
+//! (docs/design/index-checkpoints/route-c.md). Idle pages cost nothing extra:
+//! the display link stops when no page asks for frames.
 
 use std::sync::OnceLock;
 
@@ -244,9 +260,293 @@ pub fn nvidia_egl_is_active() -> bool {
     module_loaded && manifest
 }
 
+/// WebKit's identifier for the preference that holds page rendering updates
+/// near 60 a second (`WebKitFeature`, WebKitGTK 2.42 and later).
+pub const NEAR_60_FPS_FEATURE: &str = "PreferPageRenderingUpdatesNear60FPS";
+
+/// The part of WebKit's feature API the page-rate change uses. A trait so the
+/// decision is tested without WebKit as well as against it.
+pub trait FeatureApi {
+    /// WebKitGTK's version, for the log line.
+    fn version(&self) -> String;
+    /// The identifier of every feature WebKit lists, in WebKit's order, or
+    /// why the feature API is missing.
+    fn identifiers(&self) -> Result<Vec<String>, String>;
+    fn enabled(&self, index: usize) -> bool;
+    fn set_enabled(&mut self, index: usize, enabled: bool);
+}
+
+/// Turn [`NEAR_60_FPS_FEATURE`] off and read it back. `Ok` says what changed;
+/// `Err` says why page rendering stays held near 60 a second.
+pub fn turn_off_near_60(api: &mut impl FeatureApi) -> Result<String, String> {
+    let version = api.version();
+    let identifiers = api
+        .identifiers()
+        .map_err(|reason| format!("WebKitGTK {version}: {reason}"))?;
+    let Some(index) = identifiers.iter().position(|id| id == NEAR_60_FPS_FEATURE) else {
+        return Err(format!(
+            "WebKitGTK {version} lists no {NEAR_60_FPS_FEATURE} feature (of {})",
+            identifiers.len()
+        ));
+    };
+    let was_on = api.enabled(index);
+    if was_on {
+        api.set_enabled(index, false);
+    }
+    if api.enabled(index) {
+        return Err(format!(
+            "WebKitGTK {version} kept {NEAR_60_FPS_FEATURE} on after it was turned off"
+        ));
+    }
+    Ok(format!(
+        "{NEAR_60_FPS_FEATURE} off (was {}; WebKitGTK {version}): page rendering follows \
+         WebKit's display link",
+        if was_on { "on" } else { "already off" }
+    ))
+}
+
+/// The feature API of the WebKitGTK this process runs, on one `WebKitSettings`.
+///
+/// The functions are looked up at run time rather than linked: the
+/// `webkit2gtk` crate binds WebKitGTK only up to 2.40, and on an older
+/// WebKitGTK their absence must be a logged error, not a failure to start.
+struct SystemFeatures {
+    settings: *mut webkit2gtk::ffi::WebKitSettings,
+    list: *mut std::ffi::c_void,
+    features: Vec<*mut std::ffi::c_void>,
+    api: Option<FeatureFns>,
+}
+
+#[derive(Clone, Copy)]
+struct FeatureFns {
+    get_identifier: unsafe extern "C" fn(*mut std::ffi::c_void) -> *const std::ffi::c_char,
+    get_enabled: unsafe extern "C" fn(
+        *mut webkit2gtk::ffi::WebKitSettings,
+        *mut std::ffi::c_void,
+    ) -> glib::ffi::gboolean,
+    set_enabled: unsafe extern "C" fn(
+        *mut webkit2gtk::ffi::WebKitSettings,
+        *mut std::ffi::c_void,
+        glib::ffi::gboolean,
+    ),
+    list_unref: unsafe extern "C" fn(*mut std::ffi::c_void),
+}
+
+impl SystemFeatures {
+    /// # Safety
+    /// `settings` must be a live `WebKitSettings` for as long as this exists.
+    unsafe fn load(settings: *mut webkit2gtk::ffi::WebKitSettings) -> Self {
+        let mut this = SystemFeatures {
+            settings,
+            list: std::ptr::null_mut(),
+            features: Vec::new(),
+            api: None,
+        };
+        // The process's global symbol scope: libwebkit2gtk-4.1 is linked in.
+        let process = libloading::os::unix::Library::this();
+        macro_rules! sym {
+            ($name:literal, $ty:ty) => {
+                match process.get::<$ty>($name) {
+                    Ok(symbol) => *symbol,
+                    Err(_) => return this,
+                }
+            };
+        }
+        let all: unsafe extern "C" fn() -> *mut std::ffi::c_void =
+            sym!(b"webkit_settings_get_all_features\0", _);
+        let len: unsafe extern "C" fn(*mut std::ffi::c_void) -> usize =
+            sym!(b"webkit_feature_list_get_length\0", _);
+        let get: unsafe extern "C" fn(*mut std::ffi::c_void, usize) -> *mut std::ffi::c_void =
+            sym!(b"webkit_feature_list_get\0", _);
+        let fns = FeatureFns {
+            get_identifier: sym!(b"webkit_feature_get_identifier\0", _),
+            get_enabled: sym!(b"webkit_settings_get_feature_enabled\0", _),
+            set_enabled: sym!(b"webkit_settings_set_feature_enabled\0", _),
+            list_unref: sym!(b"webkit_feature_list_unref\0", _),
+        };
+        // (transfer full); released in Drop.
+        this.list = all();
+        if !this.list.is_null() {
+            this.features = (0..len(this.list)).map(|i| get(this.list, i)).collect();
+        }
+        this.api = Some(fns);
+        this
+    }
+}
+
+impl Drop for SystemFeatures {
+    fn drop(&mut self) {
+        if let (Some(api), false) = (self.api, self.list.is_null()) {
+            unsafe { (api.list_unref)(self.list) };
+        }
+    }
+}
+
+impl FeatureApi for SystemFeatures {
+    fn version(&self) -> String {
+        use webkit2gtk::ffi::{
+            webkit_get_major_version, webkit_get_micro_version, webkit_get_minor_version,
+        };
+        unsafe {
+            format!(
+                "{}.{}.{}",
+                webkit_get_major_version(),
+                webkit_get_minor_version(),
+                webkit_get_micro_version()
+            )
+        }
+    }
+
+    fn identifiers(&self) -> Result<Vec<String>, String> {
+        let Some(api) = self.api else {
+            return Err("no WebKitFeature API (WebKitGTK 2.42 or later is needed)".into());
+        };
+        if self.list.is_null() {
+            return Err("webkit_settings_get_all_features returned nothing".into());
+        }
+        Ok(self
+            .features
+            .iter()
+            .map(|&feature| {
+                let id = unsafe { (api.get_identifier)(feature) };
+                if id.is_null() {
+                    String::new()
+                } else {
+                    unsafe { std::ffi::CStr::from_ptr(id) }
+                        .to_string_lossy()
+                        .into_owned()
+                }
+            })
+            .collect())
+    }
+
+    fn enabled(&self, index: usize) -> bool {
+        let api = self.api.expect("identifiers() succeeded first");
+        unsafe { (api.get_enabled)(self.settings, self.features[index]) != 0 }
+    }
+
+    fn set_enabled(&mut self, index: usize, enabled: bool) {
+        let api = self.api.expect("identifiers() succeeded first");
+        unsafe {
+            (api.set_enabled)(
+                self.settings,
+                self.features[index],
+                glib::ffi::gboolean::from(enabled),
+            )
+        };
+    }
+}
+
+/// Turn [`NEAR_60_FPS_FEATURE`] off on `view`'s settings (main thread).
+pub fn release_page_rendering_rate(view: &webkit2gtk::WebView) -> Result<String, String> {
+    use glib::translate::ToGlibPtr;
+    use webkit2gtk::WebViewExt;
+
+    let settings = WebViewExt::settings(view).ok_or("the webview has no WebKitSettings")?;
+    let raw: *mut webkit2gtk::ffi::WebKitSettings = settings.to_glib_none().0;
+    // `settings` holds a reference for the whole call.
+    let mut api = unsafe { SystemFeatures::load(raw) };
+    turn_off_near_60(&mut api)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A WebKit stand-in for the decision's branches.
+    struct FakeFeatures {
+        ids: Result<Vec<String>, String>,
+        on: Vec<bool>,
+        sticky: bool,
+    }
+
+    impl FeatureApi for FakeFeatures {
+        fn version(&self) -> String {
+            "2.52.6".into()
+        }
+        fn identifiers(&self) -> Result<Vec<String>, String> {
+            self.ids.clone()
+        }
+        fn enabled(&self, index: usize) -> bool {
+            self.on[index]
+        }
+        fn set_enabled(&mut self, index: usize, enabled: bool) {
+            if !self.sticky {
+                self.on[index] = enabled;
+            }
+        }
+    }
+
+    fn fake(on: bool) -> FakeFeatures {
+        FakeFeatures {
+            ids: Ok(vec!["WebGL".into(), NEAR_60_FPS_FEATURE.into()]),
+            on: vec![true, on],
+            sticky: false,
+        }
+    }
+
+    #[test]
+    fn near_60_is_turned_off_and_reported() {
+        let mut api = fake(true);
+        let line = turn_off_near_60(&mut api).expect("turned off");
+        assert!(!api.on[1], "the feature is off");
+        assert!(api.on[0], "no other feature changes");
+        assert!(line.contains("was on"), "{line}");
+        assert!(line.contains("2.52.6"), "{line}");
+    }
+
+    #[test]
+    fn near_60_already_off_is_not_an_error() {
+        let line = turn_off_near_60(&mut fake(false)).expect("off");
+        assert!(line.contains("already off"), "{line}");
+    }
+
+    #[test]
+    fn missing_feature_api_fails_loudly() {
+        let mut api = fake(true);
+        api.ids = Err("no WebKitFeature API (WebKitGTK 2.42 or later is needed)".into());
+        let err = turn_off_near_60(&mut api).expect_err("an old WebKit is an error");
+        assert!(err.contains("2.42"), "{err}");
+    }
+
+    #[test]
+    fn missing_feature_fails_loudly() {
+        let mut api = fake(true);
+        api.ids = Ok(vec!["WebGL".into()]);
+        let err = turn_off_near_60(&mut api).expect_err("no such feature");
+        assert!(err.contains(NEAR_60_FPS_FEATURE), "{err}");
+    }
+
+    #[test]
+    fn a_setting_that_does_not_stick_fails_loudly() {
+        let mut api = fake(true);
+        api.sticky = true;
+        let err = turn_off_near_60(&mut api).expect_err("still on");
+        assert!(err.contains("kept"), "{err}");
+    }
+
+    /// Against the WebKitGTK this machine has: the feature exists, starts on
+    /// (the GTK port's default) and is off after the change. No display is
+    /// needed for a `WebKitSettings`.
+    #[test]
+    fn the_system_webkit_turns_near_60_off() {
+        let settings = unsafe { webkit2gtk::ffi::webkit_settings_new() };
+        assert!(!settings.is_null());
+        let line = {
+            let mut api = unsafe { SystemFeatures::load(settings) };
+            let ids = api.identifiers().expect("WebKitFeature API");
+            let index = ids
+                .iter()
+                .position(|id| id == NEAR_60_FPS_FEATURE)
+                .expect("the feature is listed");
+            assert!(api.enabled(index), "on by default in WebKitGTK");
+            let line = turn_off_near_60(&mut api).expect("turned off");
+            assert!(!api.enabled(index));
+            line
+        };
+        assert!(line.contains("was on"), "{line}");
+        unsafe { glib::gobject_ffi::g_object_unref(settings.cast()) };
+    }
 
     fn nvidia_wayland() -> Inputs {
         Inputs {
