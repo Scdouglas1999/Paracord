@@ -1,6 +1,7 @@
 #![allow(clippy::too_many_arguments)]
 
 pub mod bandwidth;
+mod delivery;
 pub mod e2ee;
 pub mod federation;
 pub mod p2p;

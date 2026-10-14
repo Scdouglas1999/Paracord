@@ -13,6 +13,7 @@ import { useRemoteSpeakingStore } from '../../../stores/remoteSpeakingStore';
 import { useToastStore } from '../../../stores/toastStore';
 import { useVoiceStore } from '../../../stores/voiceStore';
 import type { VoiceState } from '../../../types';
+import { useShareSourceStore } from '../../../lib/media/shareSource';
 import { useJoinMuteStore } from '../../glass/pill/muteStore';
 import { IxShellProvider } from '../shell/IxShellContext';
 import { CallSlot } from './CallSlot';
@@ -289,6 +290,28 @@ describe('IX-13 call view', () => {
     expect(items.some((item) => item?.startsWith('Share quality'))).toBe(true);
     // No stream in focus: nothing about a stream's sound.
     expect(items).not.toContain('Stream volume and quality');
+  });
+
+  it('Share quality marks a preset that sends the same picture as a smaller one on the shared screen', () => {
+    holdCall();
+    useVoiceStore.setState({ selfStream: true });
+    useShareSourceStore.getState().setSize({ width: 5120, height: 1440 });
+    try {
+      renderSlot();
+      act(() => useGlassStore.getState().openStage(GENERAL));
+      act(() => fireEvent.click(within(controls()).getByRole('button', { name: 'More call actions' })));
+      const more = screen.getByRole('menu', { name: 'More call actions' });
+      const entry = within(more).getAllByRole('menuitem').find((item) => item.textContent?.startsWith('Share quality'));
+      act(() => fireEvent.click(entry!));
+      const menu = screen.getByRole('dialog', { name: 'Share quality' });
+      const rows = within(menu).getAllByRole('button').map((row) => row.textContent);
+      expect(rows).toContain('4K 60fpsSame as 1440p on the shared screen');
+      expect(rows).toContain('1440p 60fps');
+      expect(rows).toContain('Movie (up to 50 Mbps)');
+      expect(rows.filter((row) => row?.includes('Same as'))).toHaveLength(1);
+    } finally {
+      useShareSourceStore.getState().setSize(null);
+    }
   });
 
   it('watching without joining: the stream in focus above the filmstrip, Clip and Join', async () => {

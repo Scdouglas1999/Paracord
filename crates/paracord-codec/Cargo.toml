@@ -104,3 +104,9 @@ required-features = ["lavc"]
 [[example]]
 name = "simulcast_encode_bench"
 required-features = ["lavc"]
+
+# The camera's simulcast encoder: per-layer uploads and rebuild-on-retarget
+# against one upload and in-place retargets (stream-fix V5).
+[[example]]
+name = "camera_encode_bench"
+required-features = ["lavc"]

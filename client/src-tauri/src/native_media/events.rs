@@ -504,6 +504,16 @@ pub fn emit_media_native_render_first_frame(
     );
 }
 
+/// The size of the screen (or window) being shared, whenever the encoder is
+/// configured for it: the share menu marks the presets that send the same
+/// picture on it ("Same as 1440p on the shared screen").
+pub fn emit_media_screen_share_source(app: &super::CallEventSink, width: u32, height: u32) {
+    let _ = app.emit(
+        "media_screen_share_source",
+        serde_json::json!({ "width": width, "height": height }),
+    );
+}
+
 /// Emit a native surface's stall edge: `stalled` when a visible, live track
 /// has presented nothing for a second (the page then says "Reconnecting
 /// video…" instead of leaving a frozen picture that reads as live), and again

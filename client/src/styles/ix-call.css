@@ -750,6 +750,13 @@ html[data-native-underlay] .ix-call-pop {
   color: var(--ix-ink-3);
 }
 
+/* A second line under a row's label (Share quality: "Same as 1440p on this screen"). */
+.ix-call-pop__sub {
+  display: block;
+  font-size: 12px;
+  color: var(--ix-ink-3);
+}
+
 .ix-call-pop__num {
   font-variant-numeric: tabular-nums;
 }

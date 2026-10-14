@@ -115,6 +115,10 @@ windows = { version = "0.61", features = [
 paracord-codec = { workspace = true, features = ["lavc"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# Quiet notifications while sharing a screen with sound (quiet_notify.rs): the
+# same notify-rust 4 the notification plugin already uses, for its
+# `suppress-sound` hint, which the plugin does not expose.
+notify-rust = "4.11"
 # Secret Service over pure-Rust zbus (no libdbus headers to install) on the
 # async-io reactor, deliberately NOT the `tokio` one: zbus's blocking wrapper
 # must not try to block on the ambient Tauri runtime.

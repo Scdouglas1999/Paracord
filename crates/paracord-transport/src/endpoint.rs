@@ -86,13 +86,29 @@ fn base_transport_config(send_buffer: usize) -> quinn::TransportConfig {
 }
 
 /// Transport tuning for the relay's server endpoint (bounded egress buffer).
+///
+/// The relay's egress runs [`crate::congestion::MediaCongestion`], not quinn's
+/// default Cubic (stream-fix V5): random loss costs a viewer retransmissions,
+/// not rate; a real bottleneck still caps it.
 pub(crate) fn server_transport_config() -> Arc<quinn::TransportConfig> {
-    Arc::new(base_transport_config(RELAY_EGRESS_DATAGRAM_SEND_BUFFER))
+    let mut transport = base_transport_config(RELAY_EGRESS_DATAGRAM_SEND_BUFFER);
+    transport
+        .congestion_controller_factory(Arc::new(crate::congestion::MediaCongestion::default()));
+    Arc::new(transport)
 }
 
 /// Transport tuning for publisher/client endpoints (large keyframe-burst buffer).
+///
+/// [`crate::congestion::MediaCongestion`] here too ([`server_transport_config`]):
+/// a publisher's frames ride reliable streams up to the relay, and under Cubic
+/// 1% random loss on the uplink held a 44 Mb/s three-layer share to a few
+/// Mb/s; every viewer then saw 4 frames a second (5%: one frame in ten
+/// seconds), whatever the uplink could carry.
 pub(crate) fn client_transport_config() -> Arc<quinn::TransportConfig> {
-    Arc::new(base_transport_config(CLIENT_DATAGRAM_SEND_BUFFER))
+    let mut transport = base_transport_config(CLIENT_DATAGRAM_SEND_BUFFER);
+    transport
+        .congestion_controller_factory(Arc::new(crate::congestion::MediaCongestion::default()));
+    Arc::new(transport)
 }
 
 impl MediaEndpoint {

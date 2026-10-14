@@ -29,6 +29,7 @@ scripts/stream-audit/env.sh down /tmp/sa-run && rm -rf /tmp/sa-run
 | `sizes` | For a viewer window switched with `setsize.sh <run>/viewer 1920 1080` (`--size` names it). |
 | `layers` | One preset, then the viewer's Viewing quality: Auto, Low, Medium, High, Source. |
 | `midstream` | Share quality changed during a share (`--order`). |
+| `netsteps` | One share (the first of `--presets`), the viewer at rest in normal view while `--net-cmd <script>` reshapes the network before each step of `--steps` (e.g. `0,1,5,0:25mbit,0`: loss % and an optional rate, passed to the script as arguments), each held `--hold` seconds. Run inside a private network namespace (see `stream-fix-v1.md`, `stream-fix-v5.md`). |
 
 `SA_VIEW_W`/`SA_VIEW_H` set the viewer's output (default 5120x1412, the owner's
 window), `SA_SRC_W`/`SA_SRC_H` the synthetic screen (default 5120x1440), `SA_ENV`

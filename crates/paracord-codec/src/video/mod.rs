@@ -389,6 +389,149 @@ pub fn preset_geometry(
     }
 }
 
+/// One of the share menu's standard presets (`SHARE_QUALITIES` in the client,
+/// `SCREEN_SHARE_PRESETS` in its voice store): a 16:9 definition, its frame
+/// rate, bitrate and content hint. The Movie presets are not in this ladder:
+/// they keep their own bitrate on any screen ([`resolve_screen_preset`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StandardScreenPreset {
+    /// The menu's name for it ("1440p"), used in logs and the menu's hint.
+    pub name: &'static str,
+    pub width: u32,
+    pub height: u32,
+    pub fps: u32,
+    pub bitrate_kbps: u32,
+    pub content_hint: VideoContentHint,
+}
+
+/// The standard presets, smallest first. Keep in step with the client's table.
+pub const STANDARD_SCREEN_PRESETS: [StandardScreenPreset; 4] = [
+    StandardScreenPreset {
+        name: "720p",
+        width: 1280,
+        height: 720,
+        fps: 30,
+        bitrate_kbps: 5_000,
+        content_hint: VideoContentHint::Detail,
+    },
+    StandardScreenPreset {
+        name: "1080p",
+        width: 1920,
+        height: 1080,
+        fps: 60,
+        bitrate_kbps: 12_000,
+        content_hint: VideoContentHint::Detail,
+    },
+    StandardScreenPreset {
+        name: "1440p",
+        width: 2560,
+        height: 1440,
+        fps: 60,
+        bitrate_kbps: 18_000,
+        content_hint: VideoContentHint::Detail,
+    },
+    StandardScreenPreset {
+        name: "4K",
+        width: 3840,
+        height: 2160,
+        fps: 60,
+        bitrate_kbps: 28_000,
+        content_hint: VideoContentHint::Motion,
+    },
+];
+
+/// What a requested screen-share preset sends from a given source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResolvedScreenPreset {
+    pub geometry: PresetGeometry,
+    pub fps: u32,
+    pub content_hint: VideoContentHint,
+    /// The smaller standard preset this one sends exactly the same picture as
+    /// on this source, whose settings it then uses (`None` when it is its own).
+    pub same_as: Option<&'static str>,
+}
+
+/// Resolve a requested preset (its 16:9 definition, frame rate, bitrate and
+/// content hint, as the menu sends it) against the real source (owner
+/// decisions, 2026-10-13):
+///
+/// - **Movie** (content hint [`VideoContentHint::Film`]): the height in the
+///   source's shape like every preset, and the stated bitrate as it is, on any
+///   screen. "Up to 50 Mbps" means 50 whatever the picture's size.
+/// - **A standard preset** ([`STANDARD_SCREEN_PRESETS`]): [`preset_geometry`].
+///   When a smaller standard preset sends the same picture on this source (the
+///   same size and frame rate: "4K" and "1440p" on a 1440-line screen are both
+///   the native size at 60), the request takes that preset's settings, bitrate
+///   and content hint included. Two choices that look the same then are the
+///   same, instead of the larger name sending the same picture with fewer bits
+///   per pixel.
+/// - Anything else (a custom request): [`preset_geometry`] and its own hint.
+pub fn resolve_screen_preset(
+    source_width: u32,
+    source_height: u32,
+    requested: &EncoderConfig,
+    max_dimension: u32,
+) -> ResolvedScreenPreset {
+    let geometry = preset_geometry(
+        source_width,
+        source_height,
+        requested.width,
+        requested.height,
+        requested.bitrate_kbps,
+        max_dimension,
+    );
+    if requested.content_hint == VideoContentHint::Film {
+        return ResolvedScreenPreset {
+            geometry: PresetGeometry {
+                bitrate_kbps: requested.bitrate_kbps.max(1),
+                ..geometry
+            },
+            fps: requested.fps,
+            content_hint: requested.content_hint,
+            same_as: None,
+        };
+    }
+    let own = ResolvedScreenPreset {
+        geometry,
+        fps: requested.fps,
+        content_hint: requested.content_hint,
+        same_as: None,
+    };
+    let is_standard = STANDARD_SCREEN_PRESETS.iter().any(|preset| {
+        preset.width == requested.width
+            && preset.height == requested.height
+            && preset.fps == requested.fps
+    });
+    if !is_standard {
+        return own;
+    }
+    for preset in STANDARD_SCREEN_PRESETS {
+        if preset.height >= requested.height {
+            break;
+        }
+        let candidate = preset_geometry(
+            source_width,
+            source_height,
+            preset.width,
+            preset.height,
+            preset.bitrate_kbps,
+            max_dimension,
+        );
+        if candidate.width == geometry.width
+            && candidate.height == geometry.height
+            && preset.fps == requested.fps
+        {
+            return ResolvedScreenPreset {
+                geometry: candidate,
+                fps: preset.fps,
+                content_hint: preset.content_hint,
+                same_as: Some(preset.name),
+            };
+        }
+    }
+    own
+}
+
 /// Compute the simulcast ladder for a source per spec §4.1.
 ///
 /// Rungs (lowest→highest), never upscaled:
@@ -398,13 +541,16 @@ pub fn preset_geometry(
 ///   at the source frame rate. Their budgets are 800 and 3500 kbps at 16:9
 ///   (640x360, 1280x720), scaled with the pixel count. H is the source at
 ///   `preset_kbps`. A lower rung at or above the source's lines is dropped.
-/// - **Camera**: L 480×270@15 / 350 kbps · M 640×360@30 / 900 kbps
-///   · H source dims @ source fps / `preset_kbps`, each aspect-fitted in its box.
+/// - **Camera**: L 480×270 / 350 kbps · M 640×360 / 900 kbps · H source dims /
+///   `preset_kbps`, each aspect-fitted in its box, every rung at the source
+///   frame rate.
 ///
-/// Screen rungs run at the source frame rate because every captured frame is
-/// fed to every layer: a rung configured for fewer frames than it is given
-/// spends its budget per frame as if for the lower rate (twice its bitrate at
-/// 30 on a 60 fps share).
+/// Every rung runs at the source frame rate because every captured frame is
+/// fed to every layer (one upload, split on the GPU), and a layer's frame ids
+/// must stay consecutive for the viewer's gap detection: a rung configured for
+/// fewer frames than it is given spends its budget per frame as if for the
+/// lower rate (twice its bitrate at 30 on a 60 fps share; the camera's low
+/// rung, once 15 fps fed 30, spent 700 of its 350 kbps).
 ///
 /// The High rung is always the source dimensions at `preset_kbps`; the lower
 /// rungs cap their budget at `preset_kbps` so a low preset never produces a
@@ -453,18 +599,12 @@ pub fn simulcast_ladder(
             }
         }
         SimulcastKind::Camera => {
-            for (layer, box_w, box_h, max_fps, kbps) in [
-                (SimulcastLayer::Low, 480u32, 270u32, 15u32, 350u32),
-                (SimulcastLayer::Medium, 640, 360, 30, 900),
+            for (layer, box_w, box_h, kbps) in [
+                (SimulcastLayer::Low, 480u32, 270u32, 350u32),
+                (SimulcastLayer::Medium, 640, 360, 900),
             ] {
                 let (width, height) = fit_within_box(source_width, source_height, box_w, box_h);
-                rungs.push((
-                    layer,
-                    width,
-                    height,
-                    source_fps.min(max_fps),
-                    kbps.min(preset_kbps),
-                ));
+                rungs.push((layer, width, height, source_fps, kbps.min(preset_kbps)));
             }
         }
     }
@@ -1144,6 +1284,78 @@ mod tests {
         assert_eq!(g(1366, 768, 1280, 720, 5_000).0, 1280);
     }
 
+    fn standard_request(name: &str) -> EncoderConfig {
+        let preset = STANDARD_SCREEN_PRESETS
+            .iter()
+            .find(|preset| preset.name == name)
+            .unwrap();
+        EncoderConfig {
+            width: preset.width,
+            height: preset.height,
+            fps: preset.fps,
+            bitrate_kbps: preset.bitrate_kbps,
+            pixel_format: PixelFormat::Bgra,
+            keyframe_interval: 0,
+            content_hint: preset.content_hint,
+        }
+    }
+
+    #[test]
+    fn a_preset_that_collapses_onto_a_smaller_one_uses_its_settings() {
+        // 5120x1440: "4K" is the native picture at 60, exactly what "1440p" sends.
+        let four_k = resolve_screen_preset(5120, 1440, &standard_request("4K"), 8192);
+        let qhd = resolve_screen_preset(5120, 1440, &standard_request("1440p"), 8192);
+        assert_eq!(four_k.same_as, Some("1440p"));
+        assert_eq!(qhd.same_as, None);
+        assert_eq!(four_k.geometry, qhd.geometry);
+        assert_eq!(four_k.geometry.bitrate_kbps, 36_000);
+        assert_eq!(four_k.content_hint, VideoContentHint::Detail);
+        // A 1080-line screen: 1440p and 4K both send what 1080p does.
+        for name in ["1440p", "4K"] {
+            let resolved = resolve_screen_preset(1920, 1080, &standard_request(name), 8192);
+            assert_eq!(resolved.same_as, Some("1080p"), "{name}");
+            assert_eq!(resolved.geometry.bitrate_kbps, 12_000, "{name}");
+        }
+        // 720p30 on a 720-line screen is 30 fps, 1080p60 is 60: not the same.
+        let hd = resolve_screen_preset(1280, 720, &standard_request("1080p"), 8192);
+        assert_eq!(hd.same_as, None);
+        // A 4K screen: every preset is its own.
+        for preset in STANDARD_SCREEN_PRESETS {
+            let resolved = resolve_screen_preset(3840, 2160, &standard_request(preset.name), 8192);
+            assert_eq!(resolved.same_as, None, "{}", preset.name);
+            assert_eq!(resolved.geometry.bitrate_kbps, preset.bitrate_kbps);
+        }
+        // The codec's size limit counts: H.264 sends 4096x1152 for both.
+        let h264 = resolve_screen_preset(5120, 1440, &standard_request("4K"), 4096);
+        assert_eq!(h264.same_as, Some("1440p"));
+    }
+
+    #[test]
+    fn movie_keeps_its_stated_bitrate_on_any_screen() {
+        let movie = |sw, sh, kbps| {
+            let request = EncoderConfig {
+                width: 3840,
+                height: 2160,
+                fps: 60,
+                bitrate_kbps: kbps,
+                pixel_format: PixelFormat::Bgra,
+                keyframe_interval: 0,
+                content_hint: VideoContentHint::Film,
+            };
+            let resolved = resolve_screen_preset(sw, sh, &request, 8192);
+            assert_eq!(resolved.same_as, None);
+            (
+                resolved.geometry.width,
+                resolved.geometry.height,
+                resolved.geometry.bitrate_kbps,
+            )
+        };
+        assert_eq!(movie(5120, 1440, 50_000), (5120, 1440, 50_000));
+        assert_eq!(movie(1920, 1080, 50_000), (1920, 1080, 50_000));
+        assert_eq!(movie(3840, 2160, 100_000), (3840, 2160, 100_000));
+        assert_eq!(movie(5120, 1440, 100_000), (5120, 1440, 100_000));
+    }
+
     #[test]
     fn preset_geometry_fits_the_codec_limit() {
         // H.264 stops at 4096: native 5120x1440 becomes 4096x1152.
@@ -1172,7 +1384,7 @@ mod tests {
                 let c = &ladder[0].1;
                 (c.width, c.height, c.fps, c.bitrate_kbps)
             },
-            (480, 270, 15, 350)
+            (480, 270, 30, 350)
         );
         assert_eq!(ladder[1].0, SimulcastLayer::Medium);
         assert_eq!(

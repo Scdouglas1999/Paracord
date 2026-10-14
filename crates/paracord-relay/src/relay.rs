@@ -1,6 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::{
-    atomic::{AtomicU64, Ordering},
+    atomic::{AtomicI32, AtomicU64, Ordering},
     Arc, OnceLock, Weak,
 };
 use std::time::{Duration, Instant};
@@ -25,6 +25,7 @@ use paracord_transport::stream::{
 use paracord_transport::webtransport::WebTransportStreams;
 
 use crate::bandwidth::{BandwidthEstimator, DownlinkEstimator};
+use crate::delivery::{DeliveryHealth, FrameDelivery, LATE_MARGIN};
 use crate::participant::{MediaParticipant, ViewTarget};
 use crate::room::{MediaRoomManager, ViewRecord};
 use crate::speaker::SpeakerDetector;
@@ -155,18 +156,23 @@ const BANDWIDTH_FEEDBACK_CHANGE_RATIO: f64 = 0.10;
 /// under to be selected (spec §4.2): highest layer with bitrate ≤ 85% of egress.
 const LAYER_BUDGET_PERCENT: u32 = 85;
 
-/// Windowed downlink loss ratio above which the relay downswitches a viewer's
-/// layer immediately (spec §4.2: "immediate downswitch on loss >2%").
-const DOWNSWITCH_LOSS_RATIO: f64 = 0.02;
+/// After a step down for congestion, how long before the next one: the
+/// switch lands at the lower layer's next keyframe and the frames already
+/// queued for the old layer still drain, so the next window would read the
+/// same backlog again.
+const CONGESTION_SETTLE: Duration = Duration::from_millis(3_000);
 
-/// Windowed downlink loss the path must stay under for the whole upswitch hold.
-///
-/// Without it a lossy path oscillated: loss over 2% stepped the viewer down,
-/// the next quiet window (headroom only) stepped it back up 5 s later, and every
-/// switch is a keyframe and a fresh decoder (at 1% netem loss the lab saw a
-/// switch every few seconds, each a 0.5 to 1.5 s freeze). A layer lost to loss
-/// comes back only once the path is clean.
-const UPSWITCH_MAX_LOSS_RATIO: f64 = 0.005;
+/// How long a layer left for congestion is not tried again, the first time.
+/// Each time a layer is lost again soon after an upswitch to it
+/// ([`UPSWITCH_TRIAL`]), the wait doubles, up to [`UPSWITCH_BACKOFF_MAX`]: a
+/// downlink just short of a layer is probed rarely instead of every few
+/// seconds (every probe is a keyframe and a fresh decoder for the viewer).
+const UPSWITCH_BACKOFF_BASE: Duration = Duration::from_secs(10);
+const UPSWITCH_BACKOFF_MAX: Duration = Duration::from_secs(80);
+
+/// A layer lost to congestion within this long of the upswitch to it was a
+/// failed probe, and doubles the wait before the next.
+const UPSWITCH_TRIAL: Duration = Duration::from_secs(20);
 
 /// A candidate upswitch only fires after the viewer's egress estimate has held
 /// at least this fraction (125%) of the *target* layer's bitrate (spec §4.2).
@@ -254,17 +260,57 @@ pub(crate) fn accept_control_frame(
 pub(crate) struct InflightStreamFrames {
     /// In-flight stream tasks per SSRC, oldest first, at most
     /// [`MAX_INFLIGHT_STREAM_FRAMES`] each.
-    pub(crate) per_ssrc: HashMap<u32, VecDeque<AbortHandle>>,
+    pub(crate) per_ssrc: HashMap<u32, VecDeque<InflightFrame>>,
     /// SSRCs present in `per_ssrc`, oldest first, so the map itself is bounded.
     ssrc_order: VecDeque<u32>,
 }
 
+/// One frame on its way to a viewer.
+pub(crate) struct InflightFrame {
+    /// When the relay handed it to the connection.
+    sent: Instant,
+    keyframe: bool,
+    task: AbortHandle,
+}
+
+/// How long a keyframe in flight is left to finish when a newer keyframe of its
+/// SSRC arrives (stream-fix V5). Superseding it at once livelocked a viewer on
+/// a lossy path: its decoder, waiting for a keyframe, asks again every 300 ms;
+/// a 5120x1440 keyframe took about that long to deliver, so each new one
+/// aborted the one about to land, and the picture froze for 5 s until the relay
+/// gave the viewer a smaller layer. A keyframe this young is about to fix the
+/// picture; one older than this is stuck, and is replaced.
+const KEYFRAME_SUPERSEDE_AFTER: Duration = Duration::from_secs(1);
+
+/// What [`InflightStreamFrames::track_frame`] dropped to make room.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct FramesDropped {
+    /// Frames aborted in flight (superseded by a keyframe, or shed past the cap).
+    pub(crate) total: usize,
+    /// Of those, frames that cost the viewer: every shed frame, and superseded
+    /// frames that had already waited past [`LATE_MARGIN`] (a keyframe that
+    /// replaces a frame sent a moment ago costs nothing).
+    pub(crate) costly: usize,
+}
+
 impl InflightStreamFrames {
+    /// How long the oldest frame still in flight (on any SSRC) has waited.
+    pub(crate) fn oldest_in_flight(&self, now: Instant) -> Option<Duration> {
+        self.per_ssrc
+            .values()
+            .flat_map(|queue| queue.iter())
+            .filter(|frame| !frame.task.is_finished())
+            .map(|frame| now.saturating_duration_since(frame.sent))
+            .max()
+    }
+
     /// Record the task writing one frame on `ssrc`.
     ///
-    /// A keyframe supersedes every older frame of its SSRC: the viewer's
-    /// decoder resynchronizes on it, so whatever is still queued before it is
-    /// aborted (each aborted task drops its `SendStream`, resetting the stream).
+    /// A keyframe supersedes the older frames of its SSRC: the viewer's
+    /// decoder resynchronizes on it, so the deltas still queued before it are
+    /// aborted (each aborted task drops its `SendStream`, resetting the stream),
+    /// and so is an older keyframe that has been in flight longer than
+    /// [`KEYFRAME_SUPERSEDE_AFTER`]; a younger keyframe is left to land.
     /// A delta past [`MAX_INFLIGHT_STREAM_FRAMES`] sheds the oldest. Then whole
     /// SSRC entries are dropped, oldest first, until at most `ssrc_cap` remain.
     /// Without the outer bound the map is keyed by an attacker-chosen wire field
@@ -275,24 +321,38 @@ impl InflightStreamFrames {
         handle: AbortHandle,
         is_keyframe: bool,
         ssrc_cap: usize,
-    ) -> usize {
+    ) -> FramesDropped {
+        let now = Instant::now();
         if !self.per_ssrc.contains_key(&ssrc) {
             self.ssrc_order.push_back(ssrc);
         }
         let queue = self.per_ssrc.entry(ssrc).or_default();
-        queue.retain(|task| !task.is_finished());
-        let mut shed = 0;
+        queue.retain(|frame| !frame.task.is_finished());
+        let mut dropped = FramesDropped::default();
         if is_keyframe {
-            shed = queue.len();
-            for task in queue.drain(..) {
-                task.abort();
-            }
+            queue.retain(|frame| {
+                let waited = now.saturating_duration_since(frame.sent);
+                if frame.keyframe && waited <= KEYFRAME_SUPERSEDE_AFTER {
+                    return true;
+                }
+                frame.task.abort();
+                dropped.total += 1;
+                if waited > LATE_MARGIN {
+                    dropped.costly += 1;
+                }
+                false
+            });
         }
-        queue.push_back(handle);
+        queue.push_back(InflightFrame {
+            sent: now,
+            keyframe: is_keyframe,
+            task: handle,
+        });
         while queue.len() > MAX_INFLIGHT_STREAM_FRAMES {
             if let Some(oldest) = queue.pop_front() {
-                oldest.abort();
-                shed += 1;
+                oldest.task.abort();
+                dropped.total += 1;
+                dropped.costly += 1;
             }
         }
 
@@ -301,12 +361,12 @@ impl InflightStreamFrames {
                 break;
             };
             if let Some(stale) = self.per_ssrc.remove(&oldest) {
-                for task in stale {
-                    task.abort();
+                for frame in stale {
+                    frame.task.abort();
                 }
             }
         }
-        shed
+        dropped
     }
 
     /// [`Self::track_frame`] for a keyframe.
@@ -589,6 +649,14 @@ pub struct ConnectionHandle {
     /// supersede-and-shed rules WITHIN a track: a keyframe on one track never
     /// aborts frames of another track the viewer watches at the same time.
     stream_egress: Arc<Mutex<InflightStreamFrames>>,
+    /// How this connection's frames are being delivered: what the relay
+    /// prices this viewer's simulcast layers on ([`crate::delivery`]).
+    delivery: Arc<std::sync::Mutex<FrameDelivery>>,
+    /// The QUIC send priority of the next frame stream: each frame one lower
+    /// than the last, so a backlog drains oldest first instead of every
+    /// frame in it advancing a little at a time (quinn round-robins streams of
+    /// equal priority), and all below 0, so control streams go first.
+    next_frame_priority: Arc<AtomicI32>,
     counters: Arc<MediaCounters>,
     /// Why the relay closed this connection, once it has (the first reason
     /// wins, as it does on the wire).
@@ -605,6 +673,8 @@ impl ConnectionHandle {
             lease: Arc::new(ConnectionLease::default()),
             transport: MediaTransport::Quic(conn),
             stream_egress: Arc::new(Mutex::new(InflightStreamFrames::default())),
+            delivery: Arc::new(std::sync::Mutex::new(FrameDelivery::default())),
+            next_frame_priority: Arc::new(AtomicI32::new(-1)),
             counters: Arc::new(MediaCounters::default()),
             relay_close: Arc::new(std::sync::OnceLock::new()),
         }
@@ -635,6 +705,8 @@ impl ConnectionHandle {
                 control,
             },
             stream_egress: Arc::new(Mutex::new(InflightStreamFrames::default())),
+            delivery: Arc::new(std::sync::Mutex::new(FrameDelivery::default())),
+            next_frame_priority: Arc::new(AtomicI32::new(-1)),
             counters: Arc::new(MediaCounters::default()),
             relay_close: Arc::new(std::sync::OnceLock::new()),
         }
@@ -860,6 +932,22 @@ impl ConnectionHandle {
         }
     }
 
+    /// Whether this connection's video frames are reaching it in time
+    /// ([`crate::delivery`]).
+    pub(crate) fn delivery_health(&self, now: Instant) -> DeliveryHealth {
+        // The in-flight registry is an async lock held only briefly by the
+        // forwarding path; a busy one just leaves the backlog signal out.
+        let oldest = self
+            .stream_egress
+            .try_lock()
+            .ok()
+            .and_then(|frames| frames.oldest_in_flight(now));
+        self.delivery
+            .lock()
+            .map(|mut delivery| delivery.health(now, oldest))
+            .unwrap_or_default()
+    }
+
     /// Forward one whole (already-encrypted) frame to this connection on a fresh
     /// unidirectional stream. The stream's FIN delimits the single message.
     ///
@@ -876,14 +964,35 @@ impl ConnectionHandle {
         msg: Bytes,
         is_keyframe: bool,
     ) -> Result<(), String> {
+        let handed_over = Instant::now();
+        let bytes = msg.len();
+        // Oldest first (see `next_frame_priority`); saturates after ~2^31 frames.
+        let priority = self
+            .next_frame_priority
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |p| {
+                Some(p.saturating_sub(1))
+            })
+            .unwrap_or(i32::MIN);
+        let delivery = Arc::clone(&self.delivery);
+        // A frame the viewer acknowledged in full counts toward its downlink's
+        // health ([`crate::delivery`]): how long after hand-off, and its size.
+        let delivered = move || {
+            let now = Instant::now();
+            if let Ok(mut delivery) = delivery.lock() {
+                delivery.record_delivered(now, now.saturating_duration_since(handed_over), bytes);
+            }
+        };
         let task = match &self.transport {
             MediaTransport::Quic(conn) => {
                 let conn = conn.clone();
                 tokio::spawn(async move {
                     if let Ok(mut send) = conn.open_uni().await {
+                        let _ = send.set_priority(priority);
                         if send.write_all(&msg).await.is_ok() && send.finish().is_ok() {
                             // In flight until the peer acknowledged all of it.
-                            let _ = send.stopped().await;
+                            if let Ok(None) = send.stopped().await {
+                                delivered();
+                            }
                         }
                     }
                 })
@@ -895,18 +1004,21 @@ impl ConnectionHandle {
                     .clone();
                 tokio::spawn(async move {
                     if let Ok(mut send) = streams.open_uni().await {
+                        let _ = send.set_priority(priority);
                         if send.write_all(&msg).await.is_ok() {
                             let _ = send.finish();
                             // Keep the task (and its SendStream) alive until the peer
                             // drains the stream, so a slow bridged downlink counts this
                             // frame as in flight.
-                            let _ = send.stopped().await;
+                            if let Ok(None) = send.stopped().await {
+                                delivered();
+                            }
                         }
                     }
                 })
             }
         };
-        let shed = {
+        let dropped = {
             let mut tracked = self.stream_egress.lock().await;
             tracked.track_frame(
                 ssrc,
@@ -915,6 +1027,12 @@ impl ConnectionHandle {
                 MAX_STREAM_EGRESS_SSRCS,
             )
         };
+        if dropped.costly > 0 {
+            if let Ok(mut delivery) = self.delivery.lock() {
+                delivery.record_unsent(Instant::now(), dropped.costly as u32);
+            }
+        }
+        let shed = dropped.total;
         if shed > 0 && !is_keyframe {
             warn!(
                 viewer = self.user_id,
@@ -1056,6 +1174,16 @@ struct LayerSelectionState {
     /// Instant the ≥125% upswitch headroom first held continuously (reset on any
     /// dip), gating the 5s upswitch hold.
     headroom_since: Option<Instant>,
+    /// When the relay last stepped this viewer down for congestion
+    /// ([`CONGESTION_SETTLE`]).
+    congestion_step_at: Option<Instant>,
+    /// The lowest layer not to try again before the instant given: the one
+    /// left for congestion, and everything above it.
+    blocked_from: Option<(u8, Instant)>,
+    /// The current wait before a layer left for congestion is tried again.
+    upswitch_backoff: Duration,
+    /// When the relay last staged an upswitch ([`UPSWITCH_TRIAL`]).
+    upswitched_at: Option<Instant>,
 }
 
 impl LayerSelectionState {
@@ -1064,6 +1192,10 @@ impl LayerSelectionState {
             current_layer,
             pending_layer: None,
             headroom_since: None,
+            congestion_step_at: None,
+            blocked_from: None,
+            upswitch_backoff: UPSWITCH_BACKOFF_BASE,
+            upswitched_at: None,
         }
     }
 }
@@ -3610,8 +3742,37 @@ impl RelayForwarder {
             .unwrap_or_default();
 
         let egress_kbps = downlink.estimate_kbps(viewer_id);
-        let loss = downlink.windowed_loss(viewer_id);
+        // Logged with each decision; not a reason for one (see
+        // `compute_target_layer`).
+        let quic_loss = downlink.windowed_loss(viewer_id);
         let now = Instant::now();
+        let delivery = self
+            .connections
+            .get(&key)
+            .map(|handle| handle.delivery_health(now))
+            .unwrap_or_default();
+        if let Some(reason) = delivery.congested.as_deref() {
+            info!(
+                viewer = viewer_id,
+                ?slot,
+                egress_kbps,
+                quic_loss,
+                delivered_kbps = delivery.delivered_kbps,
+                "relay: this viewer's frames are not arriving in time: {reason}"
+            );
+        } else {
+            debug!(
+                viewer = viewer_id,
+                ?slot,
+                egress_kbps,
+                quic_loss,
+                frames = delivery.frames,
+                late = delivery.late,
+                delivered_kbps = delivery.delivered_kbps,
+                floor_ms = delivery.floor.map(|floor| floor.as_millis() as u64),
+                "relay: viewer delivery health"
+            );
+        }
 
         let mut messages = Vec::new();
         for (stream_id, track_id, viewport, active_layer, requested_layer, track) in subscriptions {
@@ -3626,7 +3787,7 @@ impl RelayForwarder {
                 active_layer,
                 requested_layer,
                 egress_kbps,
-                loss,
+                &delivery,
                 now,
             ) {
                 messages.push(message);
@@ -3668,7 +3829,7 @@ impl RelayForwarder {
         active_layer: Option<u8>,
         requested_layer: Option<u8>,
         egress_kbps: u32,
-        loss: f64,
+        delivery: &DeliveryHealth,
         now: Instant,
     ) -> Option<(i64, ControlMessage)> {
         let key = (viewer, stream_id.clone(), track_id.clone());
@@ -3686,7 +3847,7 @@ impl RelayForwarder {
                 costs,
                 &mut entry,
                 egress_kbps,
-                loss,
+                delivery,
                 viewport,
                 requested_layer,
                 now,
@@ -3713,7 +3874,12 @@ impl RelayForwarder {
                     from = entry.current_layer,
                     to = target,
                     egress_kbps,
-                    loss,
+                    frames = delivery.frames,
+                    late = delivery.late,
+                    unsent = delivery.unsent,
+                    delivered_kbps = delivery.delivered_kbps,
+                    floor_ms = delivery.floor.map(|floor| floor.as_millis() as u64),
+                    congested = delivery.congested.as_deref(),
                     ?requested_layer,
                     "relay: staging a layer switch for the target layer's next keyframe"
                 );
@@ -4097,30 +4263,37 @@ fn viewport_layer_cap(track: &PublishedTrack, viewport: Option<&ViewportHint>) -
     Some(layer_ids[tier.min(layer_ids.len() - 1)])
 }
 
-/// The relay's per-viewer layer decision (spec §4.2): returns the layer a switch
-/// should be staged toward, or `None` to stay on `state.current_layer`.
+/// The relay's per-viewer layer decision (spec §4.2, stream-fix V5): returns
+/// the layer a switch should be staged toward, or `None` to stay on
+/// `state.current_layer`.
 ///
 /// - Viewing quality "Source" ([`SOURCE_LAYER`]): the top layer, always. No
 ///   viewport or bandwidth cap; the viewer asked for the original picture.
 /// - Viewing quality Low/Medium/High (`requested` is a layer id): that layer
 ///   is the ceiling, in place of the viewport cap (the viewer chose it). The
-///   relay still steps below it for bandwidth or loss, and back up to it.
+///   relay still steps below it when the downlink cannot carry it.
 /// - Auto: the viewport hint caps it (a small tile never receives H).
-/// - Budget: the highest layer whose cost (see [`LayerCosts`]) ≤ 85% of the
-///   egress estimate.
-/// - Downswitch is immediate on windowed loss >2%, an estimate below the current
-///   layer's cost, or the budget/cap desired level dropping below current.
-/// - Upswitch fires only after the estimate has held ≥125% of the target rung's
-///   cost for 5s (`state.headroom_since` tracks the streak). An explicit
-///   choice above the current layer is not an upswitch to earn: it is staged
-///   at once (the viewer asked for it).
+/// - **Down** only when the viewer's frames are not arriving in time
+///   ([`DeliveryHealth`]: frames acknowledged late, dropped in flight, or a
+///   backlog), never on packet loss as such: every video frame rides a reliable
+///   stream, and a retransmitted packet costs a frame nothing. One rung, or
+///   further when the rate the viewer actually took frames at fits only a
+///   lower layer (cost ≤ 85% of it). Then [`CONGESTION_SETTLE`] before another
+///   step, and the layer left is not tried again for a backoff that doubles
+///   each time a probe of it fails.
+/// - **Up** one rung after the downlink estimate (`egress_kbps`, the path's
+///   cwnd/RTT) has held ≥125% of the target rung's cost for 5 s with frames
+///   arriving in time, and the rung is not backed off. An explicit choice above
+///   the current layer is not an upswitch to earn: it is staged at once.
+/// - The estimate alone never steps a viewer down: an app-limited or lossy
+///   path reads low while it delivers every frame on time.
 #[allow(clippy::too_many_arguments)]
 fn compute_target_layer(
     track: &PublishedTrack,
     costs: &LayerCosts,
     state: &mut LayerSelectionState,
     egress_kbps: u32,
-    loss: f64,
+    delivery: &DeliveryHealth,
     viewport: Option<&ViewportHint>,
     requested: Option<u8>,
     now: Instant,
@@ -4138,62 +4311,106 @@ fn compute_target_layer(
         return (current != highest).then_some(highest);
     }
 
-    // Budget layer capped by the viewer's choice, or by the viewport for Auto.
+    // The viewer's choice, or the viewport for Auto, caps the layer.
     let ceiling = requested_ceiling(&layer_ids, requested);
-    let budget_kbps = (u64::from(egress_kbps) * u64::from(LAYER_BUDGET_PERCENT) / 100) as u32;
-    let budget_layer = layer_for_budget(costs, budget_kbps).unwrap_or(lowest);
     let cap = ceiling.unwrap_or_else(|| viewport_layer_cap(track, viewport).unwrap_or(highest));
-    let desired = budget_layer.min(cap);
-
-    let current_cost = cost_of(costs, current);
-    let loss_high = loss > DOWNSWITCH_LOSS_RATIO;
-    let estimate_below_current = current_cost > 0 && egress_kbps < current_cost;
-
-    // Immediate downswitch (an explicit choice below the current layer is one).
-    if loss_high || estimate_below_current || desired < current {
+    if cap < current {
         state.headroom_since = None;
-        let mut target = desired.min(current);
-        // A pure loss spike with no budget drop still steps down one rung.
-        if loss_high && target >= current {
-            target = next_layer_down(&layer_ids, current);
-        }
-        return (target != current).then_some(target);
+        return Some(cap);
     }
 
-    if desired > current {
-        // The viewer asked for this layer (SubscribeStream staged it) and the
-        // budget allows it: keep the switch, at the target's next keyframe,
-        // rather than earning it over a 5 s hold. A step back up after the
-        // relay's own downswitch is not that: it goes through the hold.
-        if ceiling == Some(desired) && state.pending_layer == Some(desired) {
-            state.headroom_since = None;
-            return Some(desired);
+    // A step down is on its way (it lands at the lower layer's keyframe): keep
+    // it staged, and do not step again on the backlog it leaves behind.
+    if state
+        .congestion_step_at
+        .is_some_and(|at| now.saturating_duration_since(at) < CONGESTION_SETTLE)
+    {
+        if let Some(pending) = state.pending_layer.filter(|&pending| pending < current) {
+            return Some(pending);
         }
-        if loss > UPSWITCH_MAX_LOSS_RATIO {
+        if delivery.is_congested() {
             state.headroom_since = None;
             return None;
         }
-        // Upswitch candidate: one rung up, gated by the 5s ≥125%-headroom hold
-        // over the target rung's cost.
-        let target = next_layer_up(&layer_ids, current);
-        let target_cost = u64::from(match cost_of(costs, target) {
-            0 => u32::MAX,
-            cost => cost,
-        });
-        let has_headroom = u64::from(egress_kbps) * 100 >= target_cost * UPSWITCH_HEADROOM_PERCENT;
-        if has_headroom {
-            let since = *state.headroom_since.get_or_insert(now);
-            if now.saturating_duration_since(since) >= UPSWITCH_HOLD {
-                return Some(target);
-            }
-        } else {
-            state.headroom_since = None;
+    }
+
+    if delivery.is_congested() {
+        state.headroom_since = None;
+        if current == lowest {
+            return None;
         }
+        let mut target = next_layer_down(&layer_ids, current);
+        if let Some(kbps) = delivery.delivered_kbps {
+            let fits = (u64::from(kbps) * u64::from(LAYER_BUDGET_PERCENT) / 100) as u32;
+            if let Some(layer) = layer_for_budget(costs, fits) {
+                target = target.min(layer);
+            }
+        }
+        let failed_probe = state
+            .upswitched_at
+            .is_some_and(|at| now.saturating_duration_since(at) < UPSWITCH_TRIAL);
+        state.upswitch_backoff = if failed_probe {
+            (state.upswitch_backoff * 2).min(UPSWITCH_BACKOFF_MAX)
+        } else {
+            UPSWITCH_BACKOFF_BASE
+        };
+        state.blocked_from = Some((current, now + state.upswitch_backoff));
+        state.congestion_step_at = Some(now);
+        state.upswitched_at = None;
+        return (target != current).then_some(target);
+    }
+
+    // After a step down for congestion the relay probes back up rather than
+    // trusting the estimate (see below), up to the viewer's cap.
+    let probing = state.blocked_from.is_some();
+    let budget_kbps = (u64::from(egress_kbps) * u64::from(LAYER_BUDGET_PERCENT) / 100) as u32;
+    let budget_layer = layer_for_budget(costs, budget_kbps).unwrap_or(lowest);
+    let desired = if probing { cap } else { budget_layer.min(cap) };
+    if desired <= current {
+        state.headroom_since = None;
         return None;
     }
 
-    // Steady state at the desired level.
-    state.headroom_since = None;
+    // The viewer asked for this layer (SubscribeStream staged it) and the
+    // budget allows it: keep the switch, at the target's next keyframe, rather
+    // than earning it over a 5 s hold. A step back up after the relay's own
+    // downswitch is not that: it goes through the hold and the backoff.
+    if ceiling == Some(desired) && state.pending_layer == Some(desired) {
+        state.headroom_since = None;
+        return Some(desired);
+    }
+    let target = next_layer_up(&layer_ids, current);
+    if state
+        .blocked_from
+        .is_some_and(|(layer, until)| target >= layer && now < until)
+    {
+        state.headroom_since = None;
+        return None;
+    }
+    // Upswitch candidate: one rung up, after 5 s of headroom. Headroom is the
+    // estimate holding ≥125% of the target rung's cost, or, once the relay has
+    // stepped this viewer down for congestion and the backoff is over, frames
+    // arriving in time: a probe. After a step down the viewer's connection
+    // carries only the lower layer, and the cwnd/RTT estimate of an
+    // app-limited path reads what it carries, not what it could: on a lossy
+    // path with a real round trip it never showed room for the layer left,
+    // and the viewer stayed on the lowest layer until the loss stopped. A
+    // failed probe costs one keyframe and doubles the next wait.
+    let target_cost = u64::from(match cost_of(costs, target) {
+        0 => u32::MAX,
+        cost => cost,
+    });
+    let has_headroom =
+        probing || u64::from(egress_kbps) * 100 >= target_cost * UPSWITCH_HEADROOM_PERCENT;
+    if has_headroom {
+        let since = *state.headroom_since.get_or_insert(now);
+        if now.saturating_duration_since(since) >= UPSWITCH_HOLD {
+            state.upswitched_at = Some(now);
+            return Some(target);
+        }
+    } else {
+        state.headroom_since = None;
+    }
     None
 }
 
@@ -5169,8 +5386,13 @@ mod tests {
         let key = pending();
         let shed = frames.track_frame(9, key.abort_handle(), true, MAX_STREAM_EGRESS_SSRCS);
         assert_eq!(
-            shed, 2,
-            "a keyframe supersedes the two deltas in flight before it"
+            shed,
+            FramesDropped {
+                total: 2,
+                costly: 0
+            },
+            "a keyframe supersedes the two deltas in flight before it; sent a moment ago, \
+             they cost the viewer nothing"
         );
         assert!(d1.await.unwrap_err().is_cancelled());
         assert!(d2.await.unwrap_err().is_cancelled());
@@ -5181,7 +5403,13 @@ mod tests {
         let mut shed = 0;
         for _ in 0..MAX_INFLIGHT_STREAM_FRAMES {
             let task = pending();
-            shed += frames.track_frame(9, task.abort_handle(), false, MAX_STREAM_EGRESS_SSRCS);
+            let dropped =
+                frames.track_frame(9, task.abort_handle(), false, MAX_STREAM_EGRESS_SSRCS);
+            assert_eq!(
+                dropped.total, dropped.costly,
+                "a shed frame is always a cost"
+            );
+            shed += dropped.total;
             deltas.push(task);
         }
         assert_eq!(shed, 1, "past the cap the oldest (the keyframe) is shed");
@@ -5191,6 +5419,26 @@ mod tests {
             task.abort();
         }
         other.abort();
+    }
+
+    /// A keyframe does not abort a younger keyframe still in flight on its
+    /// SSRC (it is about to fix the viewer's picture), only the deltas.
+    #[tokio::test]
+    async fn a_young_keyframe_in_flight_is_left_to_land() {
+        let mut frames = InflightStreamFrames::default();
+        let pending = || tokio::spawn(std::future::pending::<()>());
+        let first = pending();
+        frames.track_frame(9, first.abort_handle(), true, MAX_STREAM_EGRESS_SSRCS);
+        let delta = pending();
+        frames.track_frame(9, delta.abort_handle(), false, MAX_STREAM_EGRESS_SSRCS);
+        let second = pending();
+        let dropped = frames.track_frame(9, second.abort_handle(), true, MAX_STREAM_EGRESS_SSRCS);
+        assert_eq!(dropped.total, 1, "only the delta");
+        assert!(delta.await.unwrap_err().is_cancelled());
+        assert!(!first.is_finished(), "the young keyframe stays in flight");
+        assert_eq!(frames.per_ssrc[&9].len(), 2);
+        first.abort();
+        second.abort();
     }
 
     /// Establish a raw QUIC loopback pair, returning `(server_conn, client_conn)`.
@@ -5448,26 +5696,241 @@ mod tests {
         assert_eq!(viewport_layer_cap(&track, None), None);
     }
 
+    /// Frames arriving in time on a path that loses packets: QUIC retransmits
+    /// them, nothing is late (stream-fix V5).
+    const LOSSY_PATH: DeliveryHealth = DeliveryHealth {
+        frames: 120,
+        late: 0,
+        unsent: 0,
+        floor: Some(Duration::from_millis(20)),
+        delivered_kbps: Some(8_000),
+        oldest_in_flight: Some(Duration::from_millis(40)),
+        congested: None,
+    };
+
+    /// A downlink that takes frames at `kbps` and leaves them late.
+    fn congested(kbps: u32) -> DeliveryHealth {
+        DeliveryHealth {
+            frames: 60,
+            late: 40,
+            unsent: 0,
+            floor: Some(Duration::from_millis(20)),
+            delivered_kbps: Some(kbps),
+            oldest_in_flight: Some(Duration::from_millis(900)),
+            congested: Some("40 of 60 frames late".into()),
+        }
+    }
+
+    /// Neither the cwnd/RTT estimate nor packet loss steps a viewer down while
+    /// its frames arrive in time: at 1% real loss QUIC's loss count read 2 to
+    /// 15% and sent every viewer to the lowest layer.
     #[test]
-    fn compute_target_layer_budget_downswitch_is_immediate() {
+    fn compute_target_layer_estimate_and_loss_alone_never_step_down() {
         let track = three_layer_track(1);
-        // Sitting on H, but 85% of a 2 Mbps estimate (1700 kbps) only fits L.
+        for (egress, delivery) in [
+            (2_000, DeliveryHealth::default()),
+            (5_000, DeliveryHealth::default()),
+            (20_000, LOSSY_PATH),
+            (2_000, LOSSY_PATH),
+        ] {
+            let mut state = LayerSelectionState::new(2);
+            assert_eq!(
+                compute_target_layer(
+                    &track,
+                    &advertised_costs(&track),
+                    &mut state,
+                    egress,
+                    &delivery,
+                    None,
+                    None,
+                    Instant::now(),
+                ),
+                None,
+                "estimate {egress} kbps, {delivery:?}"
+            );
+        }
+    }
+
+    /// Late frames step down: one rung, or to what the rate the viewer took
+    /// frames at fits; then the step settles, and the layer left is backed off,
+    /// longer each time a probe of it fails.
+    #[test]
+    fn congestion_steps_down_settles_and_backs_off() {
+        let track = three_layer_track(1);
+        let costs = advertised_costs(&track);
+        let start = Instant::now();
+        // H (8 Mb/s) on a downlink that took 7 Mb/s: one rung, to M (3.5).
         let mut state = LayerSelectionState::new(2);
-        let target = compute_target_layer(
-            &track,
-            &advertised_costs(&track),
-            &mut state,
-            2000,
-            0.0,
-            None,
-            None,
-            Instant::now(),
+        assert_eq!(
+            compute_target_layer(
+                &track,
+                &costs,
+                &mut state,
+                50_000,
+                &congested(7_000),
+                None,
+                None,
+                start
+            ),
+            Some(1)
+        );
+        // A downlink that took 2 Mb/s fits only L.
+        let mut state = LayerSelectionState::new(2);
+        assert_eq!(
+            compute_target_layer(
+                &track,
+                &costs,
+                &mut state,
+                50_000,
+                &congested(2_000),
+                None,
+                None,
+                start
+            ),
+            Some(0)
+        );
+        // Staged: the same backlog does not step again while it settles, and
+        // the staged step is kept even once the window reads clean.
+        state.pending_layer = Some(0);
+        let soon = start + Duration::from_secs(2);
+        assert_eq!(
+            compute_target_layer(
+                &track,
+                &costs,
+                &mut state,
+                50_000,
+                &congested(2_000),
+                None,
+                None,
+                soon
+            ),
+            Some(0)
         );
         assert_eq!(
-            target,
-            Some(0),
-            "a budget below the current layer downswitches now"
+            compute_target_layer(
+                &track,
+                &costs,
+                &mut state,
+                50_000,
+                &DeliveryHealth::default(),
+                None,
+                None,
+                soon
+            ),
+            Some(0)
         );
+        // Landed on L. H is backed off for 10 s: M comes back after the 5 s
+        // hold, H not before its backoff.
+        state.current_layer = 0;
+        state.pending_layer = None;
+        let clean = DeliveryHealth::default();
+        let eval = |state: &mut LayerSelectionState, at: Duration, delivery: &DeliveryHealth| {
+            compute_target_layer(
+                &track,
+                &costs,
+                state,
+                50_000,
+                delivery,
+                None,
+                None,
+                start + at,
+            )
+        };
+        let secs = Duration::from_secs;
+        assert_eq!(eval(&mut state, secs(3), &clean), None);
+        assert_eq!(eval(&mut state, secs(8), &clean), Some(1));
+        state.current_layer = 1;
+        assert_eq!(state.blocked_from, Some((2, start + UPSWITCH_BACKOFF_BASE)));
+        assert_eq!(eval(&mut state, secs(9), &clean), None, "H is backed off");
+        assert_eq!(eval(&mut state, secs(10), &clean), None, "the hold starts");
+        assert_eq!(eval(&mut state, secs(15), &clean), Some(2));
+        state.current_layer = 2;
+        // The probe fails at once: the next wait is twice as long.
+        assert_eq!(eval(&mut state, secs(17), &congested(7_000)), Some(1));
+        assert_eq!(state.upswitch_backoff, UPSWITCH_BACKOFF_BASE * 2);
+        assert_eq!(
+            state.blocked_from,
+            Some((2, start + secs(17) + UPSWITCH_BACKOFF_BASE * 2))
+        );
+        // On the lowest layer there is nowhere to go.
+        let mut state = LayerSelectionState::new(0);
+        assert_eq!(
+            compute_target_layer(
+                &track,
+                &costs,
+                &mut state,
+                50_000,
+                &congested(300),
+                None,
+                None,
+                start
+            ),
+            None
+        );
+    }
+
+    /// After a step down for congestion, an app-limited estimate (it reads
+    /// what the lower layer carries) does not keep the viewer down: once the
+    /// backoff is over and frames arrive in time for the hold, it probes up.
+    #[test]
+    fn congestion_recovery_probes_past_an_app_limited_estimate() {
+        let track = three_layer_track(1);
+        let costs = advertised_costs(&track);
+        let start = Instant::now();
+        let mut state = LayerSelectionState::new(1);
+        assert_eq!(
+            compute_target_layer(
+                &track,
+                &costs,
+                &mut state,
+                50_000,
+                &congested(1_000),
+                None,
+                None,
+                start
+            ),
+            Some(0)
+        );
+        state.current_layer = 0;
+        state.pending_layer = None;
+        // 1.2 Mb/s: what L carries; by the estimate alone M (3.5) never fits.
+        let clean = DeliveryHealth::default();
+        let at = |s: u64| start + Duration::from_secs(s);
+        assert_eq!(
+            compute_target_layer(
+                &track,
+                &costs,
+                &mut state,
+                1_200,
+                &clean,
+                None,
+                None,
+                at(10)
+            ),
+            None,
+            "the hold starts once M's backoff is over"
+        );
+        assert_eq!(
+            compute_target_layer(
+                &track,
+                &costs,
+                &mut state,
+                1_200,
+                &clean,
+                None,
+                None,
+                at(15)
+            ),
+            Some(1)
+        );
+        // A viewer that never met congestion still goes by the estimate.
+        let mut fresh = LayerSelectionState::new(0);
+        for s in [0, 10] {
+            assert_eq!(
+                compute_target_layer(&track, &costs, &mut fresh, 1_200, &clean, None, None, at(s)),
+                None
+            );
+        }
     }
 
     #[test]
@@ -5484,52 +5947,12 @@ mod tests {
             &advertised_costs(&track),
             &mut state,
             20_000,
-            0.0,
+            &DeliveryHealth::default(),
             Some(&vp),
             None,
             Instant::now(),
         );
         assert_eq!(target, Some(0), "a small tile never receives H");
-    }
-
-    #[test]
-    fn compute_target_layer_loss_steps_down_even_with_budget() {
-        let track = three_layer_track(1);
-        // On M with ample budget, but >2% loss forces an immediate one-rung drop.
-        let mut state = LayerSelectionState::new(1);
-        let target = compute_target_layer(
-            &track,
-            &advertised_costs(&track),
-            &mut state,
-            20_000,
-            0.03,
-            None,
-            None,
-            Instant::now(),
-        );
-        assert_eq!(target, Some(0), "loss >2% downswitches immediately");
-    }
-
-    #[test]
-    fn compute_target_layer_estimate_below_current_downswitches() {
-        let track = three_layer_track(1);
-        // On H (8 Mbps rung) with a 5 Mbps estimate < current layer bitrate.
-        let mut state = LayerSelectionState::new(2);
-        let target = compute_target_layer(
-            &track,
-            &advertised_costs(&track),
-            &mut state,
-            5000,
-            0.0,
-            None,
-            None,
-            Instant::now(),
-        );
-        assert_eq!(
-            target,
-            Some(1),
-            "an estimate below the current layer downswitches"
-        );
     }
 
     #[test]
@@ -5544,7 +5967,7 @@ mod tests {
                 &advertised_costs(&track),
                 &mut state,
                 20_000,
-                0.0,
+                &DeliveryHealth::default(),
                 None,
                 None,
                 start
@@ -5561,7 +5984,7 @@ mod tests {
                 &advertised_costs(&track),
                 &mut state,
                 20_000,
-                0.0,
+                &DeliveryHealth::default(),
                 None,
                 None,
                 later
@@ -5582,7 +6005,7 @@ mod tests {
             &advertised_costs(&track),
             &mut state,
             20_000,
-            0.0,
+            &DeliveryHealth::default(),
             None,
             None,
             start,
@@ -5597,7 +6020,7 @@ mod tests {
             &advertised_costs(&track),
             &mut state,
             4000,
-            0.0,
+            &DeliveryHealth::default(),
             None,
             None,
             start + Duration::from_secs(1),
@@ -5640,7 +6063,7 @@ mod tests {
                     &costs,
                     &mut state,
                     50_000,
-                    0.0,
+                    &DeliveryHealth::default(),
                     Some(&small_tile),
                     requested,
                     now
@@ -5654,7 +6077,16 @@ mod tests {
         // once: a lossy path otherwise oscillates between layers.
         let mut state = LayerSelectionState::new(0);
         assert_eq!(
-            compute_target_layer(&track, &costs, &mut state, 50_000, 0.0, None, Some(2), now),
+            compute_target_layer(
+                &track,
+                &costs,
+                &mut state,
+                50_000,
+                &DeliveryHealth::default(),
+                None,
+                Some(2),
+                now
+            ),
             None
         );
         assert_eq!(
@@ -5663,19 +6095,29 @@ mod tests {
                 &costs,
                 &mut state,
                 50_000,
-                0.01,
+                &congested(4_000),
                 None,
                 Some(2),
                 now + UPSWITCH_HOLD
             ),
             None,
-            "1% loss resets the hold"
+            "late frames reset the hold"
         );
-        // High is still a ceiling the relay steps below for bandwidth; Source
-        // is not.
+        assert!(state.headroom_since.is_none());
+        // High is still a ceiling the relay steps below when the downlink
+        // cannot carry it; Source is not.
         let mut state = LayerSelectionState::new(2);
         assert_eq!(
-            compute_target_layer(&track, &costs, &mut state, 2000, 0.0, None, Some(2), now),
+            compute_target_layer(
+                &track,
+                &costs,
+                &mut state,
+                2000,
+                &congested(2_000),
+                None,
+                Some(2),
+                now
+            ),
             Some(0)
         );
         let mut state = LayerSelectionState::new(2);
@@ -5685,7 +6127,7 @@ mod tests {
                 &costs,
                 &mut state,
                 2000,
-                0.03,
+                &congested(2_000),
                 None,
                 Some(SOURCE_LAYER),
                 now
@@ -5705,36 +6147,47 @@ mod tests {
         let mut track = three_layer_track(1);
         track.layers[2].max_bitrate_kbps = Some(100_000);
         let costs: LayerCosts = vec![(0, 800), (1, 3_500), (2, 22_500)];
-        let mut state = LayerSelectionState::new(2);
+        // From M on a 40 Mb/s downlink: the measured top layer (22.5) has the
+        // 125% headroom, so the hold starts and the upswitch lands after it.
+        let start = Instant::now();
+        let mut state = LayerSelectionState::new(1);
+        let clean = DeliveryHealth::default();
+        assert_eq!(
+            compute_target_layer(&track, &costs, &mut state, 40_000, &clean, None, None, start),
+            None
+        );
         assert_eq!(
             compute_target_layer(
                 &track,
                 &costs,
                 &mut state,
                 40_000,
-                0.0,
+                &clean,
                 None,
                 None,
-                Instant::now()
+                start + UPSWITCH_HOLD
             ),
-            None,
-            "the measured top layer fits; no downswitch"
+            Some(2),
+            "the measured top layer fits"
         );
-        let mut state = LayerSelectionState::new(2);
-        assert_eq!(
-            compute_target_layer(
-                &track,
-                &advertised_costs(&track),
-                &mut state,
-                40_000,
-                0.0,
-                None,
-                None,
-                Instant::now()
-            ),
-            Some(1),
-            "by the cap alone the same viewer was sent the medium layer"
-        );
+        // By the cap alone (100 Mb/s) the same viewer never left the medium layer.
+        let mut state = LayerSelectionState::new(1);
+        let advertised = advertised_costs(&track);
+        for at in [start, start + UPSWITCH_HOLD] {
+            assert_eq!(
+                compute_target_layer(
+                    &track,
+                    &advertised,
+                    &mut state,
+                    40_000,
+                    &clean,
+                    None,
+                    None,
+                    at
+                ),
+                None
+            );
+        }
     }
 
     /// The relay measures each SSRC's ingress rate over its window.
@@ -5920,9 +6373,8 @@ mod tests {
                 track_id.clone(),
             ),
             LayerSelectionState {
-                current_layer: 2,
                 pending_layer: Some(0),
-                headroom_since: None,
+                ..LayerSelectionState::new(2)
             },
         );
 
@@ -6023,6 +6475,20 @@ mod tests {
         forwarder
             .downlink_estimator
             .record_sample_at(4, 37_500, rtt, 1000, 0, now);
+
+        // The estimates alone step nobody down (stream-fix V5): the downlinks
+        // of viewers 2 and 3 also leave H's frames late, taking them at
+        // 1.5 and 5 Mbps; viewer 4's arrive in time.
+        for (uid, kbps, late) in [(2, 1_500u64, true), (3, 5_000, true), (4, 15_000, false)] {
+            let handle = forwarder.connection_for_test(uid).unwrap();
+            let mut delivery = handle.delivery.lock().unwrap();
+            let start = now - Duration::from_millis(1_900);
+            for i in 0..60u64 {
+                let at = start + Duration::from_millis(i * 32);
+                let latency = Duration::from_millis(if late { 20 + i * 15 } else { 20 });
+                delivery.record_delivered(at, latency, (kbps * 1000 / 8 / 30) as usize);
+            }
+        }
 
         // Run the relay's selection for each viewer; it stages keyframe-gated
         // switches (viewer 4 already at its target stages nothing).

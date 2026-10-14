@@ -4,7 +4,7 @@
 // phase marks (CLOCK_MONOTONIC µs, the clock of every probe and trace) for
 // analyze.py.
 //
-//   node campaign.mjs --out <run dir> [--presets 720p30,1080p60,...] [--plan full|quick|layers|midstream|sizes|audio]
+//   node campaign.mjs --out <run dir> [--presets 720p30,1080p60,...] [--plan full|quick|layers|midstream|sizes|audio|netsteps]
 //
 // Everything is driven through the apps' own controls by the in-page agent
 // (audit-serve.mjs); nothing calls a media command the UI would not.
@@ -26,7 +26,7 @@ const plan = arg('plan', 'full');
 const PRESETS = arg('presets', '720p30,1080p60,1440p60,4k60,movie-50,movie-100').split(',');
 const LABEL = {
   '720p30': '720p 30fps', '1080p60': '1080p 60fps', '1440p60': '1440p 60fps', '4k60': '4K 60fps',
-  'movie-50': 'Movie (50 Mbps at 4K)', 'movie-100': 'Movie (100 Mbps at 4K)',
+  'movie-50': 'Movie (up to 50 Mbps)', 'movie-100': 'Movie (up to 100 Mbps)',
 };
 const scene = JSON.parse(readFileSync(join(OUT, 'scene.json'), 'utf8'));
 const marks = join(OUT, 'marks.log');
@@ -111,7 +111,7 @@ async function senderQuality(preset) {
     await click(await waitFor(() => btn('More call actions'), 15000)); await sleep(500);
     const item = $$('[role=menuitem]').find((b) => /^Share quality/.test(text(b)));
     await click(item); await sleep(500);
-    const opt = $$('[aria-label="Share quality"] button').find((b) => text(b) === ${JSON.stringify(LABEL[preset])});
+    const opt = $$('[aria-label="Share quality"] button').find((b) => text(b).startsWith(${JSON.stringify(LABEL[preset])}));
     if (!opt) throw new Error('no option ${LABEL[preset]}');
     await click(opt); await sleep(1500);
     // Close the menu the way a click elsewhere does (Escape would leave the call view).
@@ -356,6 +356,26 @@ try {
       const phases = arg('phases', null)?.split(',') ?? (plan === 'quick' ? ['normal', 'theater', 'fullscreen', 'theater-toggle'] : undefined);
       await layoutPhases(arg('tag', '') + preset, phases ? { phases } : {});
     }
+  }
+  if (plan === 'netsteps') {
+    // One share; the viewer at rest in normal view while --net-cmd reshapes
+    // the network before each step (--steps "0,1,5,0:20mbit,0": loss % and an
+    // optional rate, passed to the command as arguments), each held --hold s.
+    // Shows which layer the relay gives the viewer under each condition.
+    const preset = PRESETS[0];
+    await freshShare(preset);
+    await viewerWatch();
+    const st0 = await viewerLayout('normal');
+    await sleep(1500);
+    setProbeX([(await viewerState()).box ?? st0.box]);
+    const hold = Number(arg('hold', '30')) * 1000;
+    for (const step of arg('steps', '0,1,5,0').split(',')) {
+      const [loss, rate] = step.split(':');
+      execFileSync(arg('net-cmd'), rate ? [loss, rate] : [loss]);
+      log('  net', step);
+      await phase(`${arg('tag', '')}${preset}:net-${step}`, { layout: 'normal', loss: Number(loss), rate: rate ?? null }, null, hold);
+    }
+    execFileSync(arg('net-cmd'), ['0']);
   }
   if (plan === 'sizes') {
     // The viewer's output was switched by the caller; rest and theater motion only.

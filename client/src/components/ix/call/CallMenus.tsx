@@ -8,7 +8,8 @@ import { buildDevicePickerOptions, systemDefaultOptionLabel } from '../../../lib
 import { useAuthStore } from '../../../stores/authStore';
 import { toast } from '../../../stores/toastStore';
 import { useVoiceStore } from '../../../stores/voiceStore';
-import { SHARE_QUALITIES, SHARE_QUALITY_HINT, useShareQualityStore } from '../../glass/stage/useShareScreen';
+import { SHARE_QUALITIES, SHARE_QUALITY_HINT, shareQualitySameAs, useShareQualityStore } from '../../glass/stage/useShareScreen';
+import { useShareSourceStore } from '../../../lib/media/shareSource';
 import { StreamOverlayPortal, useAnchoredOverlayCoords, useOverlayDismiss } from '../../voice/streamOverlayPortal';
 
 /**
@@ -342,6 +343,15 @@ export function MoreMenu({
 
 /* ---- Share quality -------------------------------------------------------------- */
 
+/** The display this window is on, in device pixels (what a share of it captures). */
+function displaySize(): { width: number; height: number } | null {
+  if (typeof window === 'undefined' || !window.screen) return null;
+  const scale = window.devicePixelRatio || 1;
+  const width = Math.round(window.screen.width * scale);
+  const height = Math.round(window.screen.height * scale);
+  return width > 0 && height > 0 ? { width, height } : null;
+}
+
 /** The quality you send when you share your screen; during a share it updates the encoder in place. */
 export function ShareQualityMenu({
   open,
@@ -357,6 +367,8 @@ export function ShareQualityMenu({
   const quality = useShareQualityStore((state) => state.quality);
   const setQuality = useShareQualityStore((state) => state.setQuality);
   const [changing, setChanging] = useState(false);
+  const sharing = useVoiceStore((state) => state.selfStream);
+  const sharedSource = useShareSourceStore((state) => state.size);
   const inside = useCallback(
     (target: Node) => Boolean(panelRef.current?.contains(target) || anchorRef.current?.contains(target)),
     [anchorRef],
@@ -364,6 +376,10 @@ export function ShareQualityMenu({
   useOverlayDismiss(open, onClose, inside, { escape: false });
   useFocusTrap(panelRef, open && coords !== null, onClose);
   if (!open || !coords) return null;
+  // The screen the presets are judged on: the one being shared, else the one
+  // this window is on (where a share most often starts).
+  const screenSize = sharing && sharedSource ? sharedSource : displaySize();
+  const where = sharing && sharedSource ? 'the shared screen' : 'this screen';
   return (
     <StreamOverlayPortal
       panelRef={panelRef}
@@ -398,7 +414,13 @@ export function ShareQualityMenu({
               }).finally(() => setChanging(false));
             }}
           >
-            <span className="ix-call-pop__label">{option.label}</span>
+            <span className="ix-call-pop__label">
+              {option.label}
+              {(() => {
+                const sameAs = screenSize ? shareQualitySameAs(option.value, screenSize.width, screenSize.height) : null;
+                return sameAs ? <span className="ix-call-pop__sub">Same as {sameAs} on {where}</span> : null;
+              })()}
+            </span>
             {quality === option.value && <Check size={16} aria-hidden="true" />}
           </button>
         ))}

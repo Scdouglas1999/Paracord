@@ -20,6 +20,7 @@ mod native_media;
 mod now_playing;
 #[cfg(target_os = "linux")]
 mod pulse_router;
+mod quiet_notify;
 mod tray;
 mod trust_cmds;
 mod window_chrome;
@@ -2645,6 +2646,7 @@ pub fn run() {
     let builder = builder.invoke_handler(tauri::generate_handler![
         take_pending_deep_links,
         window_chrome::window_titlebar_double_click,
+        quiet_notify::notification_show_quiet,
         commands::greet,
         commands::get_app_version,
         commands::get_update_target,

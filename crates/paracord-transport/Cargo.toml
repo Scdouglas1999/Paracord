@@ -8,6 +8,9 @@ license-file.workspace = true
 [dependencies]
 # QUIC
 quinn = { workspace = true }
+# `RttEstimator` for the media congestion controller (congestion.rs); the same
+# quinn-proto quinn already builds on.
+quinn-proto = "0.11"
 h3 = { workspace = true }
 h3-quinn = { workspace = true }
 http = { workspace = true }

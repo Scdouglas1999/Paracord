@@ -183,15 +183,27 @@ impl VideoEncoder for LavcEncoder {
     }
 
     fn set_bitrate(&mut self, bitrate_kbps: u32) -> Result<bool, VideoError> {
-        // NVENC/VAAPI/QSV fix the rate when the codec context opens and expose
-        // no live rate-control reconfigure, so the only honest way to retarget
-        // is to rebuild the pipeline at the new rate. The rebuild is fully
-        // synchronous and in-process (no subprocess to restart — the hazard the
-        // old trait prohibition guarded is gone), so it is the documented lavc
-        // contract. We self-throttle: ignore sub-25% deltas and rebuilds inside
-        // the minimum interval so a chatty congestion loop cannot thrash.
         let new_kbps = bitrate_kbps.max(1);
         let current = self.config.bitrate_kbps.max(1);
+        // NVENC retargets the running session: libavcodec's nvenc compares the
+        // context's rates on every frame and reconfigures in place. No new
+        // hardware device, graph or session (a rebuild here once crashed inside
+        // `av_hwdevice_ctx_create` mid-share, stream-fix V2/V3).
+        if self.backend == LavcBackend::Nvenc {
+            if new_kbps == current {
+                return Ok(false);
+            }
+            unsafe { retarget_nvenc_in_place(self.pipe.enc_ctx, &self.config, new_kbps) };
+            self.config.bitrate_kbps = new_kbps;
+            tracing::info!(kbps = new_kbps, "lavc: NVENC bitrate retargeted in place");
+            return Ok(true);
+        }
+        // VAAPI/QSV fix the rate when the codec context opens and expose no
+        // live rate-control reconfigure, so the only honest way to retarget is
+        // to rebuild the pipeline at the new rate. The rebuild is fully
+        // synchronous and in-process. We self-throttle: ignore sub-25% deltas
+        // and rebuilds inside the minimum interval so a chatty congestion loop
+        // cannot thrash.
         let delta = new_kbps.abs_diff(current);
         // <25% change: not worth a rebuild.
         if (delta as u64) * 4 < current as u64 {
@@ -879,6 +891,26 @@ fn filter_chain_candidates(
             }]
         }
     }
+}
+
+/// Retarget a running NVENC context to `kbps`. A constant-quality encoder
+/// (every content hint but Film, see [`configure_encoder_context`]) keeps its
+/// quality target and moves only its ceiling; a Film encoder (a target rate)
+/// moves both. libavcodec's nvenc picks the change up on the next frame.
+///
+/// # Safety
+/// `ctx` must be an open NVENC codec context used only by the caller.
+pub(super) unsafe fn retarget_nvenc_in_place(
+    ctx: *mut ff::AVCodecContext,
+    config: &EncoderConfig,
+    kbps: u32,
+) {
+    let bps = i64::from(kbps.max(1)) * 1000;
+    if config.content_hint == crate::video::VideoContentHint::Film {
+        (*ctx).bit_rate = bps;
+    }
+    (*ctx).rc_max_rate = bps;
+    (*ctx).rc_buffer_size = bps.saturating_mul(2).min(i64::from(i32::MAX)) as c_int;
 }
 
 /// Apply rate control and low-latency tuning to the encoder context. Mirrors

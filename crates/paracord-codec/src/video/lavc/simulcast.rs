@@ -25,6 +25,7 @@
 
 use super::encoder::{
     apply_keyframe_request, configure_encoder_context, create_hw_device, encode_probe_frame,
+    retarget_nvenc_in_place,
 };
 use super::{
     av_error_text, av_input_format_name, av_input_pix_fmt, cstr, require_encodable, LavcBackend,
@@ -821,13 +822,7 @@ impl SharedSimulcastBackend for LavcSimulcastEncoder {
                 // A constant-quality layer keeps its quality target and moves
                 // only its ceiling; a Film layer (a target rate) moves both.
                 LavcBackend::Nvenc => {
-                    let bps = i64::from(kbps) * 1000;
-                    if layer.config.content_hint == crate::video::VideoContentHint::Film {
-                        (*layer.enc_ctx).bit_rate = bps;
-                    }
-                    (*layer.enc_ctx).rc_max_rate = bps;
-                    (*layer.enc_ctx).rc_buffer_size =
-                        bps.saturating_mul(2).min(i64::from(i32::MAX)) as c_int;
+                    retarget_nvenc_in_place(layer.enc_ctx, &layer.config, kbps);
                 }
                 // VAAPI and QSV fix the rate at open: reopen this layer's
                 // encoder on the same graph output (the upload and the other

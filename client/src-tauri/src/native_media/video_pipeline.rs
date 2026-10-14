@@ -2222,6 +2222,48 @@ fn build_simulcast_configs(
     }
 }
 
+/// The simulcast encoder for a capture of `input_width`x`input_height`, camera
+/// and screen alike. The in-process libavcodec hardware encoders (H.264/AV1)
+/// encode every layer from ONE upload of the capture-sized frame, split and
+/// scaled on the GPU (stream audit B2: one upload per layer cost 3 × 6.4 ms of
+/// a 16.7 ms frame), and retarget a layer's bitrate on the running encoder
+/// (NVENC in place; VAAPI/QSV reopen that layer's codec context only). VP9
+/// stays on the libvpx factory, one encoder per layer.
+#[cfg(feature = "vpx")]
+fn build_simulcast_encoder(
+    codec: paracord_codec::video::VideoCodec,
+    input_format: paracord_codec::video::PixelFormat,
+    input_width: u32,
+    input_height: u32,
+    layers: &[(
+        paracord_codec::video::SimulcastLayer,
+        paracord_codec::video::EncoderConfig,
+    )],
+) -> Result<paracord_codec::video::encoder::SimulcastEncoder, paracord_codec::video::VideoError> {
+    use paracord_codec::video::encoder::{create_encoder, SimulcastEncoder};
+    #[cfg(all(unix, not(target_os = "macos")))]
+    if matches!(
+        codec,
+        paracord_codec::video::VideoCodec::H264 | paracord_codec::video::VideoCodec::Av1
+    ) {
+        let shared = paracord_codec::video::lavc::LavcSimulcastEncoder::new(
+            codec,
+            input_width,
+            input_height,
+            layers,
+        )?;
+        return SimulcastEncoder::new_shared(
+            input_width,
+            input_height,
+            input_format,
+            Box::new(shared),
+        );
+    }
+    SimulcastEncoder::new_with_configs(input_width, input_height, input_format, layers, |cfg| {
+        create_encoder(codec, cfg)
+    })
+}
+
 #[cfg(feature = "vpx")]
 fn create_camera_simulcast_encoder(
     session: &mut NativeMediaSession,
@@ -2232,38 +2274,11 @@ fn create_camera_simulcast_encoder(
         paracord_codec::video::EncoderConfig,
     )],
 ) -> Result<super::session::NativeSimulcastState, String> {
-    use paracord_codec::video::encoder::{create_encoder, SimulcastEncoder};
-    use paracord_codec::video::VideoCodec;
-
-    fn build_with_codec(
-        codec: VideoCodec,
-        input_format: paracord_codec::video::PixelFormat,
-        input_width: u32,
-        input_height: u32,
-        layers: &[(
-            paracord_codec::video::SimulcastLayer,
-            paracord_codec::video::EncoderConfig,
-        )],
-    ) -> Result<SimulcastEncoder, paracord_codec::video::VideoError> {
-        SimulcastEncoder::new_with_configs(input_width, input_height, input_format, layers, |cfg| {
-            // The in-process libavcodec hardware encoders take capture-sized
-            // packed input and scale/convert on the GPU (parity with the screen
-            // path). VP9 falls through to the libvpx factory with I420.
-            #[cfg(all(unix, not(target_os = "macos")))]
-            if matches!(codec, VideoCodec::H264 | VideoCodec::Av1) {
-                return Ok(Box::new(
-                    paracord_codec::video::lavc::LavcEncoder::new_with_input(
-                        codec,
-                        cfg,
-                        input_width,
-                        input_height,
-                    )?,
-                ));
-            }
-            create_encoder(codec, cfg)
-        })
-    }
-
+    // One upload of the capture-sized frame for every layer, split and scaled
+    // on the GPU, and a bitrate change that retargets the running encoder
+    // (the screen path's encoder, stream-fix V3/V5). The camera used one
+    // `LavcEncoder` per layer: an upload each, and a whole new GPU pipeline
+    // (hardware device included) on every bitrate change.
     let preferred = session
         .video_encoder_codec
         .unwrap_or_else(default_camera_codec);
@@ -2273,7 +2288,7 @@ fn create_camera_simulcast_encoder(
         .unwrap_or(paracord_codec::video::PixelFormat::I420);
     // No silent codec substitution (parity with the screen path): a failed init
     // means the capability probe and reality disagree — surface it.
-    let (codec, encoder, effective_layers) = match build_with_codec(
+    let (codec, encoder, effective_layers) = match build_simulcast_encoder(
         preferred,
         preferred_input_format,
         input_width,
@@ -2481,43 +2496,6 @@ fn create_screen_simulcast_encoder(
         paracord_codec::video::EncoderConfig,
     )],
 ) -> Result<super::session::NativeSimulcastState, String> {
-    use paracord_codec::video::encoder::{create_encoder, SimulcastEncoder};
-    use paracord_codec::video::VideoCodec;
-
-    fn build_with_codec(
-        codec: VideoCodec,
-        input_format: paracord_codec::video::PixelFormat,
-        input_width: u32,
-        input_height: u32,
-        layers: &[(
-            paracord_codec::video::SimulcastLayer,
-            paracord_codec::video::EncoderConfig,
-        )],
-    ) -> Result<SimulcastEncoder, paracord_codec::video::VideoError> {
-        // The in-process libavcodec hardware encoders (H.264/AV1) encode every
-        // layer from ONE upload of the capture-sized frame, split and scaled on
-        // the GPU (stream audit B2: one upload per layer cost 3 × 6.4 ms of a
-        // 16.7 ms frame). VP9 stays on the libvpx factory, one encoder per layer.
-        #[cfg(all(unix, not(target_os = "macos")))]
-        if matches!(codec, VideoCodec::H264 | VideoCodec::Av1) {
-            let shared = paracord_codec::video::lavc::LavcSimulcastEncoder::new(
-                codec,
-                input_width,
-                input_height,
-                layers,
-            )?;
-            return SimulcastEncoder::new_shared(
-                input_width,
-                input_height,
-                input_format,
-                Box::new(shared),
-            );
-        }
-        SimulcastEncoder::new_with_configs(input_width, input_height, input_format, layers, |cfg| {
-            create_encoder(codec, cfg)
-        })
-    }
-
     let preferred = session
         .screen_encoder_codec
         .unwrap_or_else(default_screen_codec);
@@ -2528,7 +2506,7 @@ fn create_screen_simulcast_encoder(
     // No silent codec substitution: the codec was negotiated from advertised
     // capabilities, so a failed init here means the capability probe and
     // reality disagree — surface that instead of streaming something else.
-    let (codec, encoder, effective_layers) = match build_with_codec(
+    let (codec, encoder, effective_layers) = match build_simulcast_encoder(
         preferred,
         preferred_input_format,
         input_width,
@@ -3196,22 +3174,25 @@ pub async fn begin_screen_frame(
     );
     session.screen_encoder_codec = Some(requested_codec);
     // The config is the preset's 16:9 definition; resolve what it sends from
-    // this source: its height in the source's shape, the bitrate scaled with
-    // the pixels, within the codec's size limit.
-    let geometry = paracord_codec::video::preset_geometry(
+    // this source: its height in the source's shape, within the codec's size
+    // limit, the bitrate scaled with the pixels (Movie keeps its own), and a
+    // preset that sends the same picture as a smaller one here takes that
+    // one's settings.
+    let resolved = paracord_codec::video::resolve_screen_preset(
         frame_width,
         frame_height,
-        screen_config.width,
-        screen_config.height,
-        screen_config.bitrate_kbps,
+        &screen_config,
         paracord_codec::video::codec_max_encode_dimension(requested_codec),
     );
+    let geometry = resolved.geometry;
     let (encode_width, encode_height) =
         align_dimensions_for_codec(requested_codec, geometry.width, geometry.height);
     let desired_config = EncoderConfig {
         width: encode_width,
         height: encode_height,
+        fps: resolved.fps,
         bitrate_kbps: geometry.bitrate_kbps,
+        content_hint: resolved.content_hint,
         pixel_format: screen_encoder_input_format(requested_codec, input_is_bgra),
         ..screen_config.clone()
     };
@@ -3243,19 +3224,19 @@ pub async fn begin_screen_frame(
         .unwrap_or(true);
 
     if needs_reinit {
-        let codec_limited = paracord_codec::video::preset_geometry(
+        let unlimited = paracord_codec::video::resolve_screen_preset(
             frame_width,
             frame_height,
-            screen_config.width,
-            screen_config.height,
-            screen_config.bitrate_kbps,
+            &screen_config,
             u32::MAX,
-        ) != geometry;
+        );
+        let codec_limited = (unlimited.geometry.width, unlimited.geometry.height)
+            != (geometry.width, geometry.height);
         native_diag(
             app,
             &format!(
                 "screen share geometry: source {frame_width}x{frame_height}, preset {} lines \
-                 ({}x{} at {} kbps, 16:9) -> sending {}x{} at {} fps, {} kbps{}; layers {}",
+                 ({}x{} at {} kbps, 16:9) -> sending {}x{} at {} fps, {} kbps{}{}; layers {}",
                 screen_config.height,
                 screen_config.width,
                 screen_config.height,
@@ -3264,6 +3245,17 @@ pub async fn begin_screen_frame(
                 desired_config.height,
                 desired_config.fps,
                 desired_config.bitrate_kbps,
+                match resolved.same_as {
+                    Some(name) => format!(
+                        " (the same picture as {name} on this source, so {name}'s settings)"
+                    ),
+                    None if screen_config.content_hint
+                        == paracord_codec::video::VideoContentHint::Film =>
+                    {
+                        " (Movie: its stated bitrate on any screen)".to_string()
+                    }
+                    None => String::new(),
+                },
                 if codec_limited {
                     format!(", reduced to fit {requested_codec:?}'s size limit")
                 } else {
@@ -3276,6 +3268,11 @@ pub async fn begin_screen_frame(
                     .join(" "),
             ),
         );
+        // The share menu says which presets are the same picture on the
+        // screen being shared; it needs that screen's size.
+        if let Some(app) = app {
+            super::events::emit_media_screen_share_source(app, frame_width, frame_height);
+        }
         let encoder =
             create_screen_simulcast_encoder(session, frame_width, frame_height, &desired_layers)?;
         tracing::info!(

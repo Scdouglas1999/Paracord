@@ -17,6 +17,7 @@ import type {
 } from './mediaEngine';
 import { NativeVideoTile } from './video/nativeVideoTile';
 import { NATIVE_STILL_COMMAND, nativeStillBitmap, parseNativeStill } from './video/nativeStill';
+import { readShareSourceSize, useShareSourceStore } from './shareSource';
 import { logVoiceDiagnostic } from '../desktopDiagnostics';
 import { MediaKeyring } from './mediaKeyring';
 import {
@@ -238,6 +239,7 @@ export class TauriMediaEngine implements MediaEngine {
   /** The failure `enableVideo` already reported, and when, for de-duplication. */
   private cameraEnableFailure: { message: string; at: number } | null = null;
   private screenEventUnlisten: UnlistenFn | null = null;
+  private screenSourceUnlisten: UnlistenFn | null = null;
   private transportLostUnlisten: UnlistenFn | null = null;
   private transportLostCb: ((reason: string) => void) | null = null;
   private disconnecting = false;
@@ -606,6 +608,7 @@ export class TauriMediaEngine implements MediaEngine {
     this.screenAudioActive = false;
     if (!invoke) return;
     await this.invokeOwned('screen_share_stop', { actionRevision }).catch(() => { });
+    useShareSourceStore.getState().setSize(null);
   }
 
   supportsNativeSourcePicker(): boolean {
@@ -638,6 +641,7 @@ export class TauriMediaEngine implements MediaEngine {
 
   private cleanupScreenShare(): void {
     this.disableNativeScreenAudio();
+    useShareSourceStore.getState().setSize(null);
   }
 
   private async ensureNativeScreenShareEventListener(): Promise<void> {
@@ -657,6 +661,13 @@ export class TauriMediaEngine implements MediaEngine {
         }
       });
       this.unlisteners.push(this.screenEventUnlisten);
+    }
+    if (!this.screenSourceUnlisten) {
+      this.screenSourceUnlisten = await this.listenOwned('media_screen_share_source', (event) => {
+        const size = readShareSourceSize(event.payload);
+        if (size) useShareSourceStore.getState().setSize(size);
+      });
+      this.unlisteners.push(this.screenSourceUnlisten);
     }
   }
 

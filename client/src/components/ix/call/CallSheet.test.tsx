@@ -102,17 +102,47 @@ describe('the call sheet', () => {
     expect(useGlassStore.getState().stage.mode).toBe('none');
   });
 
-  it('a short drag springs back', () => {
-    renderSheet();
-    const sheet = screen.getByTestId('ix-call-sheet');
-    Object.defineProperty(sheet, 'offsetHeight', { value: 780 });
-    const head = sheet.querySelector('.ix-call-head') as HTMLElement;
-    fireEvent.pointerDown(head, { pointerId: 2, button: 0, clientY: 60 });
-    fireEvent.pointerMove(sheet, { pointerId: 2, clientY: 120 });
-    fireEvent.pointerUp(sheet, { pointerId: 2, clientY: 120 });
-    expect(useGlassStore.getState().stage.mode).toBe('main');
-    expect(sheet.style.transform).toBe('');
-    expect(waapi.played.find((record) => record.animation.id === 'ix-call-sheet:return')).toBeDefined();
+  // The release speed is measured from the events' own time stamps, which jsdom
+  // takes from Date.now(). Left to the wall clock, a 60 px drag read as a flick
+  // (60 px/ms, dismiss) whenever a millisecond boundary fell between the press and
+  // the move, and as no motion at all otherwise: the test passed or failed on the
+  // machine's load. Each drag here sets its own pace.
+  it('a short, slow drag springs back', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      renderSheet();
+      const sheet = screen.getByTestId('ix-call-sheet');
+      Object.defineProperty(sheet, 'offsetHeight', { value: 780 });
+      const head = sheet.querySelector('.ix-call-head') as HTMLElement;
+      fireEvent.pointerDown(head, { pointerId: 2, button: 0, clientY: 60 });
+      vi.advanceTimersByTime(300); // 60 px in 300 ms: 0.2 px/ms, under the flick speed
+      fireEvent.pointerMove(sheet, { pointerId: 2, clientY: 120 });
+      fireEvent.pointerUp(sheet, { pointerId: 2, clientY: 120 });
+      expect(useGlassStore.getState().stage.mode).toBe('main');
+      expect(sheet.style.transform).toBe('');
+      expect(waapi.played.find((record) => record.animation.id === 'ix-call-sheet:return')).toBeDefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a short, fast flick down dismisses', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      renderSheet();
+      const sheet = screen.getByTestId('ix-call-sheet');
+      Object.defineProperty(sheet, 'offsetHeight', { value: 780 });
+      const head = sheet.querySelector('.ix-call-head') as HTMLElement;
+      fireEvent.pointerDown(head, { pointerId: 4, button: 0, clientY: 60 });
+      vi.advanceTimersByTime(40); // 60 px in 40 ms: 1.5 px/ms
+      fireEvent.pointerMove(sheet, { pointerId: 4, clientY: 120 });
+      act(() => {
+        fireEvent.pointerUp(sheet, { pointerId: 4, clientY: 120 });
+      });
+      expect(useGlassStore.getState().stage.mode).toBe('none');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('a press on a button in the header is a press, not a drag', () => {

@@ -54,13 +54,44 @@ export async function requestPermission(): Promise<boolean> {
 }
 
 /**
- * Send a desktop notification.
+ * Whether this app is sharing a screen with the computer's sound. An OS
+ * notification's sound is played by the desktop's notification service, which
+ * the share's sound capture cannot tell from any other application's, so it
+ * would go out to every viewer (stream-fix V5). Read at send time from the
+ * voice store (imported lazily: the store is large and loaded by then).
+ */
+async function sharingComputerSound(): Promise<boolean> {
+  try {
+    const { useVoiceStore } = await import('../../stores/voiceStore');
+    const state = useVoiceStore.getState();
+    return Boolean(state.selfStream && state.systemAudioCaptureActive);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Send a desktop notification. While this app shares a screen with sound the
+ * notification is shown without its sound, and its sound comes back with the
+ * share's end; the popup itself is unchanged.
  */
 export async function sendNotification(
   title: string,
   body: string,
 ): Promise<void> {
   if (!isEnabled()) return;
+  const quiet = await sharingComputerSound();
+
+  if (isTauri() && quiet) {
+    // No fallback to the plugin: on Linux it would make the sound this avoids.
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('notification_show_quiet', { title, body });
+    } catch (error) {
+      console.error('[notifications] a quiet notification could not be shown while sharing with sound:', error);
+    }
+    return;
+  }
 
   if (isTauri()) {
     try {
@@ -79,7 +110,7 @@ export async function sendNotification(
   }
 
   if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-    new Notification(title, { body });
+    new Notification(title, quiet ? { body, silent: true } : { body });
   }
 }
 

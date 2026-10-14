@@ -18,22 +18,25 @@ import { useVoiceStore } from '../../../stores/voiceStore';
  * What a share can send (the store's native presets, `voiceStore.startStream`).
  * A preset names a height in lines and keeps the screen's own shape, so on a
  * 32:9 screen "1080p" is 3840x1080; "4K" is 2160 lines or the screen's own
- * size when it has fewer. The Movie bitrates are their figures at 16:9 4K
- * (3840x2160); every bitrate follows the picture's pixel count.
+ * size when it has fewer. The standard presets' bitrates follow the picture's
+ * pixel count; the Movie presets keep their stated bitrate on any screen. A
+ * preset that sends the same picture as a smaller one on a screen uses that
+ * one's settings there (`resolve_screen_preset` on the native side), and the
+ * menu says so (`shareQualitySameAs`).
  */
 export const SHARE_QUALITIES = [
   { value: '720p30', label: '720p 30fps' },
   { value: '1080p60', label: '1080p 60fps' },
   { value: '1440p60', label: '1440p 60fps' },
   { value: '4k60', label: '4K 60fps' },
-  { value: 'movie-50', label: 'Movie (50 Mbps at 4K)' },
-  { value: 'movie-100', label: 'Movie (100 Mbps at 4K)' },
+  { value: 'movie-50', label: 'Movie (up to 50 Mbps)' },
+  { value: 'movie-100', label: 'Movie (up to 100 Mbps)' },
 ] as const;
 
 /** The menu's note on what the sizes mean on a screen that is not 16:9. */
 export const SHARE_QUALITY_HINT =
   'Each size is a height: a wider screen keeps its shape, and a screen with fewer lines sends its own size. ' +
-  'The bitrate follows the picture: more for a wider screen, less for a smaller one.';
+  'The bitrate follows the picture, except Movie, which keeps its own.';
 
 export type ShareQuality = (typeof SHARE_QUALITIES)[number]['value'];
 
@@ -46,6 +49,40 @@ export const useShareQualityStore = create<{ quality: ShareQuality; setQuality: 
     setQuality: (quality) => set({ quality }),
   }),
 );
+
+/**
+ * The standard presets' size and frame rate, smallest first (the Movie presets
+ * never stand in for another). Keep in step with `STANDARD_SCREEN_PRESETS` in
+ * `paracord-codec`, which applies the same rule to what is sent.
+ */
+const STANDARD_SHARE_SIZES: ReadonlyArray<{ value: ShareQuality; name: string; height: number; fps: number }> = [
+  { value: '720p30', name: '720p', height: 720, fps: 30 },
+  { value: '1080p60', name: '1080p', height: 1080, fps: 60 },
+  { value: '1440p60', name: '1440p', height: 1440, fps: 60 },
+  { value: '4k60', name: '4K', height: 2160, fps: 60 },
+];
+
+function sentSize(screenWidth: number, screenHeight: number, presetHeight: number): string {
+  const lines = Math.min(presetHeight, screenHeight);
+  const even = (value: number) => Math.max(2, Math.floor(value) & ~1);
+  return `${even((screenWidth * lines) / screenHeight)}x${even(lines)}`;
+}
+
+/**
+ * The smaller standard preset `quality` sends exactly the same picture as on a
+ * `width`x`height` screen (same size, same frame rate), by its menu name
+ * ("1440p"), or null when it is its own. "4K" on a 1440-line screen is "1440p".
+ */
+export function shareQualitySameAs(quality: ShareQuality, width: number, height: number): string | null {
+  if (!(width > 0 && height > 0)) return null;
+  const preset = STANDARD_SHARE_SIZES.find((entry) => entry.value === quality);
+  if (!preset) return null;
+  const size = sentSize(width, height, preset.height);
+  const same = STANDARD_SHARE_SIZES.find(
+    (entry) => entry.height < preset.height && entry.fps === preset.fps && sentSize(width, height, entry.height) === size,
+  );
+  return same?.name ?? null;
+}
 
 export function shareQualityLabel(quality: ShareQuality): string {
   return SHARE_QUALITIES.find((option) => option.value === quality)?.label ?? quality;
