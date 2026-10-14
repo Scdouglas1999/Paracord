@@ -537,6 +537,28 @@ impl SimulcastEncoder {
         self.input_format
     }
 
+    /// Retarget one layer's bitrate mid-stream (`index` in the order the
+    /// layers were configured, lowest first), if the backend supports live
+    /// rate updates. The sender's uplink estimate (stream-fix V6) moves the
+    /// highest layer it still sends, which is not always the top one. Returns
+    /// `Ok(true)` when the rate was applied.
+    pub fn set_layer_bitrate(
+        &mut self,
+        index: usize,
+        bitrate_kbps: u32,
+    ) -> Result<bool, VideoError> {
+        if let Some(shared) = self.shared.as_mut() {
+            if index >= shared.layer_count() {
+                return Ok(false);
+            }
+            return shared.set_layer_bitrate(index, bitrate_kbps);
+        }
+        match self.layers.get_mut(index) {
+            Some(layer) => layer.encoder.set_bitrate(bitrate_kbps),
+            None => Ok(false),
+        }
+    }
+
     /// Retarget the highest-quality layer's bitrate mid-stream, if the
     /// backend supports live rate updates. Lower simulcast layers keep their
     /// fixed budgets — congestion response only needs to shrink the layer

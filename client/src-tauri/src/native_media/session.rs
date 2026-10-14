@@ -63,6 +63,38 @@ pub struct NativeSimulcastState {
     pub backend_name: &'static str,
     pub hardware_accelerated: bool,
     pub ssrcs: Vec<(u8, u32)>,
+    /// The bitrate each layer's encoder runs at now (lowest first).
+    pub applied_kbps: Vec<u32>,
+    /// How many layers, from the lowest, are sent and published: the screen
+    /// share's uplink estimate drops the highest ones a narrow uplink cannot
+    /// carry (stream-fix V6, `uplink.rs`).
+    pub active_layers: usize,
+    /// Per layer: skip its frames until its next keyframe (it was just
+    /// restored, or it skipped frames while the uplink drained).
+    pub resume_at_keyframe: Vec<bool>,
+    /// The highest layer sent is skipping frames while a backlog drains.
+    pub shedding: bool,
+}
+
+#[cfg(feature = "vpx")]
+impl NativeSimulcastState {
+    /// Uplink-adaptation state for a freshly built encoder: every layer sent,
+    /// at its configured bitrate.
+    pub fn uplink_defaults(
+        layers: &[(
+            paracord_codec::video::SimulcastLayer,
+            paracord_codec::video::EncoderConfig,
+        )],
+    ) -> (Vec<u32>, usize, Vec<bool>) {
+        (
+            layers
+                .iter()
+                .map(|(_, config)| config.bitrate_kbps)
+                .collect(),
+            layers.len(),
+            vec![false; layers.len()],
+        )
+    }
 }
 
 /// How a native session takes part in its room (the renderer's

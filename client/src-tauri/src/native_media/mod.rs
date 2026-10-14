@@ -12,6 +12,7 @@ pub mod native_render;
 pub mod screen_capture;
 pub mod session;
 pub mod stream_registry;
+pub mod uplink;
 pub mod video_pipeline;
 
 pub use session::NativeMediaSession;

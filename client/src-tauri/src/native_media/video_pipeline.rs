@@ -38,16 +38,34 @@ use tokio::task::JoinHandle;
 #[cfg(feature = "vpx")]
 const DECODE_CHANNEL_DEPTH: usize = 96;
 /// Most out-of-order frames the reorder stage holds before it force-delivers
-/// the oldest; only a memory bound (the hold below decides in practice).
+/// the oldest; only a memory bound (the hold below decides in practice: 400 ms
+/// is 24 frames at 60 fps).
 #[cfg(feature = "vpx")]
-const REORDER_MAX_HELD: usize = 24;
-/// Longest a frame waits for a missing predecessor before the predecessor is
-/// declared lost. Every frame rides a reliable stream, so a missing frame is
-/// normally a retransmission in progress (a tail loss waits for QUIC's probe
-/// timeout); past this the gap is a broken reference: the worker drops deltas
-/// and asks for a keyframe (see [`TrackRecovery`]).
+const REORDER_MAX_HELD: usize = 32;
+/// How long a frame waits for a missing predecessor before the predecessor is
+/// declared lost, before this track has seen a gap fill. Every frame rides a
+/// reliable stream, so a missing frame is normally a retransmission in
+/// progress; past the hold the gap is a broken reference: the worker drops
+/// deltas and asks for a keyframe (see [`TrackRecovery`]). V1 held 120 ms,
+/// which a frame resent twice (a lost packet and a lost acknowledgement, at 5%
+/// loss on both legs with 15 ms each way) overran: 35 keyframe recoveries in
+/// 40 s (stream-fix V5). The hold then follows the gaps the track has seen
+/// fill ([`ReorderHold`]).
 #[cfg(feature = "vpx")]
-const REORDER_HOLD: Duration = Duration::from_millis(120);
+const REORDER_HOLD_INITIAL: Duration = Duration::from_millis(250);
+/// The adaptive hold's range. It never goes under the initial hold: on a
+/// clean path frames reorder by a few milliseconds (gaps that fill at once),
+/// and a hold fitted to those overran the first retransmission when loss
+/// began (the lab: 150 ms, then a keyframe recovery for a frame that arrived
+/// 337 ms late). Above 400 ms a frame that really is gone (shed by the relay)
+/// costs more than the keyframe it is waiting to ask for.
+#[cfg(feature = "vpx")]
+const REORDER_HOLD_MIN: Duration = REORDER_HOLD_INITIAL;
+#[cfg(feature = "vpx")]
+const REORDER_HOLD_MAX: Duration = Duration::from_millis(400);
+/// How far back the gaps the hold is fitted to go.
+#[cfg(feature = "vpx")]
+const REORDER_FILL_WINDOW: Duration = Duration::from_secs(30);
 /// How long a track waiting for a keyframe waits before asking again. The
 /// relay coalesces requests per layer for 250 ms, so a re-ask is never folded
 /// into the request it repeats.
@@ -928,6 +946,112 @@ fn recovery_diag(sink: &KeyframeSink, line: &str) {
     }
 }
 
+/// The reorder stage's hold, fitted to how long this track's gaps take to fill
+/// (stream-fix V6).
+///
+/// A hold only costs time when a frame is missing: in order, frames go
+/// straight through, so a longer hold adds nothing on a clean path. On a lossy
+/// one it decides between waiting out a retransmission and giving the picture
+/// up for a keyframe. So the hold is 1.5 × the slowest gap that filled in the
+/// last 30 s, plus 30 ms, within [`REORDER_HOLD_MIN`]..[`REORDER_HOLD_MAX`]
+/// (250 to 400 ms). A frame that arrives after
+/// the hold gave up on it counts as a gap that filled that late, so the next
+/// one is waited for.
+#[cfg(feature = "vpx")]
+#[derive(Debug)]
+struct ReorderHold {
+    /// (when, how long the gap took to fill), oldest first.
+    fills: std::collections::VecDeque<(Instant, Duration)>,
+    /// The last gap the hold gave up on: its missing frame ids and when the
+    /// first frame after it arrived.
+    given_up: Option<(u64, u64, Instant)>,
+    current: Duration,
+}
+
+#[cfg(feature = "vpx")]
+impl ReorderHold {
+    fn new() -> Self {
+        Self {
+            fills: std::collections::VecDeque::new(),
+            given_up: None,
+            current: REORDER_HOLD_INITIAL,
+        }
+    }
+
+    fn hold(&self) -> Duration {
+        self.current
+    }
+
+    /// A gap filled: the frame after it had waited `waited`. Returns the
+    /// previous hold when the hold changed enough to log.
+    fn note_fill(&mut self, now: Instant, waited: Duration) -> Option<Duration> {
+        self.fills.push_back((now, waited));
+        self.refit(now)
+    }
+
+    /// The hold gave up on frames `first..=last`; the frame after them arrived
+    /// at `gap_began`.
+    fn note_given_up(&mut self, first: u64, last: u64, gap_began: Instant) {
+        self.given_up = Some((first, last, gap_began));
+    }
+
+    /// A frame older than the last one delivered arrived. If it is one the
+    /// hold gave up on, that gap took this long to fill: returns how long, and
+    /// the previous hold when the hold changed.
+    fn note_stale(&mut self, frame_id: u64, now: Instant) -> Option<(Duration, Option<Duration>)> {
+        let (first, last, gap_began) = self.given_up?;
+        if !(first..=last).contains(&frame_id) {
+            return None;
+        }
+        self.given_up = None;
+        let waited = now.saturating_duration_since(gap_began);
+        self.fills.push_back((now, waited));
+        Some((waited, self.refit(now)))
+    }
+
+    /// The slowest fill in the window it is fitted to.
+    fn slowest_fill(&self) -> Option<Duration> {
+        self.fills.iter().map(|(_, waited)| *waited).max()
+    }
+
+    fn refit(&mut self, now: Instant) -> Option<Duration> {
+        while self
+            .fills
+            .front()
+            .is_some_and(|(at, _)| now.saturating_duration_since(*at) > REORDER_FILL_WINDOW)
+        {
+            self.fills.pop_front();
+        }
+        let next = match self.slowest_fill() {
+            Some(slowest) => (slowest * 3 / 2 + Duration::from_millis(30))
+                .clamp(REORDER_HOLD_MIN, REORDER_HOLD_MAX),
+            None => REORDER_HOLD_INITIAL,
+        };
+        let previous = std::mem::replace(&mut self.current, next);
+        (previous.abs_diff(next) >= Duration::from_millis(20)).then_some(previous)
+    }
+}
+
+#[cfg(feature = "vpx")]
+fn note_reorder_hold_change(
+    track_key: &str,
+    sink: &KeyframeSink,
+    hold: &ReorderHold,
+    previous: Duration,
+) {
+    recovery_diag(
+        sink,
+        &format!(
+            "video-transport: reorder hold {} -> {} ms (the slowest gap to fill in the last {} s \
+             took {} ms) track={track_key}",
+            previous.as_millis(),
+            hold.hold().as_millis(),
+            REORDER_FILL_WINDOW.as_secs(),
+            hold.slowest_fill().unwrap_or_default().as_millis(),
+        ),
+    );
+}
+
 #[cfg(feature = "vpx")]
 fn spawn_decode_worker(track_key: String, sink: KeyframeSink) -> DecodeWorker {
     let (tx, mut rx) = mpsc::channel::<ReassembledVideoFrame>(DECODE_CHANNEL_DEPTH);
@@ -949,10 +1073,11 @@ fn spawn_decode_worker(track_key: String, sink: KeyframeSink) -> DecodeWorker {
         let mut recovery = TrackRecovery::new();
         let mut tick = tokio::time::interval(WORKER_TICK);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        // Reorder stage: hold frames by frame_id up to REORDER_HOLD for a
+        // Reorder stage: hold frames by frame_id up to the hold for a
         // missing predecessor, deliver in order, drop anything older than
         // last-delivered.
         let mut reorder: BTreeMap<u64, (Instant, ReassembledVideoFrame)> = BTreeMap::new();
+        let mut hold = ReorderHold::new();
         let mut last_delivered: Option<u64> = None;
         // Consecutive keyframes that failed to decode (wedged-decoder recovery;
         // see KEYFRAME_DECODE_FAILURE_LIMIT). Reset by any successful decode.
@@ -961,7 +1086,7 @@ fn spawn_decode_worker(track_key: String, sink: KeyframeSink) -> DecodeWorker {
             let next_deadline = reorder
                 .values()
                 .next()
-                .map(|(arrived, _)| *arrived + REORDER_HOLD);
+                .map(|(arrived, _)| *arrived + hold.hold());
             tokio::select! {
                 _ = worker_shutdown.notified() => break,
                 msg = rx.recv() => {
@@ -1007,13 +1132,41 @@ fn spawn_decode_worker(track_key: String, sink: KeyframeSink) -> DecodeWorker {
                             reorder.clear();
                             last_delivered = frame.frame_id.checked_sub(1);
                         }
-                        ReorderAdmission::Stale => continue, // older than something already delivered: loss.
+                        ReorderAdmission::Stale => {
+                            // Older than something already delivered. If the
+                            // hold gave up on it, the hold was too short for
+                            // this path: say so, and wait longer next time.
+                            if let Some((waited, changed)) = hold.note_stale(frame.frame_id, arrived) {
+                                recovery_diag(
+                                    &current_sink(),
+                                    &format!(
+                                        "video-transport: frame {} arrived {} ms after the frame behind it, \
+                                         after the reorder hold gave up on it track={track_key}",
+                                        frame.frame_id,
+                                        waited.as_millis()
+                                    ),
+                                );
+                                if let Some(previous) = changed {
+                                    note_reorder_hold_change(&track_key, &current_sink(), &hold, previous);
+                                }
+                            }
+                            continue;
+                        }
+                    }
+                    // This frame fills a gap that held later frames back: how
+                    // long they waited is what the hold is fitted to.
+                    let fills_gap = last_delivered.is_some_and(|last| frame.frame_id == last.wrapping_add(1));
+                    if let (true, Some((waiting_since, _))) = (fills_gap, reorder.values().next()) {
+                        let waited = arrived.saturating_duration_since(*waiting_since);
+                        if let Some(previous) = hold.note_fill(arrived, waited) {
+                            note_reorder_hold_change(&track_key, &current_sink(), &hold, previous);
+                        }
                     }
                     reorder.insert(frame.frame_id, (Instant::now(), frame));
-                    drain_reorder(&track_key, &current_sink(), &worker_duk, &mut keyframe_failures, &mut layer_lock, &mut recovery, &mut reorder, &mut last_delivered, false).await;
+                    drain_reorder(&track_key, &current_sink(), &worker_duk, &mut keyframe_failures, &mut layer_lock, &mut recovery, &mut hold, &mut reorder, &mut last_delivered, false).await;
                 }
                 _ = sleep_until_opt(next_deadline) => {
-                    drain_reorder(&track_key, &current_sink(), &worker_duk, &mut keyframe_failures, &mut layer_lock, &mut recovery, &mut reorder, &mut last_delivered, true).await;
+                    drain_reorder(&track_key, &current_sink(), &worker_duk, &mut keyframe_failures, &mut layer_lock, &mut recovery, &mut hold, &mut reorder, &mut last_delivered, true).await;
                 }
                 _ = tick.tick() => {
                     recovery.tick(&track_key, &current_sink(), &worker_duk);
@@ -1058,6 +1211,7 @@ async fn drain_reorder(
     keyframe_failures: &mut u32,
     layer_lock: &mut LayerLock,
     recovery: &mut TrackRecovery,
+    hold: &mut ReorderHold,
     reorder: &mut BTreeMap<u64, (Instant, ReassembledVideoFrame)>,
     last_delivered: &mut Option<u64>,
     force: bool,
@@ -1072,6 +1226,13 @@ async fn drain_reorder(
         force_oldest = false;
         let (arrived, frame) = reorder.remove(&frame_id).expect("frame present");
         let previous = last_delivered.replace(frame_id);
+        if !contiguous {
+            if let Some(last) = previous {
+                if frame_id > last.wrapping_add(1) {
+                    hold.note_given_up(last.wrapping_add(1), frame_id - 1, arrived);
+                }
+            }
+        }
         if !layer_lock.admit(frame.simulcast_layer, frame.encoded.is_keyframe, sink) {
             continue;
         }
@@ -1090,8 +1251,9 @@ async fn drain_reorder(
                 drop_until_keyframe,
                 frame.simulcast_layer,
                 format!(
-                    "{missing} never arrived (frame {frame_id} waited {} ms)",
-                    arrived.elapsed().as_millis()
+                    "{missing} never arrived (frame {frame_id} waited {} ms; hold {} ms)",
+                    arrived.elapsed().as_millis(),
+                    hold.hold().as_millis()
                 ),
             );
         }
@@ -2299,6 +2461,8 @@ fn create_camera_simulcast_encoder(
         Err(err) => return Err(format!("camera simulcast init for {preferred:?}: {err}")),
     };
     session.video_encoder_codec = Some(codec);
+    let (applied_kbps, active_layers, resume_at_keyframe) =
+        super::session::NativeSimulcastState::uplink_defaults(&effective_layers);
     Ok(super::session::NativeSimulcastState {
         backend_name: encoder.backend_name(),
         hardware_accelerated: encoder.is_hardware_accelerated(),
@@ -2308,6 +2472,10 @@ fn create_camera_simulcast_encoder(
         layers: effective_layers,
         codec,
         ssrcs: session.video_layer_ssrcs.clone(),
+        applied_kbps,
+        active_layers,
+        resume_at_keyframe,
+        shedding: false,
     })
 }
 
@@ -2517,6 +2685,8 @@ fn create_screen_simulcast_encoder(
         Err(err) => return Err(format!("screen simulcast init for {preferred:?}: {err}")),
     };
     session.screen_encoder_codec = Some(codec);
+    let (applied_kbps, active_layers, resume_at_keyframe) =
+        super::session::NativeSimulcastState::uplink_defaults(&effective_layers);
     Ok(super::session::NativeSimulcastState {
         backend_name: encoder.backend_name(),
         hardware_accelerated: encoder.is_hardware_accelerated(),
@@ -2526,6 +2696,10 @@ fn create_screen_simulcast_encoder(
         layers: effective_layers,
         codec,
         ssrcs: session.screen_layer_ssrcs.clone(),
+        applied_kbps,
+        active_layers,
+        resume_at_keyframe,
+        shedding: false,
     })
 }
 
@@ -2936,6 +3110,7 @@ pub fn run_camera_frame(
             frame_pts.max(0) as u64,
             frame_timestamp_us,
             &frame_data,
+            false,
         )?;
         // Clone the encoded bytes for the self-view only for the TOP layer (the
         // exact bitstream a top-layer viewer receives) and only when a subscriber
@@ -3114,7 +3289,6 @@ pub struct ScreenFrameJob {
     capture_timestamp_us: u64,
     preset_kbps: u32,
     feedback_kbps: u32,
-    applied_kbps: u32,
     key_epoch: u8,
     connection: quinn::Connection,
     frame_encryptor: Arc<Mutex<paracord_codec::crypto::FrameEncryptor>>,
@@ -3314,6 +3488,11 @@ pub async fn begin_screen_frame(
         publish_screen_track_for_current_config(session, app).await?;
     }
     let track_changed = sync_published_video_track_metadata(session, true);
+    if track_changed {
+        // The relay stages viewers of a layer that is no longer published onto
+        // the one below at its next keyframe: make that keyframe now.
+        session.screen_force_keyframe.store(true, Ordering::SeqCst);
+    }
     // A reconfiguration can add a simulcast layer (a share-quality change from
     // a two-rung ladder to a three-rung one): its SSRC needs the track's key
     // before the first frame on it is sealed, or the encode thread stops on
@@ -3344,17 +3523,13 @@ pub async fn begin_screen_frame(
         )
     })?;
 
-    // Adaptive-bitrate inputs: snapshot the relay feedback and the currently
-    // applied rate; the retarget decision + hysteresis run in the encode phase.
-    // The preset resolved for this source (scaled with its pixels), not its
-    // 16:9 definition.
+    // Adaptive-bitrate inputs: snapshot the relay feedback; the retarget
+    // decisions + hysteresis run in the encode phase against the rates the
+    // encoder carries (`NativeSimulcastState::applied_kbps`). The preset
+    // resolved for this source (scaled with its pixels), not its 16:9
+    // definition.
     let preset_kbps = desired_config.bitrate_kbps;
     let feedback_kbps = session.screen_bitrate_feedback_kbps.load(Ordering::Relaxed);
-    let applied_kbps = if session.screen_applied_bitrate_kbps == 0 {
-        preset_kbps
-    } else {
-        session.screen_applied_bitrate_kbps
-    };
 
     let pts = session.screen_pts;
     session.screen_pts = session.screen_pts.wrapping_add(1);
@@ -3392,7 +3567,6 @@ pub async fn begin_screen_frame(
         capture_timestamp_us,
         preset_kbps,
         feedback_kbps,
-        applied_kbps,
         key_epoch,
         connection: session.connection.inner().clone(),
         frame_encryptor: session.frame_encryptor.clone(),
@@ -3484,44 +3658,181 @@ pub fn run_screen_frame(
     let pts = job.pts;
     let force_keyframe = job.screen_force_keyframe.swap(false, Ordering::SeqCst);
 
-    // Adaptive bitrate (`screen_rate_step`). The relay's estimate is a LIMIT
-    // only once it falls (it falls only on loss): with no loss it is a probe
-    // just above the measured goodput, and treating that as a target held
-    // Movie 50/100 at ~17 Mb/s, climbing 10% every 2 s (stream audit B5).
-    // Under a limit the top layer follows 85% of the estimate, and climbs back
-    // by a quarter per rising estimate. The 1/8 (12.5%) hysteresis keeps
-    // estimator noise from thrashing rate control; returning to the preset
-    // always applies. Every change is logged with its reason.
+    // Adaptive bitrate, two limits (each change logged with its numbers):
+    //
+    // - The share's own uplink (`uplink.rs`, stream-fix V6): frames that queue
+    //   for the relay's acknowledgement bring a budget for every layer
+    //   together down to what the uplink carries; the top layer gives up
+    //   bitrate first, then is dropped (unpublished, so viewers move to the
+    //   layer below at its keyframe), then the next one. The budget climbs
+    //   back once the queue is gone, and dropped layers return from a
+    //   keyframe.
+    // - The relay's estimate (`screen_rate_step`), a LIMIT on the top layer
+    //   only once it falls (it falls only on loss): with no loss it is a probe
+    //   just above the measured goodput, and treating that as a target held
+    //   Movie 50/100 at ~17 Mb/s (stream audit B5).
+    //
+    // The 1/8 (12.5%) hysteresis keeps estimator noise from thrashing rate
+    // control; returning to a layer's preset always applies.
     let preset_kbps = job.preset_kbps;
     let feedback_kbps = job.feedback_kbps;
-    let applied_kbps = job.applied_kbps;
     let sent_kbps = screen_send_meter_kbps();
     let decision = screen_rate_decision(preset_kbps, feedback_kbps);
-    let target_kbps = decision.target_kbps;
+    let ladder: Vec<u32> = simulcast
+        .layers
+        .iter()
+        .map(|(_, config)| config.bitrate_kbps)
+        .collect();
+    let ladder_total: u32 = ladder.iter().sum();
+    let uplink = SCREEN_UPLINK
+        .lock()
+        .map(|mut uplink| uplink.evaluate(Instant::now(), ladder_total))
+        .unwrap_or_default();
+    for line in [&uplink.change, &uplink.shed_change].into_iter().flatten() {
+        native_diag(app, &format!("screen uplink: {line}"));
+    }
+    let mut plan = super::uplink::allocate_layers(&ladder, uplink.budget_kbps);
+    if let Ok(mut gate) = SCREEN_LAYER_GATE.lock() {
+        plan = gate.admit(
+            Instant::now(),
+            &ladder,
+            uplink.budget_kbps,
+            simulcast.active_layers,
+            plan,
+        );
+    }
+    if plan.active == ladder.len() {
+        if let Some(top) = plan.kbps.last_mut() {
+            *top = (*top).min(decision.target_kbps.max(1));
+        }
+    }
+    if plan.active != simulcast.active_layers && plan.active > 0 {
+        let size = |index: usize| {
+            simulcast
+                .layers
+                .get(index)
+                .map(|(_, config)| format!("{}x{}", config.width, config.height))
+                .unwrap_or_default()
+        };
+        let line = if plan.active < simulcast.active_layers {
+            format!(
+                "screen uplink: sending {} of {} layers: {} dropped (budget {} kbps does not fit \
+                 it at 1.5x the layer below); viewers on it move to {}",
+                plan.active,
+                ladder.len(),
+                (plan.active..simulcast.active_layers)
+                    .map(size)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                uplink.budget_kbps.unwrap_or(ladder_total),
+                size(plan.active - 1),
+            )
+        } else {
+            format!(
+                "screen uplink: sending {} of {} layers: {} restored from its next keyframe \
+                 (budget {})",
+                plan.active,
+                ladder.len(),
+                (simulcast.active_layers..plan.active)
+                    .map(size)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                uplink
+                    .budget_kbps
+                    .map_or_else(|| "the preset".to_string(), |k| format!("{k} kbps")),
+            )
+        };
+        native_diag(app, &line);
+        for index in simulcast.active_layers..plan.active {
+            if let Some(resume) = simulcast.resume_at_keyframe.get_mut(index) {
+                *resume = true;
+            }
+        }
+        if plan.active > simulcast.active_layers {
+            job.screen_force_keyframe.store(true, Ordering::SeqCst);
+        } else if let Some((layer, _)) = simulcast.layers.get(plan.active) {
+            flush_screen_frames_from(*layer as u8);
+        }
+        simulcast.active_layers = plan.active;
+    }
+    // A backlog: the highest layer still sent skips frames until it drains,
+    // then resumes from a keyframe.
+    let shed_index = uplink
+        .shed
+        .then(|| simulcast.active_layers.saturating_sub(1));
+    if uplink.shed && !simulcast.shedding {
+        if let Some((layer, _)) = shed_index.and_then(|index| simulcast.layers.get(index)) {
+            flush_screen_frames_from(*layer as u8);
+        }
+    }
+    if simulcast.shedding && !uplink.shed {
+        if let Some(resume) = simulcast
+            .resume_at_keyframe
+            .get_mut(simulcast.active_layers.saturating_sub(1))
+        {
+            *resume = true;
+        }
+        job.screen_force_keyframe.store(true, Ordering::SeqCst);
+    }
+    simulcast.shedding = uplink.shed;
 
     let fps = simulcast
         .layers
         .last()
         .map(|(_, config)| config.fps.max(1))
         .unwrap_or(30);
-    let mut new_applied_kbps = applied_kbps;
-    if target_kbps > 0
-        && target_kbps != applied_kbps
-        && (target_kbps == preset_kbps
-            || target_kbps.abs_diff(applied_kbps).saturating_mul(8) >= applied_kbps)
-    {
-        match simulcast.encoder.set_top_layer_bitrate(target_kbps) {
+    for (index, &preset) in ladder.iter().enumerate() {
+        // A layer not sent keeps its preset (it returns from a keyframe at it,
+        // and the self-view watches the top layer's bitstream).
+        let target = plan.kbps.get(index).copied().unwrap_or(preset);
+        let applied = simulcast.applied_kbps.get(index).copied().unwrap_or(preset);
+        if target == 0
+            || target == applied
+            || (target != preset && target.abs_diff(applied).saturating_mul(8) < applied)
+        {
+            continue;
+        }
+        match simulcast.encoder.set_layer_bitrate(index, target) {
             Ok(true) => {
-                new_applied_kbps = target_kbps;
-                note_screen_rate_change(
-                    app,
-                    applied_kbps,
-                    target_kbps,
-                    preset_kbps,
-                    feedback_kbps,
-                    sent_kbps,
-                    decision.limited,
-                );
+                if let Some(slot) = simulcast.applied_kbps.get_mut(index) {
+                    *slot = target;
+                }
+                let top = index + 1 == ladder.len();
+                let by_relay = top
+                    && plan.active == ladder.len()
+                    && target == decision.target_kbps
+                    && decision.limited;
+                if by_relay || (top && target == preset && uplink.budget_kbps.is_none()) {
+                    note_screen_rate_change(
+                        app,
+                        applied,
+                        target,
+                        preset_kbps,
+                        feedback_kbps,
+                        sent_kbps,
+                        decision.limited,
+                    );
+                } else {
+                    native_diag(
+                        app,
+                        &format!(
+                            "screen bitrate: layer {index} ({}) {applied} -> {target} kbps (preset \
+                             {preset}): {}",
+                            simulcast
+                                .layers
+                                .get(index)
+                                .map(|(_, c)| format!("{}x{}", c.width, c.height))
+                                .unwrap_or_default(),
+                            match uplink.budget_kbps {
+                                Some(budget) => format!(
+                                    "uplink budget {budget} kbps for every layer together, sending {}",
+                                    sent_kbps.map_or_else(|| "n/a".into(), |k| format!("{k} kbps"))
+                                ),
+                                None => "the uplink has room for the preset".to_string(),
+                            }
+                        ),
+                    );
+                }
             }
             // Backend cannot retarget live; keep the current rate rather than
             // restarting the encoder mid-stream.
@@ -3529,11 +3840,18 @@ pub fn run_screen_frame(
             Err(err) => {
                 native_diag(
                     app,
-                    &format!("screen bitrate retarget to {target_kbps} kbps failed: {err}"),
+                    &format!(
+                        "screen bitrate retarget of layer {index} to {target} kbps failed: {err}"
+                    ),
                 );
             }
         }
     }
+    let new_applied_kbps = simulcast
+        .applied_kbps
+        .last()
+        .copied()
+        .unwrap_or(preset_kbps);
 
     // Empty output is NOT treated as an error: async backends (ffmpeg
     // VAAPI/NVENC) legitimately emit nothing while their pipeline warms up,
@@ -3559,7 +3877,30 @@ pub fn run_screen_frame(
     let mut local_preview_frame: Option<LocalPreviewFrame> = None;
     let mut sent_bytes = 0usize;
     for frame in encoded_frames.drain(..) {
-        sent_bytes += frame.data.len();
+        let layer_id = frame.layer.map(|layer| layer as u8).unwrap_or(0);
+        // The uplink's decisions (above): a layer not sent, a layer skipping
+        // frames while a backlog drains, a layer waiting for its keyframe.
+        let layer_index = simulcast
+            .layers
+            .iter()
+            .position(|(layer, _)| *layer as u8 == layer_id)
+            .unwrap_or(0);
+        let resume = simulcast
+            .resume_at_keyframe
+            .get(layer_index)
+            .copied()
+            .unwrap_or(false);
+        let send_it = layer_index < simulcast.active_layers
+            && shed_index != Some(layer_index)
+            && (!resume || frame.is_keyframe);
+        if resume && frame.is_keyframe {
+            if let Some(slot) = simulcast.resume_at_keyframe.get_mut(layer_index) {
+                *slot = false;
+            }
+        }
+        if send_it {
+            sent_bytes += frame.data.len();
+        }
         // L2: every simulcast layer of one captured frame shares that frame's
         // real capture PTS (they are the same instant), so the wire timestamp
         // tracks the true capture cadence rather than a frame-index approximation.
@@ -3570,7 +3911,6 @@ pub fn run_screen_frame(
         let frame_data = frame.data;
         let frame_pts = frame.pts;
         let frame_is_keyframe = frame.is_keyframe;
-        let layer_id = frame.layer.map(|layer| layer as u8).unwrap_or(0);
         let ssrc = job
             .layer_ssrcs
             .iter()
@@ -3579,22 +3919,28 @@ pub fn run_screen_frame(
         // Every frame, delta or keyframe, rides its own reliable uni stream:
         // one path per track, so frames are neither lost nor reordered against
         // each other by the split (stream audit B3; see `send_encoded_video_frame_stream`).
-        send_encoded_video_frame_stream(
-            &job.connection,
-            &job.frame_encryptor,
-            job.key_epoch,
-            ssrc,
-            &mut local_seq,
-            frame_timestamp,
-            layer_id,
-            frame_codec,
-            frame_is_keyframe,
-            &job.stream_id,
-            &job.track_id,
-            frame_pts.max(0) as u64,
-            frame_timestamp_us,
-            &frame_data,
-        )?;
+        // A frame not sent still numbers its layer (`local_seq` is advanced
+        // only by a send, and a skipped frame is never referenced: its layer
+        // resumes at a keyframe).
+        if send_it {
+            send_encoded_video_frame_stream(
+                &job.connection,
+                &job.frame_encryptor,
+                job.key_epoch,
+                ssrc,
+                &mut local_seq,
+                frame_timestamp,
+                layer_id,
+                frame_codec,
+                frame_is_keyframe,
+                &job.stream_id,
+                &job.track_id,
+                frame_pts.max(0) as u64,
+                frame_timestamp_us,
+                &frame_data,
+                true,
+            )?;
+        }
         // Only clone the encoded bytes for the self-view when a subscriber is
         // actually watching (N12c): with no subscriber the clone is pure waste on
         // the encode hot path.
@@ -3633,13 +3979,17 @@ pub fn run_screen_frame(
             app,
             &format!(
                 "{stages} | sending {} kbps, top layer {new_applied_kbps} kbps (preset {preset_kbps}), \
-                 bandwidth estimate {}",
+                 bandwidth estimate {} | {}",
                 screen_send_meter_kbps().map_or_else(|| "n/a".to_string(), |k| k.to_string()),
                 if feedback_kbps > 0 {
                     format!("{feedback_kbps} kbps")
                 } else {
                     "none yet".to_string()
                 },
+                SCREEN_UPLINK
+                    .lock()
+                    .map(|uplink| uplink.summary(Instant::now()))
+                    .unwrap_or_default(),
             ),
         );
     }
@@ -3794,6 +4144,33 @@ struct ScreenSendMeter {
 #[cfg(feature = "vpx")]
 const SCREEN_SEND_WINDOW: Duration = Duration::from_secs(4);
 
+/// The screen share's uplink, from its own frames' acknowledgements
+/// (`uplink.rs`). One screen share per process.
+#[cfg(feature = "vpx")]
+static SCREEN_UPLINK: std::sync::LazyLock<Mutex<super::uplink::UplinkEstimator>> =
+    std::sync::LazyLock::new(|| Mutex::new(super::uplink::UplinkEstimator::new()));
+
+/// When a layer the uplink budget dropped may come back (`uplink.rs`).
+#[cfg(feature = "vpx")]
+static SCREEN_LAYER_GATE: Mutex<super::uplink::LayerGate> =
+    Mutex::new(super::uplink::LayerGate::new());
+
+/// Bumped (generation, lowest layer id) when the uplink sheds or drops
+/// layers: every screen frame of those layers still in flight is reset.
+#[cfg(feature = "vpx")]
+static SCREEN_UPLINK_FLUSH: std::sync::LazyLock<tokio::sync::watch::Sender<(u64, u8)>> =
+    std::sync::LazyLock::new(|| tokio::sync::watch::Sender::new((0, u8::MAX)));
+
+/// Reset every screen frame of layer `from_layer_id` and above still in
+/// flight.
+#[cfg(feature = "vpx")]
+fn flush_screen_frames_from(from_layer_id: u8) {
+    SCREEN_UPLINK_FLUSH.send_modify(|(generation, layer)| {
+        *generation += 1;
+        *layer = from_layer_id;
+    });
+}
+
 #[cfg(feature = "vpx")]
 static SCREEN_SEND_METER: Mutex<ScreenSendMeter> = Mutex::new(ScreenSendMeter {
     samples: std::collections::VecDeque::new(),
@@ -3806,6 +4183,12 @@ static SCREEN_SEND_METER: Mutex<ScreenSendMeter> = Mutex::new(ScreenSendMeter {
 
 #[cfg(feature = "vpx")]
 fn reset_screen_send_meter() {
+    if let Ok(mut uplink) = SCREEN_UPLINK.lock() {
+        *uplink = super::uplink::UplinkEstimator::new();
+    }
+    if let Ok(mut gate) = SCREEN_LAYER_GATE.lock() {
+        *gate = super::uplink::LayerGate::new();
+    }
     if let Ok(mut meter) = SCREEN_SEND_METER.lock() {
         meter.samples.clear();
         meter.bytes = 0;
@@ -4369,6 +4752,7 @@ fn send_encoded_video_frame_stream(
     frame_id: u64,
     frame_timestamp_us: u64,
     frame_data: &[u8],
+    screen_uplink: bool,
 ) -> Result<(), String> {
     if frame_data.is_empty() {
         return Ok(());
@@ -4395,17 +4779,89 @@ fn send_encoded_video_frame_stream(
     // encode thread (open_uni is async); frame ordering is preserved by the
     // synchronous sequence assignment above and re-established at the receiver by
     // the per-track frame_id reorder stage.
+    //
+    // A screen-share frame is followed to the relay's acknowledgement of all of
+    // it: that is what the share's uplink estimate is built on (`uplink.rs`).
+    // Lower simulcast layers go first when the uplink is short (QUIC stream
+    // priority, higher first): a viewer on them keeps a picture while the
+    // estimate catches up.
+    let uplink_frame = screen_uplink.then(|| {
+        SCREEN_UPLINK
+            .lock()
+            .map(|mut uplink| uplink.on_send(Instant::now(), message.len()))
+            .ok()
+    });
+    let uplink_frame = uplink_frame.flatten();
+    // A screen frame still queued when the uplink sheds its layer is dropped
+    // (its stream reset): a backlog of stale video is worth nothing to a
+    // viewer, and it holds up the frames behind it.
+    let mut flush = screen_uplink.then(|| SCREEN_UPLINK_FLUSH.subscribe());
     let connection = connection.clone();
     tokio::spawn(async move {
-        match connection.open_uni().await {
-            Ok(mut send) => {
-                if let Err(e) = send.write_all(&message).await {
-                    tracing::debug!("keyframe uni-stream write failed: {e}");
+        let abandon = |id: Option<u64>| {
+            if let (Some(id), Ok(mut uplink)) = (id, SCREEN_UPLINK.lock()) {
+                uplink.on_abandoned(id);
+            }
+        };
+        let flushed = async {
+            let Some(flush) = flush.as_mut() else {
+                return std::future::pending::<()>().await;
+            };
+            loop {
+                if flush.changed().await.is_err() {
+                    return std::future::pending::<()>().await;
+                }
+                let (_, from_layer) = *flush.borrow_and_update();
+                if simulcast_layer >= from_layer {
                     return;
                 }
-                let _ = send.finish();
             }
-            Err(e) => tracing::debug!("keyframe uni-stream open failed: {e}"),
+        };
+        tokio::pin!(flushed);
+        match connection.open_uni().await {
+            Ok(mut send) => {
+                let _ = send.set_priority(-i32::from(simulcast_layer));
+                let written = tokio::select! {
+                    written = send.write_all(&message) => Some(written),
+                    () = &mut flushed => None,
+                };
+                match written {
+                    Some(Ok(())) => {}
+                    Some(Err(e)) => {
+                        tracing::debug!("video uni-stream write failed: {e}");
+                        abandon(uplink_frame);
+                        return;
+                    }
+                    None => {
+                        let _ = send.reset(0u32.into());
+                        abandon(uplink_frame);
+                        return;
+                    }
+                }
+                let _ = send.finish();
+                if let Some(id) = uplink_frame {
+                    let stopped = tokio::select! {
+                        stopped = send.stopped() => Some(stopped),
+                        () = &mut flushed => None,
+                    };
+                    match stopped {
+                        Some(Ok(None)) => {
+                            if let Ok(mut uplink) = SCREEN_UPLINK.lock() {
+                                uplink.on_acked(id, Instant::now());
+                            }
+                        }
+                        Some(_) => abandon(Some(id)),
+                        None => {
+                            let _ = send.reset(0u32.into());
+                            abandon(Some(id));
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::debug!("video uni-stream open failed: {e}");
+                abandon(uplink_frame);
+            }
         }
     });
 
@@ -5623,6 +6079,32 @@ mod tests {
     }
 
     #[test]
+    fn reorder_hold_follows_the_gaps_that_fill() {
+        let start = Instant::now();
+        let mut hold = ReorderHold::new();
+        assert_eq!(hold.hold(), REORDER_HOLD_INITIAL);
+        // Quick fills (frames a few ms out of order) never shorten it.
+        assert_eq!(hold.note_fill(start, Duration::from_millis(40)), None);
+        assert_eq!(hold.hold(), REORDER_HOLD_INITIAL);
+        // A frame resent twice (180 ms) widens it to cover the next one.
+        let changed = hold.note_fill(start + Duration::from_secs(1), Duration::from_millis(180));
+        assert_eq!(changed, Some(REORDER_HOLD_INITIAL));
+        assert_eq!(hold.hold(), Duration::from_millis(300));
+        // A gap the hold gave up on, filled 380 ms later: wait longer, to the cap.
+        hold.note_given_up(10, 11, start + Duration::from_secs(2));
+        assert_eq!(hold.note_stale(9, start + Duration::from_secs(2)), None);
+        let (waited, changed) = hold
+            .note_stale(11, start + Duration::from_millis(2_380))
+            .expect("a frame the hold gave up on");
+        assert_eq!(waited, Duration::from_millis(380));
+        assert_eq!(changed, Some(Duration::from_millis(300)));
+        assert_eq!(hold.hold(), REORDER_HOLD_MAX);
+        // Once those fills are older than the window, it narrows again.
+        hold.note_fill(start + Duration::from_secs(40), Duration::from_millis(60));
+        assert_eq!(hold.hold(), REORDER_HOLD_MIN);
+    }
+
+    #[test]
     fn reorder_admission_keeps_order_and_survives_a_wrap() {
         use ReorderAdmission::*;
         // Nothing delivered yet: anything goes.
@@ -5874,7 +6356,7 @@ mod tests {
         for _ in 0..3 {
             send(frames.next().unwrap());
         }
-        tokio::time::sleep(REORDER_HOLD + Duration::from_millis(150)).await;
+        tokio::time::sleep(REORDER_HOLD_INITIAL + Duration::from_millis(150)).await;
         assert_eq!(
             presented.lock().unwrap().len(),
             3,

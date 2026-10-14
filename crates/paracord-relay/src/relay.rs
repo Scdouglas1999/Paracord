@@ -2677,15 +2677,45 @@ impl RelayForwarder {
                     );
                     return;
                 }
+                let mut restage = None;
                 if let Some(mut track) =
                     self.resolve_published_track(room_id, user_id, &stream_id, &track_id)
                 {
                     track.layers = layers.clone();
                     if let Err(err) =
-                        owned!(self.room_manager.publish_track(room_id, user_id, track))
+                        owned!(self
+                            .room_manager
+                            .publish_track(room_id, user_id, track.clone()))
                     {
                         warn!(user_id, room_id = %room_id, error = %err, "relay: failed to refresh track layers");
                         return;
+                    }
+                    restage = Some(track);
+                }
+                // A publisher whose uplink cannot carry a layer stops sending
+                // it and unpublishes it (stream-fix V6): its viewers move to
+                // the layer below now, at that layer's next keyframe, not at
+                // the next 2 s re-evaluation with no picture in between.
+                if let Some(track) = restage {
+                    for target in self.restage_viewers_off_unpublished_layers(&track) {
+                        if self.allow_keyframe_request(
+                            user_id,
+                            &stream_id,
+                            &track_id,
+                            Some(target),
+                            Instant::now(),
+                        ) {
+                            self.send_control_from(
+                                handle,
+                                user_id,
+                                &ControlMessage::RequestKeyframe {
+                                    stream_id: stream_id.clone(),
+                                    track_id: track_id.clone(),
+                                    layer_id: Some(target),
+                                },
+                            )
+                            .await;
+                        }
                     }
                 }
                 self.broadcast_control_from(
@@ -3906,6 +3936,49 @@ impl RelayForwarder {
         } else {
             None
         }
+    }
+
+    /// Stage every viewer of `track` whose layer (or staged layer) is no
+    /// longer published onto the highest published layer below it, or the
+    /// lowest. Returns the layers staged onto (each needs a keyframe).
+    fn restage_viewers_off_unpublished_layers(&self, track: &PublishedTrack) -> Vec<u8> {
+        let layer_ids = distinct_layer_ids(track);
+        let Some(&lowest) = layer_ids.first() else {
+            return Vec::new();
+        };
+        let mut targets = Vec::new();
+        for mut entry in self.layer_selection.iter_mut() {
+            let (viewer, entry_stream, entry_track) = entry.key().clone();
+            if entry_stream != track.stream_id || entry_track != track.track_id {
+                continue;
+            }
+            let state = entry.value_mut();
+            let wanted = state.pending_layer.unwrap_or(state.current_layer);
+            if layer_ids.contains(&wanted) {
+                continue;
+            }
+            let target = layer_ids
+                .iter()
+                .rev()
+                .find(|&&id| id < wanted)
+                .copied()
+                .unwrap_or(lowest);
+            info!(
+                viewer = viewer.0,
+                stream_id = %track.stream_id.0,
+                track_id = %track.track_id.0,
+                from = state.current_layer,
+                to = target,
+                "relay: the publisher stopped sending this viewer's layer; staging the layer \
+                 below for its next keyframe"
+            );
+            state.pending_layer = Some(target);
+            state.headroom_since = None;
+            if !targets.contains(&target) {
+                targets.push(target);
+            }
+        }
+        targets
     }
 
     /// Commit every viewer whose pending switch targets `layer_id` of
@@ -5642,6 +5715,76 @@ mod tests {
                 },
             ],
         }
+    }
+
+    /// A publisher that stops sending a layer for its uplink unpublishes it:
+    /// its viewers are staged onto the layer below at once (and only they).
+    #[test]
+    fn viewers_of_an_unpublished_layer_are_staged_below_it() {
+        let forwarder = RelayForwarder::new(
+            Arc::new(MediaRoomManager::new()),
+            Arc::new(SpeakerDetector::new()),
+        );
+        let mut track = three_layer_track(1);
+        let key = |viewer: i64| {
+            (
+                (viewer, ConnectionSlot::View),
+                track.stream_id.clone(),
+                track.track_id.clone(),
+            )
+        };
+        forwarder
+            .layer_selection
+            .insert(key(2), LayerSelectionState::new(2));
+        forwarder
+            .layer_selection
+            .insert(key(3), LayerSelectionState::new(1));
+        forwarder
+            .layer_selection
+            .insert(key(4), LayerSelectionState::new(0));
+        track.layers.pop();
+        assert_eq!(
+            forwarder.restage_viewers_off_unpublished_layers(&track),
+            vec![1]
+        );
+        assert_eq!(
+            forwarder
+                .layer_selection
+                .get(&key(2))
+                .unwrap()
+                .pending_layer,
+            Some(1)
+        );
+        assert_eq!(
+            forwarder
+                .layer_selection
+                .get(&key(3))
+                .unwrap()
+                .pending_layer,
+            None
+        );
+        assert_eq!(
+            forwarder
+                .layer_selection
+                .get(&key(4))
+                .unwrap()
+                .pending_layer,
+            None
+        );
+        // Down to the lowest layer alone: everyone above it goes there.
+        track.layers.pop();
+        assert_eq!(
+            forwarder.restage_viewers_off_unpublished_layers(&track),
+            vec![0]
+        );
+        assert_eq!(
+            forwarder
+                .layer_selection
+                .get(&key(3))
+                .unwrap()
+                .pending_layer,
+            Some(0)
+        );
     }
 
     /// One whole-frame uni-stream keyframe message on a given layer.

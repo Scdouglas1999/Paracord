@@ -56,3 +56,6 @@ tempfile = { workspace = true }
 # asserts against the DER that actually goes on the wire, not against the
 # parameters we asked rcgen for. Test-only: it is not linked into the server.
 x509-parser = { workspace = true }
+# The congestion-control lab example (examples/cc_lab.rs) prints the
+# controller's own log lines.
+tracing-subscriber = { workspace = true }

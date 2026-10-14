@@ -891,14 +891,21 @@ pub(crate) fn build_screen_track(session: &NativeMediaSession) -> Result<Publish
         .ok_or("screen encoder config missing while publishing track")?;
     let codec = session.screen_encoder_codec.map(codec_to_transport_codec);
     let layers = if let Some(simulcast) = session.screen_simulcast.as_ref() {
+        // Only the layers the uplink estimate still sends (stream-fix V6,
+        // `uplink.rs`): a layer dropped for a narrow uplink is unpublished, so
+        // the relay moves its viewers to the layer below.
+        let sent = simulcast
+            .active_layers
+            .clamp(1, simulcast.layers.len().max(1));
         let active_layer_id = simulcast
             .layers
-            .last()
+            .get(sent.saturating_sub(1))
             .map(|(layer, _)| *layer as u8)
             .unwrap_or(0);
         simulcast
             .layers
             .iter()
+            .take(sent)
             .map(|(layer, layer_config)| {
                 let layer_id = *layer as u8;
                 let width = u16::try_from(layer_config.width)
