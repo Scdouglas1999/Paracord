@@ -9,7 +9,179 @@ tooling is in `scripts/stream-audit/` (README there).
 Tree: `b6c57f91` (feat/index-ui = main). Machine: RTX 4080, driver 615.71.09,
 KWin 6.7.5, WebKitGTK 2.52.6. Date: 2026-10-13.
 
-## Verdict
+## After the fix round
+
+The same campaign, rerun on the branch after packages V1 to V6
+(`feat/stream-fix` at `4b4bbba6`), 2026-10-14. Same machine, driver, KWin and
+lab; the lab ran in a private network namespace; no other agent was active
+(load average 2 to 7 before each set, most of it the lab's own two apps). Details
+of each fix: `stream-fix-v1.md` … `stream-fix-v6.md`. The sections after this
+one are the audit as first written (tree `b6c57f91`): the "before".
+
+**Delivers what it says?** The sender now does, on every preset and screen
+size: the size, frame rate and bitrate each setting promises reach the wire.
+Every viewing quality, mid-stream change, re-share and loss case plays. What
+still fails is mostly on the viewer's window: at a 5120x1412 window a 60 fps
+stream reaches the screen at 34 to 47 frames a second in theater and full
+screen (GTK 3's per-paint blend, B8, unchanged by this round), and Movie 100
+reaches an Auto viewer on loopback as 2560x720.
+
+### Requested vs delivered, 5120x1440 screen, viewer window 5120x1412
+
+"Encoded" is the top layer the sender produced; "on screen" the distinct frames
+the window handed the compositor per second; "longest freeze" the longest one
+frame stayed up; latency is capture to the composited frame, median / p95.
+
+| Setting | Before: encoded | **After: encoded (top layer)** | Before: on screen, normal / theater / full | **After: on screen, normal / theater / full** | After: longest freeze (normal / theater / full) | After: latency, normal | Verdict |
+|---|---|---|---|---|---|---|---|
+| 720p 30fps | 1280x360, 25 fps, 2.9 Mb/s | **2560x720, 30.0 fps, 7.5 to 8.3 Mb/s** (≤ 10, quality-capped) | 25.2 / 24.7 / 25.3 | **29.9 / 27.1 / 25.5** | 92 / 367 / 371 ms | 90 / 101 ms | **PASS** at rest in normal view; theater and full lose 10 to 15% (window) |
+| 1080p 60fps | 1920x540, 32 to 37 fps | **3840x1080, 60.0 fps, 24.0 Mb/s** (≤ 24) | 34.3 / 25.7 / 20.5 | **54.3 / 33.8 / 34.2** | 363 / 384 / 892 ms | 86 / 101 ms | Sender PASS; window FAIL in theater and full (34 of 60) |
+| 1440p 60fps | 2560x720, 30 to 33 fps | **5120x1440, 60.0 fps, 35.5 to 36.5 Mb/s** (≤ 36) | 17.0 / – / 8.1 | **40.9 / 36.2 / 33.9** | 1222 / 942 / 680 ms | 90 / 1384 ms | Sender PASS; window FAIL (34 to 41 of 60, ~1 s window stalls) |
+| 4K 60fps | 3840x1080, 28 to 30 fps | **5120x1440, 60.0 fps, 36 Mb/s** (the menu says "Same as 1440p on this screen") | 1.1 / – / 1.9 | **43.4 / 43.5 / 42.7** | 992 / 129 / 284 ms | 101 / 1177 ms | Sender PASS; window FAIL (43 of 60) |
+| Movie (up to 50 Mbps) | 3840x1080, 29 fps, 17.7 Mb/s | **5120x1440, 60.0 fps, 49.8 to 50.7 Mb/s** | 5.8 / – / – | **47.8 / 36.6 / 30.6** | 1613 / 517 / 988 ms | 92 / 129 ms | Sender PASS; window FAIL in theater and full |
+| Movie (up to 100 Mbps) | 3840x1080, 30 fps, 18 Mb/s; viewer got 1280x360 | **5120x1440, 60.0 fps, 69 to 70 Mb/s** (CBR, "up to": the 32:9 test page holds less) | 29.7 (of 1280x360) | **55.0 / 53.6 / 55.4, but of the 2560x720 layer** | 204 / 133 / 79 ms | 99 / 114 ms | **FAIL**: an Auto viewer on loopback gets 2560x720 (below) |
+
+**Movie 100 to an Auto viewer.** The relay prices the top layer at what
+arrives on it plus 25% (69 Mb/s → 86 Mb/s) and allows 85% of its downlink
+estimate, which is clamped at 100 Mb/s: 85 < 86, so the viewer stays on
+2560x720. With 15 ms on each leg (the loss runs below) the same share reached
+the viewer at 5120x1440. "Source" quality pins the top layer. Fix: lift the
+estimate clamp, or price a layer at its measured rate without the 25% when
+the downlink has never been short.
+
+### During UI motion (5120x1412 window), on screen per second
+
+| Motion | 720p30 | 1080p60 | 1440p60 | 4K60 | Movie 50 | Movie 100 (2560x720) |
+|---|---|---|---|---|---|---|
+| Theater toggled every 1.5 s | 25.5 (before 22.1) | 42.3 (27.8) | 39.5 (21.1) | 23.4 | 46.5 | 44.6 |
+| Chat sheet toggled | 24.9 (21.7) | 46.5 (23.2) | 45.4 (15.5) | 47.1 | 43.2 | 38.4 |
+| Stream popover | 29.9 (24.3) | 53.2 (34.8) | 52.0 (21.1) | 54.1 | 52.8 | 55.5 |
+| Chat scrolled beside the stream | 27.9 (23.9) | not read¹ (28.9) | 41.6 (23.5) | 51.1 | 51.1 | 53.8 |
+
+¹ The probe's column fell outside the picture in that layout (frames were
+uploaded at 44.9/s). Viewer CPU while scrolling: 121 to 164% (before 126 to
+142%, at half the frame rate). **FAIL** for the 60 fps presets: render side
+(B8), not addressed in this round.
+
+### Other screens (viewer 5120x1412, at rest)
+
+| Screen | Setting | After: encoded | After: on screen, normal / theater / full |
+|---|---|---|---|
+| 1920x1080 | 720p30 | 1280x720, 30.0 fps, 3.8 Mb/s | 29.9 / 29.9 / 29.8 |
+| 1920x1080 | 1080p60, 1440p60, 4K60 | 1920x1080, 60.0 fps, 12.0 Mb/s (1440p and 4K: "Same as 1080p on this screen") | 54.7 to 58.1 / 54.3 to 59.1 / 57.5 to 59.5 |
+| 1920x1080 | Movie 50, Movie 100 | 1920x1080, 60.0 fps, 46.3 to 46.8 Mb/s (CBR "up to": the picture holds no more) | 56.5 to 56.7 / 55.9 to 56.2 / 52.1 to 58.2 |
+| 3840x2160 | 720p30 | 1280x720, 30.0 fps, 3.6 Mb/s | 29.6 / 26.9 / 29.8 |
+| 3840x2160 | 1080p60 | 1920x1080, 60.0 fps, 12.1 Mb/s | 57.2 / 51.4 / 52.6 |
+| 3840x2160 | 1440p60 | 2560x1440, 60.0 fps, 10.3 to 10.9 Mb/s (≤ 18) | 58.5 / 42.5 / 47.7 |
+| 3840x2160 | 4K60 | 3840x2160, 60.0 fps, 27.6 to 28.1 Mb/s | 55.1 to 55.4 / 40.4 to 42.1 / not measured² |
+| 3840x2160 | Movie 50 | 3840x2160, 60.0 fps, 49.4 to 50.4 Mb/s | 55.0 / 37.2 / 33.4 |
+| 3840x2160 | Movie 100 | 3840x2160, 60.0 fps, 99.7 to 100.2 Mb/s | 53.6 / 35.9 / 37.4 |
+
+² The lab's synthetic screen (`pattern.py`) stopped in that phase twice
+(`gst_buffer_fill: assertion 'gst_buffer_is_writable'`, then no frames); the
+capture and encoder logged "the encoder took 0.0 captured frames/s". Phases
+inside such a stall are left out here (also 720p30's motion phases and two
+audio phases of the first full run, rerun in a fresh environment).
+
+**Verdict:** sender PASS on both screens (every preset its size, 60 or 30 fps,
+its bitrate or under its quality cap); viewer PASS in normal view, FAIL in
+theater and full screen at 3840x2160 content (36 to 42 of 60).
+
+### Viewer window 1920x1080 (5120x1440 screen)
+
+| Setting | Layer, normal (Auto) | On screen, normal / theater / full | Longest freeze, theater |
+|---|---|---|---|
+| 720p30 | 2560x720 | 28.1 / 27.7 / 28.1 | 396 ms |
+| 1080p60 | 2560x720 (viewport cap), theater 3840x1080 | 54.2 / 48.0 / 45.8 | 1705 ms |
+| 1440p60 | 2560x720, theater 5120x1440 | 51.5 / 29.7 / 52.1 | 2154 ms |
+| 4K60 | 2560x720, theater 5120x1440 | 57.7 / 40.5 / 54.0 | 2261 ms |
+| Movie 50 | 2560x720, theater 5120x1440 | 56.6 / 36.0 / 54.6 | 2870 ms |
+| Movie 100 | not measured (source stall) | | |
+
+Before: green, corrupted picture in normal view (B4), 0 readable frames for
+1080p60 and 1440p60. After: no corrupted frame anywhere. **FAIL** for the
+theater switch: going to theater raises the viewport cap, and the switch to
+the 5120x1440 layer costs a 1.7 to 2.9 s gap (its keyframe over the link and a
+fresh decoder, V1's "upswitch to a large top layer costs ~1 s", longer here).
+
+### Viewing quality (1080p60 shared, 5120x1412 window)
+
+| Setting | Before: layer | **After: layer** | After: on screen | Verdict |
+|---|---|---|---|---|
+| Auto | top | 3840x1080 | 55.6 | PASS |
+| Low | medium, green | **1280x360** | 52.4 | PASS |
+| Medium | top | **2560x720** | 54.0 | PASS |
+| High | top | 3840x1080 | 53.4 | PASS |
+| Source | top (same as High) | 3840x1080, pinned | 58.6 | PASS |
+
+### Share quality changed during a share (theater)
+
+720p30 → 1080p60 → 4K60 → Movie 100 → 1440p60 → 720p30: each step plays,
+27.8 / 46.6 / 40.9 / 38.4 / 37.6 / 27.0 frames a second on screen, longest
+gap 225 to 696 ms, every step on the new size (Movie 100 at 5120x1440).
+Before: frozen 3.2 to 4.3 s, Movie 100 corrupted, 1440p60 nothing. **PASS**.
+
+### Re-share (viewer keeps watching)
+
+12 shares, cycling 720p30 / 1440p60 / Movie 50, the source switched every
+fourth, the viewer leaving and pressing Watch again mid-share: picture back
+10 of 10 (0.5 to 0.8 s; 1.0 s for the viewer who joined mid-share),
+"stopped sharing" 9 of 9, source switches 3 of 3. Before: 1 of 17 within 15 s.
+
+Found in this pass and fixed (`4b4bbba6`): a re-share from a larger top layer
+to a smaller one (1440p60 or Movie 100, then 720p30) was decoded on the old
+5120x1440 decoder, a green and magenta picture (3.9 frames a second readable)
+for as long as it ran; the V5 build does the same. Both ladders' top layer is
+"high", and unbinding the track forgot the size that would have flagged the
+change. After: 29.8 a second, clean, at every such step. **PASS**.
+
+### Stream audio
+
+| | Before | After |
+|---|---|---|
+| A WebAudio tone in the sharer's page | reached the viewer (peak 0.81) | **absent** (720p30, 1440p60, Movie 50: the viewer's peak stays at the pattern's 0.08) |
+| The pattern's bursts (another application) | present | present, 6 to 10 per phase |
+| A share with its sound off | not tested | nothing (0 bursts, rms 0.0) |
+| A/V offset (audio late) | +100 to +145 ms | **+47 to +61 ms** (V4 measured +24 to +32; still under the ~125 ms acceptability limit, above the ~45 ms detectable) |
+
+**PASS** for exclusion; A/V sync **partial** (better by about 60 to 90 ms, not
+yet under 45 ms).
+
+### Loss on every leg (15 ms each way, from before the share)
+
+| Setting | 0% | 1% | 5% | 0% again |
+|---|---|---|---|---|
+| 1440p60 (5120x1440 top layer throughout) | 55.4 / s, 179 ms | 55.8, 396 ms | **54.8, 375 ms** | 56.0, 92 ms |
+| Movie 100 (5120x1440 throughout) | 54.6, 379 ms | 55.2, 104 ms | **52.9, 388 ms** | 54.5, 409 ms |
+| 720p30 (2560x720) | 28.4, 709 ms | 29.1, 379 ms | **29.7, 117 ms** | 29.4, 400 ms |
+
+(On screen per second, longest freeze.) Capture to screen 123 to 144 ms
+median, p95 ≤ 187 ms. Before: at 1% and 5% the 1440p and 4K presets froze for
+the whole phase. **PASS**.
+
+### Uplink and congestion (new in this round, `stream-fix-v6.md`)
+
+- A share through a 10 / 20 / 50 Mb/s uplink: 54 to 60 decoded frames a
+  second, capture to screen p95 164 to 463 ms, back on 5120x1440 within 25 s
+  of the limit lifting. Before (V5): 0.3 to 0.8 frames a second, 2 to 10 s
+  behind.
+- A competing TCP flow keeps 7.6 of 20 Mb/s and 29.2 of 50 (V5: 0.6 and 0.7).
+
+### Still failing
+
+1. **Theater and full screen at a 5120x1412 window**: 34 to 47 of 60 frames
+   reach the screen (and 23 to 47 during UI motion), viewer CPU 90 to 164%.
+   GTK 3's per-paint blend (B8); the GTK 4 / graphics-offload route.
+2. **Window stalls** of ~1 to 1.6 s in some phases (1440p60 and Movie 50 at
+   rest): the nested compositor's presentation (V5 §5), not the stream.
+3. **Movie 100 to an Auto viewer on loopback**: 2560x720 (above).
+4. **Theater at a 1920x1080 window**: the switch to the top layer costs 1.7 to
+   2.9 s.
+5. **A/V offset** +47 to +61 ms.
+6. Not covered, as before: the camera, the browser sender, Windows/macOS,
+   VAAPI, a real network; Movie 100 at a 1920x1080 window (source stall).
+
+## Verdict (before the fix round)
 
 **Every share preset fails "delivers what it says".** The worst is that the
 1440p and 4K presets mostly show a frozen or corrupted picture to the viewer.
