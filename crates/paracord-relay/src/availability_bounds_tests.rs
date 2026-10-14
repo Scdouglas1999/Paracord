@@ -287,6 +287,7 @@ fn control_plane_rejects_over_long_identifiers() {
             session_id: "s".to_string(),
             video_capabilities: Vec::new(),
             media_public_key: None,
+            layer_switch_resets_decoder: true,
         },
     ] {
         assert!(

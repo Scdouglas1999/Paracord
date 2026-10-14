@@ -3252,7 +3252,7 @@ function startCall(context: OperationContext, target: CallTarget, mode: VoiceMod
     callMode: mode, modeSwitching: false, modeError: null,
     connectionError: null, connectionErrorChannelId: null, connectionErrorCode: null,
     selfMute: previousMute, selfDeaf: previousDeaf });
-  owner.joinPromise = priorRelease.then(() => performCallJoin(owner, previousMute, previousDeaf));
+  owner.joinPromise = priorRelease.then(() => performCallJoin(owner));
   return owner.joinPromise;
 }
 
@@ -3647,7 +3647,7 @@ function commitCall(owner: CallSession, data: VoiceJoinResponse, media: { room: 
   }
 }
 
-async function performCallJoin(owner: CallSession, previousMute: boolean, previousDeaf: boolean): Promise<void> {
+async function performCallJoin(owner: CallSession): Promise<void> {
   const api = createCallVoiceApi(owner.context);
   const { channelId, guildId } = owner.target;
   const isDm = guildId === 'dm';
@@ -3655,7 +3655,18 @@ async function performCallJoin(owner: CallSession, previousMute: boolean, previo
   // A listener sends nothing, whatever the mute preference says: it applies
   // when the listener joins.
   const listening = owner.mode === 'listen';
-  const shouldMute = previousMute || previousDeaf || ptt || listening;
+  // The mute and deafen the person wants when the call commits, not when the
+  // join began: the mic button is live while the call is joining, and a
+  // toggle pressed then used to be overwritten here by the state the join
+  // started with ("Unmute right after joining is undone", stream-fix V7).
+  const wanted = () => {
+    const state = useVoiceStore.getState();
+    return {
+      mute: state.selfMute || state.selfDeaf || ptt || listening,
+      deaf: state.selfDeaf,
+      preference: state.selfMute || state.selfDeaf,
+    };
+  };
   const receiveJoin = async (fallback?: 'livekit') => {
     owner.assertCurrent();
     owner.membershipUncertain = true;
@@ -3702,12 +3713,13 @@ async function performCallJoin(owner: CallSession, previousMute: boolean, previo
               refreshCertHash: () => api.mediaCertificatePin(),
             });
             owner.assertCurrent();
-            const muted = shouldMute || data.suppress === true;
+            const want = wanted();
+            const muted = want.mute || data.suppress === true;
             engine.setMute(muted);
-            engine.setDeaf(previousDeaf);
+            engine.setDeaf(want.deaf);
             // While listening, `selfMute` is the preference the upgrade will
             // apply (the pill's mute circle); the engine is silent regardless.
-            commitCall(owner, data, { mediaEngine: engine }, listening ? previousMute || previousDeaf : muted, previousDeaf);
+            commitCall(owner, data, { mediaEngine: engine }, listening ? want.preference : muted, want.deaf);
             return;
           } catch (error) {
             nativeError = error;
@@ -3756,12 +3768,13 @@ async function performCallJoin(owner: CallSession, previousMute: boolean, previo
           owner.assertCurrent();
           await applyAttachedRemoteAudioOutput(output);
           owner.assertCurrent();
-          const microphone = await setMicrophoneEnabledWithFallback(room, !shouldMute && !data.suppress, getSavedInputDeviceId());
+          const want = wanted();
+          const microphone = await setMicrophoneEnabledWithFallback(room, !want.mute && !data.suppress, getSavedInputDeviceId());
           owner.assertCurrent();
-          commitCall(owner, data, { room }, shouldMute || !microphone || data.suppress === true, previousDeaf);
-          if (microphone && !shouldMute) startLocalAudioUplinkMonitor(room);
-          setAttachedRemoteAudioMuted(previousDeaf);
-          syncRemoteAudioTracks(room, previousDeaf);
+          commitCall(owner, data, { room }, want.mute || !microphone || data.suppress === true, want.deaf);
+          if (microphone && !want.mute) startLocalAudioUplinkMonitor(room);
+          setAttachedRemoteAudioMuted(want.deaf);
+          syncRemoteAudioTracks(room, want.deaf);
           return;
         } catch (error) {
           lastError = error;

@@ -1153,6 +1153,11 @@ struct ActiveSessionInfo {
     /// The session's view target when it is a view session, so the roster
     /// can be scoped per recipient.
     view: Option<ViewTarget>,
+    /// The app declared it starts a fresh decoder at another simulcast
+    /// layer's keyframe (`SessionJoin::layer_switch_resets_decoder`). Without
+    /// it the relay never moves this viewer below the largest layer it has
+    /// shown (`LayerSelectionState::decoder_floor`).
+    layer_switch_resets_decoder: bool,
 }
 
 /// Relay-driven per-viewer, per-track simulcast layer selection state (spec §4.2).
@@ -1184,6 +1189,14 @@ struct LayerSelectionState {
     upswitch_backoff: Duration,
     /// When the relay last staged an upswitch ([`UPSWITCH_TRIAL`]).
     upswitched_at: Option<Instant>,
+    /// For a viewer whose app does not reset its decoder on a layer switch
+    /// (it did not declare `layer_switch_resets_decoder`): the largest layer
+    /// it has been given. Its decoder keeps that picture size, so a larger
+    /// layer still decodes (the decoder grows) but a smaller one decodes green
+    /// (stream-compat #2). Selection may move it up, never below this; it goes
+    /// below only when the publisher stops sending this layer, and comes back
+    /// when the publisher sends it again. `None` for every other viewer.
+    decoder_floor: Option<u8>,
 }
 
 impl LayerSelectionState {
@@ -1196,6 +1209,7 @@ impl LayerSelectionState {
             blocked_from: None,
             upswitch_backoff: UPSWITCH_BACKOFF_BASE,
             upswitched_at: None,
+            decoder_floor: None,
         }
     }
 }
@@ -2447,6 +2461,7 @@ impl RelayForwarder {
                 session_id,
                 video_capabilities,
                 media_public_key,
+                layer_switch_resets_decoder,
             } => {
                 if requested_room_id != room_id || session_id != handle.session_id {
                     warn!(
@@ -2498,9 +2513,19 @@ impl RelayForwarder {
                                 video_capabilities: video_capabilities.clone(),
                                 media_public_key: media_public_key.clone(),
                                 view,
+                                layer_switch_resets_decoder,
                             },
                         );
                     }));
+                if !layer_switch_resets_decoder {
+                    info!(
+                        user_id,
+                        room_id = %room_id,
+                        "relay: this app predates decoder resets on a layer switch; it is never \
+                         moved to a smaller simulcast layer than it has shown (Low and Medium have no \
+                         effect until it updates Paracord)"
+                    );
+                }
                 if let Err(error) = announced {
                     warn!(
                         user_id,
@@ -2756,29 +2781,13 @@ impl RelayForwarder {
                         subscription.viewport = None;
                     }
                 }
-                self.send_control_from(
-                    handle,
-                    user_id,
-                    &ControlMessage::SubscriptionAck {
-                        stream_id: subscription.stream_id.clone(),
-                        track_id: subscription.track_id.clone(),
-                        layer_id: resolved_ack_layer(resolved_track.as_ref(), &subscription),
-                        active: true,
-                    },
-                )
-                .await;
                 // The viewer changed what it asks for while receiving another
                 // layer (a Viewing quality change, a resize): keep forwarding
                 // what it has and stage the switch for the new layer's next
                 // keyframe, exactly as the relay's own selection does.
-                let mut keyframe_layer = subscription.requested_layer;
-                if let Some(target) = staged {
-                    let key = (
-                        handle.key(),
-                        subscription.stream_id.clone(),
-                        subscription.track_id.clone(),
-                    );
-                    let current = owned!(self
+                let switches_layers = self.viewer_switches_layers(handle.key());
+                let current = match staged {
+                    Some(_) => owned!(self
                         .room_manager
                         .with_room(room_id, |room| {
                             room.participants.get(&user_id).and_then(|participant| {
@@ -2791,7 +2800,88 @@ impl RelayForwarder {
                                     .and_then(|existing| existing.active_layer)
                             })
                         })
-                        .flatten());
+                        .flatten()),
+                    None if !switches_layers => owned!(self
+                        .room_manager
+                        .with_room(room_id, |room| {
+                            room.participants.get(&user_id).and_then(|participant| {
+                                participant
+                                    .track_subscriptions
+                                    .get(&(
+                                        subscription.stream_id.clone(),
+                                        subscription.track_id.clone(),
+                                    ))
+                                    .and_then(|existing| existing.active_layer)
+                            })
+                        })
+                        .flatten()),
+                    None => None,
+                };
+                // An app that does not reset its decoder keeps the largest
+                // picture size it was given: a request for a smaller layer
+                // would decode green, so it stays (stream-compat #2). A
+                // request for a larger layer goes through as for anyone.
+                let mut floor = None;
+                if !switches_layers {
+                    // Its first committed layer is its floor from now (not
+                    // from the first selection pass), so a publisher that
+                    // drops that layer before then still moves it.
+                    if let Some(layer) = current {
+                        floor = owned!({
+                            let mut entry = self
+                                .layer_selection
+                                .entry((
+                                    handle.key(),
+                                    subscription.stream_id.clone(),
+                                    subscription.track_id.clone(),
+                                ))
+                                .or_insert_with(|| LayerSelectionState::new(layer));
+                            Some(*entry.decoder_floor.get_or_insert(layer))
+                        });
+                    }
+                }
+                let kept = !switches_layers
+                    && staged.is_some_and(|target| floor.is_none_or(|floor| target < floor));
+                if kept {
+                    info!(
+                        viewer = user_id,
+                        room_id = %room_id,
+                        stream_id = %subscription.stream_id.0,
+                        track_id = %subscription.track_id.0,
+                        ?current,
+                        ?floor,
+                        asked = ?staged,
+                        requested_layer = ?subscription.requested_layer,
+                        "relay: viewer asked for a smaller layer, but its app predates decoder resets \
+                         on a layer switch and would show it green; keeping it on its layer (it needs \
+                         to update Paracord to lower video quality)"
+                    );
+                }
+                let ack_layer = if kept {
+                    current
+                } else {
+                    resolved_ack_layer(resolved_track.as_ref(), &subscription)
+                };
+                self.send_control_from(
+                    handle,
+                    user_id,
+                    &ControlMessage::SubscriptionAck {
+                        stream_id: subscription.stream_id.clone(),
+                        track_id: subscription.track_id.clone(),
+                        layer_id: ack_layer,
+                        active: true,
+                    },
+                )
+                .await;
+                let mut keyframe_layer = subscription.requested_layer;
+                if kept {
+                    keyframe_layer = current;
+                } else if let Some(target) = staged {
+                    let key = (
+                        handle.key(),
+                        subscription.stream_id.clone(),
+                        subscription.track_id.clone(),
+                    );
                     owned!({
                         let mut entry = self
                             .layer_selection
@@ -3713,6 +3803,16 @@ impl RelayForwarder {
             .collect()
     }
 
+    /// Whether the viewer on `key` may be moved between simulcast layers
+    /// mid-stream: its app declared that it starts a fresh decoder at the new
+    /// layer's keyframe. An app that predates that (or a connection that has
+    /// not joined) is never moved below the largest layer it has shown.
+    fn viewer_switches_layers(&self, key: ConnKey) -> bool {
+        self.active_sessions
+            .get(&key)
+            .is_some_and(|session| session.layer_switch_resets_decoder)
+    }
+
     fn prepare_layer_selection(&self, key: ConnKey, room_id: &str) -> Vec<(i64, ControlMessage)> {
         let (viewer_id, slot) = key;
         let downlink = self.downlink(slot);
@@ -3863,6 +3963,7 @@ impl RelayForwarder {
         now: Instant,
     ) -> Option<(i64, ControlMessage)> {
         let key = (viewer, stream_id.clone(), track_id.clone());
+        let switches_layers = self.viewer_switches_layers(viewer);
         let target = {
             let mut entry = self.layer_selection.entry(key.clone()).or_insert_with(|| {
                 LayerSelectionState::new(active_layer.unwrap_or_else(|| lowest_layer_id(track)))
@@ -3872,16 +3973,38 @@ impl RelayForwarder {
             if let Some(active) = active_layer {
                 entry.current_layer = active;
             }
-            compute_target_layer(
-                track,
-                costs,
-                &mut entry,
-                egress_kbps,
-                delivery,
-                viewport,
-                requested_layer,
-                now,
-            )
+            if switches_layers {
+                compute_target_layer(
+                    track,
+                    costs,
+                    &mut entry,
+                    egress_kbps,
+                    delivery,
+                    viewport,
+                    requested_layer,
+                    now,
+                )
+            } else {
+                // This app's decoder keeps the largest picture it was given:
+                // selection may take it up, never below that (stream-compat #2).
+                if entry.decoder_floor.is_none() {
+                    entry.decoder_floor = active_layer;
+                }
+                let selected = compute_target_layer(
+                    track,
+                    costs,
+                    &mut entry,
+                    egress_kbps,
+                    delivery,
+                    viewport,
+                    requested_layer,
+                    now,
+                );
+                match (selected, entry.decoder_floor) {
+                    (Some(up), Some(floor)) if up > floor => Some(up),
+                    _ => decoder_floor_target(&distinct_layer_ids(track), &entry),
+                }
+            }
         };
 
         let Some(target) = target else {
@@ -3972,6 +4095,18 @@ impl RelayForwarder {
                 "relay: the publisher stopped sending this viewer's layer; staging the layer \
                  below for its next keyframe"
             );
+            if state.decoder_floor.is_some() {
+                warn!(
+                    viewer = viewer.0,
+                    stream_id = %track.stream_id.0,
+                    track_id = %track.track_id.0,
+                    decoder_floor = ?state.decoder_floor,
+                    to = target,
+                    "relay: this viewer's app predates decoder resets on a layer switch and its \
+                     layer is gone; it may show a corrupt picture until the publisher sends its \
+                     layer again (it then goes back) or it updates Paracord"
+                );
+            }
             state.pending_layer = Some(target);
             state.headroom_since = None;
             if !targets.contains(&target) {
@@ -4021,6 +4156,11 @@ impl RelayForwarder {
                         entry.current_layer = layer_id;
                         entry.pending_layer = None;
                         entry.headroom_since = None;
+                        // An old app's decoder now holds this layer's size if
+                        // it is larger (stream-compat #2).
+                        if let Some(floor) = entry.decoder_floor.as_mut() {
+                            *floor = (*floor).max(layer_id);
+                        }
                     }
                     committed = true;
                 }
@@ -4301,6 +4441,30 @@ fn requested_ceiling(layer_ids: &[u8], requested: Option<u8>) -> Option<u8> {
         .copied()
 }
 
+/// Where a viewer whose app does not reset its decoder must be when selection
+/// offers nothing above its floor (stream-compat #2): on its floor layer
+/// whenever the publisher sends it; when it does not, on the highest layer
+/// below it (as `restage_viewers_off_unpublished_layers` stages), and nowhere
+/// else. `None` to stay where it is. A viewer with no floor yet (its
+/// subscription has not committed a layer) stays put.
+fn decoder_floor_target(layer_ids: &[u8], state: &LayerSelectionState) -> Option<u8> {
+    let floor = state.decoder_floor?;
+    let current = state.current_layer;
+    if layer_ids.contains(&floor) {
+        return (current != floor).then_some(floor);
+    }
+    if layer_ids.contains(&current) && current < floor {
+        return None;
+    }
+    let below = layer_ids
+        .iter()
+        .rev()
+        .find(|&&id| id < floor)
+        .or_else(|| layer_ids.first())
+        .copied()?;
+    (below != current).then_some(below)
+}
+
 /// The next-higher (or next-lower) published layer id relative to `current`,
 /// clamped to the ends of the ladder.
 fn next_layer_up(layer_ids: &[u8], current: u8) -> u8 {
@@ -4535,6 +4699,7 @@ mod tests {
                 video_capabilities: vec![],
                 media_public_key: None,
                 view: None,
+                layer_switch_resets_decoder: true,
             },
         );
         assert!(forwarder.sender_rate_limiter.try_acquire(user_id));
@@ -5002,6 +5167,7 @@ mod tests {
                     session_id: "sess".to_string(),
                     video_capabilities: vec![],
                     media_public_key: None,
+                    layer_switch_resets_decoder: true,
                 },
             )
             .await;
@@ -5034,6 +5200,7 @@ mod tests {
                     session_id: "sess-old".to_string(),
                     video_capabilities: vec![],
                     media_public_key: None,
+                    layer_switch_resets_decoder: true,
                 },
             )
             .await;
@@ -6372,6 +6539,27 @@ mod tests {
         add_bridged_session(forwarder, uid, room_id, &format!("s{uid}"));
     }
 
+    /// Record a call session for `uid` as a current app sends it
+    /// (`layer_switch_resets_decoder`), without the join's roster traffic.
+    fn joined_as_current_app(forwarder: &RelayForwarder, uid: i64, room_id: &str) {
+        let lease = forwarder
+            .connection_for_test(uid)
+            .map(|handle| Arc::clone(&handle.lease))
+            .unwrap_or_default();
+        forwarder.active_sessions.insert(
+            (uid, ConnectionSlot::Call),
+            ActiveSessionInfo {
+                lease,
+                room_id: room_id.to_string(),
+                session_id: format!("s{uid}"),
+                video_capabilities: vec![],
+                media_public_key: None,
+                view: None,
+                layer_switch_resets_decoder: true,
+            },
+        );
+    }
+
     /// The relay counts the media it actually moved, per connection, and keeps
     /// counting it: this is the only thing that can answer "did this
     /// participant's audio reach the server" after the fact, because the
@@ -6603,6 +6791,7 @@ mod tests {
         let forwarder = RelayForwarder::new(Arc::clone(&mgr), Arc::new(SpeakerDetector::new()));
         for uid in [1, 2, 3, 4] {
             add_bridged(&forwarder, uid, &room_id);
+            joined_as_current_app(&forwarder, uid, &room_id);
         }
 
         // Distinct downlink budgets via cwnd/RTT (kbps = cwnd*8*1000 / rtt_us):
@@ -6789,6 +6978,7 @@ mod tests {
                     session_id: "call-1".to_string(),
                     video_capabilities: vec![],
                     media_public_key: None,
+                    layer_switch_resets_decoder: true,
                 },
             )
             .await;
@@ -6814,6 +7004,7 @@ mod tests {
                     session_id: "call-2".to_string(),
                     video_capabilities: vec![],
                     media_public_key: None,
+                    layer_switch_resets_decoder: true,
                 },
             )
             .await;
@@ -6938,6 +7129,7 @@ mod tests {
                     session_id: "call-1".to_string(),
                     video_capabilities: vec![],
                     media_public_key: None,
+                    layer_switch_resets_decoder: true,
                 },
             )
             .await;
@@ -6976,6 +7168,7 @@ mod tests {
                 session_id: "call-2".to_string(),
                 video_capabilities: vec![],
                 media_public_key: None,
+                layer_switch_resets_decoder: true,
             },
             ControlMessage::TrackPublish {
                 track: simple_track(1, "stream-forged", "cam"),
@@ -7027,6 +7220,7 @@ mod tests {
                     session_id: "call-2".to_string(),
                     video_capabilities: vec![],
                     media_public_key: None,
+                    layer_switch_resets_decoder: true,
                 },
             )
             .await;
@@ -7071,6 +7265,7 @@ mod tests {
                         session_id: "call-1".to_string(),
                         video_capabilities: vec![],
                         media_public_key: None,
+                        layer_switch_resets_decoder: true,
                     },
                 )
                 .await;
@@ -7100,6 +7295,7 @@ mod tests {
                         session_id: "call-2".to_string(),
                         video_capabilities: vec![],
                         media_public_key: None,
+                        layer_switch_resets_decoder: true,
                     },
                 )
                 .await;
@@ -7800,6 +7996,7 @@ mod tests {
             session_id: session.to_string(),
             video_capabilities: Vec::new(),
             media_public_key: None,
+            layer_switch_resets_decoder: true,
         };
         add_bridged_session(&forwarder, 2, &room_id, "s2");
         add_bridged_session(&forwarder, 9, &room_id, "view-9");
@@ -7937,5 +8134,256 @@ mod tests {
             (4003, "media access revoked".into())
         );
         assert_eq!(call.relay_close_reason(), Some(MediaCloseReason::Revoked));
+    }
+    #[test]
+    fn floor_target_keeps_an_old_app_off_smaller_layers() {
+        let ladder = [0, 1, 2];
+        let mut state = LayerSelectionState::new(2);
+        // No floor yet: nothing moves.
+        assert_eq!(decoder_floor_target(&ladder, &state), None);
+        state.decoder_floor = Some(2);
+        assert_eq!(decoder_floor_target(&ladder, &state), None);
+        // Its layer is gone: the highest layer below it.
+        assert_eq!(decoder_floor_target(&[0, 1], &state), Some(1));
+        state.current_layer = 1;
+        assert_eq!(decoder_floor_target(&[0, 1], &state), None);
+        // Back as soon as the publisher sends it again.
+        assert_eq!(decoder_floor_target(&ladder, &state), Some(2));
+        // Down to the lowest alone.
+        assert_eq!(decoder_floor_target(&[0], &state), Some(0));
+        // Here selection offers nothing above a low floor: it stays.
+        let mut low = LayerSelectionState::new(0);
+        low.decoder_floor = Some(0);
+        assert_eq!(decoder_floor_target(&ladder, &low), None);
+    }
+
+    /// Stream-compat #2: an app that predates decoder resets on a layer switch
+    /// (no `layer_switch_resets_decoder` in its join) decodes any other layer
+    /// green. The relay never moves it below the layer it started on, whatever
+    /// it asks for and whatever its downlink does; a current app beside it
+    /// switches as before. When the publisher drops that layer the old app moves below,
+    /// and it goes back when the layer returns.
+    #[tokio::test]
+    async fn an_app_that_cannot_switch_layers_keeps_its_first_layer() {
+        let mgr = MediaRoomManager::new();
+        for uid in [1, 2, 3] {
+            mgr.join_room(
+                1,
+                100,
+                crate::participant::MediaParticipant::new(uid, format!("s{uid}")),
+            )
+            .unwrap();
+        }
+        let room_id = mgr.get_or_create_room(1, 100);
+        let mut track = three_layer_track(1);
+        let (stream_id, track_id) = (track.stream_id.clone(), track.track_id.clone());
+        mgr.publish_track(&room_id, 1, track.clone()).unwrap();
+        let mgr = Arc::new(mgr);
+        let forwarder = RelayForwarder::new(Arc::clone(&mgr), Arc::new(SpeakerDetector::new()));
+        for uid in [1, 2, 3] {
+            add_bridged(&forwarder, uid, &room_id);
+        }
+        // 2 is an old app, 3 a current one.
+        for (uid, current_app) in [(2, false), (3, true)] {
+            let handle = forwarder.connection_for_test(uid).unwrap();
+            forwarder
+                .handle_control_message(
+                    &handle,
+                    ControlMessage::SessionJoin {
+                        room_id: room_id.clone(),
+                        session_id: format!("s{uid}"),
+                        video_capabilities: vec![],
+                        media_public_key: None,
+                        layer_switch_resets_decoder: current_app,
+                    },
+                )
+                .await;
+        }
+        assert!(!forwarder.viewer_switches_layers((2, ConnectionSlot::Call)));
+        assert!(forwarder.viewer_switches_layers((3, ConnectionSlot::Call)));
+
+        let subscribe = |layer: u8| ControlMessage::SubscribeStream {
+            subscription: TrackSubscription {
+                stream_id: stream_id.clone(),
+                track_id: track_id.clone(),
+                requested_layer: Some(layer),
+                active_layer: None,
+                viewport: None,
+            },
+        };
+        let forwarded = |uid: i64| {
+            mgr.with_room(&room_id, |room| {
+                room.participants[&uid].track_subscriptions[&(stream_id.clone(), track_id.clone())]
+                    .active_layer
+            })
+            .unwrap()
+        };
+        let state = |uid: i64| {
+            *forwarder
+                .layer_selection
+                .get(&(
+                    (uid, ConnectionSlot::Call),
+                    stream_id.clone(),
+                    track_id.clone(),
+                ))
+                .unwrap()
+        };
+
+        // Both start on the top layer, then pick Low.
+        for uid in [2, 3] {
+            let handle = forwarder.connection_for_test(uid).unwrap();
+            forwarder
+                .handle_control_message(&handle, subscribe(2))
+                .await;
+            assert_eq!(forwarded(uid), Some(2));
+            forwarder
+                .handle_control_message(&handle, subscribe(0))
+                .await;
+            assert_eq!(forwarded(uid), Some(2), "a switch waits for a keyframe");
+        }
+        assert_eq!(state(3).pending_layer, Some(0), "a current app switches");
+        assert_eq!(state(2).pending_layer, None, "an old app keeps its layer");
+        assert_eq!(state(2).decoder_floor, Some(2));
+        assert_eq!(state(3).decoder_floor, None);
+
+        // Its frames arrive late at 1.5 Mb/s: the relay would step a current
+        // app down; the old app stays where its decoder can show the picture.
+        let now = Instant::now();
+        forwarder.downlink_estimator.record_sample_at(
+            2,
+            3_750,
+            Duration::from_millis(20),
+            1000,
+            0,
+            now,
+        );
+        {
+            let handle = forwarder.connection_for_test(2).unwrap();
+            let mut delivery = handle.delivery.lock().unwrap();
+            let start = now - Duration::from_millis(1_900);
+            for i in 0..60u64 {
+                let at = start + Duration::from_millis(i * 32);
+                delivery.record_delivered(
+                    at,
+                    Duration::from_millis(20 + i * 15),
+                    (1_500u64 * 1000 / 8 / 30) as usize,
+                );
+            }
+        }
+        let viewer = forwarder.connection_for_test(2).unwrap();
+        forwarder.run_layer_selection_for(&viewer).await;
+        assert_eq!(state(2).pending_layer, None);
+        assert_eq!(state(2).current_layer, 2);
+
+        // The publisher drops the top layer: the old app moves below (a
+        // picture, if possibly a corrupt one, rather than none) ...
+        let full = track.clone();
+        track.layers.pop();
+        mgr.publish_track(&room_id, 1, track.clone()).unwrap();
+        assert_eq!(
+            forwarder.restage_viewers_off_unpublished_layers(&track),
+            vec![1]
+        );
+        assert_eq!(state(2).pending_layer, Some(1));
+        forwarder.run_layer_selection_for(&viewer).await;
+        assert_eq!(state(2).pending_layer, Some(1), "selection keeps the move");
+        forwarder.forward_stream_frame_to_subscribers(
+            1,
+            &room_id,
+            &video_header(11),
+            keyframe_body(&track, 1),
+        );
+        assert_eq!(forwarded(2), Some(1));
+        assert_eq!(state(2).current_layer, 1);
+        // ... and goes back to its own layer when the publisher sends it again.
+        mgr.publish_track(&room_id, 1, full.clone()).unwrap();
+        forwarder.run_layer_selection_for(&viewer).await;
+        assert_eq!(state(2).pending_layer, Some(2));
+        forwarder.forward_stream_frame_to_subscribers(
+            1,
+            &room_id,
+            &video_header(12),
+            keyframe_body(&full, 2),
+        );
+        assert_eq!(forwarded(2), Some(2));
+    }
+    /// An old app's decoder grows to a larger picture (the compat pass saw
+    /// High after Medium play cleanly on old apps), so a request for a larger
+    /// layer is honored; the floor then rises, and a smaller one is refused.
+    #[tokio::test]
+    async fn an_old_app_may_move_up_and_then_not_back_down() {
+        let mgr = MediaRoomManager::new();
+        for uid in [1, 2] {
+            mgr.join_room(
+                1,
+                100,
+                crate::participant::MediaParticipant::new(uid, format!("s{uid}")),
+            )
+            .unwrap();
+        }
+        let room_id = mgr.get_or_create_room(1, 100);
+        let track = three_layer_track(1);
+        let (stream_id, track_id) = (track.stream_id.clone(), track.track_id.clone());
+        mgr.publish_track(&room_id, 1, track.clone()).unwrap();
+        let mgr = Arc::new(mgr);
+        let forwarder = RelayForwarder::new(Arc::clone(&mgr), Arc::new(SpeakerDetector::new()));
+        for uid in [1, 2] {
+            add_bridged(&forwarder, uid, &room_id);
+        }
+        let viewer = forwarder.connection_for_test(2).unwrap();
+        forwarder
+            .handle_control_message(
+                &viewer,
+                ControlMessage::SessionJoin {
+                    room_id: room_id.clone(),
+                    session_id: "s2".to_string(),
+                    video_capabilities: vec![],
+                    media_public_key: None,
+                    layer_switch_resets_decoder: false,
+                },
+            )
+            .await;
+        let subscribe = |layer: u8| ControlMessage::SubscribeStream {
+            subscription: TrackSubscription {
+                stream_id: stream_id.clone(),
+                track_id: track_id.clone(),
+                requested_layer: Some(layer),
+                active_layer: None,
+                viewport: None,
+            },
+        };
+        let state = || {
+            *forwarder
+                .layer_selection
+                .get(&(
+                    (2, ConnectionSlot::Call),
+                    stream_id.clone(),
+                    track_id.clone(),
+                ))
+                .unwrap()
+        };
+        forwarder
+            .handle_control_message(&viewer, subscribe(1))
+            .await;
+        assert_eq!(state().decoder_floor, Some(1));
+        // High: up, staged for the top layer's keyframe.
+        forwarder
+            .handle_control_message(&viewer, subscribe(2))
+            .await;
+        assert_eq!(state().pending_layer, Some(2));
+        forwarder.forward_stream_frame_to_subscribers(
+            1,
+            &room_id,
+            &video_header(12),
+            keyframe_body(&track, 2),
+        );
+        assert_eq!(state().current_layer, 2);
+        assert_eq!(state().decoder_floor, Some(2), "the floor rises with it");
+        // Medium now would be green: refused.
+        forwarder
+            .handle_control_message(&viewer, subscribe(1))
+            .await;
+        assert_eq!(state().pending_layer, None);
+        assert_eq!(state().current_layer, 2);
     }
 }

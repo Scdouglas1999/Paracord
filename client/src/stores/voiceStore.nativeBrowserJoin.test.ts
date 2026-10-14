@@ -78,6 +78,38 @@ describe('voiceStore call ownership across deferred boundaries', () => {
     expect(useVoiceStore.getState().mediaEngine).toBe(second.transport);
   });
 
+  it('keeps an Unmute pressed while the call is joining', async () => {
+    // Stream-fix V7: the mic button is live as soon as the join starts. The
+    // commit used to apply the mute the join began with and undo the toggle.
+    const pending = deferred<void>(); const media = engine();
+    media.connect.mockImplementation(() => pending.promise);
+    fixture.factory.mockResolvedValue(media.transport);
+    useVoiceStore.setState({ selfMute: true, selfDeaf: false });
+    const join = useVoiceStore.getState().joinChannel('one', 'guild'); await flush();
+    expect(useVoiceStore.getState().callPhase).toBe('joining');
+    await useVoiceStore.getState().toggleMute();
+    expect(useVoiceStore.getState().selfMute).toBe(false);
+    pending.resolve(); await join;
+    const transport = media.transport as unknown as { setMute: ReturnType<typeof vi.fn>; setDeaf: ReturnType<typeof vi.fn> };
+    expect(useVoiceStore.getState().callPhase).toBe('connected');
+    expect(useVoiceStore.getState().selfMute).toBe(false);
+    expect(transport.setMute).toHaveBeenLastCalledWith(false);
+    expect(transport.setDeaf).toHaveBeenLastCalledWith(false);
+  });
+
+  it('keeps a Mute pressed while the call is joining', async () => {
+    const pending = deferred<void>(); const media = engine();
+    media.connect.mockImplementation(() => pending.promise);
+    fixture.factory.mockResolvedValue(media.transport);
+    useVoiceStore.setState({ selfMute: false, selfDeaf: false });
+    const join = useVoiceStore.getState().joinChannel('one', 'guild'); await flush();
+    await useVoiceStore.getState().toggleMute();
+    pending.resolve(); await join;
+    const transport = media.transport as unknown as { setMute: ReturnType<typeof vi.fn> };
+    expect(useVoiceStore.getState().selfMute).toBe(true);
+    expect(transport.setMute).toHaveBeenLastCalledWith(true);
+  });
+
   it('shares the pending join promise for the same account/channel', async () => {
     const pending = deferred<ReturnType<typeof response>>(); fixture.join.mockReturnValue(pending.promise);
     const first = useVoiceStore.getState().joinChannel('same', 'guild');

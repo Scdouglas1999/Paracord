@@ -226,6 +226,9 @@ pub async fn start_voice_session(
                     .map(|capability| capability.to_transport())
                     .collect(),
                 media_public_key: Some(media_public_key.clone()),
+                // A layer switch starts a fresh decoder at the new layer's
+                // keyframe (video_pipeline), so the relay may switch layers.
+                layer_switch_resets_decoder: true,
             })
             .await?;
 
@@ -320,6 +323,9 @@ async fn start_view_session(
                     .map(|capability| capability.to_transport())
                     .collect(),
                 media_public_key: Some(media_public_key),
+                // A layer switch starts a fresh decoder at the new layer's
+                // keyframe (video_pipeline), so the relay may switch layers.
+                layer_switch_resets_decoder: true,
             })
             .await?;
 
@@ -717,6 +723,12 @@ pub async fn voice_switch_output_device(
 
     let mut guard = state.session.lock().await;
     let session = guard.as_mut().ok_or("no active session")?;
+
+    // No source is added or reaped from the snapshot until every live one is
+    // on the new output (session.rs, `audio_sources`): a voice whose first
+    // datagram landed mid-switch used to stay on the old mixer, silent.
+    let audio_sources = session.audio_sources.clone();
+    let _sources = audio_sources.lock().await;
 
     // Snapshot the live remote SSRCs so the actor can re-attach them to the new
     // output device. The actor builds the replacement device before tearing
@@ -1479,10 +1491,17 @@ pub async fn media_register_track_subscription(
         }
         _ => None,
     };
+    // Source goes to a relay that predates it as the top layer's number
+    // (`StreamRegistry::requested_layer_for_relay`, stream-compat #1).
+    let requested_layer = session
+        .stream_registry
+        .lock()
+        .await
+        .requested_layer_for_relay(&stream_id, &track_id, request.requested_layer);
     let subscription = TrackSubscription {
         stream_id: stream_id.clone(),
         track_id: track_id.clone(),
-        requested_layer: request.requested_layer,
+        requested_layer,
         active_layer: request.active_layer,
         viewport: viewport.clone(),
     };
@@ -1501,7 +1520,7 @@ pub async fn media_register_track_subscription(
             .and_then(|track| {
                 let preferred_layer_id = request
                     .active_layer
-                    .or(request.requested_layer)
+                    .or(requested_layer)
                     .or_else(|| subscription.resolved_layer_id(&track));
                 track
                     .layers
@@ -1524,7 +1543,7 @@ pub async fn media_register_track_subscription(
         .send_control_message(&ControlMessage::ReceiverReport {
             stream_id,
             track_id,
-            active_layer: request.active_layer.or(request.requested_layer),
+            active_layer: request.active_layer.or(requested_layer),
             viewport,
             estimated_bitrate_kbps,
             packet_loss_ppm: 0,

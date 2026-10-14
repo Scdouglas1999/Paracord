@@ -183,6 +183,15 @@ pub enum ControlMessage {
         /// on, for this call only. See [`SessionParticipant::media_public_key`].
         #[serde(default, skip_serializing_if = "Option::is_none")]
         media_public_key: Option<String>,
+        /// The client starts a fresh decoder at the keyframe of another
+        /// simulcast layer (stream-fix V1), so the relay may move it between
+        /// layers mid-stream. Absent from apps that predate it: their decoder
+        /// keeps the largest picture size it was given, and a smaller layer
+        /// decodes green, so the relay never moves such a viewer below the
+        /// largest layer it has shown (stream-fix V7). Older relays ignore the
+        /// field.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        layer_switch_resets_decoder: bool,
     },
 
     /// Client leaves a specific stream-capable media session.
@@ -879,10 +888,54 @@ mod tests {
             session_id: "browser-42".to_string(),
             video_capabilities: vec![],
             media_public_key: None,
+            layer_switch_resets_decoder: true,
         };
         let encoded = msg.encode().unwrap();
         let (decoded, _) = ControlMessage::decode(&encoded).unwrap().unwrap();
         assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn session_join_decoder_reset_capability_is_additive() {
+        // An app that predates the field sends none: it reads as false.
+        let legacy: ControlMessage = serde_json::from_str(
+            r#"{"type":"session_join","room_id":"1:2","session_id":"native-42","video_capabilities":[]}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            legacy,
+            ControlMessage::SessionJoin {
+                layer_switch_resets_decoder: false,
+                ..
+            }
+        ));
+        // A current app sends it; a relay that predates it skips the unknown
+        // field (no `deny_unknown_fields` on the wire types), which the same
+        // decode of a message with one more field stands in for.
+        let current = ControlMessage::SessionJoin {
+            room_id: "1:2".to_string(),
+            session_id: "native-42".to_string(),
+            video_capabilities: vec![],
+            media_public_key: None,
+            layer_switch_resets_decoder: true,
+        };
+        let mut json: serde_json::Value = serde_json::to_value(&current).unwrap();
+        assert_eq!(json["layer_switch_resets_decoder"], serde_json::json!(true));
+        json["a_field_from_the_future"] = serde_json::json!(1);
+        let decoded: ControlMessage = serde_json::from_value(json).unwrap();
+        assert_eq!(decoded, current);
+        // False is not written, so an old app's join is byte-identical.
+        let quiet = ControlMessage::SessionJoin {
+            room_id: "1:2".to_string(),
+            session_id: "native-42".to_string(),
+            video_capabilities: vec![],
+            media_public_key: None,
+            layer_switch_resets_decoder: false,
+        };
+        assert!(serde_json::to_value(&quiet)
+            .unwrap()
+            .get("layer_switch_resets_decoder")
+            .is_none());
     }
 
     #[test]
@@ -939,6 +992,7 @@ mod tests {
                 decode_hardware: true,
             }],
             media_public_key: None,
+            layer_switch_resets_decoder: false,
         };
         let encoded = msg.encode().unwrap();
         let (decoded, _) = ControlMessage::decode(&encoded).unwrap().unwrap();

@@ -68,6 +68,103 @@ fn stream_audio_publisher_for_ssrc(
 /// Top of the RTP audio-level scale: silence. Mirrors [`compute_audio_level`].
 const AUDIO_LEVEL_SILENCE: u8 = 127;
 
+/// One voice frame (20 ms at 48 kHz).
+const VOICE_FRAME: StdDuration = StdDuration::from_millis(20);
+
+/// The most frame slots the voice clock passes over in one silence. A receiver
+/// drops a sender's state after [`SOURCE_INACTIVITY_REAP`] without packets and
+/// starts afresh, so nothing is gained past that; and it keeps every jump far
+/// inside the half-range the receiver's rollover estimate needs.
+const MAX_VOICE_SLOTS_PASSED: u16 = 250;
+
+/// The voice track's sequence number and timestamp, kept on the audio clock:
+/// a frame slot that passes without a packet (muted, or the microphone
+/// reopening) still advances them, as RTP does.
+///
+/// Receivers play voice from a 20 ms clock. Apps before stream-fix V4 move
+/// that clock past every frame that is missing when its slot comes, and play
+/// nothing that arrives behind it. When the sequence stopped while the sender
+/// was silent, every packet after a mute shorter than 5 s (and after the
+/// microphone reopened on joining a call, 0.1 s in) arrived behind their
+/// clock, and the sender stayed silent to them until it was quiet for 5 s
+/// (stream-fix V7: 3 of 10 joins, and every 0.3 to 3 s mute, in the lab).
+/// With the slots passed, the next packet lands where their clock is. Current
+/// receivers wait when nothing has arrived and take a packet that lands in an
+/// empty buffer ahead of their clock as the start of a talk spurt
+/// (`JitterBuffer::insert`), so the jump costs them nothing.
+#[derive(Debug, Default)]
+pub(crate) struct VoiceClock {
+    seq: u16,
+    timestamp: u32,
+    /// Slots passed since the last packet sent (capped).
+    passed: u16,
+    /// When the last captured frame (sent or not) arrived.
+    last_frame_at: Option<Instant>,
+    /// The capture restarted (`CAPTURE_RESTART` marker): the next frame
+    /// passes the slots the restart cost.
+    restarted: bool,
+}
+
+impl VoiceClock {
+    /// The capture behind the microphone restarted: frames stop, and resume
+    /// from the new device after however long that took.
+    pub(crate) fn capture_restarted(&mut self) {
+        self.restarted = true;
+    }
+
+    /// A captured frame arrived at `now`. Accounts for a capture restart
+    /// before it; returns nothing.
+    pub(crate) fn frame(&mut self, now: Instant) {
+        if std::mem::take(&mut self.restarted) {
+            if let Some(previous) = self.last_frame_at {
+                // Rounded up: a receiver's clock that ran one slot further
+                // than the frames it is given conceals one frame; one that
+                // ran one slot less than them plays nothing (see above).
+                let elapsed = now.saturating_duration_since(previous);
+                let slots = elapsed.as_micros().div_ceil(VOICE_FRAME.as_micros());
+                let missing = (slots as u64)
+                    .saturating_sub(1)
+                    .min(u64::from(MAX_VOICE_SLOTS_PASSED)) as u16;
+                if missing > 0 {
+                    tracing::info!(
+                        missing_frames = missing,
+                        gap_ms = elapsed.as_millis() as u64,
+                        "microphone capture restarted; the voice clock passes the frames it lost"
+                    );
+                }
+                self.pass(missing);
+            }
+        }
+        self.last_frame_at = Some(now);
+    }
+
+    /// A captured frame that is not sent (muted): its slot passes.
+    pub(crate) fn skip(&mut self) {
+        self.pass(1);
+    }
+
+    fn pass(&mut self, slots: u16) {
+        let slots = slots.min(MAX_VOICE_SLOTS_PASSED.saturating_sub(self.passed));
+        self.passed += slots;
+        self.seq = self.seq.wrapping_add(slots);
+        self.timestamp = self
+            .timestamp
+            .wrapping_add(u32::from(slots) * FRAME_SIZE as u32);
+    }
+
+    /// The sequence number and timestamp for the next packet.
+    pub(crate) fn stamp(&self) -> (u16, u32) {
+        (self.seq, self.timestamp)
+    }
+
+    /// The packet was sent: the clock moves to the next slot.
+    pub(crate) fn sent(&mut self) {
+        self.seq = self.seq.wrapping_add(1);
+        self.timestamp = self.timestamp.wrapping_add(FRAME_SIZE as u32);
+        self.passed = 0;
+    }
+}
+
 /// Spawn the audio send task: captures mic → noise suppress → Opus encode → encrypt → QUIC datagram.
 pub fn spawn_audio_send_task(session: &mut NativeMediaSession) {
     let muted = session.muted.clone();
@@ -112,8 +209,7 @@ pub fn spawn_audio_send_task(session: &mut NativeMediaSession) {
         }
         let mut echo_canceler = paracord_codec::audio::aec::EchoCanceler::new();
         let mut noise_suppressor = paracord_codec::audio::noise::NoiseSuppressor::new();
-        let mut seq: u16 = 0;
-        let mut timestamp: u32 = 0;
+        let mut clock = VoiceClock::default();
         let mut last_loss_update = Instant::now();
 
         loop {
@@ -121,6 +217,12 @@ pub fn spawn_audio_send_task(session: &mut NativeMediaSession) {
                 _ = shutdown.notified() => break,
                 frame = pcm_rx.recv() => {
                     let Some(pcm) = frame else { break };
+                    // The capture forwarder's restart marker (no samples).
+                    if pcm.is_empty() {
+                        clock.capture_restarted();
+                        continue;
+                    }
+                    clock.frame(Instant::now());
 
                     // Count every frame that arrives, before any decision about
                     // what to do with it: this counter is how the tick below
@@ -138,6 +240,7 @@ pub fn spawn_audio_send_task(session: &mut NativeMediaSession) {
                         // on the meter too — a bar that keeps moving while you
                         // are muted is the same lie in the other direction.
                         local_mic_level.store(AUDIO_LEVEL_SILENCE, Ordering::Relaxed);
+                        clock.skip();
                         continue;
                     }
 
@@ -182,11 +285,13 @@ pub fn spawn_audio_send_task(session: &mut NativeMediaSession) {
                         Ok(data) => data,
                         Err(e) => {
                             tracing::warn!("opus encode error: {e}");
+                            clock.skip();
                             continue;
                         }
                     };
 
                     // Build header
+                    let (seq, timestamp) = clock.stamp();
                     let mut header = MediaHeader::new(TrackType::Audio, local_ssrc);
                     header.sequence = seq;
                     header.timestamp = timestamp;
@@ -208,6 +313,7 @@ pub fn spawn_audio_send_task(session: &mut NativeMediaSession) {
                             Ok(encryptor) => encryptor,
                             Err(_) => {
                                 tracing::warn!("audio send task: frame encryptor lock poisoned");
+                                clock.skip();
                                 continue;
                             }
                         };
@@ -221,6 +327,7 @@ pub fn spawn_audio_send_task(session: &mut NativeMediaSession) {
                             Ok(data) => data,
                             Err(e) => {
                                 tracing::warn!("encrypt error: {e:?}");
+                                clock.skip();
                                 continue;
                             }
                         }
@@ -237,8 +344,7 @@ pub fn spawn_audio_send_task(session: &mut NativeMediaSession) {
                         break;
                     }
 
-                    seq = seq.wrapping_add(1);
-                    timestamp = timestamp.wrapping_add(FRAME_SIZE as u32);
+                    clock.sent();
                 }
             }
         }
@@ -402,6 +508,7 @@ pub fn spawn_datagram_recv_task(session: &mut NativeMediaSession, app: super::Ca
     let stream_remote_audio = session.stream_remote_audio.clone();
     let stream_registry = session.stream_registry.clone();
     let audio_actor = session.audio_actor.clone();
+    let audio_sources = session.audio_sources.clone();
     let deafened = session.deafened.clone();
     let conn_inner = session.connection.inner().clone();
     let frame_decryptor = session.frame_decryptor.clone();
@@ -512,7 +619,13 @@ pub fn spawn_datagram_recv_task(session: &mut NativeMediaSession, app: super::Ca
                                 }
                             }
 
-                            // New SSRC: resolve its role from the registry once.
+                            // New SSRC. Its mixer source is registered and
+                            // recorded under `audio_sources`, so an output
+                            // switch or the reaper never runs between the two
+                            // (session.rs). Only this task adds sources, so the
+                            // SSRC is still new once the lock is held.
+                            let _sources = audio_sources.lock().await;
+                            // Resolve its role from the registry once.
                             let stream_publisher = {
                                 let registry = stream_registry.lock().await;
                                 stream_audio_publisher_for_ssrc(&registry, header.ssrc)
@@ -742,6 +855,7 @@ pub fn spawn_playout_task(session: &mut NativeMediaSession) {
     let remote_audio = session.remote_audio.clone();
     let stream_remote_audio = session.stream_remote_audio.clone();
     let audio_actor = session.audio_actor.clone();
+    let audio_sources = session.audio_sources.clone();
 
     let handle = tokio::spawn(async move {
         let mut tick = interval(Duration::from_millis(20));
@@ -775,6 +889,7 @@ pub fn spawn_playout_task(session: &mut NativeMediaSession) {
 
                     // Voice sources (mono).
                     let mut reap: Vec<u32> = Vec::new();
+                    let mut reaping;
                     {
                         let mut remote = remote_audio.lock().await;
                         for (ssrc, state) in remote.iter_mut() {
@@ -792,13 +907,14 @@ pub fn spawn_playout_task(session: &mut NativeMediaSession) {
                                 }
                             }
                         }
-                        for ssrc in &reap {
-                            remote.remove(ssrc);
-                        }
+                        reaping = take_reap(&audio_sources, &mut reap, |ssrc| {
+                            remote.remove(&ssrc);
+                        });
                     }
                     for ssrc in reap.drain(..) {
                         audio_actor.remove_playback_source(ssrc).await;
                     }
+                    drop(reaping.take());
 
                     // Stream / system-audio sources (stereo → cpal mixer, AU4),
                     // each played against its picture (stream audit B7).
@@ -855,19 +971,50 @@ pub fn spawn_playout_task(session: &mut NativeMediaSession) {
                                 }
                             }
                         }
-                        for ssrc in &reap {
-                            stream_audio.remove(ssrc);
-                        }
+                        reaping = take_reap(&audio_sources, &mut reap, |ssrc| {
+                            stream_audio.remove(&ssrc);
+                        });
                     }
                     for ssrc in reap.drain(..) {
                         audio_actor.remove_playback_source(ssrc).await;
                     }
+                    drop(reaping.take());
                 }
             }
         }
     });
 
     session.playout_task = Some(handle);
+}
+
+/// Take the idle sources in `reap` out of their map (`remove`) while holding
+/// the session's `audio_sources` lock, which the caller keeps until it has also
+/// removed them from the mixer: a datagram that brings one of them back waits
+/// for that and registers a fresh source, rather than one the removal then
+/// takes away (silent for as long as it keeps sending). When a source change
+/// is under way the lock is busy: nothing is reaped this tick (`reap` is
+/// cleared) and the next tick tries again. Never waits, because the caller
+/// holds a map lock that the datagram path takes under `audio_sources`.
+fn take_reap<'a>(
+    audio_sources: &'a tokio::sync::Mutex<()>,
+    reap: &mut Vec<u32>,
+    mut remove: impl FnMut(u32),
+) -> Option<tokio::sync::MutexGuard<'a, ()>> {
+    if reap.is_empty() {
+        return None;
+    }
+    match audio_sources.try_lock() {
+        Ok(guard) => {
+            for &ssrc in reap.iter() {
+                remove(ssrc);
+            }
+            Some(guard)
+        }
+        Err(_) => {
+            reap.clear();
+            None
+        }
+    }
 }
 
 /// Compute audio level from PCM samples.
@@ -920,6 +1067,78 @@ fn mix_audio_in_place(primary: &mut [f32], overlay: &[f32]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_voice_clock_passes_muted_slots_and_a_capture_restart() {
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + StdDuration::from_millis(n);
+        let mut clock = VoiceClock::default();
+        clock.capture_restarted();
+        clock.frame(ms(0));
+        assert_eq!(clock.stamp(), (0, 0), "the first capture passes nothing");
+        clock.sent();
+        clock.frame(ms(20));
+        assert_eq!(clock.stamp(), (1, 960));
+        clock.sent();
+        // Muted for 0.3 s (15 frames): the slots pass, nothing is sent.
+        for i in 0..15 {
+            clock.frame(ms(40 + i * 20));
+            clock.skip();
+        }
+        clock.frame(ms(340));
+        assert_eq!(clock.stamp(), (17, 17 * 960));
+        clock.sent();
+        // The microphone reopens and its first frame comes 90 ms after the
+        // last: the 3.5 frames lost round up to 4.
+        clock.capture_restarted();
+        clock.frame(ms(430));
+        assert_eq!(clock.stamp().0, 18 + 4);
+        clock.sent();
+        // A long mute passes at most MAX_VOICE_SLOTS_PASSED.
+        let before = clock.stamp().0;
+        for i in 0..1_000 {
+            clock.frame(ms(450 + i * 20));
+            clock.skip();
+        }
+        assert_eq!(clock.stamp().0, before + MAX_VOICE_SLOTS_PASSED);
+        clock.sent();
+        // A restart with no gap passes nothing.
+        let at = clock.stamp().0;
+        clock.capture_restarted();
+        clock.frame(ms(450 + 999 * 20 + 20));
+        assert_eq!(clock.stamp().0, at);
+    }
+
+    #[tokio::test]
+    async fn reaping_waits_for_a_source_change_and_holds_off_the_next_one() {
+        let sources = tokio::sync::Mutex::new(());
+        let mut map: std::collections::HashMap<u32, ()> = [(1, ()), (2, ())].into_iter().collect();
+        // A switch or a registration holds the lock: nothing is reaped, and the
+        // next tick tries again.
+        let busy = sources.lock().await;
+        let mut reap = vec![1];
+        assert!(take_reap(&sources, &mut reap, |ssrc| {
+            map.remove(&ssrc);
+        })
+        .is_none());
+        assert!(reap.is_empty());
+        assert!(map.contains_key(&1));
+        drop(busy);
+        // Free: taken out of the map, and the lock stays held until the mixer
+        // side is done, so a returning SSRC cannot register in between.
+        let mut reap = vec![1];
+        let held = take_reap(&sources, &mut reap, |ssrc| {
+            map.remove(&ssrc);
+        });
+        assert!(held.is_some());
+        assert_eq!(reap, vec![1]);
+        assert!(!map.contains_key(&1));
+        assert!(sources.try_lock().is_err());
+        drop(held);
+        assert!(sources.try_lock().is_ok());
+        // Nothing idle: no lock taken.
+        assert!(take_reap(&sources, &mut Vec::new(), |_| {}).is_none());
+    }
 
     #[test]
     fn screen_audio_stamps_advance_a_frame_and_follow_the_capture_clock() {

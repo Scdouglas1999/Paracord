@@ -737,6 +737,9 @@ export class BrowserMediaEngine implements MediaEngine {
       session_id: this.membershipSessionId!,
       // The key every other participant wraps its frame keys to for this call.
       media_public_key: this.keyring.publicKey,
+      // A layer switch starts a new decode chain at the new layer's keyframe
+      // (VideoDecodeGate), so the relay may move this viewer between layers.
+      layer_switch_resets_decoder: true,
       video_capabilities: (await this.getStreamCapabilities()).video.map((capability) => ({
         codec: capability.codec,
         encode: capability.encode,
@@ -3533,6 +3536,9 @@ export class BrowserMediaEngine implements MediaEngine {
       session_id: this.membershipSessionId!,
       // The key every other participant wraps its frame keys to for this call.
       media_public_key: this.keyring.publicKey,
+      // A layer switch starts a new decode chain at the new layer's keyframe
+      // (VideoDecodeGate), so the relay may move this viewer between layers.
+      layer_switch_resets_decoder: true,
       video_capabilities: (await this.getStreamCapabilities()).video.map((capability) => ({
         codec: capability.codec,
         encode: capability.encode,

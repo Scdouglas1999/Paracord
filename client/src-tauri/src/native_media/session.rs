@@ -40,6 +40,12 @@ pub fn spawn_capture_forwarder(
     stable_tx: mpsc::Sender<Vec<f32>>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
+        // A capture (re)starts here: an empty frame tells the send task, in
+        // order with the frames around it, so its voice clock can pass the
+        // slots the restart cost (`audio_pipeline::VoiceClock`).
+        if stable_tx.send(Vec::new()).await.is_err() {
+            return;
+        }
         while let Some(frame) = device_rx.recv().await {
             // Drop rather than block: the send task runs on a 20 ms clock and a
             // stalled consumer must not back-pressure the audio thread.
@@ -335,6 +341,15 @@ pub struct NativeMediaSession {
     pub connection_monitor_task: Option<JoinHandle<()>>,
     pub stream_remote_audio:
         Arc<tokio::sync::Mutex<HashMap<u32, super::audio_pipeline::StreamRemoteAudioState>>>,
+    /// Held across every change to which playback-mixer source a remote SSRC
+    /// feeds: adding one (the first datagram of a new voice or stream-audio
+    /// SSRC), removing one (the idle reaper) and moving them all to another
+    /// output device. Without it a source registered on the old output while
+    /// the switch was rebuilding the mixer kept feeding a mixer that no longer
+    /// played, and that voice stayed silent for as long as it kept talking:
+    /// the first voice after a join, when the app opens the default output and
+    /// then switches to the chosen one 0.1 s later (stream-fix V7).
+    pub audio_sources: Arc<tokio::sync::Mutex<()>>,
     /// Shared with the control-receive task so an incoming
     /// `ControlMessage::RequestKeyframe` from the relay (new subscriber, or a
     /// viewer that lost fragments) forces the next encoded frame to be intra.
@@ -667,6 +682,7 @@ impl NativeMediaSession {
             screen_audio_send_task: None,
             connection_monitor_task: None,
             stream_remote_audio: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            audio_sources: Arc::new(tokio::sync::Mutex::new(())),
             video_force_keyframe: Arc::new(AtomicBool::new(true)),
             screen_force_keyframe: Arc::new(AtomicBool::new(true)),
             #[cfg(feature = "vpx")]
@@ -905,6 +921,10 @@ mod capture_forwarder_tests {
 
         let (first_tx, first_rx) = mpsc::channel::<Vec<f32>>(8);
         let first = spawn_capture_forwarder(first_rx, stable_tx.clone());
+        assert!(
+            stable_rx.recv().await.expect("restart marker").is_empty(),
+            "a capture starts with the restart marker (VoiceClock)"
+        );
         first_tx
             .send(vec![0.25; 4])
             .await
@@ -929,6 +949,14 @@ mod capture_forwarder_tests {
             .send(vec![0.5; 6])
             .await
             .expect("second device sends");
+        assert!(
+            stable_rx
+                .recv()
+                .await
+                .expect("the send task's channel must survive a device switch")
+                .is_empty(),
+            "the new capture is announced before its first frame"
+        );
         let frame = stable_rx
             .recv()
             .await

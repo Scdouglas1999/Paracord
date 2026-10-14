@@ -9,7 +9,7 @@ use tokio::time::interval;
 
 use super::session::NativeMediaSession;
 use paracord_transport::control::ControlMessage;
-use paracord_transport::stream::{StreamId, TrackId};
+use paracord_transport::stream::{StreamId, TrackId, SOURCE_LAYER};
 
 /// Audio levels run 0 (loudest) to [`AUDIO_LEVEL_SILENCE`] (silence); see
 /// `audio_pipeline::compute_audio_level`. A speaker turns "on" only once clearly
@@ -1167,7 +1167,41 @@ async fn handle_control_message(
                 // Mark the local subscription confirmed by recording the layer
                 // the relay committed to forwarding.
                 let mut registry = stream_registry.lock().await;
-                if let Some(mut subscription) = registry
+                if let Some(retry) =
+                    source_request_for_older_relay(&registry, &stream_id, &track_id, layer_id)
+                {
+                    // An older relay echoed the Source request: it matches a
+                    // requested layer only by its exact id, so 255 matched
+                    // nothing and it forwards the lowest layer. Ask it for the
+                    // top layer by number, now and for the rest of this
+                    // connection.
+                    let first = registry.note_relay_lacks_source_layer();
+                    tracing::info!(
+                        stream_id = %stream_id.0,
+                        track_id = %track_id.0,
+                        top_layer = ?retry.requested_layer,
+                        first,
+                        "the relay predates Viewing quality Source (it echoed layer 255); asking it for the top layer by number"
+                    );
+                    registry.subscribe(retry.clone());
+                    drop(registry);
+                    let conn = conn.clone();
+                    tokio::spawn(async move {
+                        if let Err(err) = send_control_over_connection(
+                            &conn,
+                            &ControlMessage::SubscribeStream {
+                                subscription: retry,
+                            },
+                        )
+                        .await
+                        {
+                            tracing::warn!(
+                                error = %err,
+                                "failed to ask an older relay for the top layer"
+                            );
+                        }
+                    });
+                } else if let Some(mut subscription) = registry
                     .subscriptions()
                     .into_iter()
                     .find(|sub| sub.stream_id == stream_id && sub.track_id == track_id)
@@ -1833,6 +1867,37 @@ pub(crate) fn keyframe_request_for_new_key(
 
 /// Ask the publisher for a keyframe now that a new key opens its track, and
 /// once more after [`KEY_CHANGE_KEYFRAME_REPEAT`] (see there), logging why.
+/// The subscription to send again when a relay answered a Source request
+/// ([`SOURCE_LAYER`]) by echoing it: only a relay that predates Source does
+/// that for a track it has (a current relay names the top layer it will
+/// forward). The retry asks for the track's top layer by number, which such a
+/// relay matches exactly. `None` for any other acknowledgement, a request that
+/// was not Source, or a track whose layers this side does not know yet (a
+/// current relay also echoes the request for a track it has not seen).
+pub(crate) fn source_request_for_older_relay(
+    registry: &super::stream_registry::StreamRegistry,
+    stream_id: &StreamId,
+    track_id: &TrackId,
+    acked_layer: Option<u8>,
+) -> Option<paracord_transport::stream::TrackSubscription> {
+    if acked_layer != Some(SOURCE_LAYER) {
+        return None;
+    }
+    let subscription = registry
+        .subscriptions()
+        .into_iter()
+        .find(|sub| &sub.stream_id == stream_id && &sub.track_id == track_id)?;
+    if subscription.requested_layer != Some(SOURCE_LAYER) {
+        return None;
+    }
+    let top = registry.top_layer_id(stream_id, track_id)?;
+    Some(paracord_transport::stream::TrackSubscription {
+        requested_layer: Some(top),
+        active_layer: None,
+        ..subscription
+    })
+}
+
 pub(crate) fn request_keyframes_for_new_key(conn: &quinn::Connection, request: ControlMessage) {
     if let ControlMessage::RequestKeyframe {
         stream_id,
@@ -2217,6 +2282,68 @@ mod tests {
             })
             .collect();
         track
+    }
+
+    // ── Viewing quality Source on an older relay (stream-fix-v7) ───────────
+
+    #[test]
+    fn an_echoed_source_request_asks_an_older_relay_for_the_top_layer() {
+        let mut registry = super::super::stream_registry::StreamRegistry::default();
+        let track = screen_ladder("s");
+        let (stream_id, track_id) = (track.stream_id.clone(), track.track_id.clone());
+        let mut source = subscription("s", "screen");
+        source.requested_layer = Some(SOURCE_LAYER);
+        registry.subscribe(source.clone());
+        // Nothing known about the track yet: a current relay echoes too.
+        assert_eq!(
+            source_request_for_older_relay(&registry, &stream_id, &track_id, Some(SOURCE_LAYER)),
+            None
+        );
+        registry.publish_track(track);
+        // A current relay names the layer: nothing to do.
+        assert_eq!(
+            source_request_for_older_relay(&registry, &stream_id, &track_id, Some(2)),
+            None
+        );
+        // An older relay echoes 255 for a track it has: ask for layer 2.
+        let retry =
+            source_request_for_older_relay(&registry, &stream_id, &track_id, Some(SOURCE_LAYER))
+                .expect("an echoed Source asks again");
+        assert_eq!(retry.requested_layer, Some(2));
+        assert_eq!(retry.active_layer, None);
+        assert_eq!(retry.viewport, source.viewport);
+        // Only for a Source request.
+        let mut high = source.clone();
+        high.requested_layer = Some(2);
+        registry.subscribe(high);
+        assert_eq!(
+            source_request_for_older_relay(&registry, &stream_id, &track_id, Some(SOURCE_LAYER)),
+            None
+        );
+        // From then on the session asks that relay by number.
+        assert_eq!(
+            registry.requested_layer_for_relay(&stream_id, &track_id, Some(SOURCE_LAYER)),
+            Some(SOURCE_LAYER)
+        );
+        assert!(registry.note_relay_lacks_source_layer());
+        assert!(!registry.note_relay_lacks_source_layer());
+        assert_eq!(
+            registry.requested_layer_for_relay(&stream_id, &track_id, Some(SOURCE_LAYER)),
+            Some(2)
+        );
+        assert_eq!(
+            registry.requested_layer_for_relay(&stream_id, &track_id, Some(0)),
+            Some(0)
+        );
+        assert_eq!(
+            registry.requested_layer_for_relay(
+                &stream_id,
+                &TrackId::new("camera"),
+                Some(SOURCE_LAYER)
+            ),
+            Some(SOURCE_LAYER),
+            "a track with no known layers is asked for as is"
+        );
     }
 
     /// Seal one packet the way a publisher does, for `ssrc` under `epoch`.

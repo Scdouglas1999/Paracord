@@ -17,6 +17,10 @@ const MAX_BUFFERED_PACKETS: usize = 50;
 /// An inter-arrival deviation past this is a sender timeline change, not
 /// jitter, and is left out of the estimate.
 const TIMELINE_JUMP_MS: f64 = 1_000.0;
+/// A packet this many frames or more ahead of the playout point, arriving
+/// into an empty buffer, starts a talk spurt (see [`JitterBuffer::insert`]).
+/// One frame ahead stays a lost frame, concealed as before.
+const TALK_SPURT_MIN_AHEAD: i16 = 2;
 
 /// Statistics reported by the jitter buffer.
 #[derive(Debug, Clone, Default)]
@@ -127,6 +131,21 @@ impl<T> JitterBuffer<T> {
         // Initialize next_seq on first packet
         if self.next_seq.is_none() {
             self.next_seq = Some(seq);
+        }
+
+        // A talk spurt. Playout has played everything it had and is waiting
+        // (see `pull`), and this packet is frames ahead of it: the sender
+        // passed the slots it did not send (muted, or its microphone
+        // reopened; the voice clock keeps counting, for receivers that run on
+        // a clock), or a burst was lost while the buffer was empty. Play from
+        // here. Concealing the gap frame by frame first would only add its
+        // length to the delay for good.
+        if self.playing && self.packets.is_empty() {
+            if let Some(next) = self.next_seq {
+                if (seq.wrapping_sub(next) as i16) >= TALK_SPURT_MIN_AHEAD {
+                    self.next_seq = Some(seq);
+                }
+            }
         }
 
         // Don't buffer packets that are too old (behind playout point)
@@ -379,6 +398,34 @@ mod tests {
         }
         assert!(jb.stats().jitter_ms < 1.0, "{}", jb.stats().jitter_ms);
         assert_eq!(jb.stats().target_latency_ms, 20);
+    }
+
+    #[test]
+    fn a_talk_spurt_after_a_skip_plays_at_once() {
+        let mut jb: JitterBuffer<Vec<u8>> = JitterBuffer::new();
+        jb.insert(0, 0, vec![0], 0);
+        assert_eq!(jb.pull(), Some(vec![0]));
+        // The sender went quiet and passed 30 slots; playout waited.
+        assert_eq!(jb.pull(), None);
+        jb.insert(31, 31 * 960, vec![31], 640);
+        jb.insert(32, 32 * 960, vec![32], 660);
+        assert_eq!(
+            jb.pull(),
+            Some(vec![31]),
+            "no 30 frames of concealment first"
+        );
+        assert_eq!(jb.pull(), Some(vec![32]));
+        assert_eq!(jb.stats().packets_lost, 0);
+        // One frame ahead into an empty buffer is still a lost frame.
+        assert_eq!(jb.pull(), None);
+        jb.insert(34, 34 * 960, vec![34], 720);
+        assert_eq!(jb.pull(), None);
+        assert_eq!(jb.stats().packets_lost, 1);
+        assert_eq!(jb.pull(), Some(vec![34]));
+        // Ahead while frames are still buffered: no jump.
+        jb.insert(35, 35 * 960, vec![35], 740);
+        jb.insert(40, 40 * 960, vec![40], 760);
+        assert_eq!(jb.pull(), Some(vec![35]));
     }
 
     #[test]

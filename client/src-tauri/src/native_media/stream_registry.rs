@@ -1,12 +1,20 @@
 use std::collections::HashMap;
 
-use paracord_transport::stream::{PublishedTrack, StreamId, TrackId, TrackSubscription};
+use paracord_transport::stream::{
+    PublishedTrack, StreamId, TrackId, TrackSubscription, SOURCE_LAYER,
+};
 
 #[derive(Debug, Default, Clone)]
 pub struct StreamRegistry {
     published_tracks: HashMap<(StreamId, TrackId), PublishedTrack>,
     subscriptions: HashMap<(StreamId, TrackId), TrackSubscription>,
     delivered_track_keys: HashMap<(StreamId, TrackId, u8), [u8; 16]>,
+    /// The relay this session is connected to predates Viewing quality
+    /// "Source" ([`SOURCE_LAYER`]): it answered a Source request by echoing
+    /// `255` instead of naming the top layer, and would forward the lowest
+    /// layer (stream-compat #1). From then on a Source request goes out as the
+    /// track's top layer id, which such a relay matches exactly.
+    relay_lacks_source_layer: bool,
 }
 
 impl StreamRegistry {
@@ -77,6 +85,35 @@ impl StreamRegistry {
                 }
             })
             .collect()
+    }
+
+    /// Remember that this session's relay predates [`SOURCE_LAYER`]. Returns
+    /// whether that is news.
+    pub fn note_relay_lacks_source_layer(&mut self) -> bool {
+        !std::mem::replace(&mut self.relay_lacks_source_layer, true)
+    }
+
+    /// The layer to ask this session's relay for. A Source request goes out as
+    /// is, except to a relay that predates it, which is asked for the track's
+    /// top layer id instead (when the track and its layers are known; until
+    /// then the request is sent as is and the acknowledgement corrects it).
+    pub fn requested_layer_for_relay(
+        &self,
+        stream_id: &StreamId,
+        track_id: &TrackId,
+        requested: Option<u8>,
+    ) -> Option<u8> {
+        if requested != Some(SOURCE_LAYER) || !self.relay_lacks_source_layer {
+            return requested;
+        }
+        self.top_layer_id(stream_id, track_id).or(requested)
+    }
+
+    /// The highest layer id the publisher announced for a track.
+    pub fn top_layer_id(&self, stream_id: &StreamId, track_id: &TrackId) -> Option<u8> {
+        self.published_tracks
+            .get(&(stream_id.clone(), track_id.clone()))
+            .and_then(|track| track.layers.iter().map(|layer| layer.layer_id).max())
     }
 
     pub fn published_tracks(&self) -> Vec<PublishedTrack> {
