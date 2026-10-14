@@ -188,8 +188,13 @@ pub struct NativeMediaSession {
     /// microphone delivering anything at all" — a stream that opened and then
     /// went quiet is indistinguishable from a working one by level alone.
     pub local_mic_frames: Arc<AtomicU64>,
-    pub screen_audio_rx: Option<mpsc::Receiver<Vec<f32>>>,
-    pub screen_audio_tx: mpsc::Sender<Vec<f32>>,
+    pub screen_audio_rx: Option<mpsc::Receiver<super::av_sync::ScreenAudioFrame>>,
+    pub screen_audio_tx: mpsc::Sender<super::av_sync::ScreenAudioFrame>,
+    /// The zero point of the current share's media timestamps, shared by the
+    /// screen encoder (video `timestamp_us`) and the screen-audio send task
+    /// (audio `timestamp`), so a viewer can line the two up (stream audit B7).
+    /// Reset on every `start_screen_share`/`stop`.
+    pub screen_share_clock: super::av_sync::ShareClock,
     pub screen_audio_enabled: Arc<AtomicBool>,
 
     // Audio capture/playback owner. Shared with the datagram receive task so it
@@ -321,11 +326,6 @@ pub struct NativeMediaSession {
     /// dropped instead of written back.
     #[cfg(feature = "vpx")]
     pub screen_encoder_generation: u64,
-    /// Wall-clock capture time of the first screen frame of the current share,
-    /// used as the zero point for the on-the-wire microsecond PTS (L2). `None`
-    /// until the first frame; reset on every `start_screen_share`/`stop`.
-    #[cfg(feature = "vpx")]
-    pub screen_capture_base_time: Option<std::time::SystemTime>,
     /// Last microsecond PTS emitted for the screen track, so the wire timestamp
     /// stays monotonic even if a capture backend reports a non-monotonic clock.
     #[cfg(feature = "vpx")]
@@ -528,7 +528,8 @@ impl NativeMediaSession {
             mic_capture_generation.store(1, std::sync::atomic::Ordering::SeqCst);
         }
 
-        let (screen_audio_tx, screen_audio_rx) = mpsc::channel::<Vec<f32>>(64);
+        let (screen_audio_tx, screen_audio_rx) =
+            mpsc::channel::<super::av_sync::ScreenAudioFrame>(64);
 
         // Deterministic SSRCs avoid the need for a separate native
         // subscribe/signaling protocol just to map tracks to users.
@@ -559,6 +560,7 @@ impl NativeMediaSession {
             local_mic_frames: Arc::new(AtomicU64::new(0)),
             screen_audio_rx: Some(screen_audio_rx),
             screen_audio_tx,
+            screen_share_clock: super::av_sync::ShareClock::default(),
             screen_audio_enabled: Arc::new(AtomicBool::new(false)),
             audio_actor,
             noise_suppression_enabled: Arc::new(AtomicBool::new(true)),
@@ -636,8 +638,6 @@ impl NativeMediaSession {
             screen_applied_bitrate_kbps: 0,
             #[cfg(feature = "vpx")]
             screen_encoder_generation: 0,
-            #[cfg(feature = "vpx")]
-            screen_capture_base_time: None,
             #[cfg(feature = "vpx")]
             screen_last_timestamp_us: 0,
             #[cfg(feature = "vpx")]

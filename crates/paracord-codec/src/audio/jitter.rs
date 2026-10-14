@@ -14,6 +14,9 @@ const MAX_DEPTH: u32 = 10;
 const JITTER_ALPHA: f64 = 0.05;
 /// Maximum packets to buffer before dropping oldest.
 const MAX_BUFFERED_PACKETS: usize = 50;
+/// An inter-arrival deviation past this is a sender timeline change, not
+/// jitter, and is left out of the estimate.
+const TIMELINE_JUMP_MS: f64 = 1_000.0;
 
 /// Statistics reported by the jitter buffer.
 #[derive(Debug, Clone, Default)]
@@ -38,7 +41,6 @@ struct BufferedPacket<T> {
     /// The packet payload.
     payload: T,
     /// Timestamp from the media header (48 kHz clock for audio).
-    #[allow(dead_code)]
     timestamp: u32,
     /// Local arrival time in milliseconds (monotonic).
     #[allow(dead_code)]
@@ -103,13 +105,20 @@ impl<T> JitterBuffer<T> {
         if let (Some(last_arrival), Some(last_ts)) = (self.last_arrival_ms, self.last_timestamp) {
             let arrival_diff = arrival_ms as f64 - last_arrival as f64;
             // Convert timestamp diff to milliseconds (48 kHz clock)
-            let ts_diff = timestamp.wrapping_sub(last_ts) as f64 / 48.0;
+            // Signed: a sender that restarts its clock steps the stamp back.
+            let ts_diff = timestamp.wrapping_sub(last_ts) as i32 as f64 / 48.0;
             let jitter_sample = (arrival_diff - ts_diff).abs();
-            self.jitter_estimate_ms =
-                self.jitter_estimate_ms * (1.0 - JITTER_ALPHA) + jitter_sample * JITTER_ALPHA;
+            // A jump this large is a new timeline on the sender (stream audio is
+            // stamped from its share's capture clock, which restarts with the
+            // share), not network jitter: one such sample would otherwise push
+            // the estimate, and the buffer depth, up for seconds.
+            if jitter_sample < TIMELINE_JUMP_MS {
+                self.jitter_estimate_ms =
+                    self.jitter_estimate_ms * (1.0 - JITTER_ALPHA) + jitter_sample * JITTER_ALPHA;
 
-            // Adapt target depth based on jitter
-            self.adapt_target_depth();
+                // Adapt target depth based on jitter
+                self.adapt_target_depth();
+            }
         }
 
         self.last_arrival_ms = Some(arrival_ms);
@@ -141,6 +150,16 @@ impl<T> JitterBuffer<T> {
         // Prevent unbounded growth
         while self.packets.len() > MAX_BUFFERED_PACKETS {
             self.packets.pop_first();
+        }
+        // If that dropped the frame playout expects next, playout moves on to
+        // the oldest one kept. Otherwise a full buffer drops exactly the frame
+        // each pull asks for, every time, and plays nothing ever again.
+        if self.packets.len() == MAX_BUFFERED_PACKETS {
+            if let (Some(next), Some((&oldest, _))) = (self.next_seq, self.packets.iter().next()) {
+                if (oldest.wrapping_sub(next) as i16) > 0 {
+                    self.next_seq = Some(oldest);
+                }
+            }
         }
     }
 
@@ -186,10 +205,19 @@ impl<T> JitterBuffer<T> {
             self.playing = true;
             self.next_seq = Some(next.wrapping_add(1));
             Some(packet.payload)
-        } else {
-            // Packet missing - count as lost and advance sequence
+        } else if !self.is_dry() {
+            // Packet missing with later ones already here: it is lost. Count
+            // it and move on (the caller conceals it).
             self.total_lost += 1;
             self.next_seq = Some(next.wrapping_add(1));
+            None
+        } else {
+            // Nothing newer has arrived: the buffer ran dry, the frame is not
+            // lost yet. Wait for it. Advancing here let playout run ahead of
+            // the sender whenever packets came a little slower than the 20 ms
+            // pull (a sender clock a fraction slow, or a skip that emptied the
+            // buffer), after which every arriving frame was "behind" playout
+            // and the stream went silent for good.
             None
         }
     }
@@ -199,6 +227,47 @@ impl<T> JitterBuffer<T> {
         self.next_seq
             .map(|seq| self.packets.contains_key(&seq))
             .unwrap_or(false)
+    }
+
+    /// The media timestamp of the frame [`pull`](Self::pull) would return next,
+    /// if it has arrived. Stream audio carries its capture time here, which the
+    /// playout schedules against the picture.
+    pub fn peek_next_timestamp(&self) -> Option<u32> {
+        self.next_seq
+            .and_then(|seq| self.packets.get(&seq))
+            .map(|packet| packet.timestamp)
+    }
+
+    /// The media timestamp of the newest frame buffered: the earliest the
+    /// playout could be if it skipped to it.
+    pub fn peek_newest_timestamp(&self) -> Option<u32> {
+        // Newest by distance from the playout point, so a sequence wrap does
+        // not make the oldest frame look newest.
+        let next = self.next_seq?;
+        self.packets
+            .iter()
+            .max_by_key(|(seq, _)| seq.wrapping_sub(next))
+            .map(|(_, packet)| packet.timestamp)
+    }
+
+    /// The next frame is missing and nothing newer has arrived: the buffer ran
+    /// dry. The frame is late, not lost, and there is nothing to conceal yet.
+    pub fn is_dry(&self) -> bool {
+        match self.next_seq {
+            Some(next) => {
+                !self.packets.contains_key(&next)
+                    && !self
+                        .packets
+                        .keys()
+                        .any(|&seq| (seq.wrapping_sub(next) as i16) > 0)
+            }
+            None => true,
+        }
+    }
+
+    /// Frames buffered, including the next one.
+    pub fn buffered(&self) -> usize {
+        self.packets.len()
     }
 
     /// Peek at the payload buffered at the current expected sequence, without
@@ -283,6 +352,65 @@ impl<T> Default for JitterBuffer<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn next_timestamp_and_depth_are_visible() {
+        let mut jb: JitterBuffer<Vec<u8>> = JitterBuffer::new();
+        assert_eq!(jb.peek_next_timestamp(), None);
+        jb.insert(7, 6720, vec![7], 0);
+        jb.insert(8, 7680, vec![8], 20);
+        assert_eq!(jb.peek_next_timestamp(), Some(6720));
+        assert_eq!(jb.peek_newest_timestamp(), Some(7680));
+        assert_eq!(jb.buffered(), 2);
+        jb.pull();
+        assert_eq!(jb.peek_next_timestamp(), Some(7680));
+        assert_eq!(jb.buffered(), 1);
+    }
+
+    #[test]
+    fn a_sender_timeline_restart_does_not_inflate_the_jitter_estimate() {
+        let mut jb: JitterBuffer<Vec<u8>> = JitterBuffer::new();
+        for i in 0..10u16 {
+            jb.insert(i, 1_000_000 + i as u32 * 960, vec![], i as u64 * 20);
+        }
+        // The share restarted: stamps begin again near zero.
+        for i in 10..20u16 {
+            jb.insert(i, (i as u32 - 10) * 960, vec![], i as u64 * 20);
+        }
+        assert!(jb.stats().jitter_ms < 1.0, "{}", jb.stats().jitter_ms);
+        assert_eq!(jb.stats().target_latency_ms, 20);
+    }
+
+    #[test]
+    fn a_dry_buffer_waits_instead_of_running_ahead() {
+        let mut jb: JitterBuffer<Vec<u8>> = JitterBuffer::new();
+        jb.insert(0, 0, vec![0], 0);
+        assert_eq!(jb.pull(), Some(vec![0]));
+        // Pulls outpace arrivals: nothing is there, nothing is skipped.
+        assert_eq!(jb.pull(), None);
+        assert!(jb.is_dry());
+        assert_eq!(jb.pull(), None);
+        jb.insert(1, 960, vec![1], 60);
+        assert!(!jb.is_dry());
+        assert_eq!(jb.pull(), Some(vec![1]));
+        assert_eq!(jb.stats().packets_lost, 0);
+    }
+
+    #[test]
+    fn a_full_buffer_keeps_playing() {
+        let mut jb: JitterBuffer<Vec<u8>> = JitterBuffer::new();
+        // Nothing pulled while 60 frames arrive (a long hold): the oldest are
+        // dropped, and playout continues from the oldest kept.
+        for i in 0..60u16 {
+            jb.insert(i, i as u32 * 960, vec![i as u8], i as u64 * 20);
+        }
+        assert_eq!(jb.pull(), Some(vec![10]));
+        // Steady state at the cap: every pull still plays.
+        for i in 60..120u16 {
+            jb.insert(i, i as u32 * 960, vec![i as u8], i as u64 * 20);
+            assert!(jb.pull().is_some(), "frame {i}");
+        }
+    }
 
     #[test]
     fn in_order_packets() {

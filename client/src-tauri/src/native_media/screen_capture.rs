@@ -724,7 +724,7 @@ fn run_capture_loop(
     content_hint: Option<String>,
     preferred_codec: Option<String>,
     capture_audio: bool,
-    screen_audio_tx: tokio::sync::mpsc::Sender<Vec<f32>>,
+    screen_audio_tx: tokio::sync::mpsc::Sender<super::av_sync::ScreenAudioFrame>,
     screen_audio_enabled: Arc<AtomicBool>,
     startup_tx: mpsc::Sender<Result<(), String>>,
 ) -> Result<(), String> {
@@ -972,7 +972,7 @@ fn run_capture_loop(
         Ok(())
     });
 
-    let mut audio_accumulator = Vec::<f32>::new();
+    let mut audio_accumulator = ScreenAudioAccumulator::default();
     // Bound the blocking frame wait to one frame interval (capped so an external
     // stop is still observed within ~100ms at low frame rates). Replaces the old
     // 5ms busy-poll (P6): this thread owns the capturer, so it parks on the
@@ -1021,8 +1021,14 @@ fn run_capture_loop(
                     && integrated_audio_capture()
                     && screen_audio_enabled.load(Ordering::SeqCst)
                 {
+                    let first_sample_at = audio.time();
                     let samples = convert_audio_frame_to_stereo_f32(audio);
-                    push_screen_audio_samples(&screen_audio_tx, &mut audio_accumulator, &samples);
+                    push_screen_audio_samples(
+                        &screen_audio_tx,
+                        &mut audio_accumulator,
+                        &samples,
+                        first_sample_at,
+                    );
                 }
             }
 
@@ -1500,16 +1506,35 @@ fn resample_linear(samples: &[f32], input_rate: u32, output_rate: u32) -> Vec<f3
     out
 }
 
+/// ScreenCaptureKit's audio, re-chunked into 20 ms frames, with the capture
+/// time of the oldest waiting sample (the same presentation clock the screen's
+/// frames carry), so each frame goes out stamped from it (stream audit B7).
+#[derive(Default)]
+struct ScreenAudioAccumulator {
+    samples: Vec<f32>,
+    first_sample_at: Option<SystemTime>,
+}
+
 fn push_screen_audio_samples(
-    tx: &tokio::sync::mpsc::Sender<Vec<f32>>,
-    accumulator: &mut Vec<f32>,
+    tx: &tokio::sync::mpsc::Sender<super::av_sync::ScreenAudioFrame>,
+    accumulator: &mut ScreenAudioAccumulator,
     stereo_samples: &[f32],
+    first_sample_at: SystemTime,
 ) {
-    accumulator.extend_from_slice(stereo_samples);
+    if accumulator.samples.is_empty() {
+        accumulator.first_sample_at = Some(first_sample_at);
+    }
+    accumulator.samples.extend_from_slice(stereo_samples);
     let chunk_len = SCREEN_AUDIO_FRAME_SIZE * 2;
-    while accumulator.len() >= chunk_len {
-        let chunk: Vec<f32> = accumulator.drain(..chunk_len).collect();
-        let _ = tx.try_send(chunk);
+    let frame_duration = std::time::Duration::from_millis(20);
+    while accumulator.samples.len() >= chunk_len {
+        let samples: Vec<f32> = accumulator.samples.drain(..chunk_len).collect();
+        let captured_at = accumulator.first_sample_at.unwrap_or(first_sample_at);
+        accumulator.first_sample_at = Some(captured_at + frame_duration);
+        let _ = tx.try_send(super::av_sync::ScreenAudioFrame {
+            samples,
+            captured_at,
+        });
     }
 }
 

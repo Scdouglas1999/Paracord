@@ -4,7 +4,7 @@
 // phase marks (CLOCK_MONOTONIC µs, the clock of every probe and trace) for
 // analyze.py.
 //
-//   node campaign.mjs --out <run dir> [--presets 720p30,1080p60,...] [--plan full|quick|layers|midstream|sizes]
+//   node campaign.mjs --out <run dir> [--presets 720p30,1080p60,...] [--plan full|quick|layers|midstream|sizes|audio]
 //
 // Everything is driven through the apps' own controls by the in-page agent
 // (audit-serve.mjs); nothing calls a media command the UI would not.
@@ -375,6 +375,75 @@ try {
       await sleep(3000);
       await phase(`${preset}:quality-${q}`, { viewerQuality: q, ...px }, null, 8000);
     }
+  }
+  if (plan === 'audio') {
+    // Stream audio (stream-fix V4): the A/V offset at rest, a tone the sharer's
+    // own app plays (must not reach the viewer; the pattern's 1 kHz bursts, from
+    // another application, must), and a share with its sound off (nothing).
+    for (const preset of PRESETS) {
+      await freshShare(preset);
+      await viewerLayout('normal');
+      const st = await viewerState();
+      setProbeX([st.box]);
+      await sleep(3000);
+      await phase(`${preset}:audio-rest`, { preset }, null, 20000);
+      mark('start', { phase: `${preset}:app-tone`, preset, appToneHz: 3000 });
+      await run('sender', `
+        const ctx = new AudioContext();
+        await ctx.resume();
+        const until = Date.now() + 12000; let n = 0;
+        while (Date.now() < until) {
+          const osc = ctx.createOscillator(); const gain = ctx.createGain();
+          osc.frequency.value = 3000; gain.gain.value = 0.8;
+          osc.connect(gain).connect(ctx.destination);
+          osc.start(); osc.stop(ctx.currentTime + 0.3); n++;
+          await sleep(1300);
+        }
+        await ctx.close();
+        return { tones: n, state: ctx.state };`, 40000).then((r) => log('  app tone', JSON.stringify(r)));
+      mark('end', { phase: `${preset}:app-tone`, preset });
+    }
+    // A share with its sound off. The desktop UI always asks for sound and
+    // its IPC entry points are read-only, so the share starts as usual and the
+    // engine's own switch then turns the sound off (the command a share
+    // without sound sends: capture stopped, track withdrawn).
+    await senderOpenCall();
+    if (await senderSharing()) { await senderStop(); await sleep(2500); }
+    mark('share-start', { preset: PRESETS[0], audio: false });
+    await senderStart();
+    restartSenderAudioRecorder();
+    await sleep(4000);
+    const off = await run('sender', `
+      // The page's media engine, found through React's tree.
+      const rootEl = document.getElementById('root') ?? document.body.firstElementChild;
+      const containerKey = Object.keys(rootEl).find((k) => k.startsWith('__reactContainer$'));
+      const seenObjects = new WeakSet(); const fibers = [rootEl[containerKey]]; let visited = 0;
+      const findEngine = (v, depth) => {
+        if (!v || typeof v !== 'object' || depth > 5 || seenObjects.has(v) || v instanceof Node) return null;
+        seenObjects.add(v);
+        if (typeof v.sessionOwnerId === 'string' && typeof v.disableNativeScreenAudio === 'function') return v;
+        for (const k of Object.keys(v).slice(0, 80)) {
+          if (['return', 'child', 'sibling', 'alternate', '_owner'].includes(k)) continue;
+          try { const r = findEngine(v[k], depth + 1); if (r) return r; } catch { /* getters */ }
+        }
+        return null;
+      };
+      let engine = null;
+      while (fibers.length && visited < 30000 && !engine) {
+        const f = fibers.pop(); visited++; if (!f) continue;
+        engine = findEngine(f.memoizedState, 0) || findEngine(f.memoizedProps, 0);
+        if (f.child) fibers.push(f.child); if (f.sibling) fibers.push(f.sibling);
+      }
+      if (!engine) throw new Error('media engine not found');
+      engine.disableNativeScreenAudio();
+      await sleep(1500);
+      return { active: engine.isScreenShareAudioActive(), revision: engine.screenRevision };`, 60000);
+    log('  share sound off', JSON.stringify(off));
+    await sleep(4000);
+    await viewerWatch();
+    await viewerLayout('normal');
+    await phase('audio-off', { audio: false }, null, 20000);
+    await senderStop();
   }
   if (plan === 'midstream') {
     const order = arg('order', '720p30,1080p60,4k60,movie-100,1440p60,720p30').split(',');

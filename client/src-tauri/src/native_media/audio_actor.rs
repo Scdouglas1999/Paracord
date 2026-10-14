@@ -22,7 +22,11 @@ use tokio::sync::{mpsc, oneshot};
 
 use paracord_codec::audio::aec::{ReferenceConsumer, ReferenceRing, REFERENCE_RING_CAPACITY};
 use paracord_codec::audio::capture::AudioCapture;
-use paracord_codec::audio::playback::AudioPlayback;
+use paracord_codec::audio::playback::{AudioPlayback, OutputLatency};
+
+/// The output latency of whichever playback device is open now. Replaced by the
+/// audio thread whenever it opens, switches or closes the output.
+type CurrentOutput = Arc<std::sync::Mutex<Option<OutputLatency>>>;
 
 /// 20 ms PCM f32 mono frame at 48 kHz, as produced/consumed by the codec layer.
 type PcmFrame = Vec<f32>;
@@ -87,6 +91,7 @@ pub struct AudioActor {
     /// task reads them each frame.
     echo_cancellation_enabled: Arc<AtomicBool>,
     agc_enabled: Arc<AtomicBool>,
+    output: CurrentOutput,
 }
 
 /// Which end of the audio path failed, for the message the person reads.
@@ -147,9 +152,11 @@ impl AudioActor {
         let (tx, rx) = mpsc::unbounded_channel();
         let reference = ReferenceRing::new(REFERENCE_RING_CAPACITY);
         let thread_reference = reference.clone();
+        let output: CurrentOutput = Arc::default();
+        let thread_output = output.clone();
         let thread = std::thread::Builder::new()
             .name("paracord-audio".to_string())
-            .spawn(move || run_audio_thread(rx, handle, thread_reference))
+            .spawn(move || run_audio_thread(rx, handle, thread_reference, thread_output))
             .expect("failed to spawn audio actor thread");
         Self {
             tx,
@@ -157,7 +164,15 @@ impl AudioActor {
             reference,
             echo_cancellation_enabled: Arc::new(AtomicBool::new(true)),
             agc_enabled: Arc::new(AtomicBool::new(true)),
+            output,
         }
+    }
+
+    /// How long a frame pushed to `ssrc`'s playout source now takes to be
+    /// heard. `None` with no output open or no such source on it.
+    pub fn source_output_latency(&self, ssrc: u32) -> Option<std::time::Duration> {
+        let output = self.output.lock().ok()?.clone()?;
+        output.source(ssrc)
     }
 
     /// A consumer for the far-end reference ring, held by the mic send task.
@@ -295,9 +310,15 @@ fn run_audio_thread(
     mut rx: mpsc::UnboundedReceiver<AudioCommand>,
     handle: tokio::runtime::Handle,
     reference: Arc<ReferenceRing>,
+    output: CurrentOutput,
 ) {
     let mut capture: Option<AudioCapture> = None;
     let mut playback: Option<AudioPlayback> = None;
+    let publish_output = |playback: Option<&AudioPlayback>| {
+        if let Ok(mut current) = output.lock() {
+            *current = playback.map(AudioPlayback::output_latency);
+        }
+    };
 
     // `blocking_recv` is valid here because this is a plain OS thread, never a
     // tokio worker. The runtime handle is only entered transiently, below,
@@ -342,6 +363,7 @@ fn run_audio_thread(
                         if let Some(old) = playback.replace(new_playback) {
                             old.stop();
                         }
+                        publish_output(playback.as_ref());
                         let _ = reply.send(Ok(()));
                     }
                     Err(err) => {
@@ -356,6 +378,7 @@ fn run_audio_thread(
                 if let Some(old) = playback.take() {
                     old.stop();
                 }
+                publish_output(None);
             }
             AudioCommand::AddPlaybackSource { ssrc, reply } => {
                 let sender = playback.as_ref().map(|pb| {
@@ -426,6 +449,7 @@ fn run_audio_thread(
                 if let Some(old) = playback.replace(replacement) {
                     old.stop();
                 }
+                publish_output(playback.as_ref());
                 let _ = reply.send(Ok(switched));
             }
             AudioCommand::Shutdown => {
@@ -435,6 +459,7 @@ fn run_audio_thread(
                 if let Some(old) = playback.take() {
                     old.stop();
                 }
+                publish_output(None);
                 break;
             }
         }

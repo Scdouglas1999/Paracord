@@ -642,6 +642,7 @@ fn stop_decode_worker(track_key: &str) {
 /// skipped a frame would otherwise draw on top of a missing reference.
 #[cfg(feature = "vpx")]
 fn dispatch_frame_to_worker(track_key: &str, frame: ReassembledVideoFrame, sink: KeyframeSink) {
+    super::av_sync::note_video_received(track_key, frame.timestamp_us);
     let layer_id = frame.simulcast_layer;
     let mut workers = match decode_workers().lock() {
         Ok(workers) => workers,
@@ -857,6 +858,16 @@ async fn deliver_decoded_frame(
         };
         let layer = frame.simulcast_layer;
         let was_keyframe = frame.encoded.is_keyframe;
+        let captured_us = frame.timestamp_us;
+        // Hold the picture for its sound when the sound's path is longer
+        // (stream audit B7, `av_sync`); before decode, so nothing GPU-side waits.
+        let held_us = match super::av_sync::video_hold(track_key, captured_us) {
+            Some(wait) => {
+                tokio::time::sleep(wait).await;
+                wait.as_micros() as u64
+            }
+            None => 0,
+        };
         let encoded = frame.encoded;
         // The synchronous decode runs on the blocking pool; awaiting it here
         // preserves this worker's strict FIFO ordering. The decoder yields
@@ -879,6 +890,9 @@ async fn deliver_decoded_frame(
                     match present {
                         Ok(()) => {
                             binding.present_errors.store(0, Ordering::Relaxed);
+                            // The picture's clock, which the stream's audio
+                            // plays against (stream audit B7, `av_sync`).
+                            super::av_sync::note_video_presented(track_key, captured_us, held_us);
                             let now = Instant::now();
                             let previous = binding
                                 .last_present
@@ -1969,7 +1983,7 @@ pub fn start_screen_share(
         session.screen_force_keyframe.store(true, Ordering::SeqCst);
         session.screen_applied_bitrate_kbps = 0;
         session.screen_encoder_generation = session.screen_encoder_generation.wrapping_add(1);
-        session.screen_capture_base_time = None;
+        session.screen_share_clock.reset();
         session.screen_last_timestamp_us = 0;
         reset_local_self_view_decode(session, true);
         Ok(())
@@ -2006,7 +2020,7 @@ pub fn stop_screen_share(session: &mut NativeMediaSession) {
         session.screen_force_keyframe.store(true, Ordering::SeqCst);
         session.screen_applied_bitrate_kbps = 0;
         session.screen_encoder_generation = session.screen_encoder_generation.wrapping_add(1);
-        session.screen_capture_base_time = None;
+        session.screen_share_clock.reset();
         session.screen_last_timestamp_us = 0;
         reset_local_self_view_decode(session, true);
     }
@@ -2902,7 +2916,8 @@ pub async fn begin_screen_frame(
     // first frame of this share, instead of a synthesized frame_index/fps. Kept
     // monotonic per track so a capture backend with a non-monotonic clock cannot
     // rewind playback timing.
-    let base = *session.screen_capture_base_time.get_or_insert(capture_time);
+    // One zero point with the share's audio (stream audit B7, `av_sync`).
+    let base = session.screen_share_clock.base_or_init(capture_time);
     let raw_us = capture_time
         .duration_since(base)
         .map(|delta| delta.as_micros() as u64)

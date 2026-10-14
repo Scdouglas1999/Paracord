@@ -43,18 +43,21 @@ pub struct StreamRemoteAudioState {
     pub last_packet: Instant,
     /// Set once a real (non-PLC) packet has decoded; gates PLC (AU9).
     pub has_played: bool,
+    /// Plays this audio against its stream's picture (stream audit B7).
+    pub sync: super::av_sync::AudioSync,
 }
 
+/// The publisher and stream of a screen-audio SSRC.
 fn stream_audio_publisher_for_ssrc(
     registry: &super::stream_registry::StreamRegistry,
     ssrc: u32,
-) -> Option<i64> {
+) -> Option<(i64, String)> {
     for track in registry.published_tracks() {
         if track.track_id.0.as_str() != "screen-audio" {
             continue;
         }
         if track.layers.iter().any(|layer| layer.ssrc == ssrc) {
-            return Some(track.publisher_user_id);
+            return Some((track.publisher_user_id, track.stream_id.0.clone()));
         }
     }
     None
@@ -242,6 +245,41 @@ pub fn spawn_audio_send_task(session: &mut NativeMediaSession) {
     session.audio_send_task = Some(handle);
 }
 
+/// Wire timestamps for screen audio. Each frame's capture stamp jitters by a
+/// few ms (when the sound server's read returned), and the capture's sample
+/// clock drifts against the wall clock. The wire stamp therefore advances one
+/// frame at a time and is pulled a sixteenth of the way toward the capture
+/// stamp each frame: smooth, yet never drifting off it. A jump past
+/// [`SCREEN_AUDIO_RESTAMP_TICKS`] (a gap in the capture, or the share's clock
+/// restarting when the screen encoder starts) is taken as is.
+#[derive(Default)]
+struct ScreenAudioStamps {
+    last: Option<u32>,
+}
+
+/// 60 ms of 48 kHz ticks: well past a read's jitter, well short of the gap
+/// a share-clock restart leaves.
+const SCREEN_AUDIO_RESTAMP_TICKS: i32 = 2_880;
+
+impl ScreenAudioStamps {
+    fn next(&mut self, captured: u32) -> u32 {
+        let stamp = match self.last {
+            Some(last) => {
+                let expected = last.wrapping_add(FRAME_SIZE as u32);
+                let error = captured.wrapping_sub(expected) as i32;
+                if error.abs() > SCREEN_AUDIO_RESTAMP_TICKS {
+                    captured
+                } else {
+                    expected.wrapping_add((error / 16) as u32)
+                }
+            }
+            None => captured,
+        };
+        self.last = Some(stamp);
+        stamp
+    }
+}
+
 /// Spawn the screen-audio send task on a dedicated SSRC (separate from voice).
 pub fn spawn_screen_audio_send_task(session: &mut NativeMediaSession) {
     let screen_audio_enabled = session.screen_audio_enabled.clone();
@@ -252,6 +290,7 @@ pub fn spawn_screen_audio_send_task(session: &mut NativeMediaSession) {
     let Some(mut screen_audio_rx) = session.screen_audio_rx.take() else {
         return;
     };
+    let share_clock = session.screen_share_clock.clone();
 
     let conn_inner = session.connection.inner().clone();
     let frame_encryptor = session.frame_encryptor.clone();
@@ -268,16 +307,21 @@ pub fn spawn_screen_audio_send_task(session: &mut NativeMediaSession) {
             }
         };
         let mut seq: u16 = 0;
-        let mut timestamp: u32 = 0;
+        let mut stamps = ScreenAudioStamps::default();
 
         loop {
             tokio::select! {
                 _ = shutdown.notified() => break,
                 frame = screen_audio_rx.recv() => {
-                    let Some(pcm) = frame else { break };
+                    let Some(frame) = frame else { break };
                     if !screen_audio_enabled.load(Ordering::SeqCst) {
                         continue;
                     }
+                    // Capture time on the share's clock, the one the screen's
+                    // frames carry (stream audit B7).
+                    let timestamp =
+                        stamps.next(share_clock.audio_timestamp(frame.captured_at));
+                    let pcm = frame.samples;
 
                     let key_epoch = {
                         let sender_keys = track_sender_keys.lock().await;
@@ -341,7 +385,6 @@ pub fn spawn_screen_audio_send_task(session: &mut NativeMediaSession) {
                     }
 
                     seq = seq.wrapping_add(1);
-                    timestamp = timestamp.wrapping_add(FRAME_SIZE as u32);
                 }
             }
         }
@@ -473,7 +516,7 @@ pub fn spawn_datagram_recv_task(session: &mut NativeMediaSession, app: super::Ca
                                 stream_audio_publisher_for_ssrc(&registry, header.ssrc)
                             };
 
-                            if let Some(publisher_user_id) = stream_publisher {
+                            if let Some((publisher_user_id, stream_id)) = stream_publisher {
                                 // Stereo decoder: the screen-audio track is 48kHz
                                 // stereo end-to-end (contract C4).
                                 let decoder = match OpusDecoder::new_stereo() {
@@ -508,6 +551,7 @@ pub fn spawn_datagram_recv_task(session: &mut NativeMediaSession, app: super::Ca
                                     playback_tx,
                                     last_packet: Instant::now(),
                                     has_played: false,
+                                    sync: super::av_sync::AudioSync::new(&stream_id),
                                 };
                                 state.jitter_buffer.insert(
                                     header.sequence,
@@ -663,8 +707,15 @@ fn pull_and_decode(
                 Err(_) => decoder.decode_plc().ok(),
             }
         }
+        None if jitter.is_dry() => {
+            // Nothing newer has arrived: the frame is late, not lost. The
+            // mixer's buffer covers the wait; concealing here as well would add
+            // 20 ms to everything after it each time.
+            None
+        }
         None => {
-            // Try FEC recovery from the next buffered packet before PLC.
+            // Lost: later frames are here. Try FEC recovery from the next
+            // buffered packet before PLC.
             if let Some(next) = jitter.peek_next_payload() {
                 if let Ok(samples) = decoder.decode_fec(next) {
                     *has_played = true;
@@ -747,7 +798,8 @@ pub fn spawn_playout_task(session: &mut NativeMediaSession) {
                         audio_actor.remove_playback_source(ssrc).await;
                     }
 
-                    // Stream / system-audio sources (stereo → cpal mixer, AU4).
+                    // Stream / system-audio sources (stereo → cpal mixer, AU4),
+                    // each played against its picture (stream audit B7).
                     {
                         let mut stream_audio = stream_remote_audio.lock().await;
                         for (ssrc, state) in stream_audio.iter_mut() {
@@ -755,11 +807,47 @@ pub fn spawn_playout_task(session: &mut NativeMediaSession) {
                                 reap.push(*ssrc);
                                 continue;
                             }
-                            if let Some(pcm) = pull_and_decode(
-                                &mut state.jitter_buffer,
-                                &mut state.decoder,
-                                &mut state.has_played,
-                            ) {
+                            let action = state.sync.plan(super::av_sync::PlayoutState {
+                                head_timestamp: state.jitter_buffer.peek_next_timestamp(),
+                                newest_timestamp: state.jitter_buffer.peek_newest_timestamp(),
+                                buffered: state.jitter_buffer.buffered(),
+                                output_latency_us: audio_actor
+                                    .source_output_latency(*ssrc)
+                                    .map(|latency| latency.as_micros() as u64),
+                                has_played: state.has_played,
+                            });
+                            let pcm = match action {
+                                super::av_sync::SyncAction::Hold => {
+                                    // Early: the buffered frames wait one more
+                                    // tick. Once sound has started, conceal the
+                                    // gap rather than leave a hole.
+                                    if state.has_played {
+                                        state.decoder.decode_plc().ok()
+                                    } else {
+                                        None
+                                    }
+                                }
+                                super::av_sync::SyncAction::Skip => {
+                                    // Late: decode the head (the decoder's state
+                                    // must see it) and play the frame after it.
+                                    let _ = pull_and_decode(
+                                        &mut state.jitter_buffer,
+                                        &mut state.decoder,
+                                        &mut state.has_played,
+                                    );
+                                    pull_and_decode(
+                                        &mut state.jitter_buffer,
+                                        &mut state.decoder,
+                                        &mut state.has_played,
+                                    )
+                                }
+                                super::av_sync::SyncAction::Play => pull_and_decode(
+                                    &mut state.jitter_buffer,
+                                    &mut state.decoder,
+                                    &mut state.has_played,
+                                ),
+                            };
+                            if let Some(pcm) = pcm {
                                 if !pcm.is_empty() {
                                     let _ = state.playback_tx.try_send(pcm);
                                 }
@@ -830,6 +918,27 @@ fn mix_audio_in_place(primary: &mut [f32], overlay: &[f32]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn screen_audio_stamps_advance_a_frame_and_follow_the_capture_clock() {
+        let mut stamps = super::ScreenAudioStamps::default();
+        assert_eq!(stamps.next(48_000), 48_000);
+        // 3 ms of read jitter barely moves the stamp.
+        assert_eq!(stamps.next(48_000 + 960 + 144), 48_000 + 960 + 9);
+        // A steady 1 ms offset is followed within a few dozen frames.
+        let mut captured = 48_000 + 960 + 48;
+        let mut stamp = 0;
+        for _ in 0..80 {
+            captured += 960;
+            stamp = stamps.next(captured);
+        }
+        assert!(
+            (captured as i64 - stamp as i64).abs() <= 16,
+            "{captured} {stamp}"
+        );
+        // A restart of the share's clock is taken at once.
+        assert_eq!(stamps.next(480), 480);
+    }
 
     #[test]
     fn compute_audio_level_reports_silence_as_max() {

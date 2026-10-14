@@ -2,7 +2,7 @@
 """audiorec.py <target node> <log>: record a sink's monitor in a private graph
 (PIPEWIRE_REMOTE) and log the onset of every tone burst pattern.py made.
 
-Lines: "BURST t=<CLOCK_MONOTONIC µs of the onset> peak=<0..1>" and, once a
+Lines: "BURST t=<CLOCK_MONOTONIC µs of the onset> peak=<0..1> freq=<Hz>" and, once a
 second, "LEVEL t= rms=" so silence (no stream audio at all) is visible too.
 
 The onset time is taken from the buffer's arrival (CLOCK_MONOTONIC when the
@@ -56,7 +56,14 @@ def on_sample(appsink):
         first = int(loud[0])
         onset = arrival - int((len(data) - first) * 1_000_000 / 48000)
         if onset > state['quiet_until']:
-            log.write(f'BURST t={onset} peak={float(np.abs(data).max()):.3f} arrival={arrival} n={len(data)}\n')
+            # The burst's pitch tells the pattern's 1 kHz bursts (another
+            # application's sound) from a tone the app itself plays.
+            seg = data[first:first + 2048]
+            freq = 0
+            if seg.size >= 128:
+                spec = np.abs(np.fft.rfft(seg * np.hanning(seg.size)))
+                freq = int(round(np.argmax(spec[1:]) + 1) * 48000 / seg.size)
+            log.write(f'BURST t={onset} peak={float(np.abs(data).max()):.3f} arrival={arrival} n={len(data)} freq={freq}\n')
         state['quiet_until'] = onset + 500_000
     state['acc'].append(data)
     if arrival - state['last_level'] > 1_000_000:

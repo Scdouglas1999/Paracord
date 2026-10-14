@@ -183,6 +183,9 @@ pub(crate) fn create_capturer(
         flags: cm::TimeFlags::VALID,
     });
     stream_config.set_captures_audio(options.captures_audio);
+    // Without this the option was accepted and ignored: the sharer's own
+    // playback (call voices, the app's sounds) went out in the stream audio.
+    stream_config.set_excludes_current_process_audio(options.exclude_current_process_audio);
 
     let error_handler = ErrorHandler::with(ErrorHandlerInner { error_flag });
     let stream = sc::Stream::with_delegate(&filter, &stream_config, error_handler.as_ref());

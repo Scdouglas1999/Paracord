@@ -4,7 +4,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, SampleRate as CpalSampleRate, Stream, StreamConfig};
 use rubato::{FftFixedIn, Resampler};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
 use tokio::sync::mpsc;
@@ -57,6 +57,52 @@ pub fn list_output_devices_raw() -> Result<Vec<(usize, String, bool)>, PlaybackE
 const DRIFT_LOW_WATERMARK_MS: usize = 40;
 const DRIFT_HIGH_WATERMARK_MS: usize = 60;
 
+/// The device buffer cpal asks for on Linux, in ms. cpal's ALSA default is a
+/// 100 ms buffer that it keeps full, and PipeWire's ALSA plugin reports none of
+/// it as delay: every sound left ~100 ms later than anything downstream could
+/// see, which put stream audio behind its picture (stream audit B7). 40 ms in
+/// 10 ms periods is what a PipeWire graph runs at anyway.
+#[cfg(target_os = "linux")]
+const LINUX_OUTPUT_BUFFER_MS: u32 = 40;
+/// One PipeWire graph quantum at its defaults (1024 frames at 48 kHz).
+#[cfg(target_os = "linux")]
+const GRAPH_QUANTUM_US: u64 = 21_333;
+
+/// The output buffer to request, and the latency it adds at least: cpal
+/// refills the buffer whenever a period is free, so it holds between
+/// `buffer - period` and `buffer`; the floor is its middle.
+///
+/// Elsewhere the platform default stays (WASAPI shared mode and CoreAudio pick
+/// their own and report it in the callback timestamps).
+fn output_buffer_size(
+    device_sample_rate: u32,
+    supported: &cpal::SupportedBufferSize,
+) -> (cpal::BufferSize, u64) {
+    #[cfg(target_os = "linux")]
+    {
+        let wanted = device_sample_rate * LINUX_OUTPUT_BUFFER_MS / 1000;
+        let frames = match supported {
+            cpal::SupportedBufferSize::Range { min, max } => wanted.clamp(*min, *max),
+            cpal::SupportedBufferSize::Unknown => wanted,
+        };
+        let buffer_us = frames as u64 * 1_000_000 / device_sample_rate.max(1) as u64;
+        // Period = buffer / 4 (cpal's ALSA backend). Behind the ALSA buffer
+        // the sound server's graph holds one more quantum before the device
+        // (PipeWire's default, 1024 frames at 48 kHz), which nothing reports
+        // to this side either. Measured in the stream-audit lab, leaving it
+        // out put stream audio ~45 ms behind its picture.
+        (
+            cpal::BufferSize::Fixed(frames),
+            buffer_us - buffer_us / 8 + GRAPH_QUANTUM_US,
+        )
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (device_sample_rate, supported);
+        (cpal::BufferSize::Default, 0)
+    }
+}
+
 /// Internal buffer for a single audio source.
 ///
 /// Samples are stored **interleaved stereo** at the device sample rate. Mono
@@ -76,6 +122,9 @@ struct SourceBuffer {
     /// Low/high watermark in *frames* for drift control (contract AU14).
     low_watermark_frames: usize,
     high_watermark_frames: usize,
+    /// Device-rate frames this source's resampler holds back before they
+    /// reach the ring (zero at 48 kHz). Part of its output latency.
+    resampler_delay_frames: usize,
 }
 
 impl SourceBuffer {
@@ -92,6 +141,7 @@ impl SourceBuffer {
             gain: 1.0,
             low_watermark_frames: low,
             high_watermark_frames: high,
+            resampler_delay_frames: 0,
         }
     }
 
@@ -167,6 +217,33 @@ pub struct AudioPlayback {
     mixer: Arc<Mutex<MixerState>>,
     stop_flag: Arc<AtomicBool>,
     device_sample_rate: u32,
+    device_latency_us: Arc<AtomicU64>,
+}
+
+/// How long a frame handed to a source now takes to be heard: what the source
+/// has buffered ahead of it, its resampler's delay, and the device's own
+/// latency (callback to playback, as the sound server reports it). Stream
+/// audio uses it to schedule each frame against the picture.
+#[derive(Clone)]
+pub struct OutputLatency {
+    mixer: Arc<Mutex<MixerState>>,
+    device_sample_rate: u32,
+    device_latency_us: Arc<AtomicU64>,
+}
+
+impl OutputLatency {
+    /// `None` when the source is not on this output.
+    pub fn source(&self, source_id: u32) -> Option<std::time::Duration> {
+        let frames = {
+            let mixer = self.mixer.lock().ok()?;
+            let source = mixer.sources.get(&source_id)?;
+            source.available_frames() + source.resampler_delay_frames
+        };
+        let buffered_us = frames as u64 * 1_000_000 / self.device_sample_rate.max(1) as u64;
+        Some(std::time::Duration::from_micros(
+            buffered_us + self.device_latency_us.load(Ordering::Relaxed),
+        ))
+    }
 }
 
 // SAFETY: `cpal::Stream` is `!Send` as a cross-platform precaution. On Windows
@@ -266,10 +343,13 @@ impl AudioPlayback {
             "output device config"
         );
 
+        let (buffer_size, buffered_floor_us) =
+            output_buffer_size(device_sample_rate, config.buffer_size());
+        info!(?buffer_size, buffered_floor_us, "output buffer");
         let stream_config = StreamConfig {
             channels: config.channels(),
             sample_rate: CpalSampleRate(device_sample_rate),
-            buffer_size: cpal::BufferSize::Default,
+            buffer_size,
         };
 
         if device_sample_rate != SAMPLE_RATE {
@@ -288,6 +368,7 @@ impl AudioPlayback {
 
         let mixer_ref = mixer.clone();
         let stop = stop_flag.clone();
+        let device_latency_us = Arc::new(AtomicU64::new(buffered_floor_us));
 
         // Attach a far-end reference producer for this device (contract AEC4).
         // The producer carries the device rate so the AEC consumer resamples to
@@ -307,19 +388,40 @@ impl AudioPlayback {
         let stream = match sample_format {
             SampleFormat::F32 => device.build_output_stream(
                 &stream_config,
-                build_output_callback::<f32>(mixer_ref, stop, device_channels, reference_producer),
+                build_output_callback::<f32>(
+                    mixer_ref,
+                    stop,
+                    device_channels,
+                    reference_producer,
+                    device_latency_us.clone(),
+                    buffered_floor_us,
+                ),
                 error_callback,
                 None,
             )?,
             SampleFormat::I16 => device.build_output_stream(
                 &stream_config,
-                build_output_callback::<i16>(mixer_ref, stop, device_channels, reference_producer),
+                build_output_callback::<i16>(
+                    mixer_ref,
+                    stop,
+                    device_channels,
+                    reference_producer,
+                    device_latency_us.clone(),
+                    buffered_floor_us,
+                ),
                 error_callback,
                 None,
             )?,
             _ => device.build_output_stream(
                 &stream_config,
-                build_output_callback::<f32>(mixer_ref, stop, device_channels, reference_producer),
+                build_output_callback::<f32>(
+                    mixer_ref,
+                    stop,
+                    device_channels,
+                    reference_producer,
+                    device_latency_us.clone(),
+                    buffered_floor_us,
+                ),
                 error_callback,
                 None,
             )?,
@@ -333,7 +435,17 @@ impl AudioPlayback {
             mixer,
             stop_flag,
             device_sample_rate,
+            device_latency_us,
         })
+    }
+
+    /// A handle that reports each source's output latency on this device.
+    pub fn output_latency(&self) -> OutputLatency {
+        OutputLatency {
+            mixer: self.mixer.clone(),
+            device_sample_rate: self.device_sample_rate,
+            device_latency_us: self.device_latency_us.clone(),
+        }
     }
 
     /// Add a new **mono** audio source (remote voice participant).
@@ -392,6 +504,14 @@ impl AudioPlayback {
             } else {
                 None
             };
+            if let Some(resampler) = resampler.as_ref() {
+                let delay = resampler.output_delay();
+                if let Ok(mut state) = mixer.lock() {
+                    if let Some(buf) = state.sources.get_mut(&source_id) {
+                        buf.resampler_delay_frames = delay;
+                    }
+                }
+            }
             // Preallocated planar I/O so the hot path allocates nothing.
             let mut planar_in: [Vec<f32>; 2] = [vec![0.0; FRAME_SIZE], vec![0.0; FRAME_SIZE]];
             let mut interleaved_out: Vec<f32> = Vec::with_capacity(FRAME_SIZE * 2);
@@ -536,12 +656,25 @@ fn build_output_callback<S: FromF32Sample>(
     stop_flag: Arc<AtomicBool>,
     device_channels: usize,
     reference: Option<ReferenceProducer>,
+    device_latency_us: Arc<AtomicU64>,
+    buffered_floor_us: u64,
 ) -> impl FnMut(&mut [S], &cpal::OutputCallbackInfo) + Send + 'static {
     // Reused scratch for the mono far-end reference of one callback block. Held
     // across calls so the hot path allocates nothing; the ring push is lock-free
     // (contract AEC4: no locking added to the render callback).
     let mut ref_scratch: Vec<f32> = Vec::with_capacity(2048);
-    move |output: &mut [S], _info: &cpal::OutputCallbackInfo| {
+    move |output: &mut [S], info: &cpal::OutputCallbackInfo| {
+        // How far ahead of the speaker this block is written: the device and
+        // sound-server latency stream audio is scheduled against.
+        // On Linux the ALSA status reports no delay through PipeWire's ALSA
+        // plugin, so what the buffer holds is the floor (see
+        // `output_buffer_size`).
+        let timestamp = info.timestamp();
+        if let Some(ahead) = timestamp.playback.duration_since(&timestamp.callback) {
+            let ahead_us = (ahead.as_micros() as u64).max(buffered_floor_us);
+            device_latency_us.store(ahead_us, Ordering::Relaxed);
+        }
+
         if stop_flag.load(Ordering::Relaxed) {
             // Fill with silence
             for s in output.iter_mut() {

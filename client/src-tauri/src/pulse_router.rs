@@ -72,6 +72,8 @@ pub struct PulseStreamRouter {
     /// spam: every sweep still re-attempts them, because a stream can become
     /// movable later (AU11c).
     skipped: HashSet<u64>,
+    /// Own sink-inputs already named in the log, so each is reported once.
+    own_logged: HashSet<u64>,
 }
 
 fn pactl(args: &[&str]) -> Result<String, String> {
@@ -100,6 +102,85 @@ fn as_u64(value: &serde_json::Value) -> Option<u64> {
     value
         .as_u64()
         .or_else(|| value.as_str().and_then(|s| s.parse().ok()))
+}
+
+/// The parent of `pid`, from `/proc/<pid>/stat`. The command name sits in
+/// parentheses and may itself contain spaces or parentheses, so the fields are
+/// read after the last `)`.
+fn read_parent_pid(pid: u32) -> Option<u32> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    parse_parent_pid(&stat)
+}
+
+fn parse_parent_pid(stat: &str) -> Option<u32> {
+    let after_comm = &stat[stat.rfind(')')? + 1..];
+    // Fields after the name: state, ppid, ...
+    after_comm.split_whitespace().nth(1)?.parse().ok()
+}
+
+/// Sound-server client index → the process ids it carries.
+type ClientPids = HashMap<u64, Vec<u32>>;
+
+fn process_ids(properties: Option<&serde_json::Value>) -> impl Iterator<Item = u32> + '_ {
+    ["application.process.id", "pipewire.sec.pid"]
+        .into_iter()
+        .filter_map(move |key| properties.and_then(|p| p.get(key)).and_then(as_u64))
+        .filter_map(|pid| u32::try_from(pid).ok())
+}
+
+/// Every client's process ids.
+fn client_pids() -> Result<ClientPids, String> {
+    Ok(pactl_json("clients")?
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|client| {
+            let index = client.get("index").and_then(as_u64)?;
+            Some((index, process_ids(client.get("properties")).collect()))
+        })
+        .collect())
+}
+
+/// Whether `pid` is `root` or one of its descendants. Bounded so a corrupt or
+/// cyclic table cannot spin.
+fn pid_in_tree(pid: u32, root: u32, parent_of: &impl Fn(u32) -> Option<u32>) -> bool {
+    let mut current = pid;
+    for _ in 0..64 {
+        if current == root {
+            return true;
+        }
+        if current <= 1 {
+            return false;
+        }
+        match parent_of(current) {
+            Some(parent) if parent != current => current = parent,
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// A sink-input's name for the log: application name, binary and pid.
+fn describe_input(input: &serde_json::Value) -> String {
+    let property = |key: &str| {
+        input
+            .get("properties")
+            .and_then(|p| p.get(key))
+            .and_then(|v| {
+                v.as_str()
+                    .map(str::to_string)
+                    .or_else(|| as_u64(v).map(|n| n.to_string()))
+            })
+            .unwrap_or_else(|| "?".to_string())
+    };
+    format!(
+        "{}, client {}",
+        property("application.name"),
+        input
+            .get("client")
+            .and_then(as_u64)
+            .map_or_else(|| "?".to_string(), |client| client.to_string())
+    )
 }
 
 impl PulseStreamRouter {
@@ -173,6 +254,7 @@ impl PulseStreamRouter {
             real_default_sink,
             moved: HashMap::new(),
             skipped: HashSet::new(),
+            own_logged: HashSet::new(),
         };
         router.sync();
         Ok(router)
@@ -240,12 +322,15 @@ impl PulseStreamRouter {
         let Ok(inputs) = pactl_json("sink-inputs") else {
             return;
         };
-        let own_pid = std::process::id().to_string();
+        let own_pid = std::process::id();
+        let Ok(clients) = client_pids() else {
+            return;
+        };
         for input in inputs.as_array().into_iter().flatten() {
             if input.get("sink").and_then(as_u64) != Some(capture_index) {
                 continue;
             }
-            if !Self::input_is_own(input, &own_pid) {
+            if !Self::input_is_own(input, &clients, own_pid) {
                 continue;
             }
             if let Some(index) = input.get("index").and_then(as_u64) {
@@ -268,20 +353,50 @@ impl PulseStreamRouter {
         })
     }
 
-    /// Whether a sink-input belongs to Paracord, by process id or application
-    /// name. Our own streams must never be moved onto (and are rescued off) the
-    /// capture sink.
-    fn input_is_own(input: &serde_json::Value, own_pid: &str) -> bool {
+    /// Whether a sink-input belongs to Paracord: played by this process or by
+    /// any process it started, or named after it. Our own streams must never be
+    /// moved onto (and are rescued off) the capture sink.
+    ///
+    /// The process tree matters because the webview's audio does not come from
+    /// this process. WebKitGTK plays the join/leave chimes, notification sounds
+    /// and every other page sound from its `WebKitWebProcess` child (as
+    /// `PipeWire ALSA [WebKitWebProcess]`, or GStreamer's `pipewiresink`), so a
+    /// pid-equality check let all of it into the stream (stream audit B6).
+    ///
+    /// Both pids a stream can carry are checked: `application.process.id`
+    /// (what the client says, in its own pid namespace) and `pipewire.sec.pid`
+    /// (what PipeWire saw on the socket), on the stream and on the client that
+    /// owns it. A PipeWire-native or ALSA-plugin stream (WebKit's, and cpal's)
+    /// carries them only on its client, so the client list is consulted too.
+    /// Any one in our tree is enough.
+    fn input_is_own(input: &serde_json::Value, clients: &ClientPids, own_pid: u32) -> bool {
+        Self::input_is_own_with(input, clients, own_pid, read_parent_pid)
+    }
+
+    fn input_is_own_with(
+        input: &serde_json::Value,
+        clients: &ClientPids,
+        own_pid: u32,
+        parent_of: impl Fn(u32) -> Option<u32>,
+    ) -> bool {
         let properties = input.get("properties");
-        let process_id = properties
-            .and_then(|p| p.get("application.process.id"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
         let app_name = properties
             .and_then(|p| p.get("application.name"))
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        process_id == own_pid || app_name.to_ascii_lowercase().contains("paracord")
+        if app_name.to_ascii_lowercase().contains("paracord") {
+            return true;
+        }
+        let client_pids = input
+            .get("client")
+            .and_then(as_u64)
+            .and_then(|client| clients.get(&client))
+            .into_iter()
+            .flatten()
+            .copied();
+        process_ids(properties)
+            .chain(client_pids)
+            .any(|pid| pid_in_tree(pid, own_pid, &parent_of))
     }
 
     /// Whether this sink-input is sound-server plumbing rather than an
@@ -374,7 +489,16 @@ impl PulseStreamRouter {
         // before (transient DONT_MOVE) may be movable now. The previous sweep's
         // skip set is kept only to avoid re-logging the same failure every 1s.
         let previously_skipped = std::mem::take(&mut self.skipped);
-        let own_pid = std::process::id().to_string();
+        let own_pid = std::process::id();
+        // Without the clients, Paracord's own streams (whose pids sit on their
+        // client) cannot be told apart: skip the sweep rather than move them.
+        let clients = match client_pids() {
+            Ok(clients) => clients,
+            Err(err) => {
+                eprintln!("[pulse_router] client enumeration failed: {err}");
+                return;
+            }
+        };
         for input in inputs.as_array().into_iter().flatten() {
             let Some(index) = input.get("index").and_then(as_u64) else {
                 continue;
@@ -385,7 +509,14 @@ impl PulseStreamRouter {
                 continue;
             }
             let current_sink = input.get("sink").and_then(as_u64);
-            if Self::input_is_own(input, &own_pid) {
+            if Self::input_is_own(input, &clients, own_pid) {
+                if self.own_logged.insert(index) {
+                    eprintln!(
+                        "[pulse_router] keeping sink-input {index} ({}) out of the stream \
+                         audio: it is Paracord's own playback",
+                        describe_input(input)
+                    );
+                }
                 // Our own playback must NEVER sit on the capture sink — it
                 // would be inaudible AND loop voice chat into the stream
                 // (e.g. after a default-sink switch dragged it there). Send
@@ -511,6 +642,150 @@ mod tests {
     use super::PulseStreamRouter;
     use serde_json::json;
     use std::collections::HashMap;
+
+    /// A process table: 100 is Paracord, 200 its WebKit web process, 300 a
+    /// grandchild, 400 some other application under the session's init.
+    fn parents(pid: u32) -> Option<u32> {
+        match pid {
+            100 => Some(50),
+            200 => Some(100),
+            300 => Some(200),
+            400 => Some(1),
+            50 => Some(1),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn the_webviews_child_process_is_own() {
+        // What the stream audit saw: WebKit's chimes, named after the child.
+        let webkit = json!({
+            "properties": {
+                "application.name": "PipeWire ALSA [WebKitWebProcess]",
+                "application.process.id": "200",
+                "application.process.binary": "WebKitWebProcess"
+            }
+        });
+        assert!(PulseStreamRouter::input_is_own_with(
+            &webkit,
+            &HashMap::new(),
+            100,
+            parents
+        ));
+        let grandchild = json!({"properties": {"application.process.id": 300}});
+        assert!(PulseStreamRouter::input_is_own_with(
+            &grandchild,
+            &HashMap::new(),
+            100,
+            parents
+        ));
+    }
+
+    #[test]
+    fn the_socket_pid_counts_when_the_declared_one_does_not() {
+        let input = json!({
+            "properties": {
+                "application.name": "WebKitWebProcess",
+                "application.process.id": "2",
+                "pipewire.sec.pid": "200"
+            }
+        });
+        assert!(PulseStreamRouter::input_is_own_with(
+            &input,
+            &HashMap::new(),
+            100,
+            |pid| {
+                if pid == 2 {
+                    Some(1)
+                } else {
+                    parents(pid)
+                }
+            }
+        ));
+    }
+
+    #[test]
+    fn a_stream_whose_pid_is_only_on_its_client_is_judged_by_the_client() {
+        // What PipeWire's ALSA plugin and native streams look like through
+        // pipewire-pulse: no pid on the stream, `client` names the owner.
+        let webkit = json!({
+            "client": 74,
+            "properties": {"application.name": "PipeWire ALSA [WebKitWebProcess]"}
+        });
+        let clients = HashMap::from([(74, vec![200]), (48, vec![400])]);
+        assert!(PulseStreamRouter::input_is_own_with(
+            &webkit, &clients, 100, parents
+        ));
+        let other = json!({"client": 48, "properties": {"application.name": "sa-pattern-audio"}});
+        assert!(!PulseStreamRouter::input_is_own_with(
+            &other, &clients, 100, parents
+        ));
+    }
+
+    #[test]
+    fn other_applications_are_not_own() {
+        let game = json!({
+            "properties": {"application.name": "Example Game", "application.process.id": "400"}
+        });
+        assert!(!PulseStreamRouter::input_is_own_with(
+            &game,
+            &HashMap::new(),
+            100,
+            parents
+        ));
+        let unknown = json!({"properties": {"application.process.id": "999"}});
+        assert!(!PulseStreamRouter::input_is_own_with(
+            &unknown,
+            &HashMap::new(),
+            100,
+            parents
+        ));
+        let anonymous = json!({"properties": {}});
+        assert!(!PulseStreamRouter::input_is_own_with(
+            &anonymous,
+            &HashMap::new(),
+            100,
+            parents
+        ));
+    }
+
+    #[test]
+    fn own_process_and_own_name_are_own() {
+        let voice = json!({"properties": {"application.process.id": "100"}});
+        assert!(PulseStreamRouter::input_is_own_with(
+            &voice,
+            &HashMap::new(),
+            100,
+            parents
+        ));
+        let named = json!({"properties": {"application.name": "Paracord"}});
+        assert!(PulseStreamRouter::input_is_own_with(
+            &named,
+            &HashMap::new(),
+            100,
+            parents
+        ));
+    }
+
+    #[test]
+    fn parent_pid_is_read_after_the_last_parenthesis() {
+        assert_eq!(
+            super::parse_parent_pid("4242 (Web Content (x)) S 4100 4242 4100 0 -1"),
+            Some(4100)
+        );
+        assert_eq!(super::parse_parent_pid("garbage"), None);
+    }
+
+    #[test]
+    fn this_process_is_in_its_own_tree() {
+        let own = std::process::id();
+        let input = json!({"properties": {"application.process.id": own.to_string()}});
+        assert!(PulseStreamRouter::input_is_own(
+            &input,
+            &HashMap::new(),
+            own
+        ));
+    }
 
     #[test]
     fn identifies_virtual_filter_output_as_routing_infrastructure() {

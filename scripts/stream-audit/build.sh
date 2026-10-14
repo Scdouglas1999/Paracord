@@ -7,7 +7,7 @@ ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 OUT=$(realpath -m "$1")
 mkdir -p "$OUT"
 cd "$ROOT"
-TAURI_CONFIG='{"build":{"devUrl":"http://localhost:1477"}}' \
+TAURI_CONFIG="{\"build\":{\"devUrl\":\"http://localhost:${SA_UI_PORT:-1477}\"}}" \
   cargo build --release -p paracord-desktop --no-default-features --features vpx
 cp "${CARGO_TARGET_DIR:-$ROOT/target}/release/paracord-desktop" "$OUT/paracord-desktop-audit"
 cargo build --release --bin paracord-server

@@ -7,8 +7,15 @@ use paracord_codec::audio::resample::{StereoResampler, STEREO_FRAME_SAMPLES};
 
 /// Sink for captured system audio: contract C4 delivers 48kHz stereo interleaved
 /// 20ms frames (1920 samples) straight into the media session's `screen_audio_tx`.
-/// There is no JS round-trip anymore.
-type ScreenAudioSink = mpsc::Sender<Vec<f32>>;
+/// There is no JS round-trip anymore. Each frame carries the wall-clock time of
+/// its first sample, the clock the screen's frames are stamped with, so viewers
+/// can play the two in sync (stream audit B7).
+type ScreenAudioSink = mpsc::Sender<ScreenAudioFrame>;
+
+use crate::native_media::av_sync::ScreenAudioFrame;
+
+/// One 20 ms frame.
+const FRAME_DURATION: std::time::Duration = std::time::Duration::from_millis(20);
 
 /// One-shot report of whether the capture device actually opened.
 ///
@@ -74,22 +81,57 @@ impl StereoFrameEmitter {
         })
     }
 
-    /// Push an interleaved-stereo chunk at the source rate; forwards any complete
-    /// 48kHz 20ms frames to `sink`.
-    fn push(&mut self, interleaved_stereo: &[f32], sink: &ScreenAudioSink) {
+    /// Push an interleaved-stereo chunk at the source rate whose last sample was
+    /// captured at `chunk_end`; forwards any complete 48kHz 20ms frames to
+    /// `sink`, each stamped with the capture time of its first sample.
+    fn push(
+        &mut self,
+        interleaved_stereo: &[f32],
+        chunk_end: std::time::SystemTime,
+        sink: &ScreenAudioSink,
+    ) {
+        for (samples, captured_at) in self.frames(interleaved_stereo, chunk_end) {
+            let _ = sink.try_send(ScreenAudioFrame {
+                samples,
+                captured_at,
+            });
+        }
+    }
+
+    /// The complete frames a chunk finishes, oldest first, with the capture
+    /// time of each one's first sample. A frame ends where the samples still
+    /// waiting behind it begin: the chunk's end minus what is left over.
+    fn frames(
+        &mut self,
+        interleaved_stereo: &[f32],
+        chunk_end: std::time::SystemTime,
+    ) -> Vec<(Vec<f32>, std::time::SystemTime)> {
+        let mut out = Vec::new();
         if let Some(resampler) = self.resampler.as_mut() {
             self.scratch.clear();
             resampler.push(interleaved_stereo, &mut self.scratch);
-            for frame in self.scratch.drain(..) {
-                let _ = sink.try_send(frame);
+            // The resampler keeps its own partial frame; treat the newest
+            // emitted frame as ending with the chunk.
+            let count = self.scratch.len() as u32;
+            for (index, frame) in self.scratch.drain(..).enumerate() {
+                let newer = count - 1 - index as u32;
+                let start = chunk_end - FRAME_DURATION * (newer + 1);
+                out.push((frame, start));
             }
         } else {
             self.accumulator.extend_from_slice(interleaved_stereo);
-            while self.accumulator.len() >= STEREO_FRAME_SAMPLES {
+            let complete = self.accumulator.len() / STEREO_FRAME_SAMPLES;
+            let leftover = self.accumulator.len() % STEREO_FRAME_SAMPLES;
+            let leftover_time =
+                std::time::Duration::from_micros((leftover / 2) as u64 * 1_000_000 / 48_000);
+            for index in 0..complete {
+                let newer = (complete - 1 - index) as u32;
+                let start = chunk_end - leftover_time - FRAME_DURATION * (newer + 1);
                 let frame: Vec<f32> = self.accumulator.drain(..STEREO_FRAME_SAMPLES).collect();
-                let _ = sink.try_send(frame);
+                out.push((frame, start));
             }
         }
+        out
     }
 }
 
@@ -819,16 +861,18 @@ fn capture_loop_with_client(
                     // AUDCLNT_BUFFERFLAGS_SILENT = 2
                     let is_silent = (flags & 2) != 0;
 
+                    // The packet was just captured: its last sample is now.
+                    let chunk_end = std::time::SystemTime::now();
                     if is_silent {
                         let stereo = vec![0.0f32; frames_read as usize * 2];
-                        emitter.push(&stereo, sink);
+                        emitter.push(&stereo, chunk_end, sink);
                     } else {
                         let data_bytes = frames_read as usize * block_align;
                         let raw_data = std::slice::from_raw_parts(data_ptr, data_bytes);
                         let stereo =
                             interleaved_to_stereo_f32(raw_data, num_channels, bytes_per_sample);
                         if !stereo.is_empty() {
-                            emitter.push(&stereo, sink);
+                            emitter.push(&stereo, chunk_end, sink);
                         }
                     }
                 }
@@ -932,6 +976,13 @@ fn capture_loop(
             eprintln!("[audio_capture] PulseAudio read error: {e}");
             break;
         }
+        // The fragment's last sample reached the sound server's source this
+        // long ago (its recording latency); the read returned just now.
+        let chunk_end = std::time::SystemTime::now()
+            - pulse
+                .get_latency()
+                .map(|latency| std::time::Duration::from_micros(latency.0))
+                .unwrap_or_default();
 
         // Convert raw f32le bytes to Vec<f32>
         let samples: Vec<f32> = buffer
@@ -942,7 +993,7 @@ fn capture_loop(
             .collect();
 
         if !samples.is_empty() {
-            emitter.push(&samples, sink);
+            emitter.push(&samples, chunk_end, sink);
         }
     }
 
@@ -1104,6 +1155,32 @@ mod tests {
     use super::*;
     use std::time::{Duration, Instant};
 
+    /// Each 20 ms frame is stamped with its first sample's capture time: the
+    /// chunk's end, minus the samples still waiting behind it, minus newer
+    /// frames from the same chunk.
+    #[test]
+    fn emitted_frames_carry_their_first_samples_capture_time() {
+        let mut emitter = StereoFrameEmitter::new(48_000).expect("48 kHz emitter");
+        let end = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+        // 50 ms of stereo: two whole frames and 10 ms left over.
+        let frames = emitter.frames(&vec![0.0; 2 * 2400], end);
+        let starts: Vec<_> = frames.iter().map(|(_, at)| *at).collect();
+        assert_eq!(
+            starts,
+            vec![
+                end - Duration::from_millis(50),
+                end - Duration::from_millis(30)
+            ]
+        );
+        // The next 10 ms completes the third frame, which began 10 ms before
+        // the first chunk ended.
+        let later = end + Duration::from_millis(10);
+        let frames = emitter.frames(&vec![0.0; 2 * 480], later);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].1, end - Duration::from_millis(10));
+        assert_eq!(frames[0].0.len(), STEREO_FRAME_SAMPLES);
+    }
+
     /// The renderer-settable flag is a request for audio, not a permission.
     /// Nothing about it should read as consent to a future reader — the grant
     /// lives with the portal on Linux and on disk on Windows.
@@ -1145,7 +1222,7 @@ mod tests {
         write_sine_wav(&tone, 6).expect("write tone");
 
         set_system_audio_capture_enabled(true);
-        let (tx, mut rx) = mpsc::channel::<Vec<f32>>(512);
+        let (tx, mut rx) = mpsc::channel::<ScreenAudioFrame>(512);
         let stop = Arc::new(AtomicBool::new(false));
 
         start_system_audio_capture_into(tx, stop.clone()).expect("capture must start");
@@ -1163,7 +1240,7 @@ mod tests {
             match rx.try_recv() {
                 Ok(frame) => {
                     frames += 1;
-                    for sample in &frame {
+                    for sample in &frame.samples {
                         loudest = loudest.max(sample.abs());
                     }
                     if frames > 50 && loudest > 0.01 {

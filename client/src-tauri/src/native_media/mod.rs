@@ -1,5 +1,6 @@
 pub mod audio_actor;
 pub mod audio_pipeline;
+pub mod av_sync;
 pub mod call_owner;
 pub mod camera_capture;
 pub mod capabilities;
