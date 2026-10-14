@@ -320,22 +320,99 @@ fn fit_within_box(src_w: u32, src_h: u32, max_w: u32, max_h: u32) -> (u32, u32) 
     (w.max(2), h.max(2))
 }
 
+/// What a screen-share preset sends from a given source (owner decision,
+/// 2026-10-13): the encoded size and the bitrate target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PresetGeometry {
+    pub width: u32,
+    pub height: u32,
+    pub bitrate_kbps: u32,
+}
+
+/// The size a codec's hardware encoders take on either edge. H.264 encoders
+/// (NVENC, VAAPI, Media Foundation, VideoToolbox) stop at 4096; AV1 at 8192.
+/// VP9 (libvpx) goes far beyond any screen.
+pub fn codec_max_encode_dimension(codec: VideoCodec) -> u32 {
+    match codec {
+        VideoCodec::H264 => 4096,
+        VideoCodec::Av1 => 8192,
+        VideoCodec::Vp9 => 16384,
+    }
+}
+
+/// Resolve a screen-share preset against the real source.
+///
+/// A preset names a **height** (lines), not a 16:9 box: the picture keeps the
+/// source's shape at `preset_height` lines, and a source with fewer lines is
+/// sent at its own size (never upscaled). So on a 5120x1440 (32:9) screen
+/// "720p" is 2560x720, "1080p" 3840x1080, "1440p" and "4K" the native
+/// 5120x1440. A result past `max_dimension` (the codec's limit) is scaled down
+/// to fit, keeping the shape.
+///
+/// The bitrate scales with the pixel count, so every preset keeps the bits per
+/// pixel per frame of its 16:9 definition (`preset_width`×`preset_height` at
+/// `preset_kbps`): a wider screen gets proportionally more, a smaller one less.
+pub fn preset_geometry(
+    source_width: u32,
+    source_height: u32,
+    preset_width: u32,
+    preset_height: u32,
+    preset_kbps: u32,
+    max_dimension: u32,
+) -> PresetGeometry {
+    let even = |v: u64| ((v as u32) & !1).max(2);
+    if source_width == 0 || source_height == 0 || preset_height == 0 {
+        return PresetGeometry {
+            width: even(u64::from(source_width)),
+            height: even(u64::from(source_height)),
+            bitrate_kbps: preset_kbps.max(1),
+        };
+    }
+    let lines = u64::from(preset_height.min(source_height));
+    let (sw, sh) = (u64::from(source_width), u64::from(source_height));
+    let mut width = sw * lines / sh;
+    let mut height = lines;
+    let limit = u64::from(max_dimension.max(2));
+    let longest = width.max(height);
+    if longest > limit {
+        width = width * limit / longest;
+        height = height * limit / longest;
+    }
+    let (width, height) = (even(width), even(height));
+    let nominal_pixels = u64::from(preset_width.max(1)) * u64::from(preset_height);
+    let pixels = u64::from(width) * u64::from(height);
+    let bitrate_kbps = (u64::from(preset_kbps) * pixels + nominal_pixels / 2) / nominal_pixels;
+    PresetGeometry {
+        width,
+        height,
+        bitrate_kbps: bitrate_kbps.clamp(1, u64::from(u32::MAX)) as u32,
+    }
+}
+
 /// Compute the simulcast ladder for a source per spec §4.1.
 ///
-/// Rungs (lowest→highest), each aspect-fitted to the source and never upscaled:
+/// Rungs (lowest→highest), never upscaled:
 ///
-/// - **Screen**: L 640×360@30 / 800 kbps · M 1280×720@min(source,60) / 3500 kbps
-///   · H source dims @ source fps / `preset_kbps`.
+/// - **Screen**: L 360 lines / M 720 lines, each in the source's own shape (the
+///   preset-geometry rule above, so a 32:9 share's lower layers are 32:9 too),
+///   at the source frame rate. Their budgets are 800 and 3500 kbps at 16:9
+///   (640x360, 1280x720), scaled with the pixel count. H is the source at
+///   `preset_kbps`. A lower rung at or above the source's lines is dropped.
 /// - **Camera**: L 480×270@15 / 350 kbps · M 640×360@30 / 900 kbps
-///   · H source dims @ source fps / `preset_kbps`.
+///   · H source dims @ source fps / `preset_kbps`, each aspect-fitted in its box.
+///
+/// Screen rungs run at the source frame rate because every captured frame is
+/// fed to every layer: a rung configured for fewer frames than it is given
+/// spends its budget per frame as if for the lower rate (twice its bitrate at
+/// 30 on a 60 fps share).
 ///
 /// The High rung is always the source dimensions at `preset_kbps`; the lower
-/// rungs cap their suggested budget at `preset_kbps` so a low preset never
-/// produces a rung richer than the top layer. A rung whose fitted dimensions,
-/// fps, and bitrate collapse onto the previous rung (a small source) is dropped
-/// so a sub-Medium capture does not triple-encode the same picture. This is a
-/// pure function (no runtime probing) so the pipeline phase can build layer
-/// configs deterministically.
+/// rungs cap their budget at `preset_kbps` so a low preset never produces a
+/// rung richer than the top layer. A rung whose dimensions, fps, and bitrate
+/// collapse onto the previous rung (a small source) is dropped so a sub-Medium
+/// capture does not triple-encode the same picture. This is a pure function
+/// (no runtime probing) so the pipeline phase can build layer configs
+/// deterministically.
 #[allow(clippy::too_many_arguments)]
 pub fn simulcast_ladder(
     kind: SimulcastKind,
@@ -347,42 +424,61 @@ pub fn simulcast_ladder(
     content_hint: VideoContentHint,
     keyframe_interval_seconds: u32,
 ) -> Vec<(SimulcastLayer, EncoderConfig)> {
-    // (layer, box_w, box_h, max_fps, suggested_kbps).
-    let source_rung = (
-        SimulcastLayer::High,
-        source_width,
-        source_height,
-        source_fps,
-        preset_kbps,
-    );
-    let rungs: [(SimulcastLayer, u32, u32, u32, u32); 3] = match kind {
-        SimulcastKind::Screen => [
-            (SimulcastLayer::Low, 640, 360, 30, 800),
-            (SimulcastLayer::Medium, 1280, 720, 60, 3_500),
-            source_rung,
-        ],
-        SimulcastKind::Camera => [
-            (SimulcastLayer::Low, 480, 270, 15, 350),
-            (SimulcastLayer::Medium, 640, 360, 30, 900),
-            source_rung,
-        ],
-    };
+    // (layer, width, height, fps, kbps), lowest first, before de-duplication.
+    let mut rungs: Vec<(SimulcastLayer, u32, u32, u32, u32)> = Vec::with_capacity(3);
+    match kind {
+        SimulcastKind::Screen => {
+            for (layer, nominal_w, nominal_h, nominal_kbps) in [
+                (SimulcastLayer::Low, 640u32, 360u32, 800u32),
+                (SimulcastLayer::Medium, 1280, 720, 3_500),
+            ] {
+                if nominal_h >= source_height {
+                    continue;
+                }
+                let rung = preset_geometry(
+                    source_width,
+                    source_height,
+                    nominal_w,
+                    nominal_h,
+                    nominal_kbps,
+                    u32::MAX,
+                );
+                rungs.push((
+                    layer,
+                    rung.width,
+                    rung.height,
+                    source_fps,
+                    rung.bitrate_kbps.min(preset_kbps),
+                ));
+            }
+        }
+        SimulcastKind::Camera => {
+            for (layer, box_w, box_h, max_fps, kbps) in [
+                (SimulcastLayer::Low, 480u32, 270u32, 15u32, 350u32),
+                (SimulcastLayer::Medium, 640, 360, 30, 900),
+            ] {
+                let (width, height) = fit_within_box(source_width, source_height, box_w, box_h);
+                rungs.push((
+                    layer,
+                    width,
+                    height,
+                    source_fps.min(max_fps),
+                    kbps.min(preset_kbps),
+                ));
+            }
+        }
+    }
+    let (top_w, top_h) = fit_within_box(source_width, source_height, source_width, source_height);
+    rungs.push((SimulcastLayer::High, top_w, top_h, source_fps, preset_kbps));
 
     let mut out: Vec<(SimulcastLayer, EncoderConfig)> = Vec::with_capacity(3);
-    for (layer, box_w, box_h, max_fps, suggested_kbps) in rungs {
-        let (width, height) = fit_within_box(source_width, source_height, box_w, box_h);
-        let fps = source_fps.min(max_fps).max(1);
-        let bitrate_kbps = match layer {
-            // The top layer always rides the preset budget; lower rungs cap
-            // their suggested budget at the preset.
-            SimulcastLayer::High => preset_kbps.max(1),
-            _ => suggested_kbps.min(preset_kbps).max(1),
-        };
+    for (layer, width, height, fps, bitrate_kbps) in rungs {
+        let fps = fps.max(1);
         let config = EncoderConfig {
             width,
             height,
             fps,
-            bitrate_kbps,
+            bitrate_kbps: bitrate_kbps.max(1),
             pixel_format,
             keyframe_interval: fps.saturating_mul(keyframe_interval_seconds),
             content_hint,
@@ -952,10 +1048,10 @@ mod tests {
         assert_eq!(*l, SimulcastLayer::Low);
         assert_eq!(
             (low.width, low.height, low.fps, low.bitrate_kbps),
-            (640, 360, 30, 800)
+            (640, 360, 60, 800)
         );
         assert_eq!(low.pixel_format, PixelFormat::Bgra);
-        assert_eq!(low.keyframe_interval, 60); // fps * seconds
+        assert_eq!(low.keyframe_interval, 120); // fps * seconds
 
         let (m, med) = &ladder[1];
         assert_eq!(*m, SimulcastLayer::Medium);
@@ -970,6 +1066,90 @@ mod tests {
             (high.width, high.height, high.fps, high.bitrate_kbps),
             (1920, 1080, 60, 12_000)
         );
+    }
+
+    #[test]
+    fn simulcast_ladder_screen_keeps_a_wide_sources_shape() {
+        // 5120x1440 (32:9) at the native "1440p" preset: lower rungs keep 32:9
+        // at 360 and 720 lines, with 16:9 budgets scaled by pixel count.
+        let ladder = simulcast_ladder(
+            SimulcastKind::Screen,
+            5120,
+            1440,
+            60,
+            36_000,
+            PixelFormat::Bgra,
+            VideoContentHint::Detail,
+            4,
+        );
+        let rungs: Vec<_> = ladder
+            .iter()
+            .map(|(l, c)| (*l, c.width, c.height, c.fps, c.bitrate_kbps))
+            .collect();
+        assert_eq!(
+            rungs,
+            vec![
+                (SimulcastLayer::Low, 1280, 360, 60, 1_600),
+                (SimulcastLayer::Medium, 2560, 720, 60, 7_000),
+                (SimulcastLayer::High, 5120, 1440, 60, 36_000),
+            ]
+        );
+    }
+
+    #[test]
+    fn simulcast_ladder_screen_drops_a_rung_as_tall_as_the_source() {
+        // 2560x720 ("720p" on 32:9): the Medium rung would be the source again.
+        let ladder = simulcast_ladder(
+            SimulcastKind::Screen,
+            2560,
+            720,
+            30,
+            10_000,
+            PixelFormat::Bgra,
+            VideoContentHint::Detail,
+            4,
+        );
+        let rungs: Vec<_> = ladder
+            .iter()
+            .map(|(l, c)| (*l, c.width, c.height))
+            .collect();
+        assert_eq!(
+            rungs,
+            vec![
+                (SimulcastLayer::Low, 1280, 360),
+                (SimulcastLayer::High, 2560, 720)
+            ]
+        );
+    }
+
+    #[test]
+    fn preset_geometry_keeps_the_height_and_scales_the_bitrate() {
+        let g = |sw, sh, pw, ph, kbps| {
+            let r = preset_geometry(sw, sh, pw, ph, kbps, 8192);
+            (r.width, r.height, r.bitrate_kbps)
+        };
+        // 32:9 screen, the owner's monitor.
+        assert_eq!(g(5120, 1440, 1280, 720, 5_000), (2560, 720, 10_000));
+        assert_eq!(g(5120, 1440, 1920, 1080, 12_000), (3840, 1080, 24_000));
+        assert_eq!(g(5120, 1440, 2560, 1440, 18_000), (5120, 1440, 36_000));
+        // "4K" is 2160 lines capped at the source: native, at 4K's bits per pixel.
+        assert_eq!(g(5120, 1440, 3840, 2160, 50_000), (5120, 1440, 44_444));
+        // 16:9 screens get exactly the preset.
+        assert_eq!(g(1920, 1080, 1920, 1080, 12_000), (1920, 1080, 12_000));
+        assert_eq!(g(3840, 2160, 3840, 2160, 100_000), (3840, 2160, 100_000));
+        assert_eq!(g(3840, 2160, 1280, 720, 5_000), (1280, 720, 5_000));
+        // A 1080-line screen with a 4K preset sends its own size.
+        assert_eq!(g(1920, 1080, 3840, 2160, 28_000), (1920, 1080, 7_000));
+        // Odd sources round down to even sizes.
+        assert_eq!(g(1366, 768, 1280, 720, 5_000).0, 1280);
+    }
+
+    #[test]
+    fn preset_geometry_fits_the_codec_limit() {
+        // H.264 stops at 4096: native 5120x1440 becomes 4096x1152.
+        let r = preset_geometry(5120, 1440, 2560, 1440, 18_000, 4096);
+        assert_eq!((r.width, r.height), (4096, 1152));
+        assert_eq!(r.bitrate_kbps, 23_040);
     }
 
     #[test]

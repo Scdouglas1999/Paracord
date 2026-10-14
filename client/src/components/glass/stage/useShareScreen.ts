@@ -14,15 +14,26 @@ import { useVoiceStore } from '../../../stores/voiceStore';
  * and a failure, or a share without the computer's sound, is said with the reason.
  */
 
-/** What a share can send (the store's native presets, `voiceStore.startStream`). */
+/**
+ * What a share can send (the store's native presets, `voiceStore.startStream`).
+ * A preset names a height in lines and keeps the screen's own shape, so on a
+ * 32:9 screen "1080p" is 3840x1080; "4K" is 2160 lines or the screen's own
+ * size when it has fewer. The Movie bitrates are their figures at 16:9 4K
+ * (3840x2160); every bitrate follows the picture's pixel count.
+ */
 export const SHARE_QUALITIES = [
   { value: '720p30', label: '720p 30fps' },
   { value: '1080p60', label: '1080p 60fps' },
   { value: '1440p60', label: '1440p 60fps' },
   { value: '4k60', label: '4K 60fps' },
-  { value: 'movie-50', label: 'Movie 4K (50 Mbps)' },
-  { value: 'movie-100', label: 'Movie 4K (100 Mbps)' },
+  { value: 'movie-50', label: 'Movie (50 Mbps at 4K)' },
+  { value: 'movie-100', label: 'Movie (100 Mbps at 4K)' },
 ] as const;
+
+/** The menu's note on what the sizes mean on a screen that is not 16:9. */
+export const SHARE_QUALITY_HINT =
+  'Each size is a height: a wider screen keeps its shape, and a screen with fewer lines sends its own size. ' +
+  'The bitrate follows the picture: more for a wider screen, less for a smaller one.';
 
 export type ShareQuality = (typeof SHARE_QUALITIES)[number]['value'];
 

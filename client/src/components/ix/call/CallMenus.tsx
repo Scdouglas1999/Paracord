@@ -8,7 +8,7 @@ import { buildDevicePickerOptions, systemDefaultOptionLabel } from '../../../lib
 import { useAuthStore } from '../../../stores/authStore';
 import { toast } from '../../../stores/toastStore';
 import { useVoiceStore } from '../../../stores/voiceStore';
-import { SHARE_QUALITIES, useShareQualityStore } from '../../glass/stage/useShareScreen';
+import { SHARE_QUALITIES, SHARE_QUALITY_HINT, useShareQualityStore } from '../../glass/stage/useShareScreen';
 import { StreamOverlayPortal, useAnchoredOverlayCoords, useOverlayDismiss } from '../../voice/streamOverlayPortal';
 
 /**
@@ -375,6 +375,7 @@ export function ShareQualityMenu({
       <div className="ix-call-pop__body">
         <span className="ix-call-pop__kicker">Share quality</span>
         <span className="ix-call-pop__hint">Sets the quality you send. Viewers can adapt playback for their connection.</span>
+        <span className="ix-call-pop__hint">{SHARE_QUALITY_HINT}</span>
         {SHARE_QUALITIES.map((option) => (
           <button
             key={option.value}

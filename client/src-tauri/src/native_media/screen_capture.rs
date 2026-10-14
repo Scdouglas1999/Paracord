@@ -166,7 +166,7 @@ pub struct ActiveScreenCapture {
 pub(crate) struct PendingVideoFrame {
     pub(crate) width: u32,
     pub(crate) height: u32,
-    pub(crate) bgra: Vec<u8>,
+    pub(crate) bgra: FramePixels,
     /// True capture time of this frame (scap `display_time`), carried so the
     /// wire PTS can be derived from the actual capture cadence instead of a
     /// synthesized frame_index/fps. See P5 note in the encoder loop below.
@@ -182,9 +182,259 @@ pub(crate) struct PendingVideoFrame {
     pub(crate) texture: Option<scap::frame::D3D11TextureFrame>,
 }
 
+/// A captured frame's pixels: ordinary memory, or (on Linux with an NVIDIA
+/// driver) a pinned host buffer the encoder's GPU upload reads by DMA.
+pub(crate) enum FramePixels {
+    Heap(Vec<u8>),
+    #[cfg(all(unix, not(target_os = "macos")))]
+    Pinned(paracord_codec::video::lavc::PinnedFrame),
+}
+
+impl std::ops::Deref for FramePixels {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        match self {
+            FramePixels::Heap(bytes) => bytes,
+            #[cfg(all(unix, not(target_os = "macos")))]
+            FramePixels::Pinned(frame) => frame,
+        }
+    }
+}
+
+/// Where captured frames are put for the encoder, chosen once per capture.
+enum CaptureMemory {
+    Heap,
+    #[cfg(all(unix, not(target_os = "macos")))]
+    Pinned(paracord_codec::video::lavc::PinnedHostPool),
+}
+
+impl CaptureMemory {
+    /// Pinned host memory when the CUDA driver is there (the NVENC upload then
+    /// is a DMA, about 3 ms for 5120x1440 even on a loaded machine instead of
+    /// 9 to 12 through the driver's own staging copy); ordinary memory
+    /// otherwise. Said once in the log either way.
+    fn choose(app: &super::CallEventSink) -> Self {
+        #[cfg(all(unix, not(target_os = "macos")))]
+        match paracord_codec::video::lavc::PinnedHostPool::new() {
+            Ok(pool) => {
+                video_pipeline::native_diag(
+                    Some(app),
+                    "screen capture frames go to pinned host memory (direct GPU upload)",
+                );
+                return CaptureMemory::Pinned(pool);
+            }
+            Err(err) => {
+                video_pipeline::native_diag(
+                    Some(app),
+                    &format!("screen capture frames go to ordinary memory: {err}"),
+                );
+            }
+        }
+        #[cfg(not(all(unix, not(target_os = "macos"))))]
+        let _ = app;
+        CaptureMemory::Heap
+    }
+
+    /// Hand `bytes` (a captured frame) to the encoder in this memory. The copy
+    /// into a pinned buffer runs here, on the capture thread, so the encode
+    /// thread only uploads.
+    fn place(&self, bytes: Vec<u8>) -> Result<FramePixels, String> {
+        match self {
+            CaptureMemory::Heap => Ok(FramePixels::Heap(bytes)),
+            #[cfg(all(unix, not(target_os = "macos")))]
+            CaptureMemory::Pinned(pool) => {
+                let mut frame = pool.take(bytes.len()).map_err(|e| e.to_string())?;
+                parallel_copy(&mut frame, &bytes);
+                Ok(FramePixels::Pinned(frame))
+            }
+        }
+    }
+}
+
+/// Copy a large frame in four parallel chunks: one 29.5 to 33 MB memcpy takes
+/// 8 ms or more on a loaded machine, which alone would hold a 60 fps capture
+/// under its rate.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn parallel_copy(dst: &mut [u8], src: &[u8]) {
+    const CHUNKS: usize = 4;
+    let chunk = src.len().div_ceil(CHUNKS).max(1);
+    std::thread::scope(|scope| {
+        for (d, s) in dst.chunks_mut(chunk).zip(src.chunks(chunk)) {
+            scope.spawn(move || d.copy_from_slice(s));
+        }
+    });
+}
+
 struct LatestVideoFrame {
     frame: std::sync::Mutex<Option<Arc<PendingVideoFrame>>>,
     notify: std::sync::Condvar,
+    /// Captured frames replaced in the keep-latest slot before the encoder took
+    /// them (the encoder was busy): the pacing report's "lost to encode time".
+    overwritten: std::sync::atomic::AtomicU64,
+    /// Captured frames the capture thread skipped for a newer one before they
+    /// reached the slot (the capture thread fell behind).
+    superseded: std::sync::atomic::AtomicU64,
+    /// Time spent placing frames in encoder memory (the pinned copy), in µs.
+    place_us: std::sync::atomic::AtomicU64,
+    placed: std::sync::atomic::AtomicU64,
+}
+
+/// Admits captured frames to the encoder on a monotonic schedule of capture
+/// timestamps (microseconds): one slot per frame interval, a frame on time when
+/// it is no more than a quarter interval before its slot. The next slot is the
+/// current slot plus one interval, so the long-run rate never exceeds the
+/// target and a source faster than it is thinned evenly (60 Hz at 30 fps takes
+/// every other frame); a frame more than an interval late restarts the schedule
+/// from itself.
+///
+/// A source no faster than the target (a 60 Hz screen at 60 fps) is not
+/// thinned at all: its frames are on time up to three quarters of an interval
+/// early, so capture jitter (a frame delivered late, the next one on time)
+/// never costs a frame. The source's rate is a running average of capture
+/// intervals.
+#[derive(Debug, Default)]
+struct FramePacer {
+    interval_us: u64,
+    next_due_us: Option<u64>,
+    last_capture_us: Option<u64>,
+    /// Running average of the source's capture interval, in microseconds.
+    source_interval_us: Option<u64>,
+}
+
+impl FramePacer {
+    fn set_fps(&mut self, fps: u32) {
+        let interval_us = 1_000_000 / u64::from(fps.max(1));
+        if interval_us != self.interval_us {
+            self.interval_us = interval_us;
+            self.next_due_us = None;
+        }
+    }
+
+    /// Whether the frame captured at `captured_us` is due; takes its slot if so.
+    fn admit(&mut self, captured_us: u64) -> bool {
+        let interval = self.interval_us.max(1);
+        if let Some(last) = self.last_capture_us {
+            let delta = captured_us.saturating_sub(last).min(interval * 4);
+            self.source_interval_us = Some(match self.source_interval_us {
+                Some(avg) => (avg * 7 + delta) / 8,
+                None => delta,
+            });
+        }
+        self.last_capture_us = Some(captured_us);
+        let source_not_faster = self
+            .source_interval_us
+            .is_some_and(|avg| avg * 10 >= interval * 9);
+        let early_tolerance = if source_not_faster {
+            interval * 3 / 4
+        } else {
+            interval / 4
+        };
+        match self.next_due_us {
+            None => {
+                self.next_due_us = Some(captured_us + interval);
+                true
+            }
+            Some(due) if captured_us + early_tolerance >= due => {
+                self.next_due_us = Some(if captured_us >= due + interval {
+                    captured_us + interval
+                } else {
+                    due + interval
+                });
+                true
+            }
+            Some(_) => false,
+        }
+    }
+
+    /// How long to hold a frame captured at `captured_us` that was not yet due
+    /// before encoding it anyway: until its slot, plus half an interval for the
+    /// source's next frame (which replaces it, being newer) to arrive.
+    fn hold_for(&self, captured_us: u64) -> Duration {
+        let due = self.next_due_us.unwrap_or(captured_us);
+        Duration::from_micros(due.saturating_sub(captured_us) + self.interval_us / 2)
+    }
+
+    /// A held frame was encoded in the current slot.
+    fn slot_taken(&mut self) {
+        if let Some(due) = self.next_due_us {
+            self.next_due_us = Some(due + self.interval_us.max(1));
+        }
+    }
+}
+
+fn capture_time_us(at: SystemTime) -> u64 {
+    at.duration_since(SystemTime::UNIX_EPOCH)
+        .map(|since| since.as_micros() as u64)
+        .unwrap_or(0)
+}
+
+/// Frames seen and encoded by the screen encoder, reported every few seconds
+/// so a share says what rate it really encodes against its target, and where
+/// frames went missing: skipped by a capture thread that fell behind, or
+/// replaced in the slot while the encoder was busy.
+struct PacingStats {
+    since: Instant,
+    captured: u64,
+    encoded: u64,
+    slot: Option<Arc<LatestVideoFrame>>,
+    /// (overwritten, superseded, place_us, placed) at the window's start.
+    counters_at_start: [u64; 4],
+}
+
+impl PacingStats {
+    const INTERVAL: Duration = Duration::from_secs(5);
+
+    fn new() -> Self {
+        Self {
+            since: Instant::now(),
+            captured: 0,
+            encoded: 0,
+            slot: None,
+            counters_at_start: [0; 4],
+        }
+    }
+
+    fn counters(&self) -> [u64; 4] {
+        self.slot.as_ref().map_or([0; 4], |slot| {
+            [
+                slot.overwritten.load(Ordering::Relaxed),
+                slot.superseded.load(Ordering::Relaxed),
+                slot.place_us.load(Ordering::Relaxed),
+                slot.placed.load(Ordering::Relaxed),
+            ]
+        })
+    }
+
+    fn watch(&mut self, slot: Arc<LatestVideoFrame>) {
+        self.slot = Some(slot);
+        self.counters_at_start = self.counters();
+    }
+
+    fn report(&mut self, target_fps: u32) -> Option<String> {
+        let elapsed = self.since.elapsed();
+        if elapsed < Self::INTERVAL {
+            return None;
+        }
+        let secs = elapsed.as_secs_f64();
+        let now = self.counters();
+        let [busy, superseded, place_us, placed] =
+            std::array::from_fn(|i| now[i].saturating_sub(self.counters_at_start[i]));
+        let line = format!(
+            "screen pacing: target {target_fps} fps, encoded {:.1} fps; the encoder took {:.1} \
+             captured frames/s, and {:.1}/s were replaced while it was busy; the capture thread \
+             skipped {:.1}/s and placed frames in {:.2} ms each",
+            self.encoded as f64 / secs,
+            self.captured as f64 / secs,
+            busy as f64 / secs,
+            superseded as f64 / secs,
+            place_us as f64 / 1000.0 / placed.max(1) as f64,
+        );
+        self.since = Instant::now();
+        self.captured = 0;
+        self.encoded = 0;
+        self.counters_at_start = now;
+        Some(line)
+    }
 }
 
 impl ActiveScreenCapture {
@@ -742,6 +992,10 @@ fn run_capture_loop(
     let latest_video_frame = Arc::new(LatestVideoFrame {
         frame: std::sync::Mutex::new(None),
         notify: std::sync::Condvar::new(),
+        overwritten: std::sync::atomic::AtomicU64::new(0),
+        superseded: std::sync::atomic::AtomicU64::new(0),
+        place_us: std::sync::atomic::AtomicU64::new(0),
+        placed: std::sync::atomic::AtomicU64::new(0),
     });
     let encoder_frames = latest_video_frame.clone();
     let encoder_stop = stop_flag.clone();
@@ -784,39 +1038,53 @@ fn run_capture_loop(
             let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
         }
 
-        // Minimum wall-clock interval between ENCODED frames. Capture can burst
-        // above the requested rate (WGC compositor cadence, damage-driven
-        // coalescing), so pace here: the keep-latest slot means we can drop
-        // everything but the newest frame and still encode on cadence.
+        // Frame pacing (stream audit B2). Capture can run above the requested
+        // rate (a 60 Hz screen for a 30 fps preset, compositor bursts), so the
+        // encoder admits frames on a monotonic schedule of capture timestamps
+        // (`FramePacer`): a frame is encoded when its capture time reaches the
+        // next due slot (a quarter interval early is on time), and the slot
+        // then advances by one interval from the slot, not from the frame. A
+        // frame that comes in early is held only until its slot (plus a grace
+        // for the source's next frame), never a whole interval: the old
+        // sleep-then-drop gate turned a 60 Hz source into 25 fps at 30 and
+        // 43 fps at 60.
+        //
         // Static-screen keepalive: a damage-driven source stops producing frames
         // when nothing changes. Re-encode the retained frame at ~1fps so the
         // periodic-keyframe cadence keeps advancing and a late joiner's keyframe
         // request is serviced within ~1s even on a frozen screen.
         let keepalive_interval = Duration::from_secs(1);
 
+        let mut pacer = FramePacer::default();
         let mut last_encode_at: Option<Instant> = None;
         // Retain the most recent captured frame (cheap Arc clone) so it can be
         // re-encoded for a keyframe request or the keepalive tick when capture
         // has gone quiet.
         let mut retained: Option<Arc<PendingVideoFrame>> = None;
-        // A fresh frame that arrived but was held back by the pacing gate. It must
-        // still be encoded as soon as pacing allows, even if capture then goes
-        // idle — otherwise the newest content stalls until the ~1s keepalive tick.
-        let mut pending_fresh = false;
+        // A fresh frame that arrived before its slot: when to encode it if no
+        // newer frame replaces it first (so the newest content never waits
+        // for the ~1s keepalive when capture goes idle).
+        let mut held_until: Option<Instant> = None;
+        let mut pacing_stats = PacingStats::new();
+        pacing_stats.watch(encoder_frames.clone());
 
         while !encoder_stop.load(Ordering::SeqCst) {
-            let frame_interval = Duration::from_micros(
-                1_000_000 / u64::from(encoder_fps.load(Ordering::Relaxed).max(1)),
-            );
-            // Block until a fresh frame arrives or one frame interval elapses.
-            // The condvar wakes immediately on a new frame; the timeout bounds
-            // the wait so keyframe/keepalive checks still run on a static screen.
+            let fps = encoder_fps.load(Ordering::Relaxed).max(1);
+            pacer.set_fps(fps);
+            let frame_interval = Duration::from_micros(1_000_000 / u64::from(fps));
+            // Block until a fresh frame arrives, the held frame's slot, or one
+            // frame interval (so keyframe/keepalive checks still run on a
+            // static screen).
+            let wait = held_until
+                .map(|until| until.saturating_duration_since(Instant::now()))
+                .unwrap_or(frame_interval)
+                .min(frame_interval);
             let fresh = {
                 let mut guard = encoder_frames.frame.lock().map_err(|e| e.to_string())?;
-                if guard.is_none() && !encoder_stop.load(Ordering::SeqCst) {
+                if guard.is_none() && !encoder_stop.load(Ordering::SeqCst) && !wait.is_zero() {
                     let (next_guard, _timeout) = encoder_frames
                         .notify
-                        .wait_timeout(guard, frame_interval)
+                        .wait_timeout(guard, wait)
                         .map_err(|e| e.to_string())?;
                     guard = next_guard;
                 }
@@ -827,35 +1095,37 @@ fn run_capture_loop(
                 break;
             }
 
-            // Keep-latest: a fresh frame always replaces the retained frame.
-            let had_fresh = fresh.is_some();
-            if let Some(fresh_frame) = fresh {
-                retained = Some(fresh_frame);
-                pending_fresh = true;
-            }
-
             let now = Instant::now();
-            let elapsed = last_encode_at.map(|t| now.saturating_duration_since(t));
-            let paced_due = elapsed.map(|e| e >= frame_interval).unwrap_or(true);
-            let keepalive_due = elapsed.map(|e| e >= keepalive_interval).unwrap_or(true);
             let keyframe_requested = encoder_force_keyframe.load(Ordering::SeqCst);
+            let keepalive_due = last_encode_at
+                .map(|t| now.saturating_duration_since(t) >= keepalive_interval)
+                .unwrap_or(true);
 
             // Encode this iteration when:
-            //  * a fresh frame is due (pacing gate, P1b), OR
-            //  * a fresh frame the pacing gate held back is now due even though
-            //    capture went idle (trailing-frame latency, P1c), OR
+            //  * a fresh frame reached its slot, OR
+            //  * a held frame's slot (plus grace) passed with no newer frame, OR
             //  * capture is quiet but a keyframe was requested (late joiner), OR
             //    the keepalive tick is due (static-screen keepalive, P2).
-            let should_encode = retained.is_some()
-                && if had_fresh {
-                    paced_due
+            let should_encode = if let Some(fresh_frame) = fresh {
+                let captured_us = capture_time_us(fresh_frame.capture_time);
+                retained = Some(fresh_frame);
+                pacing_stats.captured += 1;
+                if pacer.admit(captured_us) {
+                    held_until = None;
+                    true
                 } else {
-                    (pending_fresh && paced_due) || keyframe_requested || keepalive_due
-                };
+                    held_until = Some(now + pacer.hold_for(captured_us));
+                    false
+                }
+            } else if held_until.is_some_and(|until| now >= until) {
+                held_until = None;
+                pacer.slot_taken();
+                true
+            } else {
+                retained.is_some() && (keyframe_requested || keepalive_due)
+            };
 
             if !should_encode {
-                // Pacing gate / nothing to send: keep the retained frame and
-                // wait for the next fresh frame or tick.
                 continue;
             }
 
@@ -868,9 +1138,10 @@ fn run_capture_loop(
             // frame_index/fps.
             let capture_time = frame.capture_time;
             last_encode_at = Some(now);
-            // The retained frame is being encoded now; any pacing-deferred fresh
-            // frame is satisfied.
-            pending_fresh = false;
+            pacing_stats.encoded += 1;
+            if let Some(line) = pacing_stats.report(fps) {
+                video_pipeline::native_diag(Some(&encoder_app), &line);
+            }
 
             // Phase 1 (brief, under the session lock): seed the encoder config
             // on the first frame, then run `begin_screen_frame`, which moves the
@@ -972,6 +1243,7 @@ fn run_capture_loop(
         Ok(())
     });
 
+    let capture_memory = CaptureMemory::choose(&app);
     let mut audio_accumulator = ScreenAudioAccumulator::default();
     // Bound the blocking frame wait to one frame interval (capped so an external
     // stop is still observed within ~100ms at low frame rates). Replaces the old
@@ -986,7 +1258,11 @@ fn run_capture_loop(
             loop {
                 match capturer.try_get_next_frame() {
                     Ok(Some(scap::frame::Frame::Video(video))) => {
-                        latest_video = Some(video);
+                        if latest_video.replace(video).is_some() {
+                            latest_video_frame
+                                .superseded
+                                .fetch_add(1, Ordering::Relaxed);
+                        }
                     }
                     Ok(Some(scap::frame::Frame::Audio(audio))) => {
                         audio_frames.push(audio);
@@ -1059,7 +1335,18 @@ fn run_capture_loop(
                 let Some((width, height, bgra, capture_time)) = convert_video_frame(video) else {
                     continue;
                 };
+                let placing = Instant::now();
+                let bgra = capture_memory.place(bgra)?;
+                latest_video_frame
+                    .place_us
+                    .fetch_add(placing.elapsed().as_micros() as u64, Ordering::Relaxed);
+                latest_video_frame.placed.fetch_add(1, Ordering::Relaxed);
                 let mut guard = latest_video_frame.frame.lock().map_err(|e| e.to_string())?;
+                if guard.is_some() {
+                    latest_video_frame
+                        .overwritten
+                        .fetch_add(1, Ordering::Relaxed);
+                }
                 *guard = Some(Arc::new(PendingVideoFrame {
                     width,
                     height,
@@ -1310,7 +1597,7 @@ pub(crate) fn pending_frame_from_texture(
     PendingVideoFrame {
         width: texture.width as u32,
         height: texture.height as u32,
-        bgra: Vec::new(),
+        bgra: FramePixels::Heap(Vec::new()),
         capture_time: texture.display_time,
         texture: Some(texture),
     }
@@ -1540,4 +1827,106 @@ fn push_screen_audio_samples(
 
 fn integrated_audio_capture() -> bool {
     cfg!(target_os = "macos")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FramePacer;
+
+    /// Frames a pacer at `fps` admits from a source at `source_hz` over one
+    /// second, with a deterministic ±`jitter_us` wobble on each capture time.
+    fn admitted(fps: u32, source_hz: f64, jitter_us: i64) -> usize {
+        let mut pacer = FramePacer::default();
+        pacer.set_fps(fps);
+        let period = 1_000_000.0 / source_hz;
+        (0..(source_hz as usize))
+            .filter(|&n| {
+                let wobble = [0, jitter_us, -jitter_us, jitter_us / 2][n % 4];
+                let at = (1_000_000.0 + n as f64 * period) as i64 + wobble;
+                pacer.admit(at as u64)
+            })
+            .count()
+    }
+
+    #[test]
+    fn a_60_hz_source_fills_a_60_fps_target() {
+        assert_eq!(admitted(60, 60.0, 0), 60);
+        assert_eq!(admitted(60, 60.0, 2_000), 60);
+        // A source a hair slower than the target is never thinned.
+        assert_eq!(admitted(60, 59.94, 1_000), 59);
+    }
+
+    #[test]
+    fn capture_jitter_at_the_target_rate_costs_no_frame() {
+        // A loaded machine: every third frame is delivered 7 ms late, the next
+        // one on time (so it looks 9.7 ms after the late one).
+        let mut pacer = FramePacer::default();
+        pacer.set_fps(60);
+        let admitted = (0..600u64)
+            .filter(|&n| pacer.admit(1_000_000 + n * 16_667 + if n % 3 == 1 { 7_000 } else { 0 }))
+            .count();
+        assert!(admitted >= 599, "{admitted}");
+    }
+
+    #[test]
+    fn a_60_hz_source_is_halved_evenly_for_30_fps() {
+        let mut pacer = FramePacer::default();
+        pacer.set_fps(30);
+        let admitted: Vec<usize> = (0..60)
+            .filter(|&n| pacer.admit(1_000_000 + n as u64 * 16_667))
+            .collect();
+        assert_eq!(admitted.len(), 30);
+        assert!(admitted.windows(2).all(|pair| pair[1] - pair[0] == 2));
+        assert_eq!(super::tests::admitted(30, 60.0, 2_000), 30);
+    }
+
+    #[test]
+    fn a_fast_source_never_exceeds_the_target() {
+        // Over ten seconds; a window's last slot may land a quarter interval
+        // early, so one frame either way.
+        let over_ten_seconds = |fps, hz: f64, jitter| -> usize {
+            let mut pacer = FramePacer::default();
+            pacer.set_fps(fps);
+            let period = 1_000_000.0 / hz;
+            (0..(hz as usize * 10))
+                .filter(|&n| {
+                    let wobble = [0, jitter, -jitter, jitter / 2][n % 4];
+                    pacer.admit(((1_000_000.0 + n as f64 * period) as i64 + wobble) as u64)
+                })
+                .count()
+        };
+        let at_144 = over_ten_seconds(60, 144.0, 500);
+        assert!((599..=601).contains(&at_144), "{at_144}");
+        let at_240 = over_ten_seconds(30, 240.0, 0);
+        assert!((299..=301).contains(&at_240), "{at_240}");
+    }
+
+    #[test]
+    fn an_early_frame_is_held_only_until_its_slot() {
+        let mut pacer = FramePacer::default();
+        pacer.set_fps(30);
+        assert!(pacer.admit(1_000_000));
+        // The next 60 Hz frame, 16.7 ms on, is early for a 33.3 ms slot.
+        assert!(!pacer.admit(1_016_667));
+        let hold = pacer.hold_for(1_016_667);
+        // Until the slot (16.7 ms) plus half an interval of grace, not a full
+        // interval from now.
+        assert_eq!(hold.as_micros(), 16_666 + 16_666);
+        pacer.slot_taken();
+        // The slot after that is still on the 30 fps grid.
+        assert!(!pacer.admit(1_050_000));
+        assert!(pacer.admit(1_066_667));
+    }
+
+    #[test]
+    fn a_stall_restarts_the_schedule_instead_of_bursting() {
+        let mut pacer = FramePacer::default();
+        pacer.set_fps(60);
+        assert!(pacer.admit(1_000_000));
+        // Half a second without frames, then a 60 Hz run: no catch-up burst.
+        let run: Vec<bool> = (0..6)
+            .map(|n| pacer.admit(1_500_000 + n * 16_667))
+            .collect();
+        assert_eq!(run, vec![true; 6]);
+    }
 }

@@ -1927,14 +1927,12 @@ pub fn start_screen_share(
             "starting native screen share encoder"
         );
 
-        let (width, height) = fit_encode_dimensions(
-            source_width,
-            source_height,
-            max_width.unwrap_or(source_width),
-            max_height.unwrap_or(source_height),
-        );
-        let width = width & !1;
-        let height = height & !1;
+        // The config holds the PRESET (its 16:9 definition: lines, nominal
+        // width, bitrate). What it sends from this source, its height kept in
+        // the source's shape, is resolved per frame in `begin_screen_frame`
+        // (`paracord_codec::video::preset_geometry`).
+        let width = max_width.unwrap_or(source_width) & !1;
+        let height = max_height.unwrap_or(source_height) & !1;
         if width == 0 || height == 0 {
             return Err(format!(
                 "screen encoder config: capture too small: {width}x{height}"
@@ -1966,10 +1964,11 @@ pub fn start_screen_share(
         native_diag(
             None,
             &format!(
-                "start_screen_share: codec={codec:?} {}x{} fps={} bitrate_kbps={}",
+                "start_screen_share: codec={codec:?} source {source_width}x{source_height}, preset {}x{} fps={} bitrate_kbps={} (16:9 definition)",
                 config.width, config.height, config.fps, config.bitrate_kbps
             ),
         );
+        reset_screen_send_meter();
         session.screen_encoder = None;
         session.screen_simulcast = None;
         session
@@ -2097,22 +2096,26 @@ fn create_screen_simulcast_encoder(
             paracord_codec::video::EncoderConfig,
         )],
     ) -> Result<SimulcastEncoder, paracord_codec::video::VideoError> {
+        // The in-process libavcodec hardware encoders (H.264/AV1) encode every
+        // layer from ONE upload of the capture-sized frame, split and scaled on
+        // the GPU (stream audit B2: one upload per layer cost 3 × 6.4 ms of a
+        // 16.7 ms frame). VP9 stays on the libvpx factory, one encoder per layer.
+        #[cfg(all(unix, not(target_os = "macos")))]
+        if matches!(codec, VideoCodec::H264 | VideoCodec::Av1) {
+            let shared = paracord_codec::video::lavc::LavcSimulcastEncoder::new(
+                codec,
+                input_width,
+                input_height,
+                layers,
+            )?;
+            return SimulcastEncoder::new_shared(
+                input_width,
+                input_height,
+                input_format,
+                Box::new(shared),
+            );
+        }
         SimulcastEncoder::new_with_configs(input_width, input_height, input_format, layers, |cfg| {
-            // The in-process libavcodec hardware encoders (H.264/AV1) take
-            // capture-sized input and scale/convert on the GPU, so construct
-            // them with the real input dims. VP9 falls through to the libvpx
-            // factory.
-            #[cfg(all(unix, not(target_os = "macos")))]
-            if matches!(codec, VideoCodec::H264 | VideoCodec::Av1) {
-                return Ok(Box::new(
-                    paracord_codec::video::lavc::LavcEncoder::new_with_input(
-                        codec,
-                        cfg,
-                        input_width,
-                        input_height,
-                    )?,
-                ));
-            }
             create_encoder(codec, cfg)
         })
     }
@@ -2814,17 +2817,23 @@ pub async fn begin_screen_frame(
         app,
     );
     session.screen_encoder_codec = Some(requested_codec);
-    let (fitted_width, fitted_height) = fit_encode_dimensions(
+    // The config is the preset's 16:9 definition; resolve what it sends from
+    // this source: its height in the source's shape, the bitrate scaled with
+    // the pixels, within the codec's size limit.
+    let geometry = paracord_codec::video::preset_geometry(
         frame_width,
         frame_height,
         screen_config.width,
         screen_config.height,
+        screen_config.bitrate_kbps,
+        paracord_codec::video::codec_max_encode_dimension(requested_codec),
     );
     let (encode_width, encode_height) =
-        align_dimensions_for_codec(requested_codec, fitted_width, fitted_height);
+        align_dimensions_for_codec(requested_codec, geometry.width, geometry.height);
     let desired_config = EncoderConfig {
         width: encode_width,
         height: encode_height,
+        bitrate_kbps: geometry.bitrate_kbps,
         pixel_format: screen_encoder_input_format(requested_codec, input_is_bgra),
         ..screen_config.clone()
     };
@@ -2856,6 +2865,39 @@ pub async fn begin_screen_frame(
         .unwrap_or(true);
 
     if needs_reinit {
+        let codec_limited = paracord_codec::video::preset_geometry(
+            frame_width,
+            frame_height,
+            screen_config.width,
+            screen_config.height,
+            screen_config.bitrate_kbps,
+            u32::MAX,
+        ) != geometry;
+        native_diag(
+            app,
+            &format!(
+                "screen share geometry: source {frame_width}x{frame_height}, preset {} lines \
+                 ({}x{} at {} kbps, 16:9) -> sending {}x{} at {} fps, {} kbps{}; layers {}",
+                screen_config.height,
+                screen_config.width,
+                screen_config.height,
+                screen_config.bitrate_kbps,
+                desired_config.width,
+                desired_config.height,
+                desired_config.fps,
+                desired_config.bitrate_kbps,
+                if codec_limited {
+                    format!(", reduced to fit {requested_codec:?}'s size limit")
+                } else {
+                    String::new()
+                },
+                desired_layers
+                    .iter()
+                    .map(|(_, c)| format!("{}x{}/{}k", c.width, c.height, c.bitrate_kbps))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            ),
+        );
         let encoder =
             create_screen_simulcast_encoder(session, frame_width, frame_height, &desired_layers)?;
         tracing::info!(
@@ -2901,7 +2943,9 @@ pub async fn begin_screen_frame(
 
     // Adaptive-bitrate inputs: snapshot the relay feedback and the currently
     // applied rate; the retarget decision + hysteresis run in the encode phase.
-    let preset_kbps = screen_config.bitrate_kbps;
+    // The preset resolved for this source (scaled with its pixels), not its
+    // 16:9 definition.
+    let preset_kbps = desired_config.bitrate_kbps;
     let feedback_kbps = session.screen_bitrate_feedback_kbps.load(Ordering::Relaxed);
     let applied_kbps = if session.screen_applied_bitrate_kbps == 0 {
         preset_kbps
@@ -3046,18 +3090,20 @@ pub fn run_screen_frame(
     let pts = job.pts;
     let force_keyframe = job.screen_force_keyframe.swap(false, Ordering::SeqCst);
 
-    // Adaptive bitrate: track the relay's bandwidth estimate downward under
-    // congestion and recover toward the preset cap when the path clears. The
-    // 1/8 (12.5%) hysteresis keeps estimator noise from thrashing rate control.
+    // Adaptive bitrate (`screen_rate_step`). The relay's estimate is a LIMIT
+    // only once it falls (it falls only on loss): with no loss it is a probe
+    // just above the measured goodput, and treating that as a target held
+    // Movie 50/100 at ~17 Mb/s, climbing 10% every 2 s (stream audit B5).
+    // Under a limit the top layer follows 85% of the estimate, and climbs back
+    // by a quarter per rising estimate. The 1/8 (12.5%) hysteresis keeps
+    // estimator noise from thrashing rate control; returning to the preset
+    // always applies. Every change is logged with its reason.
     let preset_kbps = job.preset_kbps;
     let feedback_kbps = job.feedback_kbps;
     let applied_kbps = job.applied_kbps;
-    let target_kbps = if feedback_kbps > 0 {
-        preset_kbps
-            .min((feedback_kbps.saturating_mul(85) / 100).max(MIN_ADAPTIVE_SCREEN_BITRATE_KBPS))
-    } else {
-        preset_kbps
-    };
+    let sent_kbps = screen_send_meter_kbps();
+    let decision = screen_rate_decision(preset_kbps, feedback_kbps);
+    let target_kbps = decision.target_kbps;
 
     let fps = simulcast
         .layers
@@ -3067,22 +3113,30 @@ pub fn run_screen_frame(
     let mut new_applied_kbps = applied_kbps;
     if target_kbps > 0
         && target_kbps != applied_kbps
-        && target_kbps.abs_diff(applied_kbps).saturating_mul(8) >= applied_kbps
+        && (target_kbps == preset_kbps
+            || target_kbps.abs_diff(applied_kbps).saturating_mul(8) >= applied_kbps)
     {
         match simulcast.encoder.set_top_layer_bitrate(target_kbps) {
             Ok(true) => {
                 new_applied_kbps = target_kbps;
-                tracing::info!(
-                    from_kbps = applied_kbps,
-                    to_kbps = target_kbps,
-                    "retargeted screen encoder bitrate from relay bandwidth feedback"
+                note_screen_rate_change(
+                    app,
+                    applied_kbps,
+                    target_kbps,
+                    preset_kbps,
+                    feedback_kbps,
+                    sent_kbps,
+                    decision.limited,
                 );
             }
-            // Backend cannot retarget live (e.g. ffmpeg-vaapi); keep the current
-            // rate rather than restarting the encoder mid-stream.
+            // Backend cannot retarget live; keep the current rate rather than
+            // restarting the encoder mid-stream.
             Ok(false) => {}
             Err(err) => {
-                tracing::debug!("screen encoder bitrate retarget failed: {err}");
+                native_diag(
+                    app,
+                    &format!("screen bitrate retarget to {target_kbps} kbps failed: {err}"),
+                );
             }
         }
     }
@@ -3109,7 +3163,9 @@ pub fn run_screen_frame(
     let self_view_track_key = make_track_key(&job.stream_id.0, &job.track_id.0);
     let (sv_has_subscriber, _sv_hidden) = video_dispatch_snapshot(&self_view_track_key);
     let mut local_preview_frame: Option<LocalPreviewFrame> = None;
+    let mut sent_bytes = 0usize;
     for frame in encoded_frames.drain(..) {
+        sent_bytes += frame.data.len();
         // L2: every simulcast layer of one captured frame shares that frame's
         // real capture PTS (they are the same instant), so the wire timestamp
         // tracks the true capture cadence rather than a frame-index approximation.
@@ -3197,6 +3253,22 @@ pub fn run_screen_frame(
                 frame_data.len(),
             );
         }
+    }
+    record_screen_send(sent_bytes);
+    if let Some(stages) = simulcast.encoder.stage_report() {
+        native_diag(
+            app,
+            &format!(
+                "{stages} | sending {} kbps, top layer {new_applied_kbps} kbps (preset {preset_kbps}), \
+                 bandwidth estimate {}",
+                screen_send_meter_kbps().map_or_else(|| "n/a".to_string(), |k| k.to_string()),
+                if feedback_kbps > 0 {
+                    format!("{feedback_kbps} kbps")
+                } else {
+                    "none yet".to_string()
+                },
+            ),
+        );
     }
     // Self-view: the host watches the exact bitstream remote viewers receive —
     // same codec, resolution, framerate, and bitrate. There is deliberately no
@@ -3333,6 +3405,173 @@ pub fn finish_screen_frame(
 ) -> Result<(), String> {
     let _ = (session, outcome);
     Err("screen share encoding requires the 'vpx' feature".into())
+}
+
+/// What the screen share put on the wire over the last few seconds (every
+/// layer, for the logs) and its rate-control state. One screen share per
+/// process.
+#[cfg(feature = "vpx")]
+struct ScreenSendMeter {
+    /// (when, bytes) per encoded frame, oldest first, over `SCREEN_SEND_WINDOW`.
+    samples: std::collections::VecDeque<(Instant, usize)>,
+    bytes: usize,
+    rate: ScreenRateState,
+}
+
+#[cfg(feature = "vpx")]
+const SCREEN_SEND_WINDOW: Duration = Duration::from_secs(4);
+
+#[cfg(feature = "vpx")]
+static SCREEN_SEND_METER: Mutex<ScreenSendMeter> = Mutex::new(ScreenSendMeter {
+    samples: std::collections::VecDeque::new(),
+    bytes: 0,
+    rate: ScreenRateState {
+        last_feedback_kbps: 0,
+        limit_kbps: None,
+    },
+});
+
+#[cfg(feature = "vpx")]
+fn reset_screen_send_meter() {
+    if let Ok(mut meter) = SCREEN_SEND_METER.lock() {
+        meter.samples.clear();
+        meter.bytes = 0;
+        meter.rate = ScreenRateState::default();
+    }
+}
+
+#[cfg(feature = "vpx")]
+fn record_screen_send(bytes: usize) {
+    let now = Instant::now();
+    if let Ok(mut meter) = SCREEN_SEND_METER.lock() {
+        meter.samples.push_back((now, bytes));
+        meter.bytes += bytes;
+        while meter
+            .samples
+            .front()
+            .is_some_and(|(at, _)| now.duration_since(*at) > SCREEN_SEND_WINDOW)
+        {
+            if let Some((_, old)) = meter.samples.pop_front() {
+                meter.bytes -= old;
+            }
+        }
+    }
+}
+
+/// The share's send rate in kbps, once a second of it has been measured.
+#[cfg(feature = "vpx")]
+fn screen_send_meter_kbps() -> Option<u32> {
+    let meter = SCREEN_SEND_METER.lock().ok()?;
+    let first = meter.samples.front()?.0;
+    let span = Instant::now().saturating_duration_since(first);
+    if span < Duration::from_secs(1) {
+        return None;
+    }
+    Some((meter.bytes as f64 * 8.0 / span.as_secs_f64() / 1000.0) as u32)
+}
+
+#[cfg(feature = "vpx")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ScreenRateDecision {
+    target_kbps: u32,
+    /// The bandwidth estimate is what holds the rate below the preset.
+    limited: bool,
+}
+
+/// What the screen's rate control remembers between frames.
+#[cfg(feature = "vpx")]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct ScreenRateState {
+    /// The last relay estimate seen (0 = none yet).
+    last_feedback_kbps: u32,
+    /// The top layer's ceiling while the estimate limits it.
+    limit_kbps: Option<u32>,
+}
+
+/// The screen's top-layer bitrate for this frame.
+///
+/// The relay's uplink estimate (`feedback_kbps`, 0 = none yet) only FALLS when
+/// it measures loss above 2% (multiplicative decrease to 85% of the goodput);
+/// with no loss it probes upward from the goodput. So a falling estimate is a
+/// limit: the top layer drops to 85% of it. A rising one says the path is
+/// clear: the limit climbs by a quarter (or to 85% of the estimate, if more)
+/// per estimate, and lifts once it reaches the preset. An estimate that merely
+/// trails an application-limited sender is never treated as a limit (that held
+/// Movie 50/100 at ~17 Mb/s, stream audit B5).
+#[cfg(feature = "vpx")]
+fn screen_rate_step(
+    state: &mut ScreenRateState,
+    preset_kbps: u32,
+    feedback_kbps: u32,
+) -> ScreenRateDecision {
+    if feedback_kbps > 0 && feedback_kbps != state.last_feedback_kbps {
+        let previous = std::mem::replace(&mut state.last_feedback_kbps, feedback_kbps);
+        if previous > 0 && feedback_kbps < previous {
+            let limit =
+                (feedback_kbps.saturating_mul(85) / 100).max(MIN_ADAPTIVE_SCREEN_BITRATE_KBPS);
+            state.limit_kbps = (limit < preset_kbps).then_some(limit);
+        } else if let Some(limit) = state.limit_kbps {
+            let next = limit
+                .saturating_add(limit / 4)
+                .max(feedback_kbps.saturating_mul(85) / 100);
+            state.limit_kbps = (next < preset_kbps).then_some(next);
+        }
+    }
+    match state.limit_kbps {
+        Some(limit) if limit < preset_kbps => ScreenRateDecision {
+            target_kbps: limit,
+            limited: true,
+        },
+        _ => ScreenRateDecision {
+            target_kbps: preset_kbps,
+            limited: false,
+        },
+    }
+}
+
+#[cfg(feature = "vpx")]
+fn screen_rate_decision(preset_kbps: u32, feedback_kbps: u32) -> ScreenRateDecision {
+    SCREEN_SEND_METER.lock().map_or(
+        ScreenRateDecision {
+            target_kbps: preset_kbps,
+            limited: false,
+        },
+        |mut meter| screen_rate_step(&mut meter.rate, preset_kbps, feedback_kbps),
+    )
+}
+
+/// Say why the screen's bitrate changed: an estimate that limits it is logged
+/// with its numbers, never applied silently.
+#[cfg(feature = "vpx")]
+fn note_screen_rate_change(
+    app: Option<&AppHandle>,
+    from_kbps: u32,
+    to_kbps: u32,
+    preset_kbps: u32,
+    feedback_kbps: u32,
+    sent_kbps: Option<u32>,
+    limited: bool,
+) {
+    let sent = sent_kbps.map_or_else(|| "n/a".to_string(), |k| k.to_string());
+    let line = if limited && to_kbps < from_kbps {
+        format!(
+            "screen bitrate limited by the bandwidth estimate: the relay lowered it to \
+             {feedback_kbps} kbps (it measured loss) while {sent} kbps were sent; top layer \
+             {from_kbps} -> {to_kbps} kbps (preset {preset_kbps})"
+        )
+    } else if limited {
+        format!(
+            "screen bitrate recovering under the bandwidth estimate: it rose to {feedback_kbps} kbps \
+             (no loss); top layer {from_kbps} -> {to_kbps} kbps of the preset {preset_kbps} \
+             (sending {sent} kbps)"
+        )
+    } else {
+        format!(
+            "screen bitrate at the preset: top layer {from_kbps} -> {to_kbps} kbps \
+             (bandwidth estimate {feedback_kbps} kbps, sending {sent} kbps)"
+        )
+    };
+    native_diag(app, &line);
 }
 
 #[cfg(feature = "vpx")]
@@ -5264,5 +5503,70 @@ mod tests {
         if let Ok(mut state) = video_dispatch_state().lock() {
             state.remote_track_stream_high_water.remove(&track_key);
         }
+    }
+}
+
+#[cfg(all(test, feature = "vpx"))]
+mod screen_rate_tests {
+    use super::{screen_rate_step, ScreenRateDecision, ScreenRateState};
+
+    const PRESET: u32 = 44_000;
+
+    fn run(feedback: &[u32]) -> Vec<ScreenRateDecision> {
+        let mut state = ScreenRateState::default();
+        feedback
+            .iter()
+            .map(|&kbps| screen_rate_step(&mut state, PRESET, kbps))
+            .collect()
+    }
+
+    #[test]
+    fn a_rising_estimate_never_caps_the_preset() {
+        // The relay probes upward from the goodput while nothing is lost
+        // (2.5 Mb/s default, then 1.1x goodput): Movie 50 used to sit at 85%
+        // of that. None of it is a limit.
+        let decisions = run(&[2_500, 18_700, 20_600, 22_600, 40_000, 100_000]);
+        assert!(decisions.iter().all(|d| *d
+            == ScreenRateDecision {
+                target_kbps: PRESET,
+                limited: false
+            }));
+    }
+
+    #[test]
+    fn a_falling_estimate_limits_the_top_layer_and_a_rising_one_lifts_it() {
+        let decisions = run(&[
+            40_000, 20_000, 20_000, 22_000, 24_200, 30_000, 45_000, 50_000,
+        ]);
+        let targets: Vec<(u32, bool)> = decisions
+            .iter()
+            .map(|d| (d.target_kbps, d.limited))
+            .collect();
+        assert_eq!(
+            targets,
+            vec![
+                (PRESET, false),
+                // Loss: 85% of the lowered estimate.
+                (17_000, true),
+                // Holding (loss between 0.5% and 2%): unchanged.
+                (17_000, true),
+                // Clear again: a quarter more per rising estimate.
+                (21_250, true),
+                (26_562, true),
+                (33_202, true),
+                (41_502, true),
+                // Reaches the preset: the limit lifts.
+                (PRESET, false),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_limit_never_drops_below_the_floor() {
+        let decisions = run(&[2_000, 300]);
+        assert_eq!(
+            decisions[1].target_kbps,
+            super::MIN_ADAPTIVE_SCREEN_BITRATE_KBPS
+        );
     }
 }

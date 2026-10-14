@@ -113,6 +113,44 @@ pub trait VideoEncoder: Send {
     }
 }
 
+/// One hardware pipeline that encodes every simulcast layer from a single
+/// upload of the input frame (stream audit B2: three per-layer pipelines each
+/// uploaded the full capture, 3 × 6.4 ms of a 16.7 ms frame budget at 60 fps).
+///
+/// The backend owns the per-layer encoders and scales each layer from the one
+/// GPU copy. Layers are indexed lowest to highest, in the order they were
+/// configured.
+pub trait SharedSimulcastBackend: Send {
+    /// Encode one packed input frame into every layer. `keyframes[i]` forces a
+    /// keyframe on layer `i`; its length is [`layer_count`](Self::layer_count).
+    /// Returned frames carry their layer in [`EncodedFrame::layer`].
+    fn encode_layers(
+        &mut self,
+        pts: i64,
+        data: &[u8],
+        keyframes: &[bool],
+    ) -> Result<Vec<EncodedFrame>, VideoError>;
+
+    /// Drain every layer's encoder at the end of a stream.
+    fn flush(&mut self) -> Result<Vec<EncodedFrame>, VideoError>;
+
+    /// Retarget layer `index`'s bitrate mid-stream. `Ok(true)` when applied.
+    fn set_layer_bitrate(&mut self, index: usize, bitrate_kbps: u32) -> Result<bool, VideoError>;
+
+    /// Diagnostic backend name, e.g. `lavc-nvenc-av1`.
+    fn backend_name(&self) -> &'static str;
+
+    /// Number of layers this pipeline encodes.
+    fn layer_count(&self) -> usize;
+
+    /// A one-line per-stage timing summary, at most every few seconds (`None`
+    /// in between). The caller logs it; this is how the encode cost is measured
+    /// on a live share.
+    fn stage_report(&mut self) -> Option<String> {
+        None
+    }
+}
+
 pub fn create_encoder(
     codec: VideoCodec,
     config: EncoderConfig,
@@ -200,6 +238,10 @@ pub struct SimulcastEncoder {
     /// packed capture buffer is handed to every layer encoder untouched (GPU
     /// scale+convert per layer). Fixed here; never toggled per frame.
     packed_mode: bool,
+    /// Shared-upload route ([`SharedSimulcastBackend`]): one pipeline encodes
+    /// every layer from a single GPU copy of the input. When set, `layers` is
+    /// empty and every call routes here. Fixed at construction.
+    shared: Option<Box<dyn SharedSimulcastBackend>>,
 }
 
 struct LayerEncoder {
@@ -280,7 +322,45 @@ impl SimulcastEncoder {
             backend_name,
             hardware_accelerated,
             packed_mode,
+            shared: None,
         })
+    }
+
+    /// A simulcast encoder whose layers all come from one hardware pipeline
+    /// that uploads each input frame once ([`SharedSimulcastBackend`]). The
+    /// input must be packed (BGRA/RGBA): this is the GPU route.
+    pub fn new_shared(
+        input_width: u32,
+        input_height: u32,
+        input_format: PixelFormat,
+        backend: Box<dyn SharedSimulcastBackend>,
+    ) -> Result<Self, VideoError> {
+        if !matches!(input_format, PixelFormat::Bgra | PixelFormat::Rgba) {
+            return Err(VideoError::UnsupportedPixelFormat(input_format));
+        }
+        if backend.layer_count() == 0 {
+            return Err(VideoError::EncoderInit(
+                "shared simulcast backend has no layers".into(),
+            ));
+        }
+        Ok(Self {
+            layers: Vec::new(),
+            input_format,
+            input_width,
+            input_height,
+            i420_buf: Vec::new(),
+            backend_name: backend.backend_name(),
+            hardware_accelerated: true,
+            packed_mode: true,
+            shared: Some(backend),
+        })
+    }
+
+    /// The shared pipeline's per-stage timing line, when one is due.
+    pub fn stage_report(&mut self) -> Option<String> {
+        self.shared
+            .as_mut()
+            .and_then(|shared| shared.stage_report())
     }
 
     /// Create a new simulcast encoder.
@@ -330,6 +410,11 @@ impl SimulcastEncoder {
                 expected,
                 actual: data.len(),
             });
+        }
+
+        if let Some(shared) = self.shared.as_mut() {
+            let keyframes = vec![force_keyframe; shared.layer_count()];
+            return shared.encode_layers(pts, data, &keyframes);
         }
 
         // Packed route (spec §4.1): hand the full packed capture buffer to every
@@ -426,6 +511,9 @@ impl SimulcastEncoder {
 
     /// Flush all layer encoders.
     pub fn flush(&mut self) -> Result<Vec<EncodedFrame>, VideoError> {
+        if let Some(shared) = self.shared.as_mut() {
+            return shared.flush();
+        }
         let mut results = Vec::new();
         for layer_enc in &mut self.layers {
             let mut flushed = layer_enc.encoder.flush()?;
@@ -454,6 +542,10 @@ impl SimulcastEncoder {
     /// fixed budgets — congestion response only needs to shrink the layer
     /// that dominates the wire. Returns `Ok(true)` when the rate was applied.
     pub fn set_top_layer_bitrate(&mut self, bitrate_kbps: u32) -> Result<bool, VideoError> {
+        if let Some(shared) = self.shared.as_mut() {
+            let top = shared.layer_count().saturating_sub(1);
+            return shared.set_layer_bitrate(top, bitrate_kbps);
+        }
         match self.layers.last_mut() {
             Some(layer) => layer.encoder.set_bitrate(bitrate_kbps),
             None => Ok(false),

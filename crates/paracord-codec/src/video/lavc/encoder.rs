@@ -755,7 +755,9 @@ pub(super) unsafe fn apply_keyframe_request(frame: *mut ff::AVFrame, force_keyfr
 }
 
 /// Create the backend's hardware device context.
-unsafe fn create_hw_device(backend: LavcBackend) -> Result<*mut ff::AVBufferRef, VideoError> {
+pub(super) unsafe fn create_hw_device(
+    backend: LavcBackend,
+) -> Result<*mut ff::AVBufferRef, VideoError> {
     let mut device = ptr::null_mut();
     // VAAPI can target a specific DRM render node; honor the same override the
     // subprocess backend used. NULL lets ffmpeg auto-select.
@@ -987,8 +989,18 @@ pub(super) unsafe fn configure_encoder_context(
             };
             set("preset", preset);
             set("tune", "ull");
-            set("rc", "vbr");
-            set("cq", quality_cq(config));
+            // Film (the Movie presets) is a RATE: CBR at `bit_rate`, so the
+            // advertised bitrate is what the encoder spends (QP falls until it
+            // does). Every other hint is constant quality with the preset as a
+            // ceiling, which keeps a still desktop cheap. A cq on Film made
+            // "50 Mbps" a 17 Mbps stream (stream audit B5).
+            match quality_cq(config) {
+                Some(cq) => {
+                    set("rc", "vbr");
+                    set("cq", cq);
+                }
+                None => set("rc", "cbr"),
+            }
             set_int("zerolatency", 1);
             set_int("delay", 0);
             // forced-idr makes a pict_type=I frame a real IDR (H.264/HEVC);
@@ -1026,13 +1038,16 @@ pub(super) unsafe fn configure_encoder_context(
     }
 }
 
-/// Constant-quality target, matching the subprocess `quality_qp` mapping.
-fn quality_cq(config: &EncoderConfig) -> &'static str {
+/// Constant-quality target, matching the subprocess `quality_qp` mapping, or
+/// `None` for a content hint that encodes to a target bitrate instead (Film:
+/// the Movie presets promise a rate, not a quality).
+fn quality_cq(config: &EncoderConfig) -> Option<&'static str> {
     use crate::video::VideoContentHint::*;
     match config.content_hint {
-        Detail => "17",
-        Film | Default => "18",
-        Motion => "19",
+        Detail => Some("17"),
+        Default => Some("18"),
+        Motion => Some("19"),
+        Film => None,
     }
 }
 

@@ -38,6 +38,17 @@ def code_for(n):
     return (n12 << 4) | check
 
 
+def backlog(src):
+    """Whether the sink is two frames behind: skip this frame rather than
+    queue it. Unbounded, a 29.5 MB frame every 16.7 ms filled RAM and swap in
+    a minute when the sink fell behind, and set off the OOM killer on the dev
+    box. (A leaky appsrc queue instead starved the capture to about one frame
+    a second.) A skipped frame's counter is not logged, so it reads as a source
+    gap, never as a loss downstream."""
+    return src.get_property('current-level-bytes') >= 2 * src.get_property('caps').get_structure(0).get_value('width') \
+        * src.get_property('caps').get_structure(0).get_value('height') * 4
+
+
 def mono_us():
     return time.clock_gettime_ns(time.CLOCK_MONOTONIC) // 1000
 
@@ -86,6 +97,10 @@ def main():
     ap.add_argument('--audio', action='store_true')
     ap.add_argument('--burst-every', type=int, default=120)
     ap.add_argument('--scroll', type=int, default=3, help='page scroll per frame, px')
+    ap.add_argument('--prerender', type=int, default=0,
+                    help='cycle N pre-rendered scroll positions, built from shared GStreamer '
+                         'memories (no per-frame pixel copies in Python): holds 60 fps at '
+                         '5120x1440 on a loaded machine. The page then repeats every N frames.')
     args = ap.parse_args()
 
     Gst.init(None)
@@ -113,6 +128,30 @@ def main():
         frame[rows[k]:rows[k + 1]] = color
     box = max(32, H // 7)
 
+    pre = None
+    if args.prerender > 0:
+        # Per position k the page above and below the band (with the moving
+        # block), and per bar a white and a black slab, as bytes; a frame is
+        # written into one of a ring of buffers by C copies (Gst.Buffer.fill),
+        # with no per-frame pixel work in Python.
+        def rows_bytes(a):
+            return np.ascontiguousarray(a).tobytes()
+        tops, bottoms = [], []
+        for k in range(args.prerender):
+            off = (k * args.scroll) % H
+            page = bg[off:off + H].copy()
+            bx = int((k * 9) % max(1, W - box))
+            page[H // 8:H // 8 + box, bx:bx + box] = (40, 140, 240, 255)
+            tops.append(rows_bytes(page[:rows[0]]))
+            bottoms.append(rows_bytes(page[rows[-1]:]))
+        stride = W * 4
+        slabs = [(rows_bytes(np.broadcast_to(white, (rows[k + 2] - rows[k + 1], W, 4))),
+                  rows_bytes(np.broadcast_to(black, (rows[k + 2] - rows[k + 1], W, 4)))) for k in range(16)]
+        red_slab = rows_bytes(np.broadcast_to(red, (rows[1] - rows[0], W, 4)))
+        blue_slab = rows_bytes(np.broadcast_to(blue, (rows[-1] - rows[-2], W, 4)))
+        ring = [Gst.Buffer.new_allocate(None, H * stride, None) for _ in range(8)]
+        pre = (tops, bottoms, slabs, red_slab, blue_slab, ring, stride)
+
     t0 = mono_us() + 200_000
     if args.audio:
         threading.Thread(target=audio_thread, args=(t0, fps, args.burst_every, log), daemon=True).start()
@@ -121,6 +160,33 @@ def main():
     period = 1_000_000 / fps
     try:
         while True:
+            if pre is not None:
+                tops, bottoms, slabs, red_slab, blue_slab, ring, stride = pre
+                due = t0 + n * period
+                wait = due - mono_us()
+                if wait > 0:
+                    time.sleep(wait / 1e6)
+                k = n % len(tops)
+                code = code_for(n)
+                buf = ring[n % len(ring)]
+                if buf.fill(0, tops[k]) != len(tops[k]):
+                    # Still held downstream (not writable): a fresh buffer.
+                    buf = Gst.Buffer.new_allocate(None, H * stride, None)
+                    ring[n % len(ring)] = buf
+                    buf.fill(0, tops[k])
+                buf.fill(rows[0] * stride, red_slab)
+                for b in range(16):
+                    buf.fill(rows[b + 1] * stride, slabs[b][0 if (code >> (15 - b)) & 1 else 1])
+                buf.fill(rows[-2] * stride, blue_slab)
+                buf.fill(rows[-1] * stride, bottoms[k])
+                buf.pts = int(n * period * 1000)
+                buf.duration = int(period * 1000)
+                t = mono_us()
+                if not backlog(src):
+                    src.emit('push-buffer', buf)
+                    log.write(f'SRC n={n} t={t} due={int(due)}\n')
+                n += 1
+                continue
             due = t0 + n * period
             wait = due - mono_us()
             if wait > 0:
@@ -137,8 +203,9 @@ def main():
             buf.pts = int(n * period * 1000)
             buf.duration = int(period * 1000)
             t = mono_us()
-            src.emit('push-buffer', buf)
-            log.write(f'SRC n={n} t={t} due={int(due)}\n')
+            if not backlog(src):
+                src.emit('push-buffer', buf)
+                log.write(f'SRC n={n} t={t} due={int(due)}\n')
             n += 1
     except KeyboardInterrupt:
         pass

@@ -98,3 +98,9 @@ alsa-sys = "0.3"
 [[example]]
 name = "stream_quality_probe"
 required-features = ["lavc"]
+
+# Encode-thread time per frame for a three-layer screen simulcast, per-layer
+# uploads against the shared upload. Needs a hardware encoder; run by hand.
+[[example]]
+name = "simulcast_encode_bench"
+required-features = ["lavc"]

@@ -37,12 +37,16 @@ use std::ffi::{c_char, c_int, CStr, CString};
 mod decoder;
 pub mod dmabuf;
 mod encoder;
+pub mod pinned;
+mod simulcast;
 
 pub use decoder::LavcDecoder;
 pub use dmabuf::{
     probe_dmabuf_vaapi_import, DmaBufDescriptor, DmaBufObject, DmaBufPlane, DmaBufVaapiEncoder,
 };
 pub use encoder::LavcEncoder;
+pub use pinned::{PinnedFrame, PinnedHostPool};
+pub use simulcast::LavcSimulcastEncoder;
 
 // ── Backend identity ─────────────────────────────────────────────────
 

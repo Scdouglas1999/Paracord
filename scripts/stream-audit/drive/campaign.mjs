@@ -26,7 +26,7 @@ const plan = arg('plan', 'full');
 const PRESETS = arg('presets', '720p30,1080p60,1440p60,4k60,movie-50,movie-100').split(',');
 const LABEL = {
   '720p30': '720p 30fps', '1080p60': '1080p 60fps', '1440p60': '1440p 60fps', '4k60': '4K 60fps',
-  'movie-50': 'Movie 4K (50 Mbps)', 'movie-100': 'Movie 4K (100 Mbps)',
+  'movie-50': 'Movie (50 Mbps at 4K)', 'movie-100': 'Movie (100 Mbps at 4K)',
 };
 const scene = JSON.parse(readFileSync(join(OUT, 'scene.json'), 'utf8'));
 const marks = join(OUT, 'marks.log');

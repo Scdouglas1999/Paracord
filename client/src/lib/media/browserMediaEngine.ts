@@ -884,9 +884,10 @@ export class BrowserMediaEngine implements MediaEngine {
     this.assertOpen();
     if (generation !== this.screenGeneration) throw new DOMException("Capture action canceled", "AbortError");
     const constraints: DisplayMediaStreamOptions = {
+      // A preset is a height: the capture keeps the screen's own shape (a
+      // 32:9 screen at "1080p" is 3840x1080), as the desktop sender does.
       video: {
         frameRate: config.maxFrameRate ?? 30,
-        width: { max: config.maxWidth ?? 1920 },
         height: { max: config.maxHeight ?? 1080 },
       },
       audio: config.audio,

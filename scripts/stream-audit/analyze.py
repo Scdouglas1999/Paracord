@@ -97,9 +97,11 @@ def load_probe(path):
 S, S_order = load_probe(f'{RUN}/sender/probe.log')
 V, _ = load_probe(f'{RUN}/viewer/probe.log')
 
-# Encoder input codes per encoder context: the ESRC just before each EIN on the
-# encode thread (lavc: CPU frame into the filter graph, then the GPU frame into
-# the encoder). libvpx EIN carries its own code.
+# Encoder input codes per encoder context: the latest ESRC before each EIN
+# (lavc: CPU frame into the filter graph, then the GPU frames into the
+# encoders). The shared-upload simulcast pushes one ESRC per frame and then
+# feeds every layer's encoder from it, so an ESRC stands for all the EINs up to
+# the next one. libvpx EIN carries its own code.
 ein_code = []  # (t, ctx, n)
 last_esrc = None
 for tag, d in S_order:
@@ -111,7 +113,6 @@ for tag, d in S_order:
             code = int(last_esrc.get('code', -3))
         n = unwrap(valid(code), d['t'])
         ein_code.append((d['t'], d['ctx'], n))
-        last_esrc = None
 ecfg = {}
 for d in S['ECFG']:
     ecfg[d['ctx']] = d
