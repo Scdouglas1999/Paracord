@@ -17,12 +17,27 @@ import { StreamOverlayPortal, useAnchoredOverlayCoords, useOverlayDismiss } from
  * (`StreamSurface`), which knows the canvas it draws into.
  */
 
+/**
+ * The relay's "source layer" request (`SOURCE_LAYER` in paracord-transport):
+ * always the publisher's top, full-resolution layer, with no viewport or
+ * bandwidth cap.
+ */
+export const SOURCE_LAYER = 255;
+
+/**
+ * Viewing quality → the simulcast layer asked of the relay. Low, Medium and
+ * High are layers 0, 1 and 2 (the publisher's low, medium and top rungs), and
+ * each is a ceiling: the relay never sends more, and steps below it only when
+ * the connection cannot carry it. Source pins the top layer whatever the
+ * window size or connection. Auto lets the relay choose for the window and the
+ * connection.
+ */
 export const WATCH_QUALITIES = [
   { value: 'auto', label: 'Auto', layer: null },
   { value: 'low', label: 'Low', layer: 0 },
   { value: 'medium', label: 'Medium', layer: 1 },
   { value: 'high', label: 'High', layer: 2 },
-  { value: 'source', label: 'Source', layer: 2 },
+  { value: 'source', label: 'Source', layer: SOURCE_LAYER },
 ] as const;
 
 export type WatchQuality = (typeof WATCH_QUALITIES)[number]['value'];

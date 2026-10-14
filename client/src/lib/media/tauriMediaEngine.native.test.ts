@@ -219,6 +219,23 @@ describe('the desktop video route', () => {
   });
 });
 
+describe('the viewing quality', () => {
+  it('is kept across a tile resize, and released only by asking for Auto', async () => {
+    const media = await joined();
+    const layers = () => calls('media_register_track_subscription').map(
+      (args) => (args.request as { requestedLayer: number | null }).requestedLayer,
+    );
+    await media.registerTrackSubscription({ streamId: SCREEN.streamId, trackId: 'screen', requestedLayer: 0 });
+    // A resize re-registers with the viewport only: still Low, not Auto.
+    await media.registerTrackSubscription({
+      streamId: SCREEN.streamId, trackId: 'screen', viewport: { width: 640, height: 360 },
+    });
+    // Auto (the quality menu) says "no layer" explicitly.
+    await media.registerTrackSubscription({ streamId: SCREEN.streamId, trackId: 'screen', requestedLayer: undefined });
+    expect(layers()).toEqual([0, 0, null]);
+  });
+});
+
 describe('a frame tap with no surface showing the track', () => {
   it('attaches a sampler and subscribes the lowest layer', async () => {
     const media = await joined();

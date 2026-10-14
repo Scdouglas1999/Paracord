@@ -22,8 +22,8 @@ use paracord_transport::stream::{
 use crate::bandwidth::{BandwidthEstimator, MAX_TRACKED_SSRCS_PER_PUBLISHER};
 use crate::participant::MediaParticipant;
 use crate::relay::{
-    accept_control_frame, BridgedKeyframeStreams, ConnectionHandle, RelayForwarder,
-    MAX_BRIDGED_KEYFRAME_SSRCS, MAX_CACHED_SSRCS_PER_SENDER,
+    accept_control_frame, ConnectionHandle, InflightStreamFrames, RelayForwarder,
+    MAX_CACHED_SSRCS_PER_SENDER, MAX_STREAM_EGRESS_SSRCS,
 };
 use crate::room::{get_room_clones, reset_get_room_clones, MediaRoomManager};
 use crate::speaker::SpeakerDetector;
@@ -504,24 +504,24 @@ async fn replacing_a_users_connection_closes_the_displaced_one() {
 
 #[tokio::test]
 async fn bridged_keyframe_stream_map_is_bounded_by_ssrc() {
-    let mut streams = BridgedKeyframeStreams::default();
-    // Each entry also owns up to MAX_BRIDGED_KEYFRAME_STREAMS spawned tasks, so
+    let mut streams = InflightStreamFrames::default();
+    // Each entry also owns up to MAX_INFLIGHT_STREAM_FRAMES spawned tasks, so
     // an unbounded map is unbounded tasks as well as unbounded memory.
-    for ssrc in 0..(MAX_BRIDGED_KEYFRAME_SSRCS as u32 * 20) {
+    for ssrc in 0..(MAX_STREAM_EGRESS_SSRCS as u32 * 20) {
         let task = tokio::spawn(async { std::future::pending::<()>().await });
-        streams.track(ssrc, task.abort_handle(), MAX_BRIDGED_KEYFRAME_SSRCS);
+        streams.track(ssrc, task.abort_handle(), MAX_STREAM_EGRESS_SSRCS);
     }
     assert!(
-        streams.per_ssrc.len() <= MAX_BRIDGED_KEYFRAME_SSRCS,
+        streams.per_ssrc.len() <= MAX_STREAM_EGRESS_SSRCS,
         "publisher-chosen ssrc must not grow the viewer's keyframe map, got {}",
         streams.per_ssrc.len()
     );
 
     // A realistic viewer (a handful of tracks × layers) keeps every entry.
-    let mut realistic = BridgedKeyframeStreams::default();
+    let mut realistic = InflightStreamFrames::default();
     for ssrc in 0..REALISTIC_LIVE_SSRCS as u32 {
         let task = tokio::spawn(async { std::future::pending::<()>().await });
-        realistic.track(ssrc, task.abort_handle(), MAX_BRIDGED_KEYFRAME_SSRCS);
+        realistic.track(ssrc, task.abort_handle(), MAX_STREAM_EGRESS_SSRCS);
     }
     assert_eq!(realistic.per_ssrc.len(), REALISTIC_LIVE_SSRCS);
 }

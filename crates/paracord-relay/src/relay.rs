@@ -20,7 +20,7 @@ use paracord_transport::protocol::{
     MediaHeader, TrackType, VideoFrameMetadata, HEADER_SIZE, MAX_STREAM_FRAME_SIZE,
 };
 use paracord_transport::stream::{
-    PublishedTrack, StreamId, TrackId, VideoCodecCapability, ViewportHint,
+    PublishedTrack, StreamId, TrackId, VideoCodecCapability, ViewportHint, SOURCE_LAYER,
 };
 use paracord_transport::webtransport::WebTransportStreams;
 
@@ -120,16 +120,27 @@ const MAX_KEY_ANNOUNCE_RECIPIENTS: usize = 64;
 /// against every subscriber in the room, not just the relay.
 const MAX_TRACK_LAYERS: usize = 8;
 
-/// Maximum keyframe uni streams the relay will read from one publisher at once.
+/// Maximum whole-frame uni streams the relay will read from one publisher at
+/// once.
 ///
 /// Each in-flight read buffers up to [`MAX_STREAM_FRAME_SIZE`] (16 MiB) before
 /// anything is forwarded, and QUIC lets a peer open many concurrent uni streams,
 /// so the effective per-connection buffering ceiling is this many times 16 MiB.
-/// Keyframes are deliberately exempt from the datagram rate limiter, which makes
-/// this the only bound on that path. A publisher legitimately has one keyframe
-/// stream per simulcast layer in flight, so four leaves room for a full ladder
-/// plus one straggler; beyond that the accept loop simply waits.
-const MAX_CONCURRENT_UNI_STREAM_READS: usize = 4;
+/// A native publisher sends every video frame of every simulcast layer on its
+/// own stream (three layers at 60 fps is 180 a second), and a frame whose packet
+/// was lost stays open for a retransmission, so a handful of reads in flight is
+/// normal; beyond this the accept loop simply waits. What the streams carry is
+/// charged to the same per-sender packet budget as datagrams
+/// ([`stream_frame_packet_cost`]).
+const MAX_CONCURRENT_UNI_STREAM_READS: usize = 16;
+
+/// A whole stream frame's cost against the sender's packet budget: the number
+/// of ~1200-byte packets it occupies on the wire, so moving video from
+/// datagrams onto streams does not move it out from under
+/// [`MAX_SENDER_PACKETS_PER_SECOND`].
+fn stream_frame_packet_cost(len: usize) -> f64 {
+    len.div_ceil(1200).max(1) as f64
+}
 
 /// Interval between QUIC path-stat samples for one connection.
 const BANDWIDTH_SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
@@ -148,6 +159,15 @@ const LAYER_BUDGET_PERCENT: u32 = 85;
 /// layer immediately (spec §4.2: "immediate downswitch on loss >2%").
 const DOWNSWITCH_LOSS_RATIO: f64 = 0.02;
 
+/// Windowed downlink loss the path must stay under for the whole upswitch hold.
+///
+/// Without it a lossy path oscillated: loss over 2% stepped the viewer down,
+/// the next quiet window (headroom only) stepped it back up 5 s later, and every
+/// switch is a keyframe and a fresh decoder (at 1% netem loss the lab saw a
+/// switch every few seconds, each a 0.5 to 1.5 s freeze). A layer lost to loss
+/// comes back only once the path is clean.
+const UPSWITCH_MAX_LOSS_RATIO: f64 = 0.005;
+
 /// A candidate upswitch only fires after the viewer's egress estimate has held
 /// at least this fraction (125%) of the *target* layer's bitrate (spec §4.2).
 const UPSWITCH_HEADROOM_PERCENT: u64 = 125;
@@ -155,53 +175,45 @@ const UPSWITCH_HEADROOM_PERCENT: u64 = 125;
 /// How long the ≥125% headroom must persist before an upswitch executes (spec §4.2).
 const UPSWITCH_HOLD: Duration = Duration::from_secs(5);
 
-/// Minimum interval between forwarded keyframe requests for one `(stream, track)`.
+/// Minimum interval between forwarded keyframe requests for one
+/// `(stream, track, layer)`.
 ///
-/// Viewers re-request an IDR on every gap they see; a single lossy viewer can
-/// otherwise pump the shared publisher for a keyframe many times a second,
-/// tanking the encoder's average bitrate for everyone. Coalescing bursts to at
-/// most one request per this interval protects the whole stream.
-const KEYFRAME_REQUEST_MIN_INTERVAL: Duration = Duration::from_millis(500);
-
-/// Maximum concurrent in-flight keyframe uni streams the relay keeps open toward
-/// a single bridged (WebTransport) viewer.
+/// Viewers re-request an IDR on every broken reference they see; a single lossy
+/// viewer can otherwise pump the shared publisher for a keyframe many times a
+/// second, tanking the encoder's average bitrate for everyone. Requests inside
+/// this interval are coalesced into the one already forwarded: that keyframe
+/// reaches every viewer of the layer. A viewer still waiting re-asks on its own
+/// cadence (`KEYFRAME_RETRY_AFTER` in the desktop pipeline, 300 ms, longer than
+/// this), so a coalesced request is never the reason a viewer stays frozen.
 ///
-/// A raw-QUIC viewer culls stale keyframe streams itself (a superseded keyframe
-/// is dropped by the receiver's frame_id high-water). A bridged viewer's browser
-/// does the same on the receive side, but on a slow downlink the relay must not
-/// let opened-but-unflushed keyframe streams pile up. Capping in-flight streams
-/// at this many and aborting the OLDEST when a newer keyframe arrives mirrors that
-/// stale-stream culling at the egress: the freshest keyframes win, and a stalled
-/// browser never makes the relay buffer an unbounded backlog of old keyframes.
-const MAX_BRIDGED_KEYFRAME_STREAMS: usize = 2;
+/// Keyed per layer: a layer switch asking for the target layer's keyframe must
+/// not be swallowed by a recovery request for another layer a moment earlier.
+const KEYFRAME_REQUEST_MIN_INTERVAL: Duration = Duration::from_millis(250);
 
-/// Distinct SSRCs a bridged viewer keeps in-flight keyframe-stream queues for.
+/// Most whole frames the relay keeps in flight toward one viewer on one SSRC
+/// (one track's layer) before it sheds the oldest.
+///
+/// Every frame of a native publisher's video rides a reliable uni stream (the
+/// datagram path lost frames, and with them the decoder's references, at any
+/// real loss rate: stream audit B3). Reliable delivery must not become unbounded
+/// latency toward a viewer whose downlink cannot keep up, so the egress keeps a
+/// bounded queue per SSRC: about a second of 60 fps. Shedding a delta breaks
+/// the viewer's reference chain; the viewer sees the gap, asks for a keyframe,
+/// and that keyframe supersedes (aborts) everything still queued before it.
+/// A frame counts as in flight until the viewer acknowledged all of it.
+const MAX_INFLIGHT_STREAM_FRAMES: usize = 64;
+
+/// Distinct SSRCs one viewer keeps in-flight stream-frame queues for.
 ///
 /// The queues are keyed by the publisher's `ssrc`, which is a raw wire field, so
-/// a publisher rotating it grew every bridged viewer's map by one entry (plus up
-/// to [`MAX_BRIDGED_KEYFRAME_STREAMS`] spawned tasks) per keyframe, with no
-/// pruning. A viewer only ever watches the tracks it subscribed to — bounded by
-/// the per-participant subscription cap and, in practice, a handful of
+/// a publisher rotating it grew every viewer's map by one entry (plus up to
+/// [`MAX_INFLIGHT_STREAM_FRAMES`] spawned tasks) per frame, with no pruning. A
+/// viewer only ever watches the tracks it subscribed to — bounded by the
+/// per-participant subscription cap and, in practice, a handful of
 /// (track, layer) pairs. 32 covers a viewer watching many tiles at once while
 /// still capping the map; evicting the oldest SSRC aborts its in-flight streams,
 /// which is exactly what a newer keyframe on that SSRC would have done anyway.
-pub(crate) const MAX_BRIDGED_KEYFRAME_SSRCS: usize = 32;
-
-/// Track a freshly opened keyframe uni-stream task for a bridged viewer, evicting
-/// (aborting) the oldest in-flight stream once more than `cap` are outstanding.
-///
-/// Aborting a still-writing stream task drops its `SendStream`, which resets the
-/// stream so the browser discards that now-stale keyframe — the egress mirror of
-/// the receiver-side stale-stream culling. Aborting an already-finished task is a
-/// harmless no-op, so the queue is simply bounded at `cap`.
-fn enqueue_inflight_stream(queue: &mut VecDeque<AbortHandle>, handle: AbortHandle, cap: usize) {
-    queue.push_back(handle);
-    while queue.len() > cap {
-        if let Some(oldest) = queue.pop_front() {
-            oldest.abort();
-        }
-    }
-}
+pub(crate) const MAX_STREAM_EGRESS_SSRCS: usize = 32;
 
 /// Parse one control frame's body, refusing anything the relay must not act on.
 ///
@@ -236,28 +248,53 @@ pub(crate) fn accept_control_frame(
     Some(message)
 }
 
-/// Bounded per-SSRC in-flight keyframe-stream registry for one bridged viewer.
+/// Bounded per-SSRC registry of the whole-frame uni streams in flight toward
+/// one viewer (raw QUIC or bridged WebTransport alike).
 #[derive(Default)]
-pub(crate) struct BridgedKeyframeStreams {
-    /// In-flight keyframe uni-stream tasks per SSRC, each queue oldest-first and
-    /// bounded at [`MAX_BRIDGED_KEYFRAME_STREAMS`].
+pub(crate) struct InflightStreamFrames {
+    /// In-flight stream tasks per SSRC, oldest first, at most
+    /// [`MAX_INFLIGHT_STREAM_FRAMES`] each.
     pub(crate) per_ssrc: HashMap<u32, VecDeque<AbortHandle>>,
     /// SSRCs present in `per_ssrc`, oldest first, so the map itself is bounded.
     ssrc_order: VecDeque<u32>,
 }
 
-impl BridgedKeyframeStreams {
-    /// Record `handle` under `ssrc` (evicting that SSRC's oldest in-flight stream
-    /// past [`MAX_BRIDGED_KEYFRAME_STREAMS`]), then drop whole SSRC entries —
-    /// oldest first, aborting whatever they still hold — until at most `ssrc_cap`
-    /// remain. Without the outer bound the map is keyed by an attacker-chosen
-    /// wire field and never shrinks.
-    pub(crate) fn track(&mut self, ssrc: u32, handle: AbortHandle, ssrc_cap: usize) {
+impl InflightStreamFrames {
+    /// Record the task writing one frame on `ssrc`.
+    ///
+    /// A keyframe supersedes every older frame of its SSRC: the viewer's
+    /// decoder resynchronizes on it, so whatever is still queued before it is
+    /// aborted (each aborted task drops its `SendStream`, resetting the stream).
+    /// A delta past [`MAX_INFLIGHT_STREAM_FRAMES`] sheds the oldest. Then whole
+    /// SSRC entries are dropped, oldest first, until at most `ssrc_cap` remain.
+    /// Without the outer bound the map is keyed by an attacker-chosen wire field
+    /// and never shrinks.
+    pub(crate) fn track_frame(
+        &mut self,
+        ssrc: u32,
+        handle: AbortHandle,
+        is_keyframe: bool,
+        ssrc_cap: usize,
+    ) -> usize {
         if !self.per_ssrc.contains_key(&ssrc) {
             self.ssrc_order.push_back(ssrc);
         }
         let queue = self.per_ssrc.entry(ssrc).or_default();
-        enqueue_inflight_stream(queue, handle, MAX_BRIDGED_KEYFRAME_STREAMS);
+        queue.retain(|task| !task.is_finished());
+        let mut shed = 0;
+        if is_keyframe {
+            shed = queue.len();
+            for task in queue.drain(..) {
+                task.abort();
+            }
+        }
+        queue.push_back(handle);
+        while queue.len() > MAX_INFLIGHT_STREAM_FRAMES {
+            if let Some(oldest) = queue.pop_front() {
+                oldest.abort();
+                shed += 1;
+            }
+        }
 
         while self.per_ssrc.len() > ssrc_cap {
             let Some(oldest) = self.ssrc_order.pop_front() else {
@@ -269,6 +306,13 @@ impl BridgedKeyframeStreams {
                 }
             }
         }
+        shed
+    }
+
+    /// [`Self::track_frame`] for a keyframe.
+    #[cfg(test)]
+    pub(crate) fn track(&mut self, ssrc: u32, handle: AbortHandle, ssrc_cap: usize) {
+        self.track_frame(ssrc, handle, true, ssrc_cap);
     }
 }
 
@@ -369,6 +413,11 @@ impl SenderRateLimiter {
     /// Attempt to consume one token for `user_id` at real time `now`.
     /// Returns `true` if the packet may be forwarded, `false` if it must be dropped.
     fn try_acquire_at(&self, user_id: i64, now: Instant) -> bool {
+        self.try_acquire_cost_at(user_id, 1.0, now)
+    }
+
+    /// Attempt to consume `cost` tokens for `user_id` at real time `now`.
+    fn try_acquire_cost_at(&self, user_id: i64, cost: f64, now: Instant) -> bool {
         let mut entry = self.buckets.entry(user_id).or_insert(TokenBucket {
             tokens: self.burst,
             last_refill: now,
@@ -378,8 +427,8 @@ impl SenderRateLimiter {
             .as_secs_f64();
         entry.tokens = (entry.tokens + elapsed * self.refill_per_second).min(self.burst);
         entry.last_refill = now;
-        if entry.tokens >= 1.0 {
-            entry.tokens -= 1.0;
+        if entry.tokens >= cost {
+            entry.tokens -= cost;
             true
         } else {
             false
@@ -420,14 +469,6 @@ enum MediaTransport {
         outbound_tx: mpsc::Sender<Bytes>,
         inbound_rx: Arc<Mutex<mpsc::Receiver<Bytes>>>,
         control: Option<WebTransportStreams>,
-        /// In-flight keyframe uni-stream tasks toward this viewer, keyed by SSRC
-        /// (i.e. per track+layer), each queue oldest-first and bounded at
-        /// [`MAX_BRIDGED_KEYFRAME_STREAMS`]. Keying per SSRC (not per connection)
-        /// keeps the stale-stream cull WITHIN a track: a fresh keyframe on one
-        /// track never aborts an undrained, non-superseded keyframe of a
-        /// different track a viewer is watching simultaneously. The number of
-        /// SSRCs is itself bounded at [`MAX_BRIDGED_KEYFRAME_SSRCS`].
-        keyframe_streams: Arc<Mutex<BridgedKeyframeStreams>>,
     },
 }
 
@@ -439,12 +480,10 @@ impl Clone for MediaTransport {
                 outbound_tx,
                 inbound_rx,
                 control,
-                keyframe_streams,
             } => Self::Bridged {
                 outbound_tx: outbound_tx.clone(),
                 inbound_rx: Arc::clone(inbound_rx),
                 control: control.clone(),
-                keyframe_streams: Arc::clone(keyframe_streams),
             },
         }
     }
@@ -545,6 +584,11 @@ pub struct ConnectionHandle {
     session_id: String,
     lease: Arc<ConnectionLease>,
     transport: MediaTransport,
+    /// Whole-frame uni streams in flight toward this connection, keyed by SSRC
+    /// (one track's layer). Keying per SSRC (not per connection) keeps the
+    /// supersede-and-shed rules WITHIN a track: a keyframe on one track never
+    /// aborts frames of another track the viewer watches at the same time.
+    stream_egress: Arc<Mutex<InflightStreamFrames>>,
     counters: Arc<MediaCounters>,
     /// Why the relay closed this connection, once it has (the first reason
     /// wins, as it does on the wire).
@@ -560,6 +604,7 @@ impl ConnectionHandle {
             session_id,
             lease: Arc::new(ConnectionLease::default()),
             transport: MediaTransport::Quic(conn),
+            stream_egress: Arc::new(Mutex::new(InflightStreamFrames::default())),
             counters: Arc::new(MediaCounters::default()),
             relay_close: Arc::new(std::sync::OnceLock::new()),
         }
@@ -588,8 +633,8 @@ impl ConnectionHandle {
                 outbound_tx,
                 inbound_rx: Arc::new(Mutex::new(inbound_rx)),
                 control,
-                keyframe_streams: Arc::new(Mutex::new(BridgedKeyframeStreams::default())),
             },
+            stream_egress: Arc::new(Mutex::new(InflightStreamFrames::default())),
             counters: Arc::new(MediaCounters::default()),
             relay_close: Arc::new(std::sync::OnceLock::new()),
         }
@@ -818,56 +863,78 @@ impl ConnectionHandle {
     /// Forward one whole (already-encrypted) frame to this connection on a fresh
     /// unidirectional stream. The stream's FIN delimits the single message.
     ///
-    /// The raw-QUIC path opens, writes, and finishes inline. The bridged path
-    /// spawns the open+write+finish as a task and tracks it — keyed by `ssrc`
-    /// (track+layer) — so a newer keyframe of the SAME track can abort the OLDEST
-    /// in-flight stream once more than [`MAX_BRIDGED_KEYFRAME_STREAMS`] are
-    /// outstanding for that ssrc, bounding egress backlog toward a slow browser
-    /// downlink (the egress mirror of stale-stream culling) without one track's
-    /// keyframe evicting another track's still-undrained keyframe. It therefore
-    /// returns as soon as the stream is enqueued, not once delivered.
-    pub async fn send_stream_frame(&self, ssrc: u32, msg: Bytes) -> Result<(), String> {
-        match &self.transport {
+    /// The open+write+finish runs on a task tracked per `ssrc` (track+layer) in
+    /// [`InflightStreamFrames`] until the viewer has acknowledged the whole
+    /// frame: a keyframe aborts what is still in flight before it on its SSRC
+    /// (superseded), and a backlog past [`MAX_INFLIGHT_STREAM_FRAMES`] sheds the
+    /// oldest, so a viewer whose downlink cannot keep up gets a gap (and asks for
+    /// a keyframe) rather than seconds of queued latency. Returns as soon as the
+    /// frame is enqueued, not once delivered.
+    pub async fn send_stream_frame(
+        &self,
+        ssrc: u32,
+        msg: Bytes,
+        is_keyframe: bool,
+    ) -> Result<(), String> {
+        let task = match &self.transport {
             MediaTransport::Quic(conn) => {
-                let mut send = conn.open_uni().await.map_err(|e| e.to_string())?;
-                send.write_all(&msg).await.map_err(|e| e.to_string())?;
-                send.finish().map_err(|e| e.to_string())?;
-                self.counters
-                    .stream_frames_sent
-                    .fetch_add(1, Ordering::Relaxed);
-                Ok(())
+                let conn = conn.clone();
+                tokio::spawn(async move {
+                    if let Ok(mut send) = conn.open_uni().await {
+                        if send.write_all(&msg).await.is_ok() && send.finish().is_ok() {
+                            // In flight until the peer acknowledged all of it.
+                            let _ = send.stopped().await;
+                        }
+                    }
+                })
             }
-            MediaTransport::Bridged {
-                control,
-                keyframe_streams,
-                ..
-            } => {
+            MediaTransport::Bridged { control, .. } => {
                 let streams = control
                     .as_ref()
                     .ok_or_else(|| "bridged transport is missing a control connection".to_string())?
                     .clone();
-                let task = tokio::spawn(async move {
+                tokio::spawn(async move {
                     if let Ok(mut send) = streams.open_uni().await {
                         if send.write_all(&msg).await.is_ok() {
                             let _ = send.finish();
                             // Keep the task (and its SendStream) alive until the peer
                             // drains the stream, so a slow bridged downlink counts this
-                            // keyframe as in-flight and a newer keyframe can abort the
-                            // oldest still-undrained one (egress stale-stream culling).
+                            // frame as in flight.
                             let _ = send.stopped().await;
                         }
                     }
-                });
-                let mut tracked = keyframe_streams.lock().await;
-                tracked.track(ssrc, task.abort_handle(), MAX_BRIDGED_KEYFRAME_SSRCS);
-                // Counted once the stream is enqueued, which is what this
-                // method promises — the write itself completes on the task.
-                self.counters
-                    .stream_frames_sent
-                    .fetch_add(1, Ordering::Relaxed);
-                Ok(())
+                })
             }
+        };
+        let shed = {
+            let mut tracked = self.stream_egress.lock().await;
+            tracked.track_frame(
+                ssrc,
+                task.abort_handle(),
+                is_keyframe,
+                MAX_STREAM_EGRESS_SSRCS,
+            )
+        };
+        if shed > 0 && !is_keyframe {
+            warn!(
+                viewer = self.user_id,
+                ssrc,
+                shed,
+                "relay: viewer's downlink is {MAX_INFLIGHT_STREAM_FRAMES} frames behind on this \
+                 layer; shedding the oldest (the viewer will ask for a keyframe)"
+            );
+        } else if shed > 0 {
+            debug!(
+                viewer = self.user_id,
+                ssrc, shed, "relay: a keyframe superseded frames still in flight to this viewer"
+            );
         }
+        // Counted once the stream is enqueued, which is what this method
+        // promises — the write itself completes on the task.
+        self.counters
+            .stream_frames_sent
+            .fetch_add(1, Ordering::Relaxed);
+        Ok(())
     }
 
     /// Send a single control message on a fresh bidirectional stream.
@@ -944,7 +1011,7 @@ pub struct RelayForwarder {
     /// Last time a keyframe request was forwarded upstream, keyed by
     /// `(publisher_user_id, stream, track)` so entries can be pruned when the
     /// publisher disconnects (an abrupt drop never sends `TrackUnpublish`).
-    keyframe_throttle: DashMap<(i64, StreamId, TrackId), Instant>,
+    keyframe_throttle: DashMap<(i64, StreamId, TrackId, Option<u8>), Instant>,
     /// Viewers already flagged for the unreachable "keyframe recipient has no
     /// uni-stream path" bridge state, keyed by `(viewer_user_id, ssrc)` so the
     /// error-level diagnostic fires once per viewer/stream instead of on every
@@ -1289,7 +1356,7 @@ impl RelayForwarder {
     /// across churning streams, mirroring `forget_sender_cache`.
     fn forget_keyframe_state(&self, user_id: i64) {
         self.keyframe_throttle
-            .retain(|(publisher, _, _), _| *publisher != user_id);
+            .retain(|(publisher, _, _, _), _| *publisher != user_id);
         self.ambient_keyframe_throttle
             .retain(|(publisher, _, _), _| *publisher != user_id);
         self.keyframe_bridge_skip_warned
@@ -1737,6 +1804,18 @@ impl RelayForwarder {
                         .counters
                         .stream_frames_received
                         .fetch_add(1, Ordering::Relaxed);
+                    if !task_forwarder.sender_rate_limiter.try_acquire_cost_at(
+                        user_id,
+                        stream_frame_packet_cost(body.len()),
+                        Instant::now(),
+                    ) {
+                        warn!(
+                            user_id,
+                            bytes = body.len(),
+                            "relay: stream frame over the sender's packet budget, dropped"
+                        );
+                        return;
+                    }
                     // Same fence as the datagram path: a keyframe still
                     // draining from a superseded connection must not be
                     // forwarded on the replacement's behalf, and must not touch
@@ -1848,7 +1927,7 @@ impl RelayForwarder {
             let msg = msg.clone();
             let ssrc = header.ssrc;
             tokio::spawn(async move {
-                if let Err(err) = recipient.send_stream_frame(ssrc, msg).await {
+                if let Err(err) = recipient.send_stream_frame(ssrc, msg, is_keyframe).await {
                     debug!(
                         recipient = recipient.user_id,
                         error = %err,
@@ -2435,11 +2514,11 @@ impl RelayForwarder {
                     warn!(user_id, room_id = %room_id, error = %err, "relay: failed to unpublish track");
                     return;
                 }
-                owned!(self.keyframe_throttle.remove(&(
-                    user_id,
-                    stream_id.clone(),
-                    track_id.clone()
-                )));
+                owned!(self
+                    .keyframe_throttle
+                    .retain(|(publisher, stream, track, _), _| {
+                        !(*publisher == user_id && *stream == stream_id && *track == track_id)
+                    }));
                 self.broadcast_control_from(
                     handle,
                     Some(user_id),
@@ -2489,14 +2568,17 @@ impl RelayForwarder {
                 .await;
             }
             ControlMessage::SubscribeStream { mut subscription } => {
-                if let Err(err) = owned!(self.room_manager.subscribe_track(
+                let staged = match owned!(self.room_manager.subscribe_track(
                     room_id,
                     user_id,
                     subscription.clone()
                 )) {
-                    warn!(user_id, room_id = %room_id, error = %err, "relay: failed to register track subscription");
-                    return;
-                }
+                    Ok(staged) => staged,
+                    Err(err) => {
+                        warn!(user_id, room_id = %room_id, error = %err, "relay: failed to register track subscription");
+                        return;
+                    }
+                };
                 let resolved_track = self.resolve_any_published_track(
                     room_id,
                     &subscription.stream_id,
@@ -2523,6 +2605,59 @@ impl RelayForwarder {
                     },
                 )
                 .await;
+                // The viewer changed what it asks for while receiving another
+                // layer (a Viewing quality change, a resize): keep forwarding
+                // what it has and stage the switch for the new layer's next
+                // keyframe, exactly as the relay's own selection does.
+                let mut keyframe_layer = subscription.requested_layer;
+                if let Some(target) = staged {
+                    let key = (
+                        handle.key(),
+                        subscription.stream_id.clone(),
+                        subscription.track_id.clone(),
+                    );
+                    let current = owned!(self
+                        .room_manager
+                        .with_room(room_id, |room| {
+                            room.participants.get(&user_id).and_then(|participant| {
+                                participant
+                                    .track_subscriptions
+                                    .get(&(
+                                        subscription.stream_id.clone(),
+                                        subscription.track_id.clone(),
+                                    ))
+                                    .and_then(|existing| existing.active_layer)
+                            })
+                        })
+                        .flatten());
+                    owned!({
+                        let mut entry = self
+                            .layer_selection
+                            .entry(key)
+                            .or_insert_with(|| LayerSelectionState::new(current.unwrap_or(target)));
+                        if let Some(current) = current {
+                            entry.current_layer = current;
+                        }
+                        entry.pending_layer = Some(target);
+                        entry.headroom_since = None;
+                    });
+                    info!(
+                        viewer = user_id,
+                        room_id = %room_id,
+                        stream_id = %subscription.stream_id.0,
+                        track_id = %subscription.track_id.0,
+                        ?current,
+                        to = target,
+                        requested_layer = ?subscription.requested_layer,
+                        "relay: viewer asked for another layer; switching at its next keyframe"
+                    );
+                    keyframe_layer = Some(target);
+                } else if let Some(track) = resolved_track.as_ref() {
+                    keyframe_layer = subscription
+                        .resolved_layer_id(track)
+                        .or(keyframe_layer)
+                        .filter(|layer| *layer != SOURCE_LAYER);
+                }
                 if let Some(track) = resolved_track {
                     if let Some((epoch, ciphertext)) = self.latest_track_key_delivery(
                         room_id,
@@ -2555,13 +2690,23 @@ impl RelayForwarder {
                         )
                         .await;
                     }
+                    // The new subscriber (or the staged layer) starts at a
+                    // keyframe. Recorded in the throttle so the viewer's own
+                    // first request right behind it coalesces.
+                    owned!(self.allow_keyframe_request(
+                        track.publisher_user_id,
+                        &subscription.stream_id,
+                        &subscription.track_id,
+                        keyframe_layer,
+                        Instant::now(),
+                    ));
                     self.send_control_from(
                         handle,
                         track.publisher_user_id,
                         &ControlMessage::RequestKeyframe {
                             stream_id: subscription.stream_id,
                             track_id: subscription.track_id,
-                            layer_id: subscription.requested_layer,
+                            layer_id: keyframe_layer,
                         },
                     )
                     .await;
@@ -2623,6 +2768,7 @@ impl RelayForwarder {
                     track.publisher_user_id,
                     &stream_id,
                     &track_id,
+                    layer_id,
                     Instant::now(),
                 )) {
                     debug!(
@@ -2630,10 +2776,21 @@ impl RelayForwarder {
                         room_id = %room_id,
                         stream_id = %stream_id.0,
                         track_id = %track_id.0,
-                        "relay: coalescing keyframe request (throttled)"
+                        ?layer_id,
+                        "relay: keyframe request coalesced into one forwarded under {} ms ago",
+                        KEYFRAME_REQUEST_MIN_INTERVAL.as_millis()
                     );
                     return;
                 }
+                info!(
+                    viewer = user_id,
+                    publisher = track.publisher_user_id,
+                    room_id = %room_id,
+                    stream_id = %stream_id.0,
+                    track_id = %track_id.0,
+                    ?layer_id,
+                    "relay: forwarding a viewer's keyframe request to the publisher"
+                );
                 self.send_control_from(
                     handle,
                     track.publisher_user_id,
@@ -3285,9 +3442,15 @@ impl RelayForwarder {
         publisher_user_id: i64,
         stream_id: &StreamId,
         track_id: &TrackId,
+        layer_id: Option<u8>,
         now: Instant,
     ) -> bool {
-        let key = (publisher_user_id, stream_id.clone(), track_id.clone());
+        let key = (
+            publisher_user_id,
+            stream_id.clone(),
+            track_id.clone(),
+            layer_id,
+        );
         if let Some(last) = self.keyframe_throttle.get(&key) {
             if now.saturating_duration_since(*last.value()) < KEYFRAME_REQUEST_MIN_INTERVAL {
                 return false;
@@ -3368,6 +3531,26 @@ impl RelayForwarder {
     /// emit once the ownership guard has been released: the selection itself must
     /// be atomic with respect to connection replacement, but the sends must not
     /// hold a lock across the network.
+    /// What each layer of `track` costs a viewer (see [`LayerCosts`]): its
+    /// measured ingress at this relay, padded, capped by its advertised rate.
+    fn layer_costs(&self, track: &PublishedTrack) -> LayerCosts {
+        distinct_layer_ids(track)
+            .into_iter()
+            .map(|id| {
+                let measured = track
+                    .layers
+                    .iter()
+                    .filter(|layer| layer.layer_id == id)
+                    .filter_map(|layer| {
+                        self.bandwidth_estimator
+                            .ssrc_ingress_kbps(track.publisher_user_id, layer.ssrc)
+                    })
+                    .max();
+                (id, layer_cost_kbps(layer_bitrate_kbps(track, id), measured))
+            })
+            .collect()
+    }
+
     fn prepare_layer_selection(&self, key: ConnKey, room_id: &str) -> Vec<(i64, ControlMessage)> {
         let (viewer_id, slot) = key;
         let downlink = self.downlink(slot);
@@ -3385,6 +3568,7 @@ impl RelayForwarder {
             StreamId,
             TrackId,
             Option<ViewportHint>,
+            Option<u8>,
             Option<u8>,
             PublishedTrack,
         )> = self
@@ -3417,6 +3601,7 @@ impl RelayForwarder {
                             subscription.track_id.clone(),
                             subscription.viewport.clone(),
                             subscription.active_layer,
+                            subscription.requested_layer,
                             track,
                         ))
                     })
@@ -3429,14 +3614,17 @@ impl RelayForwarder {
         let now = Instant::now();
 
         let mut messages = Vec::new();
-        for (stream_id, track_id, viewport, active_layer, track) in subscriptions {
+        for (stream_id, track_id, viewport, active_layer, requested_layer, track) in subscriptions {
+            let costs = self.layer_costs(&track);
             if let Some(message) = self.evaluate_layer_selection(
                 key,
                 &track,
+                &costs,
                 &stream_id,
                 &track_id,
                 viewport.as_ref(),
                 active_layer,
+                requested_layer,
                 egress_kbps,
                 loss,
                 now,
@@ -3473,10 +3661,12 @@ impl RelayForwarder {
         &self,
         viewer: ConnKey,
         track: &PublishedTrack,
+        costs: &LayerCosts,
         stream_id: &StreamId,
         track_id: &TrackId,
         viewport: Option<&ViewportHint>,
         active_layer: Option<u8>,
+        requested_layer: Option<u8>,
         egress_kbps: u32,
         loss: f64,
         now: Instant,
@@ -3491,7 +3681,16 @@ impl RelayForwarder {
             if let Some(active) = active_layer {
                 entry.current_layer = active;
             }
-            compute_target_layer(track, &mut entry, egress_kbps, loss, viewport, now)
+            compute_target_layer(
+                track,
+                costs,
+                &mut entry,
+                egress_kbps,
+                loss,
+                viewport,
+                requested_layer,
+                now,
+            )
         };
 
         let Some(target) = target else {
@@ -3506,11 +3705,30 @@ impl RelayForwarder {
         // Stage the switch; the actual flip happens when the target layer's next
         // keyframe arrives (`commit_pending_switches`).
         if let Some(mut entry) = self.layer_selection.get_mut(&key) {
+            if entry.pending_layer != Some(target) {
+                info!(
+                    viewer = viewer.0,
+                    stream_id = %stream_id.0,
+                    track_id = %track_id.0,
+                    from = entry.current_layer,
+                    to = target,
+                    egress_kbps,
+                    loss,
+                    ?requested_layer,
+                    "relay: staging a layer switch for the target layer's next keyframe"
+                );
+            }
             entry.pending_layer = Some(target);
         }
         // Request a keyframe on the TARGET layer, throttled per (publisher,
         // stream, track) so a churn of switches cannot pump the publisher.
-        if self.allow_keyframe_request(track.publisher_user_id, stream_id, track_id, now) {
+        if self.allow_keyframe_request(
+            track.publisher_user_id,
+            stream_id,
+            track_id,
+            Some(target),
+            now,
+        ) {
             Some((
                 track.publisher_user_id,
                 ControlMessage::RequestKeyframe {
@@ -3742,22 +3960,6 @@ fn should_forward_to_participant(
     }
 }
 
-/// Pick the highest published simulcast layer that fits within `budget_kbps`.
-fn suggest_layer_for_budget(track: &PublishedTrack, budget_kbps: u32) -> Option<u8> {
-    if track.layers.is_empty() {
-        return None;
-    }
-
-    let mut layers = track.layers.clone();
-    layers.sort_by_key(|layer| layer.layer_id);
-    layers
-        .iter()
-        .rev()
-        .find(|layer| layer.max_bitrate_kbps.unwrap_or(u32::MAX) <= budget_kbps)
-        .or_else(|| layers.first())
-        .map(|layer| layer.layer_id)
-}
-
 // ── Relay-driven per-viewer layer selection helpers (spec §4.2) ──────────────
 
 /// Distinct published layer ids on a track (deduped), ascending.
@@ -3785,6 +3987,79 @@ fn layer_bitrate_kbps(track: &PublishedTrack, layer_id: u8) -> Option<u32> {
         .iter()
         .find(|layer| layer.layer_id == layer_id)
         .and_then(|layer| layer.max_bitrate_kbps)
+}
+
+/// What forwarding each layer of a track costs a viewer's downlink, in kbps,
+/// by layer id, ascending.
+///
+/// A layer's advertised `max_bitrate_kbps` is its encoder's *cap*, not its
+/// rate: screen content runs constant-quality under the cap, so "Movie 4K
+/// (100 Mbps)" measured ~18 Mb/s on the wire (stream audit B5). Selecting by
+/// the cap compared every viewer's downlink with 100 Mb/s and sent everyone the
+/// 1280x360 layer. So a layer costs what the relay measured arriving on its
+/// SSRC (with [`MEASURED_LAYER_HEADROOM_PERCENT`] for bursts), never more than
+/// its cap; a layer with no measurement yet costs its cap.
+type LayerCosts = Vec<(u8, u32)>;
+
+/// Headroom over a layer's measured ingress rate when it is used as that
+/// layer's cost: covers keyframe bursts and content that gets busier.
+const MEASURED_LAYER_HEADROOM_PERCENT: u64 = 125;
+
+/// Combine a layer's advertised cap with its measured ingress (see
+/// [`LayerCosts`]).
+fn layer_cost_kbps(cap_kbps: Option<u32>, measured_kbps: Option<u32>) -> u32 {
+    let cap = cap_kbps.unwrap_or(u32::MAX);
+    match measured_kbps {
+        Some(measured) if measured > 0 => {
+            let padded = u64::from(measured) * MEASURED_LAYER_HEADROOM_PERCENT / 100;
+            (padded.min(u64::from(u32::MAX)) as u32).min(cap)
+        }
+        _ => cap,
+    }
+}
+
+/// Cost of one layer from a [`LayerCosts`] table (0 when unknown).
+fn cost_of(costs: &LayerCosts, layer_id: u8) -> u32 {
+    costs
+        .iter()
+        .find(|(id, _)| *id == layer_id)
+        .map(|(_, cost)| *cost)
+        .unwrap_or(0)
+}
+
+/// Costs taken from the advertised caps alone (no measurement).
+#[cfg(test)]
+fn advertised_costs(track: &PublishedTrack) -> LayerCosts {
+    distinct_layer_ids(track)
+        .into_iter()
+        .map(|id| (id, layer_cost_kbps(layer_bitrate_kbps(track, id), None)))
+        .collect()
+}
+
+/// The highest layer whose cost fits `budget_kbps`, or the lowest layer.
+fn layer_for_budget(costs: &LayerCosts, budget_kbps: u32) -> Option<u8> {
+    costs
+        .iter()
+        .rev()
+        .find(|(_, cost)| *cost <= budget_kbps)
+        .or_else(|| costs.first())
+        .map(|(id, _)| *id)
+}
+
+/// The viewer's explicit choice resolved onto the ladder: `None` for Auto,
+/// otherwise the highest published layer at or below the requested one (the
+/// lowest when none is), or the top layer for [`SOURCE_LAYER`].
+fn requested_ceiling(layer_ids: &[u8], requested: Option<u8>) -> Option<u8> {
+    let requested = requested?;
+    if requested == SOURCE_LAYER {
+        return layer_ids.last().copied();
+    }
+    layer_ids
+        .iter()
+        .rev()
+        .find(|&&id| id <= requested)
+        .or_else(|| layer_ids.first())
+        .copied()
 }
 
 /// The next-higher (or next-lower) published layer id relative to `current`,
@@ -3825,18 +4100,29 @@ fn viewport_layer_cap(track: &PublishedTrack, viewport: Option<&ViewportHint>) -
 /// The relay's per-viewer layer decision (spec §4.2): returns the layer a switch
 /// should be staged toward, or `None` to stay on `state.current_layer`.
 ///
-/// - Budget: the highest layer whose ladder bitrate ≤ 85% of the egress estimate.
-/// - Cap: the viewport hint (a small tile never receives H).
+/// - Viewing quality "Source" ([`SOURCE_LAYER`]): the top layer, always. No
+///   viewport or bandwidth cap; the viewer asked for the original picture.
+/// - Viewing quality Low/Medium/High (`requested` is a layer id): that layer
+///   is the ceiling, in place of the viewport cap (the viewer chose it). The
+///   relay still steps below it for bandwidth or loss, and back up to it.
+/// - Auto: the viewport hint caps it (a small tile never receives H).
+/// - Budget: the highest layer whose cost (see [`LayerCosts`]) ≤ 85% of the
+///   egress estimate.
 /// - Downswitch is immediate on windowed loss >2%, an estimate below the current
-///   layer's bitrate, or the budget/viewport desired level dropping below current.
+///   layer's cost, or the budget/cap desired level dropping below current.
 /// - Upswitch fires only after the estimate has held ≥125% of the target rung's
-///   bitrate for 5s (`state.headroom_since` tracks the streak).
+///   cost for 5s (`state.headroom_since` tracks the streak). An explicit
+///   choice above the current layer is not an upswitch to earn: it is staged
+///   at once (the viewer asked for it).
+#[allow(clippy::too_many_arguments)]
 fn compute_target_layer(
     track: &PublishedTrack,
+    costs: &LayerCosts,
     state: &mut LayerSelectionState,
     egress_kbps: u32,
     loss: f64,
     viewport: Option<&ViewportHint>,
+    requested: Option<u8>,
     now: Instant,
 ) -> Option<u8> {
     let layer_ids = distinct_layer_ids(track);
@@ -3847,17 +4133,23 @@ fn compute_target_layer(
     let highest = *layer_ids.last().unwrap();
     let current = state.current_layer;
 
-    // Budget layer capped by the viewport hint.
+    if requested == Some(SOURCE_LAYER) {
+        state.headroom_since = None;
+        return (current != highest).then_some(highest);
+    }
+
+    // Budget layer capped by the viewer's choice, or by the viewport for Auto.
+    let ceiling = requested_ceiling(&layer_ids, requested);
     let budget_kbps = (u64::from(egress_kbps) * u64::from(LAYER_BUDGET_PERCENT) / 100) as u32;
-    let budget_layer = suggest_layer_for_budget(track, budget_kbps).unwrap_or(lowest);
-    let cap = viewport_layer_cap(track, viewport).unwrap_or(highest);
+    let budget_layer = layer_for_budget(costs, budget_kbps).unwrap_or(lowest);
+    let cap = ceiling.unwrap_or_else(|| viewport_layer_cap(track, viewport).unwrap_or(highest));
     let desired = budget_layer.min(cap);
 
-    let current_bitrate = layer_bitrate_kbps(track, current).unwrap_or(0);
+    let current_cost = cost_of(costs, current);
     let loss_high = loss > DOWNSWITCH_LOSS_RATIO;
-    let estimate_below_current = current_bitrate > 0 && egress_kbps < current_bitrate;
+    let estimate_below_current = current_cost > 0 && egress_kbps < current_cost;
 
-    // Immediate downswitch.
+    // Immediate downswitch (an explicit choice below the current layer is one).
     if loss_high || estimate_below_current || desired < current {
         state.headroom_since = None;
         let mut target = desired.min(current);
@@ -3868,13 +4160,27 @@ fn compute_target_layer(
         return (target != current).then_some(target);
     }
 
-    // Upswitch candidate: only toward a higher desired level, gated by the 5s
-    // ≥125%-headroom hold over the target rung's bitrate.
     if desired > current {
+        // The viewer asked for this layer (SubscribeStream staged it) and the
+        // budget allows it: keep the switch, at the target's next keyframe,
+        // rather than earning it over a 5 s hold. A step back up after the
+        // relay's own downswitch is not that: it goes through the hold.
+        if ceiling == Some(desired) && state.pending_layer == Some(desired) {
+            state.headroom_since = None;
+            return Some(desired);
+        }
+        if loss > UPSWITCH_MAX_LOSS_RATIO {
+            state.headroom_since = None;
+            return None;
+        }
+        // Upswitch candidate: one rung up, gated by the 5s ≥125%-headroom hold
+        // over the target rung's cost.
         let target = next_layer_up(&layer_ids, current);
-        let target_bitrate = u64::from(layer_bitrate_kbps(track, target).unwrap_or(u32::MAX));
-        let has_headroom =
-            u64::from(egress_kbps) * 100 >= target_bitrate * UPSWITCH_HEADROOM_PERCENT;
+        let target_cost = u64::from(match cost_of(costs, target) {
+            0 => u32::MAX,
+            cost => cost,
+        });
+        let has_headroom = u64::from(egress_kbps) * 100 >= target_cost * UPSWITCH_HEADROOM_PERCENT;
         if has_headroom {
             let since = *state.headroom_since.get_or_insert(now);
             if now.saturating_duration_since(since) >= UPSWITCH_HOLD {
@@ -3956,7 +4262,7 @@ mod tests {
     }
 
     #[test]
-    fn suggest_layer_for_budget_picks_highest_fitting_layer() {
+    fn layer_for_budget_picks_highest_fitting_layer() {
         let track = PublishedTrack {
             stream_id: StreamId::new("stream-1"),
             track_id: TrackId::new("cam"),
@@ -3991,9 +4297,10 @@ mod tests {
             ],
         };
 
-        assert_eq!(suggest_layer_for_budget(&track, 4000), Some(2));
-        assert_eq!(suggest_layer_for_budget(&track, 1500), Some(1));
-        assert_eq!(suggest_layer_for_budget(&track, 400), Some(0));
+        let costs = advertised_costs(&track);
+        assert_eq!(layer_for_budget(&costs, 4000), Some(2));
+        assert_eq!(layer_for_budget(&costs, 1500), Some(1));
+        assert_eq!(layer_for_budget(&costs, 400), Some(0));
     }
 
     #[test]
@@ -4659,23 +4966,29 @@ mod tests {
 
         // The first request for a (stream, track) is forwarded; an immediate
         // burst behind it coalesces into nothing.
-        assert!(forwarder.allow_keyframe_request(publisher, &stream, &track, start));
-        assert!(!forwarder.allow_keyframe_request(publisher, &stream, &track, start));
+        assert!(forwarder.allow_keyframe_request(publisher, &stream, &track, None, start));
+        assert!(!forwarder.allow_keyframe_request(publisher, &stream, &track, None, start));
         assert!(!forwarder.allow_keyframe_request(
             publisher,
             &stream,
             &track,
+            None,
             start + Duration::from_millis(100)
         ));
+        // Another layer of the same track is its own request (a layer switch
+        // must not be swallowed by a recovery request for the old layer).
+        assert!(forwarder.allow_keyframe_request(publisher, &stream, &track, Some(1), start));
+        assert!(!forwarder.allow_keyframe_request(publisher, &stream, &track, Some(1), start));
 
         // A different track on the same stream is throttled independently.
-        assert!(forwarder.allow_keyframe_request(publisher, &stream, &other, start));
+        assert!(forwarder.allow_keyframe_request(publisher, &stream, &other, None, start));
 
         // Once the interval elapses, a fresh request is forwarded again.
         assert!(forwarder.allow_keyframe_request(
             publisher,
             &stream,
             &track,
+            None,
             start + KEYFRAME_REQUEST_MIN_INTERVAL + Duration::from_millis(1)
         ));
 
@@ -4839,36 +5152,45 @@ mod tests {
         );
     }
 
-    /// The in-flight keyframe-stream queue caps outstanding streams and aborts the
-    /// OLDEST once the cap is exceeded (the egress mirror of stale-stream culling).
+    /// A keyframe supersedes every frame still in flight before it on its SSRC;
+    /// deltas queue up to the cap and then shed the oldest; other SSRCs are
+    /// left alone.
     #[tokio::test]
-    async fn enqueue_inflight_stream_aborts_oldest_beyond_cap() {
-        let mut queue: VecDeque<AbortHandle> = VecDeque::new();
+    async fn inflight_stream_frames_supersede_at_keyframes_and_shed_beyond_cap() {
+        let mut frames = InflightStreamFrames::default();
+        let pending = || tokio::spawn(std::future::pending::<()>());
 
-        // Three tasks that never complete on their own; with a cap of 2 the first
-        // is evicted and aborted, leaving exactly the two newest alive.
-        let h1 = tokio::spawn(std::future::pending::<()>());
-        let a2 = tokio::spawn(std::future::pending::<()>());
-        let a3 = tokio::spawn(std::future::pending::<()>());
-        let (a2_handle, a3_handle) = (a2.abort_handle(), a3.abort_handle());
-
-        enqueue_inflight_stream(&mut queue, h1.abort_handle(), 2);
-        enqueue_inflight_stream(&mut queue, a2_handle.clone(), 2);
-        enqueue_inflight_stream(&mut queue, a3_handle.clone(), 2);
-
-        assert_eq!(queue.len(), 2, "queue is bounded at the cap");
-        assert!(
-            h1.await.unwrap_err().is_cancelled(),
-            "the oldest in-flight stream is aborted when the cap is exceeded"
+        let other = pending();
+        frames.track_frame(7, other.abort_handle(), false, MAX_STREAM_EGRESS_SSRCS);
+        let d1 = pending();
+        let d2 = pending();
+        frames.track_frame(9, d1.abort_handle(), false, MAX_STREAM_EGRESS_SSRCS);
+        frames.track_frame(9, d2.abort_handle(), false, MAX_STREAM_EGRESS_SSRCS);
+        let key = pending();
+        let shed = frames.track_frame(9, key.abort_handle(), true, MAX_STREAM_EGRESS_SSRCS);
+        assert_eq!(
+            shed, 2,
+            "a keyframe supersedes the two deltas in flight before it"
         );
-        assert!(!a2_handle.is_finished(), "the newer streams stay in flight");
-        assert!(
-            !a3_handle.is_finished(),
-            "the newest stream stays in flight"
-        );
+        assert!(d1.await.unwrap_err().is_cancelled());
+        assert!(d2.await.unwrap_err().is_cancelled());
+        assert!(!key.is_finished(), "the keyframe itself stays in flight");
+        assert!(!other.is_finished(), "another track's frames are untouched");
 
-        a2_handle.abort();
-        a3_handle.abort();
+        let mut deltas = Vec::new();
+        let mut shed = 0;
+        for _ in 0..MAX_INFLIGHT_STREAM_FRAMES {
+            let task = pending();
+            shed += frames.track_frame(9, task.abort_handle(), false, MAX_STREAM_EGRESS_SSRCS);
+            deltas.push(task);
+        }
+        assert_eq!(shed, 1, "past the cap the oldest (the keyframe) is shed");
+        assert_eq!(frames.per_ssrc[&9].len(), MAX_INFLIGHT_STREAM_FRAMES);
+        assert!(key.await.unwrap_err().is_cancelled());
+        for task in deltas {
+            task.abort();
+        }
+        other.abort();
     }
 
     /// Establish a raw QUIC loopback pair, returning `(server_conn, client_conn)`.
@@ -4905,7 +5227,7 @@ mod tests {
         assert!(!no_control.supports_media_uni_streams());
         assert!(no_control.accept_uni().await.is_err());
         assert!(no_control
-            .send_stream_frame(0, Bytes::from_static(b"x"))
+            .send_stream_frame(0, Bytes::from_static(b"x"), true)
             .await
             .is_err());
 
@@ -5131,7 +5453,16 @@ mod tests {
         let track = three_layer_track(1);
         // Sitting on H, but 85% of a 2 Mbps estimate (1700 kbps) only fits L.
         let mut state = LayerSelectionState::new(2);
-        let target = compute_target_layer(&track, &mut state, 2000, 0.0, None, Instant::now());
+        let target = compute_target_layer(
+            &track,
+            &advertised_costs(&track),
+            &mut state,
+            2000,
+            0.0,
+            None,
+            None,
+            Instant::now(),
+        );
         assert_eq!(
             target,
             Some(0),
@@ -5148,8 +5479,16 @@ mod tests {
             width: 640,
             height: 360,
         };
-        let target =
-            compute_target_layer(&track, &mut state, 20_000, 0.0, Some(&vp), Instant::now());
+        let target = compute_target_layer(
+            &track,
+            &advertised_costs(&track),
+            &mut state,
+            20_000,
+            0.0,
+            Some(&vp),
+            None,
+            Instant::now(),
+        );
         assert_eq!(target, Some(0), "a small tile never receives H");
     }
 
@@ -5158,7 +5497,16 @@ mod tests {
         let track = three_layer_track(1);
         // On M with ample budget, but >2% loss forces an immediate one-rung drop.
         let mut state = LayerSelectionState::new(1);
-        let target = compute_target_layer(&track, &mut state, 20_000, 0.03, None, Instant::now());
+        let target = compute_target_layer(
+            &track,
+            &advertised_costs(&track),
+            &mut state,
+            20_000,
+            0.03,
+            None,
+            None,
+            Instant::now(),
+        );
         assert_eq!(target, Some(0), "loss >2% downswitches immediately");
     }
 
@@ -5167,7 +5515,16 @@ mod tests {
         let track = three_layer_track(1);
         // On H (8 Mbps rung) with a 5 Mbps estimate < current layer bitrate.
         let mut state = LayerSelectionState::new(2);
-        let target = compute_target_layer(&track, &mut state, 5000, 0.0, None, Instant::now());
+        let target = compute_target_layer(
+            &track,
+            &advertised_costs(&track),
+            &mut state,
+            5000,
+            0.0,
+            None,
+            None,
+            Instant::now(),
+        );
         assert_eq!(
             target,
             Some(1),
@@ -5182,7 +5539,16 @@ mod tests {
         let start = Instant::now();
         // Ample headroom for M, but the first evaluation only starts the 5s clock.
         assert_eq!(
-            compute_target_layer(&track, &mut state, 20_000, 0.0, None, start),
+            compute_target_layer(
+                &track,
+                &advertised_costs(&track),
+                &mut state,
+                20_000,
+                0.0,
+                None,
+                None,
+                start
+            ),
             None,
             "an upswitch does not fire before the 5s headroom hold"
         );
@@ -5190,7 +5556,16 @@ mod tests {
         // After 5s of sustained headroom the upswitch steps up one rung.
         let later = start + UPSWITCH_HOLD + Duration::from_millis(1);
         assert_eq!(
-            compute_target_layer(&track, &mut state, 20_000, 0.0, None, later),
+            compute_target_layer(
+                &track,
+                &advertised_costs(&track),
+                &mut state,
+                20_000,
+                0.0,
+                None,
+                None,
+                later
+            ),
             Some(1),
             "an upswitch fires after 5s of ≥125% headroom"
         );
@@ -5202,7 +5577,16 @@ mod tests {
         let mut state = LayerSelectionState::new(0);
         let start = Instant::now();
         // Start the streak.
-        compute_target_layer(&track, &mut state, 20_000, 0.0, None, start);
+        compute_target_layer(
+            &track,
+            &advertised_costs(&track),
+            &mut state,
+            20_000,
+            0.0,
+            None,
+            None,
+            start,
+        );
         assert!(state.headroom_since.is_some());
         // A dip below 125% headroom over M (3500*1.25 = 4375) resets the clock —
         // but 4000 kbps still fits M at 85% budget (3400 ≥ ... no: 85% of 4000 =
@@ -5210,9 +5594,11 @@ mod tests {
         // state that clears the streak.
         compute_target_layer(
             &track,
+            &advertised_costs(&track),
             &mut state,
             4000,
             0.0,
+            None,
             None,
             start + Duration::from_secs(1),
         );
@@ -5220,6 +5606,154 @@ mod tests {
             state.headroom_since.is_none(),
             "a headroom dip clears the upswitch streak"
         );
+    }
+
+    /// Viewing quality: Low, Medium and High are those layers (ceilings, not
+    /// one rung off), Source is the top layer whatever the window or the
+    /// connection, and an explicit choice above the current layer is staged at
+    /// once rather than earned over a 5 s hold (stream audit B5).
+    #[test]
+    fn viewing_quality_maps_each_choice_to_its_layer() {
+        let track = three_layer_track(1);
+        let costs = advertised_costs(&track);
+        let now = Instant::now();
+        let small_tile = ViewportHint {
+            width: 640,
+            height: 360,
+        };
+        for (requested, from, expected) in [
+            (Some(0), 2, Some(0)),
+            (Some(1), 2, Some(1)),
+            (Some(1), 0, Some(1)),
+            (Some(2), 0, Some(2)),
+            (Some(SOURCE_LAYER), 0, Some(2)),
+            (Some(2), 2, None),
+        ] {
+            let mut state = LayerSelectionState::new(from);
+            // An upward choice was staged by the viewer's SubscribeStream.
+            if expected.is_some_and(|layer| layer > from && requested != Some(SOURCE_LAYER)) {
+                state.pending_layer = expected;
+            }
+            assert_eq!(
+                compute_target_layer(
+                    &track,
+                    &costs,
+                    &mut state,
+                    50_000,
+                    0.0,
+                    Some(&small_tile),
+                    requested,
+                    now
+                ),
+                expected,
+                "requested {requested:?} from layer {from}"
+            );
+        }
+        // Stepping back up to the chosen layer after the relay's own
+        // downswitch is earned (5 s of headroom on a clean path), never at
+        // once: a lossy path otherwise oscillates between layers.
+        let mut state = LayerSelectionState::new(0);
+        assert_eq!(
+            compute_target_layer(&track, &costs, &mut state, 50_000, 0.0, None, Some(2), now),
+            None
+        );
+        assert_eq!(
+            compute_target_layer(
+                &track,
+                &costs,
+                &mut state,
+                50_000,
+                0.01,
+                None,
+                Some(2),
+                now + UPSWITCH_HOLD
+            ),
+            None,
+            "1% loss resets the hold"
+        );
+        // High is still a ceiling the relay steps below for bandwidth; Source
+        // is not.
+        let mut state = LayerSelectionState::new(2);
+        assert_eq!(
+            compute_target_layer(&track, &costs, &mut state, 2000, 0.0, None, Some(2), now),
+            Some(0)
+        );
+        let mut state = LayerSelectionState::new(2);
+        assert_eq!(
+            compute_target_layer(
+                &track,
+                &costs,
+                &mut state,
+                2000,
+                0.03,
+                None,
+                Some(SOURCE_LAYER),
+                now
+            ),
+            None
+        );
+    }
+
+    /// A layer costs what it measures on the wire, not its encoder cap: a
+    /// "Movie 100" top layer capped at 100 Mb/s that runs at 18 Mb/s fits a
+    /// 40 Mb/s downlink (stream audit B5: every viewer got 1280x360).
+    #[test]
+    fn layer_cost_is_the_measured_rate_under_the_cap() {
+        assert_eq!(layer_cost_kbps(Some(100_000), Some(18_000)), 22_500);
+        assert_eq!(layer_cost_kbps(Some(5_000), Some(18_000)), 5_000);
+        assert_eq!(layer_cost_kbps(Some(100_000), None), 100_000);
+        let mut track = three_layer_track(1);
+        track.layers[2].max_bitrate_kbps = Some(100_000);
+        let costs: LayerCosts = vec![(0, 800), (1, 3_500), (2, 22_500)];
+        let mut state = LayerSelectionState::new(2);
+        assert_eq!(
+            compute_target_layer(
+                &track,
+                &costs,
+                &mut state,
+                40_000,
+                0.0,
+                None,
+                None,
+                Instant::now()
+            ),
+            None,
+            "the measured top layer fits; no downswitch"
+        );
+        let mut state = LayerSelectionState::new(2);
+        assert_eq!(
+            compute_target_layer(
+                &track,
+                &advertised_costs(&track),
+                &mut state,
+                40_000,
+                0.0,
+                None,
+                None,
+                Instant::now()
+            ),
+            Some(1),
+            "by the cap alone the same viewer was sent the medium layer"
+        );
+    }
+
+    /// The relay measures each SSRC's ingress rate over its window.
+    #[test]
+    fn ssrc_ingress_rate_is_measured_per_layer() {
+        let estimator = BandwidthEstimator::new();
+        let start = Instant::now();
+        for i in 0..20u16 {
+            let at = start + Duration::from_millis(u64::from(i) * 100);
+            estimator.record_ingress_at(7, 100, i, 12_500, at);
+            estimator.record_ingress_keyframe_at(7, 200, i, 1_250, at);
+        }
+        let end = start + Duration::from_millis(1_950);
+        // 12,500 bytes every 100 ms is 1 Mb/s; 1,250 bytes is 100 kb/s.
+        let high = estimator.ssrc_ingress_kbps_at(7, 100, end).unwrap();
+        let low = estimator.ssrc_ingress_kbps_at(7, 200, end).unwrap();
+        assert!((900..=1100).contains(&high), "{high}");
+        assert!((90..=110).contains(&low), "{low}");
+        assert_eq!(estimator.ssrc_ingress_kbps_at(7, 300, end), None);
     }
 
     /// Register a bridged connection whose media receipt matches the session id
@@ -5696,6 +6230,7 @@ mod tests {
             1,
             &StreamId::new("stream-new"),
             &TrackId::new("cam"),
+            None,
             throttled_at
         ));
         assert_eq!(forwarder.cached_plan_count(1), 1);
@@ -5731,6 +6266,7 @@ mod tests {
                 1,
                 &StreamId::new("stream-new"),
                 &TrackId::new("cam"),
+                None,
                 throttled_at
             ),
             "the replacement's keyframe throttle must not be reset"

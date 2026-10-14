@@ -877,12 +877,20 @@ impl MediaRoomManager {
     /// A view session may subscribe only to a published track of the stream it
     /// watches (`NotAllowedForViewer` otherwise), and an ambient view is
     /// pinned to the track's lowest simulcast layer whatever it asks for.
+    /// Register (or replace) a viewer's subscription to one track.
+    ///
+    /// Returns `Some(layer)` when the viewer was already receiving this track
+    /// on another layer: the forwarded layer is then left where it was, and
+    /// `layer` is where the new subscription resolves. The caller stages that
+    /// switch for the target layer's next keyframe (spec §4.2), because a
+    /// viewer flipped to another layer mid-GOP receives deltas it cannot decode
+    /// (the green picture of stream audit B4).
     pub fn subscribe_track(
         &self,
         room_id: &str,
         user_id: i64,
         mut subscription: TrackSubscription,
-    ) -> Result<(), RoomError> {
+    ) -> Result<Option<u8>, RoomError> {
         let mut room = self
             .rooms
             .get_mut(room_id)
@@ -911,16 +919,35 @@ impl MediaRoomManager {
                 subscription.viewport = None;
             }
         }
-        if let Some(track) = track {
-            subscription.active_layer = subscription.resolved_layer_id(&track);
-        }
         let participant = room
             .participants
             .get_mut(&user_id)
             .ok_or_else(|| RoomError::UserNotInRoom(user_id, room_id.to_string()))?;
+        let mut staged = None;
+        if let Some(track) = track {
+            // Resolve the request afresh (a viewer's own `active_layer` is not
+            // authoritative), then keep forwarding the layer it already gets.
+            subscription.active_layer = None;
+            let resolved = subscription.resolved_layer_id(&track);
+            let previous = participant
+                .track_subscriptions
+                .get(&(
+                    subscription.stream_id.clone(),
+                    subscription.track_id.clone(),
+                ))
+                .and_then(|existing| existing.active_layer)
+                .filter(|layer| track.layers.iter().any(|l| l.layer_id == *layer));
+            subscription.active_layer = match (previous, resolved) {
+                (Some(previous), Some(resolved)) if previous != resolved => {
+                    staged = Some(resolved);
+                    Some(previous)
+                }
+                _ => resolved,
+            };
+        }
         participant.subscribe_track(subscription);
         self.bump_generation(room_id);
-        Ok(())
+        Ok(staged)
     }
 
     /// Remove a participant's explicit track subscription.
@@ -1454,6 +1481,35 @@ mod tests {
             .get(&(track.stream_id.clone(), track.track_id.clone()))
             .unwrap();
         assert_eq!(subscription.active_layer, Some(1));
+
+        // Asking for another layer while receiving one does not flip the
+        // forwarded layer mid-GOP: it stays, and the new layer is returned to
+        // be switched to at its next keyframe (stream audit B4).
+        let staged = mgr
+            .subscribe_track(
+                &room_id,
+                2,
+                TrackSubscription {
+                    stream_id: track.stream_id.clone(),
+                    track_id: track.track_id.clone(),
+                    requested_layer: Some(paracord_transport::stream::SOURCE_LAYER),
+                    active_layer: None,
+                    viewport: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(staged, Some(2), "Source resolves to the top layer");
+        let room = mgr.get_room(&room_id).unwrap();
+        let subscription = room.participants[&2]
+            .track_subscriptions
+            .get(&(track.stream_id.clone(), track.track_id.clone()))
+            .unwrap()
+            .clone();
+        assert_eq!(
+            subscription.active_layer,
+            Some(1),
+            "still forwarding layer 1"
+        );
     }
 
     #[test]

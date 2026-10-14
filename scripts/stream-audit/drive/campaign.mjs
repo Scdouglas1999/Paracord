@@ -352,7 +352,9 @@ try {
   if (plan === 'full' || plan === 'quick') {
     for (const preset of PRESETS) {
       await freshShare(preset);
-      await layoutPhases(arg('tag', '') + preset, plan === 'quick' ? { phases: ['normal', 'theater', 'fullscreen', 'theater-toggle'] } : {});
+      // --phases picks the layouts (e.g. normal,theater for loss runs).
+      const phases = arg('phases', null)?.split(',') ?? (plan === 'quick' ? ['normal', 'theater', 'fullscreen', 'theater-toggle'] : undefined);
+      await layoutPhases(arg('tag', '') + preset, phases ? { phases } : {});
     }
   }
   if (plan === 'sizes') {

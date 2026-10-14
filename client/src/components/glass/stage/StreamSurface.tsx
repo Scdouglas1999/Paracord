@@ -47,6 +47,10 @@ export function StreamSurface({ engine, streamerId, notice, onPicture, sharing =
   const boxRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [hasPicture, setHasPicture] = useState(false);
+  // The picture stopped moving (the native pipeline is recovering from loss,
+  // or the streamer's video went quiet): say so instead of showing a frozen
+  // frame that still reads as live.
+  const [stalled, setStalled] = useState(false);
   const underlayLive = useNativeUnderlay(boxRef, canvasRef);
 
   const reportRef = useRef(onPicture);
@@ -77,9 +81,15 @@ export function StreamSurface({ engine, streamerId, notice, onPicture, sharing =
       () => setHasPicture(true),
       { preferredTrackId: 'screen' },
     );
+    const onStall = (event: Event) => {
+      setStalled((event as CustomEvent<{ stalled?: boolean }>).detail?.stalled === true);
+    };
+    canvas.addEventListener('paracord:video-stall', onStall);
     return () => {
+      canvas.removeEventListener('paracord:video-stall', onStall);
       unsubscribe();
       setHasPicture(false);
+      setStalled(false);
     };
   }, [engine, streamerId]);
 
@@ -124,6 +134,7 @@ export function StreamSurface({ engine, streamerId, notice, onPicture, sharing =
   }, [engine, streamerId, quality]);
 
   const showPicture = hasPicture && !notice;
+  const reconnecting = showPicture && stalled;
   return (
     <div
       ref={boxRef}
@@ -133,6 +144,7 @@ export function StreamSurface({ engine, streamerId, notice, onPicture, sharing =
       data-native-underlay-clear=""
       data-underlay={underlayLive ? 'live' : undefined}
       data-picture={showPicture ? 'true' : undefined}
+      data-video-stalled={reconnecting ? 'true' : undefined}
     >
       <canvas
         ref={canvasRef}
@@ -147,6 +159,11 @@ export function StreamSurface({ engine, streamerId, notice, onPicture, sharing =
           visibility: underlayLive ? 'hidden' : 'visible',
         }}
       />
+      {reconnecting && (
+        <div className="glass-stage__reconnecting" role="status">
+          <span className="glass-stage__reconnecting-label">Reconnecting video…</span>
+        </div>
+      )}
       {notice && (
         <div className="glass-stage__notice" role="status">
           {notice}

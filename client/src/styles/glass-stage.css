@@ -46,6 +46,26 @@
   text-align: center;
 }
 
+/* The picture stopped moving (StreamSurface `stalled`): a quiet veil over the
+   frozen frame and one line, never a live-looking still. Drawn by the page over
+   the native surface's hole, so it covers the underlay too. */
+.glass-stage__reconnecting {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background-color: color-mix(in srgb, var(--pill) 55%, transparent);
+  pointer-events: none;
+}
+
+.glass-stage__reconnecting-label {
+  padding: 8px 14px;
+  border-radius: var(--r-ctl);
+  background-color: color-mix(in srgb, var(--pill) 90%, transparent);
+  font-size: 13.5px;
+  color: var(--ink-2);
+}
+
 .glass-stage__sbtn {
   display: inline-flex;
   flex: 0 0 auto;

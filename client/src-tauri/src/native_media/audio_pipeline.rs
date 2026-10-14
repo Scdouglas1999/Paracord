@@ -25,10 +25,12 @@ const MAX_ENCODER_LOSS_PERC: u8 = 20;
 ///
 /// Each in-flight read buffers up to [`MAX_STREAM_FRAME_SIZE`] (16 MiB) before
 /// anything is dispatched, and QUIC lets the peer open many concurrent uni
-/// streams, so this is the only bound on that path's memory. A publisher has at
-/// most one keyframe stream per simulcast layer in flight, so four covers a full
-/// ladder plus a straggler; past that the accept loop simply waits.
-const MAX_CONCURRENT_UNI_STREAM_READS: usize = 4;
+/// streams, so this is the only bound on that path's memory. Every video frame
+/// arrives on its own stream, and a frame whose packet was lost stays open
+/// until its retransmission lands; with only a few reads allowed, a handful of
+/// such frames stopped this client from even accepting the frames behind them
+/// (stream-fix V1). Past this the accept loop simply waits.
+const MAX_CONCURRENT_UNI_STREAM_READS: usize = 32;
 
 pub struct StreamRemoteAudioState {
     /// Which participant published this screen-audio track. Retained for

@@ -134,6 +134,13 @@ pub struct ViewportHint {
     pub height: u32,
 }
 
+/// `requested_layer` value that asks for the track's source layer: always the
+/// top (full-resolution) layer of whatever ladder the publisher has, with no
+/// viewport or bandwidth cap. The viewer's "Source" viewing quality. A plain
+/// layer id is a ceiling the relay may still step below for bandwidth; this is
+/// a pin.
+pub const SOURCE_LAYER: u8 = u8::MAX;
+
 /// Subscription state for a viewer receiving a published media track.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -154,7 +161,23 @@ impl TrackSubscription {
             return None;
         }
 
-        if let Some(layer_id) = self.active_layer.or(self.requested_layer) {
+        if self.active_layer.is_none() {
+            if let Some(requested) = self.requested_layer {
+                // A requested layer is the viewer's ceiling (Low, Medium, High)
+                // or the source pin: resolve it onto the ladder the publisher
+                // actually has, so asking for "High" of a two-rung ladder gets
+                // its top rung rather than nothing.
+                let mut ids: Vec<u8> = track.layers.iter().map(|layer| layer.layer_id).collect();
+                ids.sort_unstable();
+                return ids
+                    .iter()
+                    .rev()
+                    .find(|&&id| requested == SOURCE_LAYER || id <= requested)
+                    .or_else(|| ids.first())
+                    .copied();
+            }
+        }
+        if let Some(layer_id) = self.active_layer {
             return track
                 .layers
                 .iter()

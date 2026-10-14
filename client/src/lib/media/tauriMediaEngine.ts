@@ -295,6 +295,13 @@ export class TauriMediaEngine implements MediaEngine {
   private screenAudioRegistrations = new Map<string, { streamId: string; trackId: string }>();
   private audioSubscriptionReleases = new Map<string, () => void>();
   private videoSubscriptionReleases = new Map<string, () => void>();
+  /**
+   * The viewer's Viewing quality per watched track (`streamId:trackId`): the
+   * layer it asked the relay for. A re-registration that does not say (a tile
+   * resize updating the viewport hint) keeps it, instead of quietly dropping
+   * the viewer back to Auto.
+   */
+  private requestedLayers = new Map<string, number>();
 
   // Native camera capture state. There is no JS getUserMedia / frame-extraction
   // path anymore (contract CAM4): capture, encode, and the self-view all live in
@@ -1002,11 +1009,16 @@ export class TauriMediaEngine implements MediaEngine {
     if (this.isOwnPublishedTrack(request.streamId, request.trackId)) {
       return;
     }
+    const layerKey = `${request.streamId}:${request.trackId}`;
+    if ('requestedLayer' in request) {
+      if (request.requestedLayer === undefined) this.requestedLayers.delete(layerKey);
+      else this.requestedLayers.set(layerKey, request.requestedLayer);
+    }
     await this.invokeOwned('media_register_track_subscription', {
       request: {
         streamId: request.streamId,
         trackId: request.trackId,
-        requestedLayer: request.requestedLayer ?? null,
+        requestedLayer: this.requestedLayers.get(layerKey) ?? null,
         activeLayer: request.activeLayer ?? null,
         viewportWidth: request.viewport?.width ?? null,
         viewportHeight: request.viewport?.height ?? null,
@@ -1195,10 +1207,11 @@ export class TauriMediaEngine implements MediaEngine {
       existing.streamId = track.streamId;
       existing.trackId = track.trackId;
       existing.activeLayer = selectedLayer.layerId;
+      // The tile's size is a hint (the relay's Auto); only the viewer's
+      // Viewing quality asks for a layer, and it is kept (`requestedLayers`).
       void this.registerTrackSubscription({
         streamId: track.streamId,
         trackId: track.trackId,
-        requestedLayer: selectedLayer.layerId,
         viewport,
       }).catch(() => {});
     });
@@ -1650,10 +1663,13 @@ export class TauriMediaEngine implements MediaEngine {
             });
           };
           const registerRelay = () =>
+            // The viewport is Auto's hint; a requested layer is a ceiling
+            // (Viewing quality), which the engine sets itself only for a
+            // sampler: no tile, the lowest layer.
             this.registerTrackSubscription({
               streamId,
               trackId,
-              requestedLayer: selectedLayer?.layerId,
+              ...(headless && selectedLayer ? { requestedLayer: selectedLayer.layerId } : {}),
               viewport,
             }).catch((error) => {
               logVoiceDiagnostic('[media] failed to register native track subscription', {
@@ -1804,6 +1820,32 @@ export class TauriMediaEngine implements MediaEngine {
               }
             });
             this.unlisteners.push(failureUnlisten);
+            // A visible stream that stopped presenting frames (loss the
+            // pipeline is recovering from, a publisher gone quiet): the native
+            // side says so after a second and again when the picture moves.
+            // The stream box shows "Reconnecting video…" in between, not a
+            // frozen picture that still reads as live.
+            const stallUnlisten = await this.listenOwned('media_native_render_stalled', (event) => {
+              const payload = event.payload as
+                | { streamId?: string; trackId?: string; stalled?: boolean; reason?: string }
+                | null;
+              if (payload?.streamId !== streamId || payload?.trackId !== trackId) return;
+              const stalled = payload.stalled === true;
+              logVoiceDiagnostic('[media] native video stall', {
+                userId,
+                streamId,
+                trackId,
+                stalled,
+                reason: payload.reason ?? null,
+              });
+              canvas.dispatchEvent(
+                new CustomEvent('paracord:video-stall', {
+                  detail: { stalled, reason: payload.reason ?? null },
+                  bubbles: true,
+                }),
+              );
+            });
+            this.unlisteners.push(stallUnlisten);
             subscription = {
               canvas,
               streamId,
@@ -1813,6 +1855,7 @@ export class TauriMediaEngine implements MediaEngine {
               stop: () => {
                 firstFrameUnlisten();
                 failureUnlisten();
+                stallUnlisten();
                 // Closes the hole (onVisibilityChange(false)) before the
                 // surface goes.
                 nativeTile.destroy();

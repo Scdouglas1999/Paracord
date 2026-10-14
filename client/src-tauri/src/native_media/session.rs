@@ -308,6 +308,11 @@ pub struct NativeMediaSession {
     /// viewer that lost fragments) forces the next encoded frame to be intra.
     pub video_force_keyframe: Arc<AtomicBool>,
     pub screen_force_keyframe: Arc<AtomicBool>,
+    /// When the screen encoder last emitted (was asked for) a keyframe: the
+    /// periodic keyframe is a wall-clock timer, not a frame count (a GOP of
+    /// `fps x 4` frames at a 60 fps preset encoding 30 fps was 8 s).
+    #[cfg(feature = "vpx")]
+    pub screen_last_keyframe_at: Option<std::time::Instant>,
     /// Most recent relay bandwidth estimate for this connection, in kbps
     /// (0 = no feedback yet). Written by the control-receive task on
     /// `ControlMessage::BandwidthFeedback`, read per frame by the screen
@@ -632,6 +637,8 @@ impl NativeMediaSession {
             stream_remote_audio: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             video_force_keyframe: Arc::new(AtomicBool::new(true)),
             screen_force_keyframe: Arc::new(AtomicBool::new(true)),
+            #[cfg(feature = "vpx")]
+            screen_last_keyframe_at: None,
             screen_bitrate_feedback_kbps: Arc::new(AtomicU32::new(0)),
             screen_encode_fps: Arc::new(AtomicU32::new(30)),
             #[cfg(feature = "vpx")]

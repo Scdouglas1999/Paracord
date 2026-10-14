@@ -4,9 +4,7 @@ use paracord_transport::protocol::MediaHeader;
 use paracord_transport::stream::PublishedTrack;
 
 #[cfg(feature = "vpx")]
-use bytes::{BufMut, Bytes, BytesMut};
-#[cfg(feature = "vpx")]
-use paracord_codec::crypto::TAG_SIZE;
+use bytes::{Bytes, BytesMut};
 #[cfg(feature = "vpx")]
 use paracord_codec::video::VideoCodec;
 #[cfg(feature = "vpx")]
@@ -29,19 +27,50 @@ use tokio::sync::{mpsc, Notify};
 #[cfg(feature = "vpx")]
 use tokio::task::JoinHandle;
 
-/// Bounded depth of the per-track decode worker's input channel. Kept tiny so a
-/// stalled decoder sheds load (drop-newest / drop-until-keyframe) instead of
-/// piling reassembled multi-KB frames on the heap.
+/// Bounded depth of the per-track decode worker's input channel. A stalled
+/// decoder sheds load (drop-until-keyframe) instead of piling reassembled
+/// frames on the heap. Every frame arrives on a reliable stream, and a frame
+/// held up by a retransmission releases the frames queued behind it all at
+/// once, and a fresh hardware decoder (a layer switch) can take the better part
+/// of a second over its first keyframe on a loaded machine (measured up to
+/// 0.96 s), so the channel absorbs about a second and a half at 60 fps rather
+/// than shedding into a keyframe wait.
 #[cfg(feature = "vpx")]
-const DECODE_CHANNEL_DEPTH: usize = 2;
-/// Maximum number of out-of-order frames the reorder stage holds before it
-/// force-delivers the oldest. Datagram reordering beyond this is treated as loss.
+const DECODE_CHANNEL_DEPTH: usize = 96;
+/// Most out-of-order frames the reorder stage holds before it force-delivers
+/// the oldest; only a memory bound (the hold below decides in practice).
 #[cfg(feature = "vpx")]
-const REORDER_MAX_HELD: usize = 2;
-/// Longest a reordered frame waits for its predecessor before being delivered
-/// anyway. Bounds added latency from the reorder stage.
+const REORDER_MAX_HELD: usize = 24;
+/// Longest a frame waits for a missing predecessor before the predecessor is
+/// declared lost. Every frame rides a reliable stream, so a missing frame is
+/// normally a retransmission in progress (a tail loss waits for QUIC's probe
+/// timeout); past this the gap is a broken reference: the worker drops deltas
+/// and asks for a keyframe (see [`TrackRecovery`]).
 #[cfg(feature = "vpx")]
-const REORDER_HOLD: Duration = Duration::from_millis(50);
+const REORDER_HOLD: Duration = Duration::from_millis(120);
+/// How long a track waiting for a keyframe waits before asking again. The
+/// relay coalesces requests per layer for 250 ms, so a re-ask is never folded
+/// into the request it repeats.
+#[cfg(feature = "vpx")]
+const KEYFRAME_RETRY_AFTER: Duration = Duration::from_millis(300);
+/// A visible, live track that has presented nothing for this long tells the
+/// page so ("Reconnecting video…") instead of leaving a frozen picture that
+/// still reads as live, and logs why.
+#[cfg(feature = "vpx")]
+const STALL_AFTER: Duration = Duration::from_secs(1);
+/// A pause this long between two frames arriving at a playing track's worker
+/// is logged: it tells a transport stall (nothing arrives, then a burst) from a
+/// decode or render stall (frames arrive, the picture does not move).
+/// A decode, or a hand-off to the surface, that holds the track's worker this
+/// long is logged (every frame behind it waits).
+#[cfg(feature = "vpx")]
+const SLOW_STEP_LOG_AFTER: Duration = Duration::from_millis(100);
+#[cfg(feature = "vpx")]
+const ARRIVAL_GAP_LOG_AFTER: Duration = Duration::from_millis(200);
+/// How often a decode worker checks its keyframe retries and its stall
+/// watchdog.
+#[cfg(feature = "vpx")]
+const WORKER_TICK: Duration = Duration::from_millis(100);
 /// How far behind the newest frame id a frame may be and still count as late
 /// (reordered or lost) rather than as a new numbering.
 ///
@@ -102,23 +131,11 @@ fn admit_reordered_frame(
     ReorderAdmission::Accept
 }
 
+/// Smallest datagram a video sender can be using; bounds how many fragments a
+/// datagram-delivered frame (a browser publisher's delta) may declare. The
+/// native sender sends every video frame on a uni stream.
 #[cfg(feature = "vpx")]
 const FALLBACK_MAX_DATAGRAM_SIZE: usize = 1200;
-/// A frame that would fragment into more than this many datagrams is sent on a
-/// reliable QUIC uni stream instead. Keyframes always take the stream path; this
-/// also catches the occasional huge delta (a scene cut) whose all-or-nothing
-/// datagram reassembly would otherwise die at any real packet-loss rate.
-#[cfg(feature = "vpx")]
-const STREAM_FRAGMENT_THRESHOLD: usize = 48;
-/// Datagram bursts larger than this many fragments are paced out with a short
-/// gap between fragments so audio datagrams never sit behind a big video burst
-/// (L3). Keyframes are off the datagram path entirely, so this now only ever
-/// applies to large delta frames.
-#[cfg(feature = "vpx")]
-const AUDIO_PACING_FRAGMENT_THRESHOLD: usize = 32;
-/// Inter-fragment gap used when pacing a large datagram burst (~1ms).
-#[cfg(feature = "vpx")]
-const AUDIO_PACING_INTERVAL: Duration = Duration::from_micros(1000);
 #[cfg(feature = "vpx")]
 const VIDEO_REASSEMBLY_TTL: Duration = Duration::from_secs(3);
 /// How often the reassembly pool is swept for expired partial frames.
@@ -144,7 +161,7 @@ const MAX_INFLIGHT_REASSEMBLY_FRAMES: usize = 128;
 /// one ~1200-byte datagram declaring 65535 fragments allocated 1.5 MB. This
 /// bounds a partial frame by what a *whole* frame is allowed to be
 /// ([`MAX_STREAM_FRAME_SIZE`]) at the smallest datagram a sender can be using.
-/// Senders move anything past `STREAM_FRAGMENT_THRESHOLD` fragments onto the
+/// Senders move large frames onto the
 /// uni-stream path, so this leaves orders of magnitude of headroom.
 #[cfg(feature = "vpx")]
 const MAX_REASSEMBLY_FRAGMENTS: usize =
@@ -157,15 +174,33 @@ const MAX_REASSEMBLY_FRAGMENTS: usize =
 /// this is the belt-and-braces bound.
 #[cfg(feature = "vpx")]
 const MAX_DECODE_WORKERS: usize = 64;
-/// Periodic keyframe cadence in seconds — a safety net only. Every encoder
-/// backend now honors on-demand keyframes instantly (the in-process libavcodec
-/// engine stamps AV_PICTURE_TYPE_I on the exact requested frame; libvpx forces
-/// one the same way), so recovery and late joins ride explicit RequestKeyframe
-/// messages. This periodic interval only bounds worst-case recovery for a
-/// viewer that missed the request; each keyframe is a burst of hundreds of
-/// datagrams that risks fragment loss, so it stays long.
+/// Camera keyframe cadence in seconds (a GOP of `fps x` this) — a safety net
+/// only: recovery and late joins ride explicit RequestKeyframe messages.
 #[cfg(feature = "vpx")]
-const SCREEN_KEYFRAME_INTERVAL_SECONDS: u32 = 4;
+const CAMERA_KEYFRAME_INTERVAL_SECONDS: u32 = 4;
+/// The screen encoders' own GOP, in seconds of frames at the preset rate: a
+/// backstop under the wall-clock keyframe timer ([`screen_keyframe_interval`]),
+/// which is what actually spaces periodic screen keyframes.
+#[cfg(feature = "vpx")]
+const SCREEN_CODEC_GOP_BACKSTOP_SECONDS: u32 = 10;
+
+/// How often a screen share emits a keyframe when nobody asks for one, in real
+/// time. Recovery rides explicit RequestKeyframe messages (a viewer that sees a
+/// broken reference asks at once and re-asks every 300 ms); this interval only
+/// bounds the worst case for a viewer whose requests all went missing, and the
+/// first picture of a viewer whose request raced the subscription.
+///
+/// It was a frame count, `fps x 4` at the preset's rate: 240 frames at a 60 fps
+/// preset that encodes ~30 fps is 8 s (stream audit B3). Per preset: 2 s;
+/// film content (the Movie presets) 3 s, because a film keyframe is the
+/// largest frame and film viewers tolerate the longest worst case.
+#[cfg(feature = "vpx")]
+fn screen_keyframe_interval(config: &paracord_codec::video::EncoderConfig) -> Duration {
+    match config.content_hint {
+        paracord_codec::video::VideoContentHint::Film => Duration::from_secs(3),
+        _ => Duration::from_secs(2),
+    }
+}
 /// Floor for relay-feedback-driven bitrate reduction; below this, screen
 /// content becomes unreadable and further reduction rarely helps.
 #[cfg(feature = "vpx")]
@@ -271,6 +306,12 @@ struct VideoDispatchState {
     /// cap decode allocations at what the peer actually negotiated rather than
     /// at the decoder's global 8K ceiling.
     remote_track_max_dimensions: HashMap<String, (u32, u32)>,
+    /// Tracks whose announced resolution changed (a share-quality change): the
+    /// decoder instance, whose limits are fixed, is recreated at the track's
+    /// next keyframe, which is where the new resolution starts. Dropping it at
+    /// once instead left the keyframe that had already arrived decoded on the
+    /// old instance and every delta after it with no decoder (B5 mid-stream).
+    remote_track_decoder_reset: std::collections::HashSet<String>,
 }
 
 /// A track's binding to its native surface (spec §3.1: the per-track
@@ -301,6 +342,9 @@ struct TrackSurfaceBinding {
     /// `None` for a sampler, whose ambient view sends a keyframe every couple
     /// of seconds by design.
     last_present: Option<Arc<Mutex<Option<Instant>>>>,
+    /// Latched while the stall watchdog has told the page this surface shows a
+    /// frozen picture (see [`STALL_AFTER`]); cleared by the next presented frame.
+    stalled: Arc<AtomicBool>,
 }
 
 /// A gap between presented frames of a decoding track longer than this is
@@ -333,6 +377,7 @@ impl Default for VideoDispatchState {
             remote_track_surfaces: HashMap::new(),
             remote_ssrc_track_bindings: HashMap::new(),
             remote_track_max_dimensions: HashMap::new(),
+            remote_track_decoder_reset: std::collections::HashSet::new(),
         }
     }
 }
@@ -678,6 +723,211 @@ fn dispatch_frame_to_worker(track_key: &str, frame: ReassembledVideoFrame, sink:
     }
 }
 
+/// A track's loss recovery and stall watchdog, owned by its decode worker.
+///
+/// The decoder cannot be trusted to notice a missing reference: NVDEC (AV1)
+/// decodes a delta whose reference was lost without an error and goes on
+/// showing the same picture until the next keyframe, which is how the 1440p
+/// and 4K presets froze for 5 to 8 s with nothing in any log (stream audit
+/// B3). So the worker treats a gap in frame ids as a broken reference itself:
+/// it drops deltas, asks the publisher for a keyframe at once, asks again every
+/// [`KEYFRAME_RETRY_AFTER`] until one decodes, and logs each step. And a
+/// visible track that presents nothing for [`STALL_AFTER`] says so to the page.
+#[cfg(feature = "vpx")]
+struct TrackRecovery {
+    /// When the last frame arrived from the network (any layer), for the stall
+    /// reason.
+    last_frame_at: Option<Instant>,
+    /// Smoothed interval between arriving frames, in ms: the track's cadence,
+    /// against which an arrival pause counts as a stall.
+    arrival_interval_ms: f64,
+    /// Since when the track has been waiting for a keyframe, and why.
+    waiting: Option<(Instant, String)>,
+    /// When a keyframe was last asked for, and how many times in this wait.
+    last_request_at: Option<Instant>,
+    requests: u32,
+    /// The layer to ask a keyframe of: the one this track decodes.
+    layer: u8,
+    /// The simulcast layer whose keyframe the decoder instance last decoded:
+    /// a keyframe of another layer recreates the instance (B4).
+    decoded_layer: Option<u8>,
+    /// Since when the track has been visible again after a pause; a paused
+    /// track presents nothing by design, so the watchdog counts from here.
+    visible_since: Option<Instant>,
+    was_hidden: bool,
+}
+
+#[cfg(feature = "vpx")]
+impl TrackRecovery {
+    fn new() -> Self {
+        Self {
+            last_frame_at: None,
+            arrival_interval_ms: 33.0,
+            waiting: None,
+            last_request_at: None,
+            requests: 0,
+            layer: 0,
+            decoded_layer: None,
+            visible_since: None,
+            was_hidden: false,
+        }
+    }
+
+    /// Start waiting for a keyframe (unless already waiting) and ask for one.
+    fn break_reference(
+        &mut self,
+        track_key: &str,
+        sink: &KeyframeSink,
+        drop_until_keyframe: &AtomicBool,
+        layer: u8,
+        reason: String,
+    ) {
+        let now = Instant::now();
+        drop_until_keyframe.store(true, Ordering::SeqCst);
+        self.layer = layer;
+        if self.waiting.is_none() {
+            self.waiting = Some((now, reason.clone()));
+            self.requests = 0;
+        }
+        self.requests += 1;
+        self.last_request_at = Some(now);
+        recovery_diag(
+            sink,
+            &format!(
+                "video-recovery: {reason}; dropping deltas and asking for a keyframe \
+                 track={track_key} layer={layer}"
+            ),
+        );
+        sink.request(layer);
+    }
+
+    /// A keyframe decoded: the wait (if any) is over.
+    fn recovered(&mut self, track_key: &str, sink: &KeyframeSink, frame_id: u64) {
+        if let Some((since, reason)) = self.waiting.take() {
+            recovery_diag(
+                sink,
+                &format!(
+                    "video-recovery: keyframe {frame_id} decoded {} ms after \"{reason}\" \
+                     ({} request(s)) track={track_key}",
+                    since.elapsed().as_millis(),
+                    self.requests
+                ),
+            );
+        }
+        self.requests = 0;
+        self.last_request_at = None;
+    }
+
+    /// Periodic work: re-ask for a keyframe while waiting, and run the stall
+    /// watchdog for the track's visible surface.
+    fn tick(&mut self, track_key: &str, sink: &KeyframeSink, drop_until_keyframe: &AtomicBool) {
+        let now = Instant::now();
+        if drop_until_keyframe.load(Ordering::SeqCst) {
+            if self.waiting.is_none() {
+                // Set outside the worker: a resumed pause or an input overflow,
+                // whose caller asked for the keyframe already.
+                self.waiting = Some((now, "decode resumed after frames were skipped".into()));
+                self.requests = 1;
+                self.last_request_at = Some(now);
+            } else if self
+                .last_request_at
+                .is_none_or(|at| now.duration_since(at) >= KEYFRAME_RETRY_AFTER)
+            {
+                self.requests += 1;
+                self.last_request_at = Some(now);
+                let waited = self
+                    .waiting
+                    .as_ref()
+                    .map_or(0, |(since, _)| now.duration_since(*since).as_millis());
+                recovery_diag(
+                    sink,
+                    &format!(
+                        "video-recovery: no keyframe {waited} ms into the wait; asking again \
+                         (request {}) track={track_key} layer={}",
+                        self.requests, self.layer
+                    ),
+                );
+                sink.request(self.layer);
+            }
+        }
+        self.watch_for_stall(track_key, now);
+    }
+
+    fn watch_for_stall(&mut self, track_key: &str, now: Instant) {
+        let Some(binding) = track_surface_binding(track_key) else {
+            return;
+        };
+        let Some(last_present) = binding.last_present.as_ref() else {
+            return; // a sampler: sparse frames by design
+        };
+        if track_is_hidden(track_key) {
+            self.was_hidden = true;
+            return;
+        }
+        if std::mem::take(&mut self.was_hidden) {
+            self.visible_since = Some(now);
+        }
+        if !binding.first_frame_presented.load(Ordering::Relaxed)
+            || binding.stalled.load(Ordering::Relaxed)
+        {
+            return;
+        }
+        let Some(last) = last_present.lock().ok().and_then(|last| *last) else {
+            return;
+        };
+        let since = self.visible_since.map_or(last, |visible| visible.max(last));
+        // A still screen sends a frame every second or so: count a stall
+        // against the track's own cadence, never less than STALL_AFTER.
+        let threshold = STALL_AFTER.max(Duration::from_secs_f64(
+            self.arrival_interval_ms * 3.0 / 1000.0,
+        ));
+        if now.duration_since(since) < threshold {
+            return;
+        }
+        binding.stalled.store(true, Ordering::Relaxed);
+        let reason = match (&self.waiting, self.last_frame_at) {
+            (Some((waiting_since, why)), _) => format!(
+                "waiting {} ms for a keyframe ({} request(s)) after {why}",
+                now.duration_since(*waiting_since).as_millis(),
+                self.requests
+            ),
+            (None, Some(frame)) if now.duration_since(frame) >= STALL_AFTER => format!(
+                "no video from the relay for {} ms",
+                now.duration_since(frame).as_millis()
+            ),
+            (None, None) => "no video from the relay".to_string(),
+            (None, Some(_)) => "frames arrive but none presents".to_string(),
+        };
+        native_diag(
+            binding.app.as_ref(),
+            &format!(
+                "native-render: no frame presented for {} ms; showing reconnecting \
+                 track={track_key} reason={reason}",
+                now.duration_since(last).as_millis()
+            ),
+        );
+        if let Some(app) = binding.app.as_ref() {
+            super::events::emit_media_native_render_stalled(
+                app,
+                &binding.stream_id,
+                &binding.track_id,
+                true,
+                &reason,
+            );
+        }
+    }
+}
+
+/// Log a recovery step where the track's diagnostics go: the remote track's
+/// session log (client-voice.log), or stderr for the self-view.
+#[cfg(feature = "vpx")]
+fn recovery_diag(sink: &KeyframeSink, line: &str) {
+    match sink {
+        KeyframeSink::Upstream { app, .. } => native_diag(Some(app), line),
+        KeyframeSink::LocalEncoder { .. } => tracing::debug!("{line}"),
+    }
+}
+
 #[cfg(feature = "vpx")]
 fn spawn_decode_worker(track_key: String, sink: KeyframeSink) -> DecodeWorker {
     let (tx, mut rx) = mpsc::channel::<ReassembledVideoFrame>(DECODE_CHANNEL_DEPTH);
@@ -696,8 +946,12 @@ fn spawn_decode_worker(track_key: String, sink: KeyframeSink) -> DecodeWorker {
                 .clone()
         };
         let mut layer_lock = LayerLock::default();
-        // Reorder stage: hold at most REORDER_MAX_HELD frames / REORDER_HOLD by
-        // frame_id, deliver in order, drop anything older than last-delivered.
+        let mut recovery = TrackRecovery::new();
+        let mut tick = tokio::time::interval(WORKER_TICK);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // Reorder stage: hold frames by frame_id up to REORDER_HOLD for a
+        // missing predecessor, deliver in order, drop anything older than
+        // last-delivered.
         let mut reorder: BTreeMap<u64, (Instant, ReassembledVideoFrame)> = BTreeMap::new();
         let mut last_delivered: Option<u64> = None;
         // Consecutive keyframes that failed to decode (wedged-decoder recovery;
@@ -712,16 +966,37 @@ fn spawn_decode_worker(track_key: String, sink: KeyframeSink) -> DecodeWorker {
                 _ = worker_shutdown.notified() => break,
                 msg = rx.recv() => {
                     let Some(frame) = msg else { break };
+                    let arrived = Instant::now();
+                    if let Some(gap) = recovery.last_frame_at.map(|at| arrived.duration_since(at)) {
+                        // A pause well past the track's own cadence: a sharer
+                        // whose screen is still sends a frame a second or so,
+                        // and that is not a stall to log every second.
+                        let usual = recovery.arrival_interval_ms;
+                        recovery.arrival_interval_ms =
+                            usual * 0.9 + (gap.as_secs_f64() * 1000.0).min(2000.0) * 0.1;
+                        if gap >= ARRIVAL_GAP_LOG_AFTER && gap.as_secs_f64() * 1000.0 >= usual * 3.0 {
+                            recovery_diag(
+                                &current_sink(),
+                                &format!(
+                                    "video-transport: no frame arrived for {} ms (frame {} ends it) \
+                                     track={track_key}",
+                                    gap.as_millis(),
+                                    frame.frame_id
+                                ),
+                            );
+                        }
+                    }
+                    recovery.last_frame_at = Some(arrived);
                     match admit_reordered_frame(last_delivered, frame.frame_id, frame.encoded.is_keyframe) {
                         ReorderAdmission::Accept => {}
                         ReorderAdmission::Resync => {
                             // A keyframe is a self-contained resync point. Accept it
-                            // even when a slower (reliable) stream path let later
-                            // deltas overtake it and advance last_delivered past it:
-                            // drop anything older and rebase onto the keyframe so it
-                            // and every following frame still decode. This is what
-                            // turns a loss-delayed keyframe from a permanent stall
-                            // (the keyframe-request death spiral) into a recovery.
+                            // even when a slower path let later frames overtake it
+                            // and advance last_delivered past it: drop anything
+                            // older and rebase onto the keyframe so it and every
+                            // following frame still decode. This is what turns a
+                            // loss-delayed keyframe from a permanent stall (the
+                            // keyframe-request death spiral) into a recovery.
                             reorder.retain(|&fid, _| fid > frame.frame_id);
                             last_delivered = frame.frame_id.checked_sub(1);
                         }
@@ -735,10 +1010,13 @@ fn spawn_decode_worker(track_key: String, sink: KeyframeSink) -> DecodeWorker {
                         ReorderAdmission::Stale => continue, // older than something already delivered: loss.
                     }
                     reorder.insert(frame.frame_id, (Instant::now(), frame));
-                    drain_reorder(&track_key, &current_sink(), &worker_duk, &mut keyframe_failures, &mut layer_lock, &mut reorder, &mut last_delivered, false).await;
+                    drain_reorder(&track_key, &current_sink(), &worker_duk, &mut keyframe_failures, &mut layer_lock, &mut recovery, &mut reorder, &mut last_delivered, false).await;
                 }
                 _ = sleep_until_opt(next_deadline) => {
-                    drain_reorder(&track_key, &current_sink(), &worker_duk, &mut keyframe_failures, &mut layer_lock, &mut reorder, &mut last_delivered, true).await;
+                    drain_reorder(&track_key, &current_sink(), &worker_duk, &mut keyframe_failures, &mut layer_lock, &mut recovery, &mut reorder, &mut last_delivered, true).await;
+                }
+                _ = tick.tick() => {
+                    recovery.tick(&track_key, &current_sink(), &worker_duk);
                 }
             }
         }
@@ -769,7 +1047,8 @@ async fn sleep_until_opt(deadline: Option<Instant>) {
 
 /// Deliver as many buffered frames as are ready: the contiguous next frame, or —
 /// when `force` (a hold deadline elapsed) or the buffer is over capacity — the
-/// oldest buffered frame regardless of gaps.
+/// oldest buffered frame regardless of gaps. A delta delivered past a gap has
+/// lost a reference: the track waits for a keyframe (see [`TrackRecovery`]).
 #[cfg(feature = "vpx")]
 #[allow(clippy::too_many_arguments)]
 async fn drain_reorder(
@@ -778,6 +1057,7 @@ async fn drain_reorder(
     drop_until_keyframe: &Arc<AtomicBool>,
     keyframe_failures: &mut u32,
     layer_lock: &mut LayerLock,
+    recovery: &mut TrackRecovery,
     reorder: &mut BTreeMap<u64, (Instant, ReassembledVideoFrame)>,
     last_delivered: &mut Option<u64>,
     force: bool,
@@ -790,16 +1070,37 @@ async fn drain_reorder(
             break;
         }
         force_oldest = false;
-        let (_, frame) = reorder.remove(&frame_id).expect("frame present");
-        *last_delivered = Some(frame_id);
+        let (arrived, frame) = reorder.remove(&frame_id).expect("frame present");
+        let previous = last_delivered.replace(frame_id);
         if !layer_lock.admit(frame.simulcast_layer, frame.encoded.is_keyframe, sink) {
             continue;
+        }
+        if !contiguous && !frame.encoded.is_keyframe && !drop_until_keyframe.load(Ordering::SeqCst)
+        {
+            let missing = previous.map_or_else(
+                || "an earlier frame".to_string(),
+                |last| match frame_id.saturating_sub(last) {
+                    2 => format!("frame {}", last + 1),
+                    _ => format!("frames {}..={}", last + 1, frame_id.saturating_sub(1)),
+                },
+            );
+            recovery.break_reference(
+                track_key,
+                sink,
+                drop_until_keyframe,
+                frame.simulcast_layer,
+                format!(
+                    "{missing} never arrived (frame {frame_id} waited {} ms)",
+                    arrived.elapsed().as_millis()
+                ),
+            );
         }
         deliver_decoded_frame(
             track_key,
             sink,
             drop_until_keyframe,
             keyframe_failures,
+            recovery,
             frame,
         )
         .await;
@@ -816,6 +1117,7 @@ async fn deliver_decoded_frame(
     sink: &KeyframeSink,
     drop_until_keyframe: &Arc<AtomicBool>,
     keyframe_failures: &mut u32,
+    recovery: &mut TrackRecovery,
     frame: ReassembledVideoFrame,
 ) {
     // Clip intake (docs/glass-spec.md §6.4): every decrypted frame of the
@@ -843,6 +1145,37 @@ async fn deliver_decoded_frame(
                 return;
             }
         }
+        let layer = frame.simulcast_layer;
+        let was_keyframe = frame.encoded.is_keyframe;
+        let frame_id = frame.frame_id;
+        if was_keyframe {
+            // A keyframe of another simulcast layer starts another bitstream
+            // (another resolution): decode it on a fresh decoder instance, never
+            // on one primed by the old layer. A share-quality change does the
+            // same at its first keyframe.
+            let layer_changed = recovery
+                .decoded_layer
+                .is_some_and(|decoded| decoded != layer);
+            let resized = take_decoder_reset(track_key);
+            if layer_changed || resized {
+                drop_track_decoder_instance(track_key);
+                native_diag(
+                    binding.app.as_ref(),
+                    &format!(
+                        "native-decode: decoder recreated at keyframe {frame_id} \
+                         ({}) track={track_key} layer={layer}",
+                        if layer_changed {
+                            format!(
+                                "layer {} -> {layer}",
+                                recovery.decoded_layer.unwrap_or(layer)
+                            )
+                        } else {
+                            "the track's resolution changed".to_string()
+                        }
+                    ),
+                );
+            }
+        }
         let Some(decoder) = decoder_handle_for_track(track_key, frame.encoded.codec) else {
             // A native-surface subscription with no decoder backend for its codec
             // cannot render — fail loudly (spec §3.7); never fall back to raw IPC.
@@ -856,8 +1189,6 @@ async fn deliver_decoded_frame(
             );
             return;
         };
-        let layer = frame.simulcast_layer;
-        let was_keyframe = frame.encoded.is_keyframe;
         let captured_us = frame.timestamp_us;
         // Hold the picture for its sound when the sound's path is longer
         // (stream audit B7, `av_sync`); before decode, so nothing GPU-side waits.
@@ -872,21 +1203,49 @@ async fn deliver_decoded_frame(
         // The synchronous decode runs on the blocking pool; awaiting it here
         // preserves this worker's strict FIFO ordering. The decoder yields
         // GPU-resident (or tier-2 CPU-I420) handles via `decode_to_handles`.
+        let decode_started = Instant::now();
         let outcome = tokio::task::spawn_blocking(move || {
             let mut guard = decoder.lock().unwrap_or_else(|e| e.into_inner());
             decode_frame_to_handles(guard.as_mut(), &encoded)
         })
         .await
         .unwrap_or(HandleDecodeResult::NeedKeyframe);
+        let decode_took = decode_started.elapsed();
+        if decode_took >= SLOW_STEP_LOG_AFTER {
+            native_diag(
+                binding.app.as_ref(),
+                &format!(
+                    "native-decode: decoding frame {frame_id} took {} ms track={track_key}",
+                    decode_took.as_millis()
+                ),
+            );
+        }
 
         match outcome {
             HandleDecodeResult::Frames(handles) => {
                 *keyframe_failures = 0;
+                if was_keyframe {
+                    recovery.decoded_layer = Some(layer);
+                    recovery.layer = layer;
+                    recovery.recovered(track_key, sink, frame_id);
+                }
                 for handle in handles {
+                    let present_started = Instant::now();
                     let present = {
                         let mut surface = binding.surface.lock().unwrap_or_else(|e| e.into_inner());
                         surface.present(handle)
                     };
+                    let present_took = present_started.elapsed();
+                    if present_took >= SLOW_STEP_LOG_AFTER {
+                        native_diag(
+                            binding.app.as_ref(),
+                            &format!(
+                                "native-render: handing frame {frame_id} to the surface took {} ms \
+                                 track={track_key}",
+                                present_took.as_millis()
+                            ),
+                        );
+                    }
                     match present {
                         Ok(()) => {
                             binding.present_errors.store(0, Ordering::Relaxed);
@@ -908,6 +1267,17 @@ async fn deliver_decoded_frame(
                                              track={track_key} keyframe={was_keyframe}",
                                             gap.as_millis()
                                         ),
+                                    );
+                                }
+                            }
+                            if binding.stalled.swap(false, Ordering::Relaxed) {
+                                if let Some(app) = binding.app.as_ref() {
+                                    super::events::emit_media_native_render_stalled(
+                                        app,
+                                        &binding.stream_id,
+                                        &binding.track_id,
+                                        false,
+                                        "a frame was presented",
                                     );
                                 }
                             }
@@ -955,6 +1325,7 @@ async fn deliver_decoded_frame(
                     // broken — tear the subscription down loudly (spec §3.7).
                     *keyframe_failures += 1;
                     drop_track_decoder_instance(track_key);
+                    recovery.decoded_layer = None;
                     native_diag(
                         binding.app.as_ref(),
                         &format!(
@@ -974,8 +1345,13 @@ async fn deliver_decoded_frame(
                         return;
                     }
                 }
-                drop_until_keyframe.store(true, Ordering::SeqCst);
-                sink.request(layer);
+                recovery.break_reference(
+                    track_key,
+                    sink,
+                    drop_until_keyframe,
+                    layer,
+                    format!("frame {frame_id} could not be decoded (keyframe={was_keyframe})"),
+                );
             }
             HandleDecodeResult::Drop => {}
         }
@@ -1071,6 +1447,7 @@ pub fn attach_native_surface(
         present_errors: Arc::new(AtomicU32::new(0)),
         first_frame_presented: Arc::new(AtomicBool::new(false)),
         last_present: on_screen.then(|| Arc::new(Mutex::new(None))),
+        stalled: Arc::new(AtomicBool::new(false)),
     };
     if let Ok(mut state) = video_dispatch_state().lock() {
         state.remote_track_surfaces.insert(key, binding);
@@ -1557,12 +1934,30 @@ pub fn bind_remote_video_track(
             state.remote_track_max_dimensions.remove(&key);
         }
     }
+    if previous_dims.is_some() && previous_dims != max_dims {
+        // Decoder limits are immutable. Recreate after a negotiated resize so
+        // live quality upgrades can decode, and downgrades retain the tighter
+        // cap: at the next keyframe, where the new resolution starts.
+        state.remote_track_decoder_reset.insert(key.clone());
+    }
     drop(state);
     if previous_dims != max_dims {
-        // Decoder limits are immutable. Recreate after a negotiated resize so
-        // live quality upgrades can decode, and downgrades retain the tighter cap.
-        drop_track_decoder_instance(&key);
+        tracing::info!(
+            track = %key,
+            ?previous_dims,
+            ?max_dims,
+            "remote track resolution changed; decoder is recreated at its next keyframe"
+        );
     }
+}
+
+/// Take a pending decoder recreation for `track_key` (see
+/// `VideoDispatchState::remote_track_decoder_reset`).
+#[cfg(feature = "vpx")]
+fn take_decoder_reset(track_key: &str) -> bool {
+    video_dispatch_state()
+        .lock()
+        .is_ok_and(|mut state| state.remote_track_decoder_reset.remove(track_key))
 }
 
 #[cfg(not(feature = "vpx"))]
@@ -1706,7 +2101,7 @@ pub fn start_camera_share(
             fps: fps.max(1),
             bitrate_kbps: (max_bitrate_bps.unwrap_or(2_500_000) / 1000).max(1),
             pixel_format: PixelFormat::I420,
-            keyframe_interval: fps.max(1) * SCREEN_KEYFRAME_INTERVAL_SECONDS,
+            keyframe_interval: fps.max(1) * CAMERA_KEYFRAME_INTERVAL_SECONDS,
             content_hint: VideoContentHint::Motion,
         };
         config
@@ -1812,7 +2207,10 @@ fn build_simulcast_configs(
         target_bitrate_kbps,
         pixel_format,
         content_hint,
-        SCREEN_KEYFRAME_INTERVAL_SECONDS,
+        match kind {
+            paracord_codec::video::SimulcastKind::Screen => SCREEN_CODEC_GOP_BACKSTOP_SECONDS,
+            paracord_codec::video::SimulcastKind::Camera => CAMERA_KEYFRAME_INTERVAL_SECONDS,
+        },
     );
     if simulcast_enabled_for_codec(codec) {
         ladder
@@ -1945,10 +2343,10 @@ pub fn start_screen_share(
             fps: fps.max(1),
             bitrate_kbps: (max_bitrate_bps.unwrap_or(12_000_000) / 1000).max(1),
             pixel_format: PixelFormat::I420,
-            // Keyframes are the dominant burst cost (each fans out into
-            // hundreds of datagrams). Late joiners and loss recovery are
-            // handled by RequestKeyframe, so a long periodic interval is safe.
-            keyframe_interval: fps.max(1) * SCREEN_KEYFRAME_INTERVAL_SECONDS,
+            // A backstop only: periodic screen keyframes come from a
+            // wall-clock timer (`screen_keyframe_interval`), and late joiners
+            // and loss recovery from RequestKeyframe.
+            keyframe_interval: fps.max(1) * SCREEN_CODEC_GOP_BACKSTOP_SECONDS,
             content_hint: match content_hint {
                 Some("detail") => VideoContentHint::Detail,
                 Some("film") => VideoContentHint::Film,
@@ -2208,7 +2606,6 @@ pub struct CameraFrameJob {
     applied_kbps: u32,
     key_epoch: u8,
     connection: quinn::Connection,
-    max_fragment_payload: usize,
     frame_encryptor: Arc<Mutex<paracord_codec::crypto::FrameEncryptor>>,
     video_force_keyframe: Arc<AtomicBool>,
     i420_convert_buf: Vec<u8>,
@@ -2326,7 +2723,19 @@ pub async fn begin_camera_frame(
     if session.published_video_track.is_none() {
         publish_camera_track_for_current_config(session, app).await?;
     }
-    sync_published_video_track_metadata(session, false);
+    let track_changed = sync_published_video_track_metadata(session, false);
+    // A reconfiguration can add a simulcast layer (a share-quality change from
+    // a two-rung ladder to a three-rung one): its SSRC needs the track's key
+    // before the first frame on it is sealed, or the encode thread stops on
+    // "no key for epoch" and every viewer is left with nothing (stream-fix V1,
+    // Movie 100 -> 1440p60). Idempotent: the key itself does not change.
+    if let Some(track) = session
+        .published_video_track
+        .clone()
+        .filter(|_| track_changed)
+    {
+        ensure_track_sender_key(session, &track).await?;
+    }
 
     let stream_id = local_video_stream_id(session, false);
     let track_id = local_video_track_id(false);
@@ -2366,14 +2775,6 @@ pub async fn begin_camera_frame(
     let capture_timestamp_us = raw_us.max(session.video_last_timestamp_us);
     session.video_last_timestamp_us = capture_timestamp_us;
 
-    let max_datagram_size = session
-        .connection
-        .max_datagram_size()
-        .unwrap_or(FALLBACK_MAX_DATAGRAM_SIZE);
-    let max_fragment_payload = max_datagram_size
-        .saturating_sub(HEADER_SIZE + TAG_SIZE + 128)
-        .max(256);
-
     let simulcast = session
         .video_simulcast
         .take()
@@ -2397,7 +2798,6 @@ pub async fn begin_camera_frame(
         applied_kbps,
         key_epoch,
         connection: session.connection.inner().clone(),
-        max_fragment_payload,
         frame_encryptor: session.frame_encryptor.clone(),
         video_force_keyframe: session.video_force_keyframe.clone(),
         i420_convert_buf,
@@ -2540,46 +2940,25 @@ pub fn run_camera_frame(
             .iter()
             .find_map(|(mapped_layer_id, ssrc)| (*mapped_layer_id == layer_id).then_some(*ssrc))
             .unwrap_or(job.fallback_ssrc);
-        if should_send_on_stream(
+        // Every frame, delta or keyframe, rides its own reliable uni stream:
+        // one path per track, so frames are neither lost nor reordered against
+        // each other by the split (stream audit B3; see `send_encoded_video_frame_stream`).
+        send_encoded_video_frame_stream(
+            &job.connection,
+            &job.frame_encryptor,
+            job.key_epoch,
+            ssrc,
+            &mut local_seq,
+            frame_timestamp,
+            layer_id,
+            frame_codec,
             frame_is_keyframe,
-            frame_data.len(),
-            job.max_fragment_payload,
-        ) {
-            send_encoded_video_frame_stream(
-                &job.connection,
-                &job.frame_encryptor,
-                job.key_epoch,
-                ssrc,
-                &mut local_seq,
-                frame_timestamp,
-                layer_id,
-                frame_codec,
-                frame_is_keyframe,
-                &job.stream_id,
-                &job.track_id,
-                frame_pts.max(0) as u64,
-                frame_timestamp_us,
-                &frame_data,
-            )?;
-        } else {
-            send_encoded_video_frame(
-                &job.connection,
-                &job.frame_encryptor,
-                job.key_epoch,
-                ssrc,
-                &mut local_seq,
-                frame_timestamp,
-                job.max_fragment_payload,
-                layer_id,
-                frame_codec,
-                frame_is_keyframe,
-                &job.stream_id,
-                &job.track_id,
-                frame_pts.max(0) as u64,
-                frame_timestamp_us,
-                &frame_data,
-            )?;
-        }
+            &job.stream_id,
+            &job.track_id,
+            frame_pts.max(0) as u64,
+            frame_timestamp_us,
+            &frame_data,
+        )?;
         // Clone the encoded bytes for the self-view only for the TOP layer (the
         // exact bitstream a top-layer viewer receives) and only when a subscriber
         // is watching (N12c) — selection is by layer id, not drain order.
@@ -2760,7 +3139,6 @@ pub struct ScreenFrameJob {
     applied_kbps: u32,
     key_epoch: u8,
     connection: quinn::Connection,
-    max_fragment_payload: usize,
     frame_encryptor: Arc<Mutex<paracord_codec::crypto::FrameEncryptor>>,
     screen_force_keyframe: Arc<AtomicBool>,
     i420_convert_buf: Vec<u8>,
@@ -2916,13 +3294,41 @@ pub async fn begin_screen_frame(
         session.screen_encoder_generation = session.screen_encoder_generation.wrapping_add(1);
     }
 
+    // Periodic keyframe on a wall-clock timer (see `screen_keyframe_interval`).
+    // A keyframe asked for by a viewer or a reconfiguration restarts the timer.
+    let now = Instant::now();
+    let keyframe_due = session
+        .screen_last_keyframe_at
+        .is_none_or(|at| now.duration_since(at) >= screen_keyframe_interval(&screen_config));
+    if keyframe_due && !session.screen_force_keyframe.swap(true, Ordering::SeqCst) {
+        tracing::debug!(
+            interval_ms = screen_keyframe_interval(&screen_config).as_millis() as u64,
+            "screen encoder: periodic keyframe"
+        );
+    }
+    if session.screen_force_keyframe.load(Ordering::SeqCst) {
+        session.screen_last_keyframe_at = Some(now);
+    }
+
     // Publish the track before the first send (moved from post-encode). Publish
     // only needs the encoder's layer configs, which exist now that any reinit
     // has run.
     if session.published_screen_track.is_none() {
         publish_screen_track_for_current_config(session, app).await?;
     }
-    sync_published_video_track_metadata(session, true);
+    let track_changed = sync_published_video_track_metadata(session, true);
+    // A reconfiguration can add a simulcast layer (a share-quality change from
+    // a two-rung ladder to a three-rung one): its SSRC needs the track's key
+    // before the first frame on it is sealed, or the encode thread stops on
+    // "no key for epoch" and every viewer is left with nothing (stream-fix V1,
+    // Movie 100 -> 1440p60). Idempotent: the key itself does not change.
+    if let Some(track) = session
+        .published_screen_track
+        .clone()
+        .filter(|_| track_changed)
+    {
+        ensure_track_sender_key(session, &track).await?;
+    }
 
     // Sender-key epoch (its own async mutex). Missing key is a hard error,
     // exactly as before.
@@ -2969,14 +3375,6 @@ pub async fn begin_screen_frame(
     let capture_timestamp_us = raw_us.max(session.screen_last_timestamp_us);
     session.screen_last_timestamp_us = capture_timestamp_us;
 
-    let max_datagram_size = session
-        .connection
-        .max_datagram_size()
-        .unwrap_or(FALLBACK_MAX_DATAGRAM_SIZE);
-    let max_fragment_payload = max_datagram_size
-        .saturating_sub(HEADER_SIZE + TAG_SIZE + 128)
-        .max(256);
-
     let simulcast = session
         .screen_simulcast
         .take()
@@ -3000,7 +3398,6 @@ pub async fn begin_screen_frame(
         applied_kbps,
         key_epoch,
         connection: session.connection.inner().clone(),
-        max_fragment_payload,
         frame_encryptor: session.frame_encryptor.clone(),
         screen_force_keyframe: session.screen_force_keyframe.clone(),
         i420_convert_buf,
@@ -3182,46 +3579,25 @@ pub fn run_screen_frame(
             .iter()
             .find_map(|(mapped_layer_id, ssrc)| (*mapped_layer_id == layer_id).then_some(*ssrc))
             .unwrap_or(job.fallback_ssrc);
-        if should_send_on_stream(
+        // Every frame, delta or keyframe, rides its own reliable uni stream:
+        // one path per track, so frames are neither lost nor reordered against
+        // each other by the split (stream audit B3; see `send_encoded_video_frame_stream`).
+        send_encoded_video_frame_stream(
+            &job.connection,
+            &job.frame_encryptor,
+            job.key_epoch,
+            ssrc,
+            &mut local_seq,
+            frame_timestamp,
+            layer_id,
+            frame_codec,
             frame_is_keyframe,
-            frame_data.len(),
-            job.max_fragment_payload,
-        ) {
-            send_encoded_video_frame_stream(
-                &job.connection,
-                &job.frame_encryptor,
-                job.key_epoch,
-                ssrc,
-                &mut local_seq,
-                frame_timestamp,
-                layer_id,
-                frame_codec,
-                frame_is_keyframe,
-                &job.stream_id,
-                &job.track_id,
-                frame_pts.max(0) as u64,
-                frame_timestamp_us,
-                &frame_data,
-            )?;
-        } else {
-            send_encoded_video_frame(
-                &job.connection,
-                &job.frame_encryptor,
-                job.key_epoch,
-                ssrc,
-                &mut local_seq,
-                frame_timestamp,
-                job.max_fragment_payload,
-                layer_id,
-                frame_codec,
-                frame_is_keyframe,
-                &job.stream_id,
-                &job.track_id,
-                frame_pts.max(0) as u64,
-                frame_timestamp_us,
-                &frame_data,
-            )?;
-        }
+            &job.stream_id,
+            &job.track_id,
+            frame_pts.max(0) as u64,
+            frame_timestamp_us,
+            &frame_data,
+        )?;
         // Only clone the encoded bytes for the self-view when a subscriber is
         // actually watching (N12c): with no subscriber the clone is pure waste on
         // the encode hot path.
@@ -3892,131 +4268,6 @@ fn stream_frame_is_newest(track_key: &str, frame_id: u64) -> bool {
     }
 }
 
-#[cfg(feature = "vpx")]
-fn send_encoded_video_frame(
-    connection: &quinn::Connection,
-    frame_encryptor: &std::sync::Arc<std::sync::Mutex<paracord_codec::crypto::FrameEncryptor>>,
-    key_epoch: u8,
-    ssrc: u32,
-    seq: &mut paracord_transport::protocol::VideoSequences,
-    frame_timestamp: u32,
-    max_fragment_payload: usize,
-    simulcast_layer: u8,
-    codec: VideoCodec,
-    is_keyframe: bool,
-    stream_id: &StreamId,
-    track_id: &TrackId,
-    frame_id: u64,
-    frame_timestamp_us: u64,
-    frame_data: &[u8],
-) -> Result<(), String> {
-    if frame_data.is_empty() {
-        return Ok(());
-    }
-
-    let fragment_count = frame_data.len().div_ceil(max_fragment_payload);
-    let fragment_count_u16 =
-        u16::try_from(fragment_count).map_err(|_| "video frame requires too many fragments")?;
-
-    // L3: a burst above the pacing threshold is trickled out with a short gap
-    // between fragments (off the encode thread) so audio datagrams never sit
-    // behind it. Smaller frames send inline, byte-for-byte as before.
-    let paced = fragment_count > AUDIO_PACING_FRAGMENT_THRESHOLD;
-    let mut pending_datagrams: Vec<Bytes> = if paced {
-        Vec::with_capacity(fragment_count)
-    } else {
-        Vec::new()
-    };
-
-    // Lock the frame encryptor once for the whole frame (N12b) rather than once
-    // per fragment. All fragment encryption happens inside this single guard; no
-    // `.await` occurs in the loop, so holding the std mutex across it is sound.
-    let mut encryptor = frame_encryptor
-        .lock()
-        .map_err(|_| "video frame encryptor lock poisoned".to_string())?;
-
-    for (fragment_index, fragment) in frame_data.chunks(max_fragment_payload).enumerate() {
-        let fragment_index_u16 =
-            u16::try_from(fragment_index).map_err(|_| "video fragment index overflow")?;
-
-        let metadata = VideoFrameMetadata {
-            stream_id: stream_id.clone(),
-            track_id: track_id.clone(),
-            frame_id,
-            layer_id: simulcast_layer,
-            codec: codec_to_transport(codec),
-            timestamp_us: frame_timestamp_us,
-            is_keyframe,
-            fragment_index: fragment_index_u16,
-            fragment_count: fragment_count_u16,
-        };
-        let mut plaintext = Vec::with_capacity(128 + fragment.len());
-        let mut metadata_buf = BytesMut::new();
-        metadata
-            .encode(&mut metadata_buf)
-            .map_err(|e| format!("video metadata encode: {e}"))?;
-        plaintext.extend_from_slice(&metadata_buf);
-        plaintext.extend_from_slice(fragment);
-
-        let mut header = MediaHeader::new(TrackType::Video, ssrc);
-        header.sequence = seq.next(ssrc);
-        header.timestamp = frame_timestamp;
-        header.key_epoch = key_epoch;
-        header.simulcast_layer = simulcast_layer;
-        header.codec = codec.header_id();
-
-        let mut header_buf = BytesMut::with_capacity(HEADER_SIZE);
-        header.encode(&mut header_buf);
-        let header_bytes = MediaHeader::aad(
-            &<[u8; HEADER_SIZE]>::try_from(&header_buf[..HEADER_SIZE]).expect("header is 16 bytes"),
-        );
-
-        let encrypted = encryptor
-            .encrypt(&header_bytes, ssrc, key_epoch, header.sequence, &plaintext)
-            .map_err(|e| format!("video encrypt: {e:?}"))?;
-
-        header.payload_length = encrypted.len() as u16;
-
-        let mut buf = BytesMut::with_capacity(HEADER_SIZE + encrypted.len());
-        header.encode(&mut buf);
-        buf.put_slice(&encrypted);
-
-        let datagram = buf.freeze();
-        if paced {
-            pending_datagrams.push(datagram);
-        } else {
-            connection
-                .send_datagram(datagram)
-                .map_err(|e| format!("video datagram send: {e}"))?;
-        }
-    }
-    drop(encryptor);
-
-    if paced {
-        let connection = connection.clone();
-        tokio::spawn(async move {
-            for datagram in pending_datagrams {
-                if connection.send_datagram(datagram).is_err() {
-                    break;
-                }
-                tokio::time::sleep(AUDIO_PACING_INTERVAL).await;
-            }
-        });
-    }
-
-    Ok(())
-}
-
-/// Whether an encoded frame should take the reliable uni-stream path instead of
-/// fire-and-forget datagrams: always for keyframes (the burst that most often
-/// dies under loss and triggers the keyframe-request death spiral), and for any
-/// delta large enough that all-or-nothing datagram reassembly would rarely
-/// survive real packet loss.
-#[cfg(feature = "vpx")]
-fn should_send_on_stream(is_keyframe: bool, frame_len: usize, max_fragment_payload: usize) -> bool {
-    is_keyframe || frame_len.div_ceil(max_fragment_payload.max(1)) > STREAM_FRAGMENT_THRESHOLD
-}
-
 /// Build the wire bytes for one whole-frame uni-stream message: encrypt the
 /// entire frame as a single AEAD unit (16-byte MediaHeader as AAD, nonce from
 /// `(ssrc, epoch, seq)`) and serialize `header + metadata + ciphertext`.
@@ -4083,8 +4334,18 @@ fn encode_stream_frame_message(
     .map_err(|e| format!("video stream frame encode: {e}"))
 }
 
-/// Send one whole encoded frame on a fresh QUIC unidirectional stream (the
-/// loss-resilient keyframe path).
+/// Send one whole encoded frame on a fresh QUIC unidirectional stream: how the
+/// native sender sends every video frame.
+///
+/// Deltas used to go as datagram fragments and keyframes (and large deltas) on
+/// streams. A datagram frame is all-or-nothing, so one lost packet of a 45-packet
+/// 4K delta lost the frame, and the reliable keyframe stream was overtaken by the
+/// deltas that followed it; either way the decoder ran on without a reference
+/// and the picture froze for seconds (stream audit B3). On streams a lost packet
+/// is retransmitted and the frame arrives late instead of never; the receiver's
+/// reorder stage puts frames back in order, and a frame that still never comes
+/// (the relay shed it for a slow downlink) is a gap the receiver recovers from
+/// with a keyframe request.
 ///
 /// The frame is encrypted as ONE AEAD unit — plaintext is the entire frame, the
 /// 16-byte MediaHeader is the AAD, and the nonce derives from the same
@@ -4300,16 +4561,17 @@ fn local_video_track_id(is_screen: bool) -> TrackId {
 }
 
 #[cfg(feature = "vpx")]
-fn sync_published_video_track_metadata(session: &mut NativeMediaSession, is_screen: bool) {
+/// Returns whether the published track changed (and was re-announced).
+fn sync_published_video_track_metadata(session: &mut NativeMediaSession, is_screen: bool) -> bool {
     let updated_track = if is_screen {
         match super::screen_capture::build_screen_track(session) {
             Ok(track) => track,
-            Err(_) => return,
+            Err(_) => return false,
         }
     } else {
         match build_camera_track(session) {
             Ok(track) => track,
-            Err(_) => return,
+            Err(_) => return false,
         }
     };
 
@@ -4319,10 +4581,10 @@ fn sync_published_video_track_metadata(session: &mut NativeMediaSession, is_scre
         session.published_video_track.as_ref()
     };
     let Some(current_track) = current_track else {
-        return;
+        return false;
     };
     if current_track == &updated_track {
-        return;
+        return false;
     }
     let layers_only_update = current_track.stream_id == updated_track.stream_id
         && current_track.track_id == updated_track.track_id
@@ -4361,6 +4623,7 @@ fn sync_published_video_track_metadata(session: &mut NativeMediaSession, is_scre
         };
         let _ = send_control_message(&conn, &message).await;
     });
+    true
 }
 
 #[cfg(feature = "vpx")]
@@ -4793,7 +5056,12 @@ mod tests {
             &[published_layer(9991, 1920, 1080)],
         );
         assert_eq!(track_max_dimensions(&key), Some((1920, 1080)));
-        assert!(!video_decoder_pool().lock().unwrap().contains_key(&key));
+        // The instance is recreated at the next keyframe, where the new
+        // resolution starts, not under the frames still arriving.
+        assert!(video_decoder_pool().lock().unwrap().contains_key(&key));
+        assert!(take_decoder_reset(&key), "a recreation is pending");
+        assert!(!take_decoder_reset(&key));
+        video_decoder_pool().lock().unwrap().remove(&key);
         unbind_remote_video_track("stream:resize-test", "screen");
     }
 
@@ -5085,6 +5353,7 @@ mod tests {
                     present_errors: Arc::new(AtomicU32::new(0)),
                     first_frame_presented: Arc::new(AtomicBool::new(false)),
                     last_present: None,
+                    stalled: Arc::new(AtomicBool::new(false)),
                 },
             );
         }
@@ -5153,6 +5422,7 @@ mod tests {
                     present_errors: Arc::new(AtomicU32::new(0)),
                     first_frame_presented: Arc::new(AtomicBool::new(false)),
                     last_present: None,
+                    stalled: Arc::new(AtomicBool::new(false)),
                 },
             );
         }
@@ -5180,6 +5450,7 @@ mod tests {
         };
         let drop_until_keyframe = Arc::new(AtomicBool::new(false));
         let mut keyframe_failures = 0u32;
+        let mut recovery = TrackRecovery::new();
 
         // Failures below the limit: instance dropped, keyframe requested, the
         // binding survives.
@@ -5190,6 +5461,7 @@ mod tests {
                 &sink,
                 &drop_until_keyframe,
                 &mut keyframe_failures,
+                &mut recovery,
                 garbage_keyframe(round as u64),
             )
             .await;
@@ -5214,6 +5486,7 @@ mod tests {
             &sink,
             &drop_until_keyframe,
             &mut keyframe_failures,
+            &mut recovery,
             garbage_keyframe(KEYFRAME_DECODE_FAILURE_LIMIT as u64),
         )
         .await;
@@ -5453,6 +5726,7 @@ mod tests {
                     present_errors: Arc::new(AtomicU32::new(0)),
                     first_frame_presented: Arc::new(AtomicBool::new(false)),
                     last_present: None,
+                    stalled: Arc::new(AtomicBool::new(false)),
                 },
             );
         }
@@ -5503,6 +5777,130 @@ mod tests {
         if let Ok(mut state) = video_dispatch_state().lock() {
             state.remote_track_stream_high_water.remove(&track_key);
         }
+    }
+
+    /// A frame that never arrives is a broken reference: once the reorder hold
+    /// gives up on it, the deltas after it are not decoded (NVDEC would show a
+    /// frozen or smeared picture without an error, stream audit B3), a keyframe
+    /// is asked for at once, and the next keyframe brings the picture back.
+    #[tokio::test]
+    async fn a_lost_frame_stops_deltas_and_asks_for_a_keyframe() {
+        use paracord_codec::video::encoder::create_encoder;
+        use paracord_codec::video::{EncoderConfig, PixelFormat, VideoContentHint};
+
+        let (width, height) = (320u32, 240u32);
+        let mut encoder = create_encoder(
+            VideoCodec::Vp9,
+            EncoderConfig {
+                width,
+                height,
+                fps: 30,
+                bitrate_kbps: 500,
+                pixel_format: PixelFormat::I420,
+                keyframe_interval: 0,
+                content_hint: VideoContentHint::Default,
+            },
+        )
+        .expect("vp9 encoder");
+        let y_size = (width * height) as usize;
+        let mut i420 = vec![128u8; y_size + 2 * (y_size / 4)];
+        let mut frames = Vec::new();
+        for pts in 0..8i64 {
+            for (i, px) in i420.iter_mut().take(y_size).enumerate() {
+                *px = ((i as i64 + pts * 13) % 256) as u8;
+            }
+            frames.extend(
+                encoder
+                    .encode(pts, &i420, pts == 0 || pts == 7)
+                    .expect("encode"),
+            );
+        }
+        assert_eq!(frames.len(), 8);
+
+        let stream_id = "stream:gap-test:screen";
+        let track_id = "screen";
+        let track_key = make_track_key(stream_id, track_id);
+        let force_keyframe = Arc::new(AtomicBool::new(false));
+        let sink = KeyframeSink::LocalEncoder {
+            force_keyframe: force_keyframe.clone(),
+        };
+        let presented = Arc::new(Mutex::new(Vec::new()));
+        let shared: super::super::native_render::SharedSurface =
+            Arc::new(Mutex::new(Box::new(MockSurface {
+                presented: presented.clone(),
+                geometry_updates: Arc::new(AtomicU32::new(0)),
+                fail_present: Arc::new(AtomicBool::new(false)),
+            })));
+        let surface_id = super::super::native_render::SurfaceId(7_778);
+        super::super::native_render::registry().insert(surface_id, shared.clone());
+        if let Ok(mut state) = video_dispatch_state().lock() {
+            state.remote_track_surfaces.insert(
+                track_key.clone(),
+                TrackSurfaceBinding {
+                    surface_id,
+                    surface: shared,
+                    stream_id: stream_id.to_string(),
+                    track_id: track_id.to_string(),
+                    app: None,
+                    present_errors: Arc::new(AtomicU32::new(0)),
+                    first_frame_presented: Arc::new(AtomicBool::new(false)),
+                    last_present: None,
+                    stalled: Arc::new(AtomicBool::new(false)),
+                },
+            );
+        }
+        let send = |frame: paracord_codec::video::EncodedFrame| {
+            let frame_id = frame.pts as u64;
+            dispatch_frame_to_worker(
+                &track_key,
+                ReassembledVideoFrame {
+                    frame_id,
+                    timestamp_us: frame_id * 33_000,
+                    encoded: frame,
+                    simulcast_layer: 0,
+                },
+                sink.clone(),
+            );
+        };
+        let mut frames = frames.into_iter();
+        // Frames 0..=2 decode; frame 3 is lost; 4..=6 arrive.
+        for _ in 0..3 {
+            send(frames.next().unwrap());
+        }
+        for _ in 0..100 {
+            if presented.lock().unwrap().len() == 3 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let _lost = frames.next().unwrap();
+        for _ in 0..3 {
+            send(frames.next().unwrap());
+        }
+        tokio::time::sleep(REORDER_HOLD + Duration::from_millis(150)).await;
+        assert_eq!(
+            presented.lock().unwrap().len(),
+            3,
+            "nothing decodes past the gap"
+        );
+        assert!(
+            force_keyframe.load(Ordering::SeqCst),
+            "the gap asked the encoder for a keyframe"
+        );
+        // The keyframe (frame 7) restores the picture.
+        send(frames.next().unwrap());
+        for _ in 0..50 {
+            if presented.lock().unwrap().len() == 4 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(presented.lock().unwrap().len(), 4, "the keyframe presents");
+
+        stop_decode_worker(&track_key);
+        detach_native_surface_by_id(surface_id);
+        super::super::native_render::registry().remove(surface_id);
+        unregister_stream_video_subscription(stream_id, track_id);
     }
 }
 

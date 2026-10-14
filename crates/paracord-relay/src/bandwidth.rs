@@ -100,6 +100,11 @@ struct PublisherIngress {
     pending_gaps: HashMap<(u32, u16), u64>,
     /// Last feedback bitrate emitted for this publisher (0 = never emitted).
     last_feedback_kbps: u32,
+    /// Bytes received per SSRC per bucket, oldest first, over the same window:
+    /// what each simulcast layer actually costs on the wire (relay layer
+    /// selection, [`BandwidthEstimator::ssrc_ingress_kbps`]). Keyed by the SSRCs
+    /// in `last_seq`, so the same bound and eviction apply.
+    ssrc_bytes: HashMap<u32, VecDeque<(u64, u64)>>,
 }
 
 impl PublisherIngress {
@@ -110,6 +115,7 @@ impl PublisherIngress {
             ssrc_order: VecDeque::new(),
             pending_gaps: HashMap::new(),
             last_feedback_kbps: 0,
+            ssrc_bytes: HashMap::new(),
         }
     }
 
@@ -125,6 +131,7 @@ impl PublisherIngress {
                 match self.ssrc_order.pop_front() {
                     Some(oldest) => {
                         self.last_seq.remove(&oldest);
+                        self.ssrc_bytes.remove(&oldest);
                         self.pending_gaps.retain(|(ssrc, _), _| *ssrc != oldest);
                     }
                     None => break,
@@ -158,6 +165,19 @@ impl PublisherIngress {
             }
         }
         let (expected, lost) = self.sequence_delta(epoch, ssrc, sequence);
+        if self.last_seq.contains_key(&ssrc) {
+            let per_ssrc = self.ssrc_bytes.entry(ssrc).or_default();
+            while per_ssrc
+                .front()
+                .is_some_and(|(bucket, _)| bucket + NUM_BUCKETS <= epoch)
+            {
+                per_ssrc.pop_front();
+            }
+            match per_ssrc.back_mut() {
+                Some((bucket, total)) if *bucket == epoch => *total += bytes,
+                _ => per_ssrc.push_back((epoch, bytes)),
+            }
+        }
         match self.buckets.back_mut() {
             Some(back) if back.epoch == epoch => {
                 back.bytes += bytes;
@@ -373,6 +393,37 @@ impl BandwidthEstimator {
             .or_insert_with(PublisherIngress::new);
     }
 
+    /// What one SSRC (one simulcast layer) of `user_id` has been arriving at
+    /// over the window, in kbps; `None` with no data for it in the window.
+    pub fn ssrc_ingress_kbps(&self, user_id: i64, ssrc: u32) -> Option<u32> {
+        self.ssrc_ingress_kbps_at(user_id, ssrc, Instant::now())
+    }
+
+    /// [`Self::ssrc_ingress_kbps`] at time `now`.
+    pub fn ssrc_ingress_kbps_at(&self, user_id: i64, ssrc: u32, now: Instant) -> Option<u32> {
+        let epoch = self.epoch(now);
+        let entry = self.publishers.get(&user_id)?;
+        let buckets = entry.ssrc_bytes.get(&ssrc)?;
+        let live = buckets
+            .iter()
+            .filter(|(bucket, _)| bucket + NUM_BUCKETS > epoch);
+        let (oldest, bytes) = live.fold((None::<u64>, 0u64), |(oldest, sum), (bucket, total)| {
+            (
+                Some(oldest.map_or(*bucket, |o| o.min(*bucket))),
+                sum + total,
+            )
+        });
+        let oldest = oldest?;
+        if bytes == 0 {
+            return None;
+        }
+        // Over the span actually observed (at least one second), so a layer
+        // that just started is not scored at its first burst's instantaneous
+        // rate.
+        let span_ms = ((epoch.saturating_sub(oldest) + 1) * BUCKET_MS).max(1000);
+        Some((bytes.saturating_mul(8) / span_ms).min(u64::from(u32::MAX)) as u32)
+    }
+
     /// Remove estimate for a disconnected user.
     pub fn remove_user(&self, user_id: i64) {
         self.publishers.remove(&user_id);
@@ -540,6 +591,15 @@ impl DownlinkEstimator {
     /// Record one QUIC path-stats sample for a viewer at the current instant.
     pub fn record_from_connection(&self, user_id: i64, conn: &quinn::Connection) {
         let path = conn.stats().path;
+        tracing::debug!(
+            viewer = user_id,
+            cwnd = path.cwnd,
+            rtt_us = path.rtt.as_micros() as u64,
+            sent_packets = path.sent_packets,
+            lost_packets = path.lost_packets,
+            congestion_events = path.congestion_events,
+            "relay: downlink path sample"
+        );
         self.record_sample_at(
             user_id,
             path.cwnd,

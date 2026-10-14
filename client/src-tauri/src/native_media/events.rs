@@ -504,6 +504,29 @@ pub fn emit_media_native_render_first_frame(
     );
 }
 
+/// Emit a native surface's stall edge: `stalled` when a visible, live track
+/// has presented nothing for a second (the page then says "Reconnecting
+/// video…" instead of leaving a frozen picture that reads as live), and again
+/// with `stalled: false` at the next presented frame. `reason` says why, as the
+/// pipeline sees it (the same line goes to the diagnostics log).
+pub fn emit_media_native_render_stalled(
+    app: &super::CallEventSink,
+    stream_id: &str,
+    track_id: &str,
+    stalled: bool,
+    reason: &str,
+) {
+    let _ = app.emit(
+        "media_native_render_stalled",
+        serde_json::json!({
+            "streamId": stream_id,
+            "trackId": track_id,
+            "stalled": stalled,
+            "reason": reason,
+        }),
+    );
+}
+
 /// One SSRC's run of packets that did not open (E2EE diagnostics, N11; the
 /// re-share freeze, stream-fix-v2).
 #[derive(Debug, Clone, Copy)]
@@ -1189,7 +1212,15 @@ async fn handle_control_message(
             // The relay only routes keyframe requests to the publisher, so a
             // request arriving here targets one of our own tracks. Flip the
             // matching encoder's force-keyframe flag directly — the frontend
-            // does not participate in native encoding.
+            // does not participate in native encoding. Every simulcast layer
+            // encodes its next frame as a keyframe (the request names the layer
+            // a viewer needs; the relay has already coalesced the burst).
+            tracing::info!(
+                stream_id = %stream_id.0,
+                track_id = %track_id.0,
+                ?layer_id,
+                "a viewer asked for a keyframe; the next encoded frame is one"
+            );
             match track_id.0.as_str() {
                 "screen" => {
                     screen_force_keyframe.store(true, std::sync::atomic::Ordering::SeqCst);
