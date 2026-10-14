@@ -205,8 +205,17 @@ async function viewerLayout(want) {
     // Full screen hides the call's chrome until the pointer moves; wake it first,
     // and wait for the control instead of failing on a frame where it is hidden.
     act = act.replace(/await click\((.*)\);$/, 'await click(await waitFor(() => $1, 6000));');
-    await run('viewer', `document.querySelector('[data-testid=ix-call]')?.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: 200, clientY: 200 }));
-      await sleep(300); ${act} await sleep(1500); return true;`);
+    try {
+      await run('viewer', `document.querySelector('[data-testid=ix-call]')?.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: 200, clientY: 200 }));
+        await sleep(300); ${act} await sleep(1500); return true;`);
+    } catch (e) {
+      // The control is in the call's chrome but not shown (the chrome hid
+      // between the wake and the wait): press it by its name, and say so.
+      const name = act.match(/'([^']+)'/)?.[1];
+      log(`  ${name}: ${e.message.slice(0, 80)}; pressing the hidden control`);
+      await run('viewer', `const b = $$('[data-testid=ix-call] button').find((x) => text(x) === ${JSON.stringify(name ?? '')});
+        if (!b) return false; b.click(); await sleep(1500); return true;`);
+    }
   }
   return viewerState();
 }

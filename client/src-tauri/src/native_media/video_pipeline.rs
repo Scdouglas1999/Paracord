@@ -2140,6 +2140,12 @@ pub fn unbind_remote_video_track(stream_id: &str, track_id: &str) {
             .remote_ssrc_track_bindings
             .retain(|_, bound| bound != &key);
         state.remote_track_max_dimensions.remove(&key);
+        // The next share is another bitstream, maybe another size under the
+        // same layer id (a 720p30 ladder's top layer is "high" as a 1440p60
+        // one's is): decode its first keyframe on a fresh decoder. Without
+        // this a re-share from 5120x1440 to 2560x720 went on through the
+        // 5120x1440 decoder, a green and magenta picture (final audit, V6).
+        state.remote_track_decoder_reset.insert(key.clone());
         // The share ended. Its next share numbers its frames from 0 again, and
         // a keyframe mark left from this one culled every keyframe of the next
         // as "stale" until its frame ids climbed past it: minutes of frozen
@@ -5514,8 +5520,14 @@ mod tests {
         assert!(video_decoder_pool().lock().unwrap().contains_key(&key));
         assert!(take_decoder_reset(&key), "a recreation is pending");
         assert!(!take_decoder_reset(&key));
-        video_decoder_pool().lock().unwrap().remove(&key);
+        // A share that ends: the next one starts on a fresh decoder too, even
+        // when it announces a size the track never had before.
         unbind_remote_video_track("stream:resize-test", "screen");
+        assert!(
+            take_decoder_reset(&key),
+            "a re-share starts on a fresh decoder"
+        );
+        video_decoder_pool().lock().unwrap().remove(&key);
     }
 
     /// Simulcast must keep working: every layer's SSRC belongs to the track, so

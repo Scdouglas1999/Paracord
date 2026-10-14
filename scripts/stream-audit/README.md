@@ -52,3 +52,36 @@ starts).
 The trust dialog for the instance (and for the devUrl origin a test build also
 asks about) is answered ahead by writing the private HOME's
 `approved_origins.json`; a nested session cannot click a native dialog.
+
+## Uplink and congestion-control labs (stream-fix V6)
+
+**The sender's uplink.** `uplinkstep.sh <loss %> [rate]`, as a `netsteps`
+`--net-cmd` inside the lab's private network namespace: 15 ms each way on
+every leg to and from the relay's UDP port (`SA_RELAY_UDP`, default 18811),
+plus loss and an optional rate on the sender's uplink alone (an HTB class with
+a ~100 ms drop-tail queue; `SA_UPLINK_SHAPER=netem` uses netem's rate limiter
+instead). Put the other legs' delay in place before the share starts (a
+`legs`-style netem whose filters use priorities above 1), so the first step
+attaches the uplink band without flushing a queue mid-share; needs `SA_RUN`
+(the run dir, to find the sender's socket).
+
+```sh
+node drive/campaign.mjs --out $RUN --plan netsteps --presets movie-50 \
+  --net-cmd scripts/stream-audit/uplinkstep.sh --steps 0,0:10mbit,0:20mbit,0:50mbit,0 --hold 40
+```
+
+**Congestion control against TCP** (`cc/`, no app): three private namespaces,
+sender, router and receiver; the router's egress is the bottleneck (HTB rate,
+drop-tail netem queue), its return path the round trip's delay. `cc_lab`
+(`cargo build --release -p paracord-transport --example cc_lab`) is a
+media-like QUIC sender (60 frames/s, a stream per frame) with a choice of
+controller; `tcpbulk.py` a competing Cubic flow; `ping` the queueing delay.
+
+```sh
+cc/netns.sh up /tmp/ccns
+CC_LAB_BIN=…/cc_lab cc/matrix.sh /tmp/ccns /tmp/cc 2 bbr,blind,cubic,media \
+  20:40:100:0:44:1 50:20:20:0:80:1          # mbit:rtt:queue ms:loss %:offered Mb/s:tcp
+python3 cc/analyze.py /tmp/cc/*/*
+cc/netns.sh down /tmp/ccns
+```
+

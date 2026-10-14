@@ -40,7 +40,7 @@ const GRAPH_A = arg('graph-a', process.env.SA_GRAPH_A ?? 'sa-pwA');
 const RECOVER_WITHIN = Number(arg('recover-within', '15000'));
 const LABEL = {
   '720p30': '720p 30fps', '1080p60': '1080p 60fps', '1440p60': '1440p 60fps', '4k60': '4K 60fps',
-  'movie-50': 'Movie 4K (50 Mbps)', 'movie-100': 'Movie 4K (100 Mbps)',
+  'movie-50': 'Movie (up to 50 Mbps)', 'movie-100': 'Movie (up to 100 Mbps)',
 };
 const marks = join(OUT, 'marks.log');
 const mono = () => Number(process.hrtime.bigint() / 1000n);
@@ -80,7 +80,7 @@ async function senderQuality(preset = PRESET) {
     await click(await waitFor(() => btn('More call actions'), 15000)); await sleep(500);
     const item = $$('[role=menuitem]').find((b) => /^Share quality/.test(text(b)));
     await click(item); await sleep(500);
-    const opt = $$('[aria-label="Share quality"] button').find((b) => text(b) === ${JSON.stringify(LABEL[preset])});
+    const opt = $$('[aria-label="Share quality"] button').find((b) => text(b).startsWith(${JSON.stringify(LABEL[preset])}));
     if (!opt) throw new Error('no option');
     await click(opt); await sleep(1500);
     if ($('[aria-label="Share quality"]')) { document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); await sleep(300); }
