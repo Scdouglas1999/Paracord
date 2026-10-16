@@ -19,6 +19,11 @@ COPY units/pc-session.service /etc/systemd/system/pc-session.service
 COPY units/pc-keyring.service /etc/systemd/user/pc-keyring.service
 COPY units/pc-audio.service /etc/systemd/user/pc-audio.service
 COPY pc.sh /usr/local/bin/pc
+# The lab is its own internet: a server here must not ask a real STUN server
+# (it would learn the build machine's real public address, not the lab
+# router's). The router's own answer is the only source in the lab.
+RUN mkdir -p /etc/systemd/user.conf.d \
+ && printf '[Manager]\nDefaultEnvironment=PARACORD_EXTERNAL_ADDRESS_STUN_SERVERS=\n' > /etc/systemd/user.conf.d/lab-no-stun.conf
 RUN chmod 0755 /usr/local/bin/pc \
  && systemctl enable xvfb.service \
  && systemctl --global enable pc-keyring.service pc-audio.service \

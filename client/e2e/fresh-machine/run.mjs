@@ -662,6 +662,160 @@ async function s4() {
   await shot(second, 'dm-second-device');
 }
 
+async function fillCss(c, css, text) {
+  const el = await until(() => c.session.exists(css), `${c.name}: no ${css}`, 30000);
+  await c.session.clear(el).catch(() => {});
+  await c.session.type(el, text);
+}
+
+/** The desktop app's own keychain items (service com.paracord.app), by account name. */
+function appKeychain(c) {
+  const out = pc(c, 'sam', 'sh', '-c', 'secret-tool search --all --unlock service com.paracord.app 2>&1 | sed -n "s/^attribute.username = //p"').out;
+  return out.split('\n').map((l) => l.trim()).filter(Boolean);
+}
+
+/** Whatever screen the app opened on: the unlock page, first-run sign-in, or the welcome. */
+async function passwordScreen(c, timeoutMs = 90000) {
+  return until(async () => {
+    const path = await c.ui.path();
+    if (path.startsWith('/unlock')) return 'unlock';
+    if (await c.session.exists('[data-testid=fr-sign-in-server]')) return 'sign-in';
+    if (await c.session.exists('[data-testid=fr-choose-host]')) return 'welcome';
+    if (path.startsWith('/login')) return 'login';
+    if (/\/app\//.test(path)) return 'app';
+    return null;
+  }, `${c.name}: no unlock, sign-in or welcome screen`, timeoutMs);
+}
+
+async function s9() {
+  scenario('S9', 'A hosting computer whose app lost its data (an update that moved it): the app uses its own server, Host goes to sign-in, the recovery phrase signs in');
+  const { host, friend } = st;
+  await ensureApp(host, 'host-s9');
+  await quit(host);
+  // What the owner's app went through: the web data and the app's keychain
+  // items are gone; the server, its config and its own key are untouched.
+  pc(host, 'sam', 'sh', '-c', 'cd ~/.local/share/com.paracord.desktop && rm -rf localstorage storage databases CacheStorage WebKitCache mediakeys security hsts-storage.sqlite; secret-tool clear service com.paracord.app; true');
+  check('the app data is gone and the server keeps running', appKeychain(host).length === 0 && pc(host, 'unit-active').out === 'active');
+  const ui = await launch(host, 'host-lost-data');
+  const first = await passwordScreen(host);
+  await sleep(2500);
+  await shot(host, 'lost-data-launch');
+  const log = pc(host, 'sam', 'sh', '-c', 'tail -n 200 ~/.local/share/com.paracord.desktop/logs/Paracord/logs/client-voice.log').out;
+  check('the app adopts this computer\'s own server as home', /using this computer.s own server/.test(log) && log.includes('127.0.0.1:8443'), log.split('\n').filter((l) => /home server|own server/.test(l)).join(' | '));
+  if (first === 'welcome') {
+    await ui.clickTid('fr-choose-host');
+  }
+  await until(() => host.session.exists('[data-testid=fr-sign-in-server]'), 'Host on an owned server did not go to sign-in', 30000);
+  await sleep(1500);
+  await shot(host, 'lost-data-host-sign-in');
+  const field = await host.session.prop(await ui.tid('fr-sign-in-server'), 'value');
+  check('Host on a server that already has its owner goes to sign-in with this computer\'s server filled in', /127\.0\.0\.1:8443/.test(field ?? ''), `${first} → ${field}`);
+  if (first === 'welcome') {
+    check('it says the server already runs here', (await ui.text()).includes('already runs your server'), (await ui.text()).slice(0, 300).replace(/\s+/g, ' '));
+  } else {
+    check('the app opens on the first-run sign-in, not the older login page', first === 'sign-in', `${first} ${await ui.path()}`);
+  }
+  await ui.click('Use your recovery phrase');
+  await sleep(1500);
+  await shot(host, 'lost-data-recover');
+  const rt = await ui.text();
+  check('the recovery phrase page knows the server (no "choose your server", no "doesn\'t know which server")', !(await host.session.exists('[data-testid=recover-no-server]')) && !rt.includes("doesn't know which server"), rt.slice(0, 300).replace(/\s+/g, ' '));
+  await fillCss(host, 'textarea[placeholder^="ridge harbor"]', st.samPhrase.join(' '));
+  await fillCss(host, 'input[placeholder="ada"]', SAM.username);
+  await ui.click('Continue');
+  await fillCss(host, 'input[placeholder="Choose a strong password"]', SAM.password);
+  await fillCss(host, 'input[placeholder="Type your password again"]', SAM.password);
+  await shot(host, 'lost-data-new-password');
+  await ui.click('Recover account');
+  await until(async () => /\/app\//.test(await ui.path()), `the recovery did not reach the app: ${(await ui.text().catch(() => '')).slice(0, 200)}`, 90000).then(
+    () => check('the recovery phrase signs in to this computer\'s server', true),
+    async (e) => { await shot(host, 'lost-data-recover-failed'); check('the recovery phrase signs in to this computer\'s server', false, e.message); throw e; },
+  );
+  await sleep(4000);
+  await shot(host, 'lost-data-recovered');
+  const t = await ui.text();
+  check(`the recovered app shows "${SERVER}"`, t.includes(SERVER), t.slice(0, 200).replace(/\s+/g, ' '));
+  await openDmWith(host, 'Alex');
+  await sleep(3000);
+  if (await ui.hasButton('Publish new keys for this device', { timeoutMs: 3000 }).catch(() => false)) {
+    await ui.click('Publish new keys for this device');
+    await sleep(4000);
+  }
+  st.dm9 = `lark-cedar-${stamp} after the recovery`;
+  await say(friend, st.dm9);
+  await attempt('a message from the friend after the recovery is readable', () => seesText(host, st.dm9, 60000));
+  await shot(host, 'lost-data-dm');
+  await sleep(3000);
+  check('the unlock is remembered in the keychain', appKeychain(host).some((u) => u.startsWith('paracord:identity:')), appKeychain(host).join(', '));
+  await quit(host);
+  await launch(host, 'host-after-recovery');
+  const again = await passwordScreen(host);
+  await sleep(4000);
+  await shot(host, 'after-recovery-relaunch');
+  check('the next launch asks for no password', again === 'app' && !(await host.session.exists('input[type=password]')), `${again} ${await host.ui.path()}`);
+}
+
+// The keychain is not up when the app starts (KDE/GNOME still starting it).
+const SECRET_ACTIVATION = 'for f in /usr/share/dbus-1/services/org.freedesktop.secrets.service /usr/share/dbus-1/services/org.gnome.keyring.service /usr/share/dbus-1/services/org.freedesktop.impl.portal.Secret.service; do [ -e "$f" ] && mv "$f" /root/masked/; done; true';
+
+async function s10() {
+  scenario('S10', 'The keychain starts after the app: the password screen, then the keychain comes up, the person signs in, and the next launch remembers the unlock');
+  const { host } = st;
+  await ensureApp(host, 'host-s10');
+  await quit(host);
+  pc(host, 'sam', 'sh', '-c', 'secret-tool clear service com.paracord.app; true');
+  L.exec(host.name, ['sh', '-c', `mkdir -p /root/masked; ${SECRET_ACTIVATION}`], { allowFail: true });
+  pc(host, 'sam', 'sh', '-c', 'systemctl --user stop pc-keyring.service; systemctl --user mask --runtime gnome-keyring-daemon.service gnome-keyring-daemon.socket >/dev/null 2>&1; systemctl --user stop gnome-keyring-daemon.service gnome-keyring-daemon.socket >/dev/null 2>&1; pkill -x gnome-keyring-d; busctl --user call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus ReloadConfig >/dev/null 2>&1; true');
+  await sleep(1500);
+  const down = pc(host, 'sam', 'sh', '-c', 'busctl --user status org.freedesktop.secrets >/dev/null 2>&1 && echo up || echo down').out.trim();
+  check('the keychain is down and cannot be started on demand', down === 'down', down);
+  try {
+    await s10WithoutKeychain(host);
+  } finally {
+    // Whatever happened, later scenarios get the keychain back.
+    keychainUp(host);
+  }
+}
+
+function keychainUp(host) {
+  L.exec(host.name, ['sh', '-c', 'mv /root/masked/* /usr/share/dbus-1/services/ 2>/dev/null; true'], { allowFail: true });
+  pc(host, 'sam', 'sh', '-c', 'systemctl --user unmask --runtime gnome-keyring-daemon.service gnome-keyring-daemon.socket >/dev/null 2>&1; busctl --user call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus ReloadConfig >/dev/null 2>&1; systemctl --user start pc-keyring.service; true');
+}
+
+async function s10WithoutKeychain(host) {
+  const ui = await launch(host, 'host-no-keychain');
+  await sleep(50000); // past the app's wait for a keychain that is starting
+  const screen = await passwordScreen(host);
+  await shot(host, 'no-keychain-launch');
+  check('without a keychain the app asks for the password', screen !== 'app', screen);
+  // The keychain comes up.
+  keychainUp(host);
+  await until(() => pc(host, 'sam', 'sh', '-c', 'busctl --user status org.freedesktop.secrets >/dev/null 2>&1 && echo up').out.trim() === 'up', 'the keychain did not come back', 30000);
+  await sleep(2000);
+  if (screen === 'unlock') {
+    await fillCss(host, 'input[type=password]', SAM.password);
+    await ui.click('Unlock');
+  } else {
+    if (screen === 'welcome') await ui.clickTid('fr-choose-host');
+    await until(() => host.session.exists('[data-testid=fr-sign-in-server]'), 'no sign-in', 30000);
+    await sleep(1500);
+    await ui.fill('fr-sign-in-user', SAM.username);
+    await ui.fill('fr-sign-in-password', SAM.password);
+    await ui.clickTid('fr-sign-in-submit');
+  }
+  await until(async () => /\/app\//.test(await ui.path()), 'signing in after the keychain came up did not reach the app', 90000);
+  await sleep(8000);
+  await shot(host, 'keychain-late-signed-in');
+  const items = appKeychain(host);
+  check('the unlock is saved once the keychain is up', items.some((u) => u.startsWith('paracord:identity:')), items.join(', '));
+  await quit(host);
+  await launch(host, 'host-after-late-keychain');
+  const again = await passwordScreen(host);
+  await sleep(4000);
+  await shot(host, 'late-keychain-relaunch');
+  check('the next launch asks for no password', again === 'app' && !(await host.session.exists('input[type=password]')), `${again} ${await host.ui.path()}`);
+}
+
 async function s7() {
   scenario('S7', 'Certificate change on the server: the friend\'s app shows identity-changed and stays disconnected until Trust');
   const { host, friend } = st;
@@ -853,7 +1007,7 @@ async function s5() {
   let rows = await hostFirstRun(hostb, 'hostb', JO, 'Board Game Club');
   rows = await retryFailedRows(hostb, rows, 'hostb');
   check('rows 1–3 and 5 succeed, row 4 warns', rows.length === 5 && [0, 1, 2, 4].every((i) => rows[i].state === 'ok') && rows[3].state === 'warn', rows.map((r) => r.state).join(','));
-  check('row 4 says the router didn\'t allow it', /Your router didn.t allow it, so for now only people on your home network can join\./.test(rows[3]?.text), rows[3]?.text);
+  check('row 4 says the router didn\'t allow it and names the port to forward', /Your router didn.t allow it\. Once port 8443 is forwarded/.test(rows[3]?.text), rows[3]?.text);
   await hostb.ui.click('Show me how');
   const sheet = await hostb.session.text(await hostb.ui.tid('fr-router-sheet'));
   await sleep(500);
@@ -870,20 +1024,24 @@ async function s5() {
   await hostb.ui.heading('Invite your friends', 60000);
   await sleep(1200);
   await shot(hostb, 'invite-lan');
-  const lan = await inviteLink(hostb);
-  check('the invite is the home-network link with the note', /^https:\/\/192\.168\.50\.29:8443\/invite\//.test(lan ?? '') && !!(await hostb.ui.maybeTid('fr-lan-note')), lan);
+  const refusedLink = await inviteLink(hostb);
+  const outsideNote = await hostb.ui.maybeTid('fr-outside-note');
+  check('the invite is the public link, with the note that the port is the host\'s to forward', refusedLink?.startsWith(`https://${PUBLIC_IP}:8443/invite/`) && !!outsideNote && /port 8443 is forwarded/.test(await hostb.session.text(outsideNote)), refusedLink);
+  check('no home-network address is offered as a link', !/192\.168\./.test(await hostb.ui.text()));
   check('nothing claims friends can reach this computer', !/Friends can reach you/.test(await hostb.ui.text()));
 
   // The router owner turns UPnP on and allows mappings.
   L.routerMode('pcfm-router', 'allow');
   const t0 = Date.now();
-  const flipped = await until(async () => {
-    const l = await inviteLink(hostb);
-    return l && l.startsWith(`https://${PUBLIC_IP}:8443/invite/`) ? l : null;
-  }, 'the invite never switched to the public address', 130000, 1000).catch(() => null);
+  const opened = await until(async () => {
+    const st5 = await invoke(hostb, 'host_status');
+    return st5.reachability?.state === 'open' ? st5 : null;
+  }, 'the router never opened the way', 130000, 1000).catch(() => null);
   const secs = Math.round((Date.now() - t0) / 1000);
+  await sleep(1500);
   await shot(hostb, 'invite-after-router-allows');
-  check('within 70 s of the router allowing it the invite switches to the public address, live', !!flipped && secs <= 70, `${flipped} after ${secs} s`);
+  check('within 70 s of the router allowing it the server says the way is open, and the note goes', !!opened && secs <= 70 && !(await hostb.ui.maybeTid('fr-outside-note')), `${opened?.reachability?.state} after ${secs} s`);
+  check('the invite is still the public link', (await inviteLink(hostb))?.startsWith(`https://${PUBLIC_IP}:8443/invite/`), await inviteLink(hostb));
   const status = await invoke(hostb, 'host_status');
   check('reachability is open', status.reachability?.state === 'open', JSON.stringify(status.reachability));
   check('a friend outside reaches the host now', health(st.friend, `https://${PUBLIC_IP}:8443`));
@@ -938,7 +1096,8 @@ async function s6() {
   await sleep(1000);
   await shot(hostc, 'invite');
   const link = await inviteLink(hostc);
-  check('the invite is the home-network link', /^https:\/\/192\.168\.60\.28:8443\//.test(link ?? ''), link);
+  const noPublic = await hostc.ui.maybeTid('fr-no-public-note');
+  check('with only a shared address there is no link, never a home-network one, and the note names the provider', !/^https?:/.test(link ?? '') && !!noPublic && /provider/.test(await hostc.session.text(noPublic)), `${link} | ${noPublic ? await hostc.session.text(noPublic) : 'no note'}`);
   check('no "Friends can reach you" anywhere', !/Friends can reach you|reach you at/.test(await hostc.ui.text()));
   await hostc.ui.clickTid('fr-open-server');
   await hostc.ui.waitText('Say hi to everyone', 60000).catch(() => {});
@@ -961,7 +1120,7 @@ async function main() {
   }
   L.createNetworks(['lan', 'wan']);
   L.startRouter({});
-  for (const fn of [s1, s2, s3, s4, s7, s8, s5, s6]) {
+  for (const fn of [s1, s2, s3, s4, s9, s10, s7, s8, s5, s6]) {
     try {
       await fn();
     } catch (e) {
