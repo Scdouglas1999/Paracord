@@ -170,3 +170,53 @@ Cloudflare.
 - If the keychain has no Secret Service at all at login, the password screen
   appears at launch (it is not waited for). The next unlock re-checks the
   keychain and remembers.
+
+## Follow-up: "Paracord doesn't know which server to use yet" after hosting setup
+
+The installed build (desktop `444b5ae8…`) showed `NO_SERVER_CHOSEN_MESSAGE`.
+The owner's `tauri://localhost` profile (read only) holds just
+`paracord:server-list` (empty) and `paracord:v2:firstRun.launchSeen`. It has no
+account, no keystore, no refresh token and no saved server. (In the log,
+`hasToken` is always `[redacted]`, so it does not show that a token exists.)
+The owner said "I went through the hosting setup", which identifies the page:
+the first-run **Host** path on a computer whose server already has its owner.
+`hostStore.runSetup` sees `escrow` in `completed_steps` and marks the Account
+row done without running `createHostAccount`. That function is the only place
+the host path saves the server URL. The flow then reached the recovery-phrase
+step, and its Continue (`confirmRecoverySaved`) had no server to ask.
+
+Fix (`e9101ab4`):
+
+- Boot: with no home server saved, a computer that hosts one adopts its
+  origin. The new `host_home_server` command reads `host.json` without the
+  host lock. This happens before the first trust sync and before anything
+  renders (`main.tsx` awaits it). The shell trusts its own server's origin by
+  the certificate on disk, without a prompt (`host.rs` `OwnServer`). A saved
+  server is never replaced.
+- On a computer whose server has its owner, Host goes to sign-in on that
+  server with the address filled in and a line saying so. A setup that made no
+  account does not go on to an empty phrase step.
+- Audit:
+  - `/recover` and `/setup` with no server show the shared "Choose your
+    server first" screen.
+  - `/unlock` with no server keeps its offline answer (wrong password) and
+    never shows the adapter text.
+  - `/login` is behind `AuthRoute`, which sends a desktop with no server to
+    `/connect`.
+  - The first-run phrase error is now a sentence.
+- Tests: `lib/host/adoptHostedServer.test.tsx` covers a hosting computer with
+  no saved server reaching recovery with the hosted server, and that a saved
+  server is never replaced. `FirstRunPage.ownServer.test.tsx` covers Host
+  leading to sign-in on `https://127.0.0.1:8443`.
+
+Gates: fmt, clippy `--workspace -D warnings` and paracord-desktop tests pass.
+Client typecheck passes; vitest 506 files and 4958 tests pass; eslint has 0
+errors; tokens and motion-lint pass.
+
+Release build (not installed):
+
+- `paracord-desktop` (`target/release`): sha256
+  `fc6a0dd8ad220575e9bc7c09fcc77a93b50d996904123dc95e78bcfa55ae7b99`
+- `paracord-host` (staged sidecar): sha256
+  `81ee4f262e105c6f330f854e5c0ae51b3fdd8e3c9b6d7adcce5c44c1d77d9982`. Only its
+  embedded web UI changed.
