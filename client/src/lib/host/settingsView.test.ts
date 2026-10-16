@@ -171,6 +171,31 @@ describe('reachView (spec 5.4, Settings column)', () => {
       expect(reachView(reach({ state }), NOW).text).not.toMatch(/Friends can reach/);
     }
   });
+
+  it('names the public address (router or STUN) with what still has to change', () => {
+    const silent = reachView(reach({ state: 'no_answer', external_ip: null, observed_ip: '198.51.100.4' }), NOW);
+    expect(silent.tone).toBe('warn');
+    expect(silent.text).toBe(
+      "Your router didn't answer. Once port 8443 is forwarded on your router, friends will reach you at 198.51.100.4; people on your home network can join now.",
+    );
+    expect(silent.chips).toEqual(['show_me_how', 'try_again']);
+    expect(silent.linkHint).toBe(
+      "Invite links use your public address, 198.51.100.4. To give out a domain name instead, set public_url under [server] in the server's paracord.toml and restart it.",
+    );
+    // A carrier-grade NAT address is never offered as the way in.
+    const cgnat = reachView(reach({ state: 'no_answer', external_ip: null, observed_ip: '100.64.2.2' }), NOW);
+    expect(cgnat.text).toBe("Your router didn't answer, so for now only people on your home network can join.");
+    expect(cgnat.linkHint).toMatch(/^Invite links use your address on the home network\./);
+  });
+
+  it('a connection seen from outside confirms a port forwarded by hand', () => {
+    const view = reachView(
+      reach({ state: 'no_answer', external_ip: null, observed_ip: '198.51.100.4', confirmed_at: '2026-10-12T20:25:00Z' }),
+      NOW,
+    );
+    expect(view).toMatchObject({ tone: 'ok', text: 'Friends can reach you at 198.51.100.4.', chips: [], recheck: true });
+    expect(view.note).toMatch(/^A friend connected from outside 5 minutes ago\.$/);
+  });
 });
 
 describe('storageView (spec 4.6, 4.7)', () => {

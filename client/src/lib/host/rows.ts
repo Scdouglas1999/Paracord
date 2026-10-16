@@ -169,9 +169,42 @@ export function previewStatus(rows: HostRow[]): 'not_running' | 'starting' | 'on
   return row1.state === 'ok' ? 'online' : 'starting';
 }
 
+/** A public IPv4 address (not private, carrier-grade NAT, loopback, link-local or reserved). */
+function isPublicIpv4(text: string | null | undefined): text is string {
+  const parts = (text ?? '').trim().split('.').map(Number);
+  if (parts.length !== 4 || parts.some((p) => !Number.isInteger(p) || p < 0 || p > 255)) return false;
+  const [a, b] = parts;
+  return !(
+    a === 0 ||
+    a === 10 ||
+    a === 127 ||
+    a >= 224 ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 169 && b === 254) ||
+    (a === 100 && b >= 64 && b <= 127)
+  );
+}
+
+/**
+ * The public address friends would use: the router's own report when it is
+ * public, else what a STUN server saw (`observed_ip`). Null when neither is.
+ */
+export function publicAddress(reach: Reachability): string | null {
+  if (isPublicIpv4(reach.external_ip)) return reach.external_ip.trim();
+  if (isPublicIpv4(reach.observed_ip)) return reach.observed_ip.trim();
+  return null;
+}
+
 /** Row 4 / Settings / Invite sheet copy for a reachability state (spec 5.4). */
 export function reachabilityCopy(reach: Reachability): { tone: 'ok' | 'warn'; text: string } {
   const ip = reach.external_ip ?? 'your public address';
+  const outside = publicAddress(reach);
+  // Someone outside already got through on that address (a port forwarded by
+  // hand): the router's silence no longer matters.
+  if (outside && reach.confirmed_at && (reach.state === 'refused' || reach.state === 'no_answer')) {
+    return { tone: 'ok', text: `Friends can reach you at ${outside}.` };
+  }
   switch (reach.state) {
     case 'open':
       return { tone: 'ok', text: `Your router opened the way. Friends can reach you at ${ip}.` };
@@ -183,13 +216,17 @@ export function reachabilityCopy(reach: Reachability): { tone: 'ok' | 'warn'; te
     case 'refused':
       return {
         tone: 'warn',
-        text: "Your router didn't allow it, so for now only people on your home network can join.",
+        text: outside
+          ? `Your router didn't allow it. Once port ${reach.port} is forwarded on your router, friends will reach you at ${outside}; people on your home network can join now.`
+          : "Your router didn't allow it, so for now only people on your home network can join.",
       };
     case 'no_answer':
     case 'asking':
       return {
         tone: 'warn',
-        text: "Your router didn't answer, so for now only people on your home network can join.",
+        text: outside
+          ? `Your router didn't answer. Once port ${reach.port} is forwarded on your router, friends will reach you at ${outside}; people on your home network can join now.`
+          : "Your router didn't answer, so for now only people on your home network can join.",
       };
     case 'shared_address':
       return {

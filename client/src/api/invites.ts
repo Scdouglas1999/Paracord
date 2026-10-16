@@ -10,7 +10,18 @@ import type { AcceptInviteRequest } from './generated/AcceptInviteRequest';
 import type { CreateInviteRequest } from './generated/CreateInviteRequest';
 import type { RestClient } from './restClient';
 
-export type ShareReach = 'internet' | 'local_network' | 'this_computer' | 'unknown';
+/**
+ * How far a link carries. `internet_unconfirmed`: the network's public
+ * address, but nothing has shown people outside get through yet (the router
+ * refused or did not answer); `note` says what is in the way.
+ */
+export type ShareReach = 'internet' | 'internet_unconfirmed' | 'local_network' | 'this_computer' | 'unknown';
+
+/** What may stop people outside from reaching the link. */
+export type ShareNote = 'port_not_forwarded' | 'firewall_blocked' | 'carrier_nat' | 'outer_router';
+
+/** Where the address came from: `[server] public_url`, the router, this computer, or a STUN server. */
+export type ShareSource = 'configured' | 'router' | 'this_computer' | 'stun';
 
 /** What the server says it can be reached as. `url` is an origin, no trailing slash. */
 export interface ShareAddress {
@@ -21,6 +32,14 @@ export interface ShareAddress {
    * in. Absent on servers before 3.2.
    */
   asks_router?: boolean;
+  /** The origin links pointed at before the public address changed. */
+  previous_url?: string | null;
+  /** The address on the local network, when `url` is a different (outside) one. */
+  local_url?: string | null;
+  source?: ShareSource;
+  note?: ShareNote;
+  /** The TCP port that has to reach the server (the one to forward). */
+  port?: number;
 }
 
 export function createInviteApi(getApi: () => RestClient) {

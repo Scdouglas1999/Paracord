@@ -15,12 +15,17 @@
 //! ```
 //!
 //! `firewall_blocked` (Windows host mode) overrides whichever of those applies.
-//! The external address is whatever the router said. This module has no way to
-//! ask anyone else, and no code path guesses.
+//! The external address is whatever the router said — also when it refused the
+//! mapping but still named its address. Only when the router has not named a
+//! public address, and the owner left `[network] external_address_stun_servers`
+//! on, is a STUN server asked what address this network's traffic comes from
+//! ([`crate::stun`]); that lands in `observed_ip`, at most once per
+//! [`STUN_REFRESH`] (and on "Try again"), and never changes the state.
 
 use crate::portmap::{
     self, FailureKind, MapFailure, Mapping, PortRequest, Router, DISCOVERY_BUDGET,
 };
+use crate::stun::PublicAddressProbe;
 use chrono::{DateTime, SecondsFormat, Utc};
 use paracord_contracts::host::ReachabilityState;
 use paracord_core::reachability::{classify, AddressClass, ReachabilityHub};
@@ -36,6 +41,11 @@ type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// How often to look again at a mapping that never expires.
 const PERMANENT_RECHECK: Duration = Duration::from_secs(12 * 60 * 60);
+
+/// How often the STUN server is asked again while the router stays silent. A
+/// home address changes rarely; asking on every one-minute retry would send a
+/// datagram to a third party for nothing.
+pub const STUN_REFRESH: Duration = Duration::from_secs(30 * 60);
 
 /// The rule the desktop host installs (spec §2.4).
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -55,6 +65,10 @@ pub struct Environment {
     pub lan_ip: Box<dyn Fn() -> Option<IpAddr> + Send + Sync>,
     /// Windows host mode only.
     pub firewall: Option<Arc<dyn FirewallCheck>>,
+    /// Asks a STUN server for this network's public address when the router
+    /// will not say. `None` when `[network] external_address_stun_servers` is
+    /// empty.
+    pub public_address: Option<Arc<dyn PublicAddressProbe>>,
 }
 
 pub struct Settings {
@@ -123,6 +137,8 @@ struct Shared {
     stop: Notify,
     /// The router whose mapping is live, for renewal.
     held: Mutex<Option<Arc<Tracked>>>,
+    /// When the STUN server was last asked.
+    observed_at: Mutex<Option<tokio::time::Instant>>,
 }
 
 /// The running state machine.
@@ -159,6 +175,7 @@ pub fn spawn(
             .collect(),
         stop: Notify::new(),
         held: Mutex::new(None),
+        observed_at: Mutex::new(None),
     });
     let task = tokio::spawn(run(Arc::clone(&shared)));
     Handle { shared, task }
@@ -252,6 +269,7 @@ async fn attempt(shared: &Shared, why: Why) -> Duration {
                 r.lease_expires_at = None;
                 r.next_retry_at = Some(stamp(after(retry)));
                 r.last_error = None;
+                r.observed_ip = None;
             });
             log_state(shared);
             apply_firewall(shared).await;
@@ -303,6 +321,7 @@ async fn attempt(shared: &Shared, why: Why) -> Duration {
         }
         Err(failure) => apply_failure(shared, &failure, lan_ip),
     };
+    observe_public_address(shared, why, lan_ip).await;
     log_state(shared);
 
     // Windows host mode: a missing firewall rule beats whatever the router said.
@@ -357,8 +376,12 @@ fn apply_failure(shared: &Shared, failure: &MapFailure, lan_ip: Option<IpAddr>) 
     shared.hub.update(|r| {
         r.state = state;
         r.method = None;
-        // Only the router may name the external address, and it just failed to.
-        r.external_ip = None;
+        // A router that refused may still have named its outside address; one
+        // that did not answer named nothing. Never an unusable one.
+        r.external_ip = failure
+            .external_ip
+            .filter(|ip| classify(*ip) != AddressClass::Unusable)
+            .map(|ip| ip.to_string());
         // The router that answered, if any: a refusal still knows its address.
         r.gateway_ip = failure.gateway_ip.map(|ip| ip.to_string());
         r.lan_ip = lan_ip.map(|ip| ip.to_string());
@@ -367,6 +390,60 @@ fn apply_failure(shared: &Shared, failure: &MapFailure, lan_ip: Option<IpAddr>) 
         r.last_error = Some(failure.reason.clone());
     });
     retry
+}
+
+/// Ask the STUN server for this network's public address when the router has
+/// not named one, and forget the answer once the router does.
+async fn observe_public_address(shared: &Shared, why: Why, lan_ip: Option<IpAddr>) {
+    let current = shared.hub.current();
+    let router_public = current
+        .external_ip
+        .as_deref()
+        .and_then(|text| text.parse::<IpAddr>().ok())
+        .is_some_and(|ip| classify(ip) == AddressClass::Public);
+    let Some(probe) = shared.env.public_address.as_ref() else {
+        return;
+    };
+    if router_public {
+        if current.observed_ip.is_some() {
+            shared.hub.update(|r| r.observed_ip = None);
+        }
+        return;
+    }
+    let due = {
+        let asked = shared.observed_at.lock().unwrap_or_else(|e| e.into_inner());
+        why != Why::Timer || asked.is_none_or(|at| at.elapsed() >= STUN_REFRESH)
+    };
+    if !due {
+        return;
+    }
+    *shared.observed_at.lock().unwrap_or_else(|e| e.into_inner()) =
+        Some(tokio::time::Instant::now());
+    match probe.discover(lan_ip).await {
+        Ok(observed) => {
+            let class = classify(observed.ip);
+            tracing::info!(
+                target: "paracord::portmap",
+                server = %observed.server,
+                observed_ip = %observed.ip,
+                public = class == AddressClass::Public,
+                "the router did not name a public address; asked a STUN server instead"
+            );
+            // Kept even when it is not public, so the invite can say what is in
+            // the way; only a public one is ever shared.
+            let observed_ip = (class != AddressClass::Unusable).then(|| observed.ip.to_string());
+            shared.hub.update(|r| r.observed_ip = observed_ip);
+        }
+        Err(reason) => {
+            tracing::warn!(
+                target: "paracord::portmap",
+                reason = %reason,
+                "could not learn this network's public address from a STUN server; invite links \
+                 use the address on this network"
+            );
+            shared.hub.update(|r| r.observed_ip = None);
+        }
+    }
 }
 
 /// Returns true when the firewall is blocking.
@@ -410,6 +487,7 @@ fn log_state(shared: &Shared) {
             target: "paracord::portmap",
             state = ?r.state,
             external_ip = r.external_ip.as_deref().unwrap_or("-"),
+            observed_ip = r.observed_ip.as_deref().unwrap_or("-"),
             reason = r.last_error.as_deref().unwrap_or("-"),
             next_retry_at = r.next_retry_at.as_deref().unwrap_or("-"),
             "reachability"
@@ -454,7 +532,9 @@ pub fn outcome_for(r: &paracord_contracts::host::Reachability) -> portmap::Outco
         },
         ReachabilityState::Refused | ReachabilityState::NoAnswer | ReachabilityState::Asking => {
             Outcome::NotAvailable {
-                external_ip: None,
+                // Where friends would join once the port is forwarded, when
+                // a public address is known.
+                external_ip: paracord_core::reachability::public_address(r).map(|(ip, _)| ip),
                 reason: r
                     .last_error
                     .clone()

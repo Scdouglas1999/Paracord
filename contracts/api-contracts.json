@@ -2341,7 +2341,7 @@
               ]
             },
             "external_ip": {
-              "description": "Only ever what the router reported.",
+              "description": "What the router reported as its own outside address (also when it\nrefused the mapping but still named its address), or for `direct` this\ncomputer's own public address. Never learned from anywhere else.",
               "type": [
                 "string",
                 "null"
@@ -2379,6 +2379,13 @@
               ]
             },
             "next_retry_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "observed_ip": {
+              "description": "The public address a STUN server (`[network]\nexternal_address_stun_servers`) saw this network's traffic come from.\nAsked only while the router has not reported a public address of its\nown, and never taken as proof that the way in is open. Absent when\ndiscovery is off, failed, or was not needed (and on older servers).",
               "type": [
                 "string",
                 "null"
@@ -2667,7 +2674,7 @@
               ]
             },
             "external_ip": {
-              "description": "Only ever what the router reported.",
+              "description": "What the router reported as its own outside address (also when it\nrefused the mapping but still named its address), or for `direct` this\ncomputer's own public address. Never learned from anywhere else.",
               "type": [
                 "string",
                 "null"
@@ -2705,6 +2712,13 @@
               ]
             },
             "next_retry_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "observed_ip": {
+              "description": "The public address a STUN server (`[network]\nexternal_address_stun_servers`) saw this network's traffic come from.\nAsked only while the router has not reported a public address of its\nown, and never taken as proof that the way in is open. Absent when\ndiscovery is off, failed, or was not needed (and on older servers).",
               "type": [
                 "string",
                 "null"

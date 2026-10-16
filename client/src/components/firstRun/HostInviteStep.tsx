@@ -22,6 +22,13 @@ export interface HostInviteView {
   onlyHere: boolean;
   /** The public address changed while the server ran (§5.6). */
   addressChanged: boolean;
+  /**
+   * `{local_url}/invite/{code}` when the main link is the outside address: the
+   * link for people on the same network, which works whatever the router does.
+   */
+  localUrl?: string | null;
+  /** Why people outside may not get through yet (`shareNoteText`), or null. */
+  note?: string | null;
   maxAge: number;
   maxUses: number;
   error: string | null;
@@ -129,11 +136,17 @@ export function HostInviteStep({
   onBack: () => void;
 }) {
   const [copied, setCopied] = useState(false);
+  const [copiedLocal, setCopiedLocal] = useState(false);
   useEffect(() => {
     if (!copied) return;
     const timer = window.setTimeout(() => setCopied(false), 1600);
     return () => window.clearTimeout(timer);
   }, [copied]);
+  useEffect(() => {
+    if (!copiedLocal) return;
+    const timer = window.setTimeout(() => setCopiedLocal(false), 1600);
+    return () => window.clearTimeout(timer);
+  }, [copiedLocal]);
 
   return (
     <Screen
@@ -189,10 +202,37 @@ export function HostInviteStep({
           Only this computer can reach this server right now, so nobody else can use this link yet.
         </div>
       )}
+      {view.note && !view.lan && (
+        <div className="fr-lanwarn" data-testid="fr-outside-note">
+          <FrGlyph name="warn" size={15} />
+          {view.note}
+        </div>
+      )}
+      {view.localUrl && (
+        <div className="fr-linkrow fr-linkrow--local" data-testid="fr-invite-local-link">
+          <span className="fr-linkrow__label">On this network</span>
+          <code>{view.localUrl}</code>
+          <button
+            type="button"
+            className="fr-chip"
+            aria-label={copiedLocal ? 'Link for this network copied' : 'Copy the link for this network'}
+            onClick={async () => {
+              if (!view.localUrl) return;
+              await writeClipboardText(view.localUrl);
+              setCopiedLocal(true);
+            }}
+          >
+            <FrGlyph name={copiedLocal ? 'check' : 'copy'} size={15} />
+            <span aria-live="polite">{copiedLocal ? 'Copied' : 'Copy'}</span>
+          </button>
+        </div>
+      )}
       {view.lan && (
         <div className="fr-lanwarn" data-testid="fr-lan-note">
           <FrGlyph name="warn" size={15} />
-          Works on your home network until your router lets friends in. Paracord keeps trying.
+          {view.note
+            ? `Works on your home network for now. ${view.note}`
+            : 'Works on your home network until your router lets friends in. Paracord keeps trying.'}
         </div>
       )}
       <div className="fr-share">

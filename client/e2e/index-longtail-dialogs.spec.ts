@@ -170,6 +170,52 @@ test.describe('dialogs (§6.12)', () => {
     expect(phone!.width).toBeLessThanOrEqual(390 - 32);
   });
 
+  test('invite: an unconfirmed public address leads, says what is missing, and keeps the link for this network', async ({ page }) => {
+    await open(page);
+    await page.route('**/api/v1/channels/*/invites', (route) =>
+      route.request().method() === 'POST'
+        ? json(route, {
+            code: 'k4Tz9wMe',
+            channel_id: CH.fuelGeneral,
+            guild_id: GUILD.fuel.id,
+            created_at: '2026-10-01T21:38:00-05:00',
+            inviter_id: PEOPLE.you.id,
+            max_age: 604800,
+            max_uses: 0,
+            uses: 0,
+          })
+        : route.fallback(),
+    );
+    // A router that answers neither UPnP nor NAT-PMP/PCP; STUN named the address.
+    await page.route('**/api/v1/instance/share-address', (route) =>
+      json(route, {
+        url: 'https://198.51.100.4:8443',
+        reach: 'internet_unconfirmed',
+        local_url: 'https://192.168.1.20:8443',
+        source: 'stun',
+        note: 'port_not_forwarded',
+        port: 8443,
+        asks_router: true,
+      }),
+    );
+    await page.locator('[data-testid="ix-sidebar-header"] [aria-haspopup="menu"]').click();
+    await page.getByRole('menuitem', { name: 'Invite people' }).click();
+    const dialog = page.getByRole('dialog', { name: /Invite people to Fuel/ });
+    await expect(dialog.getByRole('textbox', { name: 'Invite link' })).toHaveValue('https://198.51.100.4:8443/invite/k4Tz9wMe');
+    await expect(dialog.getByTestId('invite-reach-note')).toHaveText(
+      'People outside your network may not reach this until port 8443 is forwarded on your router.',
+    );
+    await expect(dialog.getByRole('textbox', { name: 'Link on this network' })).toHaveValue(
+      'https://192.168.1.20:8443/invite/k4Tz9wMe',
+    );
+    expect(await creamButtons(dialog), 'still one cream button').toEqual(['Copy invite link']);
+    await shot(page, 'invite-unconfirmed');
+    await page.setViewportSize({ width: 390, height: 844 });
+    await shot(page, 'invite-unconfirmed', 'phone', 500);
+    const phone = await dialog.boundingBox();
+    expect(phone!.width).toBeLessThanOrEqual(390 - 32);
+  });
+
   test('forward: search, choose, one cream Send; faces are marks and avatars', async ({ page }) => {
     await open(page, (h) => h.routes.channel('gnLounge'));
     const menu = await openMessageMenu(page, LOUNGE_LINE);

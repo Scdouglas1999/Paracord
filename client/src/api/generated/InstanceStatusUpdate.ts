@@ -50,7 +50,9 @@ export interface Reachability {
    */
   confirmed_at: string | null;
   /**
-   * Only ever what the router reported.
+   * What the router reported as its own outside address (also when it
+   * refused the mapping but still named its address), or for `direct` this
+   * computer's own public address. Never learned from anywhere else.
    */
   external_ip: string | null;
   gateway_ip: string | null;
@@ -62,6 +64,14 @@ export interface Reachability {
    */
   method: string | null;
   next_retry_at: string | null;
+  /**
+   * The public address a STUN server (`[network]
+   * external_address_stun_servers`) saw this network's traffic come from.
+   * Asked only while the router has not reported a public address of its
+   * own, and never taken as proof that the way in is open. Absent when
+   * discovery is off, failed, or was not needed (and on older servers).
+   */
+  observed_ip?: string | null;
   port: number;
   state: ReachabilityState;
   [k: string]: unknown | undefined;

@@ -351,6 +351,17 @@ pub struct NetworkConfig {
     /// often to ask again, in seconds. Env: `PARACORD_REACHABILITY_RETRY_SECONDS`.
     #[serde(default = "default_reachability_retry_seconds")]
     pub reachability_retry_seconds: u64,
+    /// When the router does not say what this network's public address is,
+    /// ask these STUN servers (`host:port`, in order) instead, so invite links
+    /// can use the public address. One UDP datagram to a third party, at most
+    /// every 30 minutes while the router stays silent; it tells that server
+    /// this network's address, as any packet would. Empty = never ask: invite
+    /// links then use the address on the local network until the router (or
+    /// `[server] public_url`) names one. Only used while `auto_port_forward`
+    /// is on. Env: `PARACORD_EXTERNAL_ADDRESS_STUN_SERVERS` (comma-separated,
+    /// empty to turn it off).
+    #[serde(default = "default_external_address_stun_servers")]
+    pub external_address_stun_servers: Vec<String>,
 }
 
 impl Default for NetworkConfig {
@@ -360,6 +371,7 @@ impl Default for NetworkConfig {
             auto_port_forward: true,
             port_forward_lease_seconds: default_port_forward_lease_seconds(),
             reachability_retry_seconds: default_reachability_retry_seconds(),
+            external_address_stun_servers: default_external_address_stun_servers(),
         }
     }
 }
@@ -743,6 +755,42 @@ fn default_port_forward_lease_seconds() -> u32 {
 fn default_reachability_retry_seconds() -> u64 {
     60
 }
+fn default_external_address_stun_servers() -> Vec<String> {
+    crate::stun::DEFAULT_SERVERS
+        .iter()
+        .map(|server| server.to_string())
+        .collect()
+}
+
+/// Every entry must be `host:port` with a real port, so a typo fails at start
+/// instead of turning discovery off without a word.
+fn validate_stun_servers(servers: &[String]) -> Result<()> {
+    for server in servers {
+        let valid = server.rsplit_once(':').is_some_and(|(host, port)| {
+            !host.trim_matches(['[', ']']).is_empty()
+                && !host.contains(char::is_whitespace)
+                && !host.contains('"')
+                && port.parse::<u16>().is_ok_and(|port| port != 0)
+        });
+        if !valid {
+            anyhow::bail!(
+                "[network] external_address_stun_servers: {server:?} is not host:port \
+                 (for example \"stun.cloudflare.com:3478\"); use an empty list to turn \
+                 STUN off"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// A TOML array of strings, for the template.
+fn toml_string_array(items: &[String]) -> String {
+    let quoted: Vec<String> = items
+        .iter()
+        .map(|item| toml::Value::String(item.clone()).to_string())
+        .collect();
+    format!("[{}]", quoted.join(", "))
+}
 /// A config with `[at_rest] enabled = true` from before key sources existed
 /// took its key from `key_env`; that is still what it means.
 fn default_at_rest_key_source() -> KeySource {
@@ -928,7 +976,8 @@ pub(crate) fn generate_config_template(config: &Config) -> String {
 bind_address = "{bind_address}"
 server_name = "{server_name}"
 permission_cache_max_entries = {permission_cache_max_entries}
-# Set explicitly for internet-facing deployments:
+# Set explicitly for internet-facing deployments. Invite links use it instead of
+# the address your router (or a STUN server) reports, e.g. for a domain name:
 # public_url = "https://your-domain-or-ip:8443"
 # With TLS on, bind_address answers plain HTTP with a redirect to HTTPS (and
 # serves ACME HTTP-01 challenges). false = no plain-HTTP listener at all.
@@ -1074,6 +1123,15 @@ port_forward_lease_seconds = {port_forward_lease_seconds}
 # others: how often to ask again, in seconds.
 # Env override: PARACORD_REACHABILITY_RETRY_SECONDS
 reachability_retry_seconds = {reachability_retry_seconds}
+# When the router does not say what your public address is (no UPnP / NAT-PMP /
+# PCP answer), ask these STUN servers instead, so invite links can use your
+# public address rather than your home-network one. This sends one small UDP
+# message to the first server that answers (at most every 30 minutes), which
+# tells that company your network's public address, as any website you visit
+# would. [] = never ask: invite links then use your home-network address until
+# your router or public_url (under [server]) names one.
+# Env override: PARACORD_EXTERNAL_ADDRESS_STUN_SERVERS (comma-separated)
+external_address_stun_servers = {external_address_stun_servers}
 
 [tls]
 # HTTPS support — required for getUserMedia() on non-localhost origins.
@@ -1237,6 +1295,8 @@ timeout_seconds = {ai_timeout_seconds}
         auto_port_forward = config.network.auto_port_forward,
         port_forward_lease_seconds = config.network.port_forward_lease_seconds,
         reachability_retry_seconds = config.network.reachability_retry_seconds,
+        external_address_stun_servers =
+            toml_string_array(&config.network.external_address_stun_servers),
         tls_enabled = config.tls.enabled,
         tls_port = config.tls.port,
         tls_cert = config.tls.cert_path,
@@ -1586,6 +1646,14 @@ impl Config {
                 }
             }
         }
+        if let Ok(value) = std::env::var("PARACORD_EXTERNAL_ADDRESS_STUN_SERVERS") {
+            config.network.external_address_stun_servers = value
+                .split(',')
+                .map(str::trim)
+                .filter(|server| !server.is_empty())
+                .map(str::to_string)
+                .collect();
+        }
         if let Ok(value) = std::env::var("PARACORD_TLS_ENABLED") {
             if let Ok(parsed) = value.parse::<bool>() {
                 config.tls.enabled = parsed;
@@ -1931,6 +1999,7 @@ impl Config {
             }
         }
 
+        validate_stun_servers(&config.network.external_address_stun_servers)?;
         validate_secret_configuration(&config)?;
         Ok(config)
     }
@@ -2114,6 +2183,50 @@ mod tests {
         assert!(config.network.auto_port_forward);
         assert_eq!(config.network.port_forward_lease_seconds, 3600);
         assert_eq!(config.network.reachability_retry_seconds, 60);
+    }
+
+    /// The STUN list is written into new configs, an older config without the
+    /// key gets the defaults, `[]` turns it off, and a typo fails loudly.
+    #[test]
+    fn the_stun_server_list_round_trips_defaults_and_validates() {
+        let template = generate_config_template(&Config::default());
+        assert!(
+            template.contains(
+                "external_address_stun_servers = [\"stun.cloudflare.com:3478\", \"stun.l.google.com:19302\"]"
+            ),
+            "{template}"
+        );
+        let parsed: Config = toml::from_str(&template).expect("template must round-trip");
+        assert_eq!(parsed.network.external_address_stun_servers.len(), 2);
+
+        let line_start = template.find("external_address_stun_servers =").unwrap();
+        let line_end = line_start + template[line_start..].find('\n').unwrap() + 1;
+        let mut without_key = template.clone();
+        without_key.replace_range(line_start..line_end, "");
+        let parsed: Config = toml::from_str(&without_key).expect("template must parse");
+        assert_eq!(
+            parsed.network.external_address_stun_servers,
+            vec!["stun.cloudflare.com:3478", "stun.l.google.com:19302"]
+        );
+
+        let mut off = template.clone();
+        off.replace_range(line_start..line_end, "external_address_stun_servers = []\n");
+        let parsed: Config = toml::from_str(&off).expect("template must parse");
+        assert!(parsed.network.external_address_stun_servers.is_empty());
+        assert!(super::validate_stun_servers(&[]).is_ok());
+
+        for bad in [
+            "stun.example.net",
+            "stun.example.net:0",
+            ":3478",
+            "a b:3478",
+        ] {
+            assert!(
+                super::validate_stun_servers(&[bad.to_string()]).is_err(),
+                "{bad}"
+            );
+        }
+        assert!(super::validate_stun_servers(&["[2001:db8::1]:3478".to_string()]).is_ok());
     }
 
     /// An existing config keeps whatever it says, and one that never

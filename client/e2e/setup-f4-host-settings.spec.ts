@@ -122,6 +122,17 @@ test.describe('Paracord on this computer', () => {
     });
   }
 
+  test("the router didn't answer, a STUN server named the public address: say where friends will reach it", async ({ page }) => {
+    await openHostSettings(page, { observedIp: '198.51.100.4' }, 'no_answer');
+    await expect(page.getByTestId('host-reach')).toHaveText(
+      "Your router didn't answer. Once port 8443 is forwarded on your router, friends will reach you at 198.51.100.4; people on your home network can join now.",
+    );
+    await expect(page.getByTestId('host-reach-link-hint')).toHaveText(
+      "Invite links use your public address, 198.51.100.4. To give out a domain name instead, set public_url under [server] in the server's paracord.toml and restart it.",
+    );
+    await shoot(page, 'reach-no_answer-stun', false);
+  });
+
   test('shared address: What can I do?', async ({ page }) => {
     await openHostSettings(page, {}, 'shared_address');
     await expect(page.getByTestId('host-reach')).toContainText('shares its public address');

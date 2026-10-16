@@ -43,7 +43,7 @@ export async function copyEndlessInvite(input: { guildId: string; channelId: str
     (await findEndlessInvite(guildId, userId)) ??
     (await inviteApi.create(channelId, { max_age: 0, max_uses: 0 })).data.code;
   const share = await resolveShareAddress();
-  if (!share.url) throw new Error(reachNote(share.reach, share.asks_router));
+  if (!share.url) throw new Error(reachNote(share));
   const link = `${share.url}/invite/${code}`;
   await writeClipboardText(link);
   return link;

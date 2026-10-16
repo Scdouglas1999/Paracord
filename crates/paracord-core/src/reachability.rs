@@ -14,8 +14,11 @@
 //! sends `INSTANCE_STATUS_UPDATE` to admins whenever anything in
 //! [`InstanceStatusUpdate`] changes.
 //!
-//! The external address comes only from the router. No outside service is ever
-//! asked what this network's address is.
+//! The external address comes from the router first. Only while the router has
+//! not named a public address of its own, and only when the owner left
+//! `[network] external_address_stun_servers` on, does the server ask a STUN
+//! server what address its traffic arrives from ([`Reachability::observed_ip`]).
+//! That answer names an address; it never says the way in is open.
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use paracord_contracts::host::{
@@ -88,6 +91,40 @@ pub fn is_public(ip: IpAddr) -> bool {
     classify(ip) == AddressClass::Public
 }
 
+/// Where the public address in [`public_address`] came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PublicSource {
+    /// The router reported it.
+    Router,
+    /// This computer's own interface address is public (`direct`).
+    ThisComputer,
+    /// A STUN server saw this network's traffic come from it.
+    Stun,
+}
+
+/// The public address people outside would connect to, as best the server
+/// knows: the router's own report when it is public, else what a STUN server
+/// observed. `None` when neither is a public address.
+pub fn public_address(r: &Reachability) -> Option<(IpAddr, PublicSource)> {
+    let parse = |text: Option<&str>| text.and_then(|t| t.trim().parse::<IpAddr>().ok());
+    if let Some(ip) = parse(r.external_ip.as_deref()).filter(|ip| is_public(*ip)) {
+        let source = if r.state == ReachabilityState::Direct {
+            PublicSource::ThisComputer
+        } else {
+            PublicSource::Router
+        };
+        return Some((ip, source));
+    }
+    parse(r.observed_ip.as_deref())
+        .filter(|ip| is_public(*ip))
+        .map(|ip| (ip, PublicSource::Stun))
+}
+
+/// Whether the router (or this computer's own public address) opened the way.
+fn opened(state: ReachabilityState) -> bool {
+    matches!(state, ReachabilityState::Open | ReachabilityState::Direct)
+}
+
 /// Everything the gateway announces to admins.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HubState {
@@ -105,8 +142,8 @@ const CONFIRMATION_REFRESH: Duration = Duration::from_secs(60);
 pub struct ReachabilityHub {
     state: watch::Sender<HubState>,
     retry: Notify,
-    /// The last external address the router reported, kept across failures so
-    /// a change is noticed even if the router was unreachable in between.
+    /// The last public address ([`public_address`]), kept across failures so a
+    /// change is noticed even if nothing could be asked in between.
     addresses: Mutex<Addresses>,
 }
 
@@ -136,6 +173,7 @@ impl ReachabilityHub {
                 next_retry_at: None,
                 last_error: None,
                 confirmed_at: None,
+                observed_ip: None,
             },
             storage: None,
             backups: None,
@@ -161,17 +199,20 @@ impl ReachabilityHub {
         self.state.send_if_modified(|hub| {
             let before = hub.reachability.clone();
             change(&mut hub.reachability);
-            // A confirmation belongs to the address it was seen on: when the
-            // address changes, or nothing is reachable any more, it is stale.
-            let still_valid = hub.reachability.external_ip == before.external_ip
-                && matches!(
-                    hub.reachability.state,
-                    ReachabilityState::Open | ReachabilityState::Direct
-                );
+            let was = public_address(&before).map(|(ip, _)| ip);
+            let now = public_address(&hub.reachability).map(|(ip, _)| ip);
+            // A confirmation belongs to the address it was seen on and to the
+            // way in it came through: when the address changes, when the router
+            // stops (or starts) holding the door, or when nothing is asked any
+            // more, it is stale.
+            let still_valid = now.is_some()
+                && now == was
+                && opened(hub.reachability.state) == opened(before.state)
+                && hub.reachability.state != ReachabilityState::Off;
             if !still_valid {
                 hub.reachability.confirmed_at = None;
             }
-            if let Some(now_ip) = hub.reachability.external_ip.clone() {
+            if let Some(now_ip) = now.map(|ip| ip.to_string()) {
                 let mut addresses = self.addresses.lock().unwrap_or_else(|e| e.into_inner());
                 if addresses.last_known.as_deref() != Some(now_ip.as_str()) {
                     if addresses.last_known.is_some() {
@@ -234,7 +275,8 @@ impl ReachabilityHub {
     }
 
     /// A TLS connection was accepted from `peer`. When it comes from a public
-    /// address that is not this network's own, it proves the way in works.
+    /// address that is not this network's own, it proves the way in works —
+    /// also when the router never said it opened it (a port forwarded by hand).
     pub fn record_inbound_connection(&self, peer: IpAddr) {
         self.record_inbound_connection_at(peer, Utc::now());
     }
@@ -247,12 +289,15 @@ impl ReachabilityHub {
         {
             let hub = self.state.borrow();
             let r = &hub.reachability;
-            if !matches!(r.state, ReachabilityState::Open | ReachabilityState::Direct) {
+            if !confirmable(r) {
                 return;
             }
             // A connection from this network's own external address is a
             // loop through the router, not a friend.
-            if r.external_ip.as_deref() == Some(peer.to_string().as_str()) {
+            let peer_text = peer.to_string();
+            if r.external_ip.as_deref() == Some(peer_text.as_str())
+                || r.observed_ip.as_deref() == Some(peer_text.as_str())
+            {
                 return;
             }
             if let Some(last) = r
@@ -270,13 +315,20 @@ impl ReachabilityHub {
         let stamp = now.to_rfc3339_opts(SecondsFormat::Secs, true);
         self.state.send_if_modified(|hub| {
             let r = &mut hub.reachability;
-            if !matches!(r.state, ReachabilityState::Open | ReachabilityState::Direct) {
+            if !confirmable(r) {
                 return false;
             }
             r.confirmed_at = Some(stamp);
             true
         });
     }
+}
+
+/// An outside connection can confirm the way in only when there is a public
+/// address it came in on, and while someone is asking at all.
+fn confirmable(r: &Reachability) -> bool {
+    !matches!(r.state, ReachabilityState::Off | ReachabilityState::Asking)
+        && public_address(r).is_some()
 }
 
 /// The process-wide hub. The server learns its reachability once, at startup,
@@ -455,6 +507,81 @@ mod tests {
         });
         open(&hub, "203.0.113.10");
         assert_eq!(hub.previous_external_ip().as_deref(), Some("203.0.113.9"));
+    }
+
+    #[test]
+    fn the_public_address_is_the_routers_when_public_else_the_stun_answer() {
+        let hub = ReachabilityHub::new();
+        hub.update(|r| {
+            r.state = ReachabilityState::NoAnswer;
+            r.observed_ip = Some("198.51.100.4".into());
+        });
+        assert_eq!(
+            public_address(&hub.current()),
+            Some((ip("198.51.100.4"), PublicSource::Stun))
+        );
+        // A router that names a carrier-grade NAT address does not hide the
+        // public one STUN saw.
+        hub.update(|r| {
+            r.state = ReachabilityState::SharedAddress;
+            r.external_ip = Some("100.64.0.9".into());
+        });
+        assert_eq!(
+            public_address(&hub.current()),
+            Some((ip("198.51.100.4"), PublicSource::Stun))
+        );
+        // The router's own public answer wins over STUN.
+        hub.update(|r| {
+            r.state = ReachabilityState::Refused;
+            r.external_ip = Some("203.0.113.9".into());
+        });
+        assert_eq!(
+            public_address(&hub.current()),
+            Some((ip("203.0.113.9"), PublicSource::Router))
+        );
+        hub.update(|r| r.state = ReachabilityState::Direct);
+        assert_eq!(
+            public_address(&hub.current()).map(|(_, source)| source),
+            Some(PublicSource::ThisComputer)
+        );
+        // Nothing public anywhere: nothing to share.
+        hub.update(|r| {
+            r.state = ReachabilityState::NoAnswer;
+            r.external_ip = None;
+            r.observed_ip = Some("10.0.0.1".into());
+        });
+        assert_eq!(public_address(&hub.current()), None);
+    }
+
+    #[test]
+    fn a_stranger_confirms_a_port_forwarded_by_hand() {
+        let hub = ReachabilityHub::new();
+        let now = Utc::now();
+        // The router did not answer; STUN named the address.
+        hub.update(|r| {
+            r.state = ReachabilityState::NoAnswer;
+            r.observed_ip = Some("203.0.113.9".into());
+            r.port = 8443;
+        });
+        // A loop through the router from the network's own address is not a friend.
+        hub.record_inbound_connection_at(ip("203.0.113.9"), now);
+        assert!(hub.current().confirmed_at.is_none());
+        hub.record_inbound_connection_at(ip("198.51.100.7"), now);
+        assert!(hub.current().confirmed_at.is_some());
+        // The next unchanged retry keeps it; a new address does not.
+        hub.update(|r| r.next_retry_at = Some("later".into()));
+        assert!(hub.current().confirmed_at.is_some());
+        hub.update(|r| r.observed_ip = Some("203.0.113.10".into()));
+        assert!(hub.current().confirmed_at.is_none());
+        assert_eq!(hub.previous_external_ip().as_deref(), Some("203.0.113.9"));
+    }
+
+    #[test]
+    fn nothing_confirms_without_a_public_address() {
+        let hub = ReachabilityHub::new();
+        hub.update(|r| r.state = ReachabilityState::NoAnswer);
+        hub.record_inbound_connection_at(ip("198.51.100.7"), Utc::now());
+        assert!(hub.current().confirmed_at.is_none());
     }
 
     fn storage() -> StorageStatus {

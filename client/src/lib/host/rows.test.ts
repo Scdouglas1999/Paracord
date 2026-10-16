@@ -94,5 +94,13 @@ describe('host setup rows', () => {
     );
     expect(reachabilityCopy({ ...base, state: 'refused' }).tone).toBe('warn');
     expect(reachabilityCopy({ ...base, state: 'off' }).text).toBe("Paracord isn't asking your router to let friends in.");
+    // A refusing router that still named its address.
+    expect(reachabilityCopy({ ...base, state: 'refused' }).text).toBe(
+      "Your router didn't allow it. Once port 8443 is forwarded on your router, friends will reach you at 203.0.113.1; people on your home network can join now.",
+    );
+    // Nothing public known: home network only.
+    expect(reachabilityCopy({ ...base, state: 'refused', external_ip: '100.70.0.1' }).text).toBe(
+      "Your router didn't allow it, so for now only people on your home network can join.",
+    );
   });
 });

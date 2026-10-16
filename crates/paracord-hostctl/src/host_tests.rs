@@ -174,6 +174,7 @@ fn encrypted_status() -> HostStatus {
             next_retry_at: None,
             last_error: None,
             confirmed_at: None,
+            observed_ip: None,
         },
         backups: BackupStatus {
             enabled: true,
@@ -590,7 +591,8 @@ fn reach_warns_with_the_spec_copy_and_backup_failure_is_reported() {
     rig.host.claim(&owner()).unwrap();
     rig.host.write_escrow("k", OWNER_KEY).unwrap();
     let events = rig.events(8443);
-    assert!(events.contains(&"4 reach warn [refused] Your router didn't allow it, so for now only people on your home network can join.".to_string()));
+    // The fixture's router still named its public address while refusing.
+    assert!(events.contains(&"4 reach warn [refused] Your router didn't allow it. Once port 8443 is forwarded on your router, friends will reach you at 203.0.113.1; people on your home network can join now.".to_string()));
     assert_eq!(
         events.last().unwrap(),
         "5 backup fail [backup_failed] The first backup didn't finish (no space left on device)."
@@ -617,6 +619,24 @@ fn reach_copy_is_the_spec_table() {
             "This computer has its own public address (203.0.113.1). Friends can reach it if your firewall allows port 8443.".into()
         )
     );
+    reach.state = ReachabilityState::NoAnswer;
+    // The router named its address (or STUN did): say where friends will
+    // reach the server, and what has to change first.
+    assert_eq!(
+        reach_copy(&reach).1,
+        "Your router didn't answer. Once port 8443 is forwarded on your router, friends will reach you at 203.0.113.1; people on your home network can join now."
+    );
+    reach.external_ip = None;
+    reach.observed_ip = Some("198.51.100.4".into());
+    assert!(reach_copy(&reach)
+        .1
+        .contains("friends will reach you at 198.51.100.4;"));
+    reach.state = ReachabilityState::Refused;
+    assert!(reach_copy(&reach)
+        .1
+        .starts_with("Your router didn't allow it. Once port 8443 is forwarded"));
+    // A carrier-grade NAT address is never offered.
+    reach.observed_ip = Some("100.64.0.1".into());
     reach.state = ReachabilityState::NoAnswer;
     assert_eq!(
         reach_copy(&reach).1,

@@ -212,6 +212,34 @@ fn step_name(step: HostSetupStep) -> &'static str {
     }
 }
 
+/// The public address friends would use: the router's report when it is
+/// public, else the one a STUN server saw (`observed_ip`). Mirrors
+/// `paracord_core::reachability::public_address` for IPv4, which is all either
+/// source reports here.
+fn public_ip(reach: &Reachability) -> Option<String> {
+    let public = |text: &str| match text.trim().parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(ip)) => {
+            let [a, b, ..] = ip.octets();
+            !(ip.is_private()
+                || ip.is_loopback()
+                || ip.is_link_local()
+                || ip.is_unspecified()
+                || ip.is_multicast()
+                || ip.is_broadcast()
+                || a == 0
+                || a >= 240
+                || (a == 100 && (64..=127).contains(&b)))
+        }
+        _ => false,
+    };
+    reach
+        .external_ip
+        .as_deref()
+        .filter(|ip| public(ip))
+        .or(reach.observed_ip.as_deref().filter(|ip| public(ip)))
+        .map(str::to_string)
+}
+
 /// Row 4's line for a reachability answer (spec §5.4), and whether it is ok.
 pub fn reach_copy(reach: &Reachability) -> (HostProgressState, String) {
     let ip = reach
@@ -232,11 +260,23 @@ pub fn reach_copy(reach: &Reachability) -> (HostProgressState, String) {
         ),
         ReachabilityState::Refused => (
             HostProgressState::Warn,
-            "Your router didn't allow it, so for now only people on your home network can join.".into(),
+            match public_ip(reach) {
+                Some(ip) => format!(
+                    "Your router didn't allow it. Once port {} is forwarded on your router, friends will reach you at {ip}; people on your home network can join now.",
+                    reach.port
+                ),
+                None => "Your router didn't allow it, so for now only people on your home network can join.".into(),
+            },
         ),
         ReachabilityState::NoAnswer | ReachabilityState::Asking => (
             HostProgressState::Warn,
-            "Your router didn't answer, so for now only people on your home network can join.".into(),
+            match public_ip(reach) {
+                Some(ip) => format!(
+                    "Your router didn't answer. Once port {} is forwarded on your router, friends will reach you at {ip}; people on your home network can join now.",
+                    reach.port
+                ),
+                None => "Your router didn't answer, so for now only people on your home network can join.".into(),
+            },
         ),
         ReachabilityState::SharedAddress => (
             HostProgressState::Warn,

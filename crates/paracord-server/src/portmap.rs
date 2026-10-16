@@ -51,6 +51,10 @@ const MIN_LEASE: Duration = Duration::from_secs(120);
 /// asking for a week and being given an hour is normal and handled by renewal.
 const MAX_LEASE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
+/// How long to wait, after a refusal, for the router to say its outside
+/// address. Short: the refusal is the verdict, the address is extra.
+const REFUSED_ADDRESS_BUDGET: Duration = Duration::from_millis(1500);
+
 /// How the mapping shows up in a router's table.
 const UPNP_TCP_DESCRIPTION: &str = "Paracord (app)";
 const UPNP_UDP_DESCRIPTION: &str = "Paracord (voice & video)";
@@ -250,6 +254,10 @@ pub struct MapFailure {
     /// the NAT-PMP/PCP gateway that sent a result code). `None` when nothing
     /// answered, so the sheet only names an address it knows is the router's.
     pub gateway_ip: Option<IpAddr>,
+    /// The router's own outside address, when it refused the mapping but still
+    /// answered "what is your external address" (UPnP GetExternalIPAddress,
+    /// NAT-PMP opcode 0). A refusal does not make that answer less true.
+    pub external_ip: Option<IpAddr>,
 }
 
 impl MapFailure {
@@ -258,6 +266,7 @@ impl MapFailure {
             kind: FailureKind::Refused,
             reason: reason.into(),
             gateway_ip: None,
+            external_ip: None,
         }
     }
 
@@ -266,6 +275,7 @@ impl MapFailure {
             kind: FailureKind::NoAnswer,
             reason: reason.into(),
             gateway_ip: None,
+            external_ip: None,
         }
     }
 
@@ -273,6 +283,13 @@ impl MapFailure {
     #[must_use]
     pub fn via_gateway(mut self, gateway: IpAddr) -> Self {
         self.gateway_ip = Some(gateway);
+        self
+    }
+
+    /// Record the outside address the refusing router still reported.
+    #[must_use]
+    pub fn with_external_ip(mut self, external_ip: Option<IpAddr>) -> Self {
+        self.external_ip = external_ip;
         self
     }
 }
@@ -358,6 +375,7 @@ pub async fn establish(
     let mut reasons: Vec<String> = Vec::new();
     let mut refused = false;
     let mut gateway_ip: Option<IpAddr> = None;
+    let mut external_ip: Option<IpAddr> = None;
 
     for router in routers {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
@@ -383,6 +401,7 @@ pub async fn establish(
                 // The first router that answered names the address; a later
                 // method that answered and refused does not replace it.
                 gateway_ip = gateway_ip.or(failure.gateway_ip);
+                external_ip = external_ip.or(failure.external_ip);
                 reasons.push(format!("{}: {}", router.method(), failure.reason));
             }
             Err(_) => reasons.push(format!(
@@ -407,6 +426,7 @@ pub async fn establish(
             },
             reason,
             gateway_ip,
+            external_ip,
         }),
     }
 }
@@ -508,13 +528,24 @@ impl UpnpRouter {
 
         let mut granted = Some(lease);
         for (port, transport) in request.entries() {
-            if add_upnp_mapping(&gateway, local_ip, port, transport, lease_seconds)
-                .await
-                .map_err(|failure| failure.via_gateway(router_ip))?
-            {
+            match add_upnp_mapping(&gateway, local_ip, port, transport, lease_seconds).await {
                 // The router only keeps permanent entries: nothing expires, so
                 // there is no lease to renew against.
-                granted = None;
+                Ok(true) => granted = None,
+                Ok(false) => {}
+                Err(failure) => {
+                    // A router that says no to the mapping may still say what
+                    // its outside address is; keep that answer.
+                    let external_ip = if failure.kind == FailureKind::Refused {
+                        tokio::time::timeout(REFUSED_ADDRESS_BUDGET, gateway.get_external_ip())
+                            .await
+                            .ok()
+                            .and_then(Result::ok)
+                    } else {
+                        None
+                    };
+                    return Err(failure.via_gateway(router_ip).with_external_ip(external_ip));
+                }
             }
         }
 
@@ -809,10 +840,25 @@ impl Router for NatPmpRouter {
                     internal_port,
                     options,
                 )
-                .await
-                .map_err(|err| {
-                    tag_if_answered(natpmp_failure(&err, transport, port), gateway_ip)
-                })?;
+                .await;
+                let mapping = match mapping {
+                    Ok(mapping) => mapping,
+                    Err(err) => {
+                        let failure =
+                            tag_if_answered(natpmp_failure(&err, transport, port), gateway_ip);
+                        // A gateway that answered with a result code may still
+                        // say its outside address (RFC 6886 §3.2).
+                        let external_ip = if failure.kind == FailureKind::Refused {
+                            natpmp_external_address(gateway_ip)
+                                .await
+                                .ok()
+                                .map(IpAddr::V4)
+                        } else {
+                            None
+                        };
+                        return Err(failure.with_external_ip(external_ip));
+                    }
+                };
 
                 // A different outside port is not usable here: clients derive
                 // both the app URL and the media port from this one number, so
@@ -848,12 +894,7 @@ impl Router for NatPmpRouter {
             let external_ip = match (protocol, external_ip) {
                 ("pcp", Some(ip)) => ip,
                 _ => {
-                    let timeout = crab_nat::TimeoutConfig {
-                        initial_timeout: Duration::from_millis(400),
-                        max_retries: 2,
-                        max_retry_timeout: Some(Duration::from_secs(2)),
-                    };
-                    let ip = crab_nat::natpmp::external_address(gateway_ip.into(), Some(timeout))
+                    let ip = natpmp_external_address(gateway_ip)
                         .await
                         .map_err(|err| {
                             let reason = format!(
@@ -901,6 +942,18 @@ impl Router for NatPmpRouter {
             }
         })
     }
+}
+
+/// NAT-PMP opcode 0: the gateway's outside address.
+async fn natpmp_external_address(
+    gateway_ip: Ipv4Addr,
+) -> Result<Ipv4Addr, crab_nat::natpmp::Failure> {
+    let timeout = crab_nat::TimeoutConfig {
+        initial_timeout: Duration::from_millis(400),
+        max_retries: 2,
+        max_retry_timeout: Some(Duration::from_secs(2)),
+    };
+    crab_nat::natpmp::external_address(gateway_ip.into(), Some(timeout)).await
 }
 
 /// A gateway that never answered (or whose socket failed) is "no answer"; every

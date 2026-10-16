@@ -1,5 +1,6 @@
 use super::*;
-use paracord_core::share_address::{derive, ShareInputs, ShareReach};
+use crate::stun::{Observed, PublicAddressProbe};
+use paracord_core::share_address::{derive, ShareInputs, ShareNote, ShareReach, ShareSource};
 use std::sync::atomic::AtomicUsize;
 
 const REQUEST: PortRequest = PortRequest {
@@ -86,6 +87,7 @@ fn env(lan: Option<&str>) -> Environment {
     Environment {
         lan_ip: Box::new(move || lan),
         firewall: None,
+        public_address: None,
     }
 }
 
@@ -509,6 +511,7 @@ fn the_banner_outcome_follows_the_state() {
         next_retry_at: None,
         last_error: None,
         confirmed_at: None,
+        observed_ip: None,
     };
     assert!(outcome_for(&base).is_mapped());
     for state in [
@@ -552,4 +555,220 @@ fn netsh_output_is_judged_by_exit_status_and_port_only() {
     ));
     // 18443 is not 8443.
     assert!(!netsh_rule_covers_port(true, "LocalPort: 18443\n", 8443));
+}
+
+// ── When the router will not say: the STUN probe ───────────────────────────
+
+/// A STUN probe that never touches the network.
+struct FakeStun {
+    answer: Result<&'static str, &'static str>,
+    asked: AtomicUsize,
+    asked_from: Mutex<Option<IpAddr>>,
+}
+
+impl FakeStun {
+    fn answering(ip: &'static str) -> Arc<Self> {
+        Arc::new(Self {
+            answer: Ok(ip),
+            asked: AtomicUsize::new(0),
+            asked_from: Mutex::new(None),
+        })
+    }
+
+    fn failing() -> Arc<Self> {
+        Arc::new(Self {
+            answer: Err("no answer in time"),
+            asked: AtomicUsize::new(0),
+            asked_from: Mutex::new(None),
+        })
+    }
+}
+
+impl PublicAddressProbe for FakeStun {
+    fn discover(&self, local: Option<IpAddr>) -> BoxFuture<'_, Result<Observed, String>> {
+        Box::pin(async move {
+            self.asked.fetch_add(1, Ordering::SeqCst);
+            *self.asked_from.lock().unwrap() = local;
+            match self.answer {
+                Ok(ip) => Ok(Observed {
+                    ip: ip.parse().unwrap(),
+                    server: "stun.test:3478".into(),
+                }),
+                Err(reason) => Err(reason.to_string()),
+            }
+        })
+    }
+}
+
+fn env_with_stun(lan: Option<&str>, probe: &Arc<FakeStun>) -> Environment {
+    let mut e = env(lan);
+    e.public_address = Some(Arc::clone(probe) as Arc<dyn PublicAddressProbe>);
+    e
+}
+
+fn lan_inputs() -> ShareInputs {
+    ShareInputs {
+        public_url: None,
+        local_url: "https://192.168.1.20:8443".into(),
+        scheme: "https".into(),
+        port: 8443,
+    }
+}
+
+/// The owner's network: nothing answers UPnP or NAT-PMP/PCP. STUN names the
+/// address, from this computer's own interface, and the invite uses it,
+/// unconfirmed, with the home link alongside.
+#[tokio::test]
+async fn a_silent_router_with_stun_shares_the_public_address_unconfirmed() {
+    let probe = FakeStun::answering("198.51.100.4");
+    let hub = Arc::new(ReachabilityHub::new());
+    let handle = spawn(
+        Arc::clone(&hub),
+        settings(10_000),
+        env_with_stun(Some("192.168.1.20"), &probe),
+        vec![Scripted::silent() as Arc<dyn Router>],
+    );
+    let r = eventually(&hub, "observed address", |r| r.observed_ip.is_some()).await;
+    assert_eq!(r.state, ReachabilityState::NoAnswer);
+    assert_eq!(r.external_ip, None);
+    assert_eq!(r.observed_ip.as_deref(), Some("198.51.100.4"));
+    assert_eq!(
+        *probe.asked_from.lock().unwrap(),
+        Some("192.168.1.20".parse().unwrap())
+    );
+    let share = derive(&lan_inputs(), &r, None);
+    assert_eq!(share.url.as_deref(), Some("https://198.51.100.4:8443"));
+    assert_eq!(share.reach, ShareReach::InternetUnconfirmed);
+    assert_eq!(share.note, Some(ShareNote::PortNotForwarded));
+    assert_eq!(share.source, Some(ShareSource::Stun));
+    assert_eq!(
+        share.local_url.as_deref(),
+        Some("https://192.168.1.20:8443")
+    );
+    handle.release().await;
+}
+
+/// A router that refuses the mapping but names its address: that answer is
+/// kept, it is the link, and no STUN server is asked.
+#[tokio::test]
+async fn a_refusal_keeps_the_address_the_router_named_and_skips_stun() {
+    let probe = FakeStun::answering("198.51.100.4");
+    let router = Scripted::new(vec![Err(MapFailure::refused(
+        "the router refused TCP 8443",
+    )
+    .via_gateway("192.168.1.1".parse().unwrap())
+    .with_external_ip(Some("203.0.113.9".parse().unwrap())))]);
+    let hub = Arc::new(ReachabilityHub::new());
+    let handle = spawn(
+        Arc::clone(&hub),
+        settings(10_000),
+        env_with_stun(Some("192.168.1.20"), &probe),
+        vec![router as Arc<dyn Router>],
+    );
+    handle.first_attempt().await;
+    let r = hub.current();
+    assert_eq!(r.state, ReachabilityState::Refused);
+    assert_eq!(r.external_ip.as_deref(), Some("203.0.113.9"));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(probe.asked.load(Ordering::SeqCst), 0);
+    assert_eq!(hub.current().observed_ip, None);
+    let share = derive(&lan_inputs(), &hub.current(), None);
+    assert_eq!(share.url.as_deref(), Some("https://203.0.113.9:8443"));
+    assert_eq!(share.reach, ShareReach::InternetUnconfirmed);
+    assert_eq!(share.source, Some(ShareSource::Router));
+    handle.release().await;
+}
+
+/// The router's own address is carrier-grade NAT: STUN is asked for the
+/// public one, and the invite says the provider is in the way.
+#[tokio::test]
+async fn a_carrier_nat_router_asks_stun_and_names_the_problem() {
+    let probe = FakeStun::answering("198.51.100.4");
+    let hub = Arc::new(ReachabilityHub::new());
+    let handle = spawn(
+        Arc::clone(&hub),
+        settings(10_000),
+        env_with_stun(Some("192.168.1.20"), &probe),
+        vec![Scripted::new(vec![mapped("100.72.0.5")]) as Arc<dyn Router>],
+    );
+    let r = eventually(&hub, "observed address", |r| r.observed_ip.is_some()).await;
+    assert_eq!(r.state, ReachabilityState::SharedAddress);
+    let share = derive(&lan_inputs(), &r, None);
+    assert_eq!(share.url.as_deref(), Some("https://198.51.100.4:8443"));
+    assert_eq!(share.note, Some(ShareNote::CarrierNat));
+    handle.release().await;
+}
+
+/// An open router never needs STUN.
+#[tokio::test]
+async fn an_open_router_never_asks_stun() {
+    let probe = FakeStun::answering("198.51.100.4");
+    let hub = Arc::new(ReachabilityHub::new());
+    let handle = spawn(
+        Arc::clone(&hub),
+        settings(10_000),
+        env_with_stun(Some("192.168.1.20"), &probe),
+        vec![Scripted::new(vec![mapped("203.0.113.9")]) as Arc<dyn Router>],
+    );
+    handle.first_attempt().await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(hub.current().state, ReachabilityState::Open);
+    assert_eq!(probe.asked.load(Ordering::SeqCst), 0);
+    handle.release().await;
+}
+
+/// The timer's one-minute retries do not ask STUN again (once per refresh);
+/// "Try again" does.
+#[tokio::test]
+async fn stun_is_asked_once_per_refresh_and_again_on_try_again() {
+    let probe = FakeStun::answering("198.51.100.4");
+    let router = Scripted::new(vec![Err(MapFailure::no_answer("quiet"))]);
+    let hub = Arc::new(ReachabilityHub::new());
+    let handle = spawn(
+        Arc::clone(&hub),
+        settings(30),
+        env_with_stun(Some("192.168.1.20"), &probe),
+        vec![Arc::clone(&router) as Arc<dyn Router>],
+    );
+    eventually(&hub, "observed address", |r| r.observed_ip.is_some()).await;
+    let before = router.maps.load(Ordering::SeqCst);
+    while router.maps.load(Ordering::SeqCst) < before + 3 {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(probe.asked.load(Ordering::SeqCst), 1);
+    hub.request_retry();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while probe.asked.load(Ordering::SeqCst) < 2 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "Try again did not ask"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    handle.release().await;
+}
+
+/// A failed STUN attempt names nothing: the invite stays on the home network.
+#[tokio::test]
+async fn a_failed_stun_attempt_leaves_the_local_address() {
+    let probe = FakeStun::failing();
+    let hub = Arc::new(ReachabilityHub::new());
+    let handle = spawn(
+        Arc::clone(&hub),
+        settings(10_000),
+        env_with_stun(Some("192.168.1.20"), &probe),
+        vec![Scripted::silent() as Arc<dyn Router>],
+    );
+    handle.first_attempt().await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while probe.asked.load(Ordering::SeqCst) == 0 {
+        assert!(tokio::time::Instant::now() < deadline, "STUN never asked");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let r = hub.current();
+    assert_eq!(r.observed_ip, None);
+    let share = derive(&lan_inputs(), &r, None);
+    assert_eq!(share.url.as_deref(), Some("https://192.168.1.20:8443"));
+    assert_eq!(share.reach, ShareReach::LocalNetwork);
+    handle.release().await;
 }

@@ -22,6 +22,7 @@ mod logging;
 mod portmap;
 mod reachability;
 mod restore;
+mod stun;
 mod tls;
 mod web_ui;
 
@@ -412,6 +413,10 @@ async fn main() -> Result<()> {
                     Box::new(move || reachability::bind_lan_ip(&bind_address))
                 },
                 firewall: reachability::platform_firewall(config.host.enabled),
+                public_address: stun::StunProbe::new(&config.network.external_address_stun_servers)
+                    .map(|probe| {
+                        std::sync::Arc::new(probe) as std::sync::Arc<dyn stun::PublicAddressProbe>
+                    }),
             },
             portmap::default_routers(),
         )),

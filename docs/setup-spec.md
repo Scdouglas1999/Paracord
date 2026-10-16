@@ -1050,16 +1050,25 @@ out. A mapped router reporting a private address is treated as reach
 
 Plus fields: `method` (`upnp|nat-pmp|pcp`), `external_ip?`, `gateway_ip?`,
 `lan_ip?`, `port`, `lease_expires_at?`, `next_retry_at?`, `last_error?`,
-`confirmed_at?`.
+`confirmed_at?`, `observed_ip?`.
 
-- The external IP comes **only from the router**: UPnP `GetExternalIPAddress`,
+- `external_ip` comes **only from the router**: UPnP `GetExternalIPAddress`,
   PCP's response, and for NAT-PMP an explicit external-address request
-  (opcode 0, RFC 6886 §3.2; implemented in `portmap.rs` if `crab_nat` 0.8 does
-  not expose it). `detect_external_ip` and every ipify call are deleted; the TLS
-  SAN list (`tls.rs` 425-443) uses the router-reported address when known.
+  (opcode 0, RFC 6886 §3.2). A router that refuses the mapping is still asked
+  for its address, and that answer is kept with `refused`. `detect_external_ip`
+  and every ipify call are deleted; the TLS SAN list (`tls.rs` 425-443) uses the
+  router-reported address when known.
+- `observed_ip`: only while the router has not named a public address, and only
+  when `[network] external_address_stun_servers` is not empty (default:
+  `stun.cloudflare.com:3478`, `stun.l.google.com:19302`), the server sends one
+  STUN Binding Request (RFC 8489, IPv4, from the bind interface) and records
+  the XOR-MAPPED-ADDRESS. At most once per 30 minutes, and again on "Try
+  again". It names an address; it never changes the state. `[]` turns it off.
 - `confirmed_at` is set when the server accepts a TLS connection whose peer
-  address is a public IP that is not this network's own external address. It
-  is the only thing that upgrades copy to "A friend connected from outside".
+  address is a public IP that is not this network's own external (or observed)
+  address, while a public address is known. It is the only thing that upgrades
+  copy to "A friend connected from outside", and it also confirms a port the
+  owner forwarded by hand while the router stays silent.
 
 ### 5.3 Transitions
 
@@ -1098,9 +1107,20 @@ anything but router answers and observed connections.
 
 ### 5.6 Share address
 
-`share_address_for` becomes a function of `Reachability`:
-`open/direct → https://{external_ip}:{port}`, else `https://{lan_ip}:{port}`,
-operator `public_url` still wins. Invite links embed this address. When the
+`share_address_for` becomes a function of `Reachability`
+(`paracord_core::share_address::derive`); operator `public_url` still wins:
+
+- a public address known (`external_ip` when public, else `observed_ip`) →
+  `https://{it}:{port}`. `reach` is `internet` for `open`/`direct` or once
+  `confirmed_at` is set, else `internet_unconfirmed` with a `note`:
+  `port_not_forwarded`, `firewall_blocked`, `carrier_nat` (the router's own
+  address is in 100.64.0.0/10) or `outer_router` (the router's own address is
+  private: another router in front). `local_url` carries the LAN address, shown
+  as the "On this network" link;
+- no public address known → `https://{lan_ip}:{port}`, `local_network` (with
+  `carrier_nat`/`outer_router` when the router named such an address).
+
+Invite links embed this address. When the
 ISP changes the public IP, links made earlier stop working; the Invite screen
 and sheet always show the current link and, after a change, the line "Your
 public address changed. Links you shared before won't work; share this one."

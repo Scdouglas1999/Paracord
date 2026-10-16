@@ -36,7 +36,9 @@ pub struct Reachability {
     pub state: ReachabilityState,
     /// `"upnp"`, `"nat-pmp"` or `"pcp"`.
     pub method: Option<String>,
-    /// Only ever what the router reported.
+    /// What the router reported as its own outside address (also when it
+    /// refused the mapping but still named its address), or for `direct` this
+    /// computer's own public address. Never learned from anywhere else.
     pub external_ip: Option<String>,
     pub gateway_ip: Option<String>,
     pub lan_ip: Option<String>,
@@ -46,6 +48,13 @@ pub struct Reachability {
     pub last_error: Option<String>,
     /// When a connection from outside this network was observed.
     pub confirmed_at: Option<String>,
+    /// The public address a STUN server (`[network]
+    /// external_address_stun_servers`) saw this network's traffic come from.
+    /// Asked only while the router has not reported a public address of its
+    /// own, and never taken as proof that the way in is open. Absent when
+    /// discovery is off, failed, or was not needed (and on older servers).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_ip: Option<String>,
 }
 
 /// Where the at-rest storage key lives (`[at_rest] key_source`, spec §4.2).

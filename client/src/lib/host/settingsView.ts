@@ -13,7 +13,7 @@ import { formatDistance } from 'date-fns';
 
 import type { BackupStatus, HostStatus, Reachability, StorageStatus } from '../../api/generated/HostStatus';
 import { storageCopy } from '../../pages/firstRun/rows';
-import { HOST_ROW_COPY, reachabilityCopy } from './rows';
+import { HOST_ROW_COPY, publicAddress, reachabilityCopy } from './rows';
 import type { HostInfo } from './types';
 
 export type Tone = 'ok' | 'warn' | 'fail' | 'plain';
@@ -125,10 +125,27 @@ export interface ReachView {
   sheet: 'refused' | 'no_answer' | null;
   /** A quiet "Check the router again" where no chip already asks again. */
   recheck: boolean;
+  /** Which address invite links use, and how to give out another one (`public_url`). */
+  linkHint?: string | null;
+}
+
+/**
+ * The address invite links carry, and the one override there is: a domain name
+ * (or any address) set as `public_url` in the server's config file.
+ */
+export function inviteAddressHint(reach: Reachability): string | null {
+  if (reach.state === 'asking' || reach.state === 'off') return null;
+  const ip = publicAddress(reach);
+  const uses = ip ? `your public address, ${ip}` : 'your address on the home network';
+  return `Invite links use ${uses}. To give out a domain name instead, set public_url under [server] in the server's paracord.toml and restart it.`;
 }
 
 /** `now` and `confirmed_at` are compared for "… {relative time}." */
 export function reachView(reach: Reachability, now: number): ReachView {
+  return { ...reachViewWithoutHint(reach, now), linkHint: inviteAddressHint(reach) };
+}
+
+function reachViewWithoutHint(reach: Reachability, now: number): ReachView {
   if (reach.state === 'asking') {
     return { tone: 'plain', text: HOST_ROW_COPY[4].pending, note: null, chips: [], sheet: null, recheck: false };
   }
@@ -143,7 +160,18 @@ export function reachView(reach: Reachability, now: number): ReachView {
       return { tone, text, note, chips: [], sheet: null, recheck: true };
     }
     case 'refused':
-    case 'no_answer':
+    case 'no_answer': {
+      const confirmed = reach.confirmed_at ? Date.parse(reach.confirmed_at) : Number.NaN;
+      if (tone === 'ok' && Number.isFinite(confirmed)) {
+        return {
+          tone,
+          text,
+          note: `A friend connected from outside ${formatDistance(confirmed, now, { addSuffix: true })}.`,
+          chips: [],
+          sheet: null,
+          recheck: true,
+        };
+      }
       return {
         tone,
         text,
@@ -152,6 +180,7 @@ export function reachView(reach: Reachability, now: number): ReachView {
         sheet: reach.state,
         recheck: false,
       };
+    }
     case 'shared_address':
       return { tone, text, note: 'Paracord checks again every minute.', chips: ['what_can_i_do'], sheet: null, recheck: true };
     case 'firewall_blocked':

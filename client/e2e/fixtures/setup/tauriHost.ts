@@ -62,6 +62,8 @@ export interface HostingState {
   backupError: string | null;
   /** `Reachability.confirmed_at`. */
   confirmedAt: string | null;
+  /** `Reachability.observed_ip`: what a STUN server saw while the router stayed silent. */
+  observedIp?: string | null;
   /** `host_start` rejects with this (and the service stays stopped). */
   startFails: string | null;
   /** `host_remove` rejects with this. */
@@ -208,6 +210,7 @@ export class TauriHost {
         next_retry_at: null,
         last_error: null,
         confirmed_at: h?.confirmedAt ?? null,
+        ...(h?.observedIp ? { observed_ip: h.observedIp } : {}),
       },
       backups: { enabled: true, interval_seconds: 86400, keep: 14, last_backup_at: h?.lastBackupAt ?? null, last_error: h?.backupError ?? null },
       instance_id: RESTORE_VECTOR.instanceId,

@@ -409,6 +409,11 @@ export function HostSettingsSection({ onCloseSettings }: { onCloseSettings?: () 
                 {live.reach.text}
               </Line>
               {live.reach.note && <p className="ix-host-sub">{live.reach.note}</p>}
+              {live.reach.linkHint && (
+                <p className="ix-host-sub" data-testid="host-reach-link-hint">
+                  {live.reach.linkHint}
+                </p>
+              )}
               {(live.reach.chips.length > 0 || live.reach.recheck) && (
                 <div className="ix-host-chips">
                   {live.reach.chips.map(chip)}
