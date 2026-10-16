@@ -4392,11 +4392,11 @@
           "type": "object"
         },
         "link_previews": {
-          "description": "Link previews on for this person (spec §8.3). Optional in the\ncontract: servers before 3.4 do not send it, and the client reads its\nabsence as \"this server has no switch\".",
+          "description": "Link previews on for this person (spec §8.3). Optional in the\ncontract: servers before 4.0 do not send it, and the client reads its\nabsence as \"this server has no switch\".",
           "type": "boolean"
         },
         "link_previews_available": {
-          "description": "The server fetches previews at all (`[link_previews] enabled`). When\nfalse the switch is disabled with \"Turned off on this server.\" Absent\nfrom servers before 3.4.",
+          "description": "The server fetches previews at all (`[link_previews] enabled`). When\nfalse the switch is disabled with \"Turned off on this server.\" Absent\nfrom servers before 4.0.",
           "type": "boolean"
         },
         "locale": {

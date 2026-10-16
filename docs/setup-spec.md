@@ -1122,7 +1122,7 @@ anything but router answers and observed connections.
   Invite screen and dialog say Paracord hasn't found the public address yet.
 - a home-network (LAN) address is never an invite link: it reaches nobody an
   invite is for (owner decision, 2026-10-16). `local_network` is only what
-  servers before 3.4 answer, and clients treat it as "no public address".
+  servers before 4.0 answer, and clients treat it as "no public address".
 
 Invite links embed this address. When the
 ISP changes the public IP, links made earlier stop working; the Invite screen

@@ -15,7 +15,7 @@ import type { RestClient } from './restClient';
  * address, but nothing has shown people outside get through yet (the router
  * refused or did not answer); `note` says what is in the way. `unknown` with
  * no `url`: no public address is known yet. `local_network` only comes from
- * servers before 3.4, and its home-network `url` is never used as a link.
+ * servers before 4.0, and its home-network `url` is never used as a link.
  */
 export type ShareReach = 'internet' | 'internet_unconfirmed' | 'local_network' | 'this_computer' | 'unknown';
 
