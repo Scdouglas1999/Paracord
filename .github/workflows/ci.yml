@@ -311,16 +311,27 @@ jobs:
         env:
           PARACORD_HOSTCTL_LIVE: "1"
         run: cargo test --locked -p paracord-hostctl --test live_service -- --nocapture --test-threads=1
-      # The real paracord-host through setup rows 1 and 2 needs the login
-      # keychain unlocked. GitHub's macOS image keeps it open for the runner
-      # user, but that is not a promise, and the first run is how it is learned:
-      # this step is allowed to fail visibly (the lifecycle step above is not).
+      # The real paracord-host through setup rows 1 and 2 needs an unlocked
+      # keychain. The runner's login keychain is locked with nobody signed in
+      # to unlock it, and the Security framework then waits for a person
+      # forever (the first run hung for over an hour). A signed-in Mac has its
+      # login keychain unlocked; this makes the same, and the step has a time
+      # limit. It is still allowed to fail visibly (the lifecycle step above is
+      # not).
       - name: Placeholder web client for the embedded UI
         run: mkdir -p client/dist && echo '<!doctype html><title>placeholder</title>' > client/dist/index.html
       - name: Build paracord-host
         run: cargo build --locked --bin paracord-host
+      - name: An unlocked keychain, as a signed-in Mac has
+        run: |
+          security create-keychain -p ci paracord-ci.keychain
+          security set-keychain-settings paracord-ci.keychain
+          security unlock-keychain -p ci paracord-ci.keychain
+          security list-keychains -d user -s paracord-ci.keychain $(security list-keychains -d user | tr -d '"')
+          security default-keychain -d user -s paracord-ci.keychain
       - name: Set up the host with the real binary
         continue-on-error: true
+        timeout-minutes: 15
         env:
           PARACORD_HOSTCTL_LIVE: "1"
           PARACORD_HOSTCTL_LIVE_HOST_BINARY: ${{ github.workspace }}/target/debug/paracord-host

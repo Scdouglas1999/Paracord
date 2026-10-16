@@ -526,10 +526,16 @@ mod tests {
     }
 
     /// Against the WebKitGTK this machine has: the feature exists, starts on
-    /// (the GTK port's default) and is off after the change. No display is
-    /// needed for a `WebKitSettings`.
+    /// (the GTK port's default) and is off after the change. WebKitGTK 2.52
+    /// makes a `WebKitSettings` without a display, but older releases (CI's
+    /// Ubuntu) build a GtkStyleContext for it and abort the whole test binary
+    /// when there is none, so this runs only where a display exists.
     #[test]
     fn the_system_webkit_turns_near_60_off() {
+        if std::env::var_os("DISPLAY").is_none() && std::env::var_os("WAYLAND_DISPLAY").is_none() {
+            eprintln!("skipped: no display, and an older WebKitGTK aborts without one");
+            return;
+        }
         let settings = unsafe { webkit2gtk::ffi::webkit_settings_new() };
         assert!(!settings.is_null());
         let line = {
