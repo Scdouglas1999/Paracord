@@ -19,7 +19,7 @@ import { writeClipboardText } from '../../lib/clipboard';
 import { toast } from '../../stores/toastStore';
 import { cn } from '../../lib/utils';
 import { ROUTER_SETTING_LABEL } from '../../lib/instanceAccess';
-import { onThisNetworkUrl, shareNoteText } from '../../lib/shareAddress';
+import { NO_PUBLIC_ADDRESS, shareNoteText } from '../../lib/shareAddress';
 
 interface InviteModalProps {
   guildName: string;
@@ -131,36 +131,24 @@ function isLoopbackOrigin(origin: string): boolean {
 /**
  * What an invite should point at, and how far it will carry.
  *
- * The address somebody is using works for other people too — unless it is
- * `localhost`, which is exactly the owner who set the server up on the machine
- * it runs on, and whose links used to send every friend to the friend's own
- * computer. Then, and only then, the server is asked what it is reachable as.
+ * An invite is for people somewhere else, so the link is always a public
+ * address: the one this person already uses when it is public (a domain or a
+ * public IP), else the one the server says it is reachable as. A home-network
+ * or loopback address reaches nobody an invite is for, so it is never the
+ * link; with no public address known there is no link, and the note says why.
  */
 export async function resolveShareAddress(): Promise<ShareAddress> {
   const own = ownServerBaseUrl();
-  const loopback = isLoopbackOrigin(own);
-  // An address on the home network is no use to a friend elsewhere either, so
-  // ask the server whether it has a better one: its public address, which it
-  // offers even before anything has shown people outside get through
-  // (`internet_unconfirmed`, with the reason in `note`).
-  const lan = !loopback && isPrivateNetworkOrigin(own);
-  if (!loopback && !lan) return { url: own, reach: 'unknown' };
+  if (!isLoopbackOrigin(own) && !isPrivateNetworkOrigin(own)) return { url: own, reach: 'unknown' };
   try {
     const { data } = await inviteApi.shareAddress();
-    if (data?.url && !isLoopbackOrigin(data.url)) {
-      const outside = data.reach === 'internet' || data.reach === 'internet_unconfirmed';
-      if (lan && !outside) {
-        return { url: own, reach: 'local_network', asks_router: data.asks_router, note: data.note, port: data.port };
-      }
-      // Someone at home keeps the address they already use as the home link.
-      return { ...data, local_url: data.local_url ?? (lan ? own : null) };
-    }
-    if (lan) return { url: own, reach: 'local_network', asks_router: data?.asks_router, note: data?.note, port: data?.port };
+    if (data?.url && !isLoopbackOrigin(data.url) && !isPrivateNetworkOrigin(data.url)) return data;
+    if (data?.reach === 'this_computer') return { url: null, reach: 'this_computer' };
+    return { url: null, reach: 'unknown', asks_router: data?.asks_router, note: data?.note, port: data?.port };
   } catch {
-    // An older server has no such endpoint. The note below says what that means.
-    if (lan) return { url: own, reach: 'local_network' };
+    // An older server has no such endpoint, so it cannot say what its public address is.
+    return { url: null, reach: 'unknown' };
   }
-  return { url: null, reach: 'this_computer' };
 }
 
 /**
@@ -176,18 +164,17 @@ export function reachNote(share: Pick<ShareAddress, 'reach' | 'asks_router' | 'n
         shareNoteText(share) ??
         'People outside your network may not reach this until the server’s port is forwarded on the router.'
       );
-    case 'local_network': {
-      const blocked = share.note === 'carrier_nat' || share.note === 'outer_router' ? shareNoteText(share) : null;
-      if (blocked) return `Right now this only works for people on the same network (the same Wi-Fi) as the server. ${blocked}`;
-      if (asksRouter === false) {
-        return `Right now this only works for people on the same network (the same Wi-Fi) as the server. For friends elsewhere, the owner can turn on “${ROUTER_SETTING_LABEL}” in Admin → Settings and restart the server.`;
-      }
-      return 'Right now this only works for people on the same network (the same Wi-Fi) as the server. For friends elsewhere, the router needs a port opened: see “Friends outside your network” in the Paracord docs.';
-    }
     case 'this_computer':
       return 'This server can only be reached from this computer right now, so nobody else can use an invite yet. It needs to be started so that other computers can reach it.';
-    default:
-      return 'Send this to a friend. It opens in any browser, and the Paracord app accepts it too.';
+    default: {
+      if (share.url) return 'Send this to a friend. It opens in any browser, and the Paracord app accepts it too.';
+      const blocked = shareNoteText(share);
+      const setting =
+        asksRouter === false
+          ? ` The owner can also turn on “${ROUTER_SETTING_LABEL}” in Admin → Settings, or set the server's public address.`
+          : '';
+      return `${NO_PUBLIC_ADDRESS}${blocked ? ` ${blocked}` : ''}${setting}`;
+    }
   }
 }
 
@@ -200,8 +187,6 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
   const [portableLink, setPortableLink] = useState('');
   const [inviteLink, setInviteLink] = useState('');
   const [share, setShare] = useState<ShareAddress>({ url: null, reach: 'unknown' });
-  const [localLink, setLocalLink] = useState('');
-  const [copiedLocal, setCopiedLocal] = useState(false);
   const [loading, setLoading] = useState(false);
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [copyError, setCopyError] = useState<string | null>(null);
@@ -225,11 +210,9 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
       });
       const code = data.code;
       const resolved = await resolveShareAddress();
-      const local = onThisNetworkUrl(resolved);
       setInviteCode(code);
       setShare(resolved);
       setInviteLink(resolved.url ? `${resolved.url}/invite/${code}` : '');
-      setLocalLink(local ? `${local}/invite/${code}` : '');
       setPortableLink(resolved.url ? toPortableUri(resolved.url, code) : '');
       setOptionsDirty(false);
       // Best-effort cleanup of the invite this one replaces. The new invite is
@@ -248,7 +231,6 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
         setInviteCode('');
         setPortableLink('');
         setInviteLink('');
-        setLocalLink('');
       }
       setInviteError(`Failed to generate invite: ${extractApiError(err)}`);
     } finally {
@@ -276,18 +258,6 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
       setTimeout(() => setCopiedPortable(false), 2000);
     } catch (err) {
       setCopyError(`Failed to copy the invite link: ${extractApiError(err)}`);
-    }
-  };
-
-  /** The same invite on the home-network address, for people in the same house. */
-  const handleCopyLocal = async () => {
-    try {
-      setCopyError(null);
-      await writeClipboardText(localLink);
-      setCopiedLocal(true);
-      setTimeout(() => setCopiedLocal(false), 2000);
-    } catch (err) {
-      setCopyError(`Failed to copy the link for this network: ${extractApiError(err)}`);
     }
   };
 
@@ -379,33 +349,6 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
               >
                 Friend already has the Paracord app? Copy a link that opens it directly
               </button>
-            )}
-            {localLink && (
-              <div className="mt-3" data-testid="invite-local-link">
-                <FieldLabel>On this network</FieldLabel>
-                <InviteReadout dimmed={optionsDirty}>
-                  <input
-                    type="text"
-                    value={loading ? 'Generating…' : localLink}
-                    readOnly
-                    aria-label="Link on this network"
-                    title={localLink}
-                    className="min-w-0 flex-1 bg-transparent text-[13px] text-[var(--ix-ink-2)] outline-none"
-                  />
-                  <Button
-                    variant="glass"
-                    size="sm"
-                    onClick={handleCopyLocal}
-                    disabled={loading || optionsDirty}
-                    aria-label={copiedLocal ? 'Link for this network copied' : 'Copy the link for this network'}
-                  >
-                    <CopyLabel done={copiedLocal} idle="Copy" copied="Copied" size={13} />
-                  </Button>
-                </InviteReadout>
-                <p className="mt-1.5 text-[12.5px] leading-[1.45] text-[var(--ix-ink-3)]">
-                  Works for people on the same Wi-Fi or network as the server, whatever the router does.
-                </p>
-              </div>
             )}
           </div>
 

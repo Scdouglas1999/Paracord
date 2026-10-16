@@ -41,34 +41,29 @@ export function shareNoteText(share: Pick<ShareAddress, 'note' | 'port' | 'url' 
   }
 }
 
-/** The "On this network" origin, when the link itself is an outside address. */
-export function onThisNetworkUrl(share: Pick<ShareAddress, 'url' | 'local_url'>): string | null {
-  const local = share.local_url?.replace(/\/+$/, '') || null;
-  return local && local !== share.url ? local : null;
-}
+/** Said wherever a link would be when no public address is known yet. */
+export const NO_PUBLIC_ADDRESS =
+  "Paracord hasn't found this network's public address yet, so there's no link to share. It keeps checking.";
 
 /** First-run Invite screen fields (§1.13) from a share address. */
 export interface HostInviteShare {
-  /** The origin the invite link is built on, or null when nobody else can reach the server. */
+  /** The public origin the invite link is built on, or null when none is known. */
   base: string | null;
-  /** The home-network origin, shown as a second link. */
-  localBase: string | null;
-  /** The link only reaches the home network. */
-  lan: boolean;
+  /** No public address is known yet, so there is no link. */
+  noPublicAddress: boolean;
   /** Only this computer can reach the server. */
   onlyHere: boolean;
   addressChanged: boolean;
-  /** What may stop people outside, when the link is the outside address. */
+  /** What may stop people outside from reaching the public address. */
   note: string | null;
 }
 
 export function hostInviteShare(share: ShareAddress): HostInviteShare {
   return {
     base: share.url,
-    localBase: onThisNetworkUrl(share),
-    lan: share.reach === 'local_network',
-    onlyHere: !share.url || share.reach === 'this_computer',
+    noPublicAddress: !share.url && share.reach !== 'this_computer',
+    onlyHere: share.reach === 'this_computer',
     addressChanged: Boolean(share.previous_url),
-    note: share.reach === 'internet_unconfirmed' || share.reach === 'local_network' ? shareNoteText(share) : null,
+    note: share.reach === 'internet' ? null : shareNoteText(share),
   };
 }

@@ -112,23 +112,25 @@ describe('InviteModal', () => {
     expect(screen.getByText(/opens in any browser/)).toBeInTheDocument();
   });
 
-  it('says so plainly when only people on the same network can use the link', async () => {
+  it('never offers a home-network address as the link', async () => {
+    // An older server answers with its home-network address: that reaches
+    // nobody an invite is for, so there is no link, and the note says why.
     vi.mocked(inviteApi.shareAddress).mockResolvedValue({
       data: { url: 'https://192.168.1.50:8443', reach: 'local_network' },
     } as never);
 
     render(<InviteModal guildName="Launch Guild" channelId="channel-1" onClose={vi.fn()} />);
 
-    expect(await screen.findByDisplayValue('https://192.168.1.50:8443/invite/abc123')).toBeInTheDocument();
-    expect(screen.getByText(/same network \(the same Wi-Fi\)/)).toBeInTheDocument();
+    expect(await screen.findByText(/hasn't found this network's public address yet/)).toBeInTheDocument();
+    expect(screen.queryByDisplayValue(/192\.168\./)).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Copy invite link')).toBeDisabled();
   });
 
-  it('uses the public address before the router confirms it, says what is missing, and keeps the home link', async () => {
+  it('uses the public address before the router confirms it and says what is missing', async () => {
     vi.mocked(inviteApi.shareAddress).mockResolvedValue({
       data: {
         url: 'https://198.51.100.4:8443',
         reach: 'internet_unconfirmed',
-        local_url: 'https://192.168.1.20:8443',
         source: 'stun',
         note: 'port_not_forwarded',
         port: 8443,
@@ -143,10 +145,9 @@ describe('InviteModal', () => {
     expect(screen.getByTestId('invite-reach-note')).toHaveTextContent(
       'People outside your network may not reach this until port 8443 is forwarded on your router.',
     );
-    const local = screen.getByLabelText('Link on this network');
-    expect(local).toHaveValue('https://192.168.1.20:8443/invite/abc123');
-    await user.click(screen.getByRole('button', { name: 'Copy the link for this network' }));
-    expect(writeClipboardText).toHaveBeenCalledWith('https://192.168.1.20:8443/invite/abc123');
+    expect(screen.queryByLabelText('Link on this network')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Copy invite link' }));
+    expect(writeClipboardText).toHaveBeenCalledWith('https://198.51.100.4:8443/invite/abc123');
   });
 
   it('says plainly when the provider shares the public address', async () => {
@@ -154,7 +155,6 @@ describe('InviteModal', () => {
       data: {
         url: 'https://198.51.100.4:8443',
         reach: 'internet_unconfirmed',
-        local_url: 'https://192.168.1.20:8443',
         note: 'carrier_nat',
         port: 8443,
       },
@@ -165,20 +165,9 @@ describe('InviteModal', () => {
     expect(await screen.findByText(/Your internet provider shares this public address with other customers/)).toBeInTheDocument();
   });
 
-  it('shows no second link when the link already is the home address', async () => {
-    vi.mocked(inviteApi.shareAddress).mockResolvedValue({
-      data: { url: 'https://192.168.1.50:8443', reach: 'local_network', port: 8443 },
-    } as never);
-
-    render(<InviteModal guildName="Launch Guild" channelId="channel-1" onClose={vi.fn()} />);
-
-    await screen.findByDisplayValue('https://192.168.1.50:8443/invite/abc123');
-    expect(screen.queryByTestId('invite-local-link')).not.toBeInTheDocument();
-  });
-
   it('points at the setting when the server was installed for the home network only', async () => {
     vi.mocked(inviteApi.shareAddress).mockResolvedValue({
-      data: { url: 'https://192.168.1.50:8443', reach: 'local_network', asks_router: false },
+      data: { url: null, reach: 'unknown', asks_router: false },
     } as never);
 
     render(<InviteModal guildName="Launch Guild" channelId="channel-1" onClose={vi.fn()} />);
@@ -188,14 +177,14 @@ describe('InviteModal', () => {
     ).toBeInTheDocument();
   });
 
-  it('points at the router when the server asked it and the router said no', async () => {
+  it('names what is in the way when there is no public address yet', async () => {
     vi.mocked(inviteApi.shareAddress).mockResolvedValue({
-      data: { url: 'https://192.168.1.50:8443', reach: 'local_network', asks_router: true },
+      data: { url: null, reach: 'unknown', asks_router: true, note: 'outer_router', port: 8443 },
     } as never);
 
     render(<InviteModal guildName="Launch Guild" channelId="channel-1" onClose={vi.fn()} />);
 
-    expect(await screen.findByText(/the router needs a port opened/)).toBeInTheDocument();
+    expect(await screen.findByText(/Another router sits in front of yours/)).toBeInTheDocument();
     expect(screen.queryByText(/Admin → Settings/)).not.toBeInTheDocument();
   });
 
@@ -204,7 +193,8 @@ describe('InviteModal', () => {
 
     render(<InviteModal guildName="Launch Guild" channelId="channel-1" onClose={vi.fn()} />);
 
-    expect(await screen.findByText(/only be reached from this computer/)).toBeInTheDocument();
+    // An older server cannot say what its public address is.
+    expect(await screen.findByText(/hasn't found this network's public address yet/)).toBeInTheDocument();
     expect(screen.getByLabelText('Copy invite link')).toBeDisabled();
     expect(screen.queryByDisplayValue(/localhost/)).not.toBeInTheDocument();
   });

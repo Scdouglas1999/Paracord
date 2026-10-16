@@ -1115,10 +1115,14 @@ anything but router answers and observed connections.
   `confirmed_at` is set, else `internet_unconfirmed` with a `note`:
   `port_not_forwarded`, `firewall_blocked`, `carrier_nat` (the router's own
   address is in 100.64.0.0/10) or `outer_router` (the router's own address is
-  private: another router in front). `local_url` carries the LAN address, shown
-  as the "On this network" link;
-- no public address known → `https://{lan_ip}:{port}`, `local_network` (with
-  `carrier_nat`/`outer_router` when the router named such an address).
+  private: another router in front). Forwarding the port is then the host's
+  to do; the note says so;
+- no public address known → no link (`url: null`, `reach: unknown`, with
+  `carrier_nat`/`outer_router` when the router named such an address). The
+  Invite screen and dialog say Paracord hasn't found the public address yet.
+- a home-network (LAN) address is never an invite link: it reaches nobody an
+  invite is for (owner decision, 2026-10-16). `local_network` is only what
+  servers before 3.4 answer, and clients treat it as "no public address".
 
 Invite links embed this address. When the
 ISP changes the public IP, links made earlier stop working; the Invite screen

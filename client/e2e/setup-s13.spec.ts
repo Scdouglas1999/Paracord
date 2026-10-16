@@ -332,11 +332,11 @@ test.describe('join', () => {
 });
 
 test.describe('lan, identity, sign in', () => {
-  test('the invite on the home network only', async ({ page }) => {
+  test('no public address yet: no link, never a home-network one', async ({ page }) => {
     const scene = await toHostName(page, { reach: 'refused', progressDelayMs: 30 });
     scriptClaim(scene);
     await accountRoutes(page, HOME);
-    await page.route(`${HOME}/api/v1/instance/share-address`, (route) => route.fulfill(json({ url: 'https://192.168.1.28:8443', reach: 'local_network' })));
+    await page.route(`${HOME}/api/v1/instance/share-address`, (route) => route.fulfill(json({ url: null, reach: 'unknown', port: 8443 })));
     await fillName(page);
     await page.getByRole('button', { name: 'Continue' }).click();
     await fillAccount(page);
@@ -345,9 +345,10 @@ test.describe('lan, identity, sign in', () => {
     await page.getByTestId('fr-setup-continue').click();
     await page.getByTestId('fr-phrase-saved').check();
     await page.getByTestId('fr-phrase-continue').click();
-    await expect(page.getByTestId('fr-lan-note')).toBeVisible();
-    await expect(page.getByTestId('fr-invite-link')).toContainText('https://192.168.1.28:8443/invite/k7Qm2xR');
-    await shoot(scene, 'host-invite-lan');
+    await expect(page.getByTestId('fr-no-public-note')).toBeVisible();
+    await expect(page.getByTestId('fr-invite-link')).toContainText('No public address yet');
+    await expect(page.getByTestId('fr-invite-link')).not.toContainText('192.168.1.28');
+    await shoot(scene, 'host-invite-no-public');
   });
 
   test('a server whose identity changed', async ({ page }) => {

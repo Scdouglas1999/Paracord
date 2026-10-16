@@ -1051,29 +1051,27 @@ function usePreviewModel(path: FirstRunPath | null, signIn: boolean, probed: Pro
 
 /** Host › Invite (§1.13): the share address and the invite, made when the screen first appears. */
 function useHostInvite(active: boolean): { view: HostInviteView; busy: boolean; change: (o: { maxAge: number; maxUses: number }) => Promise<void> } {
-  const [view, setView] = useState<HostInviteView>({ url: null, lan: false, onlyHere: false, addressChanged: false, maxAge: 604_800, maxUses: 25, error: null });
+  const [view, setView] = useState<HostInviteView>({ url: null, noPublicAddress: false, onlyHere: false, addressChanged: false, maxAge: 604_800, maxUses: 25, error: null });
   const [busy, setBusy] = useState(false);
   const code = useRef<string | null>(null);
   const share = useRef<string | null>(null);
-
-  const localShare = useRef<string | null>(null);
 
   const readShare = useCallback(async () => {
     const { data } = await homeInvites.shareAddress();
     const s = hostInviteShare(data);
     // A server only this computer can reach has no share address (§5.5
     // `this_computer`): the link is the address in use here, and says so.
-    const url = data.url ?? useFirstRunStore.getState().result?.serverUrl ?? null;
+    // With no public address known yet there is no link at all: a home-network
+    // address reaches nobody an invite is for.
+    const url = data.url ?? (s.onlyHere ? (useFirstRunStore.getState().result?.serverUrl ?? null) : null);
     share.current = url;
-    localShare.current = s.localBase;
     setView((v) => ({
       ...v,
-      lan: s.lan,
+      noPublicAddress: s.noPublicAddress,
       onlyHere: s.onlyHere,
       addressChanged: s.addressChanged,
       note: s.note,
-      url: url && code.current ? `${url}/invite/${code.current}` : v.url,
-      localUrl: s.localBase && code.current ? `${s.localBase}/invite/${code.current}` : null,
+      url: url && code.current ? `${url}/invite/${code.current}` : url ? v.url : null,
     }));
     return url;
   }, []);
@@ -1092,7 +1090,6 @@ function useHostInvite(active: boolean): { view: HostInviteView; busy: boolean; 
         maxUses,
         error: null,
         url: base ? `${base}/invite/${data.code}` : null,
-        localUrl: localShare.current ? `${localShare.current}/invite/${data.code}` : null,
       }));
     },
     [readShare],

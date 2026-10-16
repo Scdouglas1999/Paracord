@@ -170,7 +170,7 @@ test.describe('dialogs (§6.12)', () => {
     expect(phone!.width).toBeLessThanOrEqual(390 - 32);
   });
 
-  test('invite: an unconfirmed public address leads, says what is missing, and keeps the link for this network', async ({ page }) => {
+  test('invite: an unconfirmed public address is the only link, and it says what is missing', async ({ page }) => {
     await open(page);
     await page.route('**/api/v1/channels/*/invites', (route) =>
       route.request().method() === 'POST'
@@ -191,7 +191,6 @@ test.describe('dialogs (§6.12)', () => {
       json(route, {
         url: 'https://198.51.100.4:8443',
         reach: 'internet_unconfirmed',
-        local_url: 'https://192.168.1.20:8443',
         source: 'stun',
         note: 'port_not_forwarded',
         port: 8443,
@@ -205,9 +204,7 @@ test.describe('dialogs (§6.12)', () => {
     await expect(dialog.getByTestId('invite-reach-note')).toHaveText(
       'People outside your network may not reach this until port 8443 is forwarded on your router.',
     );
-    await expect(dialog.getByRole('textbox', { name: 'Link on this network' })).toHaveValue(
-      'https://192.168.1.20:8443/invite/k4Tz9wMe',
-    );
+    await expect(dialog.getByRole('textbox', { name: 'Link on this network' })).toHaveCount(0);
     expect(await creamButtons(dialog), 'still one cream button').toEqual(['Copy invite link']);
     await shot(page, 'invite-unconfirmed');
     await page.setViewportSize({ width: 390, height: 844 });

@@ -13,7 +13,9 @@ import type { RestClient } from './restClient';
 /**
  * How far a link carries. `internet_unconfirmed`: the network's public
  * address, but nothing has shown people outside get through yet (the router
- * refused or did not answer); `note` says what is in the way.
+ * refused or did not answer); `note` says what is in the way. `unknown` with
+ * no `url`: no public address is known yet. `local_network` only comes from
+ * servers before 3.4, and its home-network `url` is never used as a link.
  */
 export type ShareReach = 'internet' | 'internet_unconfirmed' | 'local_network' | 'this_computer' | 'unknown';
 
@@ -34,8 +36,6 @@ export interface ShareAddress {
   asks_router?: boolean;
   /** The origin links pointed at before the public address changed. */
   previous_url?: string | null;
-  /** The address on the local network, when `url` is a different (outside) one. */
-  local_url?: string | null;
   source?: ShareSource;
   note?: ShareNote;
   /** The TCP port that has to reach the server (the one to forward). */

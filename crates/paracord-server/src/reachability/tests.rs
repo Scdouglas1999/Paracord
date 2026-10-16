@@ -183,7 +183,8 @@ async fn private_and_shared_external_addresses_are_shared_address() {
             &r,
             None,
         );
-        assert_eq!(share.reach, ShareReach::LocalNetwork, "{ip}");
+        assert_eq!(share.url, None, "{ip}");
+        assert_eq!(share.reach, ShareReach::Unknown, "{ip}");
         handle.release().await;
     }
 }
@@ -429,8 +430,8 @@ async fn a_failed_renewal_leaves_open_then_recovers() {
         &failed,
         None,
     );
-    assert_eq!(share.url.as_deref(), Some("https://192.168.1.20:8443"));
-    assert_eq!(share.reach, ShareReach::LocalNetwork);
+    assert_eq!(share.url, None);
+    assert_eq!(share.reach, ShareReach::Unknown);
 
     eventually(&hub, "open again", |r| r.state == ReachabilityState::Open).await;
     handle.release().await;
@@ -641,10 +642,6 @@ async fn a_silent_router_with_stun_shares_the_public_address_unconfirmed() {
     assert_eq!(share.reach, ShareReach::InternetUnconfirmed);
     assert_eq!(share.note, Some(ShareNote::PortNotForwarded));
     assert_eq!(share.source, Some(ShareSource::Stun));
-    assert_eq!(
-        share.local_url.as_deref(),
-        Some("https://192.168.1.20:8443")
-    );
     handle.release().await;
 }
 
@@ -768,7 +765,7 @@ async fn a_failed_stun_attempt_leaves_the_local_address() {
     let r = hub.current();
     assert_eq!(r.observed_ip, None);
     let share = derive(&lan_inputs(), &r, None);
-    assert_eq!(share.url.as_deref(), Some("https://192.168.1.20:8443"));
-    assert_eq!(share.reach, ShareReach::LocalNetwork);
+    assert_eq!(share.url, None);
+    assert_eq!(share.reach, ShareReach::Unknown);
     handle.release().await;
 }

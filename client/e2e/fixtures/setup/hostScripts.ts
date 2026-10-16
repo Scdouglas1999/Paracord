@@ -82,9 +82,14 @@ export function reachEvent(reach: ReachScenario): ProgressEvent {
 }
 
 /** The share address the invite carries for a reach state (spec 5.6). */
-export function shareAddress(reach: ReachScenario): { url: string; reach: 'internet' | 'local_network' } {
+export function shareAddress(reach: ReachScenario): { url: string; reach: 'internet' | 'internet_unconfirmed'; note?: 'port_not_forwarded'; port: number } {
+  // The link is always the public address; until the router opened the way it
+  // is unconfirmed, and the note says the port is the host's to forward.
   const internet = reach === 'open' || reach === 'direct';
-  return { url: `https://${internet ? THIS_COMPUTER.externalIp : THIS_COMPUTER.lanIp}:${THIS_COMPUTER.port}`, reach: internet ? 'internet' : 'local_network' };
+  const url = `https://${THIS_COMPUTER.externalIp}:${THIS_COMPUTER.port}`;
+  return internet
+    ? { url, reach: 'internet', port: THIS_COMPUTER.port }
+    : { url, reach: 'internet_unconfirmed', note: 'port_not_forwarded', port: THIS_COMPUTER.port };
 }
 
 /**

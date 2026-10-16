@@ -355,9 +355,9 @@ pub struct NetworkConfig {
     /// ask these STUN servers (`host:port`, in order) instead, so invite links
     /// can use the public address. One UDP datagram to a third party, at most
     /// every 30 minutes while the router stays silent; it tells that server
-    /// this network's address, as any packet would. Empty = never ask: invite
-    /// links then use the address on the local network until the router (or
-    /// `[server] public_url`) names one. Only used while `auto_port_forward`
+    /// this network's address, as any packet would. Empty = never ask: there is
+    /// then no invite link until the router (or `[server] public_url`) names
+    /// the public address. Only used while `auto_port_forward`
     /// is on. Env: `PARACORD_EXTERNAL_ADDRESS_STUN_SERVERS` (comma-separated,
     /// empty to turn it off).
     #[serde(default = "default_external_address_stun_servers")]
@@ -1125,11 +1125,11 @@ port_forward_lease_seconds = {port_forward_lease_seconds}
 reachability_retry_seconds = {reachability_retry_seconds}
 # When the router does not say what your public address is (no UPnP / NAT-PMP /
 # PCP answer), ask these STUN servers instead, so invite links can use your
-# public address rather than your home-network one. This sends one small UDP
+# public address. This sends one small UDP
 # message to the first server that answers (at most every 30 minutes), which
 # tells that company your network's public address, as any website you visit
-# would. [] = never ask: invite links then use your home-network address until
-# your router or public_url (under [server]) names one.
+# would. [] = never ask: there is then no invite link until your router or
+# public_url (under [server]) names your public address.
 # Env override: PARACORD_EXTERNAL_ADDRESS_STUN_SERVERS (comma-separated)
 external_address_stun_servers = {external_address_stun_servers}
 

@@ -38,8 +38,6 @@ pub enum ShareReach {
     /// the port may still have to be forwarded by hand. [`ShareAddress::note`]
     /// says what stands in the way.
     InternetUnconfirmed,
-    /// People on the same network only.
-    LocalNetwork,
     /// Only this computer (a loopback bind).
     ThisComputer,
     /// Startup has not worked it out (yet).
@@ -90,11 +88,7 @@ pub struct ShareAddress {
     /// says those links no longer work (spec §5.6).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_url: Option<String>,
-    /// The origin on the local network when `url` is something else: the
-    /// "On this network" link, which works at home whatever the router does.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub local_url: Option<String>,
-    /// Where the address in `url` came from, when it is not the local one.
+    /// Where the address in `url` came from.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<ShareSource>,
     /// What may stop people outside from reaching `url`.
@@ -111,7 +105,8 @@ pub struct ShareAddress {
 pub struct ShareInputs {
     /// `[server] public_url`, which wins over everything.
     pub public_url: Option<String>,
-    /// The origin on the local network (or loopback) the banner prints.
+    /// The origin on the local network (or loopback) the banner prints; only
+    /// used to tell a loopback bind, never handed out as a link.
     pub local_url: String,
     /// `http` or `https`.
     pub scheme: String,
@@ -196,23 +191,23 @@ fn wan_note(reachability: &Reachability) -> Option<ShareNote> {
 ///
 /// * a configured `public_url` is the last word;
 /// * a loopback bind is "this computer";
-/// * otherwise the network's public address is the link whenever one is known
-///   — the router's own report, else what a STUN server saw — and it is
-///   `internet` once the router opened the way (or a connection from outside
-///   was seen), `internet_unconfirmed` with a [`ShareNote`] before that;
-/// * with no public address known, the address on the local network.
+/// * otherwise the link is always the network's public address — the
+///   router's own report, else what a STUN server saw — `internet` once the
+///   router opened the way (or a connection from outside was seen),
+///   `internet_unconfirmed` with a [`ShareNote`] before that. Forwarding the
+///   port is then the host's to do; the note says so;
+/// * with no public address known yet there is no link (`unknown`): a link on
+///   the home network reaches nobody it is meant for.
 pub fn derive(
     inputs: &ShareInputs,
     reachability: &Reachability,
     previous_external_ip: Option<&str>,
 ) -> ShareAddress {
     let loopback = is_loopback_origin(&inputs.local_url);
-    let local_url = (!loopback).then(|| inputs.local_url.clone());
     if let Some(url) = inputs.public_url.as_deref() {
         return ShareAddress {
             url: Some(url.to_string()),
             reach: ShareReach::Internet,
-            local_url: local_url.filter(|local| local != url),
             source: Some(ShareSource::Configured),
             ..ShareAddress::default()
         };
@@ -227,8 +222,8 @@ pub fn derive(
     }
     let Some((ip, source)) = public_address(reachability) else {
         return ShareAddress {
-            url: local_url,
-            reach: ShareReach::LocalNetwork,
+            url: None,
+            reach: ShareReach::Unknown,
             note: wan_note(reachability),
             port: Some(inputs.port),
             ..ShareAddress::default()
@@ -259,7 +254,6 @@ pub fn derive(
         } else {
             ShareReach::InternetUnconfirmed
         },
-        local_url: local_url.filter(|local| *local != url),
         url: Some(url),
         previous_url,
         source: Some(match source {
@@ -315,12 +309,11 @@ mod tests {
             assert_eq!(a.url.as_deref(), Some("https://203.0.113.7:8443"));
             assert_eq!(a.reach, ShareReach::Internet);
             assert_eq!(a.note, None);
-            assert_eq!(a.local_url.as_deref(), Some(LAN));
         }
     }
 
     /// The owner's case: no UPnP, no NAT-PMP/PCP, and STUN named the address.
-    /// The link is the outside one, marked unconfirmed, with the home link kept.
+    /// The link is the outside one, marked unconfirmed; forwarding is the host's.
     #[test]
     fn no_answer_with_a_stun_address_shares_it_unconfirmed() {
         let r = observed(state(ReachabilityState::NoAnswer, None), "198.51.100.4");
@@ -329,7 +322,6 @@ mod tests {
         assert_eq!(a.reach, ShareReach::InternetUnconfirmed);
         assert_eq!(a.note, Some(ShareNote::PortNotForwarded));
         assert_eq!(a.source, Some(ShareSource::Stun));
-        assert_eq!(a.local_url.as_deref(), Some(LAN));
         assert_eq!(a.port, Some(8443));
     }
 
@@ -383,7 +375,9 @@ mod tests {
     }
 
     #[test]
-    fn with_no_public_address_known_the_link_stays_on_the_network() {
+    fn with_no_public_address_known_there_is_no_link() {
+        // A home-network address reaches nobody an invite is for, so it is
+        // never the link.
         for kind in [
             ReachabilityState::Off,
             ReachabilityState::Asking,
@@ -392,18 +386,17 @@ mod tests {
             ReachabilityState::FirewallBlocked,
         ] {
             let a = derive(&inputs(None, LAN), &state(kind, None), None);
-            assert_eq!(a.url.as_deref(), Some(LAN), "{kind:?}");
-            assert_eq!(a.reach, ShareReach::LocalNetwork, "{kind:?}");
-            assert_eq!(a.local_url, None, "{kind:?}");
+            assert_eq!(a.url, None, "{kind:?}");
+            assert_eq!(a.reach, ShareReach::Unknown, "{kind:?}");
         }
-        // A shared address alone is never claimed, but it is named.
+        // A shared address alone is never the link, but it is named.
         let a = derive(
             &inputs(None, LAN),
             &state(ReachabilityState::SharedAddress, Some("100.64.1.1")),
             None,
         );
-        assert_eq!(a.url.as_deref(), Some(LAN));
-        assert_eq!(a.reach, ShareReach::LocalNetwork);
+        assert_eq!(a.url, None);
+        assert_eq!(a.reach, ShareReach::Unknown);
         assert_eq!(a.note, Some(ShareNote::CarrierNat));
     }
 
@@ -434,7 +427,6 @@ mod tests {
         assert_eq!(a.url.as_deref(), Some("https://chat.example.com"));
         assert_eq!(a.reach, ShareReach::Internet);
         assert_eq!(a.source, Some(ShareSource::Configured));
-        assert_eq!(a.local_url.as_deref(), Some(LAN));
 
         // Even over an unconfirmed STUN address.
         let stun = observed(state(ReachabilityState::NoAnswer, None), "198.51.100.4");
@@ -482,7 +474,7 @@ mod tests {
         );
         assert_eq!(
             serde_json::to_value(&a).unwrap(),
-            serde_json::json!({ "url": LAN, "reach": "local_network", "port": 8443 })
+            serde_json::json!({ "url": null, "reach": "unknown", "port": 8443 })
         );
         let a = derive(
             &inputs(None, LAN),
@@ -494,7 +486,6 @@ mod tests {
             serde_json::json!({
                 "url": "https://198.51.100.4:8443",
                 "reach": "internet_unconfirmed",
-                "local_url": LAN,
                 "source": "stun",
                 "note": "port_not_forwarded",
                 "port": 8443,

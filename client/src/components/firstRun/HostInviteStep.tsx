@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import QRCode from 'qrcode';
 
 import { writeClipboardText } from '../../lib/clipboard';
+import { NO_PUBLIC_ADDRESS } from '../../lib/shareAddress';
 import { CordMark } from '../brand/CordMark';
 import { BackButton, FrGlyph, GoButton } from './primitives';
 import { Screen, type ScreenState } from './Screen';
@@ -16,17 +17,12 @@ export const USE_CHOICES = [1, 5, 10, 25, 100] as const;
 export interface HostInviteView {
   /** `{share_url}/invite/{code}`; null while it is being made. */
   url: string | null;
-  /** The address only reaches the home network (§1.13 amber note). */
-  lan: boolean;
+  /** No public address is known yet, so there is no link to share. */
+  noPublicAddress: boolean;
   /** Only this computer can reach the server right now (§5.5 `this_computer`). */
   onlyHere: boolean;
   /** The public address changed while the server ran (§5.6). */
   addressChanged: boolean;
-  /**
-   * `{local_url}/invite/{code}` when the main link is the outside address: the
-   * link for people on the same network, which works whatever the router does.
-   */
-  localUrl?: string | null;
   /** Why people outside may not get through yet (`shareNoteText`), or null. */
   note?: string | null;
   maxAge: number;
@@ -136,17 +132,11 @@ export function HostInviteStep({
   onBack: () => void;
 }) {
   const [copied, setCopied] = useState(false);
-  const [copiedLocal, setCopiedLocal] = useState(false);
   useEffect(() => {
     if (!copied) return;
     const timer = window.setTimeout(() => setCopied(false), 1600);
     return () => window.clearTimeout(timer);
   }, [copied]);
-  useEffect(() => {
-    if (!copiedLocal) return;
-    const timer = window.setTimeout(() => setCopiedLocal(false), 1600);
-    return () => window.clearTimeout(timer);
-  }, [copiedLocal]);
 
   return (
     <Screen
@@ -169,7 +159,7 @@ export function HostInviteStep({
       }
     >
       <div className="fr-linkrow" data-testid="fr-invite-link">
-        <code>{view.url ?? 'Making your link…'}</code>
+        <code>{view.url ?? (view.noPublicAddress ? 'No public address yet' : 'Making your link…')}</code>
         <button
           type="button"
           className="fr-chip fr-chip--cream"
@@ -202,37 +192,16 @@ export function HostInviteStep({
           Only this computer can reach this server right now, so nobody else can use this link yet.
         </div>
       )}
-      {view.note && !view.lan && (
+      {view.note && !view.noPublicAddress && (
         <div className="fr-lanwarn" data-testid="fr-outside-note">
           <FrGlyph name="warn" size={15} />
           {view.note}
         </div>
       )}
-      {view.localUrl && (
-        <div className="fr-linkrow fr-linkrow--local" data-testid="fr-invite-local-link">
-          <span className="fr-linkrow__label">On this network</span>
-          <code>{view.localUrl}</code>
-          <button
-            type="button"
-            className="fr-chip"
-            aria-label={copiedLocal ? 'Link for this network copied' : 'Copy the link for this network'}
-            onClick={async () => {
-              if (!view.localUrl) return;
-              await writeClipboardText(view.localUrl);
-              setCopiedLocal(true);
-            }}
-          >
-            <FrGlyph name={copiedLocal ? 'check' : 'copy'} size={15} />
-            <span aria-live="polite">{copiedLocal ? 'Copied' : 'Copy'}</span>
-          </button>
-        </div>
-      )}
-      {view.lan && (
-        <div className="fr-lanwarn" data-testid="fr-lan-note">
+      {view.noPublicAddress && (
+        <div className="fr-lanwarn" data-testid="fr-no-public-note">
           <FrGlyph name="warn" size={15} />
-          {view.note
-            ? `Works on your home network for now. ${view.note}`
-            : 'Works on your home network until your router lets friends in. Paracord keeps trying.'}
+          {view.note ? `${NO_PUBLIC_ADDRESS} ${view.note}` : NO_PUBLIC_ADDRESS}
         </div>
       )}
       <div className="fr-share">

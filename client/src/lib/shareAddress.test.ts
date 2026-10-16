@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { hostInviteShare, onThisNetworkUrl, shareNoteText } from './shareAddress';
+import { hostInviteShare, shareNoteText } from './shareAddress';
 
-const LAN = 'https://192.168.1.20:8443';
 const OUTSIDE = 'https://198.51.100.4:8443';
 
 describe('shareNoteText', () => {
@@ -31,40 +30,28 @@ describe('shareNoteText', () => {
   });
 });
 
-describe('onThisNetworkUrl', () => {
-  it('is the local address only when it differs from the link', () => {
-    expect(onThisNetworkUrl({ url: OUTSIDE, local_url: `${LAN}/` })).toBe(LAN);
-    expect(onThisNetworkUrl({ url: LAN, local_url: LAN })).toBeNull();
-    expect(onThisNetworkUrl({ url: OUTSIDE })).toBeNull();
-  });
-});
-
 describe('hostInviteShare (first-run Invite screen)', () => {
-  it('uses the outside address with the note and the home link', () => {
-    expect(
-      hostInviteShare({ url: OUTSIDE, reach: 'internet_unconfirmed', local_url: LAN, note: 'port_not_forwarded', port: 8443, source: 'stun' }),
-    ).toEqual({
+  it('uses the public address with the note', () => {
+    expect(hostInviteShare({ url: OUTSIDE, reach: 'internet_unconfirmed', note: 'port_not_forwarded', port: 8443, source: 'stun' })).toEqual({
       base: OUTSIDE,
-      localBase: LAN,
-      lan: false,
+      noPublicAddress: false,
       onlyHere: false,
       addressChanged: false,
       note: 'People outside your network may not reach this until port 8443 is forwarded on your router.',
     });
   });
 
-  it('is home-only, with the reason, when no public address is known', () => {
-    const view = hostInviteShare({ url: LAN, reach: 'local_network', note: 'carrier_nat', port: 8443 });
-    expect(view).toMatchObject({ base: LAN, localBase: null, lan: true, onlyHere: false });
+  it('has no link, with the reason, when no public address is known', () => {
+    const view = hostInviteShare({ url: null, reach: 'unknown', note: 'carrier_nat', port: 8443 });
+    expect(view).toMatchObject({ base: null, noPublicAddress: true, onlyHere: false });
     expect(view.note).toMatch(/^Your internet provider shares its public address/);
   });
 
   it('confirmed links carry no note; a loopback server has no link', () => {
-    expect(hostInviteShare({ url: OUTSIDE, reach: 'internet', local_url: LAN, previous_url: 'https://198.51.100.3:8443' })).toMatchObject({
+    expect(hostInviteShare({ url: OUTSIDE, reach: 'internet', previous_url: 'https://198.51.100.3:8443' })).toMatchObject({
       note: null,
       addressChanged: true,
-      localBase: LAN,
     });
-    expect(hostInviteShare({ url: null, reach: 'this_computer' })).toMatchObject({ base: null, onlyHere: true });
+    expect(hostInviteShare({ url: null, reach: 'this_computer' })).toMatchObject({ base: null, onlyHere: true, noPublicAddress: false });
   });
 });
