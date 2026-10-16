@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { render, screen, act } from '@testing-library/react';
-import { MemoryRouter, Route, Routes, useNavigate } from 'react-router';
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProtectedRoute } from './App';
 import { destinationAfterLogin } from './pages/LoginPage';
@@ -21,6 +21,12 @@ const serverListState = {
 
 const accountState = { isUnlocked: false, identityVersion: null as 1 | 2 | null, restoreState: 'done' as 'idle' | 'pending' | 'done' };
 let deviceHasIdentity = false;
+const env = vi.hoisted(() => ({ desktop: false }));
+
+vi.mock('./lib/tauriEnv', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./lib/tauriEnv')>()),
+  isTauri: () => env.desktop,
+}));
 
 vi.mock('./stores/authStore', () => ({
   useAuthStore: Object.assign(
@@ -59,6 +65,11 @@ function StrayNavigator() {
   return null;
 }
 
+function FirstRunSignIn() {
+  const state = useLocation().state as { server?: string } | null;
+  return <div>First-run sign-in on {state?.server ?? 'no server'}</div>;
+}
+
 function renderApp() {
   return render(
     <MemoryRouter initialEntries={['/app']}>
@@ -69,6 +80,7 @@ function renderApp() {
         <Route path="/unlock" element={<div>Unlock screen</div>} />
         <Route path="/login" element={<div>Login form</div>} />
         <Route path="/connect" element={<div>Connect screen</div>} />
+        <Route path="/welcome/sign-in" element={<FirstRunSignIn />} />
       </Routes>
     </MemoryRouter>,
   );
@@ -83,10 +95,25 @@ describe('ProtectedRoute guard', () => {
     accountState.isUnlocked = false;
     accountState.identityVersion = null;
     deviceHasIdentity = false;
+    env.desktop = false;
     // A server in the list makes serverStatus resolve to 'ready' synchronously.
     serverListState.servers = [{ id: 's1' }];
     serverListState.tokensHydrated = true;
     stray.go = null;
+  });
+
+  it('sends the web build with no session to /login', () => {
+    renderApp();
+    expect(screen.getByText('Login form')).toBeInTheDocument();
+  });
+
+  it('sends the desktop with no session to the first-run sign-in, on the saved server', () => {
+    // A computer that hosts a server adopts it at launch; signing in to it must
+    // be the designed sign-in, not the older /login page.
+    env.desktop = true;
+    renderApp();
+    expect(screen.getByText('First-run sign-in on https://example.test')).toBeInTheDocument();
+    expect(screen.queryByText('Login form')).not.toBeInTheDocument();
   });
 
   it('sends a signed-in account with no device identity to /setup', () => {

@@ -301,6 +301,11 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
     if (!isUnlocked) return <GuardRedirect to="/unlock" />;
     return <DeviceKeySignIn />;
   }
+  // The desktop signs in on the first-run sign-in, with the saved server filled
+  // in; it sends an older server on to /login itself (docs/setup-spec.md §3.12).
+  if (isTauri()) {
+    return <Navigate to="/welcome/sign-in" replace state={{ server: getStoredServerUrl() ?? undefined }} />;
+  }
   return <GuardRedirect to="/login" />;
 }
 
