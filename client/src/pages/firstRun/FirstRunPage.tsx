@@ -8,7 +8,7 @@ import { setStoredServerUrl } from '../../lib/config/apiBaseUrl';
 import { setFirstRunProbe, useDeepLinkIntake } from '../../lib/deepLinks';
 import { parseInviteLink, type InviteLink } from '../../lib/inviteLinks';
 import { useReducedMotion } from '../../lib/motion/reducedMotion';
-import { completeLegacyMfa, completeMfaSignIn, currentRecoveryPhrase, homeServerChosen, legacySignIn, signInWithPassword, type PendingMfaSignIn, type SignInOutcome } from '../../lib/oneCredential';
+import { completeLegacyMfa, completeMfaSignIn, credentialErrorMessage, currentRecoveryPhrase, homeServerChosen, legacySignIn, signInWithPassword, type PendingMfaSignIn, type SignInOutcome } from '../../lib/oneCredential';
 import { toPortableUri } from '../../lib/portableLinks';
 import { OlderServerError } from '../../lib/serverFeatures';
 import { LOCAL_SERVER_ID } from '../../lib/serverScope';
@@ -76,6 +76,14 @@ import { acceptInvite, homeInvites, landingPath } from './landing';
 import { storageCopy } from './rows';
 import { RESTORE_COPY, RESTORE_ROW } from './restore';
 import { hostInviteShare } from '../../lib/shareAddress';
+import type { HostInfo } from '../../lib/host/types';
+
+/** The sign-in line when Host found this computer's server already set up. */
+export const OWN_SERVER_SIGN_IN_SUB = 'Paracord already runs your server on this computer. Sign in with the account you made when you set it up.';
+
+/** The hosted server has its owner account (setup's Account row finished). */
+export const hostHasOwner = (info: Pick<HostInfo, 'completed_steps'>): boolean =>
+  info.completed_steps.includes('claim') || info.completed_steps.includes('escrow');
 
 /**
  * The first run (docs/setup-spec.md §1): the launch, the split welcome, the
@@ -239,9 +247,17 @@ export function FirstRunPage({ mode }: FirstRunPageProps) {
 
   /* ---- The welcome --------------------------------------------------------- */
 
-  const choose = useCallback(
+  // This computer's server already has its owner (a repeated host setup, or a
+  // profile that lost its account): there is no account to make, so Host is
+  // sign-in to that server. Running the host flow again made nothing at the
+  // Account row and then failed at the phrase with no server to talk to.
+  const signInToOwnServer = useCallback(
+    (url: string) => navigate(signInPath, { state: { server: url, ownServer: true } }),
+    [navigate, signInPath],
+  );
+
+  const go = useCallback(
     (next: FirstRunPath) => {
-      if (chose) return;
       const s = useFirstRunStore.getState();
       s.choosePath(next);
       if (next === 'host' && desktop) void startPreflight();
@@ -257,7 +273,22 @@ export function FirstRunPage({ mode }: FirstRunPageProps) {
       }, 430);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [chose, desktop, reduced],
+    [desktop, reduced],
+  );
+
+  const choose = useCallback(
+    (next: FirstRunPath) => {
+      if (chose) return;
+      if (next === 'host' && desktop) {
+        void useHostStore.getState().loadInfo().then((info) => {
+          if (info?.enabled && info.home_url && hostHasOwner(info)) signInToOwnServer(info.home_url);
+          else go(next);
+        });
+        return;
+      }
+      go(next);
+    },
+    [chose, desktop, go, signInToOwnServer],
   );
 
   // A deep link waiting at launch, or one that arrives on the welcome: straight to Join (§1.2, §6.4).
@@ -561,7 +592,7 @@ export function FirstRunPage({ mode }: FirstRunPageProps) {
       if (path === 'host' && !signInRoute) goStep('invite');
       else finish();
     } catch (error) {
-      setPhraseError(`Couldn't save that you kept your phrase (${errorMessage(error)}). Try again.`);
+      setPhraseError(`Couldn't save that you kept your phrase. ${credentialErrorMessage(error, 'Try again.')}`);
     } finally {
       setPhraseBusy(false);
     }
@@ -770,7 +801,13 @@ export function FirstRunPage({ mode }: FirstRunPageProps) {
           onSubmit={(submit) => void onSignInSubmit(submit)}
           onBack={signInView === 'form' ? back : () => setSignInView('form')}
           onForgot={(server) => void onForgot(server)}
-          sub={restoredServer && signInServer === restoredServer ? RESTORE_COPY.signInSub : undefined}
+          sub={
+            restoredServer && signInServer === restoredServer
+              ? RESTORE_COPY.signInSub
+              : (location.state as { ownServer?: boolean } | null)?.ownServer
+                ? OWN_SERVER_SIGN_IN_SUB
+                : undefined
+          }
         />
       );
     }
@@ -870,7 +907,15 @@ export function FirstRunPage({ mode }: FirstRunPageProps) {
             rows={setupRows}
             status={setupStatus}
             onChip={(row, chip) => void onChip(row, chip)}
-            onContinue={() => (entryPath === 'restore' ? afterRestore() : goStep('phrase'))}
+            onContinue={() => {
+              if (entryPath === 'restore') afterRestore();
+              else if (entryPath === 'host' && !useFirstRunStore.getState().phrase?.length) {
+                // Setup found the owner already there and made no account: no phrase to show.
+                const url = useHostStore.getState().info?.home_url;
+                if (url) signInToOwnServer(url);
+                else goStep('phrase');
+              } else goStep('phrase');
+            }}
             onProtected={
               entryPath === 'restore'
                 ? undefined

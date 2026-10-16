@@ -315,6 +315,17 @@ pub(crate) async fn own_server(app: &AppHandle) -> Result<Option<OwnServer>, Str
         .map_err(|e| format!("Reading the hosted server's certificate stopped ({e})."))?
 }
 
+/// The origin of the server this computer hosts (`https://127.0.0.1:<port>`),
+/// or `None` when it hosts none. Read from `host.json` alone, without the host
+/// lock `host_info` takes: the app asks this at boot, while `host_on_launch`
+/// may be updating the server, to adopt its own server as home when it has no
+/// other (a profile that lost its saved server). The shell already trusts this
+/// origin with the certificate on disk, without a prompt (see [`OwnServer`]).
+#[tauri::command]
+pub async fn host_home_server(app: AppHandle) -> Result<Option<String>, String> {
+    Ok(own_server(&app).await?.map(|own| own.origin))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

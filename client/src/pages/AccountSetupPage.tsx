@@ -1,3 +1,4 @@
+import { ChooseServerFirst } from './ChooseServerFirst';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { Check, Copy, KeyRound, ShieldAlert } from 'lucide-react';
@@ -34,6 +35,7 @@ import {
   newPasswordProblem,
   SAME_AS_LEGACY_MESSAGE,
   takeLegacyPassword,
+  homeServerChosen,
   useCredentialMode,
 } from '../lib/oneCredential';
 import { RecoveryPhraseCard } from './RecoveryPhraseCard';
@@ -46,8 +48,19 @@ import { RecoveryPhraseCard } from './RecoveryPhraseCard';
 export function AccountSetupPage() {
   const [params] = useSearchParams();
   const legacyLink = params.get('migrate') === '1';
-  const mode = useCredentialMode(!legacyLink);
+  const navigate = useNavigate();
+  const [serverChosen] = useState(homeServerChosen);
+  const mode = useCredentialMode(!legacyLink && serverChosen);
   if (legacyLink) return <LegacyAccountSetupPage />;
+  if (!serverChosen) {
+    return (
+      <ChooseServerFirst
+        body="Setting up your account happens on the server your account is on, and Paracord doesn't know which server that is yet. Enter its address or an invite link on the sign-in screen."
+        onSignIn={() => navigate('/welcome/sign-in')}
+        onBack={() => navigate(-1)}
+      />
+    );
+  }
   if (mode === null) return <BrandSplash label="Just a moment..." />;
   if (mode === 'one-password') return <MoveToOnePasswordPage />;
   if (mode === 'unreachable') {

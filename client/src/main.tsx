@@ -18,6 +18,7 @@ import { sameServerUrl } from './lib/serverScope';
 import { useServerListStore } from './stores/serverListStore';
 import { toast } from './stores/toastStore';
 import { installDeepLinks } from './lib/deepLinks';
+import { adoptHostedHomeServer } from './lib/host/adoptHostedServer';
 
 // In Tauri, assets are embedded in the exe. The PWA service worker caches stale
 // assets in WebView2 storage that override the exe's embedded files, preventing
@@ -61,7 +62,7 @@ if (isTauri() && 'serviceWorker' in navigator) {
 //     is for one it has never verified, and a refused request does not wait for
 //     it, `recheckTrust`.)
 const TRUST_RESYNC_WHILE_DISCONNECTED_MS = 30_000;
-if (isTauri()) {
+function startTrustSync(): void {
   let syncedUrls = '';
   // The stored home server too: session bootstrap refreshes against it at once,
   // and the shell refuses an origin this sync has not verified.
@@ -152,16 +153,30 @@ function BootHandoff({ children }: { children: React.ReactNode }) {
 
 // The desktop window is shown by public/boot-window.js as soon as the loading
 // screen is in the document, not here after the bundle has loaded.
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <BootHandoff>
-      <ErrorBoundary>
-        <BrowserRouter>
-          <AppProviders>
-            <App />
-          </AppProviders>
-        </BrowserRouter>
-      </ErrorBoundary>
-    </BootHandoff>
-  </React.StrictMode>
-);
+function render(): void {
+  ReactDOM.createRoot(document.getElementById('root')!).render(
+    <React.StrictMode>
+      <BootHandoff>
+        <ErrorBoundary>
+          <BrowserRouter>
+            <AppProviders>
+              <App />
+            </AppProviders>
+          </BrowserRouter>
+        </ErrorBoundary>
+      </BootHandoff>
+    </React.StrictMode>
+  );
+}
+
+// A desktop that hosts a server and has no home server saved takes its own
+// (lib/host/adoptHostedServer.ts) before the first trust sync and before any
+// screen can send an account request: those all go to the home server, and
+// without one they went nowhere ("Paracord doesn't know which server to use").
+void (async () => {
+  if (isTauri()) {
+    await adoptHostedHomeServer();
+    startTrustSync();
+  }
+  render();
+})();

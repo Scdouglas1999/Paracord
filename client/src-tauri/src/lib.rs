@@ -2768,6 +2768,7 @@ pub fn run() {
         host::host_restore,
         host::host_pick_backup,
         host::host_info,
+        host::host_home_server,
         host::host_on_launch,
         host::host_rollback_update,
         host::host_allow_firewall,
