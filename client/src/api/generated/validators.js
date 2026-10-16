@@ -9,9 +9,9 @@ var __commonJS = (cb, mod) => function __require() {
   }
 };
 
-// ../../Paracord/client/node_modules/ajv/dist/runtime/ucs2length.js
+// node_modules/ajv/dist/runtime/ucs2length.js
 var require_ucs2length = __commonJS({
-  "../../Paracord/client/node_modules/ajv/dist/runtime/ucs2length.js"(exports) {
+  "node_modules/ajv/dist/runtime/ucs2length.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     function ucs2length(str) {
@@ -12262,7 +12262,7 @@ function validate111(data, { instancePath = "", parentData, parentDataProperty, 
 }
 validate111.evaluated = { "props": { "mode": true, "session_id": true }, "dynamicProps": false, "dynamicItems": false };
 var isUserSettingsResponse = validate112;
-var schema163 = { "$id": "urn:paracord:contract:UserSettingsResponse", "$schema": "https://json-schema.org/draft/2020-12/schema", "description": "`GET`/`PATCH /users/@me/settings`. The server stores `theme`, `locale`, and\n`status` as opaque strings (bounded by length only), and `notifications` and\n`keybinds` as free-form JSON objects; they are echoed verbatim.", "properties": { "crypto_auth_enabled": { "type": "boolean" }, "custom_css": { "type": ["string", "null"] }, "custom_status": { "type": ["string", "null"] }, "keybinds": { "additionalProperties": true, "type": "object" }, "link_previews": { "description": "Link previews on for this person (spec \xA78.3).", "type": "boolean" }, "link_previews_available": { "description": 'The server fetches previews at all (`[link_previews] enabled`). When\nfalse the switch is disabled with "Turned off on this server."', "type": "boolean" }, "locale": { "type": "string" }, "message_display_compact": { "type": "boolean" }, "notifications": { "additionalProperties": true, "type": "object" }, "status": { "type": "string" }, "theme": { "type": "string" }, "user_id": { "type": "string" } }, "required": ["user_id", "theme", "locale", "message_display_compact", "custom_css", "status", "custom_status", "crypto_auth_enabled", "link_previews", "link_previews_available", "notifications", "keybinds"], "title": "UserSettingsResponse", "type": "object" };
+var schema163 = { "$id": "urn:paracord:contract:UserSettingsResponse", "$schema": "https://json-schema.org/draft/2020-12/schema", "description": "`GET`/`PATCH /users/@me/settings`. The server stores `theme`, `locale`, and\n`status` as opaque strings (bounded by length only), and `notifications` and\n`keybinds` as free-form JSON objects; they are echoed verbatim.", "properties": { "crypto_auth_enabled": { "type": "boolean" }, "custom_css": { "type": ["string", "null"] }, "custom_status": { "type": ["string", "null"] }, "keybinds": { "additionalProperties": true, "type": "object" }, "link_previews": { "description": 'Link previews on for this person (spec \xA78.3). Optional in the\ncontract: servers before 3.4 do not send it, and the client reads its\nabsence as "this server has no switch".', "type": "boolean" }, "link_previews_available": { "description": 'The server fetches previews at all (`[link_previews] enabled`). When\nfalse the switch is disabled with "Turned off on this server." Absent\nfrom servers before 3.4.', "type": "boolean" }, "locale": { "type": "string" }, "message_display_compact": { "type": "boolean" }, "notifications": { "additionalProperties": true, "type": "object" }, "status": { "type": "string" }, "theme": { "type": "string" }, "user_id": { "type": "string" } }, "required": ["user_id", "theme", "locale", "message_display_compact", "custom_css", "status", "custom_status", "crypto_auth_enabled", "notifications", "keybinds"], "title": "UserSettingsResponse", "type": "object" };
 function validate112(data, { instancePath = "", parentData, parentDataProperty, rootData = data, dynamicAnchors = {} } = {}) {
   ;
   let vErrors = null;
@@ -12277,7 +12277,7 @@ function validate112(data, { instancePath = "", parentData, parentDataProperty, 
   if (errors === 0) {
     if (data && typeof data == "object" && !Array.isArray(data)) {
       let missing0;
-      if (data.user_id === void 0 && (missing0 = "user_id") || data.theme === void 0 && (missing0 = "theme") || data.locale === void 0 && (missing0 = "locale") || data.message_display_compact === void 0 && (missing0 = "message_display_compact") || data.custom_css === void 0 && (missing0 = "custom_css") || data.status === void 0 && (missing0 = "status") || data.custom_status === void 0 && (missing0 = "custom_status") || data.crypto_auth_enabled === void 0 && (missing0 = "crypto_auth_enabled") || data.link_previews === void 0 && (missing0 = "link_previews") || data.link_previews_available === void 0 && (missing0 = "link_previews_available") || data.notifications === void 0 && (missing0 = "notifications") || data.keybinds === void 0 && (missing0 = "keybinds")) {
+      if (data.user_id === void 0 && (missing0 = "user_id") || data.theme === void 0 && (missing0 = "theme") || data.locale === void 0 && (missing0 = "locale") || data.message_display_compact === void 0 && (missing0 = "message_display_compact") || data.custom_css === void 0 && (missing0 = "custom_css") || data.status === void 0 && (missing0 = "status") || data.custom_status === void 0 && (missing0 = "custom_status") || data.crypto_auth_enabled === void 0 && (missing0 = "crypto_auth_enabled") || data.notifications === void 0 && (missing0 = "notifications") || data.keybinds === void 0 && (missing0 = "keybinds")) {
         validate112.errors = [{ instancePath, schemaPath: "#/required", keyword: "required", params: { missingProperty: missing0 }, message: "must have required property '" + missing0 + "'" }];
         return false;
       } else {

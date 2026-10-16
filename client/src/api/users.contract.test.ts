@@ -171,6 +171,15 @@ describe('user settings contract', () => {
     await expect(authApi.updateSettings({ theme: 'dark' })).rejects.toBeInstanceOf(ApiContractError);
   });
 
+  it('reads settings from a 3.3 server, which sends no link-preview fields', async () => {
+    // The new app on a friend's server that has not updated yet.
+    const { link_previews: _on, link_previews_available: _available, ...fromOlderServer } = settings;
+    clientWith(fromOlderServer);
+    const response = await authApi.getSettings();
+    expect(response.data.link_previews).toBeUndefined();
+    expect(response.data.theme).toBe(settings.theme);
+  });
+
   it('rejects omitted custom_css/custom_status (nullable, not optional)', async () => {
     const { custom_css: _css, ...noCss } = settings;
     clientWith(noCss);

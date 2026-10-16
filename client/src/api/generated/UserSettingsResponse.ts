@@ -14,14 +14,17 @@ export interface UserSettingsResponse {
     [k: string]: unknown | undefined;
   };
   /**
-   * Link previews on for this person (spec §8.3).
+   * Link previews on for this person (spec §8.3). Optional in the
+   * contract: servers before 3.4 do not send it, and the client reads its
+   * absence as "this server has no switch".
    */
-  link_previews: boolean;
+  link_previews?: boolean;
   /**
    * The server fetches previews at all (`[link_previews] enabled`). When
-   * false the switch is disabled with "Turned off on this server."
+   * false the switch is disabled with "Turned off on this server." Absent
+   * from servers before 3.4.
    */
-  link_previews_available: boolean;
+  link_previews_available?: boolean;
   locale: string;
   message_display_compact: boolean;
   notifications: {

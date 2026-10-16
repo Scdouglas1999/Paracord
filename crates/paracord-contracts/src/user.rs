@@ -125,11 +125,18 @@ pub struct UserSettingsResponse {
     pub status: String,
     pub custom_status: Option<String>,
     pub crypto_auth_enabled: bool,
-    /// Link previews on for this person (spec §8.3).
-    pub link_previews: bool,
+    /// Link previews on for this person (spec §8.3). Optional in the
+    /// contract: servers before 3.4 do not send it, and the client reads its
+    /// absence as "this server has no switch".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "bool")]
+    pub link_previews: Option<bool>,
     /// The server fetches previews at all (`[link_previews] enabled`). When
-    /// false the switch is disabled with "Turned off on this server."
-    pub link_previews_available: bool,
+    /// false the switch is disabled with "Turned off on this server." Absent
+    /// from servers before 3.4.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "bool")]
+    pub link_previews_available: Option<bool>,
     pub notifications: BTreeMap<String, Value>,
     pub keybinds: BTreeMap<String, Value>,
 }

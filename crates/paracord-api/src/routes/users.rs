@@ -336,8 +336,8 @@ fn settings_response(
         status: status.to_string(),
         custom_status,
         crypto_auth_enabled: s.crypto_auth_enabled,
-        link_previews: s.link_previews,
-        link_previews_available,
+        link_previews: Some(s.link_previews),
+        link_previews_available: Some(link_previews_available),
         notifications: settings_object(&s.notifications, "notifications")?,
         keybinds: settings_object(&s.keybinds, "keybinds")?,
     })
@@ -775,8 +775,8 @@ pub async fn get_settings(
             status: "online".to_string(),
             custom_status: None,
             crypto_auth_enabled: false,
-            link_previews: true,
-            link_previews_available: state.config.link_previews_enabled,
+            link_previews: Some(true),
+            link_previews_available: Some(state.config.link_previews_enabled),
             notifications: BTreeMap::new(),
             keybinds: BTreeMap::new(),
         }))
