@@ -103,14 +103,22 @@ describe('ask for my password, per device', () => {
   });
 
   it('fails closed when this device’s storage cannot be read', () => {
-    const getItem = vi.spyOn(window.localStorage, 'getItem').mockImplementation(() => {
-      throw new Error('denied');
-    });
+    // Replace the whole object: where Storage's methods live differs between
+    // Node versions (jsdom's prototype or Node's own), so a spy on one misses
+    // the other.
+    const real = Object.getOwnPropertyDescriptor(window, 'localStorage');
+    const refusing = {
+      getItem: () => { throw new Error('denied'); },
+      setItem: () => { throw new Error('denied'); },
+      removeItem: () => { throw new Error('denied'); },
+    };
+    Object.defineProperty(window, 'localStorage', { configurable: true, get: () => refusing });
     try {
       expect(deviceAskChoice()).toBe('unreadable');
       expect(adoptAccountChoice(false)).toBe(true);
     } finally {
-      getItem.mockRestore();
+      if (real) Object.defineProperty(window, 'localStorage', real);
+      else delete (window as { localStorage?: Storage }).localStorage;
     }
   });
 
