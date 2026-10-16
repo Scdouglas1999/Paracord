@@ -493,37 +493,178 @@ fn within_timeout<T: Send + 'static>(
 ) -> Result<T, String> {
     let (tx, rx) = std::sync::mpsc::channel();
     // Detached on purpose: a keychain agent that never answers must cost one
-    // parked thread, not the window. The verdict below is cached, so a store
-    // that times out once is not asked again in this run.
+    // parked thread, not the window.
     std::thread::spawn(move || {
         let _ = tx.send(op());
     });
     match rx.recv_timeout(SECURE_STORE_TIMEOUT) {
         Ok(result) => result,
-        Err(_) => Err(format!("{SECURE_STORE_UNAVAILABLE} (it did not answer)")),
+        Err(_) => Err(SECURE_STORE_NOT_ANSWERED.into()),
     }
 }
 
-fn secure_store_available() -> bool {
-    static AVAILABLE: LazyLock<bool> = LazyLock::new(|| {
-        let ok = within_timeout(|| Ok(keyring_round_trips())).unwrap_or(false);
-        if !ok {
-            eprintln!(
-                "[paracord] OS keychain does not retain secrets on this system; \
-                 using the encrypted local fallback store instead."
-            );
+/// What the keychain probe has said so far.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeychainVerdict {
+    /// The probe's value survived a write and a fresh read.
+    Available,
+    /// The probe finished and the keychain did not keep the value.
+    Unavailable,
+    /// The probe is still waiting on the keychain agent.
+    NotAnswered,
+}
+
+enum ProbeState {
+    NotStarted,
+    /// `waited_out`: one caller already waited the full budget for this probe;
+    /// later callers do not each wait again while it is still out.
+    Running {
+        waited_out: bool,
+    },
+    Done {
+        ok: bool,
+        at: std::time::Instant,
+    },
+}
+
+/// The keychain round-trip probe, and its verdict.
+///
+/// The verdict used to be a `LazyLock<bool>` computed under the 5-second
+/// budget, so a keychain that took longer than that to answer the first time
+/// was recorded as *absent for the whole run*. That is exactly what happens
+/// when the first secret request D-Bus-activates the agent (KDE's `ksecretd`,
+/// started on demand) or the wallet asks for its password: the owner's app
+/// started `ksecretd` at 08:21:31, the probe timed out, and for the rest of the
+/// run every secret went to the encrypted-file fallback and the identity was
+/// never remembered, so the next launch came up locked.
+///
+/// The same run also shows the other half: on 2026-10-14 the app started at
+/// 07:51 with no Secret Service on the bus at all (KDE's `ksecretd` is not
+/// D-Bus-activatable under `org.freedesktop.secrets`), and `ksecretd` came up
+/// at 08:21:31 when the hosted server stored its storage key. The app's "no
+/// keychain" from 07:51 stood until it quit, so the 08:22 sign-in could not be
+/// remembered either.
+///
+/// Now a probe that has not answered yet is reported as not answered, not as
+/// a missing keychain; it keeps running, and its real answer is what every
+/// later call (and [`secure_store_ready`]) sees. A keychain that works stays
+/// working for the run. A "no keychain" verdict is asked again once it is
+/// [`SECURE_STORE_RECHECK_AFTER`] old, so a keychain that appears mid-run is
+/// used from then on.
+struct KeychainProbe {
+    state: Mutex<ProbeState>,
+    answered: std::sync::Condvar,
+}
+
+impl KeychainProbe {
+    const fn new() -> Self {
+        Self {
+            state: Mutex::new(ProbeState::NotStarted),
+            answered: std::sync::Condvar::new(),
         }
-        ok
-    });
-    *AVAILABLE
+    }
+
+    /// Start the probe if nobody has (or the last "no keychain" is older than
+    /// `recheck_after`), then wait up to `wait` for its answer. With
+    /// `wait_again` false, a caller that finds the probe already waited out by
+    /// someone else returns at once instead of paying the budget again.
+    fn verdict(
+        &'static self,
+        probe: impl FnOnce() -> bool + Send + 'static,
+        wait: std::time::Duration,
+        wait_again: bool,
+        recheck_after: std::time::Duration,
+    ) -> KeychainVerdict {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let start = match *state {
+            ProbeState::NotStarted => true,
+            ProbeState::Done { ok: false, at } => at.elapsed() >= recheck_after,
+            _ => false,
+        };
+        if start {
+            *state = ProbeState::Running { waited_out: false };
+            // Detached on purpose: a keychain agent that never answers must
+            // cost one parked thread, not the window.
+            std::thread::spawn(move || {
+                let ok = probe();
+                if !ok {
+                    eprintln!(
+                        "[paracord] OS keychain does not retain secrets on this system; \
+                         using the encrypted local fallback store instead."
+                    );
+                }
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                *state = ProbeState::Done {
+                    ok,
+                    at: std::time::Instant::now(),
+                };
+                self.answered.notify_all();
+            });
+        }
+        let wait = match *state {
+            ProbeState::Running { waited_out: true } if !wait_again => std::time::Duration::ZERO,
+            _ => wait,
+        };
+        let (mut state, _) = self
+            .answered
+            .wait_timeout_while(state, wait, |s| matches!(s, ProbeState::Running { .. }))
+            .unwrap_or_else(|e| e.into_inner());
+        match *state {
+            ProbeState::Done { ok: true, .. } => KeychainVerdict::Available,
+            ProbeState::Done { ok: false, .. } => KeychainVerdict::Unavailable,
+            ProbeState::Running { ref mut waited_out } => {
+                *waited_out = true;
+                KeychainVerdict::NotAnswered
+            }
+            ProbeState::NotStarted => KeychainVerdict::NotAnswered,
+        }
+    }
+}
+
+static KEYCHAIN_PROBE: KeychainProbe = KeychainProbe::new();
+
+/// "Has not answered yet" is how the renderer tells a keychain that is still
+/// starting from one that is not there (`rememberedUnlock.ts`).
+const SECURE_STORE_NOT_ANSWERED: &str =
+    "secure store unavailable: the OS keychain has not answered yet";
+
+/// How old a "no keychain" verdict may get before the next secret operation
+/// asks the keychain again.
+const SECURE_STORE_RECHECK_AFTER: std::time::Duration = std::time::Duration::from_secs(30);
+
+fn secure_store_verdict() -> KeychainVerdict {
+    KEYCHAIN_PROBE.verdict(
+        keyring_round_trips,
+        SECURE_STORE_TIMEOUT,
+        false,
+        SECURE_STORE_RECHECK_AFTER,
+    )
 }
 
 /// Ask the keychain the one question that matters while the window is still
 /// being built, so the renderer's first read does not pay for the answer.
 pub fn warm_secure_store() {
     std::thread::spawn(|| {
-        let _ = secure_store_available();
+        let _ = secure_store_verdict();
     });
+}
+
+/// The longest a caller may wait in [`secure_store_ready`]: long enough for a
+/// person to type their wallet password into the keychain's own prompt.
+const SECURE_STORE_READY_MAX: std::time::Duration = std::time::Duration::from_secs(180);
+
+/// Wait (up to `timeout_ms`, at most three minutes) for the keychain probe to
+/// finish, and say whether the keychain keeps secrets. The renderer calls this
+/// after a write was refused with "has not answered yet", then writes again.
+#[tauri::command]
+pub async fn secure_store_ready(timeout_ms: u64) -> bool {
+    let wait = std::time::Duration::from_millis(timeout_ms).min(SECURE_STORE_READY_MAX);
+    tauri::async_runtime::spawn_blocking(move || {
+        KEYCHAIN_PROBE.verdict(keyring_round_trips, wait, true, SECURE_STORE_RECHECK_AFTER)
+            == KeychainVerdict::Available
+    })
+    .await
+    .unwrap_or(false)
 }
 
 fn secure_store_op<T: Send + 'static>(
@@ -531,8 +672,10 @@ fn secure_store_op<T: Send + 'static>(
     op: impl FnOnce(keyring::Entry) -> Result<T, String> + Send + 'static,
 ) -> Result<T, String> {
     validate_secure_store_key(&key)?;
-    if !secure_store_available() {
-        return Err(SECURE_STORE_UNAVAILABLE.into());
+    match secure_store_verdict() {
+        KeychainVerdict::Available => {}
+        KeychainVerdict::Unavailable => return Err(SECURE_STORE_UNAVAILABLE.into()),
+        KeychainVerdict::NotAnswered => return Err(SECURE_STORE_NOT_ANSWERED.into()),
     }
     within_timeout(move || {
         let entry = keyring::Entry::new(SECURE_STORE_SERVICE, &key)
@@ -1089,6 +1232,90 @@ mod activity_consent_tests {
         );
         assert_eq!(sanitize_diagnostic_line("one\ntwo\rthree"), "one two three");
         assert!(sanitize_diagnostic_line(&"x".repeat(10_000)).len() <= MAX_DIAGNOSTIC_LINE_BYTES);
+    }
+}
+
+#[cfg(test)]
+mod keychain_probe_tests {
+    use super::{KeychainProbe, KeychainVerdict};
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    const LONG: Duration = Duration::from_secs(3600);
+
+    fn probe() -> &'static KeychainProbe {
+        Box::leak(Box::new(KeychainProbe::new()))
+    }
+
+    fn never() -> bool {
+        unreachable!("no new probe expected")
+    }
+
+    /// The first secret request starts the keychain agent and it answers
+    /// after the budget. That is "not answered", and the probe's real answer
+    /// is what the next caller gets: it is not recorded as a missing keychain
+    /// for the rest of the run.
+    #[test]
+    fn a_keychain_that_answers_late_is_used_once_it_answers() {
+        let keychain = probe();
+        let (release, gate) = mpsc::channel::<()>();
+        let slow = move || {
+            let _ = gate.recv();
+            true
+        };
+        assert_eq!(
+            keychain.verdict(slow, Duration::from_millis(50), false, LONG),
+            KeychainVerdict::NotAnswered
+        );
+        // A second caller while it is still out does not pay the budget again.
+        let started = std::time::Instant::now();
+        assert_eq!(
+            keychain.verdict(never, Duration::from_secs(5), false, LONG),
+            KeychainVerdict::NotAnswered
+        );
+        assert!(started.elapsed() < Duration::from_secs(1));
+        release.send(()).unwrap();
+        // `secure_store_ready` waits for the answer.
+        assert_eq!(
+            keychain.verdict(never, Duration::from_secs(5), true, LONG),
+            KeychainVerdict::Available
+        );
+        assert_eq!(
+            keychain.verdict(never, Duration::ZERO, false, Duration::ZERO),
+            KeychainVerdict::Available,
+            "a keychain that works stays working for the run"
+        );
+    }
+
+    /// The owner's run: no Secret Service on the bus at launch, `ksecretd`
+    /// up half an hour later. Once the "no keychain" verdict is old enough,
+    /// the next operation asks again and gets the keychain.
+    #[test]
+    fn a_keychain_that_appears_later_is_used_after_the_recheck() {
+        let keychain = probe();
+        assert_eq!(
+            keychain.verdict(|| false, Duration::from_secs(5), false, LONG),
+            KeychainVerdict::Unavailable
+        );
+        // Not yet old enough: no new probe, the same answer.
+        assert_eq!(
+            keychain.verdict(never, Duration::from_secs(5), false, LONG),
+            KeychainVerdict::Unavailable
+        );
+        // Old enough: asked again.
+        assert_eq!(
+            keychain.verdict(|| true, Duration::from_secs(5), false, Duration::ZERO),
+            KeychainVerdict::Available
+        );
+    }
+
+    #[test]
+    fn a_prompt_answer_is_available_at_once() {
+        let keychain = probe();
+        assert_eq!(
+            keychain.verdict(|| true, Duration::from_secs(5), false, LONG),
+            KeychainVerdict::Available
+        );
     }
 }
 

@@ -2549,6 +2549,32 @@ pub fn run() {
             if let Err(err) = commands::append_client_log(app.handle().clone(), startup_line) {
                 eprintln!("failed to write startup diagnostics log line: {err}");
             }
+            // A build without `custom-protocol` (the stream-audit and other test
+            // builds) loads its UI from the devUrl, so the webview keeps the
+            // sign-in, the identity and every setting under *that* origin
+            // (`http://localhost:<port>`), apart from a release build's
+            // `tauri://localhost`. Installing one as someone's app and then a
+            // release over it looks like an update that forgot the account.
+            // Say so in the log, where the next person to ask will look.
+            #[cfg(not(feature = "custom-protocol"))]
+            {
+                let origin = app
+                    .config()
+                    .build
+                    .dev_url
+                    .as_ref()
+                    .map(|url| url.origin().ascii_serialization())
+                    .unwrap_or_else(|| "the dev server".to_string());
+                let line = format!(
+                    "{} [desktop] test build (no custom-protocol): the UI loads from {origin}, \
+                     so this app's saved sign-in and identity live under that origin and a \
+                     release build will not see them",
+                    chrono_like_timestamp_utc()
+                );
+                if let Err(err) = commands::append_client_log(app.handle().clone(), line) {
+                    eprintln!("failed to write the test-build log line: {err}");
+                }
+            }
             #[cfg(target_os = "linux")]
             if let Some(line) = linux_webkit::startup_line() {
                 if let Err(err) = commands::append_client_log(app.handle().clone(), line) {
@@ -2656,6 +2682,7 @@ pub fn run() {
         commands::secure_store_set,
         commands::secure_store_get,
         commands::secure_store_delete,
+        commands::secure_store_ready,
         commands::secure_store_fallback_encrypt,
         commands::secure_store_fallback_decrypt,
         commands::set_activity_sharing_enabled,

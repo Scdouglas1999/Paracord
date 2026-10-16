@@ -29,14 +29,52 @@ export function rememberedIdentityKey(homeOrigin: string, userId: string): strin
 /** Remembered unlock is a desktop feature; a browser tab always asks. */
 export const canRememberUnlock = (): boolean => isTauri();
 
+/**
+ * The shell's word for a keychain that is still starting (`commands.rs`
+ * `SECURE_STORE_NOT_ANSWERED`): the first secret request of a session can
+ * start the agent (KDE's `ksecretd`, gnome-keyring) or wait on its password
+ * prompt, which takes longer than the shell's 5-second budget. That is not a
+ * missing keychain, and it must not be treated as one.
+ */
+export const KEYCHAIN_NOT_ANSWERED = 'has not answered yet';
+
+const describe = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
+/** The keychain is still starting: ask again once it has answered. */
+export const keychainNotAnswered = (error: unknown): boolean => describe(error).includes(KEYCHAIN_NOT_ANSWERED);
+
 export class KeychainUnavailableError extends Error {
+  /** The keychain had not answered yet; `waitForKeychain` then a retry may still succeed. */
+  readonly pending: boolean;
+
   constructor(detail: string) {
-    super(`This computer's keychain isn't available, so Paracord will ask for your password when it opens. (${detail})`);
+    const pending = detail.includes(KEYCHAIN_NOT_ANSWERED);
+    super(pending
+      ? "This computer's keychain is still starting. Paracord will remember you once it answers."
+      : `This computer's keychain isn't available, so Paracord will ask for your password when it opens. (${detail})`);
     this.name = 'KeychainUnavailableError';
+    this.pending = pending;
   }
 }
 
-const describe = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+/** How long a launch waits for a keychain that is still starting before it asks for the password. */
+export const LAUNCH_KEYCHAIN_WAIT_MS = 45_000;
+/** How long a background "remember me" waits: long enough to type a wallet password into its prompt. */
+export const REMEMBER_KEYCHAIN_WAIT_MS = 180_000;
+
+/**
+ * Wait until the keychain has answered the shell's probe; `true` when it keeps
+ * secrets. Resolves `false` when it still has not answered after `timeoutMs`,
+ * or does not keep secrets.
+ */
+export async function waitForKeychain(timeoutMs: number): Promise<boolean> {
+  if (!canRememberUnlock()) return false;
+  try {
+    return (await invoke<boolean>('secure_store_ready', { timeoutMs })) === true;
+  } catch {
+    return false;
+  }
+}
 
 /** Store the identity for the next launch. Throws `KeychainUnavailableError` when the keychain refuses. */
 export async function rememberIdentity(homeOrigin: string, userId: string, privateKey: Uint8Array): Promise<void> {
@@ -61,9 +99,17 @@ export async function recallIdentity(homeOrigin: string, userId: string, publicK
   let stored: string | null;
   try {
     stored = await invoke<string | null>('secure_store_get', { key });
-  } catch {
-    // No keychain: nothing can have been remembered there.
-    return null;
+  } catch (error) {
+    // No keychain: nothing can have been remembered there. A keychain that is
+    // still starting (the first secret request of a session starts the agent)
+    // is waited for: answering "locked" here is how a relaunch came up asking
+    // for a password the person had asked Paracord to remember.
+    if (!keychainNotAnswered(error) || !(await waitForKeychain(LAUNCH_KEYCHAIN_WAIT_MS))) return null;
+    try {
+      stored = await invoke<string | null>('secure_store_get', { key });
+    } catch {
+      return null;
+    }
   }
   if (!stored) return null;
   if (!/^[0-9a-f]{64}$/.test(stored)) {

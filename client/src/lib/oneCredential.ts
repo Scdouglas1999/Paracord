@@ -33,7 +33,7 @@ import { PROOF_PURPOSE, signCredentialProof, type AuthChallenge, type ProofPurpo
 import { unwrapIdentity, wrapIdentity, WRAP_ALG_V2 } from './credential/wrap';
 import { assessNewPassword } from './credential/password';
 import { withExplicitActivityOff } from './features/privacyDefaults';
-import { canRememberUnlock, forgetIdentity, KeychainUnavailableError, rememberIdentity } from './rememberedUnlock';
+import { canRememberUnlock, forgetIdentity, KeychainUnavailableError, rememberIdentity, REMEMBER_KEYCHAIN_WAIT_MS, waitForKeychain } from './rememberedUnlock';
 import { LOCAL_SERVER_ID } from './serverScope';
 import { noteMissingRoute, OlderServerError, useServerFeatureStore } from './serverFeatures';
 
@@ -174,6 +174,32 @@ export async function applyRememberPolicy(keystore: AccountKeystoreV2): Promise<
     account.setRememberProblem(null);
   } catch (error) {
     account.setRememberProblem(error instanceof KeychainUnavailableError ? error.message : String(error));
+    // A keychain that is still starting is not a missing one: wait for it in
+    // the background and remember then. Treating it as missing left the
+    // identity unremembered for good, and the next launch came up locked.
+    if (error instanceof KeychainUnavailableError && error.pending) void rememberWhenKeychainAnswers(keystore);
+  }
+}
+
+/**
+ * The second half of {@link applyRememberPolicy} for a keychain that had not
+ * answered: once it has, remember the identity, if it is still the unlocked
+ * one and this computer still has not asked for its password.
+ */
+export async function rememberWhenKeychainAnswers(keystore: AccountKeystoreV2): Promise<void> {
+  const account = () => useAccountStore.getState();
+  if (!(await waitForKeychain(REMEMBER_KEYCHAIN_WAIT_MS))) {
+    account().setRememberProblem(new KeychainUnavailableError('the keychain did not answer').message);
+    return;
+  }
+  if (!account().isUnlocked || deviceAskChoice() === true) return;
+  const current = await readKeystoreV2().catch(() => null);
+  if (!current || current.userId !== keystore.userId || current.homeOrigin !== keystore.homeOrigin) return;
+  try {
+    await withUnlockedPrivateKey((privateKey) => rememberIdentity(current.homeOrigin, current.userId, privateKey));
+    account().setRememberProblem(null);
+  } catch (error) {
+    account().setRememberProblem(error instanceof KeychainUnavailableError ? error.message : String(error));
   }
 }
 
