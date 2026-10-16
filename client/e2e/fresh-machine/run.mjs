@@ -1038,9 +1038,11 @@ async function s5() {
     return st5.reachability?.state === 'open' ? st5 : null;
   }, 'the router never opened the way', 130000, 1000).catch(() => null);
   const secs = Math.round((Date.now() - t0) / 1000);
-  await sleep(1500);
+  check('within 70 s of the router allowing it the server says the way is open', !!opened && secs <= 70, `${opened?.reachability?.state} after ${secs} s`);
+  // The Invite screen re-reads the address every minute (and on focus).
+  const cleared = await until(async () => !(await hostb.ui.maybeTid('fr-outside-note')), 'the note stayed', 75000, 1000).then(() => true, () => false);
   await shot(hostb, 'invite-after-router-allows');
-  check('within 70 s of the router allowing it the server says the way is open, and the note goes', !!opened && secs <= 70 && !(await hostb.ui.maybeTid('fr-outside-note')), `${opened?.reachability?.state} after ${secs} s`);
+  check('within a minute after that the Invite screen drops the port note', cleared);
   check('the invite is still the public link', (await inviteLink(hostb))?.startsWith(`https://${PUBLIC_IP}:8443/invite/`), await inviteLink(hostb));
   const status = await invoke(hostb, 'host_status');
   check('reachability is open', status.reachability?.state === 'open', JSON.stringify(status.reachability));
