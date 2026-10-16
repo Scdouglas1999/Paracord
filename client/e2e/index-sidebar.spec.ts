@@ -145,6 +145,9 @@ test.describe('IX-5 sidebar', () => {
     await dockItem(page, 'gameNight').click();
     // Mid-slide: two panes. The one sliding out keeps Fuel: inert, hidden, frozen on general.
     await expect.poll(async () => page.locator('.ix-pane').count(), { timeout: 3_000 }).toBe(2);
+    // The old pane slides out for 135ms and is removed when that finishes: hold
+    // the slide while it is looked at, or a slow machine looks after it is gone.
+    await page.evaluate(() => document.getAnimations().forEach((animation) => animation.pause()));
     const leaving = page.locator('.ix-pane[data-leaving="true"]');
     await expect(leaving).toHaveAttribute('inert', '');
     await expect(leaving).toHaveAttribute('aria-hidden', 'true');
@@ -158,6 +161,7 @@ test.describe('IX-5 sidebar', () => {
         .map((animation) => animation.id),
     );
     expect(inLeaving).toEqual([]);
+    await page.evaluate(() => document.getAnimations().forEach((animation) => animation.play()));
     await page.waitForTimeout(MOTION_GONE_MS);
     await expect(page.locator('.ix-pane')).toHaveCount(1);
     const header = sidebarHeader(page);

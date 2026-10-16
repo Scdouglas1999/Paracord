@@ -141,13 +141,19 @@ async function expectIndexAuth(page: Page, name: string, size: SizeName, options
     expect.soft(field.height, `${name}: a field is 44 tall (${field.id})`).toBe(44);
     expect.soft(field.radius, `${name}: a field has radius 12`).toBe('12px');
   }
-  // Exactly one cream button on the page.
-  const cream = await page.evaluate((color) => {
-    return [...document.querySelectorAll('button, a')]
-      .filter((el) => (el as HTMLElement).offsetParent !== null)
-      .filter((el) => getComputedStyle(el).backgroundColor === color).length;
-  }, CREAM);
-  expect.soft(cream, `${name}: one cream button`).toBe(1);
+  // Exactly one cream button on the page, once a step that is arriving has
+  // settled (on a slow machine the check can land mid-transition).
+  await expect
+    .poll(
+      () =>
+        page.evaluate((color) => {
+          return [...document.querySelectorAll('button, a')]
+            .filter((el) => (el as HTMLElement).offsetParent !== null)
+            .filter((el) => getComputedStyle(el).backgroundColor === color).length;
+        }, CREAM),
+      { message: `${name}: one cream button`, timeout: 5_000 },
+    )
+    .toBe(1);
   // No Glass pane, no uppercase kicker.
   expect.soft(await page.locator('.glass-pane, .glass-kicker, .pc-plate').count(), `${name}: no Glass leftovers`).toBe(0);
 }

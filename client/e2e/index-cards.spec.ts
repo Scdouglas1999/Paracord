@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -326,6 +327,9 @@ test.describe('the event card (the prototype\'s .event)', () => {
   });
 
   test('is the prototype\'s card to the pixel (held against s0-plan-a-night)', async ({ page }) => {
+    // The references are local renders of the prototype (index-reference.mjs),
+    // not in the repository: CI has none to hold the card against.
+    test.skip(!existsSync(REF), `no reference render at ${REF} (make it with e2e/index-reference.mjs)`);
     await open(page);
     const card = cell(page, 'event-draft').locator('.ix-event');
     await shoot(page, 'event-card-draft', card);
