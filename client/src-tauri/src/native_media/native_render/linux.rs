@@ -782,6 +782,8 @@ mod underlay_fixed {
 
     impl UnderlayFixed {
         /// Main thread, after GTK is initialized.
+        // No `Default`: it would hide that this needs GTK up on the main thread.
+        #[allow(clippy::new_without_default)]
         pub fn new() -> Self {
             glib::Object::new()
         }
