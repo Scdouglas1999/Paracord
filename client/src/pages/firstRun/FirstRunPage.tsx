@@ -75,6 +75,7 @@ import { checkInvite } from './inviteCheck';
 import { acceptInvite, homeInvites, landingPath } from './landing';
 import { storageCopy } from './rows';
 import { RESTORE_COPY, RESTORE_ROW } from './restore';
+import { hostInviteShare } from '../../lib/shareAddress';
 
 /**
  * The first run (docs/setup-spec.md §1): the launch, the split welcome, the
@@ -1010,19 +1011,24 @@ function useHostInvite(active: boolean): { view: HostInviteView; busy: boolean; 
   const code = useRef<string | null>(null);
   const share = useRef<string | null>(null);
 
+  const localShare = useRef<string | null>(null);
+
   const readShare = useCallback(async () => {
     const { data } = await homeInvites.shareAddress();
-    const previous = (data as { previous_url?: string | null }).previous_url;
+    const s = hostInviteShare(data);
     // A server only this computer can reach has no share address (§5.5
     // `this_computer`): the link is the address in use here, and says so.
     const url = data.url ?? useFirstRunStore.getState().result?.serverUrl ?? null;
     share.current = url;
+    localShare.current = s.localBase;
     setView((v) => ({
       ...v,
-      lan: data.reach === 'local_network',
-      onlyHere: !data.url || data.reach === 'this_computer',
-      addressChanged: Boolean(previous),
+      lan: s.lan,
+      onlyHere: s.onlyHere,
+      addressChanged: s.addressChanged,
+      note: s.note,
       url: url && code.current ? `${url}/invite/${code.current}` : v.url,
+      localUrl: s.localBase && code.current ? `${s.localBase}/invite/${code.current}` : null,
     }));
     return url;
   }, []);
@@ -1035,7 +1041,14 @@ function useHostInvite(active: boolean): { view: HostInviteView; busy: boolean; 
       const { data } = await homeInvites.create(channelId, { max_age: maxAge, max_uses: maxUses });
       code.current = data.code;
       const base = share.current ?? (await readShare());
-      setView((v) => ({ ...v, maxAge, maxUses, error: null, url: base ? `${base}/invite/${data.code}` : null }));
+      setView((v) => ({
+        ...v,
+        maxAge,
+        maxUses,
+        error: null,
+        url: base ? `${base}/invite/${data.code}` : null,
+        localUrl: localShare.current ? `${localShare.current}/invite/${data.code}` : null,
+      }));
     },
     [readShare],
   );
