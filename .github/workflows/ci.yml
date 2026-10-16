@@ -327,7 +327,8 @@ jobs:
           security create-keychain -p ci paracord-ci.keychain
           security set-keychain-settings paracord-ci.keychain
           security unlock-keychain -p ci paracord-ci.keychain
-          security list-keychains -d user -s paracord-ci.keychain $(security list-keychains -d user | tr -d '"')
+          # Put it first in the search list, keeping the ones already there.
+          security list-keychains -d user | xargs security list-keychains -d user -s paracord-ci.keychain
           security default-keychain -d user -s paracord-ci.keychain
       - name: Set up the host with the real binary
         continue-on-error: true
