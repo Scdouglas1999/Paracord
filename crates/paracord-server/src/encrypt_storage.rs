@@ -217,6 +217,11 @@ pub async fn run(args: &EncryptStorageArgs, config_path: &str) -> Result<()> {
             .unwrap_or(Path::new(".")),
     )?;
 
+    // The directories a server makes on its first start (uploads, media,
+    // backups): a server that was installed but never started has none of
+    // them, and the backup reads them.
+    crate::ensure_data_dirs(&config);
+
     // 1. Backup, before anything changes.
     if journal.backup.is_none() {
         let name = paracord_core::backup::create_backup_with_sqlite_key(

@@ -29,7 +29,7 @@
          auto_port_forward = true and nothing is started; with no flag (this
          runner sets CI) the answer is the default, yes.
       5b. An install from before stored-data encryption (made here with
-         PARACORD_AT_REST_ENABLED=false and a plaintext database): without a
+         PARACORD_AT_REST_ENABLED=false and started once): without a
          flag the installer only names the command; with -EncryptStorage it
          converts the database and records the key file.
       6. Cleanup: the installer has no uninstaller, so this removes the task,
@@ -346,7 +346,23 @@ try {
     $oldToml = $oldToml -replace '\./data/', (($old -replace '\\', '/') + '/data/')
     [System.IO.File]::WriteAllText($oldCfg, $oldToml, (New-Object System.Text.UTF8Encoding $false))
     $oldDb = Join-Path $old 'data\paracord.db'
-    & python -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute('create table t(x)'); c.execute('insert into t values (1)'); c.commit()" $oldDb
+    # Started once, the way a real install from before encryption was: the
+    # server makes its full database and its data folders, then stops.
+    $env:PARACORD_AT_REST_ENABLED = 'false'
+    $env:PARACORD_AUTO_PORT_FORWARD = 'false'
+    try {
+        $oldServer = Start-Process -FilePath (Join-Path $old 'paracord-server.exe') -ArgumentList @('-c', $oldCfg) `
+            -WorkingDirectory $old -PassThru -WindowStyle Hidden `
+            -RedirectStandardOutput (Join-Path $Work 'old-run.log') -RedirectStandardError (Join-Path $Work 'old-run.err')
+    } finally {
+        Remove-Item Env:\PARACORD_AT_REST_ENABLED, Env:\PARACORD_AUTO_PORT_FORWARD -ErrorAction SilentlyContinue
+    }
+    $oldPort = [int](Get-TomlValue $oldCfg 'tls' 'port')
+    Check (Wait-Health $oldPort 90) 'the old install ran once and made its database'
+    Stop-Process -Id $oldServer.Id -Force -ErrorAction SilentlyContinue
+    $deadline = (Get-Date).AddSeconds(30)
+    while ((Get-Date) -lt $deadline -and (Wait-Health $oldPort 1)) { Start-Sleep -Milliseconds 500 }
+    Start-Sleep -Seconds 2
     Check ((Get-TomlValue $oldCfg 'at_rest' 'enabled') -ne 'true') 'the old install is not encrypted'
     $log = Join-Path $Work 'old-up1.log'
     $code = Invoke-Installer 'pwsh' $log @('-LocalArchive', $zip, '-InstallDir', $old, '-NoService', '-NoBrowser')
