@@ -167,6 +167,7 @@ fn host_setup_rows_1_and_2_with_the_real_binary() {
             if let Err(e) = self.0.remove(true) {
                 eprintln!("cleanup: removing the test host failed: {e:#}");
             }
+            eprintln!("cleanup: the test host is removed");
         }
     }
     let _cleanup = RemoveHost(&host);
@@ -204,7 +205,10 @@ fn host_setup_rows_1_and_2_with_the_real_binary() {
         host.logs_tail(200).unwrap_or_default()
     );
     let status = host.status().unwrap();
+    eprintln!("[{:>6.1}s] status read", t0.elapsed().as_secs_f32());
     assert!(status.storage.sqlite_encrypted && status.setup_required);
     host.stop().unwrap();
+    eprintln!("[{:>6.1}s] stopped", t0.elapsed().as_secs_f32());
     host.start().unwrap();
+    eprintln!("[{:>6.1}s] started again; removing the test host", t0.elapsed().as_secs_f32());
 }
