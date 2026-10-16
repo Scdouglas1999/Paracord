@@ -171,12 +171,30 @@ fn host_setup_rows_1_and_2_with_the_real_binary() {
     }
     let _cleanup = RemoveHost(&host);
 
+    // Each step says when it starts and ends: on a machine where something
+    // waits for a person (a keychain prompt), this is how CI shows where.
+    let t0 = std::time::Instant::now();
+    eprintln!("[{:>6.1}s] preflight", t0.elapsed().as_secs_f32());
     let preflight = host.preflight().unwrap();
+    eprintln!(
+        "[{:>6.1}s] preflight done: ok={}",
+        t0.elapsed().as_secs_f32(),
+        preflight.ok
+    );
     assert!(preflight.ok, "preflight refused: {preflight:?}");
     let port = preflight.port.unwrap();
     let events = std::sync::Mutex::new(Vec::new());
-    host.setup(port, &|e| events.lock().unwrap().push(e))
-        .unwrap();
+    host.setup(port, &|e| {
+        eprintln!(
+            "[{:>6.1}s] setup row {} {}",
+            t0.elapsed().as_secs_f32(),
+            e.row,
+            serde_json::to_string(&e.state).unwrap_or_default()
+        );
+        events.lock().unwrap().push(e)
+    })
+    .unwrap();
+    eprintln!("[{:>6.1}s] setup returned", t0.elapsed().as_secs_f32());
     let events = events.into_inner().unwrap();
     let last = events.last().unwrap();
     assert_eq!(

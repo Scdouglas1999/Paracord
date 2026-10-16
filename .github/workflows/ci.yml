@@ -332,7 +332,7 @@ jobs:
           security default-keychain -d user -s paracord-ci.keychain
       - name: Set up the host with the real binary
         continue-on-error: true
-        timeout-minutes: 15
+        timeout-minutes: 8
         env:
           PARACORD_HOSTCTL_LIVE: "1"
           PARACORD_HOSTCTL_LIVE_HOST_BINARY: ${{ github.workspace }}/target/debug/paracord-host
