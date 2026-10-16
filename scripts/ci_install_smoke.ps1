@@ -74,7 +74,11 @@ function Get-TomlValue([string]$path, [string]$section, [string]$key) {
         if ($trimmed -match '^\[([^\]]+)\]$') { $current = $Matches[1]; continue }
         if ($current -ne $section -or $trimmed.StartsWith('#')) { continue }
         if ($trimmed -match ('^' + [regex]::Escape($key) + '\s*=\s*(.+)$')) {
-            return $Matches[1].Trim().Trim('"')
+            $value = $Matches[1].Trim()
+            # A path with backslashes is written as a TOML literal string
+            # ('C:\...'); a basic string ("...") escapes its backslashes.
+            if ($value.StartsWith("'")) { return $value.Trim("'") }
+            return $value.Trim('"').Replace('\\', '\')
         }
     }
     return ''
@@ -98,6 +102,8 @@ function Invoke-Installer([string]$Shell, [string]$Log, [string[]]$Arguments) {
     & $Shell @argList *> $Log
     $code = $LASTEXITCODE
     Write-Host "  ....  $Shell install.ps1 $($Arguments -join ' ') -> exit $code"
+    # An unexpected failure is only diagnosable from CI with the installer's own words.
+    if ($code -ne 0) { Get-Content -Path $Log -Tail 25 | ForEach-Object { Write-Host "        | $_" } }
     return $code
 }
 
@@ -320,9 +326,13 @@ try {
     Write-Host '== 5b. An install from before stored-data encryption'
     # The system install's server holds the ports; encrypt-storage refuses while
     # anything answers, so stop it first.
+    # Disabled first: the task restarts a server that is killed.
+    Disable-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue | Out-Null
     Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
     Get-Process -Name 'paracord-server' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 3
+    $deadline = (Get-Date).AddSeconds(30)
+    while ((Get-Date) -lt $deadline -and (Wait-Health $webPort 1)) { Start-Sleep -Milliseconds 500 }
+    Check (-not (Wait-Health $webPort 1)) "nothing answers on $webPort before the conversion"
     $old = Join-Path $Work 'inst-old'
     $Installs.Add($old)
     New-Item -ItemType Directory -Path (Join-Path $old 'config') -Force | Out-Null

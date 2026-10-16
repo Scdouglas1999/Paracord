@@ -190,7 +190,10 @@ function Get-TomlValue([string]$path, [string]$section, [string]$key) {
                 $value = $Matches[1].Trim()
                 $hash = $value.IndexOf('#')
                 if ($hash -gt 0) { $value = $value.Substring(0, $hash).Trim() }
-                return $value.Trim('"')
+                # A Windows path is written as a TOML literal string ('C:\...');
+                # a basic string ("...") escapes its backslashes.
+                if ($value.StartsWith("'")) { return $value.Trim("'") }
+                return $value.Trim('"').Replace('\\', '\')
             }
         }
     } catch { }
