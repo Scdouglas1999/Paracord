@@ -1,4 +1,5 @@
 import { vi } from 'vitest';
+import { createStore } from 'zustand/vanilla';
 import type { Message } from '../types';
 import type { AccountScope } from '../lib/serverScope';
 import type { AccountMessagingRuntime, RuntimeMessageEvent } from '../lib/messages/accountMessagingRuntime';
@@ -8,6 +9,8 @@ function runtime() {
   const listeners = new Set<(event: RuntimeMessageEvent) => void>();
   const knownMessageReaders = new Set<() => Message[]>();
   return {
+    // Already past the handshake: store tests are not about connection start-up.
+    store: createStore<{ synchronization: string; storage: string }>(() => ({ synchronization: 'ready', storage: 'idle' })),
     send: vi.fn<AccountMessagingRuntime['send']>(async () => {}),
     decrypt: vi.fn<AccountMessagingRuntime['decrypt']>(async () => { throw new Error('Identity locked'); }),
     reconcile: vi.fn(async () => {}),

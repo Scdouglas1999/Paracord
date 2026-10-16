@@ -221,6 +221,21 @@ describe('messageStore', () => {
       await first;
     });
 
+    it('waits for the message connection to finish starting instead of failing', async () => {
+      // A conversation opened right after launch or sign-in.
+      const runtime = getTestMessagingRuntime({ serverId: '__local__', userId: 'u1' });
+      runtime.store.setState({ synchronization: 'recovering' });
+      mockChannelApi.getMessages.mockResolvedValueOnce({ data: [makeMessage({ id: 'm1' })] });
+      const fetching = useMessageStore.getState().fetchMessages('ch1');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(runtime.prepareChannelHistory).not.toHaveBeenCalled();
+      expect(mockChannelApi.getMessages).not.toHaveBeenCalled();
+      runtime.store.setState({ synchronization: 'ready' });
+      await fetching;
+      expect(useMessageStore.getState().messages['ch1']?.map((m) => m.id)).toEqual(['m1']);
+      expect(useMessageStore.getState().messageErrors['ch1']).toBeNull();
+    });
+
     it('shows toast on fetch failure', async () => {
       mockChannelApi.getMessages.mockRejectedValue(new Error('fail'));
 

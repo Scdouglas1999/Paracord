@@ -28,6 +28,9 @@ import { applyDecryptedBody } from '../lib/messages/attachments/messageBodyProje
 import type { SealedForward } from '../lib/messages/attachments/attachmentEnvelope';
 import { canProjectMutationReceipt } from '../lib/messages/receiptProjection';
 
+/** How long history waits for the authenticated message connection to finish starting. */
+export const MESSAGING_READY_WAIT_MS = 30_000;
+
 export const MAX_MESSAGES_PER_CHANNEL = 500;
 export const MAX_CACHED_CHANNELS = 25;
 
@@ -237,6 +240,25 @@ function createAccountMessageStore(scope: AccountScope) {
   }
 
   const runtime = getAccountMessagingRuntime(scope);
+
+  /**
+   * A conversation opened right after launch or sign-in asks for history while
+   * the authenticated message connection is still starting. Wait for it (up to
+   * {@link MESSAGING_READY_WAIT_MS}) rather than show the runtime's refusal.
+   */
+  function messagingStarted(): boolean {
+    const { synchronization, storage } = runtime.store.getState();
+    return synchronization === 'ready' || storage === 'review';
+  }
+  function messagingReady(signal?: AbortSignal): Promise<void> {
+    const ready = messagingStarted;
+    return new Promise<void>((resolve) => {
+      const done = () => { clearTimeout(timer); unsubscribe(); signal?.removeEventListener('abort', done); resolve(); };
+      const timer = setTimeout(done, MESSAGING_READY_WAIT_MS);
+      const unsubscribe = runtime.store.subscribe(() => { if (ready()) done(); });
+      signal?.addEventListener('abort', done);
+    });
+  }
 
   const _messageFetchRequests = new Map<string, HistoryRequest>();
   let messageSessionGeneration = 0;
@@ -569,6 +591,10 @@ function createAccountMessageStore(scope: AccountScope) {
               try {
                 if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 300 * attempt));
                 if (!isCurrent()) return;
+                if (!messagingStarted()) {
+                  await messagingReady(request.controller.signal);
+                  if (!isCurrent()) return;
+                }
                 await runtime.prepareChannelHistory(channelId);
                 if (!isCurrent()) return;
                 const { data } = await api.getMessages(
@@ -713,6 +739,10 @@ function createAccountMessageStore(scope: AccountScope) {
         const context = ownOperation();
         const api = createChannelApi(() => context.api);
         try {
+          if (!messagingStarted()) {
+            await messagingReady(context.signal);
+            context.assertCurrent();
+          }
           await runtime.prepareChannelHistory(channelId);
           context.assertCurrent();
           const { data } = await api.getMessages(channelId, { before, limit }, { signal: context.signal });
@@ -729,6 +759,10 @@ function createAccountMessageStore(scope: AccountScope) {
         try {
           const generation = messageSessionGeneration;
           try {
+            if (!messagingStarted()) {
+              await messagingReady(context.signal);
+              context.assertCurrent();
+            }
             await runtime.prepareChannelHistory(channelId);
             context.assertCurrent();
             const { data } = await api.getPins(channelId);
