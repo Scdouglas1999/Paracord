@@ -23,6 +23,10 @@ export interface ProbedServer {
 
 export type SignInView = 'form' | 'mfa' | 'legacy';
 
+/** "Use your recovery phrase" with no server in the Server field and none saved. */
+export const CHOOSE_SERVER_FOR_PHRASE =
+  "Enter your server's address or an invite link first. Your recovery phrase signs you in to that server.";
+
 export interface SignInSubmit {
   server: ProbedServer;
   identifier: string;
@@ -95,7 +99,14 @@ export function SignInStep({
     onProbedRef.current = onProbed;
   }, [onProbed]);
 
-  useEffect(() => setServerText(initialServer), [initialServer]);
+  // A suggestion that arrives late (this computer's own server, read from the
+  // host) fills the field only while the person has not typed something else.
+  const lastInitialServer = useRef(initialServer);
+  useEffect(() => {
+    const previous = lastInitialServer.current;
+    lastInitialServer.current = initialServer;
+    setServerText((text) => (text.trim() === '' || text === previous ? initialServer : text));
+  }, [initialServer]);
 
   useEffect(() => {
     const target = serverFromInput(serverText);

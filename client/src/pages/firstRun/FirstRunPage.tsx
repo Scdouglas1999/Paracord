@@ -8,7 +8,7 @@ import { setStoredServerUrl } from '../../lib/config/apiBaseUrl';
 import { setFirstRunProbe, useDeepLinkIntake } from '../../lib/deepLinks';
 import { parseInviteLink, type InviteLink } from '../../lib/inviteLinks';
 import { useReducedMotion } from '../../lib/motion/reducedMotion';
-import { completeLegacyMfa, completeMfaSignIn, currentRecoveryPhrase, legacySignIn, signInWithPassword, type PendingMfaSignIn, type SignInOutcome } from '../../lib/oneCredential';
+import { completeLegacyMfa, completeMfaSignIn, currentRecoveryPhrase, homeServerChosen, legacySignIn, signInWithPassword, type PendingMfaSignIn, type SignInOutcome } from '../../lib/oneCredential';
 import { toPortableUri } from '../../lib/portableLinks';
 import { OlderServerError } from '../../lib/serverFeatures';
 import { LOCAL_SERVER_ID } from '../../lib/serverScope';
@@ -44,7 +44,7 @@ import { ProtectedSheet, type ProtectedHostRows } from '../../components/firstRu
 import type { ScreenState } from '../../components/firstRun/Screen';
 import { SetupStep } from '../../components/firstRun/SetupStep';
 import { DetailsSheet, RouterSheet, SharedAddressSheet } from '../../components/firstRun/Sheets';
-import { SignInStep, type ProbedServer, type SignInSubmit, type SignInView } from '../../components/firstRun/SignInStep';
+import { SignInStep, type ProbedServer, type SignInSubmit, type SignInView, CHOOSE_SERVER_FOR_PHRASE } from '../../components/firstRun/SignInStep';
 import { TitleBar } from '../../components/firstRun/TitleBar';
 import { Welcome } from '../../components/firstRun/Welcome';
 import { Preview } from '../../components/firstRun/preview/Preview';
@@ -611,6 +611,22 @@ export function FirstRunPage({ mode }: FirstRunPageProps) {
     return useFirstRunStore.getState().invite.link?.serverUrl ?? '';
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signInRoute]);
+  // This computer runs a server: with nothing else to go on, that is the one
+  // to sign in to. A profile that lost its saved server (a fresh one, or a
+  // build that keeps its data under another origin) otherwise met an empty
+  // Server field, and "Use your recovery phrase" then had no server at all.
+  const [hostedServer, setHostedServer] = useState('');
+  useEffect(() => {
+    if (!signInRoute || mode !== 'desktop' || initialServer) return;
+    let current = true;
+    void useHostStore.getState().loadInfo().then((info) => {
+      if (current && info?.enabled && info.home_url) setHostedServer(info.home_url);
+    });
+    return () => {
+      current = false;
+    };
+  }, [signInRoute, mode, initialServer]);
+  const signInServer = initialServer || hostedServer;
 
   const afterSignIn = useCallback(
     async (outcome: SignInOutcome, server: ProbedServer) => {
@@ -697,6 +713,13 @@ export function FirstRunPage({ mode }: FirstRunPageProps) {
           if (server.fingerprint) await trustServer(server.url, server.fingerprint);
           setStoredServerUrl(server.url);
         }
+        // The phrase signs in to a server: with none found here and none saved,
+        // there is nowhere to send it (a request with no server was refused by
+        // the shell as "Native fetch requires an absolute URL").
+        if (!server && !homeServerChosen()) {
+          setSignInError(CHOOSE_SERVER_FOR_PHRASE);
+          return;
+        }
         navigate('/recover');
       } catch (error) {
         setSignInError(errorMessage(error));
@@ -738,7 +761,7 @@ export function FirstRunPage({ mode }: FirstRunPageProps) {
           key={entry.key}
           state={state}
           web={mode === 'web'}
-          initialServer={initialServer}
+          initialServer={signInServer}
           view={signInView}
           busy={signInBusy}
           error={signInError}
@@ -746,7 +769,7 @@ export function FirstRunPage({ mode }: FirstRunPageProps) {
           onSubmit={(submit) => void onSignInSubmit(submit)}
           onBack={signInView === 'form' ? back : () => setSignInView('form')}
           onForgot={(server) => void onForgot(server)}
-          sub={restoredServer && initialServer === restoredServer ? RESTORE_COPY.signInSub : undefined}
+          sub={restoredServer && signInServer === restoredServer ? RESTORE_COPY.signInSub : undefined}
         />
       );
     }

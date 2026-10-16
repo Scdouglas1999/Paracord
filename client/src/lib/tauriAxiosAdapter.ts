@@ -34,6 +34,16 @@ interface NativeMultipartPart {
   data_base64?: string;
 }
 
+/** `AxiosError.code` of a desktop request sent before any server was chosen. */
+export const NO_SERVER_CHOSEN = 'ERR_PARACORD_NO_SERVER';
+export const NO_SERVER_CHOSEN_MESSAGE =
+  "Paracord doesn't know which server to use yet. Enter your server's address or an invite link first.";
+
+/** A desktop request that named no server (see {@link NO_SERVER_CHOSEN}). */
+export function isNoServerChosen(error: unknown): boolean {
+  return (error as { code?: unknown } | null)?.code === NO_SERVER_CHOSEN;
+}
+
 let invokeCache: ((cmd: string, args: Record<string, unknown>) => Promise<unknown>) | null = null;
 
 async function getInvoke() {
@@ -190,6 +200,15 @@ export async function tauriAdapter(config: InternalAxiosRequestConfig): Promise<
   // Serialize through axios itself so arrays, a custom `paramsSerializer` and
   // an existing query string in `url` behave exactly as they do in the browser.
   const url = axios.getUri({ ...config, url: path, baseURL: undefined });
+  // A desktop page is served from the app bundle, so a relative URL names no
+  // server at all: the API base fell back to `/api/v1` because no server has
+  // been chosen yet (a fresh profile, or a screen reached before the first
+  // run picked one). The shell would refuse it with "Native fetch requires an
+  // absolute URL", which means nothing to the person reading it. Refuse here,
+  // before anything is sent, in words they can act on.
+  if (!/^https?:\/\//i.test(url)) {
+    throw axiosError(NO_SERVER_CHOSEN_MESSAGE, NO_SERVER_CHOSEN, config);
+  }
 
   const headers = headersFromConfig(config);
   const method = (config.method ?? 'GET').toUpperCase();

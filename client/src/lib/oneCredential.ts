@@ -1,4 +1,5 @@
 import { getPublicKeyAsync, utils } from '@noble/ed25519';
+import { isAxiosError } from 'axios';
 import { useEffect, useState } from 'react';
 import { authApi } from '../api/auth';
 import { isMissingRoute } from '../api/client';
@@ -35,6 +36,8 @@ import { assessNewPassword } from './credential/password';
 import { withExplicitActivityOff } from './features/privacyDefaults';
 import { canRememberUnlock, forgetIdentity, KeychainUnavailableError, rememberIdentity, REMEMBER_KEYCHAIN_WAIT_MS, waitForKeychain } from './rememberedUnlock';
 import { LOCAL_SERVER_ID } from './serverScope';
+import { isTauri } from './tauriEnv';
+import { isNoServerChosen, NO_SERVER_CHOSEN_MESSAGE } from './tauriAxiosAdapter';
 import { noteMissingRoute, OlderServerError, useServerFeatureStore } from './serverFeatures';
 
 /**
@@ -63,6 +66,17 @@ import { noteMissingRoute, OlderServerError, useServerFeatureStore } from './ser
 /** The home server's origin (the account's `homeOrigin` in keystores, pins and the keychain). */
 export function homeOrigin(): string {
   return normalizeHomeOrigin(new URL(resolveApiBaseUrl(), window.location.href).toString());
+}
+
+/**
+ * Does this app know which server is home? A browser page always does (its
+ * own origin answers a relative URL). The desktop is served from its bundle,
+ * so until a server has been chosen the API base is a bare `/api/v1` that
+ * names no server, and every account flow would send its first request
+ * nowhere.
+ */
+export function homeServerChosen(): boolean {
+  return !isTauri() || /^https?:\/\//i.test(resolveApiBaseUrl());
 }
 
 // ── Version detection (§3.12) ──────────────────────────────────────────────
@@ -904,15 +918,23 @@ export async function startOver(input: { token: string; identifier: string; newP
 /** A failure's sentence for the person (credential refusals carry their own). */
 export function credentialErrorMessage(error: unknown, fallback: string): string {
   if (error instanceof CredentialError || error instanceof OlderServerError) return error.message;
+  if (isNoServerChosen(error)) return NO_SERVER_CHOSEN_MESSAGE;
   if (isMissingRoute(error)) return new OlderServerError('oneCredential').message;
   const message = (error as { response?: { data?: { message?: unknown } } } | null)?.response?.data?.message;
   if (typeof message === 'string' && message && message !== 'unauthorized') return message;
   if (responseStatus(error) === 401) return fallback;
-  if (error && typeof error === 'object' && 'response' in error && !(error as { response?: unknown }).response) {
-    return "Paracord couldn't reach the server. It may be restarting, or this computer can't see it.";
+  // A request that got no answer. Its message is the transport's ("Network
+  // Error", the desktop shell's own refusal text), written for a log, not for
+  // the person: say what it means instead.
+  if (isAxiosError(error) ? !error.response : error && typeof error === 'object' && 'response' in error && !(error as { response?: unknown }).response) {
+    return UNREACHABLE_MESSAGE;
   }
+  // Any other answer from the server without a sentence of its own.
+  if (isAxiosError(error)) return fallback;
   return error instanceof Error && error.message ? error.message : fallback;
 }
+
+const UNREACHABLE_MESSAGE = "Paracord couldn't reach the server. It may be restarting, or this computer can't see it.";
 
 export { UNWRAP_FAILED_MESSAGE };
 

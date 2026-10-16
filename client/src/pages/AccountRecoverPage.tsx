@@ -19,6 +19,8 @@ import {
 import {
   completeRecoverMfa,
   credentialErrorMessage,
+  detectCredentialMode,
+  homeServerChosen,
   newPasswordProblem,
   recoverWithPhrase,
   setPasswordAfterRecovery,
@@ -73,7 +75,49 @@ export function recoverStepError(
   return null;
 }
 
+const RECOVER_FAILED = 'Recovery failed. Check your phrase and try again.';
+
+/**
+ * The recovery phrase signs in to a server, so the desktop must know which one
+ * first. Reached before any server was chosen (a fresh profile's "Forgot your
+ * password?" with the Server field still empty), the page says so and sends
+ * the person to sign-in, where the server is chosen — instead of sending a
+ * request that names no server.
+ */
+function ChooseServerFirst({ onSignIn, onBack }: { onSignIn: () => void; onBack: () => void }) {
+  return (
+    <AuthCanvas>
+      <AuthCard>
+        <div className={AUTH_FORM} data-testid="recover-no-server">
+          <AuthHeading
+            title="Choose your server first"
+            subtitle="Your recovery phrase signs you in to the server your account is on, and Paracord doesn't know which server that is yet. Enter its address or an invite link on the sign-in screen, then choose Use your recovery phrase."
+          />
+          <div className="flex items-center gap-3">
+            <Button type="button" variant="ghost" size="lg" onClick={onBack}>
+              Back
+            </Button>
+            <Button type="button" size="lg" className="flex-1" onClick={onSignIn}>
+              Go to sign-in
+            </Button>
+          </div>
+        </div>
+      </AuthCard>
+    </AuthCanvas>
+  );
+}
+
 export function AccountRecoverPage() {
+  const navigate = useNavigate();
+  // Read once per visit: the server is chosen on another screen, never here.
+  const [serverChosen] = useState(homeServerChosen);
+  if (!serverChosen) {
+    return <ChooseServerFirst onSignIn={() => navigate('/welcome/sign-in')} onBack={() => navigate(-1)} />;
+  }
+  return <RecoverWithPhrase />;
+}
+
+function RecoverWithPhrase() {
   const [draft, setDraft] = useState<RecoverDraft>({
     phrase: '',
     username: '',
@@ -92,7 +136,8 @@ export function AccountRecoverPage() {
   // then choose a new password for every device. Older servers keep the
   // device-only recovery below (§3.12).
   const credentialMode = useCredentialMode();
-  const onePassword = credentialMode === 'one-password';
+  // Copy only: until an older server has said it is one, describe one password.
+  const onePassword = credentialMode !== 'legacy';
   const [pendingMfa, setPendingMfa] = useState<Extract<RecoverOutcome, { kind: 'mfa' }> | null>(null);
   const [recovered, setRecovered] = useState<RecoveredSession | null>(null);
   const [mfaCode, setMfaCode] = useState('');
@@ -120,7 +165,24 @@ export function AccountRecoverPage() {
       }
     }
 
-    if (onePassword) {
+    // Which recovery the home server runs is its answer, not a guess: a server
+    // that has not answered (yet) is asked again here, and one that still does
+    // not answer is reported. Recovering on this device alone because the
+    // question failed left the person "recovered" with no server behind it.
+    let mode = credentialMode;
+    if (mode !== 'one-password' && mode !== 'legacy') {
+      setError('');
+      setLoading(true);
+      try {
+        mode = await detectCredentialMode();
+      } catch (err) {
+        setError(credentialErrorMessage(err, RECOVER_FAILED));
+        return;
+      } finally {
+        setLoading(false);
+      }
+    }
+    if (mode === 'one-password') {
       await runOnePasswordRecovery();
       return;
     }
@@ -129,9 +191,7 @@ export function AccountRecoverPage() {
       await recover(draft.phrase.trim(), draft.username.trim(), draft.password);
       navigate('/app');
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : 'Recovery failed. Check your phrase and try again.',
-      );
+      setError(credentialErrorMessage(err, RECOVER_FAILED));
     } finally {
       setLoading(false);
     }
@@ -166,7 +226,7 @@ export function AccountRecoverPage() {
       setRecovered(null);
       navigate('/app');
     } catch (err) {
-      setError(credentialErrorMessage(err, 'Recovery failed. Check your phrase and try again.'));
+      setError(credentialErrorMessage(err, RECOVER_FAILED));
     } finally {
       setLoading(false);
     }
