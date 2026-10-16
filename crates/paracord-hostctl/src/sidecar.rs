@@ -70,6 +70,21 @@ pub fn init_invocation(layout: &HostLayout, port: u16) -> Invocation {
     )
 }
 
+/// `paracord-host forget-storage-key`: the host binary deletes the storage
+/// key it made (on macOS a keychain item belongs to the program that made it).
+pub fn forget_storage_key_invocation(binary: &Path, service: &str, account: &str) -> Invocation {
+    Invocation::new(
+        &path_arg(binary),
+        [
+            "forget-storage-key".to_string(),
+            "--service".to_string(),
+            service.to_string(),
+            "--account".to_string(),
+            account.to_string(),
+        ],
+    )
+}
+
 /// The `instance_id:` line of `init`'s four printed lines (S6).
 pub fn instance_id_from_init(output: &CommandOutput) -> Option<String> {
     output.stdout.lines().find_map(|line| {

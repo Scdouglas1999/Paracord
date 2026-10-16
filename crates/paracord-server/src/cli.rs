@@ -61,6 +61,23 @@ pub enum Command {
     /// checked against the backup's escrow first. Pipe it straight into
     /// restore-backup rather than saving it anywhere.
     EscrowKey(EscrowKeyArgs),
+
+    /// Delete this server's storage key from the system keychain. The desktop
+    /// app runs it when its server is removed with its data: the key belongs
+    /// to this program, which made it, and on macOS another program deleting
+    /// it has to be allowed by the person first. A key that is already gone
+    /// is not an error.
+    ForgetStorageKey(ForgetStorageKeyArgs),
+}
+
+#[derive(ClapArgs, Debug)]
+pub struct ForgetStorageKeyArgs {
+    /// `[at_rest] keychain_service`.
+    #[arg(long)]
+    pub service: String,
+    /// `[at_rest] keychain_account`.
+    #[arg(long)]
+    pub account: String,
 }
 
 #[derive(ClapArgs, Debug)]

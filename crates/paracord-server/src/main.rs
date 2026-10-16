@@ -228,6 +228,10 @@ async fn main() -> Result<()> {
                 encrypt_storage::run(encrypt_args, &args.config).await
             }
             cli::Command::EscrowKey(escrow_args) => escrow_key::run(escrow_args),
+            cli::Command::ForgetStorageKey(forget) => {
+                at_rest_boot::keychain::delete(&forget.service, &forget.account)
+                    .map_err(|e| anyhow::anyhow!("couldn't delete the storage key: {e}"))
+            }
         };
     }
 

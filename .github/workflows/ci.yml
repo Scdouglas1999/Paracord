@@ -316,8 +316,8 @@ jobs:
       # to unlock it, and the Security framework then waits for a person
       # forever (the first run hung for over an hour). A signed-in Mac has its
       # login keychain unlocked; this makes the same, and the step has a time
-      # limit. It is still allowed to fail visibly (the lifecycle step above is
-      # not).
+      # limit. Removing the host deletes its key through paracord-host itself,
+      # which made it: a delete from another program waits for a person too.
       - name: Placeholder web client for the embedded UI
         run: mkdir -p client/dist && echo '<!doctype html><title>placeholder</title>' > client/dist/index.html
       - name: Build paracord-host
@@ -331,7 +331,6 @@ jobs:
           security list-keychains -d user | xargs security list-keychains -d user -s paracord-ci.keychain
           security default-keychain -d user -s paracord-ci.keychain
       - name: Set up the host with the real binary
-        continue-on-error: true
         timeout-minutes: 8
         env:
           PARACORD_HOSTCTL_LIVE: "1"

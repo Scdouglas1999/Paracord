@@ -88,6 +88,32 @@ pub struct Host {
     parts: HostParts,
 }
 
+/// Delete the server's storage key. The installed host binary made it, so it
+/// deletes it: on macOS a keychain item belongs to the program that created
+/// it, and a delete from the app has to be allowed by the person first (CI,
+/// with nobody there, waited forever). With no installed binary left, the app
+/// deletes it itself and macOS may ask.
+fn forget_storage_key(
+    runner: &dyn CommandRunner,
+    binary: &Path,
+    service: &str,
+    account: &str,
+) -> Result<(), String> {
+    if !binary.exists() {
+        return crate::keychain::delete(service, account);
+    }
+    let output = runner
+        .run(&sidecar::forget_storage_key_invocation(
+            binary, service, account,
+        ))
+        .map_err(|e| format!("couldn't run Paracord's server ({e})"))?;
+    if output.success() {
+        Ok(())
+    } else {
+        Err(output.reason_line())
+    }
+}
+
 /// The bundled host binary next to the running app executable.
 pub fn bundled_sidecar() -> Result<PathBuf> {
     let exe = std::env::current_exe().context("couldn't find the app's own executable")?;
@@ -328,6 +354,7 @@ impl Host {
         let runner: Arc<dyn CommandRunner> = Arc::new(SystemRunner);
         let manager =
             service::platform_manager(names.clone(), runner.clone(), &layout.config_dir())?;
+        let forget = (runner.clone(), layout.binary());
         Ok(Self::new(HostParts {
             state_path: layout::state_file(app_local_data_dir),
             layout,
@@ -343,7 +370,9 @@ impl Host {
                     claim_file,
                 ))
             }),
-            keychain_delete: Box::new(crate::keychain::delete),
+            keychain_delete: Box::new(move |service, account| {
+                forget_storage_key(forget.0.as_ref(), &forget.1, service, account)
+            }),
             port_free: Box::new(preflight::port_bindable),
             manage_firewall: cfg!(windows),
             timing: Timing::default(),
@@ -1299,3 +1328,48 @@ impl Host {
 #[cfg(all(test, unix))]
 #[path = "host_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod forget_key_tests {
+    use super::forget_storage_key;
+    use crate::runner::fake::{fail, FakeRunner};
+
+    #[test]
+    fn the_installed_host_binary_deletes_the_key_it_made() {
+        let dir = tempfile::tempdir().unwrap();
+        let binary = dir.path().join("paracord-host");
+        std::fs::write(&binary, b"").unwrap();
+        let runner = FakeRunner::new();
+        forget_storage_key(&runner, &binary, "Paracord", "host-storage-key:abc").unwrap();
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].program, binary.to_string_lossy());
+        assert_eq!(
+            calls[0].args,
+            [
+                "forget-storage-key",
+                "--service",
+                "Paracord",
+                "--account",
+                "host-storage-key:abc"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_refusal_from_the_host_binary_is_the_reason() {
+        let dir = tempfile::tempdir().unwrap();
+        let binary = dir.path().join("paracord-host");
+        std::fs::write(&binary, b"").unwrap();
+        let runner = FakeRunner::new();
+        runner.respond(|_| {
+            Some(fail(
+                1,
+                "Error: couldn't delete the storage key: the system keychain is locked",
+            ))
+        });
+        let err =
+            forget_storage_key(&runner, &binary, "Paracord", "host-storage-key:abc").unwrap_err();
+        assert!(err.contains("keychain is locked"), "{err}");
+    }
+}
