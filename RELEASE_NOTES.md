@@ -1,3 +1,84 @@
+# Paracord 4.0.0
+
+Paracord now sets itself up. Open the app and choose whether you're hosting a server or joining one. Hosting runs a server on your own computer in about a minute, with encryption, daily backups and your router taken care of. You sign in with one password, and the whole app has a new look.
+
+This is a major version because older apps can't fully use a 4.0 server: they're asked to update before making an account, and they can't sign in to an account that has moved to one password.
+
+Compare: [v3.3.0...v4.0.0](https://github.com/Scdouglas1999/Paracord/compare/v3.3.0...v4.0.0)
+
+## Host or join, from the app
+
+The first screen is split in two: **Host a server** on the left, **Join friends** on the right.
+
+- **Host a server:** name it, pick a color, make your account. The app starts a server on this computer, encrypts what it stores, creates your encryption keys, asks your router to let friends in and turns on daily backups, showing each step as it goes. It ends on an invite link with a QR code.
+- The server runs in the background as a service for your account (systemd on Linux, a scheduled task on Windows, a launch agent on macOS). It keeps running with the app closed and starts when you sign in to the computer.
+- **Settings › This computer** shows whether it's running and reachable, its backups and its log, with buttons to stop, start, update or remove it.
+- **Join friends:** paste an invite link and see the server, who's online and four words that identify it before you make an account. `paracord://` links open the app directly, even when it isn't running, and the app offers an invite it finds on your clipboard.
+- **Restore from a backup:** on a new computer, choose Host, then "Restore from a backup instead", pick the backup and enter your recovery phrase.
+
+The install command still works for an always-on machine and now sets up the same encryption and backups.
+
+## One password
+
+Your password now does both jobs. Your device turns it into one key that signs you in and another that locks your private messages, and the server only ever sees the first.
+
+- New accounts get a 24-word recovery phrase, shown once. It gets your account back if you forget your password or lose your computer.
+- Signing in on a new device brings your encryption keys back from an encrypted backup on the server, which only your password unlocks.
+- On a computer you trust, the app remembers your unlock in the system keychain, so it opens without asking. "Ask for my password" turns that off for that device.
+- **Accounts from before 4.0** are asked to move to one password the first time you open them in 4.0: enter both old passwords and choose to keep one. "Not now" keeps the account working with two passwords; the app asks again next time it starts.
+
+## Privacy and security, on by default
+
+- **Stored data is encrypted on the server's disk,** with a key kept in the computer's keychain. Your recovery phrase can unlock a copy of that key, so a backup can be restored on another computer. Existing servers keep running unencrypted until you convert them: `paracord-server encrypt-storage`, or run the installer again with `--encrypt-storage` (`-EncryptStorage` on Windows). It takes a backup first.
+- **Daily backups**, kept on the host computer for 14 days.
+- **Server identity:** the app remembers each server's certificate the first time and shows four words for it. If it changes, the app stays disconnected and asks you, instead of connecting anyway.
+- **Invites** expire after 7 days and allow 25 people by default. An invite preview shows only what you need to decide.
+- **Link previews and activity sharing** have their own switches under Settings › Privacy, and "See what's protected" lists what's encrypted where.
+
+## Letting friends reach you
+
+- The server asks your router to forward port 8443 with UPnP, NAT-PMP or PCP, and renews it while it runs. If the router doesn't answer or says no, the app shows the exact steps for your router.
+- Invite links always use your public internet address. When the router hasn't confirmed the port is open, the invite says people outside your network may not reach it until port 8443 is forwarded.
+- If your router won't say what your public address is, the server asks a public STUN server (Cloudflare's, then Google's) at most every 30 minutes. That server sees your network's address and nothing else. `external_address_stun_servers = []` in the settings file turns this off.
+- A connection shared by your internet provider (carrier-grade NAT), or a second router in front of yours, is named plainly, with what to do about it.
+- No relay or third-party service carries your traffic.
+
+## A new look
+
+- A new layout across the app: one sidebar per server, with the live voice channel at the top showing who's in it and what they're sharing, channels below, and your servers in a dock along the bottom.
+- Messages in grouped bubbles, a message box that opens into tools, and cards for events, polls, files, links, feeds and scores.
+- People replaces Home: friends, your inbox, direct messages and Discover in one place.
+- Calls grow out of the voice card into a full view with a people grid, focus on a stream or camera, and a chat column. Streams can fill the window or the whole screen, edge to edge.
+- On phones, the dock becomes a bottom bar and pages slide in from the side.
+- The new mark: a single paracord looped into a P. Loading screens draw it.
+- The desktop window draws its own title bar on every platform, so it looks the same on Windows, macOS and Linux, and taskbars show the Paracord icon.
+- The theme choices are gone: there is one dark look, plus a high-contrast version.
+
+## Streams and video
+
+- The desktop app draws every video itself, on Windows, macOS and Linux, instead of decoding it in the page.
+- Stream quality settings now deliver what they promise. Before, every preset sent less than it said.
+- Streams no longer freeze after a few minutes, turn green when the size changes, or freeze when someone stops sharing and starts again.
+- A stream's sound no longer plays through the wrong person's audio, and voice is there from the first second of a call.
+- Streams share a busy connection more fairly, and the sender adjusts to its own upload speed.
+- Save the last 30 seconds of a stream you're watching as a clip.
+- On Linux, the interface follows your display's refresh rate instead of being held to 60 frames a second, where your drivers allow it.
+
+## Removed
+
+- Reactions on streams.
+- The extra themes (Slate, Dusk sky, Paper & ink, Aubergine, Night, Daylight, AMOLED).
+
+## Known issues
+
+- On Linux with an NVIDIA card, WebKit still holds the interface to 60 frames a second, and theater and full-screen streams at very high resolutions can drop frames.
+- A stream between two computers on a fast home network tops out around 100 Mb/s.
+- Stream audio runs about 50 ms behind the picture.
+- A camera doesn't lower its quality to fit a slow upload yet; screen shares do.
+- Each account's encryption follows one device at a time: signing in on a new device moves your private messages there, and the old device stops receiving new ones.
+- Changing the email on a one-password account isn't available yet.
+- The Windows installer and hosting from the app on Windows and macOS have been tested in CI, not by hand on real machines.
+
 # Paracord 3.3.0
 
 More to do together, and more that arrives on its own. You can watch or listen to something together in a voice channel, play sounds for the room, and share what you're listening to. A server can pull in posts from blogs, YouTube, GitHub, Twitch and Jellyfin, show whether its game servers are up, and run a daily word puzzle. The desktop app can now update itself.
