@@ -5,6 +5,18 @@
 #   Re-verified 2026-10-04: `cargo tree -i rsa --target all -e all` and `-i sqlx-mysql` print nothing;
 #   rsa is only a Cargo.lock entry from sqlx's macro crate, never compiled (Paracord targets only SQLite + PostgreSQL).
 #   Review by: 2026-12-31 (remove when upstream sqlx no longer pulls sqlx-mysql/rsa into this graph).
+# - RUSTSEC-2026-0367, RUSTSEC-2026-0368, RUSTSEC-2026-0369 (zip 4.6.1: extraction can
+#   follow symlinks or keep SUID/SGID bits outside the destination): zip comes only from
+#   tauri-plugin-updater 2.10.1 (`cargo tree -i zip --target all`), which requires zip ^4
+#   up to 3.0.0-alpha.3. The updater checks the update's minisign signature against
+#   Paracord's update key before installing (updater.rs `verify_signature`), so an
+#   archive needs that key to reach extraction; and it uses zip only on Windows when the
+#   update is a zip, while Paracord publishes the .msi itself (macOS is .app.tar.gz, via
+#   tar). Checked 2026-10-16.
+#   Review by: 2026-11-30 (remove when tauri-plugin-updater moves to zip >= 9).
 ignore = [
   "RUSTSEC-2023-0071",
+  "RUSTSEC-2026-0367",
+  "RUSTSEC-2026-0368",
+  "RUSTSEC-2026-0369",
 ]
