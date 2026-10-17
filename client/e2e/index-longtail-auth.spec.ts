@@ -141,8 +141,10 @@ async function expectIndexAuth(page: Page, name: string, size: SizeName, options
     expect.soft(field.height, `${name}: a field is 44 tall (${field.id})`).toBe(44);
     expect.soft(field.radius, `${name}: a field has radius 12`).toBe('12px');
   }
-  // Exactly one cream button on the page, once a step that is arriving has
-  // settled (on a slow machine the check can land mid-transition).
+  // Exactly one cream button on the page, at rest: the pointer is moved off
+  // (the button that replaced the one just clicked is under it, and a hovered
+  // button is not cream), and a step that is arriving has settled.
+  await page.mouse.move(0, 0);
   await expect
     .poll(
       () =>

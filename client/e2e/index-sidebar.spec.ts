@@ -161,7 +161,16 @@ test.describe('IX-5 sidebar', () => {
         .map((animation) => animation.id),
     );
     expect(inLeaving).toEqual([]);
-    await page.evaluate(() => document.getAnimations().forEach((animation) => animation.play()));
+    // Then end it, so the old pane goes now rather than whenever this machine gets to it.
+    await page.evaluate(() =>
+      document.getAnimations().forEach((animation) => {
+        try {
+          animation.finish();
+        } catch {
+          animation.play(); // an endless animation cannot be finished; let it run on
+        }
+      }),
+    );
     await page.waitForTimeout(MOTION_GONE_MS);
     await expect(page.locator('.ix-pane')).toHaveCount(1);
     const header = sidebarHeader(page);

@@ -74,6 +74,38 @@ const running = (page: Page) =>
       .map((animation) => animation.id || animation.constructor.name),
   );
 
+/**
+ * Record every Web Animation the page starts from now on, so one that has
+ * already finished (a 165ms glide on a slow machine) can still be read.
+ */
+const recordAnimations = (page: Page) =>
+  page.evaluate(() => {
+    const seen: Animation[] = [];
+    (window as unknown as { __ixAnimations: Animation[] }).__ixAnimations = seen;
+    const original = Element.prototype.animate;
+    Element.prototype.animate = function (this: Element, ...args: Parameters<Element['animate']>) {
+      const animation = original.apply(this, args);
+      seen.push(animation);
+      return animation;
+    };
+  });
+
+/** The recorded animation with this id: its timing and which properties it moves. */
+const recorded = (page: Page, id: string) =>
+  page.evaluate((wanted) => {
+    const all = (window as unknown as { __ixAnimations?: Animation[] }).__ixAnimations ?? [];
+    const animation = [...all].reverse().find((candidate) => candidate.id === wanted);
+    const timing = animation?.effect?.getTiming();
+    const frames = (animation?.effect as KeyframeEffect | undefined)?.getKeyframes() ?? [];
+    return {
+      duration: timing?.duration,
+      easing: timing?.easing,
+      props: [...new Set(frames.flatMap((frame) => Object.keys(frame).filter((key) => !['offset', 'easing', 'composite', 'computedOffset'].includes(key))))],
+      from: frames[0]?.transform,
+      to: frames[frames.length - 1]?.transform,
+    };
+  }, id);
+
 const state = (locator: Locator) =>
   locator.evaluate((element) => ({
     current: element.hasAttribute('data-current'),
@@ -199,21 +231,11 @@ test.describe('switching (§5.1)', () => {
     // s1 first, so the dock is the prototype's s4: Fuel live with something unread.
     await h.step('arrive');
     await page.waitForTimeout(SETTLE);
+    await recordAnimations(page);
     await dockItem(page, 'gameNight').click();
     // The glide: one Web Animation on the indicator, transform only, from Fuel's x to Game Night's.
-    await expect.poll(async () => (await running(page)).includes('ix-dock:indicator')).toBe(true);
-    const glide = await page.evaluate(() => {
-      const animation = document.getAnimations().find((candidate) => candidate.id === 'ix-dock:indicator');
-      const timing = animation?.effect?.getTiming();
-      const frames = (animation?.effect as KeyframeEffect | undefined)?.getKeyframes() ?? [];
-      return {
-        duration: timing?.duration,
-        easing: timing?.easing,
-        props: [...new Set(frames.flatMap((frame) => Object.keys(frame).filter((key) => !['offset', 'easing', 'composite', 'computedOffset'].includes(key))))],
-        from: frames[0]?.transform,
-        to: frames[frames.length - 1]?.transform,
-      };
-    });
+    await expect.poll(async () => (await recorded(page, 'ix-dock:indicator')).duration).toBeDefined();
+    const glide = await recorded(page, 'ix-dock:indicator');
     expect(glide.duration).toBe(165);
     expect(glide.easing).toBe('cubic-bezier(0.32, 0.72, 0, 1)');
     expect(glide.props).toEqual(['transform']);
@@ -316,17 +338,11 @@ test.describe('reduced motion (§5)', () => {
     expect(await running(page)).not.toContain('ix-dock:ping');
 
     // The indicator moves with a 65ms opacity fade, not a glide.
+    await recordAnimations(page);
     await dockItem(page, 'basecamp').click();
-    await expect.poll(async () => (await running(page)).includes('ix-dock:indicator')).toBe(true);
-    const fade = await page.evaluate(() => {
-      const animation = document.getAnimations().find((candidate) => candidate.id === 'ix-dock:indicator');
-      const frames = (animation?.effect as KeyframeEffect | undefined)?.getKeyframes() ?? [];
-      return {
-        duration: animation?.effect?.getTiming().duration,
-        props: [...new Set(frames.flatMap((frame) => Object.keys(frame).filter((key) => !['offset', 'easing', 'composite', 'computedOffset'].includes(key))))],
-      };
-    });
-    expect(fade).toEqual({ duration: 65, props: ['opacity'] });
+    await expect.poll(async () => (await recorded(page, 'ix-dock:indicator')).duration).toBeDefined();
+    const { duration, props } = await recorded(page, 'ix-dock:indicator');
+    expect({ duration, props }).toEqual({ duration: 65, props: ['opacity'] });
     await page.waitForTimeout(SETTLE);
     const bar = await box(indicator(page));
     const base = await box(dockItem(page, 'basecamp'));

@@ -485,9 +485,10 @@ async fn every_protocol_reads_its_fake_server() -> anyhow::Result<()> {
 #[tokio::test]
 async fn a_server_that_is_not_answering_can_still_be_added() -> anyhow::Result<()> {
     let ctx = Ctx::new().await?;
-    let closed = std::net::TcpListener::bind("127.0.0.1:0")?;
-    let port = closed.local_addr()?.port();
-    drop(closed);
+    // Port 1 (tcpmux) has no listener on any machine this runs on. A port
+    // taken from a closed listener could be picked up by another test running
+    // at the same time before the probe reached it.
+    let port = 1;
 
     let (status, preview) = ctx
         .request(
