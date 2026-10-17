@@ -42,6 +42,11 @@ jobs:
       - name: npm audit
         working-directory: client
         run: npm ci && npm audit --audit-level=moderate
+      # The release audits the bot SDK too; checking it here finds an advisory
+      # on a push rather than when a version is tagged.
+      - name: npm audit (bot SDK)
+        working-directory: packages/paracord-bot-sdk
+        run: npm ci && npm audit --audit-level=moderate
 
   security-gate:
     name: Security Gate
