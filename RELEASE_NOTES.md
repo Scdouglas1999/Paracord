@@ -1,3 +1,18 @@
+# Paracord 4.0.1
+
+Calls work again in the Linux AppImage.
+
+Compare: [v4.0.0...v4.0.1](https://github.com/Scdouglas1999/Paracord/compare/v4.0.0...v4.0.1)
+
+## Fixed
+
+- **Linux AppImage: joining a call said no microphone or speakers were connected.** The AppImage carried older copies of the PipeWire and PulseAudio libraries, and your system's audio plugin could not use them, so Paracord found no audio devices at all. It now uses your system's own copies. If you updated to 4.0.0 from inside the app on Linux, this update fixes it.
+- Join and leave chimes no longer leave an error behind when sound can't start.
+
+## Known issues
+
+- **Linux AppImage: sounds played by the page are silent.** Join and leave chimes, the soundboard and the sound of something you watch together don't play in the AppImage, because its bundled GStreamer can't use your system's plugins. Calls, voice and screen sharing are not affected, and neither are the .deb and .rpm packages. A fix is coming in the next update.
+
 # Paracord 4.0.0
 
 Paracord now sets itself up. Open the app and choose whether you're hosting a server or joining one. Hosting runs a server on your own computer in about a minute, with encryption, daily backups and your router taken care of. You sign in with one password, and the whole app has a new look.
