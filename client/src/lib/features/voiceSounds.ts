@@ -8,15 +8,6 @@
  * No external audio files are needed; everything is synthesized at runtime.
  */
 
-let audioContext: AudioContext | null = null;
-
-function getAudioContext(): AudioContext {
-  if (!audioContext || audioContext.state === 'closed') {
-    audioContext = new AudioContext();
-  }
-  return audioContext;
-}
-
 /**
  * Play a two-tone beep.
  *
@@ -31,12 +22,19 @@ function playTwoTone(
   toneDuration: number,
   volume: number,
 ): void {
+  let ctx: AudioContext | null = null;
   try {
-    const ctx = getAudioContext();
+    // A notification owns its audio device only for the duration of the beep.
+    // Keeping a silent context running keeps WebKit audio threads awake even
+    // after leaving voice or minimizing the window. Separate contexts also let
+    // overlapping notifications finish without cutting one another off.
+    const context = new AudioContext();
+    ctx = context;
+    const release = () => { void context.close().catch(() => {}); };
 
     // Resume context if suspended (browser autoplay policy)
     if (ctx.state === 'suspended') {
-      void ctx.resume();
+      void ctx.resume().catch(release);
     }
 
     const now = ctx.currentTime;
@@ -51,6 +49,10 @@ function playTwoTone(
     gain1.gain.exponentialRampToValueAtTime(0.001, now + toneDuration);
     osc1.connect(gain1);
     gain1.connect(ctx.destination);
+    osc1.onended = () => {
+      osc1.disconnect();
+      gain1.disconnect();
+    };
     osc1.start(now);
     osc1.stop(now + toneDuration);
 
@@ -63,9 +65,15 @@ function playTwoTone(
     gain2.gain.exponentialRampToValueAtTime(0.001, now + toneDuration * 2);
     osc2.connect(gain2);
     gain2.connect(ctx.destination);
+    osc2.onended = () => {
+      osc2.disconnect();
+      gain2.disconnect();
+      release();
+    };
     osc2.start(now + toneDuration);
     osc2.stop(now + toneDuration * 2);
   } catch {
+    if (ctx) void ctx.close().catch(() => {});
     // Silently ignore audio errors -- sound effects are non-critical
   }
 }
