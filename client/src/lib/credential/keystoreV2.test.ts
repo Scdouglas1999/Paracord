@@ -10,6 +10,7 @@ import {
   unlockKeystoreV2, writeKeystoreV2, type AccountKeystoreV2,
 } from './keystoreV2';
 import { InlineKdfWorker, installTestLocks } from './testWorker';
+import { slow } from '../../test/timeouts';
 
 const kdf = { alg: 'scrypt', log_n: 17, r: 8, p: 1 };
 const origin = 'https://paracord.example:8443';
@@ -53,7 +54,7 @@ describe('keystore v2', () => {
     expect(InlineKdfWorker.created.every((worker) => worker.terminated)).toBe(true);
     // Two real scrypt derivations at the production cost: a few seconds normally,
     // past the 20s default under coverage instrumentation.
-  }, 60_000);
+  }, slow(60_000));
 
   it('refuses a backup from another epoch or format', () => {
     expect(() => keystoreFromBackup(account, v2Params, { ...backup, epoch: 2 })).toThrow(expect.objectContaining({ code: 'invalid' }));

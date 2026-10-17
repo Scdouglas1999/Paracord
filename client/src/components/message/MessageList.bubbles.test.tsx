@@ -9,6 +9,7 @@ import { installWaapiStub, type WaapiStub } from '../../lib/motion/waapiStub';
 import { useVoiceStore } from '../../stores/voiceStore';
 import { parseMarkdown } from '../../lib/markdown';
 import { MessageList, isSystemMessage, systemMessageText } from './MessageList';
+import { slow } from '../../test/timeouts';
 
 /**
  * The Index timeline (docs/index-spec.md §3.1, §4.11; IX-11): bubbles grouped
@@ -606,7 +607,7 @@ describe('a row redraws only when something it draws changed', () => {
     fireEvent.click(within(row).getByRole('button', { name: 'More actions' }));
     await waitFor(() => expect(row).toHaveAttribute('data-menu-open', 'true'));
     expect(faces()).toBe(before + 1);
-  }, 60_000);
+  }, slow(60_000));
 });
 
 describe('the New divider (§4.11)', () => {

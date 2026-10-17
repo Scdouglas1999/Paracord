@@ -1,6 +1,12 @@
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 
+// Under --coverage V8 counts every block, and the password KDF (scrypt at its
+// production cost, millions of small steps) runs several times slower. Time
+// limits scale with it there, and only there, so a real slowdown still fails
+// the ordinary run. Tests with their own limit use `slow()` from src/test/timeouts.
+const TIMEOUT_SCALE = process.argv.includes('--coverage') ? 5 : 1;
+
 export default defineConfig({
   plugins: [react()],
   test: {
@@ -12,8 +18,9 @@ export default defineConfig({
     // the full parallel suite, which starves their async waitFor/findBy polling.
     // The 5s default per-test timeout is too tight for that contention; 20s
     // keeps genuine hangs bounded while giving real work room to finish.
-    testTimeout: 20000,
-    hookTimeout: 20000,
+    testTimeout: 20000 * TIMEOUT_SCALE,
+    hookTimeout: 20000 * TIMEOUT_SCALE,
+    env: { PARACORD_TEST_TIMEOUT_SCALE: String(TIMEOUT_SCALE) },
     // Each test worker owns a Vite transform pipeline and a jsdom instance.
     // Running one per logical CPU exhausts memory and leaves worker processes
     // alive long after the last assertion on CI and developer laptops. Keep a

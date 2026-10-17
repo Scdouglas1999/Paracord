@@ -3,6 +3,7 @@ import { getPublicKeyAsync, utils, verifyAsync } from '@noble/ed25519';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CredentialParams } from '../api/generated/CredentialParams';
 import type { NewCredential, NewIdentity } from '../api/generated/CredentialRegister';
+import { slow } from '../test/timeouts';
 
 /**
  * The one-password flows against an in-memory home server that checks what the
@@ -240,7 +241,7 @@ async function signUp(username = 'sam') {
   return flows.signUpWithPassword({ username, password: PASSWORD, email: `${username}@example.test` });
 }
 
-describe('one-password flows', { timeout: 120_000 }, () => {
+describe('one-password flows', { timeout: slow(120_000) }, () => {
   it('signs up: the server gets an auth key and a proof, never the password; the device keeps a v2 keystore and a pin', async () => {
     const { user, phrase, privacyDefaultsError } = await signUp();
     expect(privacyDefaultsError).toBeNull();
