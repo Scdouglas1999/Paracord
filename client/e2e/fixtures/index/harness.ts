@@ -143,6 +143,13 @@ export class IndexHarness {
     await this.syncWorld();
     const flat = batch.flat();
     if (flat.length === 0) return;
+    // A page that is still connecting (a slow machine) would miss these frames:
+    // give it a moment to open its stream. Scenes that are offline on purpose
+    // still emit into nothing after that, as before.
+    const deadline = Date.now() + 5_000;
+    while ((await this.stub.streamCount()) === 0 && Date.now() < deadline) {
+      await this.page.waitForTimeout(100);
+    }
     const marker = drainMarker((this.drains += 1));
     const streams = await this.stub.emit([...flat, marker]);
     if (streams === 0) return;

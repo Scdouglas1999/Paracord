@@ -155,6 +155,12 @@ export class RealtimeStub {
     return answer.streams;
   }
 
+  /** How many streams are open, without writing anything to them. */
+  async streamCount(): Promise<number> {
+    const response = await fetch(`http://127.0.0.1:${this.port}/__streams`);
+    return ((await response.json()) as { streams: number }).streams;
+  }
+
   /** Cut every open stream (the client reconnects at once and gets a fresh READY). */
   async drop(): Promise<void> {
     await this.post('/__drop', {});

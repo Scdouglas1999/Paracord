@@ -269,9 +269,12 @@ test.describe('the phone (index-spec §9)', () => {
   test('the edge swipe drags the page with the finger, and finishes or springs back on release', async ({ page }) => {
     await open(page);
     expect(await screenOf(page)).toBe('conversation');
+    // Let the entrance finish first: a swipe that starts mid-transition is not one.
+    await page.waitForTimeout(600);
 
     // A slow, short swipe: the page follows, then springs back.
     await drag(page, line({ x: 6, y: 420 }, { x: 120, y: 424 }, 12), 24, false);
+    await expect.poll(async () => shiftX(await transformOf(main(page))), { timeout: 2_000 }).toBeGreaterThan(90);
     const mid = shiftX(await transformOf(main(page)));
     expect(mid).toBeGreaterThan(90);
     expect(mid).toBeLessThan(130);

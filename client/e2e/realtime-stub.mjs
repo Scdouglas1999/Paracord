@@ -95,6 +95,11 @@ const server = createServer((request, response) => {
     });
     return;
   }
+  // How many pages hold a stream right now; read-only, so asking changes nothing.
+  if (url.pathname === '/__streams' && request.method === 'GET') {
+    response.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ streams: streams.size }));
+    return;
+  }
   if (url.pathname === '/__emit' && request.method === 'POST') {
     let body = '';
     request.on('data', (chunk) => { body += chunk; });
