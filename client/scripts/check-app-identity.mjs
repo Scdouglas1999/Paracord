@@ -37,7 +37,7 @@ if (!existsSync(entryPath)) fail(`missing ${entryPath}`);
 else {
   const entry = readFileSync(entryPath, 'utf8');
   for (const line of [`Icon=${id}`, `StartupWMClass=${id}`, 'MimeType=x-scheme-handler/paracord;']) {
-    if (!entry.split('\n').includes(line)) fail(`${id}.desktop lacks ${line}`);
+    if (!entry.split(/\r?\n/).includes(line)) fail(`${id}.desktop lacks ${line}`);
   }
 }
 const iconSizes = ['32x32', '64x64', '128x128', '256x256', '512x512'];
