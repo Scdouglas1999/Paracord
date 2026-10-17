@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Finish a freshly built Paracord AppImage: take the Wayland client libraries
-# out so it uses the host's copies, and make its own desktop entry and icon the
-# app's (com.paracord.desktop).
+# Finish a freshly built Paracord AppImage: take the Wayland, PipeWire and
+# PulseAudio client libraries out so it uses the host's copies, and make its own
+# desktop entry and icon the app's (com.paracord.desktop).
 #
 # Usage (from client/, after `npx tauri build --bundles appimage`):
 #   scripts/finalize-appimage.sh ../target/release/bundle/appimage/Paracord_<version>_amd64.AppImage
@@ -17,6 +17,16 @@
 # display: EGL_BAD_PARAMETER" before the window appears. libwayland keeps its
 # ABI backward compatible, so the host's copy (always present where Mesa is)
 # serves the bundled GTK and WebKit as well.
+#
+# Audio has the same shape. Paracord opens microphones and speakers through
+# ALSA, whose default device on a current desktop is the host's PipeWire (or
+# PulseAudio) plugin, and that plugin is built against the host's libpipewire /
+# libpulse. With the build machine's older copies first on the library path
+# (Ubuntu's libpipewire 0.3 against a host's PipeWire 1.6: "undefined symbol
+# pw_properties_new_string_checked"), the plugin fails to load, ALSA has no
+# default device, and the app says no microphone or speakers are connected:
+# nobody can join a call (4.0.0 AppImage). Both libraries are on every desktop
+# that plays sound, and Paracord's own PipeWire screen capture wants the host's.
 #
 # The identity: the window's app id is com.paracord.desktop (app_identity.rs),
 # and a taskbar finds the icon through the desktop entry of that name. The
@@ -61,17 +71,18 @@ trap 'rm -rf "$work"' EXIT
 appdir="$work/squashfs-root"
 [ -x "$appdir/AppRun" ] || die "extracted AppImage has no AppRun: $appimage"
 
-wayland_libs() {
-  find "$1" \( -type f -o -type l \) -name 'libwayland-*.so*' -print
+host_libs() {
+  find "$1" \( -type f -o -type l \) \( -name 'libwayland-*.so*' -o -name 'libpipewire-*.so*' \
+    -o -name 'libpulse.so*' -o -name 'libpulse-simple.so*' -o -name 'libpulsecommon-*.so' \) -print
 }
 
-mapfile -t bundled < <(wayland_libs "$appdir")
+mapfile -t bundled < <(host_libs "$appdir")
 for lib in "${bundled[@]}"; do
   echo "finalize-appimage: removing ${lib#"$appdir"/}"
   rm -f "$lib"
 done
-mapfile -t left < <(wayland_libs "$appdir")
-[ "${#left[@]}" -eq 0 ] || die "Wayland libraries still present after removal: ${left[*]}"
+mapfile -t left < <(host_libs "$appdir")
+[ "${#left[@]}" -eq 0 ] || die "host libraries still present after removal: ${left[*]}"
 
 app_id=com.paracord.desktop
 entry="usr/share/applications/$app_id.desktop"
@@ -101,14 +112,14 @@ chmod 755 "$out"
 check="$work/check"
 mkdir "$check"
 (cd "$check" && "$out" --appimage-extract >/dev/null) || die "could not read back the repacked AppImage"
-mapfile -t repacked < <(wayland_libs "$check")
+mapfile -t repacked < <(host_libs "$check")
 [ "${#repacked[@]}" -eq 0 ] || die "repacked AppImage still bundles: ${repacked[*]}"
 mapfile -t roots < <(find "$check/squashfs-root" -maxdepth 1 -name '*.desktop' -printf '%f\n')
 [ "${roots[*]}" = "$app_id.desktop" ] || die "repacked AppImage's root entry is '${roots[*]}', not $app_id.desktop"
 [ -s "$check/squashfs-root/.DirIcon" ] || die "repacked AppImage has no .DirIcon"
 
 mv -f "$out" "$appimage"
-echo "finalize-appimage: repacked $(basename "$appimage"): host Wayland libraries, $app_id entry and icon"
+echo "finalize-appimage: repacked $(basename "$appimage"): host Wayland, PipeWire and PulseAudio libraries, $app_id entry and icon"
 
 if [ -e "$sig" ]; then
   rm -f "$sig"
