@@ -51,7 +51,9 @@ describe('keystore v2', () => {
     expect(toHex(await unlockKeystoreV2(keystore, password))).toBe(vectors.wrap[0].private_key_hex);
     await expect(unlockKeystoreV2(keystore, password + '!')).rejects.toMatchObject({ code: 'unwrap_failed' });
     expect(InlineKdfWorker.created.every((worker) => worker.terminated)).toBe(true);
-  });
+    // Two real scrypt derivations at the production cost: a few seconds normally,
+    // past the 20s default under coverage instrumentation.
+  }, 60_000);
 
   it('refuses a backup from another epoch or format', () => {
     expect(() => keystoreFromBackup(account, v2Params, { ...backup, epoch: 2 })).toThrow(expect.objectContaining({ code: 'invalid' }));
